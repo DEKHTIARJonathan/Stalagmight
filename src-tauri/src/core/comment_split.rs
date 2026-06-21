@@ -59,7 +59,11 @@ pub fn split(s: Option<&str>) -> (Option<String>, Option<String>) {
 }
 
 fn non_empty(s: &str) -> Option<&str> {
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 fn prefix_lines(s: &str) -> String {
@@ -75,6 +79,7 @@ fn prefix_lines(s: &str) -> String {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -107,7 +112,10 @@ mod tests {
         assert_eq!(m, format!("{M}broken tape\njunction with main"));
         assert_eq!(
             split(Some(&m)),
-            (Some("broken tape".into()), Some("junction with main".into()))
+            (
+                Some("broken tape".into()),
+                Some("junction with main".into())
+            )
         );
     }
 

@@ -14,9 +14,24 @@ fn shot(azimuth_in: f64, azimuth_out: f64, length: f64, depth_in: f64, depth_out
 #[test]
 fn get_connected_section_ids_traverses_merges() {
     let mut project = Project::new("Merged".to_string(), None);
-    let a = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
-    let b = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
-    let c = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 0).into(),
@@ -55,7 +70,11 @@ fn station_key_round_trips_and_tracks_station_across_insert() {
     let sr = StationRef::new(a, 2);
     let key = project.key_for_ref(sr).expect("key for in-range station");
     assert!(matches!(key.anchor, StationAnchor::AfterShot(_)));
-    assert_eq!(project.resolve_key(&key), Some(sr), "key_for_ref/resolve_key round-trip");
+    assert_eq!(
+        project.resolve_key(&key),
+        Some(sr),
+        "key_for_ref/resolve_key round-trip"
+    );
 
     // SectionStart round-trips too.
     let start = StationRef::new(a, 0);
@@ -85,14 +104,12 @@ fn station_key_deserializes_legacy_positional_shape() {
     // to a transitional anchor — so opening an old project after upgrading does not
     // silently drop its undo history (the old blob would fail to parse otherwise).
     // Legacy index 0 -> SectionStart.
-    let start: StationKey =
-        serde_json::from_str(r#"{"section_id":3,"station_index":0}"#).unwrap();
+    let start: StationKey = serde_json::from_str(r#"{"section_id":3,"station_index":0}"#).unwrap();
     assert_eq!(start, StationKey::new(3, StationAnchor::SectionStart));
 
     // Legacy positive index -> transitional Index anchor (the load re-anchor pass
     // later canonicalizes it; resolve_key tolerates it in the meantime).
-    let mid: StationKey =
-        serde_json::from_str(r#"{"section_id":3,"station_index":2}"#).unwrap();
+    let mid: StationKey = serde_json::from_str(r#"{"section_id":3,"station_index":2}"#).unwrap();
     assert_eq!(mid, StationKey::new(3, StationAnchor::Index(2)));
 
     // The current `{section_id, anchor}` shape still round-trips.
@@ -116,13 +133,22 @@ fn cascade_bfs_does_not_propagate_through_a_non_finite_section() {
 
     let mut project = Project::new("NaN".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let n = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let x = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
 
     // Per-station local coords. Section N is NaN-poisoned at every station.
@@ -140,16 +166,29 @@ fn cascade_bfs_does_not_propagate_through_a_non_finite_section() {
     ]);
 
     let mut authoritative: HashSet<SectionId> = HashSet::from([a]);
-    project.cascade_bfs(&adjacency, &local, &station_offsets, &mut authoritative, &[a]);
+    project.cascade_bfs(
+        &adjacency,
+        &local,
+        &station_offsets,
+        &mut authoritative,
+        &[a],
+    );
 
     // Only the seed A stays authoritative: N is reached via a non-finite delta (not
     // anchored), and X is reachable only through N (never reached).
-    assert!(!authoritative.contains(&n), "a NaN-poisoned section must not be anchored");
+    assert!(
+        !authoritative.contains(&n),
+        "a NaN-poisoned section must not be anchored"
+    );
     assert!(
         !authoritative.contains(&x),
         "a section reachable only through a NaN section must not be anchored"
     );
-    assert_eq!(authoritative.len(), 1, "only the seed should remain authoritative");
+    assert_eq!(
+        authoritative.len(),
+        1,
+        "only the seed should remain authoritative"
+    );
 }
 
 #[test]
@@ -159,8 +198,18 @@ fn station_ref_traversals_cover_every_bearing_collection() {
     // wiring it in here, this test (and the integrity check that consumes the
     // traversal) won't see it — the failure that motivates centralizing them.
     let mut project = Project::new("Refs".to_string(), None);
-    let a = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
-    let b = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // One ref in each of the five collections, all anchored at station a:1.
     project.station_merges.push(StationMerge {
@@ -184,8 +233,12 @@ fn station_ref_traversals_cover_every_bearing_collection() {
         station_ref: StationRef::new(a, 1).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
     });
-    project.station_offsets.insert(StationRef::new(a, 1).into(), (1.0, 2.0, 3.0));
-    project.station_comments.insert(StationRef::new(a, 1).into(), "note".to_string());
+    project
+        .station_offsets
+        .insert(StationRef::new(a, 1).into(), (1.0, 2.0, 3.0));
+    project
+        .station_comments
+        .insert(StationRef::new(a, 1).into(), "note".to_string());
 
     // READ traversal: every collection's label is visited.
     let mut labels: HashSet<String> = HashSet::new();
@@ -196,10 +249,22 @@ fn station_ref_traversals_cover_every_bearing_collection() {
             a1_hits += 1;
         }
     });
-    for expected in ["merge", "loop closure", "zero datum", "station offset", "station comment"] {
-        assert!(labels.contains(expected), "for_each_station_ref must visit {expected}");
+    for expected in [
+        "merge",
+        "loop closure",
+        "zero datum",
+        "station offset",
+        "station comment",
+    ] {
+        assert!(
+            labels.contains(expected),
+            "for_each_station_ref must visit {expected}"
+        );
     }
-    assert_eq!(a1_hits, 5, "a:1 is referenced once in each of the five collections");
+    assert_eq!(
+        a1_hits, 5,
+        "a:1 is referenced once in each of the five collections"
+    );
 
     // REWRITE traversal: shifting a:1 -> a:2 must update every collection, incl.
     // the two HashMap keys.
@@ -213,22 +278,59 @@ fn station_ref_traversals_cover_every_bearing_collection() {
     // Pure traversal mechanics: keys were inserted as transitional Index anchors
     // and never reanchored, so compare the rewritten keys directly (a:2 is
     // intentionally past the end — this checks the rewrite, not resolvability).
-    assert_eq!(project.station_merges[0].station_a, StationRef::new(a, 2).into());
-    assert_eq!(project.loop_closures[0].station_a, StationRef::new(a, 2).into());
-    assert_eq!(project.zero_datums[0].station_ref, StationRef::new(a, 2).into());
-    assert!(project.station_offsets.contains_key(&StationRef::new(a, 2).into()));
-    assert!(!project.station_offsets.contains_key(&StationRef::new(a, 1).into()));
-    assert!(project.station_comments.contains_key(&StationRef::new(a, 2).into()));
-    assert!(!project.station_comments.contains_key(&StationRef::new(a, 1).into()));
+    assert_eq!(
+        project.station_merges[0].station_a,
+        StationRef::new(a, 2).into()
+    );
+    assert_eq!(
+        project.loop_closures[0].station_a,
+        StationRef::new(a, 2).into()
+    );
+    assert_eq!(
+        project.zero_datums[0].station_ref,
+        StationRef::new(a, 2).into()
+    );
+    assert!(project
+        .station_offsets
+        .contains_key(&StationRef::new(a, 2).into()));
+    assert!(!project
+        .station_offsets
+        .contains_key(&StationRef::new(a, 1).into()));
+    assert!(project
+        .station_comments
+        .contains_key(&StationRef::new(a, 2).into()));
+    assert!(!project
+        .station_comments
+        .contains_key(&StationRef::new(a, 1).into()));
 }
 
 #[test]
 fn section_has_zero_datum_with_connected_merges() {
     let mut project = Project::new("Zero".to_string(), None);
-    let a = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
-    let b = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
-    let c = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
-    let d = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let d = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 0).into(),
@@ -257,10 +359,7 @@ fn compute_station_raw_coords_applies_offsets_and_bounds() {
     let shot_b = shot(90.0, 90.0, 5.0, 0.0, 2.0);
     let section_id = project
         .add_section(SectionData {
-            shots: vec![
-                shot_a.clone(),
-                shot_b.clone(),
-            ],
+            shots: vec![shot_a.clone(), shot_b.clone()],
             ..Default::default()
         })
         .id;
@@ -302,7 +401,11 @@ fn set_zero_datum_first_datum_positions_station_at_origin() {
     // Check that offset was applied to move station to origin
     let offset = project.section_offsets.get(&section_id).unwrap();
     // Station was at (0, horizontal), needs offset (-0, -horizontal) to be at origin
-    assert!((offset.0 - 0.0).abs() < 1e-6, "Expected x offset ~0, got {}", offset.0);
+    assert!(
+        (offset.0 - 0.0).abs() < 1e-6,
+        "Expected x offset ~0, got {}",
+        offset.0
+    );
     let expected_y_offset = -shot_a.horizontal_length();
     assert!(
         (offset.1 - expected_y_offset).abs() < 1e-6,
@@ -316,7 +419,11 @@ fn set_zero_datum_first_datum_positions_station_at_origin() {
     assert!((coords.x).abs() < 1e-6, "Expected x ~0, got {}", coords.x);
     assert!((coords.y).abs() < 1e-6, "Expected y ~0, got {}", coords.y);
     // Z should be preserved
-    assert!((coords.z - 1.0).abs() < 1e-6, "Expected z ~1, got {}", coords.z);
+    assert!(
+        (coords.z - 1.0).abs() < 1e-6,
+        "Expected z ~1, got {}",
+        coords.z
+    );
 }
 
 #[test]
@@ -350,9 +457,17 @@ fn set_zero_datum_connected_sections_move_together() {
     // Section a station 1 is at (0, 10) before datum (shot goes north)
     // Section b station 0 is at (0, 10) before datum (aligned to a:1)
     // Section b station 1 is at (5, 10) before datum (shot goes east from b:0)
-    let coords_b1_before = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
-    assert!((coords_b1_before.x - 5.0).abs() < 1e-6, "Pre-datum b.1 x should be 5");
-    assert!((coords_b1_before.y - 10.0).abs() < 1e-6, "Pre-datum b.1 y should be 10");
+    let coords_b1_before = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
+    assert!(
+        (coords_b1_before.x - 5.0).abs() < 1e-6,
+        "Pre-datum b.1 x should be 5"
+    );
+    assert!(
+        (coords_b1_before.y - 10.0).abs() < 1e-6,
+        "Pre-datum b.1 y should be 10"
+    );
 
     // Set datum on section a, station 1 (which is at y=10 before datum)
     // This should move all connected sections so a.1 lands at origin
@@ -365,19 +480,41 @@ fn set_zero_datum_connected_sections_move_together() {
     assert!(project.section_offsets.contains_key(&b));
 
     // Section a station 1 (datum station) should be at origin
-    let coords_a1 = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
-    assert!((coords_a1.x).abs() < 1e-6, "Datum station x should be 0, got {}", coords_a1.x);
-    assert!((coords_a1.y).abs() < 1e-6, "Datum station y should be 0, got {}", coords_a1.y);
+    let coords_a1 = project
+        .compute_station_raw_coords(StationRef::new(a, 1))
+        .unwrap();
+    assert!(
+        (coords_a1.x).abs() < 1e-6,
+        "Datum station x should be 0, got {}",
+        coords_a1.x
+    );
+    assert!(
+        (coords_a1.y).abs() < 1e-6,
+        "Datum station y should be 0, got {}",
+        coords_a1.y
+    );
 
     // Section a station 0 should be at (0, -10) since it's 10m south of the datum
-    let coords_a0 = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
-    assert!((coords_a0.x).abs() < 1e-6, "a.0 x should be 0, got {}", coords_a0.x);
-    assert!((coords_a0.y - (-10.0)).abs() < 1e-6, "a.0 y should be -10, got {}", coords_a0.y);
+    let coords_a0 = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
+    assert!(
+        (coords_a0.x).abs() < 1e-6,
+        "a.0 x should be 0, got {}",
+        coords_a0.x
+    );
+    assert!(
+        (coords_a0.y - (-10.0)).abs() < 1e-6,
+        "a.0 y should be -10, got {}",
+        coords_a0.y
+    );
 
     // Section b should have moved by the same delta as section a
     // Before: b.1 was at (5, 10). After: b.1 should be at (5, 0)
     // (The offset delta was (0, -10) to move a.1 from (0, 10) to (0, 0))
-    let coords_b1_after = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+    let coords_b1_after = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
     assert!(
         (coords_b1_after.x - 5.0).abs() < 1e-6,
         "b.1 x should be 5, got {}",
@@ -409,26 +546,38 @@ fn set_zero_datum_subsequent_datum_uses_gps_offset() {
 
     // Set first datum on section a, station 0
     let gps_a = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(a, 0), gps_a).unwrap();
+    project
+        .set_zero_datum(StationRef::new(a, 0), gps_a)
+        .unwrap();
 
     // Section a station 0 should be at origin
-    let coords_a0 = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
+    let coords_a0 = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
     assert!((coords_a0.x).abs() < 1e-6);
     assert!((coords_a0.y).abs() < 1e-6);
 
     // Set second datum on section b with GPS offset
     // At equator, 0.01 degree longitude ~ 1113 meters east
     let gps_b = GpsCoordinates::new(0.0, 0.01, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(b, 0), gps_b).unwrap();
+    project
+        .set_zero_datum(StationRef::new(b, 0), gps_b)
+        .unwrap();
 
     // Section b station 0 should be at approximately (1113, 0)
-    let coords_b0 = project.compute_station_raw_coords(StationRef::new(b, 0)).unwrap();
+    let coords_b0 = project
+        .compute_station_raw_coords(StationRef::new(b, 0))
+        .unwrap();
     assert!(
         (coords_b0.x - 1113.2).abs() < 10.0,
         "Expected x ~1113, got {}",
         coords_b0.x
     );
-    assert!(coords_b0.y.abs() < 10.0, "Expected y ~0, got {}", coords_b0.y);
+    assert!(
+        coords_b0.y.abs() < 10.0,
+        "Expected y ~0, got {}",
+        coords_b0.y
+    );
 }
 
 #[test]
@@ -450,9 +599,15 @@ fn set_zero_datum_z_coordinates_preserved() {
     project.set_zero_datum(station_ref, gps).unwrap();
 
     // Check all stations have preserved z coordinates
-    let coords_0 = project.compute_station_raw_coords(StationRef::new(section_id, 0)).unwrap();
-    let coords_1 = project.compute_station_raw_coords(StationRef::new(section_id, 1)).unwrap();
-    let coords_2 = project.compute_station_raw_coords(StationRef::new(section_id, 2)).unwrap();
+    let coords_0 = project
+        .compute_station_raw_coords(StationRef::new(section_id, 0))
+        .unwrap();
+    let coords_1 = project
+        .compute_station_raw_coords(StationRef::new(section_id, 1))
+        .unwrap();
+    let coords_2 = project
+        .compute_station_raw_coords(StationRef::new(section_id, 2))
+        .unwrap();
 
     assert!((coords_0.z - 0.0).abs() < 1e-6, "Station 0 z should be 0");
     assert!((coords_1.z - 5.0).abs() < 1e-6, "Station 1 z should be 5");
@@ -482,7 +637,10 @@ fn remove_zero_datum_keeps_positions_unchanged() {
 
     // Offset should be unchanged
     let offset_after = project.section_offsets.get(&section_id).copied();
-    assert_eq!(offset_before, offset_after, "Offset should not change when removing datum");
+    assert_eq!(
+        offset_before, offset_after,
+        "Offset should not change when removing datum"
+    );
 }
 
 #[test]
@@ -503,8 +661,14 @@ fn update_first_datum_gps_keeps_station_at_origin() {
 
     // Station 1 should be at origin
     let coords_after_first = project.compute_station_raw_coords(station_ref).unwrap();
-    assert!((coords_after_first.x).abs() < 1e-6, "First datum: x should be 0");
-    assert!((coords_after_first.y).abs() < 1e-6, "First datum: y should be 0");
+    assert!(
+        (coords_after_first.x).abs() < 1e-6,
+        "First datum: x should be 0"
+    );
+    assert!(
+        (coords_after_first.y).abs() < 1e-6,
+        "First datum: y should be 0"
+    );
     let offset_after_first = project.section_offsets.get(&section_id).copied().unwrap();
 
     // Update the first datum with different GPS coordinates
@@ -552,7 +716,9 @@ fn store_zero_datum_without_repositioning_does_not_modify_offsets() {
     // Store datum without repositioning
     let station_ref = StationRef::new(section_id, 0);
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project.store_zero_datum_without_repositioning(station_ref, gps).unwrap();
+    project
+        .store_zero_datum_without_repositioning(station_ref, gps)
+        .unwrap();
 
     // Offset should remain unchanged
     let offset = project.section_offsets.get(&section_id).unwrap();
@@ -584,12 +750,18 @@ fn coordinate_computation_no_global_datum_subtraction() {
     let stations = project.compute_station_coordinates();
 
     // Station 0 should be at (0, 0) - no global subtraction
-    let station_0 = stations.iter().find(|s| s.station_ref == StationRef::new(section_id, 0)).unwrap();
+    let station_0 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(section_id, 0))
+        .unwrap();
     assert!((station_0.coordinates.x).abs() < 1e-6);
     assert!((station_0.coordinates.y).abs() < 1e-6);
 
     // Station 1 should be at (0, 10) - no global subtraction
-    let station_1 = stations.iter().find(|s| s.station_ref == StationRef::new(section_id, 1)).unwrap();
+    let station_1 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(section_id, 1))
+        .unwrap();
     assert!((station_1.coordinates.x).abs() < 1e-6);
     assert!((station_1.coordinates.y - 10.0).abs() < 1e-6);
 }
@@ -601,49 +773,80 @@ fn merge_stations_propagates_datum_positioning_a_into_b() {
     let mut project = Project::new("MergeDatumA".to_string(), None);
 
     // Section A: has datum, shot goes north 10m
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Set datum on A.0 (positions A.0 at origin)
-    project.set_zero_datum(
-        StationRef::new(a, 0),
-        GpsCoordinates::new(45.0, -90.0, 0.0).unwrap()
-    ).unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
 
     // Verify A is positioned correctly before merge
-    let a0_coords = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
+    let a0_coords = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
     assert!((a0_coords.x).abs() < 1e-6, "A.0 x should be 0");
     assert!((a0_coords.y).abs() < 1e-6, "A.0 y should be 0");
-    let a1_coords = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
+    let a1_coords = project
+        .compute_station_raw_coords(StationRef::new(a, 1))
+        .unwrap();
     assert!((a1_coords.y - 10.0).abs() < 1e-6, "A.1 y should be 10");
 
     // Section B: no datum, shot goes east 5m
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Merge B.0 into A.1 (B merges into datum group)
-    project.merge_stations(
-        StationRef::new(a, 1),
-        StationRef::new(b, 0),
-    ).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
 
     // After merge, B should be positioned in datum coordinate system
     // B.0 should be at A.1's position (0, 10)
-    let b0_coords = project.compute_station_raw_coords(StationRef::new(b, 0)).unwrap();
-    assert!((b0_coords.x).abs() < 1e-6, "B.0 x should be 0, got {}", b0_coords.x);
-    assert!((b0_coords.y - 10.0).abs() < 1e-6, "B.0 y should be 10, got {}", b0_coords.y);
+    let b0_coords = project
+        .compute_station_raw_coords(StationRef::new(b, 0))
+        .unwrap();
+    assert!(
+        (b0_coords.x).abs() < 1e-6,
+        "B.0 x should be 0, got {}",
+        b0_coords.x
+    );
+    assert!(
+        (b0_coords.y - 10.0).abs() < 1e-6,
+        "B.0 y should be 10, got {}",
+        b0_coords.y
+    );
 
     // B.1 should be at (5, 10) - 5m east of B.0
-    let b1_coords = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
-    assert!((b1_coords.x - 5.0).abs() < 1e-6, "B.1 x should be 5, got {}", b1_coords.x);
-    assert!((b1_coords.y - 10.0).abs() < 1e-6, "B.1 y should be 10, got {}", b1_coords.y);
+    let b1_coords = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
+    assert!(
+        (b1_coords.x - 5.0).abs() < 1e-6,
+        "B.1 x should be 5, got {}",
+        b1_coords.x
+    );
+    assert!(
+        (b1_coords.y - 10.0).abs() < 1e-6,
+        "B.1 y should be 10, got {}",
+        b1_coords.y
+    );
 
     // A's positions should be unchanged
-    let a0_after = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
+    let a0_after = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
     assert!((a0_after.x).abs() < 1e-6, "A.0 x should still be 0");
     assert!((a0_after.y).abs() < 1e-6, "A.0 y should still be 0");
 }
@@ -655,48 +858,77 @@ fn merge_stations_propagates_datum_positioning_b_into_a() {
     let mut project = Project::new("MergeDatumB".to_string(), None);
 
     // Section A: no datum, shot goes north 10m
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Section B: has datum, shot goes east 5m
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Set datum on B.0 (positions B.0 at origin)
-    project.set_zero_datum(
-        StationRef::new(b, 0),
-        GpsCoordinates::new(45.0, -90.0, 0.0).unwrap()
-    ).unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(b, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
 
     // Verify B is positioned correctly before merge
-    let b0_coords = project.compute_station_raw_coords(StationRef::new(b, 0)).unwrap();
+    let b0_coords = project
+        .compute_station_raw_coords(StationRef::new(b, 0))
+        .unwrap();
     assert!((b0_coords.x).abs() < 1e-6, "B.0 x should be 0");
     assert!((b0_coords.y).abs() < 1e-6, "B.0 y should be 0");
 
     // Merge A.0 into B.1 (A merges into datum group)
     // B.1 is at (5, 0)
-    project.merge_stations(
-        StationRef::new(a, 0),
-        StationRef::new(b, 1),
-    ).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 1))
+        .unwrap();
 
     // After merge, A should be positioned in datum coordinate system
     // A.0 should be at B.1's position (5, 0)
-    let a0_coords = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
-    assert!((a0_coords.x - 5.0).abs() < 1e-6, "A.0 x should be 5, got {}", a0_coords.x);
-    assert!((a0_coords.y).abs() < 1e-6, "A.0 y should be 0, got {}", a0_coords.y);
+    let a0_coords = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
+    assert!(
+        (a0_coords.x - 5.0).abs() < 1e-6,
+        "A.0 x should be 5, got {}",
+        a0_coords.x
+    );
+    assert!(
+        (a0_coords.y).abs() < 1e-6,
+        "A.0 y should be 0, got {}",
+        a0_coords.y
+    );
 
     // A.1 should be at (5, 10) - 10m north of A.0
-    let a1_coords = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
-    assert!((a1_coords.x - 5.0).abs() < 1e-6, "A.1 x should be 5, got {}", a1_coords.x);
-    assert!((a1_coords.y - 10.0).abs() < 1e-6, "A.1 y should be 10, got {}", a1_coords.y);
+    let a1_coords = project
+        .compute_station_raw_coords(StationRef::new(a, 1))
+        .unwrap();
+    assert!(
+        (a1_coords.x - 5.0).abs() < 1e-6,
+        "A.1 x should be 5, got {}",
+        a1_coords.x
+    );
+    assert!(
+        (a1_coords.y - 10.0).abs() < 1e-6,
+        "A.1 y should be 10, got {}",
+        a1_coords.y
+    );
 
     // B's positions should be unchanged
-    let b0_after = project.compute_station_raw_coords(StationRef::new(b, 0)).unwrap();
+    let b0_after = project
+        .compute_station_raw_coords(StationRef::new(b, 0))
+        .unwrap();
     assert!((b0_after.x).abs() < 1e-6, "B.0 x should still be 0");
     assert!((b0_after.y).abs() < 1e-6, "B.0 y should still be 0");
 }
@@ -706,33 +938,55 @@ fn merge_stations_without_datum_aligns_first_section_to_second() {
     // Test: No datum present; the first section should move to align with the second.
     let mut project = Project::new("MergeNoDatum".to_string(), None);
 
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
-    let a1_before = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
-    let b0_before = project.compute_station_raw_coords(StationRef::new(b, 0)).unwrap();
+    let a1_before = project
+        .compute_station_raw_coords(StationRef::new(a, 1))
+        .unwrap();
+    let b0_before = project
+        .compute_station_raw_coords(StationRef::new(b, 0))
+        .unwrap();
     assert!((a1_before.y - 10.0).abs() < 1e-6);
     assert!((b0_before.x).abs() < 1e-6);
     assert!((b0_before.y).abs() < 1e-6);
 
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
 
-    let a1_after = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
-    let b0_after = project.compute_station_raw_coords(StationRef::new(b, 0)).unwrap();
+    let a1_after = project
+        .compute_station_raw_coords(StationRef::new(a, 1))
+        .unwrap();
+    let b0_after = project
+        .compute_station_raw_coords(StationRef::new(b, 0))
+        .unwrap();
     assert!((a1_after.x - b0_after.x).abs() < 1e-6);
     assert!((a1_after.y - b0_after.y).abs() < 1e-6);
 
-    let offset_a = project.section_offsets.get(&a).copied().unwrap_or((0.0, 0.0));
+    let offset_a = project
+        .section_offsets
+        .get(&a)
+        .copied()
+        .unwrap_or((0.0, 0.0));
     assert!((offset_a.0).abs() < 1e-6);
     assert!((offset_a.1 + 10.0).abs() < 1e-6);
 
-    let offset_b = project.section_offsets.get(&b).copied().unwrap_or((0.0, 0.0));
+    let offset_b = project
+        .section_offsets
+        .get(&b)
+        .copied()
+        .unwrap_or((0.0, 0.0));
     assert!((offset_b.0).abs() < 1e-6);
     assert!((offset_b.1).abs() < 1e-6);
 }
@@ -744,56 +998,84 @@ fn merge_stations_transitive_datum_propagation() {
     let mut project = Project::new("TransitiveDatum".to_string(), None);
 
     // Section A: has datum, shot goes north 10m
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Set datum on A.0
-    project.set_zero_datum(
-        StationRef::new(a, 0),
-        GpsCoordinates::new(45.0, -90.0, 0.0).unwrap()
-    ).unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
 
     // Section B: shot goes east 5m (will be connected to A)
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Merge B.0 into A.1 - B now connected to datum group
-    project.merge_stations(
-        StationRef::new(a, 1),
-        StationRef::new(b, 0),
-    ).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
 
     // Section C: shot goes south 3m
-    let c = project.add_section(SectionData {
-        shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Verify B.1 position before merging C
     // B.1 should be at (5, 10) - B.0 at (0, 10), B.1 5m east
-    let b1_before = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+    let b1_before = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
     assert!((b1_before.x - 5.0).abs() < 1e-6, "B.1 x should be 5");
     assert!((b1_before.y - 10.0).abs() < 1e-6, "B.1 y should be 10");
 
     // Merge C.0 into B.1 - C should be positioned via transitive datum
-    project.merge_stations(
-        StationRef::new(b, 1),
-        StationRef::new(c, 0),
-    ).unwrap();
+    project
+        .merge_stations(StationRef::new(b, 1), StationRef::new(c, 0))
+        .unwrap();
 
     // C.0 should be at B.1's position (5, 10)
-    let c0_coords = project.compute_station_raw_coords(StationRef::new(c, 0)).unwrap();
-    assert!((c0_coords.x - 5.0).abs() < 1e-6, "C.0 x should be 5, got {}", c0_coords.x);
-    assert!((c0_coords.y - 10.0).abs() < 1e-6, "C.0 y should be 10, got {}", c0_coords.y);
+    let c0_coords = project
+        .compute_station_raw_coords(StationRef::new(c, 0))
+        .unwrap();
+    assert!(
+        (c0_coords.x - 5.0).abs() < 1e-6,
+        "C.0 x should be 5, got {}",
+        c0_coords.x
+    );
+    assert!(
+        (c0_coords.y - 10.0).abs() < 1e-6,
+        "C.0 y should be 10, got {}",
+        c0_coords.y
+    );
 
     // C.1 should be at (5, 7) - 3m south of C.0
-    let c1_coords = project.compute_station_raw_coords(StationRef::new(c, 1)).unwrap();
-    assert!((c1_coords.x - 5.0).abs() < 1e-6, "C.1 x should be 5, got {}", c1_coords.x);
-    assert!((c1_coords.y - 7.0).abs() < 1e-6, "C.1 y should be 7, got {}", c1_coords.y);
+    let c1_coords = project
+        .compute_station_raw_coords(StationRef::new(c, 1))
+        .unwrap();
+    assert!(
+        (c1_coords.x - 5.0).abs() < 1e-6,
+        "C.1 x should be 5, got {}",
+        c1_coords.x
+    );
+    assert!(
+        (c1_coords.y - 7.0).abs() < 1e-6,
+        "C.1 y should be 7, got {}",
+        c1_coords.y
+    );
 }
 
 // === Duplicate datum validation tests ===
@@ -814,13 +1096,21 @@ fn set_zero_datum_rejects_duplicate_in_same_section() {
 
     // Set first datum on station 0
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
+    project
+        .set_zero_datum(StationRef::new(section_id, 0), gps)
+        .unwrap();
 
     // Attempt to set second datum on station 1 (same section) - should fail
     let result = project.set_zero_datum(StationRef::new(section_id, 1), gps);
-    assert!(result.is_err(), "Should reject duplicate datum in same section");
+    assert!(
+        result.is_err(),
+        "Should reject duplicate datum in same section"
+    );
     let err = result.unwrap_err();
-    assert!(err.contains("already has a zero datum"), "Error should mention existing datum: {err}");
+    assert!(
+        err.contains("already has a zero datum"),
+        "Error should mention existing datum: {err}"
+    );
 }
 
 #[test]
@@ -829,14 +1119,18 @@ fn set_zero_datum_rejects_duplicate_in_connected_group() {
     let mut project = Project::new("DuplicateConnected".to_string(), None);
 
     // Create two sections
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Merge B.0 to A.1
     project.station_merges.push(StationMerge {
@@ -851,9 +1145,15 @@ fn set_zero_datum_rejects_duplicate_in_connected_group() {
 
     // Attempt to set second datum on section B (connected through merge) - should fail
     let result = project.set_zero_datum(StationRef::new(b, 1), gps);
-    assert!(result.is_err(), "Should reject duplicate datum in connected group");
+    assert!(
+        result.is_err(),
+        "Should reject duplicate datum in connected group"
+    );
     let err = result.unwrap_err();
-    assert!(err.contains("already has a zero datum"), "Error should mention existing datum: {err}");
+    assert!(
+        err.contains("already has a zero datum"),
+        "Error should mention existing datum: {err}"
+    );
 }
 
 #[test]
@@ -862,23 +1162,32 @@ fn set_zero_datum_allows_disconnected_groups() {
     let mut project = Project::new("DisconnectedGroups".to_string(), None);
 
     // Create two unconnected sections
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Set datum on section A
     let gps_a = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(a, 0), gps_a).unwrap();
+    project
+        .set_zero_datum(StationRef::new(a, 0), gps_a)
+        .unwrap();
 
     // Set datum on section B (disconnected) - should succeed
     let gps_b = GpsCoordinates::new(46.0, -91.0, 0.0).unwrap();
     let result = project.set_zero_datum(StationRef::new(b, 0), gps_b);
-    assert!(result.is_ok(), "Disconnected groups should each allow their own datum");
+    assert!(
+        result.is_ok(),
+        "Disconnected groups should each allow their own datum"
+    );
     assert_eq!(project.zero_datums.len(), 2);
 }
 
@@ -897,7 +1206,12 @@ fn set_zero_datum_rejects_across_multi_hop_merge_chain() {
             })
             .id
     };
-    let (a, b, c, d) = (mk(&mut project), mk(&mut project), mk(&mut project), mk(&mut project));
+    let (a, b, c, d) = (
+        mk(&mut project),
+        mk(&mut project),
+        mk(&mut project),
+        mk(&mut project),
+    );
 
     // Chain A — B — C — D, each merge joining one section's end to the next's start.
     for (x, y) in [(a, b), (b, c), (c, d)] {
@@ -944,15 +1258,25 @@ fn convert_orphan_closures_leaves_double_anchored_groups_unconverted() {
     project.ensure_shot_uuids();
 
     project
-        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(45.0, -90.0, 0.0).unwrap())
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
         .unwrap();
     project
-        .set_zero_datum(StationRef::new(b, 0), GpsCoordinates::new(45.001, -90.0, 0.0).unwrap())
+        .set_zero_datum(
+            StationRef::new(b, 0),
+            GpsCoordinates::new(45.001, -90.0, 0.0).unwrap(),
+        )
         .unwrap();
 
     // A closure between two anchored-but-disconnected groups is legitimate.
     project
-        .create_loop_closure(StationRef::new(a, 1), StationRef::new(b, 1), ClosureStrategy::Batch)
+        .create_loop_closure(
+            StationRef::new(a, 1),
+            StationRef::new(b, 1),
+            ClosureStrategy::Batch,
+        )
         .unwrap();
 
     let converted = project.convert_orphan_closures_to_merges();
@@ -960,8 +1284,15 @@ fn convert_orphan_closures_leaves_double_anchored_groups_unconverted() {
         converted, 0,
         "must not convert a closure that would double-anchor a merge component"
     );
-    assert!(project.station_merges.is_empty(), "no merge should have been created");
-    assert_eq!(project.loop_closures.len(), 1, "the bridge closure must be retained");
+    assert!(
+        project.station_merges.is_empty(),
+        "no merge should have been created"
+    );
+    assert_eq!(
+        project.loop_closures.len(),
+        1,
+        "the bridge closure must be retained"
+    );
     assert!(
         project.over_anchored_merge_components().is_empty(),
         "the two datums must stay in separate merge components"
@@ -1055,14 +1386,19 @@ fn set_zero_datum_error_includes_section_name() {
 
     // Set first datum
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
+    project
+        .set_zero_datum(StationRef::new(section_id, 0), gps)
+        .unwrap();
 
     // Attempt duplicate
     let result = project.set_zero_datum(StationRef::new(section_id, 1), gps);
     let err = result.unwrap_err();
 
     // Error should include section name
-    assert!(err.contains("Main Passage"), "Error should include section name: {err}");
+    assert!(
+        err.contains("Main Passage"),
+        "Error should include section name: {err}"
+    );
 }
 
 #[test]
@@ -1081,7 +1417,9 @@ fn set_zero_datum_error_includes_station_number() {
 
     // Set first datum on station 0
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
+    project
+        .set_zero_datum(StationRef::new(section_id, 0), gps)
+        .unwrap();
 
     // Attempt to set on station 2
     let result = project.set_zero_datum(StationRef::new(section_id, 2), gps);
@@ -1089,7 +1427,10 @@ fn set_zero_datum_error_includes_station_number() {
 
     // Error should reference stations with 0-indexed format (e.g., "Section 0 #2")
     assert!(err.contains("#2"), "New station should include #2: {err}");
-    assert!(err.contains("#0"), "Existing datum station should include #0: {err}");
+    assert!(
+        err.contains("#0"),
+        "Existing datum station should include #0: {err}"
+    );
 }
 
 #[test]
@@ -1105,7 +1446,9 @@ fn set_zero_datum_validation_runs_before_state_changes() {
 
     // Set first datum
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
+    project
+        .set_zero_datum(StationRef::new(section_id, 0), gps)
+        .unwrap();
 
     // Record state before failed attempt
     let offset_before = project.section_offsets.get(&section_id).copied();
@@ -1117,8 +1460,15 @@ fn set_zero_datum_validation_runs_before_state_changes() {
 
     // State should be unchanged
     let offset_after = project.section_offsets.get(&section_id).copied();
-    assert_eq!(offset_before, offset_after, "Section offset should not change on validation failure");
-    assert_eq!(datums_count_before, project.zero_datums.len(), "Zero datums count should not change");
+    assert_eq!(
+        offset_before, offset_after,
+        "Section offset should not change on validation failure"
+    );
+    assert_eq!(
+        datums_count_before,
+        project.zero_datums.len(),
+        "Zero datums count should not change"
+    );
 }
 
 #[test]
@@ -1134,7 +1484,9 @@ fn set_zero_datum_allows_resetting_same_station() {
 
     // Set datum
     let gps1 = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(section_id, 0), gps1).unwrap();
+    project
+        .set_zero_datum(StationRef::new(section_id, 0), gps1)
+        .unwrap();
 
     // Re-set on same station with different GPS - should succeed
     let gps2 = GpsCoordinates::new(46.0, -91.0, 0.0).unwrap();
@@ -1159,11 +1511,17 @@ fn store_zero_datum_without_repositioning_validates_duplicate() {
 
     // Set first datum normally
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
+    project
+        .set_zero_datum(StationRef::new(section_id, 0), gps)
+        .unwrap();
 
     // Attempt store-only on different station - should fail
-    let result = project.store_zero_datum_without_repositioning(StationRef::new(section_id, 1), gps);
-    assert!(result.is_err(), "Store-only should also validate for duplicates");
+    let result =
+        project.store_zero_datum_without_repositioning(StationRef::new(section_id, 1), gps);
+    assert!(
+        result.is_err(),
+        "Store-only should also validate for duplicates"
+    );
 }
 
 #[test]
@@ -1186,15 +1544,23 @@ fn find_connected_zero_datum_uses_station_connectivity() {
 
     // Set datum on station 1 (middle)
     let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(section_id, 1), gps).unwrap();
+    project
+        .set_zero_datum(StationRef::new(section_id, 1), gps)
+        .unwrap();
 
     // Station 0 is connected to station 1 through shot 0
     let result_0 = project.set_zero_datum(StationRef::new(section_id, 0), gps);
-    assert!(result_0.is_err(), "Station 0 should be connected to datum at station 1");
+    assert!(
+        result_0.is_err(),
+        "Station 0 should be connected to datum at station 1"
+    );
 
     // Station 3 is connected to station 1 through shots 1 and 2
     let result_3 = project.set_zero_datum(StationRef::new(section_id, 3), gps);
-    assert!(result_3.is_err(), "Station 3 should be connected to datum at station 1");
+    assert!(
+        result_3.is_err(),
+        "Station 3 should be connected to datum at station 1"
+    );
 }
 
 // === Loop closure tests ===
@@ -1204,48 +1570,68 @@ fn create_loop_closure_creates_correct_values() {
     let mut project = Project::new("ClosureTest".to_string(), None);
 
     // Section A: shot goes north 10m
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 1.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 1.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Section B: shot goes east 5m
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Merge B.0 to A.1 so they're connected
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
 
     // Create closure between A.0 and B.1 (same-section closures require same connected group)
-    let closure = project.create_loop_closure(
-        StationRef::new(a, 0),
-        StationRef::new(b, 1),
-        ClosureStrategy::Batch,
-    ).unwrap();
+    let closure = project
+        .create_loop_closure(
+            StationRef::new(a, 0),
+            StationRef::new(b, 1),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
 
     assert!(project.key_is_ref(&closure.station_a, StationRef::new(a, 0)));
     assert!(project.key_is_ref(&closure.station_b, StationRef::new(b, 1)));
 
     // Path length should be sum of shot lengths: 10m + 5m = 15m
-    assert!((closure.path_length - 15.0).abs() < 0.1,
-        "Path length should be ~15m (10+5), got {}", closure.path_length);
+    assert!(
+        (closure.path_length - 15.0).abs() < 0.1,
+        "Path length should be ~15m (10+5), got {}",
+        closure.path_length
+    );
 
     // Misclosure is Euclidean distance between A.0 and B.1
-    assert!(closure.misclosure_distance > 0.0, "Misclosure should be positive for non-coincident stations");
+    assert!(
+        closure.misclosure_distance > 0.0,
+        "Misclosure should be positive for non-coincident stations"
+    );
 
     // Verify error_percentage formula: (misclosure / path_length) * 100
     let expected_pct = (closure.misclosure_distance / closure.path_length) * 100.0;
-    assert!((closure.error_percentage - expected_pct).abs() < 1e-6,
+    assert!(
+        (closure.error_percentage - expected_pct).abs() < 1e-6,
         "error_percentage should equal misclosure/path_length*100: expected {}, got {}",
-        expected_pct, closure.error_percentage);
+        expected_pct,
+        closure.error_percentage
+    );
 
     // Horizontal + vertical misclosure should be consistent with total misclosure
     // (total >= horizontal because total includes vertical component)
-    assert!(closure.misclosure_distance >= closure.horizontal_misclosure,
+    assert!(
+        closure.misclosure_distance >= closure.horizontal_misclosure,
         "Total misclosure {} should be >= horizontal {}",
-        closure.misclosure_distance, closure.horizontal_misclosure);
+        closure.misclosure_distance,
+        closure.horizontal_misclosure
+    );
     assert!(closure.vertical_misclosure >= 0.0);
 
     assert_eq!(project.loop_closures.len(), 1);
@@ -1255,13 +1641,15 @@ fn create_loop_closure_creates_correct_values() {
 fn create_loop_closure_proportional_is_deferred() {
     let mut project = Project::new("ClosureDist".to_string(), None);
 
-    let section_id = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(90.0, 90.0, 10.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     let station_a = StationRef::new(section_id, 0);
     let station_b = StationRef::new(section_id, 2);
@@ -1269,11 +1657,8 @@ fn create_loop_closure_proportional_is_deferred() {
     let coords_a_before = project.compute_station_raw_coords(station_a).unwrap();
     let coords_b_before = project.compute_station_raw_coords(station_b).unwrap();
 
-    let result = project.create_loop_closure(
-        station_a,
-        station_b,
-        ClosureStrategy::ProportionalByLength,
-    );
+    let result =
+        project.create_loop_closure(station_a, station_b, ClosureStrategy::ProportionalByLength);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("deferred"));
     assert!(project.loop_closures.is_empty());
@@ -1288,22 +1673,21 @@ fn create_loop_closure_proportional_is_deferred() {
 fn create_loop_closure_equal_distribution_is_deferred() {
     let mut project = Project::new("ClosureFallback".to_string(), None);
 
-    let section_id = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 5.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     let station_a = StationRef::new(section_id, 0);
     let station_b = StationRef::new(section_id, 2);
 
-    let result = project.create_loop_closure(
-        station_a,
-        station_b,
-        ClosureStrategy::EqualDistribution,
-    );
+    let result =
+        project.create_loop_closure(station_a, station_b, ClosureStrategy::EqualDistribution);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("deferred"));
     assert!(project.loop_closures.is_empty());
@@ -1313,23 +1697,31 @@ fn create_loop_closure_equal_distribution_is_deferred() {
 fn create_loop_closure_rejects_duplicate() {
     let mut project = Project::new("DupClosure".to_string(), None);
 
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
 
     // First closure succeeds
-    project.create_loop_closure(
-        StationRef::new(a, 0),
-        StationRef::new(b, 1),
-        ClosureStrategy::default(),
-    ).unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(a, 0),
+            StationRef::new(b, 1),
+            ClosureStrategy::default(),
+        )
+        .unwrap();
 
     // Duplicate should fail
     let result = project.create_loop_closure(
@@ -1346,7 +1738,10 @@ fn create_loop_closure_rejects_duplicate() {
         StationRef::new(a, 0),
         ClosureStrategy::default(),
     );
-    assert!(result.is_err(), "Reversed duplicate closure should be rejected");
+    assert!(
+        result.is_err(),
+        "Reversed duplicate closure should be rejected"
+    );
 }
 
 #[test]
@@ -1354,14 +1749,16 @@ fn create_loop_closure_allows_same_section() {
     let mut project = Project::new("SameSectionClosure".to_string(), None);
 
     // A section with 3 shots - all stations are connected within the section
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(90.0, 90.0, 10.0, 0.0, 0.0),
-            shot(180.0, 180.0, 10.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+                shot(180.0, 180.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     // Stations 0 and 3 are in the same section and connected through shots
     let result = project.create_loop_closure(
@@ -1369,7 +1766,11 @@ fn create_loop_closure_allows_same_section() {
         StationRef::new(a, 3),
         ClosureStrategy::default(),
     );
-    assert!(result.is_ok(), "Same-section closure should be allowed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Same-section closure should be allowed: {:?}",
+        result.err()
+    );
     assert_eq!(project.loop_closures.len(), 1);
 }
 
@@ -1377,14 +1778,18 @@ fn create_loop_closure_allows_same_section() {
 fn create_loop_closure_rejects_unconnected_stations() {
     let mut project = Project::new("UnconnectedClosure".to_string(), None);
 
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Don't merge them - they are unconnected
     let result = project.create_loop_closure(
@@ -1400,21 +1805,30 @@ fn create_loop_closure_rejects_unconnected_stations() {
 fn merge_stations_rejects_already_connected() {
     let mut project = Project::new("ConnectedMerge".to_string(), None);
 
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // First merge succeeds
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
 
     // Second merge between connected sections should fail
     let result = project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 1));
-    assert!(result.is_err(), "Merging already-connected stations should be rejected");
+    assert!(
+        result.is_err(),
+        "Merging already-connected stations should be rejected"
+    );
     assert!(result.unwrap_err().contains("already connected"));
 }
 
@@ -1422,22 +1836,32 @@ fn merge_stations_rejects_already_connected() {
 fn unmerge_stations_removes_matching_closure_and_preserves_others() {
     let mut project = Project::new("UnmergePair".to_string(), None);
 
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let c = project.add_section(SectionData {
-        shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Merge A-B and B-C
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
-    project.merge_stations(StationRef::new(b, 1), StationRef::new(c, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(b, 1), StationRef::new(c, 0))
+        .unwrap();
 
     // Inject a closure matching the A-B merge pair directly.
     // (create_loop_closure won't accept stations that are the merge pair itself)
@@ -1471,12 +1895,13 @@ fn unmerge_stations_removes_matching_closure_and_preserves_others() {
     assert_eq!(project.loop_closures.len(), 2);
 
     // Unmerge A-B: should remove the A.1-B.0 closure but keep B.1-C.0
-    let (success, removed) = project.unmerge_stations(
-        StationRef::new(a, 1),
-        StationRef::new(b, 0),
-    );
+    let (success, removed) = project.unmerge_stations(StationRef::new(a, 1), StationRef::new(b, 0));
     assert!(success);
-    assert_eq!(removed.len(), 1, "Should remove exactly 1 closure matching the merge pair");
+    assert_eq!(
+        removed.len(),
+        1,
+        "Should remove exactly 1 closure matching the merge pair"
+    );
     assert!(project.key_is_ref(&removed[0].station_a, StationRef::new(a, 1)));
     assert!(project.key_is_ref(&removed[0].station_b, StationRef::new(b, 0)));
 
@@ -1490,22 +1915,32 @@ fn unmerge_stations_removes_matching_closure_and_preserves_others() {
 fn unmerge_stations_preserves_unrelated_closures() {
     let mut project = Project::new("UnmergePreserve".to_string(), None);
 
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let c = project.add_section(SectionData {
-        shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Merge A-B and B-C
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
-    project.merge_stations(StationRef::new(b, 1), StationRef::new(c, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(b, 1), StationRef::new(c, 0))
+        .unwrap();
 
     // Create closure using B-C pair stations (b.1, c.0)
     // This is a direct closure at the merge point
@@ -1525,13 +1960,17 @@ fn unmerge_stations_preserves_unrelated_closures() {
     assert_eq!(project.loop_closures.len(), 1);
 
     // Unmerge A-B: should NOT remove the B.1-C.0 closure (different pair)
-    let (success, removed) = project.unmerge_stations(
-        StationRef::new(a, 1),
-        StationRef::new(b, 0),
-    );
+    let (success, removed) = project.unmerge_stations(StationRef::new(a, 1), StationRef::new(b, 0));
     assert!(success);
-    assert!(removed.is_empty(), "No closures should be removed for unrelated pair");
-    assert_eq!(project.loop_closures.len(), 1, "B-C closure should be preserved");
+    assert!(
+        removed.is_empty(),
+        "No closures should be removed for unrelated pair"
+    );
+    assert_eq!(
+        project.loop_closures.len(),
+        1,
+        "B-C closure should be preserved"
+    );
 }
 
 #[test]
@@ -1584,7 +2023,10 @@ fn closure_expands_connected_sections_with_existing_merges() {
     let merged = project.get_merged_section_ids(a);
     assert!(merged.contains(&a), "A should be in merge group");
     assert!(merged.contains(&b), "B should be in merge group");
-    assert!(!merged.contains(&c), "C should NOT be in merge group (only closure-linked)");
+    assert!(
+        !merged.contains(&c),
+        "C should NOT be in merge group (only closure-linked)"
+    );
     assert_eq!(merged.len(), 2);
 
     // Full connectivity (merges + closures): all three sections are connected
@@ -1595,10 +2037,7 @@ fn closure_expands_connected_sections_with_existing_merges() {
     assert_eq!(reachable.len(), 3);
 
     // Path length including closures: BFS traverses closure as zero-distance edge
-    let path = project.calculate_path_length_between(
-        StationRef::new(a, 0),
-        StationRef::new(c, 1),
-    );
+    let path = project.calculate_path_length_between(StationRef::new(a, 0), StationRef::new(c, 1));
     // A.0 -> A.1 (1m shot) -> B.0 (merge, 0) -> B.1 (1m shot) -> C.0 (closure, 0) -> C.1 (1m shot)
     assert!(
         (path - 3.0).abs() < 1e-6,
@@ -1607,10 +2046,8 @@ fn closure_expands_connected_sections_with_existing_merges() {
 
     // Merge-only path length: cannot reach C.1 from A.0 without closures
     // Falls back to sum of merged section lengths
-    let merge_only_path = project.calculate_merge_only_path_length(
-        StationRef::new(a, 0),
-        StationRef::new(c, 1),
-    );
+    let merge_only_path =
+        project.calculate_merge_only_path_length(StationRef::new(a, 0), StationRef::new(c, 1));
     // A and B are merge-connected (total 2m), C is not reachable without closures
     // Fallback returns sum of A+B shots = 2.0
     assert!(
@@ -1619,20 +2056,11 @@ fn closure_expands_connected_sections_with_existing_merges() {
     );
 
     // are_stations_in_closure should detect the closure
-    assert!(project.are_stations_in_closure(
-        StationRef::new(b, 1),
-        StationRef::new(c, 0),
-    ));
+    assert!(project.are_stations_in_closure(StationRef::new(b, 1), StationRef::new(c, 0),));
     // Reverse direction also works
-    assert!(project.are_stations_in_closure(
-        StationRef::new(c, 0),
-        StationRef::new(b, 1),
-    ));
+    assert!(project.are_stations_in_closure(StationRef::new(c, 0), StationRef::new(b, 1),));
     // Non-closure pair returns false
-    assert!(!project.are_stations_in_closure(
-        StationRef::new(a, 0),
-        StationRef::new(c, 0),
-    ));
+    assert!(!project.are_stations_in_closure(StationRef::new(a, 0), StationRef::new(c, 0),));
 }
 
 #[test]
@@ -1668,10 +2096,7 @@ fn calculate_path_length_prefers_shorter_weighted_path() {
         merged_at: Utc::now(),
     });
 
-    let path = project.calculate_path_length_between(
-        StationRef::new(a, 0),
-        StationRef::new(a, 1),
-    );
+    let path = project.calculate_path_length_between(StationRef::new(a, 0), StationRef::new(a, 1));
     assert!(
         (path - 2.0).abs() < 1e-6,
         "Path should prefer length 2.0 over direct 100.0, got {path}"
@@ -1683,11 +2108,21 @@ fn calculate_path_length_prefers_shorter_weighted_path() {
 // ---------------------------------------------------------------------------
 
 fn ep_station(section_id: SectionId, station_index: u32) -> RulerEndpoint {
-    RulerEndpoint { section_id, station_index: Some(station_index), shot_id: None, t: None }
+    RulerEndpoint {
+        section_id,
+        station_index: Some(station_index),
+        shot_id: None,
+        t: None,
+    }
 }
 
 fn ep_shot(section_id: SectionId, shot_id: ShotId, t: f64) -> RulerEndpoint {
-    RulerEndpoint { section_id, station_index: None, shot_id: Some(shot_id), t: Some(t) }
+    RulerEndpoint {
+        section_id,
+        station_index: None,
+        shot_id: Some(shot_id),
+        t: Some(t),
+    }
 }
 
 #[test]
@@ -1703,17 +2138,36 @@ fn along_line_simple_linear_section() {
             ..Default::default()
         })
         .id;
-    let shots: Vec<ShotId> = project.get_section(a).unwrap().shots.iter().map(|s| s.id).collect();
+    let shots: Vec<ShotId> = project
+        .get_section(a)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.id)
+        .collect();
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(a, 3));
-    assert!((r.along_line.unwrap() - 30.0).abs() < 1e-6, "got {:?}", r.along_line);
+    assert!(
+        (r.along_line.unwrap() - 30.0).abs() < 1e-6,
+        "got {:?}",
+        r.along_line
+    );
     assert_eq!(
         r.path_shots,
         vec![
-            PathShot { section_id: a, shot_id: shots[0] },
-            PathShot { section_id: a, shot_id: shots[1] },
-            PathShot { section_id: a, shot_id: shots[2] },
+            PathShot {
+                section_id: a,
+                shot_id: shots[0]
+            },
+            PathShot {
+                section_id: a,
+                shot_id: shots[1]
+            },
+            PathShot {
+                section_id: a,
+                shot_id: shots[2]
+            },
         ],
     );
     assert_eq!(
@@ -1731,10 +2185,16 @@ fn along_line_simple_linear_section() {
 fn along_line_cross_section_merge_skips_merge_edge() {
     let mut project = Project::new("Merge".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1).into(),
@@ -1746,13 +2206,23 @@ fn along_line_cross_section_merge_skips_merge_edge() {
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(b, 1));
-    assert!((r.along_line.unwrap() - 10.0).abs() < 1e-6, "got {:?}", r.along_line);
+    assert!(
+        (r.along_line.unwrap() - 10.0).abs() < 1e-6,
+        "got {:?}",
+        r.along_line
+    );
     // Two shots; the zero-cost merge edge is NOT emitted as a shot.
     assert_eq!(
         r.path_shots,
         vec![
-            PathShot { section_id: a, shot_id: a_shot },
-            PathShot { section_id: b, shot_id: b_shot },
+            PathShot {
+                section_id: a,
+                shot_id: a_shot
+            },
+            PathShot {
+                section_id: b,
+                shot_id: b_shot
+            },
         ],
     );
 }
@@ -1763,16 +2233,25 @@ fn along_line_routes_through_loop_closure() {
     // edges, so a closed loop gives a shorter route than the direct long shot.
     let mut project = Project::new("Closure".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let b = project
         .add_section(SectionData {
-            shots: vec![shot(90.0, 90.0, 1.0, 0.0, 0.0), shot(90.0, 90.0, 1.0, 0.0, 0.0)],
+            shots: vec![
+                shot(90.0, 90.0, 1.0, 0.0, 0.0),
+                shot(90.0, 90.0, 1.0, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
     // Tie A.0<->B.0 and A.1<->B.2 with loop closures (not merges).
-    for (sa, sb) in [(StationRef::new(a, 0), StationRef::new(b, 0)), (StationRef::new(a, 1), StationRef::new(b, 2))] {
+    for (sa, sb) in [
+        (StationRef::new(a, 0), StationRef::new(b, 0)),
+        (StationRef::new(a, 1), StationRef::new(b, 2)),
+    ] {
         project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
             station_a: sa.into(),
@@ -1787,17 +2266,33 @@ fn along_line_routes_through_loop_closure() {
         });
         project.next_closure_id += 1;
     }
-    let b_shots: Vec<ShotId> = project.get_section(b).unwrap().shots.iter().map(|s| s.id).collect();
+    let b_shots: Vec<ShotId> = project
+        .get_section(b)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.id)
+        .collect();
     let a_shot = project.get_section(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(a, 1));
-    assert!((r.along_line.unwrap() - 2.0).abs() < 1e-6, "should route via closure, got {:?}", r.along_line);
+    assert!(
+        (r.along_line.unwrap() - 2.0).abs() < 1e-6,
+        "should route via closure, got {:?}",
+        r.along_line
+    );
     assert_eq!(
         r.path_shots,
         vec![
-            PathShot { section_id: b, shot_id: b_shots[0] },
-            PathShot { section_id: b, shot_id: b_shots[1] },
+            PathShot {
+                section_id: b,
+                shot_id: b_shots[0]
+            },
+            PathShot {
+                section_id: b,
+                shot_id: b_shots[1]
+            },
         ],
     );
     assert!(
@@ -1810,15 +2305,28 @@ fn along_line_routes_through_loop_closure() {
 fn along_line_shot_point_partial_length() {
     let mut project = Project::new("ShotPoint".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let s0 = project.get_section(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
 
     // Station 0 to a point 25% along shot 0 → 2.5 m; whole shot tinted.
     let r = project.along_line_between(&stations, ep_station(a, 0), ep_shot(a, s0, 0.25));
-    assert!((r.along_line.unwrap() - 2.5).abs() < 1e-6, "got {:?}", r.along_line);
-    assert_eq!(r.path_shots, vec![PathShot { section_id: a, shot_id: s0 }]);
+    assert!(
+        (r.along_line.unwrap() - 2.5).abs() < 1e-6,
+        "got {:?}",
+        r.along_line
+    );
+    assert_eq!(
+        r.path_shots,
+        vec![PathShot {
+            section_id: a,
+            shot_id: s0
+        }]
+    );
     // Only station 0 is a real node on the path; the shot-point endpoint is virtual.
     assert_eq!(r.path_stations, vec![StationRef::new(a, 0)]);
 }
@@ -1827,14 +2335,27 @@ fn along_line_shot_point_partial_length() {
 fn along_line_same_shot_endpoints() {
     let mut project = Project::new("SameShot".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let s0 = project.get_section(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_shot(a, s0, 0.2), ep_shot(a, s0, 0.7));
-    assert!((r.along_line.unwrap() - 5.0).abs() < 1e-6, "got {:?}", r.along_line);
-    assert_eq!(r.path_shots, vec![PathShot { section_id: a, shot_id: s0 }]);
+    assert!(
+        (r.along_line.unwrap() - 5.0).abs() < 1e-6,
+        "got {:?}",
+        r.along_line
+    );
+    assert_eq!(
+        r.path_shots,
+        vec![PathShot {
+            section_id: a,
+            shot_id: s0
+        }]
+    );
     // Two mid-shot points cross no station.
     assert!(r.path_stations.is_empty());
 }
@@ -1847,7 +2368,10 @@ fn along_line_same_shot_prefers_shorter_route_around() {
     // to the direct segment — Dijkstra picks the genuine shortest path (#26, Codex).
     let mut project = Project::new("SameShotRoute".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     project.loop_closures.push(LoopClosure {
         id: project.next_closure_id,
@@ -1866,10 +2390,20 @@ fn along_line_same_shot_prefers_shorter_route_around() {
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_shot(a, s0, 0.1), ep_shot(a, s0, 0.9));
-    assert!((r.along_line.unwrap() - 20.0).abs() < 1e-6, "should route around, got {:?}", r.along_line);
+    assert!(
+        (r.along_line.unwrap() - 20.0).abs() < 1e-6,
+        "should route around, got {:?}",
+        r.along_line
+    );
     // The end-legs of the shot are traversed (v→A.0 and A.1→v), but the middle
     // A.0→A.1 leg uses the closure, not the shot — still exactly one shot entry.
-    assert_eq!(r.path_shots, vec![PathShot { section_id: a, shot_id: s0 }]);
+    assert_eq!(
+        r.path_shots,
+        vec![PathShot {
+            section_id: a,
+            shot_id: s0
+        }]
+    );
 }
 
 #[test]
@@ -1879,7 +2413,10 @@ fn along_line_parallel_closure_does_not_tint_shot() {
     // path did NOT traverse — must not be tinted (#26, Codex).
     let mut project = Project::new("ParallelClosure".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     project.loop_closures.push(LoopClosure {
         id: project.next_closure_id,
@@ -1898,7 +2435,11 @@ fn along_line_parallel_closure_does_not_tint_shot() {
 
     let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(a, 1));
     assert_eq!(r.along_line, Some(0.0), "routes via the 0-cost closure");
-    assert!(r.path_shots.is_empty(), "the parallel shot must not be tinted: {:?}", r.path_shots);
+    assert!(
+        r.path_shots.is_empty(),
+        "the parallel shot must not be tinted: {:?}",
+        r.path_shots
+    );
 }
 
 #[test]
@@ -1907,24 +2448,37 @@ fn along_line_zero_length_same_shot_has_empty_path() {
     // matching identical station endpoints (#26, Codex).
     let mut project = Project::new("ZeroLenShot".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let s0 = project.get_section(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_shot(a, s0, 0.5), ep_shot(a, s0, 0.5));
     assert_eq!(r.along_line, Some(0.0), "got {:?}", r.along_line);
-    assert!(r.path_shots.is_empty(), "zero-length same-shot must not tint: {:?}", r.path_shots);
+    assert!(
+        r.path_shots.is_empty(),
+        "zero-length same-shot must not tint: {:?}",
+        r.path_shots
+    );
 }
 
 #[test]
 fn along_line_disconnected_returns_none() {
     let mut project = Project::new("Disconnected".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let stations = project.compute_station_coordinates();
 
@@ -1938,7 +2492,10 @@ fn along_line_identical_and_degenerate_t() {
     let mut project = Project::new("Degenerate".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0), shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
@@ -1963,13 +2520,22 @@ fn along_line_skips_merge_and_closure_phantoms() {
     // entries for the zero-cost merge/closure ties.
     let mut project = Project::new("NoPhantom".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let c = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1).into(),
@@ -1992,8 +2558,17 @@ fn along_line_skips_merge_and_closure_phantoms() {
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(c, 1));
-    assert!((r.along_line.unwrap() - 3.0).abs() < 1e-6, "got {:?}", r.along_line);
-    assert_eq!(r.path_shots.len(), 3, "exactly 3 shots, no merge/closure phantoms: {:?}", r.path_shots);
+    assert!(
+        (r.along_line.unwrap() - 3.0).abs() < 1e-6,
+        "got {:?}",
+        r.along_line
+    );
+    assert_eq!(
+        r.path_shots.len(),
+        3,
+        "exactly 3 shots, no merge/closure phantoms: {:?}",
+        r.path_shots
+    );
 }
 
 #[test]
@@ -2004,14 +2579,27 @@ fn along_line_reference_shot_is_traversed_and_tinted() {
     let mut ref_shot = shot(0.0, 0.0, 7.0, 0.0, 0.0);
     ref_shot.is_reference = true;
     let a = project
-        .add_section(SectionData { shots: vec![ref_shot], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![ref_shot],
+            ..Default::default()
+        })
         .id;
     let s0 = project.get_section(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
 
     let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(a, 1));
-    assert!((r.along_line.unwrap() - 7.0).abs() < 1e-6, "got {:?}", r.along_line);
-    assert_eq!(r.path_shots, vec![PathShot { section_id: a, shot_id: s0 }]);
+    assert!(
+        (r.along_line.unwrap() - 7.0).abs() < 1e-6,
+        "got {:?}",
+        r.along_line
+    );
+    assert_eq!(
+        r.path_shots,
+        vec![PathShot {
+            section_id: a,
+            shot_id: s0
+        }]
+    );
 }
 
 #[test]
@@ -2024,7 +2612,10 @@ fn along_line_follows_passed_coordinates_not_measured_length() {
     let mut project = Project::new("AdjustedLengths".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0), shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
@@ -2042,12 +2633,20 @@ fn along_line_follows_passed_coordinates_not_measured_length() {
     set(&mut stations, 2, 28.0); // shot 1 → 25 m apart
 
     let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(a, 2));
-    assert!((r.along_line.unwrap() - 28.0).abs() < 1e-6, "got {:?}", r.along_line);
+    assert!(
+        (r.along_line.unwrap() - 28.0).abs() < 1e-6,
+        "got {:?}",
+        r.along_line
+    );
 
     // A mid-shot endpoint's partial leg uses the same coordinate-derived length:
     // 40 % along shot 1 (25 m apart) = 10 m, plus shot 0's 3 m = 13 m.
     let r2 = project.along_line_between(&stations, ep_station(a, 0), ep_shot(a, s1, 0.4));
-    assert!((r2.along_line.unwrap() - 13.0).abs() < 1e-6, "got {:?}", r2.along_line);
+    assert!(
+        (r2.along_line.unwrap() - 13.0).abs() < 1e-6,
+        "got {:?}",
+        r2.along_line
+    );
 }
 
 #[test]
@@ -2109,7 +2708,10 @@ fn new_merge_expands_existing_closure_connectivity() {
     let connected_after = project.get_connected_section_ids(a);
     assert!(connected_after.contains(&a), "A connected");
     assert!(connected_after.contains(&b), "B connected via closure");
-    assert!(connected_after.contains(&c), "C connected via closure+merge");
+    assert!(
+        connected_after.contains(&c),
+        "C connected via closure+merge"
+    );
     assert_eq!(connected_after.len(), 3);
 
     // Merge-only: A is alone (no merges from A), B and C are merge-connected
@@ -2121,10 +2723,7 @@ fn new_merge_expands_existing_closure_connectivity() {
     assert_eq!(merged_b.len(), 2, "B and C are merge-connected");
 
     // Path including closures should traverse both closure and merge with zero distance
-    let path = project.calculate_path_length_between(
-        StationRef::new(a, 0),
-        StationRef::new(c, 1),
-    );
+    let path = project.calculate_path_length_between(StationRef::new(a, 0), StationRef::new(c, 1));
     // A.0 -> A.1 (1m) -> B.0 (closure, 0) -> B.1 (1m) -> C.0 (merge, 0) -> C.1 (1m)
     assert!(
         (path - 3.0).abs() < 1e-6,
@@ -2200,10 +2799,7 @@ fn transitive_closure_computation_correct() {
         .closures_with
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(c, 0) && !cr.is_transitive);
-    assert!(
-        a1_direct.is_some(),
-        "A.1 should have direct closure to C.0"
-    );
+    assert!(a1_direct.is_some(), "A.1 should have direct closure to C.0");
     assert_eq!(a1_direct.unwrap().closure_id, closure_id);
     assert!(a1_direct.unwrap().via_station.is_none());
 
@@ -2234,10 +2830,7 @@ fn transitive_closure_computation_correct() {
         .closures_with
         .iter()
         .find(|cr| cr.station_ref == StationRef::new(a, 1) && !cr.is_transitive);
-    assert!(
-        c0_direct.is_some(),
-        "C.0 should have direct closure to A.1"
-    );
+    assert!(c0_direct.is_some(), "C.0 should have direct closure to A.1");
 
     // C.0: transitive closure to B.0 via A.1 (B.0 is merged with A.1)
     let c0_transitive = c0
@@ -2539,17 +3132,12 @@ fn transitive_closure_through_create_loop_closure_api() {
 
     // Other stations (A.1, B.0, B.1, C.0) should NOT have any closure refs
     // because neither closure endpoint (A.0, C.1) is in a merge group
-    for (section_id, station_index, label) in [
-        (a, 1, "A.1"),
-        (b, 0, "B.0"),
-        (b, 1, "B.1"),
-        (c, 0, "C.0"),
-    ] {
+    for (section_id, station_index, label) in
+        [(a, 1, "A.1"), (b, 0, "B.0"), (b, 1, "B.1"), (c, 0, "C.0")]
+    {
         let station = stations
             .iter()
-            .find(|s| {
-                s.station_ref == StationRef::new(section_id, station_index)
-            })
+            .find(|s| s.station_ref == StationRef::new(section_id, station_index))
             .unwrap();
         assert!(
             station.closures_with.is_empty(),
@@ -2835,20 +3423,22 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
         "A.1 direct to X"
     );
     assert!(
-        a1.closures_with.iter().any(|cr| cr.station_ref
-            == StationRef::new(sec_b, 1)
-            && cr.is_transitive
-            && cr.via_station == Some(StationRef::new(sec_main, 0))
-            && cr.closure_id == cl_b.id),
+        a1.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(sec_b, 1)
+                && cr.is_transitive
+                && cr.via_station == Some(StationRef::new(sec_main, 0))
+                && cr.closure_id == cl_b.id),
         "A.1 transitive to B.1 via X, got: {:?}",
         a1.closures_with
     );
     assert!(
-        a1.closures_with.iter().any(|cr| cr.station_ref
-            == StationRef::new(sec_c, 1)
-            && cr.is_transitive
-            && cr.via_station == Some(StationRef::new(sec_main, 0))
-            && cr.closure_id == cl_c.id),
+        a1.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(sec_c, 1)
+                && cr.is_transitive
+                && cr.via_station == Some(StationRef::new(sec_main, 0))
+                && cr.closure_id == cl_c.id),
         "A.1 transitive to C.1 via X, got: {:?}",
         a1.closures_with
     );
@@ -2859,18 +3449,20 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
         .find(|s| s.station_ref == StationRef::new(sec_b, 1))
         .unwrap();
     assert!(
-        b1.closures_with.iter().any(|cr| cr.station_ref
-            == StationRef::new(sec_a, 1)
-            && cr.is_transitive
-            && cr.closure_id == cl_a.id),
+        b1.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(sec_a, 1)
+                && cr.is_transitive
+                && cr.closure_id == cl_a.id),
         "B.1 transitive to A.1 via X, got: {:?}",
         b1.closures_with
     );
     assert!(
-        b1.closures_with.iter().any(|cr| cr.station_ref
-            == StationRef::new(sec_c, 1)
-            && cr.is_transitive
-            && cr.closure_id == cl_c.id),
+        b1.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(sec_c, 1)
+                && cr.is_transitive
+                && cr.closure_id == cl_c.id),
         "B.1 transitive to C.1 via X, got: {:?}",
         b1.closures_with
     );
@@ -2881,18 +3473,20 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
         .find(|s| s.station_ref == StationRef::new(sec_c, 1))
         .unwrap();
     assert!(
-        c1.closures_with.iter().any(|cr| cr.station_ref
-            == StationRef::new(sec_a, 1)
-            && cr.is_transitive
-            && cr.closure_id == cl_a.id),
+        c1.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(sec_a, 1)
+                && cr.is_transitive
+                && cr.closure_id == cl_a.id),
         "C.1 transitive to A.1 via X, got: {:?}",
         c1.closures_with
     );
     assert!(
-        c1.closures_with.iter().any(|cr| cr.station_ref
-            == StationRef::new(sec_b, 1)
-            && cr.is_transitive
-            && cr.closure_id == cl_b.id),
+        c1.closures_with
+            .iter()
+            .any(|cr| cr.station_ref == StationRef::new(sec_b, 1)
+                && cr.is_transitive
+                && cr.closure_id == cl_b.id),
         "C.1 transitive to B.1 via X, got: {:?}",
         c1.closures_with
     );
@@ -2908,18 +3502,24 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
 /// - a has a zero datum on station 0
 fn build_project_with_relationships() -> (Project, SectionId, SectionId, SectionId) {
     let mut project = Project::new("Cleanup Test".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 2.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let c = project.add_section(SectionData {
-        shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 2.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Merge a -> b
     project.station_merges.push(StationMerge {
@@ -2947,7 +3547,9 @@ fn build_project_with_relationships() -> (Project, SectionId, SectionId, Section
     project.section_offsets.insert(a, (10.0, 20.0));
 
     // Station offset for a:0
-    project.station_offsets.insert(StationRef::new(a, 0).into(), (1.0, 2.0, 3.0));
+    project
+        .station_offsets
+        .insert(StationRef::new(a, 0).into(), (1.0, 2.0, 3.0));
 
     // Zero datum for a:0
     project.zero_datums.push(ZeroDatum {
@@ -2965,7 +3567,11 @@ fn test_cleanup_removes_merges() {
 
     project.cleanup_section_references(a);
 
-    assert_eq!(project.station_merges.len(), 0, "Merge referencing section A should be removed");
+    assert_eq!(
+        project.station_merges.len(),
+        0,
+        "Merge referencing section A should be removed"
+    );
 }
 
 #[test]
@@ -2975,7 +3581,11 @@ fn test_cleanup_removes_closures() {
 
     project.cleanup_section_references(b);
 
-    assert_eq!(project.loop_closures.len(), 0, "Closure referencing section B should be removed");
+    assert_eq!(
+        project.loop_closures.len(),
+        0,
+        "Closure referencing section B should be removed"
+    );
 }
 
 #[test]
@@ -2986,8 +3596,15 @@ fn test_cleanup_removes_offsets() {
 
     project.cleanup_section_references(a);
 
-    assert!(!project.section_offsets.contains_key(&a), "Section offset for A should be removed");
-    assert_eq!(project.station_offsets.len(), 0, "Station offset for A:0 should be removed");
+    assert!(
+        !project.section_offsets.contains_key(&a),
+        "Section offset for A should be removed"
+    );
+    assert_eq!(
+        project.station_offsets.len(),
+        0,
+        "Station offset for A:0 should be removed"
+    );
 }
 
 #[test]
@@ -2997,7 +3614,11 @@ fn test_cleanup_removes_zero_datums() {
 
     project.cleanup_section_references(a);
 
-    assert_eq!(project.zero_datums.len(), 0, "Zero datum for A:0 should be removed");
+    assert_eq!(
+        project.zero_datums.len(),
+        0,
+        "Zero datum for A:0 should be removed"
+    );
 }
 
 #[test]
@@ -3055,14 +3676,20 @@ fn test_get_section_relationships() {
     assert_eq!(rel_a.merges.len(), 1, "Section A has one merge");
     assert_eq!(rel_a.closures.len(), 0, "Section A has no closures");
     assert!(rel_a.has_section_offset, "Section A has a section offset");
-    assert_eq!(rel_a.station_offset_count, 1, "Section A has one station offset");
+    assert_eq!(
+        rel_a.station_offset_count, 1,
+        "Section A has one station offset"
+    );
     assert_eq!(rel_a.zero_datum_count, 1, "Section A has one zero datum");
 
     let rel_b = project.get_section_relationships(b);
     assert_eq!(rel_b.merges.len(), 1, "Section B has one merge");
     assert_eq!(rel_b.closures.len(), 1, "Section B has one closure");
     assert!(!rel_b.has_section_offset, "Section B has no section offset");
-    assert_eq!(rel_b.station_offset_count, 0, "Section B has no station offsets");
+    assert_eq!(
+        rel_b.station_offset_count, 0,
+        "Section B has no station offsets"
+    );
     assert_eq!(rel_b.zero_datum_count, 0, "Section B has no zero datums");
 }
 
@@ -3077,19 +3704,13 @@ fn preview_delete_shot_basic() {
     let mut project = Project::new("PreviewDelete".to_string(), None);
     let section_a = project
         .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 1.0, 0.0, 0.0),
-                shot(0.0, 0.0, 1.0, 0.0, 0.0),
-            ],
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let section_b = project
         .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 1.0, 0.0, 0.0),
-                shot(0.0, 0.0, 1.0, 0.0, 0.0),
-            ],
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
@@ -3129,8 +3750,14 @@ fn preview_delete_shot_basic() {
     let impact = project.preview_delete_shot(section_a, shot1_id).unwrap();
     assert_eq!(impact.removed_station, StationRef::new(section_a, 2));
     assert_eq!(impact.removed_merges.len(), 1);
-    assert_eq!(impact.removed_merges[0].station_a, StationRef::new(section_a, 2));
-    assert_eq!(impact.removed_merges[0].station_b, StationRef::new(section_b, 1));
+    assert_eq!(
+        impact.removed_merges[0].station_a,
+        StationRef::new(section_a, 2)
+    );
+    assert_eq!(
+        impact.removed_merges[0].station_b,
+        StationRef::new(section_b, 1)
+    );
 }
 
 #[test]
@@ -3138,19 +3765,13 @@ fn preview_delete_shot_with_closure_rewire() {
     let mut project = Project::new("ClosureRewire".to_string(), None);
     let section_a = project
         .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 1.0, 0.0, 0.0),
-                shot(0.0, 0.0, 1.0, 0.0, 0.0),
-            ],
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let section_b = project
         .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 1.0, 0.0, 0.0),
-                shot(0.0, 0.0, 1.0, 0.0, 0.0),
-            ],
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
@@ -3255,7 +3876,10 @@ fn preview_delete_shot_mid_shot_loop_blocks_shift() {
     // This connects them excluding shot at pos 1, so shift_blocked should be true.
     let mid_shot_id = project.get_section(section_a).unwrap().shots[1].id;
     let impact = project.preview_delete_shot(section_a, mid_shot_id).unwrap();
-    assert!(impact.shift_blocked, "Expected shift_blocked to be true for loop");
+    assert!(
+        impact.shift_blocked,
+        "Expected shift_blocked to be true for loop"
+    );
     assert!(
         !impact.shift_blocked_reasons.is_empty(),
         "Expected at least one shift_blocked reason"
@@ -3285,7 +3909,11 @@ fn remove_shot_with_rewire_first_shot_adjusts_offset() {
     let first_shot_id = project.get_section(section_id).unwrap().shots[0].id;
 
     // Offset before should be (0, 0) by default
-    let offset_before = project.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+    let offset_before = project
+        .section_offsets
+        .get(&section_id)
+        .copied()
+        .unwrap_or((0.0, 0.0));
     assert!((offset_before.0).abs() < 1e-6);
     assert!((offset_before.1).abs() < 1e-6);
 
@@ -3297,7 +3925,11 @@ fn remove_shot_with_rewire_first_shot_adjusts_offset() {
     // horizontal_length * sin(90°) = 10.0 * 1.0 = 10.0  (x)
     // horizontal_length * cos(90°) = 10.0 * 0.0 = ~0.0   (y)
     // After removing, offset = (0.0 + 10.0, 0.0 + ~0.0) = (~10.0, ~0.0)
-    let offset_after = project.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+    let offset_after = project
+        .section_offsets
+        .get(&section_id)
+        .copied()
+        .unwrap_or((0.0, 0.0));
     assert!(
         (offset_after.0 - 10.0).abs() < 1e-6,
         "Expected x offset ~10.0, got {}",
@@ -3398,7 +4030,11 @@ fn insert_shot_before_at_position_zero_adjusts_offset() {
     // Displacement of inserted shot going east at 90°:
     // (horizontal * sin(90°), horizontal * cos(90°)) = (5.0, ~0.0)
     // Offset adjusted by (-5.0, ~0.0) to keep existing stations in place
-    let offset = project.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+    let offset = project
+        .section_offsets
+        .get(&section_id)
+        .copied()
+        .unwrap_or((0.0, 0.0));
     assert!(
         (offset.0 - (-5.0)).abs() < 1e-6,
         "Expected x offset ~-5.0, got {}",
@@ -3417,19 +4053,13 @@ fn insert_shot_after_shifts_station_refs() {
 
     let section_a = project
         .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 1.0, 0.0, 0.0),
-                shot(0.0, 0.0, 1.0, 0.0, 0.0),
-            ],
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
     let section_b = project
         .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 1.0, 0.0, 0.0),
-                shot(0.0, 0.0, 1.0, 0.0, 0.0),
-            ],
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
@@ -3476,12 +4106,18 @@ fn insert_shot_after_shifts_station_refs() {
     // So section_a:2 becomes section_a:3.
     // The merge should now reference section_a:3.
     let merge = &project.station_merges[0];
-    assert!(project.key_is_ref(&merge.station_a, StationRef::new(section_a, 3)), "Merge station_a should have shifted from 2 to 3");
+    assert!(
+        project.key_is_ref(&merge.station_a, StationRef::new(section_a, 3)),
+        "Merge station_a should have shifted from 2 to 3"
+    );
     assert!(project.key_is_ref(&merge.station_b, StationRef::new(section_b, 0)));
 
     // The closure should reference section_a:3 (was section_a:2).
     let closure = &project.loop_closures[0];
-    assert!(project.key_is_ref(&closure.station_a, StationRef::new(section_a, 3)), "Closure station_a should have shifted from 2 to 3");
+    assert!(
+        project.key_is_ref(&closure.station_a, StationRef::new(section_a, 3)),
+        "Closure station_a should have shifted from 2 to 3"
+    );
     assert!(project.key_is_ref(&closure.station_b, StationRef::new(section_b, 1)));
 }
 
@@ -3495,21 +4131,36 @@ fn insert_upstream_keeps_cross_refs_on_same_physical_station() {
     let mut project = Project::new("StableId".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            shots: vec![
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+                shot(90.0, 90.0, 5.0, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     // Merge A:1 ↔ B:0, then canonicalize anchors as a load would.
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
     project.reanchor_station_refs();
-    assert!(project.check_merge_alignment().is_empty(), "merge starts aligned");
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "merge starts aligned"
+    );
 
     let a_endpoint = |p: &Project| -> StationKey {
         let m = &p.station_merges[0];
-        if m.station_a.section_id == a { m.station_a.clone() } else { m.station_b.clone() }
+        if m.station_a.section_id == a {
+            m.station_a.clone()
+        } else {
+            m.station_b.clone()
+        }
     };
     assert!(project.key_is_ref(&a_endpoint(&project), StationRef::new(a, 1)));
 
@@ -3543,16 +4194,27 @@ fn dangling_anchor_flagged_by_integrity() {
     let mut project = Project::new("Dangling".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            shots: vec![
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+                shot(90.0, 90.0, 5.0, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
-    project.merge_stations(StationRef::new(a, 2), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 2), StationRef::new(b, 0))
+        .unwrap();
     project.reanchor_station_refs();
-    assert!(project.check_structural_integrity().is_empty(), "sound to start");
+    assert!(
+        project.check_structural_integrity().is_empty(),
+        "sound to start"
+    );
 
     // Forge a merge endpoint onto a shot UUID that doesn't exist in the section.
     project.station_merges[0].station_a =
@@ -3842,8 +4504,16 @@ fn reachability_includes_non_aligned_closures() {
             .unwrap()
     };
     // A0=0, A1=10, B0=10 (closure, 0-cost), B1=17 — all finite (reachable).
-    assert_eq!(field.distances[pos(b, 0)], Some(10.0), "B0 reachable via closure");
-    assert_eq!(field.distances[pos(b, 1)], Some(17.0), "B1 reachable via closure");
+    assert_eq!(
+        field.distances[pos(b, 0)],
+        Some(10.0),
+        "B0 reachable via closure"
+    );
+    assert_eq!(
+        field.distances[pos(b, 1)],
+        Some(17.0),
+        "B1 reachable via closure"
+    );
 }
 
 #[test]
@@ -3889,16 +4559,22 @@ fn distance_field_uses_coordinate_distances() {
 fn create_loop_closure_rejects_merged_stations() {
     let mut project = Project::new("ClosureRejectMerged".to_string(), None);
 
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
 
     // Try to create closure between already-merged stations
     let result = project.create_loop_closure(
@@ -3914,31 +4590,43 @@ fn create_loop_closure_rejects_merged_stations() {
 fn create_loop_closure_allows_disconnected_with_both_datums() {
     let mut project = Project::new("ClosureDisconnectedDatums".to_string(), None);
 
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Each section gets its own zero datum (disconnected but GPS-anchored)
-    project.set_zero_datum(
-        StationRef::new(a, 0),
-        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
-    ).unwrap();
-    project.set_zero_datum(
-        StationRef::new(b, 0),
-        GpsCoordinates::new(0.0, 0.01, 0.0).unwrap(),
-    ).unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(b, 0),
+            GpsCoordinates::new(0.0, 0.01, 0.0).unwrap(),
+        )
+        .unwrap();
 
     let result = project.create_loop_closure(
         StationRef::new(a, 1),
         StationRef::new(b, 1),
         ClosureStrategy::Batch,
     );
-    assert!(result.is_ok(), "Disconnected with both datums should allow closure: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Disconnected with both datums should allow closure: {:?}",
+        result.err()
+    );
 }
 
 // Group B: compute_closure_metrics
@@ -3948,45 +4636,69 @@ fn compute_closure_metrics_known_geometry() {
     let mut project = Project::new("ClosureMetrics".to_string(), None);
 
     // Section A: 2 shots going north (0°), 10m each → A:0=(0,0), A:1=(0,10), A:2=(0,20)
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     // Section B: 1 shot going east (90°), 5m → B:0=(0,0), B:1=(5,0)
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Merge A:0 with B:0
-    project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
 
-    let metrics = project.compute_closure_metrics(
-        StationRef::new(a, 2),
-        StationRef::new(b, 1),
-    ).unwrap();
+    let metrics = project
+        .compute_closure_metrics(StationRef::new(a, 2), StationRef::new(b, 1))
+        .unwrap();
 
     // A:2 is at (0, 20), B:1 is at (5, 0) after merge alignment
     // B was moved to align B:0 with A:0 at origin
-    let coords_a2 = project.compute_station_raw_coords(StationRef::new(a, 2)).unwrap();
-    let coords_b1 = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+    let coords_a2 = project
+        .compute_station_raw_coords(StationRef::new(a, 2))
+        .unwrap();
+    let coords_b1 = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
 
     let expected_h = coords_a2.horizontal_distance_to(&coords_b1);
     let expected_v = (coords_a2.z - coords_b1.z).abs();
     let expected_d = coords_a2.distance_to(&coords_b1);
 
-    assert!((metrics.horizontal_misclosure - expected_h).abs() < 1e-6,
-        "horizontal: expected {}, got {}", expected_h, metrics.horizontal_misclosure);
-    assert!((metrics.vertical_misclosure - expected_v).abs() < 1e-6,
-        "vertical: expected {}, got {}", expected_v, metrics.vertical_misclosure);
-    assert!((metrics.misclosure_distance - expected_d).abs() < 1e-6,
-        "distance: expected {}, got {}", expected_d, metrics.misclosure_distance);
+    assert!(
+        (metrics.horizontal_misclosure - expected_h).abs() < 1e-6,
+        "horizontal: expected {}, got {}",
+        expected_h,
+        metrics.horizontal_misclosure
+    );
+    assert!(
+        (metrics.vertical_misclosure - expected_v).abs() < 1e-6,
+        "vertical: expected {}, got {}",
+        expected_v,
+        metrics.vertical_misclosure
+    );
+    assert!(
+        (metrics.misclosure_distance - expected_d).abs() < 1e-6,
+        "distance: expected {}, got {}",
+        expected_d,
+        metrics.misclosure_distance
+    );
     assert!(metrics.path_length > 0.0, "path_length should be > 0");
-    assert!(metrics.error_percentage > 0.0, "error_percentage should be > 0");
+    assert!(
+        metrics.error_percentage > 0.0,
+        "error_percentage should be > 0"
+    );
 }
 
 #[test]
@@ -3995,30 +4707,41 @@ fn compute_closure_metrics_zero_misclosure() {
 
     // Two sections that arrive at the same point: a perfect loop
     // Section A: 1 shot going north (0°), 10m → A:0=(0,0), A:1=(0,10)
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Section B: 1 shot going north (0°), 10m → B:0=(0,0), B:1=(0,10)
-    let b = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Merge A:0 with B:0
-    project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
 
     // A:1 and B:1 should be at the same point (0, 10)
-    let metrics = project.compute_closure_metrics(
-        StationRef::new(a, 1),
-        StationRef::new(b, 1),
-    ).unwrap();
+    let metrics = project
+        .compute_closure_metrics(StationRef::new(a, 1), StationRef::new(b, 1))
+        .unwrap();
 
-    assert!(metrics.misclosure_distance < 1e-6,
-        "Expected near-zero misclosure, got {}", metrics.misclosure_distance);
-    assert!(metrics.error_percentage < 1e-6,
-        "Expected near-zero error, got {}", metrics.error_percentage);
+    assert!(
+        metrics.misclosure_distance < 1e-6,
+        "Expected near-zero misclosure, got {}",
+        metrics.misclosure_distance
+    );
+    assert!(
+        metrics.error_percentage < 1e-6,
+        "Expected near-zero error, got {}",
+        metrics.error_percentage
+    );
 }
 
 // Group C: distribute_closure_error_internal (core algorithm)
@@ -4028,43 +4751,61 @@ fn distribute_closure_simple_two_section_loop() {
     let mut project = Project::new("DistributeSimple".to_string(), None);
 
     // Section A: 3 shots going north (0°), 10m each → A:3=(0,30)
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     // Section B: 1 shot going south (180°), 29m → B:1=(0,-29)
-    let b = project.add_section(SectionData {
-        shots: vec![shot(180.0, 180.0, 29.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 29.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Merge A:0 with B:0
-    project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
 
     // A:3 at (0,30), B:1 at (0,-29). Gap = 59m in y.
-    let coords_a3_before = project.compute_station_raw_coords(StationRef::new(a, 3)).unwrap();
-    let coords_b1_before = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+    let coords_a3_before = project
+        .compute_station_raw_coords(StationRef::new(a, 3))
+        .unwrap();
+    let coords_b1_before = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
     assert!((coords_a3_before.y - 30.0).abs() < 1e-6);
     assert!((coords_b1_before.y - (-29.0)).abs() < 1e-6);
 
     // Distribute closure error proportionally
-    project.test_distribute_closure_error(
-        StationRef::new(a, 3),
-        StationRef::new(b, 1),
-        ClosureStrategy::ProportionalByLength,
-    ).unwrap();
+    project
+        .test_distribute_closure_error(
+            StationRef::new(a, 3),
+            StationRef::new(b, 1),
+            ClosureStrategy::ProportionalByLength,
+        )
+        .unwrap();
 
     // After distribution, A:3 and B:1 should have the same coordinates
-    let coords_a3_after = project.compute_station_raw_coords(StationRef::new(a, 3)).unwrap();
-    let coords_b1_after = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+    let coords_a3_after = project
+        .compute_station_raw_coords(StationRef::new(a, 3))
+        .unwrap();
+    let coords_b1_after = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
     let residual = coords_a3_after.distance_to(&coords_b1_after);
-    assert!(residual < 0.01,
-        "Endpoints should align after distribution, residual = {residual}");
+    assert!(
+        residual < 0.01,
+        "Endpoints should align after distribution, residual = {residual}"
+    );
 }
 
 #[test]
@@ -4072,51 +4813,73 @@ fn distribute_closure_with_zero_datum_at_endpoint() {
     let mut project = Project::new("DistributeDatumEndpoint".to_string(), None);
 
     // Section A: 3 shots going north (0°), 10m each
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     // Section B: 1 shot going south (180°), 29m
-    let b = project.add_section(SectionData {
-        shots: vec![shot(180.0, 180.0, 29.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 29.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Set zero datum on A:0 before merging
-    project.set_zero_datum(
-        StationRef::new(a, 0),
-        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
-    ).unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
+        .unwrap();
 
     // Merge A:0 with B:0
-    project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
 
     // Record A:0 position before distribution
-    let coords_a0_before = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
+    let coords_a0_before = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
 
     // Distribute closure error
-    project.test_distribute_closure_error(
-        StationRef::new(a, 3),
-        StationRef::new(b, 1),
-        ClosureStrategy::ProportionalByLength,
-    ).unwrap();
+    project
+        .test_distribute_closure_error(
+            StationRef::new(a, 3),
+            StationRef::new(b, 1),
+            ClosureStrategy::ProportionalByLength,
+        )
+        .unwrap();
 
     // A:0 (zero datum) should NOT have moved
-    let coords_a0_after = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
-    assert!(coords_a0_before.distance_to(&coords_a0_after) < 1e-6,
-        "Zero datum station should not move");
+    let coords_a0_after = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
+    assert!(
+        coords_a0_before.distance_to(&coords_a0_after) < 1e-6,
+        "Zero datum station should not move"
+    );
 
     // Endpoints should align
-    let coords_a3_after = project.compute_station_raw_coords(StationRef::new(a, 3)).unwrap();
-    let coords_b1_after = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+    let coords_a3_after = project
+        .compute_station_raw_coords(StationRef::new(a, 3))
+        .unwrap();
+    let coords_b1_after = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
     let residual = coords_a3_after.distance_to(&coords_b1_after);
-    assert!(residual < 0.01,
-        "Endpoints should align after distribution, residual = {residual}");
+    assert!(
+        residual < 0.01,
+        "Endpoints should align after distribution, residual = {residual}"
+    );
 }
 
 #[test]
@@ -4124,22 +4887,28 @@ fn distribute_closure_with_zero_datum_mid_path() {
     let mut project = Project::new("DistributeDatumMid".to_string(), None);
 
     // Section A: 2 shots going north (0°), 10m each → A:0=(0,0), A:1=(0,10), A:2=(0,20)
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     // Section B: 1 shot going south (180°), 19m → B:1=(0,-19)
-    let b = project.add_section(SectionData {
-        shots: vec![shot(180.0, 180.0, 19.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 19.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Merge A:0 with B:0
-    project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
 
     // Set zero datum on A:1 (mid-path station)
     project.zero_datums.push(ZeroDatum {
@@ -4148,27 +4917,41 @@ fn distribute_closure_with_zero_datum_mid_path() {
     });
 
     // Record A:1 position before distribution
-    let coords_a1_before = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
+    let coords_a1_before = project
+        .compute_station_raw_coords(StationRef::new(a, 1))
+        .unwrap();
 
     // Distribute closure error — datum is mid-path, so path splits at A:1
-    project.test_distribute_closure_error(
-        StationRef::new(a, 2),
-        StationRef::new(b, 1),
-        ClosureStrategy::ProportionalByLength,
-    ).unwrap();
+    project
+        .test_distribute_closure_error(
+            StationRef::new(a, 2),
+            StationRef::new(b, 1),
+            ClosureStrategy::ProportionalByLength,
+        )
+        .unwrap();
 
     // A:1 (zero datum) should NOT have moved
-    let coords_a1_after = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
-    assert!(coords_a1_before.distance_to(&coords_a1_after) < 1e-6,
+    let coords_a1_after = project
+        .compute_station_raw_coords(StationRef::new(a, 1))
+        .unwrap();
+    assert!(
+        coords_a1_before.distance_to(&coords_a1_after) < 1e-6,
         "Zero datum station should not move, moved by {}",
-        coords_a1_before.distance_to(&coords_a1_after));
+        coords_a1_before.distance_to(&coords_a1_after)
+    );
 
     // Endpoints should align
-    let coords_a2_after = project.compute_station_raw_coords(StationRef::new(a, 2)).unwrap();
-    let coords_b1_after = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+    let coords_a2_after = project
+        .compute_station_raw_coords(StationRef::new(a, 2))
+        .unwrap();
+    let coords_b1_after = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
     let residual = coords_a2_after.distance_to(&coords_b1_after);
-    assert!(residual < 0.01,
-        "Endpoints should align after distribution, residual = {residual}");
+    assert!(
+        residual < 0.01,
+        "Endpoints should align after distribution, residual = {residual}"
+    );
 }
 
 #[test]
@@ -4176,19 +4959,25 @@ fn distribute_closure_both_anchored_fails() {
     let mut project = Project::new("DistributeBothAnchored".to_string(), None);
 
     // Section A: 1 shot going north
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Section B: 1 shot going south, slightly different length
-    let b = project.add_section(SectionData {
-        shots: vec![shot(180.0, 180.0, 9.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 9.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Merge A:0 with B:0
-    project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
 
     // Set zero datums on both closure endpoints
     project.zero_datums.push(ZeroDatum {
@@ -4206,8 +4995,10 @@ fn distribute_closure_both_anchored_fails() {
         StationRef::new(b, 1),
         ClosureStrategy::ProportionalByLength,
     );
-    assert!(result.is_err(),
-        "Should fail when both endpoints are anchored to zero datums");
+    assert!(
+        result.is_err(),
+        "Should fail when both endpoints are anchored to zero datums"
+    );
 }
 
 #[test]
@@ -4215,35 +5006,49 @@ fn distribute_closure_equal_distribution() {
     let mut project = Project::new("DistributeEqual".to_string(), None);
 
     // Section A: 3 shots going north, different lengths
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 5.0, 0.0, 0.0),
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 15.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 15.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     // Section B: 1 shot going south, 29m
-    let b = project.add_section(SectionData {
-        shots: vec![shot(180.0, 180.0, 29.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 29.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
-    project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
 
-    project.test_distribute_closure_error(
-        StationRef::new(a, 3),
-        StationRef::new(b, 1),
-        ClosureStrategy::EqualDistribution,
-    ).unwrap();
+    project
+        .test_distribute_closure_error(
+            StationRef::new(a, 3),
+            StationRef::new(b, 1),
+            ClosureStrategy::EqualDistribution,
+        )
+        .unwrap();
 
     // Endpoints should align
-    let coords_a3 = project.compute_station_raw_coords(StationRef::new(a, 3)).unwrap();
-    let coords_b1 = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+    let coords_a3 = project
+        .compute_station_raw_coords(StationRef::new(a, 3))
+        .unwrap();
+    let coords_b1 = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
     let residual = coords_a3.distance_to(&coords_b1);
-    assert!(residual < 0.01,
-        "Endpoints should align after equal distribution, residual = {residual}");
+    assert!(
+        residual < 0.01,
+        "Endpoints should align after equal distribution, residual = {residual}"
+    );
 }
 
 #[test]
@@ -4251,43 +5056,59 @@ fn distribute_closure_fallback_separate_datums() {
     let mut project = Project::new("DistributeFallbackDatums".to_string(), None);
 
     // Section A: 2 shots going north → A:2=(0,20)
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     // Section B: 1 shot going east → B:1=(5+offset,0+offset)
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Set separate zero datums on each (NOT connected by merges)
-    project.set_zero_datum(
-        StationRef::new(a, 0),
-        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
-    ).unwrap();
-    project.set_zero_datum(
-        StationRef::new(b, 0),
-        GpsCoordinates::new(0.0, 0.01, 0.0).unwrap(),
-    ).unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(b, 0),
+            GpsCoordinates::new(0.0, 0.01, 0.0).unwrap(),
+        )
+        .unwrap();
 
     // Distribute with fallback path (no direct connection)
-    project.test_distribute_closure_error(
-        StationRef::new(a, 2),
-        StationRef::new(b, 1),
-        ClosureStrategy::ProportionalByLength,
-    ).unwrap();
+    project
+        .test_distribute_closure_error(
+            StationRef::new(a, 2),
+            StationRef::new(b, 1),
+            ClosureStrategy::ProportionalByLength,
+        )
+        .unwrap();
 
     // Endpoints should align
-    let coords_a2 = project.compute_station_raw_coords(StationRef::new(a, 2)).unwrap();
-    let coords_b1 = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+    let coords_a2 = project
+        .compute_station_raw_coords(StationRef::new(a, 2))
+        .unwrap();
+    let coords_b1 = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
     let residual = coords_a2.distance_to(&coords_b1);
-    assert!(residual < 0.01,
-        "Endpoints should align via fallback datums, residual = {residual}");
+    assert!(
+        residual < 0.01,
+        "Endpoints should align via fallback datums, residual = {residual}"
+    );
 }
 
 /// Stress test: 50-section ring network with closure.
@@ -4305,32 +5126,38 @@ fn distribute_closure_large_ring_network() {
     for i in 0..num_sections {
         // Each section goes at a slightly different heading to create a ring
         let azimuth = (i as f64 * 360.0 / num_sections as f64) % 360.0;
-        let id = project.add_section(SectionData {
-            shots: vec![
-                shot(azimuth, azimuth, 10.0, 0.0, 0.0),
-                shot(azimuth, azimuth, 10.0, 0.0, 0.0),
-                shot(azimuth, azimuth, 10.0, 0.0, 0.0),
-                shot(azimuth, azimuth, 10.0, 0.0, 0.0),
-                shot(azimuth, azimuth, 10.0, 0.0, 0.0),
-            ],
-            ..Default::default()
-        }).id;
+        let id = project
+            .add_section(SectionData {
+                shots: vec![
+                    shot(azimuth, azimuth, 10.0, 0.0, 0.0),
+                    shot(azimuth, azimuth, 10.0, 0.0, 0.0),
+                    shot(azimuth, azimuth, 10.0, 0.0, 0.0),
+                    shot(azimuth, azimuth, 10.0, 0.0, 0.0),
+                    shot(azimuth, azimuth, 10.0, 0.0, 0.0),
+                ],
+                ..Default::default()
+            })
+            .id;
         section_ids.push(id);
     }
 
     // Chain sections: merge end of section i with start of section i+1
     for i in 0..(num_sections - 1) {
-        project.merge_stations(
-            StationRef::new(section_ids[i], 5),   // end of section i
-            StationRef::new(section_ids[i + 1], 0), // start of section i+1
-        ).unwrap();
+        project
+            .merge_stations(
+                StationRef::new(section_ids[i], 5),     // end of section i
+                StationRef::new(section_ids[i + 1], 0), // start of section i+1
+            )
+            .unwrap();
     }
 
     // Set zero datum on the first station
-    project.set_zero_datum(
-        StationRef::new(section_ids[0], 0),
-        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
-    ).unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(section_ids[0], 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
+        .unwrap();
 
     // Record positions before closure
     let first_station = StationRef::new(section_ids[0], 0);
@@ -4338,36 +5165,44 @@ fn distribute_closure_large_ring_network() {
     let coords_first_before = project.compute_station_raw_coords(first_station).unwrap();
 
     // Create a closure between last station and first station (closing the ring)
-    project.test_distribute_closure_error(
-        last_station,
-        first_station,
-        ClosureStrategy::ProportionalByLength,
-    ).unwrap();
+    project
+        .test_distribute_closure_error(
+            last_station,
+            first_station,
+            ClosureStrategy::ProportionalByLength,
+        )
+        .unwrap();
 
     // Zero datum should not have moved
     let coords_first_after = project.compute_station_raw_coords(first_station).unwrap();
-    assert!(coords_first_before.distance_to(&coords_first_after) < 1e-6,
+    assert!(
+        coords_first_before.distance_to(&coords_first_after) < 1e-6,
         "Zero datum should not move, delta = {}",
-        coords_first_before.distance_to(&coords_first_after));
+        coords_first_before.distance_to(&coords_first_after)
+    );
 
     // Endpoints should align (closure should be resolved)
     let coords_last_after = project.compute_station_raw_coords(last_station).unwrap();
     let coords_first_after2 = project.compute_station_raw_coords(first_station).unwrap();
     let residual = coords_last_after.distance_to(&coords_first_after2);
-    assert!(residual < 0.01,
-        "Ring endpoints should align after distribution, residual = {residual}");
+    assert!(
+        residual < 0.01,
+        "Ring endpoints should align after distribution, residual = {residual}"
+    );
 
     // All merge points should remain consistent (merged stations should coincide)
     for i in 0..(num_sections - 1) {
-        let end_i = project.compute_station_raw_coords(
-            StationRef::new(section_ids[i], 5)
-        ).unwrap();
-        let start_next = project.compute_station_raw_coords(
-            StationRef::new(section_ids[i + 1], 0)
-        ).unwrap();
+        let end_i = project
+            .compute_station_raw_coords(StationRef::new(section_ids[i], 5))
+            .unwrap();
+        let start_next = project
+            .compute_station_raw_coords(StationRef::new(section_ids[i + 1], 0))
+            .unwrap();
         let merge_residual = end_i.distance_to(&start_next);
-        assert!(merge_residual < 0.01,
-            "Merge point {i} should be consistent, residual = {merge_residual}");
+        assert!(
+            merge_residual < 0.01,
+            "Merge point {i} should be consistent, residual = {merge_residual}"
+        );
     }
 }
 
@@ -4378,51 +5213,79 @@ fn apply_station_move_adjusts_incoming_and_outgoing_shots() {
     let mut project = Project::new("StationMoveMiddle".to_string(), None);
 
     // Section with 3 shots: stations at (0,0), (0,10), (0,20), (0,30)
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     // Section B: 1 shot, same geometry to create a closure path
-    let b = project.add_section(SectionData {
-        shots: vec![shot(180.0, 180.0, 29.5, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 29.5, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
-    project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
 
     // Record positions before (verify they're valid)
-    let _coords_0_before = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
-    let _coords_3_before = project.compute_station_raw_coords(StationRef::new(a, 3)).unwrap();
+    let _coords_0_before = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
+    let _coords_3_before = project
+        .compute_station_raw_coords(StationRef::new(a, 3))
+        .unwrap();
 
     // Distribute closure error — this will move intermediate stations including middle ones
-    project.test_distribute_closure_error(
-        StationRef::new(a, 3),
-        StationRef::new(b, 1),
-        ClosureStrategy::ProportionalByLength,
-    ).unwrap();
+    project
+        .test_distribute_closure_error(
+            StationRef::new(a, 3),
+            StationRef::new(b, 1),
+            ClosureStrategy::ProportionalByLength,
+        )
+        .unwrap();
 
     // Endpoints should be aligned
-    let coords_a3 = project.compute_station_raw_coords(StationRef::new(a, 3)).unwrap();
-    let coords_b1 = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
-    assert!(coords_a3.distance_to(&coords_b1) < 0.01,
-        "Endpoints should be aligned");
+    let coords_a3 = project
+        .compute_station_raw_coords(StationRef::new(a, 3))
+        .unwrap();
+    let coords_b1 = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
+    assert!(
+        coords_a3.distance_to(&coords_b1) < 0.01,
+        "Endpoints should be aligned"
+    );
 
     // Intermediate stations (1, 2) should have moved — their positions should differ from
     // the original linear progression
-    let coords_1 = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
-    let coords_2 = project.compute_station_raw_coords(StationRef::new(a, 2)).unwrap();
+    let coords_1 = project
+        .compute_station_raw_coords(StationRef::new(a, 1))
+        .unwrap();
+    let coords_2 = project
+        .compute_station_raw_coords(StationRef::new(a, 2))
+        .unwrap();
 
     // All 4 stations should still be in a reasonable order (y increasing or near-increasing)
-    let coords_0 = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
-    assert!(coords_0.y < coords_1.y || (coords_0.y - coords_1.y).abs() < 1.0,
-        "Station 0 should be before station 1");
-    assert!(coords_1.y < coords_2.y || (coords_1.y - coords_2.y).abs() < 1.0,
-        "Station 1 should be before station 2");
+    let coords_0 = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
+    assert!(
+        coords_0.y < coords_1.y || (coords_0.y - coords_1.y).abs() < 1.0,
+        "Station 0 should be before station 1"
+    );
+    assert!(
+        coords_1.y < coords_2.y || (coords_1.y - coords_2.y).abs() < 1.0,
+        "Station 1 should be before station 2"
+    );
 }
 
 #[test]
@@ -4430,50 +5293,76 @@ fn apply_station_move_station_zero_uses_section_offset() {
     let mut project = Project::new("StationMoveZero".to_string(), None);
 
     // Section A: 1 shot going north
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Section B: 1 shot going south, slightly short — creates misclosure at station 0
-    let b = project.add_section(SectionData {
-        shots: vec![shot(180.0, 180.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
 
     // Record section offset before
-    let _offset_before = project.section_offsets.get(&a).copied().unwrap_or((0.0, 0.0));
+    let _offset_before = project
+        .section_offsets
+        .get(&a)
+        .copied()
+        .unwrap_or((0.0, 0.0));
 
     // A:0 is at the origin. B:1 is at (0, 10) + (0, -10) = (0, 0) after merge alignment.
     // Both A:0 and B:1 are at (0, 0), so zero misclosure — perfect loop.
     // Let's modify B to create a gap:
     // Actually, let's use a more direct test — just set up the closure so station 0 needs to move
-    let c = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    project.merge_stations(StationRef::new(b, 1), StationRef::new(c, 0)).unwrap();
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .merge_stations(StationRef::new(b, 1), StationRef::new(c, 0))
+        .unwrap();
 
     // Now we have A:0 merged to chain, create a closure between A:0's group and C:1
     // A:0=(0,0), C:1 = some other position — distribute will move stations
     // The test verifies that if station 0 needs an XY move, section_offsets is used
-    let _offset_a_before = project.section_offsets.get(&a).copied().unwrap_or((0.0, 0.0));
+    let _offset_a_before = project
+        .section_offsets
+        .get(&a)
+        .copied()
+        .unwrap_or((0.0, 0.0));
 
     // Distribute error — this exercises apply_station_move_internal on various stations
-    project.test_distribute_closure_error(
-        StationRef::new(a, 0),
-        StationRef::new(c, 1),
-        ClosureStrategy::EqualDistribution,
-    ).unwrap();
+    project
+        .test_distribute_closure_error(
+            StationRef::new(a, 0),
+            StationRef::new(c, 1),
+            ClosureStrategy::EqualDistribution,
+        )
+        .unwrap();
 
     // The test passes if no panic/error occurs — the internal logic correctly
     // routes station 0 XY moves through section_offsets
-    let coords_a0 = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
-    let coords_c1 = project.compute_station_raw_coords(StationRef::new(c, 1)).unwrap();
-    assert!(coords_a0.distance_to(&coords_c1) < 0.01,
-        "Endpoints should align");
+    let coords_a0 = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
+    let coords_c1 = project
+        .compute_station_raw_coords(StationRef::new(c, 1))
+        .unwrap();
+    assert!(
+        coords_a0.distance_to(&coords_c1) < 0.01,
+        "Endpoints should align"
+    );
 }
 
 #[test]
@@ -4481,41 +5370,60 @@ fn apply_station_move_last_station_only_modifies_incoming() {
     let mut project = Project::new("StationMoveLast".to_string(), None);
 
     // 2 shots: stations 0, 1, 2
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     // B: connect to create closure path
-    let b = project.add_section(SectionData {
-        shots: vec![shot(180.0, 180.0, 19.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 19.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
-    project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
 
     // A:2 is the last station. After distribution, the last shot (idx=1) should be modified
     // but there's no outgoing shot from A:2.
-    project.test_distribute_closure_error(
-        StationRef::new(a, 2),
-        StationRef::new(b, 1),
-        ClosureStrategy::ProportionalByLength,
-    ).unwrap();
+    project
+        .test_distribute_closure_error(
+            StationRef::new(a, 2),
+            StationRef::new(b, 1),
+            ClosureStrategy::ProportionalByLength,
+        )
+        .unwrap();
 
     // Verify alignment
-    let coords_a2 = project.compute_station_raw_coords(StationRef::new(a, 2)).unwrap();
-    let coords_b1 = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
-    assert!(coords_a2.distance_to(&coords_b1) < 0.01,
-        "Endpoints should align, residual = {}", coords_a2.distance_to(&coords_b1));
+    let coords_a2 = project
+        .compute_station_raw_coords(StationRef::new(a, 2))
+        .unwrap();
+    let coords_b1 = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
+    assert!(
+        coords_a2.distance_to(&coords_b1) < 0.01,
+        "Endpoints should align, residual = {}",
+        coords_a2.distance_to(&coords_b1)
+    );
 
     // All stations should have valid, finite coordinates
     for idx in 0..=2 {
-        let c = project.compute_station_raw_coords(StationRef::new(a, idx)).unwrap();
-        assert!(c.x.is_finite() && c.y.is_finite() && c.z.is_finite(),
-            "Station {idx} coords should be finite");
+        let c = project
+            .compute_station_raw_coords(StationRef::new(a, idx))
+            .unwrap();
+        assert!(
+            c.x.is_finite() && c.y.is_finite() && c.z.is_finite(),
+            "Station {idx} coords should be finite"
+        );
     }
 }
 
@@ -4526,43 +5434,57 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
     let mut project = Project::new("EnforceMergeAlignment".to_string(), None);
 
     // Section A: 3 shots going north, 10m each → A:0=(0,0), A:1=(0,10), A:2=(0,20), A:3=(0,30)
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     // Section B: 1 shot going east, 5m → B:0=(0,0), B:1=(5,0)
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Section C: 1 shot going west, 5m → C:0=(0,0), C:1=(-5,0)
-    let c = project.add_section(SectionData {
-        shots: vec![shot(270.0, 270.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(270.0, 270.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Set datum on A:0
-    project.set_zero_datum(
-        StationRef::new(a, 0),
-        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
-    ).unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
+        .unwrap();
 
     // Merge B:0 to A:1 and C:0 to A:3
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
-    project.merge_stations(StationRef::new(a, 3), StationRef::new(c, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(a, 3), StationRef::new(c, 0))
+        .unwrap();
 
     // Create closures between B:1 and C:1 — they form a loop through section A
-    project.create_loop_closure(
-        StationRef::new(b, 1),
-        StationRef::new(c, 1),
-        ClosureStrategy::Batch,
-    ).unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(b, 1),
+            StationRef::new(c, 1),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
 
     // Adjust loop closures — this triggers enforce_merge_alignment internally
     let config = ClosureAdjustmentConfig::default();
@@ -4578,21 +5500,32 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
         Ok(()) => {
             // Verify stations are still at valid, finite coordinates
             for idx in 0..=3 {
-                let coords = project.compute_station_raw_coords(StationRef::new(a, idx)).unwrap();
-                assert!(coords.x.is_finite() && coords.y.is_finite() && coords.z.is_finite(),
-                    "A:{idx} coords should be finite after adjustment");
+                let coords = project
+                    .compute_station_raw_coords(StationRef::new(a, idx))
+                    .unwrap();
+                assert!(
+                    coords.x.is_finite() && coords.y.is_finite() && coords.z.is_finite(),
+                    "A:{idx} coords should be finite after adjustment"
+                );
             }
 
             // Zero datum should not have moved
-            let coords_a0 = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
-            assert!(coords_a0.x.abs() < 1e-6 && coords_a0.y.abs() < 1e-6,
-                "Zero datum A:0 should remain at origin");
+            let coords_a0 = project
+                .compute_station_raw_coords(StationRef::new(a, 0))
+                .unwrap();
+            assert!(
+                coords_a0.x.abs() < 1e-6 && coords_a0.y.abs() < 1e-6,
+                "Zero datum A:0 should remain at origin"
+            );
         }
         Err(e) => {
             // Some errors are expected for certain geometries
             // (e.g., "No eligible loop closures" or convergence failure)
             assert!(
-                e.contains("eligible") || e.contains("converge") || e.contains("datum") || e.contains("failed"),
+                e.contains("eligible")
+                    || e.contains("converge")
+                    || e.contains("datum")
+                    || e.contains("failed"),
                 "Unexpected error: {e}"
             );
         }
@@ -4696,7 +5629,8 @@ fn compute_adjusted_closes_loop_without_mutating_measured() {
     // 3. Adjusted view: the loop closes (endpoints ~coincident).
     let adj_a2 = station_coords(&adjusted, StationRef::new(a, 2));
     let adj_b2 = station_coords(&adjusted, StationRef::new(b, 2));
-    let adjusted_misclosure = ((adj_a2.x - adj_b2.x).powi(2) + (adj_a2.y - adj_b2.y).powi(2)).sqrt();
+    let adjusted_misclosure =
+        ((adj_a2.x - adj_b2.x).powi(2) + (adj_a2.y - adj_b2.y).powi(2)).sqrt();
     assert!(
         adjusted_misclosure < 1e-3,
         "adjusted loop should close, got {adjusted_misclosure}"
@@ -4797,9 +5731,12 @@ fn solve_reduced_laplacian_matches_dense() {
         let mut diag_x = vec![0.0; n];
         let mut diag_y = vec![0.0; n];
 
-        let add_edge = |a: usize, b: usize, seed: &mut u64,
-                            adj: &mut Vec<Vec<(usize, f64, f64)>>,
-                            dx: &mut Vec<f64>, dy: &mut Vec<f64>| {
+        let add_edge = |a: usize,
+                        b: usize,
+                        seed: &mut u64,
+                        adj: &mut Vec<Vec<(usize, f64, f64)>>,
+                        dx: &mut Vec<f64>,
+                        dy: &mut Vec<f64>| {
             let wx = 0.5 + next(seed);
             let wy = 0.5 + next(seed);
             adj[a].push((b, -wx, -wy));
@@ -4848,9 +5785,8 @@ fn solve_reduced_laplacian_matches_dense() {
         // Strictly SPD (grounded) → unique solution, so a zero warm start matches
         // the dense reference exactly.
         let x0 = vec![0.0; n];
-        let (sol_x, sol_y) = Project::solve_reduced_laplacian(
-            n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0, &x0,
-        );
+        let (sol_x, sol_y) =
+            Project::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0, &x0);
 
         for i in 0..n {
             assert!(
@@ -4895,7 +5831,11 @@ fn solve_reduced_laplacian_preserves_unconstrained_axis_warm_start() {
         sol_x[1]
     );
     // The constrained node still solves normally.
-    assert!((sol_x[0] - 5.0).abs() < 1e-9, "node 0 X should be 5, got {}", sol_x[0]);
+    assert!(
+        (sol_x[0] - 5.0).abs() < 1e-9,
+        "node 0 X should be 5, got {}",
+        sol_x[0]
+    );
 }
 
 /// Regression for the early-exit fix (Codex #86 follow-up): when the reduced core
@@ -4923,7 +5863,10 @@ fn solve_reduced_laplacian_zero_rhs_constrained_core_solves_not_warm_start() {
         Project::solve_reduced_laplacian(n, &diag, &diag, &atb, &atb, &adj, &x0_x, &x0_y);
 
     for (i, v) in sol_x.iter().chain(sol_y.iter()).enumerate() {
-        assert!(v.abs() < 1e-6, "zero-RHS constrained core must solve to 0, got {v} at {i}");
+        assert!(
+            v.abs() < 1e-6,
+            "zero-RHS constrained core must solve to 0, got {v} at {i}"
+        );
     }
 }
 
@@ -5018,36 +5961,70 @@ fn adjust_line_loop_matches_hand_computed_optimum() {
     let mut project = Project::new("LineLoop".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0), shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            shots: vec![
+                shot(90.0, 90.0, 5.0, 0.0, 0.0),
+                shot(90.0, 90.0, 5.0, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
     let b = project
         .add_section(SectionData {
-            shots: vec![shot(90.0, 90.0, 5.1, 0.0, 0.0), shot(90.0, 90.0, 5.1, 0.0, 0.0)],
+            shots: vec![
+                shot(90.0, 90.0, 5.1, 0.0, 0.0),
+                shot(90.0, 90.0, 5.1, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
     project
-        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
         .unwrap();
     project
         .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
         .unwrap();
     project
-        .create_loop_closure(StationRef::new(a, 2), StationRef::new(b, 2), ClosureStrategy::Batch)
+        .create_loop_closure(
+            StationRef::new(a, 2),
+            StationRef::new(b, 2),
+            ClosureStrategy::Batch,
+        )
         .unwrap();
 
-    let adjusted = project.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
+    let adjusted =
+        project.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
     let at = |sr| station_coords(&adjusted, sr);
     let approx = |c: Coordinates, x: f64, y: f64| (c.x - x).abs() < 1e-6 && (c.y - y).abs() < 1e-6;
 
     // Hand-computed optimum.
-    assert!(approx(at(StationRef::new(a, 0)), 0.0, 0.0), "A0 = {:?}", at(StationRef::new(a, 0)));
-    assert!(approx(at(StationRef::new(a, 1)), 5.05, 0.0), "A1 = {:?}", at(StationRef::new(a, 1)));
-    assert!(approx(at(StationRef::new(a, 2)), 10.10, 0.0), "A2 = {:?}", at(StationRef::new(a, 2)));
-    assert!(approx(at(StationRef::new(b, 1)), 5.05, 0.0), "B1 = {:?}", at(StationRef::new(b, 1)));
-    assert!(approx(at(StationRef::new(b, 2)), 10.10, 0.0), "B2 = {:?}", at(StationRef::new(b, 2)));
+    assert!(
+        approx(at(StationRef::new(a, 0)), 0.0, 0.0),
+        "A0 = {:?}",
+        at(StationRef::new(a, 0))
+    );
+    assert!(
+        approx(at(StationRef::new(a, 1)), 5.05, 0.0),
+        "A1 = {:?}",
+        at(StationRef::new(a, 1))
+    );
+    assert!(
+        approx(at(StationRef::new(a, 2)), 10.10, 0.0),
+        "A2 = {:?}",
+        at(StationRef::new(a, 2))
+    );
+    assert!(
+        approx(at(StationRef::new(b, 1)), 5.05, 0.0),
+        "B1 = {:?}",
+        at(StationRef::new(b, 1))
+    );
+    assert!(
+        approx(at(StationRef::new(b, 2)), 10.10, 0.0),
+        "B2 = {:?}",
+        at(StationRef::new(b, 2))
+    );
 }
 
 /// Property/fuzz sweep over random connected geometries with closures. For each
@@ -5088,18 +6065,32 @@ fn adjust_random_geometries_are_optimal_and_well_formed() {
                     shot(az, az, len, 0.0, 0.0)
                 })
                 .collect();
-            sids.push(project.add_section(SectionData { shots, ..Default::default() }).id);
+            sids.push(
+                project
+                    .add_section(SectionData {
+                        shots,
+                        ..Default::default()
+                    })
+                    .id,
+            );
         }
 
         // Datum anchors the first section.
         project
-            .set_zero_datum(StationRef::new(sids[0], 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+            .set_zero_datum(
+                StationRef::new(sids[0], 0),
+                GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+            )
             .unwrap();
 
         // Connect every later section to an earlier one with a merge → a connected
         // tree (no loops yet).
         let station_count = |p: &Project, sid| {
-            p.sections.iter().find(|s| s.id == sid).map(|s| s.shots.len()).unwrap_or(0)
+            p.sections
+                .iter()
+                .find(|s| s.id == sid)
+                .map(|s| s.shots.len())
+                .unwrap_or(0)
         };
         for s in 1..n_sections {
             let earlier = sids[(next(&mut seed) * s as f64) as usize];
@@ -5127,7 +6118,10 @@ fn adjust_random_geometries_are_optimal_and_well_formed() {
                 sids[sj],
                 (next(&mut seed) * (station_count(&project, sids[sj]) + 1) as f64) as u32,
             );
-            if project.create_loop_closure(pi, pj, ClosureStrategy::Batch).is_ok() {
+            if project
+                .create_loop_closure(pi, pj, ClosureStrategy::Batch)
+                .is_ok()
+            {
                 closures.push((pi, pj));
             }
         }
@@ -5150,7 +6144,10 @@ fn adjust_random_geometries_are_optimal_and_well_formed() {
         }
         // Datum fixed.
         let d0 = station_coords(&adjusted, StationRef::new(sids[0], 0));
-        assert!(d0.x.abs() < 1e-6 && d0.y.abs() < 1e-6, "datum moved to {d0:?}");
+        assert!(
+            d0.x.abs() < 1e-6 && d0.y.abs() < 1e-6,
+            "datum moved to {d0:?}"
+        );
         // Deterministic.
         assert_eq!(adjusted.len(), adjusted2.len());
         for (s1, s2) in adjusted.iter().zip(&adjusted2) {
@@ -5173,7 +6170,10 @@ fn adjust_random_geometries_are_optimal_and_well_formed() {
     }
 
     // Guard against the sweep silently degenerating into all-fast-path trials.
-    assert!(exercised_closures > 0, "fuzz sweep never exercised a closure solve");
+    assert!(
+        exercised_closures > 0,
+        "fuzz sweep never exercised a closure solve"
+    );
 }
 
 /// Profiling harness for the closure-adjusted solve (#81). Ignored by default.
@@ -5196,7 +6196,9 @@ fn profile_closure_solve_large() {
         // Path A: eastward shots of length 5.0.
         let a = project
             .add_section(SectionData {
-                shots: (0..n_shots).map(|_| shot(90.0, 90.0, 5.0, 0.0, 0.0)).collect(),
+                shots: (0..n_shots)
+                    .map(|_| shot(90.0, 90.0, 5.0, 0.0, 0.0))
+                    .collect(),
                 ..Default::default()
             })
             .id;
@@ -5204,13 +6206,18 @@ fn profile_closure_solve_large() {
         // misclosure for the solve to distribute).
         let b = project
             .add_section(SectionData {
-                shots: (0..n_shots).map(|_| shot(90.0, 90.0, 5.001, 0.0, 0.0)).collect(),
+                shots: (0..n_shots)
+                    .map(|_| shot(90.0, 90.0, 5.001, 0.0, 0.0))
+                    .collect(),
                 ..Default::default()
             })
             .id;
 
         project
-            .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+            .set_zero_datum(
+                StationRef::new(a, 0),
+                GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+            )
             .unwrap();
         // Join the two chains at the origin and close the far ends → one big loop.
         project
@@ -5376,7 +6383,10 @@ fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
     // Component 1 — will FAIL (two datums forced into the origin constraint group).
     let (a, b) = looped(&mut project);
     project
-        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
         .unwrap();
     let dup_key = project.key_for_ref(StationRef::new(b, 0)).unwrap();
     project.zero_datums.push(ZeroDatum {
@@ -5386,7 +6396,10 @@ fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
     // Component 2 — disconnected from the first, with a single datum; SUCCEEDS.
     let (c, d) = looped(&mut project);
     project
-        .set_zero_datum(StationRef::new(c, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .set_zero_datum(
+            StationRef::new(c, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
         .unwrap();
 
     let config = ClosureAdjustmentConfig::default();
@@ -5436,14 +6449,16 @@ fn is_shot_frozen_single_datum_dead_end() {
     // Section with datum on station 0, shots going one direction.
     // No shot is frozen (dead end, no datum reachable on far side).
     let mut project = Project::new("Frozen".to_string(), None);
-    let sec = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 1.0, 0.0, 1.0),
-            shot(0.0, 0.0, 1.0, 1.0, 2.0),
-            shot(0.0, 0.0, 1.0, 2.0, 3.0),
-        ],
-        ..Default::default()
-    }).id;
+    let sec = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 1.0),
+                shot(0.0, 0.0, 1.0, 1.0, 2.0),
+                shot(0.0, 0.0, 1.0, 2.0, 3.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(sec, 0).into(),
@@ -5463,20 +6478,21 @@ fn is_shot_frozen_loop_with_two_datums() {
     // Section B: station 0 (datum) --shot0--> station 1 --shot1--> station 2
     // Merges: A:0 <-> B:0, A:2 <-> B:2
     let mut project = Project::new("TwoDatums".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 1.0, 0.0, 1.0),
-            shot(0.0, 0.0, 1.0, 1.0, 2.0),
-        ],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![
-            shot(180.0, 180.0, 1.0, 0.0, 1.0),
-            shot(180.0, 180.0, 1.0, 1.0, 2.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 1.0), shot(0.0, 0.0, 1.0, 1.0, 2.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(180.0, 180.0, 1.0, 0.0, 1.0),
+                shot(180.0, 180.0, 1.0, 1.0, 2.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 0).into(),
@@ -5519,21 +6535,22 @@ fn is_shot_frozen_loop_with_aligned_closure() {
     // Shots A:0, A:1, B:0, B:1 should be frozen (in the loop).
     // Shot B:2 is NOT frozen (dead-end branch past the closure point).
     let mut project = Project::new("AlignedClosure".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 1.0, 0.0, 1.0),
-            shot(0.0, 0.0, 1.0, 1.0, 2.0),
-        ],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![
-            shot(180.0, 180.0, 1.0, 0.0, 1.0),
-            shot(180.0, 180.0, 1.0, 1.0, 2.0),
-            shot(180.0, 180.0, 1.0, 2.0, 3.0), // dead-end branch
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 1.0), shot(0.0, 0.0, 1.0, 1.0, 2.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(180.0, 180.0, 1.0, 0.0, 1.0),
+                shot(180.0, 180.0, 1.0, 1.0, 2.0),
+                shot(180.0, 180.0, 1.0, 2.0, 3.0), // dead-end branch
+            ],
+            ..Default::default()
+        })
+        .id;
 
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 0).into(),
@@ -5566,11 +6583,21 @@ fn is_shot_frozen_loop_with_aligned_closure() {
     // A:0, A:1, B:0, B:1 should be frozen
     let a_frozen: Vec<_> = frozen.iter().filter(|f| f.section_id == a).collect();
     let b_frozen: Vec<_> = frozen.iter().filter(|f| f.section_id == b).collect();
-    assert_eq!(a_frozen.len(), 2, "Both shots in section A should be frozen");
-    assert_eq!(b_frozen.len(), 2, "Only shots 0,1 in section B should be frozen");
+    assert_eq!(
+        a_frozen.len(),
+        2,
+        "Both shots in section A should be frozen"
+    );
+    assert_eq!(
+        b_frozen.len(),
+        2,
+        "Only shots 0,1 in section B should be frozen"
+    );
 
     // Verify B:2 (dead-end branch) is NOT frozen
-    let b2_frozen = frozen.iter().any(|f| f.section_id == b && f.shot_index == 2);
+    let b2_frozen = frozen
+        .iter()
+        .any(|f| f.section_id == b && f.shot_index == 2);
     assert!(!b2_frozen, "Dead-end shot B:2 should NOT be frozen");
 }
 
@@ -5578,20 +6605,21 @@ fn is_shot_frozen_loop_with_aligned_closure() {
 fn is_shot_frozen_unaligned_closure_not_traversed() {
     // Same topology as above but closure is NOT aligned. No shots should be frozen.
     let mut project = Project::new("UnalignedClosure".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 1.0, 0.0, 1.0),
-            shot(0.0, 0.0, 1.0, 1.0, 2.0),
-        ],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![
-            shot(180.0, 180.0, 1.0, 0.0, 1.0),
-            shot(180.0, 180.0, 1.0, 1.0, 2.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 1.0), shot(0.0, 0.0, 1.0, 1.0, 2.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(180.0, 180.0, 1.0, 0.0, 1.0),
+                shot(180.0, 180.0, 1.0, 1.0, 2.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 0).into(),
@@ -5620,7 +6648,10 @@ fn is_shot_frozen_unaligned_closure_not_traversed() {
     project.next_closure_id += 1;
 
     let frozen = project.compute_frozen_shots();
-    assert!(frozen.is_empty(), "Unaligned closure should not cause shots to be frozen");
+    assert!(
+        frozen.is_empty(),
+        "Unaligned closure should not cause shots to be frozen"
+    );
 }
 
 #[test]
@@ -5658,28 +6689,34 @@ fn touches_geometry_detects_geometry_fields() {
         comment: Some(Some("test".to_string())),
         ..Default::default()
     };
-    assert!(!lrud_update.touches_geometry(), "LRUD/comment should not be geometry");
+    assert!(
+        !lrud_update.touches_geometry(),
+        "LRUD/comment should not be geometry"
+    );
 
     let empty_update = ShotUpdates::default();
-    assert!(!empty_update.touches_geometry(), "Empty update should not touch geometry");
+    assert!(
+        !empty_update.touches_geometry(),
+        "Empty update should not touch geometry"
+    );
 }
 
 #[test]
 fn update_shot_rejects_frozen_geometry() {
     // Create a loop with two datums so all shots are frozen
     let mut project = Project::new("FrozenUpdate".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 1.0, 0.0, 1.0),
-        ],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![
-            shot(180.0, 180.0, 1.0, 0.0, 1.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 1.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 1.0, 0.0, 1.0)],
+            ..Default::default()
+        })
+        .id;
 
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 0).into(),
@@ -5703,7 +6740,10 @@ fn update_shot_rejects_frozen_geometry() {
 
     // Verify shots are frozen
     let frozen = project.compute_frozen_shots();
-    assert!(!frozen.is_empty(), "Shots should be frozen in a loop with two datums");
+    assert!(
+        !frozen.is_empty(),
+        "Shots should be frozen in a loop with two datums"
+    );
 
     // The update_shot validation is in the command handler, not on Project directly.
     // But we can verify the frozen status and touches_geometry independently.
@@ -5718,9 +6758,19 @@ fn update_shot_rejects_frozen_geometry() {
     let section_lookup = project.build_section_lookup();
     let merge_adj = project.build_merge_adjacency(&section_lookup);
     let closure_adj = project.build_aligned_closure_adjacency(&section_lookup);
-    let datum_stations: HashSet<StationRef> =
-        project.zero_datums.iter().filter_map(|d| project.resolve_key(&d.station_ref)).collect();
-    assert!(project.is_shot_frozen(a, 0, &section_lookup, &merge_adj, &closure_adj, &datum_stations));
+    let datum_stations: HashSet<StationRef> = project
+        .zero_datums
+        .iter()
+        .filter_map(|d| project.resolve_key(&d.station_ref))
+        .collect();
+    assert!(project.is_shot_frozen(
+        a,
+        0,
+        &section_lookup,
+        &merge_adj,
+        &closure_adj,
+        &datum_stations
+    ));
 
     // Non-geometry update should be allowed (touches_geometry returns false)
     let non_geo_update = ShotUpdates {
@@ -5731,7 +6781,10 @@ fn update_shot_rejects_frozen_geometry() {
 
     // Verify the shot can still be updated with non-geometry fields
     let result = project.update_shot(a, shot_id, &non_geo_update);
-    assert!(result.is_some(), "Non-geometry update on frozen shot should succeed");
+    assert!(
+        result.is_some(),
+        "Non-geometry update on frozen shot should succeed"
+    );
     assert_eq!(
         project.get_section(a).unwrap().shots[0].comment.as_deref(),
         Some("hello")
@@ -5807,14 +6860,18 @@ fn stats_multiple_sections() {
 #[test]
 fn stats_with_loop_closures() {
     let mut project = Project::new("Loops".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     project.loop_closures.push(LoopClosure {
         id: 1,
@@ -5847,24 +6904,34 @@ fn calculate_penetration_empty_stations_no_datum() {
 #[test]
 fn calculate_penetration_single_datum_measures_max_distance() {
     let mut project = Project::new("Penetration".to_string(), None);
-    let section_id = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 15.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 15.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     // Set datum on station 0
     let gps = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
+    project
+        .set_zero_datum(StationRef::new(section_id, 0), gps)
+        .unwrap();
 
     let stations = project.compute_station_coordinates();
     let penetration = project.calculate_penetration(&stations);
 
     // With shots going north (azimuth 0): total horizontal distance = 10 + 15 = 25
-    assert!(penetration > 24.0, "Expected penetration > 24, got {penetration}");
-    assert!(penetration < 26.0, "Expected penetration < 26, got {penetration}");
+    assert!(
+        penetration > 24.0,
+        "Expected penetration > 24, got {penetration}"
+    );
+    assert!(
+        penetration < 26.0,
+        "Expected penetration < 26, got {penetration}"
+    );
 }
 
 // =====================================================================
@@ -5874,10 +6941,12 @@ fn calculate_penetration_single_datum_measures_max_distance() {
 #[test]
 fn merge_stations_rejects_nonexistent_station() {
     let mut project = Project::new("MergeInvalid".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     let result = project.merge_stations(
         StationRef::new(a, 0),
@@ -5890,17 +6959,23 @@ fn merge_stations_rejects_nonexistent_station() {
 #[test]
 fn merge_stations_rejects_already_merged_pair() {
     let mut project = Project::new("MergeDupe".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // First merge succeeds
-    project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
 
     // Second merge of same pair fails
     let result = project.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0));
@@ -5911,21 +6986,37 @@ fn merge_stations_rejects_already_merged_pair() {
 #[test]
 fn merge_stations_rejects_both_datums() {
     let mut project = Project::new("MergeBothDatums".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
-    project.set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
-    project.set_zero_datum(StationRef::new(b, 0), GpsCoordinates::new(1.0, 1.0, 0.0).unwrap()).unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(b, 0),
+            GpsCoordinates::new(1.0, 1.0, 0.0).unwrap(),
+        )
+        .unwrap();
 
     let result = project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 1));
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Both stations are connected to zero datums"));
+    assert!(result
+        .unwrap_err()
+        .contains("Both stations are connected to zero datums"));
 }
 
 // =====================================================================
@@ -5935,10 +7026,12 @@ fn merge_stations_rejects_both_datums() {
 #[test]
 fn compute_station_raw_coords_with_individual_station_offset() {
     let mut project = Project::new("StationOffset".to_string(), None);
-    let section_id = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Station 1 is at (0, 10, 0) without offset
     let station_ref = StationRef::new(section_id, 1);
@@ -5947,7 +7040,9 @@ fn compute_station_raw_coords_with_individual_station_offset() {
     assert!((coords_before.y - 10.0).abs() < 1e-6);
 
     // Add individual station offset
-    project.station_offsets.insert(station_ref.into(), (3.0, -2.0, 1.0));
+    project
+        .station_offsets
+        .insert(station_ref.into(), (3.0, -2.0, 1.0));
 
     let coords_after = project.compute_station_raw_coords(station_ref).unwrap();
     assert!((coords_after.x - 3.0).abs() < 1e-6);
@@ -5958,15 +7053,19 @@ fn compute_station_raw_coords_with_individual_station_offset() {
 #[test]
 fn compute_station_raw_coords_station_zero_with_section_offset() {
     let mut project = Project::new("SectionOffset".to_string(), None);
-    let section_id = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     project.section_offsets.insert(section_id, (100.0, 200.0));
 
     // Station 0 should be at the section offset
-    let coords = project.compute_station_raw_coords(StationRef::new(section_id, 0)).unwrap();
+    let coords = project
+        .compute_station_raw_coords(StationRef::new(section_id, 0))
+        .unwrap();
     assert!((coords.x - 100.0).abs() < 1e-6);
     assert!((coords.y - 200.0).abs() < 1e-6);
 }
@@ -5978,53 +7077,63 @@ fn compute_station_raw_coords_station_zero_with_section_offset() {
 #[test]
 fn path_length_simple_linear_section() {
     let mut project = Project::new("PathLen".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 15.0, 0.0, 0.0),
-            shot(0.0, 0.0, 8.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 15.0, 0.0, 0.0),
+                shot(0.0, 0.0, 8.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
-    let path_len = project.calculate_path_length_between(
-        StationRef::new(a, 0),
-        StationRef::new(a, 3),
+    let path_len =
+        project.calculate_path_length_between(StationRef::new(a, 0), StationRef::new(a, 3));
+    assert!(
+        (path_len - 33.0).abs() < 1e-6,
+        "Expected 10+15+8=33, got {path_len}"
     );
-    assert!((path_len - 33.0).abs() < 1e-6, "Expected 10+15+8=33, got {path_len}");
 }
 
 #[test]
 fn path_length_partial_section() {
     let mut project = Project::new("PartialPath".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(0.0, 0.0, 15.0, 0.0, 0.0),
-            shot(0.0, 0.0, 8.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 15.0, 0.0, 0.0),
+                shot(0.0, 0.0, 8.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     // Path from station 1 to station 3 (two shots: 15 + 8 = 23)
-    let path_len = project.calculate_path_length_between(
-        StationRef::new(a, 1),
-        StationRef::new(a, 3),
+    let path_len =
+        project.calculate_path_length_between(StationRef::new(a, 1), StationRef::new(a, 3));
+    assert!(
+        (path_len - 23.0).abs() < 1e-6,
+        "Expected 15+8=23, got {path_len}"
     );
-    assert!((path_len - 23.0).abs() < 1e-6, "Expected 15+8=23, got {path_len}");
 }
 
 #[test]
 fn path_length_through_merge() {
     let mut project = Project::new("PathThroughMerge".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Merge a.1 to b.0 (zero-distance edge)
     project.station_merges.push(StationMerge {
@@ -6034,20 +7143,19 @@ fn path_length_through_merge() {
     });
 
     // Path from a.0 to b.1: 10 (shot in a) + 0 (merge) + 5 (shot in b) = 15
-    let path_len = project.calculate_path_length_between(
-        StationRef::new(a, 0),
-        StationRef::new(b, 1),
+    let path_len =
+        project.calculate_path_length_between(StationRef::new(a, 0), StationRef::new(b, 1));
+    assert!(
+        (path_len - 15.0).abs() < 1e-6,
+        "Expected 10+5=15, got {path_len}"
     );
-    assert!((path_len - 15.0).abs() < 1e-6, "Expected 10+5=15, got {path_len}");
 }
 
 #[test]
 fn path_length_nonexistent_station_returns_zero() {
     let project = Project::new("NoStation".to_string(), None);
-    let path_len = project.calculate_path_length_between(
-        StationRef::new(999, 0),
-        StationRef::new(999, 1),
-    );
+    let path_len =
+        project.calculate_path_length_between(StationRef::new(999, 0), StationRef::new(999, 1));
     assert!((path_len - 0.0).abs() < 1e-6);
 }
 
@@ -6059,13 +7167,15 @@ fn path_length_nonexistent_station_returns_zero() {
 fn compute_station_coordinates_basic_section() {
     let mut project = Project::new("StationCoords".to_string(), None);
     // Use zero depth change so horizontal_length == length
-    let section_id = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(90.0, 90.0, 5.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    }).id;
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(90.0, 90.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     let stations = project.compute_station_coordinates();
 
@@ -6077,34 +7187,71 @@ fn compute_station_coordinates_basic_section() {
     assert_eq!(section_stations.len(), 3);
 
     // Station 0 at origin (no section offset)
-    let s0 = section_stations.iter().find(|s| s.station_ref.station_index == 0).unwrap();
+    let s0 = section_stations
+        .iter()
+        .find(|s| s.station_ref.station_index == 0)
+        .unwrap();
     assert!((s0.coordinates.x).abs() < 1e-6);
     assert!((s0.coordinates.y).abs() < 1e-6);
 
     // Station 1: north 10m (azimuth 0), z = 0 (no depth change)
-    let s1 = section_stations.iter().find(|s| s.station_ref.station_index == 1).unwrap();
-    assert!((s1.coordinates.x).abs() < 1e-6, "s1 x = {}", s1.coordinates.x);
-    assert!((s1.coordinates.y - 10.0).abs() < 1e-6, "s1 y = {}", s1.coordinates.y);
-    assert!((s1.coordinates.z).abs() < 1e-6, "s1 z = {}", s1.coordinates.z);
+    let s1 = section_stations
+        .iter()
+        .find(|s| s.station_ref.station_index == 1)
+        .unwrap();
+    assert!(
+        (s1.coordinates.x).abs() < 1e-6,
+        "s1 x = {}",
+        s1.coordinates.x
+    );
+    assert!(
+        (s1.coordinates.y - 10.0).abs() < 1e-6,
+        "s1 y = {}",
+        s1.coordinates.y
+    );
+    assert!(
+        (s1.coordinates.z).abs() < 1e-6,
+        "s1 z = {}",
+        s1.coordinates.z
+    );
 
     // Station 2: north 10m then east 5m
-    let s2 = section_stations.iter().find(|s| s.station_ref.station_index == 2).unwrap();
-    assert!((s2.coordinates.x - 5.0).abs() < 1e-6, "s2 x = {}", s2.coordinates.x);
-    assert!((s2.coordinates.y - 10.0).abs() < 1e-6, "s2 y = {}", s2.coordinates.y);
-    assert!((s2.coordinates.z).abs() < 1e-6, "s2 z = {}", s2.coordinates.z);
+    let s2 = section_stations
+        .iter()
+        .find(|s| s.station_ref.station_index == 2)
+        .unwrap();
+    assert!(
+        (s2.coordinates.x - 5.0).abs() < 1e-6,
+        "s2 x = {}",
+        s2.coordinates.x
+    );
+    assert!(
+        (s2.coordinates.y - 10.0).abs() < 1e-6,
+        "s2 y = {}",
+        s2.coordinates.y
+    );
+    assert!(
+        (s2.coordinates.z).abs() < 1e-6,
+        "s2 z = {}",
+        s2.coordinates.z
+    );
 }
 
 #[test]
 fn compute_station_coordinates_merged_sections_have_merged_with() {
     let mut project = Project::new("MergedCoords".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1).into(),
@@ -6115,14 +7262,20 @@ fn compute_station_coordinates_merged_sections_have_merged_with() {
     let stations = project.compute_station_coordinates();
 
     // Station a.1 should have b.0 in merged_with
-    let a1 = stations.iter().find(|s| s.station_ref == StationRef::new(a, 1)).unwrap();
+    let a1 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(a, 1))
+        .unwrap();
     assert!(
         a1.merged_with.contains(&StationRef::new(b, 0)),
         "a.1 should have b.0 in merged_with"
     );
 
     // Station b.0 should have a.1 in merged_with
-    let b0 = stations.iter().find(|s| s.station_ref == StationRef::new(b, 0)).unwrap();
+    let b0 = stations
+        .iter()
+        .find(|s| s.station_ref == StationRef::new(b, 0))
+        .unwrap();
     assert!(
         b0.merged_with.contains(&StationRef::new(a, 1)),
         "b.0 should have a.1 in merged_with"
@@ -6156,24 +7309,49 @@ fn realign_datum_section_keeps_datum_pinned() {
 
     // Edit shot[1]: 5m → 8m
     let shot_id = project.sections.iter().find(|s| s.id == sec).unwrap().shots[1].id;
-    project.update_shot(sec, shot_id, &ShotUpdates { length: Some(8.0), ..Default::default() });
+    project.update_shot(
+        sec,
+        shot_id,
+        &ShotUpdates {
+            length: Some(8.0),
+            ..Default::default()
+        },
+    );
 
     // Datum has drifted
     let drifted = project.compute_station_raw_coords(datum_station).unwrap();
-    assert!((drifted.y).abs() > 1.0, "Expected drift, got y={}", drifted.y);
+    assert!(
+        (drifted.y).abs() > 1.0,
+        "Expected drift, got y={}",
+        drifted.y
+    );
 
     // Realign
     project.realign_after_shot_edit(sec);
 
     // Datum back at origin
     let fixed = project.compute_station_raw_coords(datum_station).unwrap();
-    assert!((fixed.x).abs() < 1e-6, "Datum x should be 0, got {}", fixed.x);
-    assert!((fixed.y).abs() < 1e-6, "Datum y should be 0, got {}", fixed.y);
+    assert!(
+        (fixed.x).abs() < 1e-6,
+        "Datum x should be 0, got {}",
+        fixed.x
+    );
+    assert!(
+        (fixed.y).abs() < 1e-6,
+        "Datum y should be 0, got {}",
+        fixed.y
+    );
 
     // Station 0 moved to compensate (absorbed the 3m length increase)
-    let s0 = project.compute_station_raw_coords(StationRef::new(sec, 0)).unwrap();
+    let s0 = project
+        .compute_station_raw_coords(StationRef::new(sec, 0))
+        .unwrap();
     // Before edit: s0 was at y = -18. After: y = -21 (3m further south)
-    assert!((s0.y - (-21.0)).abs() < 1e-6, "s0 y should be -21, got {}", s0.y);
+    assert!(
+        (s0.y - (-21.0)).abs() < 1e-6,
+        "s0 y should be -21, got {}",
+        s0.y
+    );
 }
 
 #[test]
@@ -6242,24 +7420,55 @@ fn realign_merged_section_keeps_merge_point_aligned() {
     // Align section 2 offset so 2:3 matches 1:3
     // 1:3 is at (0, 30). 2:3 without offset is at (15, 0).
     // Need offset: (0-15, 30-0) = (-15, 30)
-    let pos_1_3 = project.compute_station_raw_coords(StationRef::new(sec1, 3)).unwrap();
-    let pos_2_3_raw = project.compute_station_raw_coords(StationRef::new(sec2, 3)).unwrap();
-    project.section_offsets.insert(sec2, (pos_1_3.x - pos_2_3_raw.x, pos_1_3.y - pos_2_3_raw.y));
+    let pos_1_3 = project
+        .compute_station_raw_coords(StationRef::new(sec1, 3))
+        .unwrap();
+    let pos_2_3_raw = project
+        .compute_station_raw_coords(StationRef::new(sec2, 3))
+        .unwrap();
+    project
+        .section_offsets
+        .insert(sec2, (pos_1_3.x - pos_2_3_raw.x, pos_1_3.y - pos_2_3_raw.y));
 
     // Verify merge alignment
-    let pos_2_3 = project.compute_station_raw_coords(StationRef::new(sec2, 3)).unwrap();
-    assert!((pos_2_3.x - pos_1_3.x).abs() < 1e-6, "Merge should be aligned x");
-    assert!((pos_2_3.y - pos_1_3.y).abs() < 1e-6, "Merge should be aligned y");
+    let pos_2_3 = project
+        .compute_station_raw_coords(StationRef::new(sec2, 3))
+        .unwrap();
+    assert!(
+        (pos_2_3.x - pos_1_3.x).abs() < 1e-6,
+        "Merge should be aligned x"
+    );
+    assert!(
+        (pos_2_3.y - pos_1_3.y).abs() < 1e-6,
+        "Merge should be aligned y"
+    );
 
     // Record positions of locked stations
-    let pos_2_0_before = project.compute_station_raw_coords(StationRef::new(sec2, 0)).unwrap();
+    let pos_2_0_before = project
+        .compute_station_raw_coords(StationRef::new(sec2, 0))
+        .unwrap();
 
     // Edit shot 2:1 (between 2:1 and 2:2): length 5m → 15m (+10m)
-    let shot_id = project.sections.iter().find(|s| s.id == sec2).unwrap().shots[1].id;
-    project.update_shot(sec2, shot_id, &ShotUpdates { length: Some(15.0), ..Default::default() });
+    let shot_id = project
+        .sections
+        .iter()
+        .find(|s| s.id == sec2)
+        .unwrap()
+        .shots[1]
+        .id;
+    project.update_shot(
+        sec2,
+        shot_id,
+        &ShotUpdates {
+            length: Some(15.0),
+            ..Default::default()
+        },
+    );
 
     // Before realign: 2:3 has drifted 10m east from 1:3
-    let drifted_2_3 = project.compute_station_raw_coords(StationRef::new(sec2, 3)).unwrap();
+    let drifted_2_3 = project
+        .compute_station_raw_coords(StationRef::new(sec2, 3))
+        .unwrap();
     assert!(
         (drifted_2_3.x - pos_1_3.x).abs() > 5.0,
         "2:3 should have drifted from 1:3"
@@ -6269,29 +7478,42 @@ fn realign_merged_section_keeps_merge_point_aligned() {
     project.realign_after_shot_edit(sec2);
 
     // After realign: 2:3 matches 1:3 again (merge point preserved)
-    let fixed_2_3 = project.compute_station_raw_coords(StationRef::new(sec2, 3)).unwrap();
+    let fixed_2_3 = project
+        .compute_station_raw_coords(StationRef::new(sec2, 3))
+        .unwrap();
     assert!(
         (fixed_2_3.x - pos_1_3.x).abs() < 1e-6,
         "2:3 x should match 1:3 x, got {} vs {}",
-        fixed_2_3.x, pos_1_3.x
+        fixed_2_3.x,
+        pos_1_3.x
     );
     assert!(
         (fixed_2_3.y - pos_1_3.y).abs() < 1e-6,
         "2:3 y should match 1:3 y, got {} vs {}",
-        fixed_2_3.y, pos_1_3.y
+        fixed_2_3.y,
+        pos_1_3.y
     );
 
     // 1:0 (datum) still at origin
     let datum_coords = project.compute_station_raw_coords(datum_ref).unwrap();
-    assert!((datum_coords.x).abs() < 1e-6, "Datum should still be at origin x");
-    assert!((datum_coords.y).abs() < 1e-6, "Datum should still be at origin y");
+    assert!(
+        (datum_coords.x).abs() < 1e-6,
+        "Datum should still be at origin x"
+    );
+    assert!(
+        (datum_coords.y).abs() < 1e-6,
+        "Datum should still be at origin y"
+    );
 
     // 2:0 (unlocked end) moved to compensate
-    let pos_2_0_after = project.compute_station_raw_coords(StationRef::new(sec2, 0)).unwrap();
+    let pos_2_0_after = project
+        .compute_station_raw_coords(StationRef::new(sec2, 0))
+        .unwrap();
     assert!(
         (pos_2_0_after.x - pos_2_0_before.x).abs() > 5.0,
         "2:0 should have shifted to compensate, before={} after={}",
-        pos_2_0_before.x, pos_2_0_after.x
+        pos_2_0_before.x,
+        pos_2_0_after.x
     );
 }
 
@@ -6334,7 +7556,14 @@ fn realign_is_idempotent() {
 
     // Edit shot[0]
     let shot_id = project.sections.iter().find(|s| s.id == sec).unwrap().shots[0].id;
-    project.update_shot(sec, shot_id, &ShotUpdates { length: Some(12.0), ..Default::default() });
+    project.update_shot(
+        sec,
+        shot_id,
+        &ShotUpdates {
+            length: Some(12.0),
+            ..Default::default()
+        },
+    );
 
     project.realign_after_shot_edit(sec);
     let offsets_first = project.section_offsets.clone();
@@ -6377,7 +7606,12 @@ fn realign_edit_in_datum_section_propagates_to_merged() {
         .id;
 
     // Datum at 1:0
-    project.set_zero_datum(StationRef::new(sec1, 0), GpsCoordinates::new(45.0, -90.0, 0.0).unwrap()).unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(sec1, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
 
     // Merge 1:3 <-> 2:0
     project.station_merges.push(StationMerge {
@@ -6387,36 +7621,71 @@ fn realign_edit_in_datum_section_propagates_to_merged() {
     });
 
     // Align section 2 to merge point
-    let pos_1_3 = project.compute_station_raw_coords(StationRef::new(sec1, 3)).unwrap();
-    let pos_2_0 = project.compute_station_raw_coords(StationRef::new(sec2, 0)).unwrap();
-    project.section_offsets.insert(sec2, (pos_1_3.x - pos_2_0.x, pos_1_3.y - pos_2_0.y));
+    let pos_1_3 = project
+        .compute_station_raw_coords(StationRef::new(sec1, 3))
+        .unwrap();
+    let pos_2_0 = project
+        .compute_station_raw_coords(StationRef::new(sec2, 0))
+        .unwrap();
+    project
+        .section_offsets
+        .insert(sec2, (pos_1_3.x - pos_2_0.x, pos_1_3.y - pos_2_0.y));
 
     // Record 2:1's position before edit
-    let pos_2_1_before = project.compute_station_raw_coords(StationRef::new(sec2, 1)).unwrap();
+    let pos_2_1_before = project
+        .compute_station_raw_coords(StationRef::new(sec2, 1))
+        .unwrap();
 
     // Edit shot 1:1 (between 1:1 and 1:2): 10m → 20m
-    let shot_id = project.sections.iter().find(|s| s.id == sec1).unwrap().shots[1].id;
-    project.update_shot(sec1, shot_id, &ShotUpdates { length: Some(20.0), ..Default::default() });
+    let shot_id = project
+        .sections
+        .iter()
+        .find(|s| s.id == sec1)
+        .unwrap()
+        .shots[1]
+        .id;
+    project.update_shot(
+        sec1,
+        shot_id,
+        &ShotUpdates {
+            length: Some(20.0),
+            ..Default::default()
+        },
+    );
 
     // 1:3 has shifted north by 10m. 1:0 (datum) is before the edit, unchanged.
     // Realign from sec1 (the edited section)
     project.realign_after_shot_edit(sec1);
 
     // 1:0 still at origin (datum, before edited shot)
-    let datum = project.compute_station_raw_coords(StationRef::new(sec1, 0)).unwrap();
-    assert!((datum.x).abs() < 1e-6 && (datum.y).abs() < 1e-6, "Datum should be at origin");
+    let datum = project
+        .compute_station_raw_coords(StationRef::new(sec1, 0))
+        .unwrap();
+    assert!(
+        (datum.x).abs() < 1e-6 && (datum.y).abs() < 1e-6,
+        "Datum should be at origin"
+    );
 
     // 2:0 should match new 1:3 position (30 + 10 = 40 north)
-    let new_1_3 = project.compute_station_raw_coords(StationRef::new(sec1, 3)).unwrap();
-    let new_2_0 = project.compute_station_raw_coords(StationRef::new(sec2, 0)).unwrap();
+    let new_1_3 = project
+        .compute_station_raw_coords(StationRef::new(sec1, 3))
+        .unwrap();
+    let new_2_0 = project
+        .compute_station_raw_coords(StationRef::new(sec2, 0))
+        .unwrap();
     assert!(
         (new_2_0.x - new_1_3.x).abs() < 1e-6 && (new_2_0.y - new_1_3.y).abs() < 1e-6,
         "2:0 should match 1:3 after realign: 2:0=({},{}) 1:3=({},{})",
-        new_2_0.x, new_2_0.y, new_1_3.x, new_1_3.y
+        new_2_0.x,
+        new_2_0.y,
+        new_1_3.x,
+        new_1_3.y
     );
 
     // 2:1 should have moved by same amount as 1:3 (10m north)
-    let pos_2_1_after = project.compute_station_raw_coords(StationRef::new(sec2, 1)).unwrap();
+    let pos_2_1_after = project
+        .compute_station_raw_coords(StationRef::new(sec2, 1))
+        .unwrap();
     assert!(
         (pos_2_1_after.y - pos_2_1_before.y - 10.0).abs() < 1e-6,
         "2:1 should have moved 10m north, delta={}",
@@ -6438,14 +7707,18 @@ fn penetration_no_zero_datum_returns_zero() {
 #[test]
 fn penetration_single_section_with_datum() {
     let mut project = Project::new("Pen".to_string(), None);
-    let sec_id = project.add_section(SectionData {
-        // Northward shot: azimuth 0 means north
-        shots: vec![shot(0.0, 180.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let sec_id = project
+        .add_section(SectionData {
+            // Northward shot: azimuth 0 means north
+            shots: vec![shot(0.0, 180.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     let gps = GpsCoordinates::new(45.0, 10.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(sec_id, 0), gps).unwrap();
+    project
+        .set_zero_datum(StationRef::new(sec_id, 0), gps)
+        .unwrap();
 
     let stations = project.compute_station_coordinates();
     let pen = project.calculate_penetration(&stations);
@@ -6456,14 +7729,18 @@ fn penetration_single_section_with_datum() {
 #[test]
 fn penetration_datum_at_end_station() {
     let mut project = Project::new("PenEnd".to_string(), None);
-    let sec_id = project.add_section(SectionData {
-        shots: vec![shot(0.0, 180.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let sec_id = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 180.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Datum at end of section (station 1)
     let gps = GpsCoordinates::new(45.0, 10.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(sec_id, 1), gps).unwrap();
+    project
+        .set_zero_datum(StationRef::new(sec_id, 1), gps)
+        .unwrap();
 
     let stations = project.compute_station_coordinates();
     let pen = project.calculate_penetration(&stations);
@@ -6478,9 +7755,24 @@ fn penetration_datum_at_end_station() {
 #[test]
 fn cleanup_removes_merges_referencing_section() {
     let mut project = Project::new("Cleanup".to_string(), None);
-    let a = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
-    let b = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
-    let c = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 0).into(),
@@ -6496,14 +7788,28 @@ fn cleanup_removes_merges_referencing_section() {
     assert_eq!(project.station_merges.len(), 2);
     project.cleanup_section_references(b);
     // Both merges involve section b, so both should be removed
-    assert_eq!(project.station_merges.len(), 0, "all merges involving section b should be removed");
+    assert_eq!(
+        project.station_merges.len(),
+        0,
+        "all merges involving section b should be removed"
+    );
 }
 
 #[test]
 fn cleanup_removes_closures_referencing_section() {
     let mut project = Project::new("ClosureCleanup".to_string(), None);
-    let a = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
-    let b = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     project.loop_closures.push(LoopClosure {
         id: 1,
@@ -6539,13 +7845,27 @@ fn cleanup_removes_closures_referencing_section() {
 #[test]
 fn cleanup_removes_offsets_and_datums() {
     let mut project = Project::new("OffsetCleanup".to_string(), None);
-    let a = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
-    let b = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     project.section_offsets.insert(a, (1.0, 2.0));
     project.section_offsets.insert(b, (3.0, 4.0));
-    project.station_offsets.insert(StationRef::new(a, 0).into(), (1.0, 2.0, 3.0));
-    project.station_offsets.insert(StationRef::new(b, 0).into(), (4.0, 5.0, 6.0));
+    project
+        .station_offsets
+        .insert(StationRef::new(a, 0).into(), (1.0, 2.0, 3.0));
+    project
+        .station_offsets
+        .insert(StationRef::new(b, 0).into(), (4.0, 5.0, 6.0));
 
     let gps = GpsCoordinates::new(45.0, 10.0, 0.0).unwrap();
     project.set_zero_datum(StationRef::new(a, 0), gps).unwrap();
@@ -6553,19 +7873,48 @@ fn cleanup_removes_offsets_and_datums() {
 
     project.cleanup_section_references(a);
 
-    assert!(!project.section_offsets.contains_key(&a), "section a offset should be removed");
-    assert!(project.section_offsets.contains_key(&b), "section b offset should remain");
-    assert_eq!(project.station_offsets.len(), 1, "only b's station offset should remain");
-    assert_eq!(project.zero_datums.len(), 1, "only b's zero datum should remain");
+    assert!(
+        !project.section_offsets.contains_key(&a),
+        "section a offset should be removed"
+    );
+    assert!(
+        project.section_offsets.contains_key(&b),
+        "section b offset should remain"
+    );
+    assert_eq!(
+        project.station_offsets.len(),
+        1,
+        "only b's station offset should remain"
+    );
+    assert_eq!(
+        project.zero_datums.len(),
+        1,
+        "only b's zero datum should remain"
+    );
     assert_eq!(project.zero_datums[0].station_ref.section_id, b);
 }
 
 #[test]
 fn cleanup_preserves_unrelated_merges() {
     let mut project = Project::new("PreserveUnrelated".to_string(), None);
-    let a = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
-    let b = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
-    let c = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 0).into(),
@@ -6691,16 +8040,22 @@ fn compute_station_depth_from_surrounding_shots() {
     project.add_section(SectionData {
         shots: vec![
             shot(0.0, 0.0, 1.0, 0.0, 5.0),  // shot 0: depth_in=0, depth_out=5
-            shot(0.0, 0.0, 1.0, 6.0, 10.0),  // shot 1: depth_in=6, depth_out=10
+            shot(0.0, 0.0, 1.0, 6.0, 10.0), // shot 1: depth_in=6, depth_out=10
         ],
         ..Default::default()
     });
     let sec_id = project.sections[0].id;
 
     // Station 1 is between the two shots
-    let coords = project.compute_station_raw_coords(StationRef::new(sec_id, 1)).unwrap();
+    let coords = project
+        .compute_station_raw_coords(StationRef::new(sec_id, 1))
+        .unwrap();
     // Average of shot[0].depth_out (5.0) and shot[1].depth_in (6.0)
-    assert!((coords.z - 5.5).abs() < 1e-9, "depth should be 5.5, got {}", coords.z);
+    assert!(
+        (coords.z - 5.5).abs() < 1e-9,
+        "depth should be 5.5, got {}",
+        coords.z
+    );
 }
 
 #[test]
@@ -6708,15 +8063,19 @@ fn compute_station_depth_first_station() {
     // Station 0 has only an outgoing shot — depth = shot[0].depth_in
     let mut project = Project::new("Depth".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 1.0, 3.0, 7.0),
-        ],
+        shots: vec![shot(0.0, 0.0, 1.0, 3.0, 7.0)],
         ..Default::default()
     });
     let sec_id = project.sections[0].id;
 
-    let coords = project.compute_station_raw_coords(StationRef::new(sec_id, 0)).unwrap();
-    assert!((coords.z - 3.0).abs() < 1e-9, "first station depth should be 3.0, got {}", coords.z);
+    let coords = project
+        .compute_station_raw_coords(StationRef::new(sec_id, 0))
+        .unwrap();
+    assert!(
+        (coords.z - 3.0).abs() < 1e-9,
+        "first station depth should be 3.0, got {}",
+        coords.z
+    );
 }
 
 #[test]
@@ -6732,26 +8091,36 @@ fn compute_station_depth_last_station() {
     });
     let sec_id = project.sections[0].id;
 
-    let coords = project.compute_station_raw_coords(StationRef::new(sec_id, 2)).unwrap();
-    assert!((coords.z - 12.0).abs() < 1e-9, "last station depth should be 12.0, got {}", coords.z);
+    let coords = project
+        .compute_station_raw_coords(StationRef::new(sec_id, 2))
+        .unwrap();
+    assert!(
+        (coords.z - 12.0).abs() < 1e-9,
+        "last station depth should be 12.0, got {}",
+        coords.z
+    );
 }
 
 #[test]
 fn compute_station_depth_with_merge_averages_both_sections() {
     // Two sections merged at a station — depth should average across all colocated readings
     let mut project = Project::new("MergeDepth".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 1.0, 0.0, 8.0),  // shot 0: depth_out=8
-        ],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![
-            shot(90.0, 90.0, 1.0, 10.0, 20.0),  // shot 0: depth_in=10
-        ],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 8.0), // shot 0: depth_out=8
+            ],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(90.0, 90.0, 1.0, 10.0, 20.0), // shot 0: depth_in=10
+            ],
+            ..Default::default()
+        })
+        .id;
 
     // Merge A:1 with B:0
     project.station_merges.push(StationMerge {
@@ -6762,8 +8131,14 @@ fn compute_station_depth_with_merge_averages_both_sections() {
 
     // Station A:1 is colocated with B:0
     // Depths: A shot[0].depth_out=8, B shot[0].depth_in=10 → average = 9
-    let coords = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
-    assert!((coords.z - 9.0).abs() < 1e-9, "merged station depth should be 9.0, got {}", coords.z);
+    let coords = project
+        .compute_station_raw_coords(StationRef::new(a, 1))
+        .unwrap();
+    assert!(
+        (coords.z - 9.0).abs() < 1e-9,
+        "merged station depth should be 9.0, got {}",
+        coords.z
+    );
 }
 
 #[test]
@@ -6776,8 +8151,14 @@ fn compute_station_depth_no_shots_returns_zero() {
     });
     let sec_id = project.sections[0].id;
 
-    let coords = project.compute_station_raw_coords(StationRef::new(sec_id, 0)).unwrap();
-    assert!((coords.z).abs() < 1e-9, "depth should be 0.0 for empty section, got {}", coords.z);
+    let coords = project
+        .compute_station_raw_coords(StationRef::new(sec_id, 0))
+        .unwrap();
+    assert!(
+        (coords.z).abs() < 1e-9,
+        "depth should be 0.0 for empty section, got {}",
+        coords.z
+    );
 }
 
 #[test]
@@ -6787,20 +8168,26 @@ fn compute_raw_coords_xy_walk_north() {
     // dx = 5 * sin(0) = 0, dy = 5 * cos(0) = 5
     let mut project = Project::new("Walk".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 5.0, 10.0, 10.0),
-        ],
+        shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
         ..Default::default()
     });
     let sec_id = project.sections[0].id;
 
-    let c0 = project.compute_station_raw_coords(StationRef::new(sec_id, 0)).unwrap();
+    let c0 = project
+        .compute_station_raw_coords(StationRef::new(sec_id, 0))
+        .unwrap();
     assert!((c0.x).abs() < 1e-9, "station 0 x should be 0");
     assert!((c0.y).abs() < 1e-9, "station 0 y should be 0");
 
-    let c1 = project.compute_station_raw_coords(StationRef::new(sec_id, 1)).unwrap();
+    let c1 = project
+        .compute_station_raw_coords(StationRef::new(sec_id, 1))
+        .unwrap();
     assert!((c1.x).abs() < 1e-9, "station 1 x should be 0 (due north)");
-    assert!((c1.y - 5.0).abs() < 1e-9, "station 1 y should be 5.0, got {}", c1.y);
+    assert!(
+        (c1.y - 5.0).abs() < 1e-9,
+        "station 1 y should be 5.0, got {}",
+        c1.y
+    );
 }
 
 #[test]
@@ -6808,16 +8195,24 @@ fn compute_raw_coords_xy_walk_east() {
     // A shot due east (azimuth=90) with length 3m, flat
     let mut project = Project::new("Walk".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![
-            shot(90.0, 90.0, 3.0, 5.0, 5.0),
-        ],
+        shots: vec![shot(90.0, 90.0, 3.0, 5.0, 5.0)],
         ..Default::default()
     });
     let sec_id = project.sections[0].id;
 
-    let c1 = project.compute_station_raw_coords(StationRef::new(sec_id, 1)).unwrap();
-    assert!((c1.x - 3.0).abs() < 1e-9, "station 1 x should be 3.0 (due east), got {}", c1.x);
-    assert!((c1.y).abs() < 1e-9, "station 1 y should be ~0, got {}", c1.y);
+    let c1 = project
+        .compute_station_raw_coords(StationRef::new(sec_id, 1))
+        .unwrap();
+    assert!(
+        (c1.x - 3.0).abs() < 1e-9,
+        "station 1 x should be 3.0 (due east), got {}",
+        c1.x
+    );
+    assert!(
+        (c1.y).abs() < 1e-9,
+        "station 1 y should be ~0, got {}",
+        c1.y
+    );
 }
 
 #[test]
@@ -6835,47 +8230,84 @@ fn compute_raw_coords_depth_independent_of_xy() {
     let sec_id = project.sections[0].id;
 
     // Station 0: only outgoing shot → depth_in = 5.0
-    let c0 = project.compute_station_raw_coords(StationRef::new(sec_id, 0)).unwrap();
-    assert!((c0.z - 5.0).abs() < 1e-9, "station 0 depth should be 5.0, got {}", c0.z);
+    let c0 = project
+        .compute_station_raw_coords(StationRef::new(sec_id, 0))
+        .unwrap();
+    assert!(
+        (c0.z - 5.0).abs() < 1e-9,
+        "station 0 depth should be 5.0, got {}",
+        c0.z
+    );
 
     // Station 1: incoming depth_out=8, outgoing depth_in=7 → average = 7.5
-    let c1 = project.compute_station_raw_coords(StationRef::new(sec_id, 1)).unwrap();
-    assert!((c1.z - 7.5).abs() < 1e-9, "station 1 depth should be 7.5, got {}", c1.z);
+    let c1 = project
+        .compute_station_raw_coords(StationRef::new(sec_id, 1))
+        .unwrap();
+    assert!(
+        (c1.z - 7.5).abs() < 1e-9,
+        "station 1 depth should be 7.5, got {}",
+        c1.z
+    );
 
     // Station 2: only incoming → depth_out = 12.0
-    let c2 = project.compute_station_raw_coords(StationRef::new(sec_id, 2)).unwrap();
-    assert!((c2.z - 12.0).abs() < 1e-9, "station 2 depth should be 12.0, got {}", c2.z);
+    let c2 = project
+        .compute_station_raw_coords(StationRef::new(sec_id, 2))
+        .unwrap();
+    assert!(
+        (c2.z - 12.0).abs() < 1e-9,
+        "station 2 depth should be 12.0, got {}",
+        c2.z
+    );
 }
 
 #[test]
 fn compute_raw_coords_with_section_offset() {
     let mut project = Project::new("Offset".to_string(), None);
-    let sec = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
-        ..Default::default()
-    }).id;
+    let sec = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
+            ..Default::default()
+        })
+        .id;
 
     project.section_offsets.insert(sec, (100.0, 200.0));
 
-    let c0 = project.compute_station_raw_coords(StationRef::new(sec, 0)).unwrap();
-    assert!((c0.x - 100.0).abs() < 1e-9, "x should include section offset");
-    assert!((c0.y - 200.0).abs() < 1e-9, "y should include section offset");
+    let c0 = project
+        .compute_station_raw_coords(StationRef::new(sec, 0))
+        .unwrap();
+    assert!(
+        (c0.x - 100.0).abs() < 1e-9,
+        "x should include section offset"
+    );
+    assert!(
+        (c0.y - 200.0).abs() < 1e-9,
+        "y should include section offset"
+    );
 }
 
 #[test]
 fn compute_raw_coords_with_station_offset() {
     let mut project = Project::new("StaOff".to_string(), None);
-    let sec = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
-        ..Default::default()
-    }).id;
+    let sec = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
+            ..Default::default()
+        })
+        .id;
 
-    project.station_offsets.insert(StationRef::new(sec, 0).into(), (1.0, 2.0, 3.0));
+    project
+        .station_offsets
+        .insert(StationRef::new(sec, 0).into(), (1.0, 2.0, 3.0));
 
-    let c0 = project.compute_station_raw_coords(StationRef::new(sec, 0)).unwrap();
+    let c0 = project
+        .compute_station_raw_coords(StationRef::new(sec, 0))
+        .unwrap();
     assert!((c0.x - 1.0).abs() < 1e-9, "x should include station offset");
     assert!((c0.y - 2.0).abs() < 1e-9, "y should include station offset");
-    assert!((c0.z - 13.0).abs() < 1e-9, "z should be depth(10) + offset(3)");
+    assert!(
+        (c0.z - 13.0).abs() < 1e-9,
+        "z should be depth(10) + offset(3)"
+    );
 }
 
 // ── adjust_least_squares tests ──────────────────────────────────────
@@ -6884,13 +8316,15 @@ fn compute_raw_coords_with_station_offset() {
 fn lsq_no_closures_is_noop() {
     // With no closures, there are no constraints to adjust — should return Ok
     let mut project = Project::new("LSQ".to_string(), None);
-    let sec = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 5.0, 5.0),
-            shot(90.0, 90.0, 10.0, 5.0, 5.0),
-        ],
-        ..Default::default()
-    }).id;
+    let sec = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 5.0, 5.0),
+                shot(90.0, 90.0, 10.0, 5.0, 5.0),
+            ],
+            ..Default::default()
+        })
+        .id;
 
     let config = ClosureAdjustmentConfig::default();
     let component: HashSet<SectionId> = [sec].into_iter().collect();
@@ -6904,18 +8338,24 @@ fn lsq_preserves_depth_values() {
     let mut project = Project::new("LSQDepth".to_string(), None);
 
     // Create a triangle: section A (north 10m), section B (east 10m), section C (south-west ~14m)
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 5.0, 8.0)],  // north, depth 5→8
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 10.0, 8.0, 12.0)],  // east, depth 8→12
-        ..Default::default()
-    }).id;
-    let c = project.add_section(SectionData {
-        shots: vec![shot(225.0, 225.0, 14.5, 12.0, 5.5)],  // south-west back, depth 12→5.5
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 5.0, 8.0)], // north, depth 5→8
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 10.0, 8.0, 12.0)], // east, depth 8→12
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(225.0, 225.0, 14.5, 12.0, 5.5)], // south-west back, depth 12→5.5
+            ..Default::default()
+        })
+        .id;
 
     // Merge to form a loop: A:1 → B:0, B:1 → C:0
     project.station_merges.push(StationMerge {
@@ -6944,37 +8384,49 @@ fn lsq_preserves_depth_values() {
     };
 
     // Save original depths
-    let orig_depths: Vec<(f64, f64)> = project.sections.iter()
+    let orig_depths: Vec<(f64, f64)> = project
+        .sections
+        .iter()
         .flat_map(|s| s.shots.iter().map(|sh| (sh.depth_in, sh.depth_out)))
         .collect();
 
     let config = ClosureAdjustmentConfig::default();
     let component: HashSet<SectionId> = [a, b, c].into_iter().collect();
-    let result = project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
+    let result =
+        project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
 
     // Verify depths are unchanged
-    let new_depths: Vec<(f64, f64)> = project.sections.iter()
+    let new_depths: Vec<(f64, f64)> = project
+        .sections
+        .iter()
         .flat_map(|s| s.shots.iter().map(|sh| (sh.depth_in, sh.depth_out)))
         .collect();
-    assert_eq!(orig_depths, new_depths, "depth_in/depth_out must not change after LSQ adjustment");
+    assert_eq!(
+        orig_depths, new_depths,
+        "depth_in/depth_out must not change after LSQ adjustment"
+    );
 }
 
 #[test]
 fn lsq_anchor_station_stays_fixed() {
     // The anchor station (or its group) should not move
     let mut project = Project::new("LSQAnchor".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 5.0, 5.0),
-            shot(0.0, 0.0, 10.0, 5.0, 5.0),
-        ],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(180.0, 180.0, 20.5, 5.0, 5.0)],  // slight error for closure
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 5.0, 5.0),
+                shot(0.0, 0.0, 10.0, 5.0, 5.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(180.0, 180.0, 20.5, 5.0, 5.0)], // slight error for closure
+            ..Default::default()
+        })
+        .id;
 
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 2).into(),
@@ -7008,7 +8460,10 @@ fn lsq_anchor_station_stays_fixed() {
         (coords_after.x - coords_before.x).abs() < 1e-6
             && (coords_after.y - coords_before.y).abs() < 1e-6,
         "anchor XY should not move: before=({}, {}), after=({}, {})",
-        coords_before.x, coords_before.y, coords_after.x, coords_after.y
+        coords_before.x,
+        coords_before.y,
+        coords_after.x,
+        coords_after.y
     );
 }
 
@@ -7016,17 +8471,21 @@ fn lsq_anchor_station_stays_fixed() {
 fn lsq_produces_finite_coordinates() {
     // After adjustment, all station coordinates should be finite
     let mut project = Project::new("LSQFinite".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 5.0, 5.0),
-            shot(90.0, 90.0, 10.0, 5.0, 5.0),
-        ],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(225.0, 225.0, 14.0, 5.0, 5.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 5.0, 5.0),
+                shot(90.0, 90.0, 10.0, 5.0, 5.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(225.0, 225.0, 14.0, 5.0, 5.0)],
+            ..Default::default()
+        })
+        .id;
 
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 2).into(),
@@ -7049,15 +8508,33 @@ fn lsq_produces_finite_coordinates() {
 
     let config = ClosureAdjustmentConfig::default();
     let component: HashSet<SectionId> = [a, b].into_iter().collect();
-    let result = project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
+    let result =
+        project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
 
     for section in &project.sections {
         for idx in 0..=section.shots.len() {
-            let coords = project.compute_station_raw_coords(StationRef::new(section.id, idx as u32)).unwrap();
-            assert!(coords.x.is_finite(), "x should be finite for {}:{}", section.id, idx);
-            assert!(coords.y.is_finite(), "y should be finite for {}:{}", section.id, idx);
-            assert!(coords.z.is_finite(), "z should be finite for {}:{}", section.id, idx);
+            let coords = project
+                .compute_station_raw_coords(StationRef::new(section.id, idx as u32))
+                .unwrap();
+            assert!(
+                coords.x.is_finite(),
+                "x should be finite for {}:{}",
+                section.id,
+                idx
+            );
+            assert!(
+                coords.y.is_finite(),
+                "y should be finite for {}:{}",
+                section.id,
+                idx
+            );
+            assert!(
+                coords.z.is_finite(),
+                "z should be finite for {}:{}",
+                section.id,
+                idx
+            );
         }
     }
 }
@@ -7066,18 +8543,24 @@ fn lsq_produces_finite_coordinates() {
 fn lsq_with_zero_datum_fixes_that_group() {
     // When a zero datum exists, its group should be fixed and not move
     let mut project = Project::new("LSQDatum".to_string(), None);
-    let a = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 5.0, 5.0)],
-        ..Default::default()
-    }).id;
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 10.0, 5.0, 5.0)],
-        ..Default::default()
-    }).id;
-    let c = project.add_section(SectionData {
-        shots: vec![shot(225.0, 225.0, 14.5, 5.0, 5.0)],
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 5.0, 5.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 10.0, 5.0, 5.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(225.0, 225.0, 14.5, 5.0, 5.0)],
+            ..Default::default()
+        })
+        .id;
 
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1).into(),
@@ -7108,14 +8591,19 @@ fn lsq_with_zero_datum_fixes_that_group() {
         is_aligned: false,
     };
 
-    let datum_coords_before = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
+    let datum_coords_before = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
 
     let config = ClosureAdjustmentConfig::default();
     let component: HashSet<SectionId> = [a, b, c].into_iter().collect();
-    let result = project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
+    let result =
+        project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
 
-    let datum_coords_after = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
+    let datum_coords_after = project
+        .compute_station_raw_coords(StationRef::new(a, 0))
+        .unwrap();
     assert!(
         (datum_coords_after.x - datum_coords_before.x).abs() < 1e-6
             && (datum_coords_after.y - datum_coords_before.y).abs() < 1e-6,
@@ -7126,48 +8614,72 @@ fn lsq_with_zero_datum_fixes_that_group() {
 #[test]
 fn lsq_update_shot_horizontal_only_preserves_depth() {
     // Direct test of update_shot_horizontal_only
-    let mut s = Shot::new(1, ShotData {
-        azimuth_in: 45.0,
-        azimuth_out: 45.0,
-        length: 10.0,
-        depth_in: 3.0,
-        depth_out: 7.0,
-        pitch_in: Some(23.5),
-        pitch_out: Some(23.5),
-        ..Default::default()
-    });
+    let mut s = Shot::new(
+        1,
+        ShotData {
+            azimuth_in: 45.0,
+            azimuth_out: 45.0,
+            length: 10.0,
+            depth_in: 3.0,
+            depth_out: 7.0,
+            pitch_in: Some(23.5),
+            pitch_out: Some(23.5),
+            ..Default::default()
+        },
+    );
 
     // Update horizontal displacement to pure east (dx=5, dy=0)
     Project::update_shot_horizontal_only(&mut s, 5.0, 0.0);
 
     assert!((s.depth_in - 3.0).abs() < 1e-9, "depth_in must not change");
-    assert!((s.depth_out - 7.0).abs() < 1e-9, "depth_out must not change");
+    assert!(
+        (s.depth_out - 7.0).abs() < 1e-9,
+        "depth_out must not change"
+    );
     assert_eq!(s.pitch_in, Some(23.5), "pitch_in must not change");
     assert_eq!(s.pitch_out, Some(23.5), "pitch_out must not change");
     // Azimuth should now point east (90 degrees)
-    assert!((s.azimuth_in - 90.0).abs() < 1e-6, "azimuth should be 90, got {}", s.azimuth_in);
+    assert!(
+        (s.azimuth_in - 90.0).abs() < 1e-6,
+        "azimuth should be 90, got {}",
+        s.azimuth_in
+    );
     // Length should account for horizontal + dz: sqrt(5^2 + 4^2) = sqrt(41)
     let expected_len = (25.0_f64 + 16.0).sqrt();
-    assert!((s.length - expected_len).abs() < 1e-6, "length should be sqrt(41), got {}", s.length);
+    assert!(
+        (s.length - expected_len).abs() < 1e-6,
+        "length should be sqrt(41), got {}",
+        s.length
+    );
 }
 
 #[test]
 fn lsq_update_shot_horizontal_only_zero_displacement() {
     // When dx=dy=0, azimuth should be preserved, length = |dz|
-    let mut s = Shot::new(1, ShotData {
-        azimuth_in: 135.0,
-        azimuth_out: 135.0,
-        length: 5.0,
-        depth_in: 2.0,
-        depth_out: 6.0,
-        ..Default::default()
-    });
+    let mut s = Shot::new(
+        1,
+        ShotData {
+            azimuth_in: 135.0,
+            azimuth_out: 135.0,
+            length: 5.0,
+            depth_in: 2.0,
+            depth_out: 6.0,
+            ..Default::default()
+        },
+    );
 
     Project::update_shot_horizontal_only(&mut s, 0.0, 0.0);
 
-    assert!((s.azimuth_in - 135.0).abs() < 1e-6, "azimuth should be preserved when displacement is zero");
+    assert!(
+        (s.azimuth_in - 135.0).abs() < 1e-6,
+        "azimuth should be preserved when displacement is zero"
+    );
     // length = sqrt(0 + dz^2) = |4| = 4
-    assert!((s.length - 4.0).abs() < 1e-6, "length should be |dz|=4, got {}", s.length);
+    assert!(
+        (s.length - 4.0).abs() < 1e-6,
+        "length should be |dz|=4, got {}",
+        s.length
+    );
 }
 
 #[test]
@@ -7186,19 +8698,21 @@ fn lsq_long_chain_per_shot_changes_are_small() {
     let mut project = Project::new("LSQLongChain".to_string(), None);
 
     // Section A: 200 shots heading north, each 5m
-    let shots_a: Vec<ShotData> = (0..200)
-        .map(|_| shot(0.0, 0.0, 5.0, 0.0, 0.0))
-        .collect();
-    let a = project.add_section(SectionData {
-        shots: shots_a,
-        ..Default::default()
-    }).id;
+    let shots_a: Vec<ShotData> = (0..200).map(|_| shot(0.0, 0.0, 5.0, 0.0, 0.0)).collect();
+    let a = project
+        .add_section(SectionData {
+            shots: shots_a,
+            ..Default::default()
+        })
+        .id;
 
     // Section B: 1 shot heading east, 10m
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Zero datums
     project.zero_datums.push(ZeroDatum {
@@ -7220,9 +8734,13 @@ fn lsq_long_chain_per_shot_changes_are_small() {
     // path_length ≈ 200*5 + 10 = 1010m
 
     // Save original shot data
-    let orig_shots_a: Vec<(f64, f64)> = project.sections.iter()
-        .find(|s| s.id == a).unwrap()
-        .shots.iter()
+    let orig_shots_a: Vec<(f64, f64)> = project
+        .sections
+        .iter()
+        .find(|s| s.id == a)
+        .unwrap()
+        .shots
+        .iter()
         .map(|s| (s.azimuth_in, s.length))
         .collect();
 
@@ -7241,17 +8759,20 @@ fn lsq_long_chain_per_shot_changes_are_small() {
 
     let config = ClosureAdjustmentConfig::default();
     let component: HashSet<SectionId> = [a, b].into_iter().collect();
-    let result = project.adjust_least_squares(
-        &component, &[closure], StationRef::new(a, 0), &config,
-    );
+    let result =
+        project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
 
     // Check per-shot changes are small (bounded by misclosure / num_shots * safety_factor)
     // With 201 shots and 10m misclosure, max per-shot change ≈ 0.05m per shot.
     // We allow up to 0.5m per shot to be safe (10x margin).
-    let new_shots_a: Vec<(f64, f64)> = project.sections.iter()
-        .find(|s| s.id == a).unwrap()
-        .shots.iter()
+    let new_shots_a: Vec<(f64, f64)> = project
+        .sections
+        .iter()
+        .find(|s| s.id == a)
+        .unwrap()
+        .shots
+        .iter()
         .map(|s| (s.azimuth_in, s.length))
         .collect();
 
@@ -7267,16 +8788,26 @@ fn lsq_long_chain_per_shot_changes_are_small() {
             len_delta < 0.5,
             "shot {} length changed by {:.3}m (orig={:.3}, new={:.3}) — \
              suggests solver did not converge",
-            i, len_delta, orig_len, new_len,
+            i,
+            len_delta,
+            orig_len,
+            new_len,
         );
         // Azimuth change: for a 5m shot, 0.5m displacement is ~5.7 degrees
         let az_delta = (new_az - orig_az).abs();
-        let az_delta = if az_delta > 180.0 { 360.0 - az_delta } else { az_delta };
+        let az_delta = if az_delta > 180.0 {
+            360.0 - az_delta
+        } else {
+            az_delta
+        };
         assert!(
             az_delta < 10.0,
             "shot {} azimuth changed by {:.3}° (orig={:.3}, new={:.3}) — \
              suggests solver did not converge",
-            i, az_delta, orig_az, new_az,
+            i,
+            az_delta,
+            orig_az,
+            new_az,
         );
     }
 }
@@ -7307,16 +8838,20 @@ fn lsq_realistic_topology_preserves_geometry() {
             shot(az, az, len, i as f64 * 0.1, (i + 1) as f64 * 0.1)
         })
         .collect();
-    let a = project.add_section(SectionData {
-        shots: shots_a,
-        ..Default::default()
-    }).id;
+    let a = project
+        .add_section(SectionData {
+            shots: shots_a,
+            ..Default::default()
+        })
+        .id;
 
     // Section B: 1 shot (anchor)
-    let b = project.add_section(SectionData {
-        shots: vec![shot(120.0, 120.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(120.0, 120.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
     // Set section A offset (large, like real data)
     let offset_a = (761.5, -1284.6);
@@ -7339,7 +8874,10 @@ fn lsq_realistic_topology_preserves_geometry() {
     let b_shot_dx = 10.0 * 120.0_f64.to_radians().sin();
     let b_shot_dy = 10.0 * 120.0_f64.to_radians().cos();
     // Set B offset so B:1 is near A:73 with a small misclosure (~2m)
-    project.section_offsets.insert(b, (a73_abs_x - b_shot_dx + 1.5, a73_abs_y - b_shot_dy + 1.3));
+    project.section_offsets.insert(
+        b,
+        (a73_abs_x - b_shot_dx + 1.5, a73_abs_y - b_shot_dy + 1.3),
+    );
 
     // Zero datums
     project.zero_datums.push(ZeroDatum {
@@ -7352,9 +8890,15 @@ fn lsq_realistic_topology_preserves_geometry() {
     });
 
     // Save original shots for section A
-    let orig_a: Vec<(f64, f64)> = project.sections.iter()
-        .find(|s| s.id == a).unwrap()
-        .shots.iter().map(|s| (s.azimuth_in, s.length)).collect();
+    let orig_a: Vec<(f64, f64)> = project
+        .sections
+        .iter()
+        .find(|s| s.id == a)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| (s.azimuth_in, s.length))
+        .collect();
 
     // Closure: A:73 ↔ B:1 (misclosure ~2m)
     let closure = LoopClosure {
@@ -7371,27 +8915,47 @@ fn lsq_realistic_topology_preserves_geometry() {
     };
 
     // Capture positions around closure point BEFORE adjustment
-    let pos_a73_before = project.compute_station_raw_coords(StationRef::new(a, 73)).unwrap();
-    let pos_b1_before = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
-    let actual_misclosure = ((pos_a73_before.x - pos_b1_before.x).powi(2) + (pos_a73_before.y - pos_b1_before.y).powi(2)).sqrt();
+    let pos_a73_before = project
+        .compute_station_raw_coords(StationRef::new(a, 73))
+        .unwrap();
+    let pos_b1_before = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
+    let actual_misclosure = ((pos_a73_before.x - pos_b1_before.x).powi(2)
+        + (pos_a73_before.y - pos_b1_before.y).powi(2))
+    .sqrt();
 
     let config = ClosureAdjustmentConfig::default();
     let component: HashSet<SectionId> = [a, b].into_iter().collect();
-    let result = project.adjust_least_squares(
-        &component, &[closure], StationRef::new(a, 0), &config,
-    );
+    let result =
+        project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
 
     // Verify closure endpoints now coincide
-    let pos_a73_after = project.compute_station_raw_coords(StationRef::new(a, 73)).unwrap();
-    let pos_b1_after = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
-    let residual_misc = ((pos_a73_after.x - pos_b1_after.x).powi(2) + (pos_a73_after.y - pos_b1_after.y).powi(2)).sqrt();
-    assert!(residual_misc < 0.01, "residual misclosure {residual_misc:.6}m should be near zero");
+    let pos_a73_after = project
+        .compute_station_raw_coords(StationRef::new(a, 73))
+        .unwrap();
+    let pos_b1_after = project
+        .compute_station_raw_coords(StationRef::new(b, 1))
+        .unwrap();
+    let residual_misc = ((pos_a73_after.x - pos_b1_after.x).powi(2)
+        + (pos_a73_after.y - pos_b1_after.y).powi(2))
+    .sqrt();
+    assert!(
+        residual_misc < 0.01,
+        "residual misclosure {residual_misc:.6}m should be near zero"
+    );
 
     // Verify per-shot changes in section A are bounded.
-    let new_a: Vec<(f64, f64)> = project.sections.iter()
-        .find(|s| s.id == a).unwrap()
-        .shots.iter().map(|s| (s.azimuth_in, s.length)).collect();
+    let new_a: Vec<(f64, f64)> = project
+        .sections
+        .iter()
+        .find(|s| s.id == a)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| (s.azimuth_in, s.length))
+        .collect();
 
     let mut max_len_delta_a = 0.0_f64;
     let mut worst_shot = 0;
@@ -7405,7 +8969,9 @@ fn lsq_realistic_topology_preserves_geometry() {
     assert!(
         max_len_delta_a < 1.0,
         "shot {} length changed by {:.4}m — too large for {:.2}m misclosure",
-        worst_shot, max_len_delta_a, actual_misclosure,
+        worst_shot,
+        max_len_delta_a,
+        actual_misclosure,
     );
 }
 
@@ -7423,26 +8989,28 @@ fn lsq_spur_shots_are_not_modified() {
     // Loop stations: A:30–A:100, B:0–B:1.
     let mut project = Project::new("SpurTest".to_string(), None);
 
-    let shots_a: Vec<ShotData> = (0..100)
-        .map(|_| shot(0.0, 0.0, 5.0, 0.0, 0.0))
-        .collect();
-    let a = project.add_section(SectionData {
-        shots: shots_a,
-        ..Default::default()
-    }).id;
+    let shots_a: Vec<ShotData> = (0..100).map(|_| shot(0.0, 0.0, 5.0, 0.0, 0.0)).collect();
+    let a = project
+        .add_section(SectionData {
+            shots: shots_a,
+            ..Default::default()
+        })
+        .id;
 
-    let b = project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
 
-    let shots_c: Vec<ShotData> = (0..20)
-        .map(|_| shot(90.0, 90.0, 3.0, 0.0, 0.0))
-        .collect();
-    let c = project.add_section(SectionData {
-        shots: shots_c,
-        ..Default::default()
-    }).id;
+    let shots_c: Vec<ShotData> = (0..20).map(|_| shot(90.0, 90.0, 3.0, 0.0, 0.0)).collect();
+    let c = project
+        .add_section(SectionData {
+            shots: shots_c,
+            ..Default::default()
+        })
+        .id;
 
     // Merge C:0 ↔ A:50
     project.station_merges.push(StationMerge {
@@ -7467,14 +9035,21 @@ fn lsq_spur_shots_are_not_modified() {
     project.section_offsets.insert(c, (500.0, 1050.0));
 
     // Save original shot data for spur sections
-    let orig_a_spur: Vec<(f64, f64)> = project.sections.iter()
-        .find(|s| s.id == a).unwrap()
-        .shots[..30]  // A:0–A:29 are spur shots (before closure at A:30)
-        .iter().map(|s| (s.azimuth_in, s.length)).collect();
+    let orig_a_spur: Vec<(f64, f64)> = project.sections.iter().find(|s| s.id == a).unwrap().shots
+        [..30] // A:0–A:29 are spur shots (before closure at A:30)
+        .iter()
+        .map(|s| (s.azimuth_in, s.length))
+        .collect();
 
-    let orig_c: Vec<(f64, f64)> = project.sections.iter()
-        .find(|s| s.id == c).unwrap()
-        .shots.iter().map(|s| (s.azimuth_in, s.length)).collect();
+    let orig_c: Vec<(f64, f64)> = project
+        .sections
+        .iter()
+        .find(|s| s.id == c)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| (s.azimuth_in, s.length))
+        .collect();
 
     let closure = LoopClosure {
         id: 1,
@@ -7491,45 +9066,64 @@ fn lsq_spur_shots_are_not_modified() {
 
     let config = ClosureAdjustmentConfig::default();
     let component: HashSet<SectionId> = [a, b, c].into_iter().collect();
-    let result = project.adjust_least_squares(
-        &component, &[closure], StationRef::new(a, 0), &config,
-    );
+    let result =
+        project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
     assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
 
     // Verify spur shots in A (indices 0..29) are exactly unchanged.
-    let new_a_spur: Vec<(f64, f64)> = project.sections.iter()
-        .find(|s| s.id == a).unwrap()
-        .shots[..30]
-        .iter().map(|s| (s.azimuth_in, s.length)).collect();
+    let new_a_spur: Vec<(f64, f64)> = project.sections.iter().find(|s| s.id == a).unwrap().shots
+        [..30]
+        .iter()
+        .map(|s| (s.azimuth_in, s.length))
+        .collect();
     for (i, (orig, new)) in orig_a_spur.iter().zip(new_a_spur.iter()).enumerate() {
         assert!(
             (orig.0 - new.0).abs() < f64::EPSILON && (orig.1 - new.1).abs() < f64::EPSILON,
             "spur shot A:{i} was modified: az {:.6}→{:.6}, len {:.6}→{:.6}",
-            orig.0, new.0, orig.1, new.1,
+            orig.0,
+            new.0,
+            orig.1,
+            new.1,
         );
     }
 
     // Verify all shots in section C are exactly unchanged.
-    let new_c: Vec<(f64, f64)> = project.sections.iter()
-        .find(|s| s.id == c).unwrap()
-        .shots.iter().map(|s| (s.azimuth_in, s.length)).collect();
+    let new_c: Vec<(f64, f64)> = project
+        .sections
+        .iter()
+        .find(|s| s.id == c)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| (s.azimuth_in, s.length))
+        .collect();
     for (i, (orig, new)) in orig_c.iter().zip(new_c.iter()).enumerate() {
         assert!(
             (orig.0 - new.0).abs() < f64::EPSILON && (orig.1 - new.1).abs() < f64::EPSILON,
             "spur shot C:{i} was modified: az {:.6}→{:.6}, len {:.6}→{:.6}",
-            orig.0, new.0, orig.1, new.1,
+            orig.0,
+            new.0,
+            orig.1,
+            new.1,
         );
     }
 
     // Verify merged stations (C:0 ↔ A:50) still share the same position.
-    let pos_c0 = project.compute_station_raw_coords(StationRef::new(c, 0)).unwrap();
-    let pos_a50 = project.compute_station_raw_coords(StationRef::new(a, 50)).unwrap();
+    let pos_c0 = project
+        .compute_station_raw_coords(StationRef::new(c, 0))
+        .unwrap();
+    let pos_a50 = project
+        .compute_station_raw_coords(StationRef::new(a, 50))
+        .unwrap();
     let merge_gap = ((pos_c0.x - pos_a50.x).powi(2) + (pos_c0.y - pos_a50.y).powi(2)).sqrt();
     assert!(
         merge_gap < 1e-6,
         "merge C:0↔A:50 broken after adjustment: gap={merge_gap:.6}m, \
          C:0=({:.4},{:.4}), A:50=({:.4},{:.4})",
-        pos_c0.x, pos_c0.y, pos_a50.x, pos_a50.y,
+        pos_c0.x,
+        pos_c0.y,
+        pos_a50.x,
+        pos_a50.y,
     );
 }
 
@@ -7610,7 +9204,8 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
 #[ignore = "diagnostic against a real on-disk file; run with --ignored"]
 fn diagnose_naharon_section31_bridge_closure() {
     use crate::persistence::Database;
-    let path = std::path::Path::new("/home/user/Documents/stalagmight/20260601_naharon-final.stalx");
+    let path =
+        std::path::Path::new("/home/user/Documents/stalagmight/20260601_naharon-final.stalx");
     let db = Database::open_existing(path).unwrap();
     let mut project = db.load_project().unwrap();
     project.rebuild_section_index();
@@ -7629,12 +9224,21 @@ fn diagnose_naharon_section31_bridge_closure() {
             .count();
         (merges, closures)
     };
-    eprintln!("section 31 BEFORE: merges/closures = {:?}", count31(&project));
+    eprintln!(
+        "section 31 BEFORE: merges/closures = {:?}",
+        count31(&project)
+    );
     let converted = project.convert_orphan_closures_to_merges();
     eprintln!("converted {converted} orphan closure(s)");
-    eprintln!("section 31 AFTER:  merges/closures = {:?}", count31(&project));
+    eprintln!(
+        "section 31 AFTER:  merges/closures = {:?}",
+        count31(&project)
+    );
     let (merges, closures) = count31(&project);
-    assert_eq!(closures, 0, "section 31's sole-bridge closure should be gone");
+    assert_eq!(
+        closures, 0,
+        "section 31's sole-bridge closure should be gone"
+    );
     assert!(merges >= 1, "section 31 should now be attached by a merge");
 }
 
@@ -7642,7 +9246,8 @@ fn diagnose_naharon_section31_bridge_closure() {
 #[ignore = "diagnostic against a real on-disk file; run with --ignored"]
 fn diagnose_naharon_merge_alignment() {
     use crate::persistence::Database;
-    let path = std::path::Path::new("/home/user/Documents/stalagmight/20260601_naharon-final.stalx");
+    let path =
+        std::path::Path::new("/home/user/Documents/stalagmight/20260601_naharon-final.stalx");
     let db = Database::open_existing(path).unwrap();
     let mut project = db.load_project().unwrap();
     project.rebuild_section_index();
@@ -7670,7 +9275,10 @@ fn diagnose_naharon_merge_alignment() {
 fn integrity_flags_non_finite_geometry() {
     let mut p = Project::new("NaN".to_string(), None);
     let a = p
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     assert!(p.check_structural_integrity().is_empty());
     // Poison a shot the way a corrupt/older file or unguarded import could.
@@ -7707,8 +9315,13 @@ fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
     });
     // Merge A2 <-> B0 and align (B0 lands on A2).
-    project.merge_stations(StationRef::new(a, 2), StationRef::new(b, 0)).unwrap();
-    assert!(project.check_merge_alignment().is_empty(), "merge should be aligned");
+    project
+        .merge_stations(StationRef::new(a, 2), StationRef::new(b, 0))
+        .unwrap();
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "merge should be aligned"
+    );
     // A closure A0 <-> B2, marked aligned — but A0=(0,0) and B2 is 20m north.
     project.loop_closures.push(LoopClosure {
         id: 1,
@@ -7787,12 +9400,18 @@ fn insert_before_and_after_agree_on_boundary_merge_ref() {
         let mut p = Project::new("Boundary".to_string(), None);
         let a = p
             .add_section(SectionData {
-                shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+                shots: vec![
+                    shot(0.0, 0.0, 5.0, 0.0, 0.0),
+                    shot(90.0, 90.0, 5.0, 0.0, 0.0),
+                ],
                 ..Default::default()
             })
             .id;
         let b = p
-            .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+                ..Default::default()
+            })
             .id;
         // Merge B0 onto A's MIDDLE station (index 1) — the insertion boundary.
         p.record_station_merge(StationMerge {
@@ -7811,8 +9430,14 @@ fn insert_before_and_after_agree_on_boundary_merge_ref() {
             .iter()
             .find(|m| m.station_a.section_id == a || m.station_b.section_id == a)
             .expect("merge");
-        let key = if m.station_a.section_id == a { &m.station_a } else { &m.station_b };
-        p.resolve_key(key).expect("merge endpoint resolves").station_index
+        let key = if m.station_a.section_id == a {
+            &m.station_a
+        } else {
+            &m.station_b
+        };
+        p.resolve_key(key)
+            .expect("merge endpoint resolves")
+            .station_index
     };
 
     let (mut p_after, a, s0, _) = build();
@@ -7832,8 +9457,14 @@ fn insert_before_and_after_agree_on_boundary_merge_ref() {
     // off-by-one re-pointed the merge onto the new station, which still
     // "coincided" but at the wrong place; this checks the merge holds after the
     // insert + cascade.
-    assert!(p_after.check_merge_alignment().is_empty(), "after-path partner displaced");
-    assert!(p_before.check_merge_alignment().is_empty(), "before-path partner displaced");
+    assert!(
+        p_after.check_merge_alignment().is_empty(),
+        "after-path partner displaced"
+    );
+    assert!(
+        p_before.check_merge_alignment().is_empty(),
+        "before-path partner displaced"
+    );
 }
 
 #[test]
@@ -7842,16 +9473,24 @@ fn redrive_offsets_after_load_heals_persisted_drift() {
     // empty transient caches (as after deserialization).
     let mut project = Project::new("Loaded".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
     });
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
     // Persisted drift + stale caches.
     project.adjust_section_offset(b, 31.0, -9.0);
     project.section_index_cache.clear();
@@ -7860,7 +9499,10 @@ fn redrive_offsets_after_load_heals_persisted_drift() {
 
     let healed = project.redrive_offsets_after_load();
     assert_eq!(healed, 1);
-    assert!(project.check_merge_alignment().is_empty(), "load must open geometrically correct");
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "load must open geometrically correct"
+    );
 }
 
 #[test]
@@ -7885,7 +9527,10 @@ fn redrive_dedups_uuids_before_reanchor_preserving_second_duplicate_ref() {
     project.ensure_shot_uuids();
     // Force a duplicate: shots[0] and shots[1] share a UUID, as a corrupt/legacy
     // file could persist. (ensure_unique keeps the first and re-mints the second.)
-    let dup = project.get_section(s).unwrap().shots[0].uuid.clone().unwrap();
+    let dup = project.get_section(s).unwrap().shots[0]
+        .uuid
+        .clone()
+        .unwrap();
     project.get_section_mut(s).unwrap().shots[1].uuid = Some(dup.clone());
 
     // A station offset stored in the legacy positional form at station 2 — the
@@ -7918,7 +9563,11 @@ fn redrive_dedups_uuids_before_reanchor_preserving_second_duplicate_ref() {
     let mut uniq = uuids.clone();
     uniq.sort();
     uniq.dedup();
-    assert_eq!(uuids.len(), uniq.len(), "duplicate shot UUID repaired on load");
+    assert_eq!(
+        uuids.len(),
+        uniq.len(),
+        "duplicate shot UUID repaired on load"
+    );
 }
 
 #[test]
@@ -7928,12 +9577,20 @@ fn resolve_offsets_does_not_touch_when_already_consistent() {
     // bogus timestamp and a no-op integrity Repair looks like a real change.
     let mut project = Project::new("Clean".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
     // First solve makes the offsets consistent (and legitimately touches).
     project.resolve_offsets();
     assert!(project.check_merge_alignment().is_empty());
@@ -7943,7 +9600,10 @@ fn resolve_offsets_does_not_touch_when_already_consistent() {
     // must leave modified_at exactly as it was (no touch).
     let healed = project.resolve_offsets();
     assert_eq!(healed, 0, "nothing to heal");
-    assert_eq!(project.modified_at, stamp, "resolve_offsets must not touch a clean project");
+    assert_eq!(
+        project.modified_at, stamp,
+        "resolve_offsets must not touch a clean project"
+    );
 
     // And a genuine drift still touches (offsets change → modified_at advances).
     project.adjust_section_offset(b, 10.0, -4.0);
@@ -7961,7 +9621,10 @@ fn section_has_zero_datum_ignores_dangling_datum() {
     // world coordinate system around a station that doesn't resolve.
     let mut project = Project::new("DanglingDatum".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     project.ensure_shot_uuids();
     // A dangling datum: anchored on a shot UUID that no shot carries.
@@ -7989,10 +9652,16 @@ fn check_merge_alignment_detects_and_realign_fixes_drift() {
     // Two sections, A0-A1 and B0-B1, with A1 merged to B0.
     let mut project = Project::new("Drift".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     // Anchor A at a zero datum so realign has an authority.
     project.zero_datums.push(ZeroDatum {
@@ -8000,8 +9669,13 @@ fn check_merge_alignment_detects_and_realign_fixes_drift() {
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
     });
     // Merge A1 <-> B0 (merge_stations computes the aligning offset).
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
-    assert!(project.check_merge_alignment().is_empty(), "merge should start aligned");
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "merge should start aligned"
+    );
 
     // Corrupt section B's offset directly (simulating a missed cascade).
     project.adjust_section_offset(b, 12.0, -7.0);
@@ -8023,16 +9697,24 @@ fn realign_corrects_sub_tolerance_offset_drift() {
     // must re-derive it regardless of the reported drift count.
     let mut project = Project::new("SubTol".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
     });
-    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
     let b_correct = project.section_offset(b);
 
     // Nudge B by 3 cm — under the 5 cm reporting tolerance.
@@ -8046,7 +9728,11 @@ fn realign_corrects_sub_tolerance_offset_drift() {
         "precondition: B is actually drifted"
     );
     // The per-command self-heal still early-returns here (no reported drift)...
-    assert_eq!(project.realign_merges(), 0, "realign_merges keeps the no-drift early-return");
+    assert_eq!(
+        project.realign_merges(),
+        0,
+        "realign_merges keeps the no-drift early-return"
+    );
     assert!(
         (project.section_offset(b).0 - b_correct.0).abs() > 0.02,
         "...so the sub-tolerance drift survives the per-command path"
@@ -8068,7 +9754,10 @@ fn realign_preserves_floating_section_offset() {
     // it's a cascade seed/anchor, never seed-adjusted.
     let mut project = Project::new("Float".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     project.adjust_section_offset(a, 12.0, 7.0);
     project.resolve_offsets(); // the unconditional re-solve
@@ -8085,10 +9774,16 @@ fn realign_preserves_floating_section_offset() {
 fn integrity_fixture() -> (Project, SectionId, SectionId) {
     let mut project = Project::new("Integrity".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1).into(),
@@ -8118,10 +9813,16 @@ fn integrity_fixture() -> (Project, SectionId, SectionId) {
 fn check_orphan_closures_detects_sole_bridge_closure() {
     let mut p = Project::new("Orphan".to_string(), None);
     let a = p
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let b = p
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     // A closure between A and B with NO merge connecting them: a sole bridge.
     p.loop_closures.push(LoopClosure {
@@ -8160,12 +9861,18 @@ fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
     let mut project = Project::new("Bridge".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            shots: vec![
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+                shot(90.0, 90.0, 5.0, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
@@ -8215,12 +9922,18 @@ fn deleting_shot_converts_broken_loop_closure_to_merge() {
     let mut project = Project::new("Loop".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(90.0, 90.0, 1.0, 0.0, 0.0)],
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+                shot(90.0, 90.0, 1.0, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     // A2 is merged with B0 (B hangs off the end of A).
     project.record_station_merge(StationMerge {
@@ -8350,8 +10063,12 @@ fn integrity_flags_dangling_closure_and_zero_datum() {
 fn integrity_orphan_offsets_and_comments_are_warnings_only() {
     let (mut project, _, _) = integrity_fixture();
     project.section_offsets.insert(9999, (1.0, 2.0));
-    project.station_offsets.insert(StationRef::new(9999, 0).into(), (1.0, 2.0, 3.0));
-    project.station_comments.insert(StationRef::new(9999, 0).into(), "x".to_string());
+    project
+        .station_offsets
+        .insert(StationRef::new(9999, 0).into(), (1.0, 2.0, 3.0));
+    project
+        .station_comments
+        .insert(StationRef::new(9999, 0).into(), "x".to_string());
     let v = project.check_structural_integrity();
     assert_eq!(v.len(), 3, "{v:?}");
     assert!(v.iter().all(|x| x.severity == ViolationSeverity::Warning));
@@ -8373,7 +10090,10 @@ fn check_structural_integrity_flags_and_repairs_duplicate_shot_uuid() {
         })
         .id;
     project.ensure_shot_uuids();
-    let first_uuid = project.get_section(a).unwrap().shots[0].uuid.clone().unwrap();
+    let first_uuid = project.get_section(a).unwrap().shots[0]
+        .uuid
+        .clone()
+        .unwrap();
     // Force shot 1 to collide with shot 0's UUID.
     project.get_section_mut(a).unwrap().shots[1].uuid = Some(first_uuid.clone());
 
@@ -8388,7 +10108,9 @@ fn check_structural_integrity_flags_and_repairs_duplicate_shot_uuid() {
     // Detect.
     let violations = project.check_structural_integrity();
     assert!(
-        violations.iter().any(|v| v.category == "duplicate_shot_uuid"),
+        violations
+            .iter()
+            .any(|v| v.category == "duplicate_shot_uuid"),
         "duplicate UUID must be flagged: {violations:?}"
     );
     assert!(project.has_critical_integrity_violations());
@@ -8410,7 +10132,10 @@ fn check_structural_integrity_flags_and_repairs_duplicate_shot_uuid() {
         "no duplicate UUID violation after repair"
     );
     // The anchor that resolved to the first station is still valid.
-    assert!(project.resolve_key(&anchor).is_some(), "first-shot anchor survives repair");
+    assert!(
+        project.resolve_key(&anchor).is_some(),
+        "first-shot anchor survives repair"
+    );
 }
 
 #[test]
@@ -8420,10 +10145,16 @@ fn dangling_cross_references_are_omitted_from_wire_output() {
     // refs still round-trip to their positional index.
     let mut project = Project::new("Wire".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     project.ensure_shot_uuids();
 
@@ -8451,8 +10182,15 @@ fn dangling_cross_references_are_omitted_from_wire_output() {
 
     // get_section_relationships excludes the dangling merge entirely.
     let rel = project.get_section_relationships(a);
-    assert_eq!(rel.merges.len(), 1, "dangling merge omitted from wire output");
-    assert_eq!(rel.merges[0].station_a.station_index, 0, "valid ref round-trips positionally");
+    assert_eq!(
+        rel.merges.len(),
+        1,
+        "dangling merge omitted from wire output"
+    );
+    assert_eq!(
+        rel.merges[0].station_a.station_index, 0,
+        "valid ref round-trips positionally"
+    );
 }
 
 #[test]
@@ -8462,10 +10200,16 @@ fn has_unresolvable_cross_references_detects_dangling_offset() {
     // collide on the PRIMARY KEY — so it must count as unresolvable.
     let mut project = Project::new("Block".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     project.ensure_shot_uuids();
-    assert!(!project.has_unresolvable_cross_references(), "clean project resolves");
+    assert!(
+        !project.has_unresolvable_cross_references(),
+        "clean project resolves"
+    );
 
     let dangling = StationKey::new(a, StationAnchor::AfterShot("ghost".to_string()));
     project.station_offsets.insert(dangling, (1.0, 2.0, 3.0));
@@ -8532,32 +10276,64 @@ fn golden_symmetric_v_resolves_to_axis_of_symmetry() {
     // on σ_len / σ_az at all.
     let mut project = Project::new("GoldenSymV".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot(80.0, 80.0, 10.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(80.0, 80.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot(100.0, 100.0, 10.0, 0.0, 0.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot(100.0, 100.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
         .id;
     project
-        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
         .unwrap();
     project
         .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
         .unwrap();
     project
-        .create_loop_closure(StationRef::new(a, 1), StationRef::new(b, 1), ClosureStrategy::Batch)
+        .create_loop_closure(
+            StationRef::new(a, 1),
+            StationRef::new(b, 1),
+            ClosureStrategy::Batch,
+        )
         .unwrap();
 
-    let adjusted = project.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
+    let adjusted =
+        project.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
 
     let expected_x = 10.0 * 80.0_f64.to_radians().sin();
-    golden_assert_xy(station_coords(&adjusted, StationRef::new(a, 1)), (expected_x, 0.0), 1e-6, "A endpoint");
-    golden_assert_xy(station_coords(&adjusted, StationRef::new(b, 1)), (expected_x, 0.0), 1e-6, "B endpoint");
+    golden_assert_xy(
+        station_coords(&adjusted, StationRef::new(a, 1)),
+        (expected_x, 0.0),
+        1e-6,
+        "A endpoint",
+    );
+    golden_assert_xy(
+        station_coords(&adjusted, StationRef::new(b, 1)),
+        (expected_x, 0.0),
+        1e-6,
+        "B endpoint",
+    );
     // The closure must actually fuse the two endpoints.
     let adj_a = station_coords(&adjusted, StationRef::new(a, 1));
     let adj_b = station_coords(&adjusted, StationRef::new(b, 1));
-    assert!((adj_a.x - adj_b.x).abs() < 1e-6 && (adj_a.y - adj_b.y).abs() < 1e-6, "closure endpoints coincide");
+    assert!(
+        (adj_a.x - adj_b.x).abs() < 1e-6 && (adj_a.y - adj_b.y).abs() < 1e-6,
+        "closure endpoints coincide"
+    );
     // The datum stays pinned at the origin.
-    golden_assert_xy(station_coords(&adjusted, StationRef::new(a, 0)), (0.0, 0.0), 1e-9, "datum");
+    golden_assert_xy(
+        station_coords(&adjusted, StationRef::new(a, 0)),
+        (0.0, 0.0),
+        1e-9,
+        "datum",
+    );
 }
 
 /// Build a "star": one single-shot leg per `legs` entry `(azimuth°, length,
@@ -8579,7 +10355,10 @@ fn solve_weighted_mean_star(legs: &[(f64, f64, f64)]) -> Coordinates {
         })
         .collect();
     project
-        .set_zero_datum(StationRef::new(sids[0], 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .set_zero_datum(
+            StationRef::new(sids[0], 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
         .unwrap();
     for &sid in &sids[1..] {
         project
@@ -8595,7 +10374,8 @@ fn solve_weighted_mean_star(legs: &[(f64, f64, f64)]) -> Coordinates {
             )
             .unwrap();
     }
-    let adjusted = project.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
+    let adjusted =
+        project.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
     station_coords(&adjusted, StationRef::new(sids[0], 1))
 }
 
@@ -8603,13 +10383,20 @@ fn solve_weighted_mean_star(legs: &[(f64, f64, f64)]) -> Coordinates {
 /// the documented σ→weight propagation (NOT the production assembly). With the
 /// origin fixed at (0,0) the decoupled normal equations give, per axis,
 /// `P = Σ w·Δ / Σ w`.
-fn weighted_mean_star_expected(legs: &[(f64, f64, f64)], config: &ClosureAdjustmentConfig) -> (f64, f64) {
+fn weighted_mean_star_expected(
+    legs: &[(f64, f64, f64)],
+    config: &ClosureAdjustmentConfig,
+) -> (f64, f64) {
     let (mut num_x, mut den_x, mut num_y, mut den_y) = (0.0, 0.0, 0.0, 0.0);
     for &(az_deg, len, raw_quality) in legs {
         // Clamp quality exactly as production's adjust_least_squares does, so the
         // weight model also matches for quality <= 0 / non-finite (otherwise
         // s_len = 0 → σ = 0 → w = ∞ → NaN and the assertion false-fails).
-        let quality = if raw_quality.is_finite() && raw_quality > 0.0 { raw_quality } else { 1.0 };
+        let quality = if raw_quality.is_finite() && raw_quality > 0.0 {
+            raw_quality
+        } else {
+            1.0
+        };
         let az = az_deg.to_radians();
         let s_len = config.base_sigma_length_m * quality;
         let s_az = config.base_sigma_azimuth_deg.to_radians() * quality;
@@ -8642,11 +10429,11 @@ fn golden_weight_model_star_matches_sigma_propagation() {
     // the same assembly, so a wrong weight formula is self-consistent there.
     let config = ClosureAdjustmentConfig::default();
     let cases: &[&[(f64, f64, f64)]] = &[
-        &[(90.0, 10.0, 1.0), (0.0, 10.0, 1.0)],                   // east + north, isotropic quality
-        &[(90.0, 10.0, 1.0), (0.0, 10.0, 3.0)],                   // north leg down-weighted by quality
-        &[(90.0, 10.0, 1.0), (180.0, 6.0, 1.0)],                  // opposed legs, unequal length
+        &[(90.0, 10.0, 1.0), (0.0, 10.0, 1.0)], // east + north, isotropic quality
+        &[(90.0, 10.0, 1.0), (0.0, 10.0, 3.0)], // north leg down-weighted by quality
+        &[(90.0, 10.0, 1.0), (180.0, 6.0, 1.0)], // opposed legs, unequal length
         &[(90.0, 10.0, 1.0), (0.0, 8.0, 1.0), (45.0, 12.0, 2.0)], // three legs, mixed dir/len/quality
-        &[(30.0, 7.0, 1.0), (200.0, 9.0, 1.5), (300.0, 5.0, 0.5)],// arbitrary 3-leg star
+        &[(30.0, 7.0, 1.0), (200.0, 9.0, 1.5), (300.0, 5.0, 0.5)], // arbitrary 3-leg star
     ];
     for legs in cases {
         let got = solve_weighted_mean_star(legs);
@@ -8755,12 +10542,18 @@ fn rigorous_polar_reference(
         }
     };
     for m in &project.station_merges {
-        if let (Some(a), Some(b)) = (project.resolve_key(&m.station_a), project.resolve_key(&m.station_b)) {
+        if let (Some(a), Some(b)) = (
+            project.resolve_key(&m.station_a),
+            project.resolve_key(&m.station_b),
+        ) {
             fuse(&mut parent, a, b);
         }
     }
     for lc in &project.loop_closures {
-        if let (Some(a), Some(b)) = (project.resolve_key(&lc.station_a), project.resolve_key(&lc.station_b)) {
+        if let (Some(a), Some(b)) = (
+            project.resolve_key(&lc.station_a),
+            project.resolve_key(&lc.station_b),
+        ) {
             fuse(&mut parent, a, b);
         }
     }
@@ -8781,7 +10574,14 @@ fn rigorous_polar_reference(
                 k += 1.0;
             }
         }
-        pos.insert(*root, if k > 0.0 { (sx / k, sy / k) } else { (0.0, 0.0) });
+        pos.insert(
+            *root,
+            if k > 0.0 {
+                (sx / k, sy / k)
+            } else {
+                (0.0, 0.0)
+            },
+        );
     }
     // Fixed group = the datum's group, pinned at its measured position. This oracle
     // anchors exactly ONE datum, so it only handles single-datum, single-component
@@ -8794,9 +10594,15 @@ fn rigorous_polar_reference(
         "rigorous_polar_reference supports single-datum networks only (got {})",
         project.zero_datums.len()
     );
-    let datum = project.zero_datums.first().and_then(|z| project.resolve_key(&z.station_ref));
+    let datum = project
+        .zero_datums
+        .first()
+        .and_then(|z| project.resolve_key(&z.station_ref));
     let fixed_root = datum.map(|d| find(&mut parent, d));
-    assert!(fixed_root.is_some(), "rigorous_polar_reference: datum did not resolve to a group");
+    assert!(
+        fixed_root.is_some(),
+        "rigorous_polar_reference: datum did not resolve to a group"
+    );
     if let (Some(fr), Some(d)) = (fixed_root, datum) {
         if let Some(c) = project.compute_station_raw_coords(d) {
             pos.insert(fr, (c.x, c.y));
@@ -8822,7 +10628,11 @@ fn rigorous_polar_reference(
     }
     let mut obs: Vec<Obs> = Vec::new();
     for s in &project.sections {
-        let q = if s.quality.is_finite() && s.quality > 0.0 { s.quality } else { 1.0 };
+        let q = if s.quality.is_finite() && s.quality > 0.0 {
+            s.quality
+        } else {
+            1.0
+        };
         let s_len = config.base_sigma_length_m * q;
         let s_az = config.base_sigma_azimuth_deg.to_radians() * q;
         for (idx, shot) in s.shots.iter().enumerate() {
@@ -8928,24 +10738,37 @@ fn oblique_loop(len_b: f64) -> Project {
     let mut project = Project::new("Oblique".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![shot(30.0, 30.0, 10.0, 0.0, 0.0), shot(90.0, 90.0, 10.0, 0.0, 0.0)],
+            shots: vec![
+                shot(30.0, 30.0, 10.0, 0.0, 0.0),
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
     let b = project
         .add_section(SectionData {
-            shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0), shot(30.0, 30.0, len_b, 0.0, 0.0)],
+            shots: vec![
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+                shot(30.0, 30.0, len_b, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
     project
-        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
         .unwrap();
     project
         .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
         .unwrap();
     project
-        .create_loop_closure(StationRef::new(a, 2), StationRef::new(b, 2), ClosureStrategy::Batch)
+        .create_loop_closure(
+            StationRef::new(a, 2),
+            StationRef::new(b, 2),
+            ClosureStrategy::Batch,
+        )
         .unwrap();
     project
 }
@@ -8960,19 +10783,35 @@ fn model_soundness_oracle_reproduces_known_rigorous_optima() {
     let mut zero = Project::new("RefZero".to_string(), None);
     let za = zero
         .add_section(SectionData {
-            shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            shots: vec![
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
     let zb = zero
         .add_section(SectionData {
-            shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            shots: vec![
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+            ],
             ..Default::default()
         })
         .id;
-    zero.set_zero_datum(StationRef::new(za, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
-    zero.merge_stations(StationRef::new(za, 0), StationRef::new(zb, 0)).unwrap();
-    zero.create_loop_closure(StationRef::new(za, 2), StationRef::new(zb, 2), ClosureStrategy::Batch).unwrap();
+    zero.set_zero_datum(
+        StationRef::new(za, 0),
+        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    )
+    .unwrap();
+    zero.merge_stations(StationRef::new(za, 0), StationRef::new(zb, 0))
+        .unwrap();
+    zero.create_loop_closure(
+        StationRef::new(za, 2),
+        StationRef::new(zb, 2),
+        ClosureStrategy::Batch,
+    )
+    .unwrap();
     let r0 = rigorous_polar_reference(&zero, &config);
     for m in &zero.compute_station_coordinates() {
         let (rx, ry) = r0[&m.station_ref];
@@ -8989,11 +10828,31 @@ fn model_soundness_oracle_reproduces_known_rigorous_optima() {
     // gap, which at this 10° angular misclosure is ~15 cm. This both validates the
     // oracle on a known answer and demonstrates the model gap is real and signed.
     let mut v = Project::new("RefSymV".to_string(), None);
-    let va = v.add_section(SectionData { shots: vec![shot(80.0, 80.0, 10.0, 0.0, 0.0)], ..Default::default() }).id;
-    let vb = v.add_section(SectionData { shots: vec![shot(100.0, 100.0, 10.0, 0.0, 0.0)], ..Default::default() }).id;
-    v.set_zero_datum(StationRef::new(va, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
-    v.merge_stations(StationRef::new(va, 0), StationRef::new(vb, 0)).unwrap();
-    v.create_loop_closure(StationRef::new(va, 1), StationRef::new(vb, 1), ClosureStrategy::Batch).unwrap();
+    let va = v
+        .add_section(SectionData {
+            shots: vec![shot(80.0, 80.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let vb = v
+        .add_section(SectionData {
+            shots: vec![shot(100.0, 100.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    v.set_zero_datum(
+        StationRef::new(va, 0),
+        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    )
+    .unwrap();
+    v.merge_stations(StationRef::new(va, 0), StationRef::new(vb, 0))
+        .unwrap();
+    v.create_loop_closure(
+        StationRef::new(va, 1),
+        StationRef::new(vb, 1),
+        ClosureStrategy::Batch,
+    )
+    .unwrap();
     let rv = rigorous_polar_reference(&v, &config);
     let (rx, ry) = rv[&StationRef::new(va, 1)];
     assert!(
@@ -9016,7 +10875,11 @@ fn model_sound_matches_rigorous_in_small_misclosure_regime() {
     // axis-aligned (no dropped covariance), looser where they are oblique.
     let config = ClosureAdjustmentConfig::default();
     let cases: Vec<(&str, Project, f64)> = vec![
-        ("axis-aligned 0.2 m loop", looped_project_with_misclosure().0, 1e-3),
+        (
+            "axis-aligned 0.2 m loop",
+            looped_project_with_misclosure().0,
+            1e-3,
+        ),
         ("oblique 1 cm loop", oblique_loop(10.01), 3e-3),
     ];
     for (name, project, tol) in cases {
@@ -9086,11 +10949,31 @@ fn fuzz_loop(seed: u64) -> Project {
             })
             .collect()
     };
-    let a = p.add_section(SectionData { shots: mkshots(&mut st, na), ..Default::default() }).id;
-    let b = p.add_section(SectionData { shots: mkshots(&mut st, nb), ..Default::default() }).id;
-    p.set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
-    p.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
-    p.create_loop_closure(StationRef::new(a, na as u32), StationRef::new(b, nb as u32), ClosureStrategy::Batch).unwrap();
+    let a = p
+        .add_section(SectionData {
+            shots: mkshots(&mut st, na),
+            ..Default::default()
+        })
+        .id;
+    let b = p
+        .add_section(SectionData {
+            shots: mkshots(&mut st, nb),
+            ..Default::default()
+        })
+        .id;
+    p.set_zero_datum(
+        StationRef::new(a, 0),
+        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    )
+    .unwrap();
+    p.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    p.create_loop_closure(
+        StationRef::new(a, na as u32),
+        StationRef::new(b, nb as u32),
+        ClosureStrategy::Batch,
+    )
+    .unwrap();
     p
 }
 
@@ -9112,11 +10995,31 @@ fn drift_shots(st: &mut u64, n: usize, base_az: f64) -> Vec<ShotData> {
 fn big_loop(n: usize, seed: u64) -> Project {
     let mut st = seed | 1;
     let mut p = Project::new(format!("loop_{}", 2 * n + 1), None);
-    let a = p.add_section(SectionData { shots: drift_shots(&mut st, n, 60.0), ..Default::default() }).id;
-    let b = p.add_section(SectionData { shots: drift_shots(&mut st, n, 30.0), ..Default::default() }).id;
-    p.set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
-    p.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
-    p.create_loop_closure(StationRef::new(a, n as u32), StationRef::new(b, n as u32), ClosureStrategy::Batch).unwrap();
+    let a = p
+        .add_section(SectionData {
+            shots: drift_shots(&mut st, n, 60.0),
+            ..Default::default()
+        })
+        .id;
+    let b = p
+        .add_section(SectionData {
+            shots: drift_shots(&mut st, n, 30.0),
+            ..Default::default()
+        })
+        .id;
+    p.set_zero_datum(
+        StationRef::new(a, 0),
+        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    )
+    .unwrap();
+    p.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    p.create_loop_closure(
+        StationRef::new(a, n as u32),
+        StationRef::new(b, n as u32),
+        ClosureStrategy::Batch,
+    )
+    .unwrap();
     p
 }
 
@@ -9126,13 +11029,33 @@ fn ladder(segs: usize, seg: usize, seed: u64) -> Project {
     let n = segs * seg;
     let mut st = seed | 1;
     let mut p = Project::new(format!("ladder_{}", 2 * n + 1), None);
-    let a = p.add_section(SectionData { shots: drift_shots(&mut st, n, 90.0), ..Default::default() }).id;
-    let b = p.add_section(SectionData { shots: drift_shots(&mut st, n, 90.0), ..Default::default() }).id;
-    p.set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
-    p.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    let a = p
+        .add_section(SectionData {
+            shots: drift_shots(&mut st, n, 90.0),
+            ..Default::default()
+        })
+        .id;
+    let b = p
+        .add_section(SectionData {
+            shots: drift_shots(&mut st, n, 90.0),
+            ..Default::default()
+        })
+        .id;
+    p.set_zero_datum(
+        StationRef::new(a, 0),
+        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    )
+    .unwrap();
+    p.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
     for k in 1..=segs {
         let idx = (k * seg) as u32;
-        p.create_loop_closure(StationRef::new(a, idx), StationRef::new(b, idx), ClosureStrategy::Batch).unwrap();
+        p.create_loop_closure(
+            StationRef::new(a, idx),
+            StationRef::new(b, idx),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
     }
     p
 }
@@ -9144,25 +11067,54 @@ fn grid(rows: usize, cols: usize, seed: u64) -> Project {
     let mut st = seed | 1;
     let mut p = Project::new(format!("grid_{rows}x{cols}"), None);
     let row_sec: Vec<u32> = (0..rows)
-        .map(|_| p.add_section(SectionData { shots: drift_shots(&mut st, cols - 1, 90.0), ..Default::default() }).id)
+        .map(|_| {
+            p.add_section(SectionData {
+                shots: drift_shots(&mut st, cols - 1, 90.0),
+                ..Default::default()
+            })
+            .id
+        })
         .collect();
     let col_sec: Vec<u32> = (0..cols)
-        .map(|_| p.add_section(SectionData { shots: drift_shots(&mut st, rows - 1, 0.0), ..Default::default() }).id)
+        .map(|_| {
+            p.add_section(SectionData {
+                shots: drift_shots(&mut st, rows - 1, 0.0),
+                ..Default::default()
+            })
+            .id
+        })
         .collect();
-    p.set_zero_datum(StationRef::new(row_sec[0], 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
+    p.set_zero_datum(
+        StationRef::new(row_sec[0], 0),
+        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    )
+    .unwrap();
     // Spanning tree of identity merges: row 0 ties every column, column 0 ties every
     // row. (Tree → each merge joins a new section, never an already-connected pair.)
     for c in 0..cols {
-        p.merge_stations(StationRef::new(row_sec[0], c as u32), StationRef::new(col_sec[c], 0)).unwrap();
+        p.merge_stations(
+            StationRef::new(row_sec[0], c as u32),
+            StationRef::new(col_sec[c], 0),
+        )
+        .unwrap();
     }
     for r in 1..rows {
-        p.merge_stations(StationRef::new(row_sec[r], 0), StationRef::new(col_sec[0], r as u32)).unwrap();
+        p.merge_stations(
+            StationRef::new(row_sec[r], 0),
+            StationRef::new(col_sec[0], r as u32),
+        )
+        .unwrap();
     }
     // Interior nodes are already path-connected, so identifying row r / col c there
     // CLOSES a cell loop — one closure per interior node.
     for r in 1..rows {
         for c in 1..cols {
-            p.create_loop_closure(StationRef::new(row_sec[r], c as u32), StationRef::new(col_sec[c], r as u32), ClosureStrategy::Batch).unwrap();
+            p.create_loop_closure(
+                StationRef::new(row_sec[r], c as u32),
+                StationRef::new(col_sec[c], r as u32),
+                ClosureStrategy::Batch,
+            )
+            .unwrap();
         }
     }
     p
@@ -9186,21 +11138,37 @@ fn fuzz_paths(seed: u64, paths: usize, max_shots: usize, len_min: f64, len_max: 
                 })
                 .collect();
             let q = 0.5 + xorshift01(&mut st) * 2.5;
-            p.add_section(SectionData { shots, quality: q, ..Default::default() }).id
+            p.add_section(SectionData {
+                shots,
+                quality: q,
+                ..Default::default()
+            })
+            .id
         })
         .collect();
-    p.set_zero_datum(StationRef::new(sids[0], 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
+    p.set_zero_datum(
+        StationRef::new(sids[0], 0),
+        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    )
+    .unwrap();
     for &sid in &sids[1..] {
-        p.merge_stations(StationRef::new(sids[0], 0), StationRef::new(sid, 0)).unwrap();
+        p.merge_stations(StationRef::new(sids[0], 0), StationRef::new(sid, 0))
+            .unwrap();
     }
     let end_of = |p: &Project, sid: u32| {
-        let n = p.sections.iter().find(|s| s.id == sid).map(|s| s.shots.len()).unwrap_or(0);
+        let n = p
+            .sections
+            .iter()
+            .find(|s| s.id == sid)
+            .map(|s| s.shots.len())
+            .unwrap_or(0);
         StationRef::new(sid, n as u32)
     };
     let end0 = end_of(&p, sids[0]);
     for &sid in &sids[1..] {
         let e = end_of(&p, sid);
-        p.create_loop_closure(end0, e, ClosureStrategy::Batch).unwrap();
+        p.create_loop_closure(end0, e, ClosureStrategy::Batch)
+            .unwrap();
     }
     p
 }
@@ -9211,14 +11179,31 @@ fn build_star(name: &str, legs: &[(f64, f64, f64)]) -> Project {
     let mut p = Project::new(name.to_string(), None);
     let sids: Vec<u32> = legs
         .iter()
-        .map(|&(az, len, q)| p.add_section(SectionData { shots: vec![shot(az, az, len, 0.0, 0.0)], quality: q, ..Default::default() }).id)
+        .map(|&(az, len, q)| {
+            p.add_section(SectionData {
+                shots: vec![shot(az, az, len, 0.0, 0.0)],
+                quality: q,
+                ..Default::default()
+            })
+            .id
+        })
         .collect();
-    p.set_zero_datum(StationRef::new(sids[0], 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
+    p.set_zero_datum(
+        StationRef::new(sids[0], 0),
+        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    )
+    .unwrap();
     for &sid in &sids[1..] {
-        p.merge_stations(StationRef::new(sids[0], 0), StationRef::new(sid, 0)).unwrap();
+        p.merge_stations(StationRef::new(sids[0], 0), StationRef::new(sid, 0))
+            .unwrap();
     }
     for &sid in &sids[1..] {
-        p.create_loop_closure(StationRef::new(sids[0], 1), StationRef::new(sid, 1), ClosureStrategy::Batch).unwrap();
+        p.create_loop_closure(
+            StationRef::new(sids[0], 1),
+            StationRef::new(sid, 1),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
     }
     p
 }
@@ -9227,18 +11212,39 @@ fn build_star(name: &str, legs: &[(f64, f64, f64)]) -> Project {
 /// and the CI check call this, so they see identical geometry.
 fn gama_golden_networks() -> Vec<(String, Project)> {
     let mut nets: Vec<(String, Project)> = vec![
-        ("axis_aligned_loop".to_string(), looped_project_with_misclosure().0),
+        (
+            "axis_aligned_loop".to_string(),
+            looped_project_with_misclosure().0,
+        ),
         ("oblique_loop".to_string(), oblique_loop(10.5)),
-        ("star_mixed".to_string(), build_star("star_mixed", &[(90.0, 10.0, 1.0), (0.0, 8.0, 1.0), (45.0, 12.0, 2.0)])),
+        (
+            "star_mixed".to_string(),
+            build_star(
+                "star_mixed",
+                &[(90.0, 10.0, 1.0), (0.0, 8.0, 1.0), (45.0, 12.0, 2.0)],
+            ),
+        ),
         // Large scale and dense-redundancy topologies.
         ("loop_101".to_string(), big_loop(50, 0x10001)),
         ("ladder_1001".to_string(), ladder(20, 25, 0x1ADDE2)),
         ("grid_12x12".to_string(), grid(12, 12, 0x6121D)),
         // Harsh random multi-path bundles: full-circle azimuths, wide length bands.
-        ("wild_2path".to_string(), fuzz_paths(0x21D2, 2, 7, 0.5, 40.0)),
-        ("wild_3path".to_string(), fuzz_paths(0x5A1A, 3, 5, 0.2, 30.0)),
-        ("wild_4path".to_string(), fuzz_paths(0xB17E, 4, 4, 1.0, 50.0)),
-        ("wild_long".to_string(), fuzz_paths(0xF1A5C0, 2, 9, 0.3, 25.0)),
+        (
+            "wild_2path".to_string(),
+            fuzz_paths(0x21D2, 2, 7, 0.5, 40.0),
+        ),
+        (
+            "wild_3path".to_string(),
+            fuzz_paths(0x5A1A, 3, 5, 0.2, 30.0),
+        ),
+        (
+            "wild_4path".to_string(),
+            fuzz_paths(0xB17E, 4, 4, 1.0, 50.0),
+        ),
+        (
+            "wild_long".to_string(),
+            fuzz_paths(0xF1A5C0, 2, 9, 0.3, 25.0),
+        ),
     ];
     for seed in [0xA11CE_u64, 0xBEEF, 0xC0FFEE, 0xD15EA5E, 0x5EED] {
         nets.push((format!("fuzz_{seed}"), fuzz_loop(seed)));
@@ -9277,12 +11283,18 @@ fn station_groups(project: &Project) -> (HashMap<StationRef, usize>, Vec<Vec<Sta
         }
     };
     for m in &project.station_merges {
-        if let (Some(a), Some(b)) = (project.resolve_key(&m.station_a), project.resolve_key(&m.station_b)) {
+        if let (Some(a), Some(b)) = (
+            project.resolve_key(&m.station_a),
+            project.resolve_key(&m.station_b),
+        ) {
             fuse(&mut parent, a, b);
         }
     }
     for lc in &project.loop_closures {
-        if let (Some(a), Some(b)) = (project.resolve_key(&lc.station_a), project.resolve_key(&lc.station_b)) {
+        if let (Some(a), Some(b)) = (
+            project.resolve_key(&lc.station_a),
+            project.resolve_key(&lc.station_b),
+        ) {
             fuse(&mut parent, a, b);
         }
     }
@@ -9365,18 +11377,26 @@ fn emit_leveling_gkf(
     // tol-abs is the gross-error threshold in MM: gama removes any observation whose
     // misclosure exceeds it. Our fuzzed loops have metre-scale misclosures by design,
     // so set it huge to keep every observation in the adjustment.
-    s.push_str("<parameters sigma-apr=\"1.0\" conf-pr=\"0.95\" tol-abs=\"1e12\" sigma-act=\"apriori\"/>\n");
+    s.push_str(
+        "<parameters sigma-apr=\"1.0\" conf-pr=\"0.95\" tol-abs=\"1e12\" sigma-act=\"apriori\"/>\n",
+    );
     s.push_str("<points-observations>\n");
     for (k, &g) in rcm.iter().enumerate() {
         if g == datum_group {
-            s.push_str(&format!("<point id=\"g{k}\" z=\"{datum_coord:.12}\" fix=\"Z\"/>\n"));
+            s.push_str(&format!(
+                "<point id=\"g{k}\" z=\"{datum_coord:.12}\" fix=\"Z\"/>\n"
+            ));
         } else {
             s.push_str(&format!("<point id=\"g{k}\" adj=\"Z\"/>\n"));
         }
     }
     s.push_str("<height-differences>\n");
     for sec in &project.sections {
-        let q = if sec.quality.is_finite() && sec.quality > 0.0 { sec.quality } else { 1.0 };
+        let q = if sec.quality.is_finite() && sec.quality > 0.0 {
+            sec.quality
+        } else {
+            1.0
+        };
         let s_len = config.base_sigma_length_m * q;
         let s_az = config.base_sigma_azimuth_deg.to_radians() * q;
         for (idx, shot) in sec.shots.iter().enumerate() {
@@ -9389,11 +11409,20 @@ fn emit_leveling_gkf(
             let len = shot.length;
             let hlen = shot.horizontal_length();
             let (val, sigma) = if axis == 0 {
-                (hlen * az.sin(), ((az.sin() * s_len).powi(2) + (len * az.cos() * s_az).powi(2)).sqrt())
+                (
+                    hlen * az.sin(),
+                    ((az.sin() * s_len).powi(2) + (len * az.cos() * s_az).powi(2)).sqrt(),
+                )
             } else {
-                (hlen * az.cos(), ((az.cos() * s_len).powi(2) + (len * az.sin() * s_az).powi(2)).sqrt())
+                (
+                    hlen * az.cos(),
+                    ((az.cos() * s_len).powi(2) + (len * az.sin() * s_az).powi(2)).sqrt(),
+                )
             };
-            s.push_str(&format!("  <dh from=\"g{}\" to=\"g{}\" val=\"{val:.12}\" stdev=\"{sigma:.12}\"/>\n", rank[gi], rank[gj]));
+            s.push_str(&format!(
+                "  <dh from=\"g{}\" to=\"g{}\" val=\"{val:.12}\" stdev=\"{sigma:.12}\"/>\n",
+                rank[gi], rank[gj]
+            ));
         }
     }
     s.push_str("</height-differences>\n</points-observations>\n</network>\n</gama-local>\n");
@@ -9409,8 +11438,14 @@ fn parse_gama_adjusted(xml: &str) -> HashMap<String, f64> {
         .map(|(b, _)| b)
         .unwrap_or("");
     for chunk in body.split("<point>").skip(1) {
-        let id = chunk.split_once("<id>").and_then(|(_, r)| r.split_once("</id>")).map(|(v, _)| v.trim().to_string());
-        let z = chunk.split_once("<Z>").and_then(|(_, r)| r.split_once("</Z>")).and_then(|(v, _)| v.trim().parse::<f64>().ok());
+        let id = chunk
+            .split_once("<id>")
+            .and_then(|(_, r)| r.split_once("</id>"))
+            .map(|(v, _)| v.trim().to_string());
+        let z = chunk
+            .split_once("<Z>")
+            .and_then(|(_, r)| r.split_once("</Z>"))
+            .and_then(|(v, _)| v.trim().parse::<f64>().ok());
         if let (Some(id), Some(z)) = (id, z) {
             out.insert(id, z);
         }
@@ -9431,7 +11466,11 @@ fn generate_gama_golden_fixtures() {
 
     for (name, project) in gama_golden_networks() {
         let (gidx, members) = station_groups(&project);
-        let datum = project.zero_datums.first().and_then(|z| project.resolve_key(&z.station_ref)).unwrap();
+        let datum = project
+            .zero_datums
+            .first()
+            .and_then(|z| project.resolve_key(&z.station_ref))
+            .unwrap();
         let dg = gidx[&datum];
         let datum_raw = project.compute_station_raw_coords(datum).unwrap();
         // Group adjacency from inter-group shots → reverse Cuthill–McKee point order.
@@ -9471,8 +11510,17 @@ fn generate_gama_golden_fixtures() {
             assert!(status.success(), "gama-local failed on {name} axis {axis}");
             let adj = parse_gama_adjusted(&std::fs::read_to_string(&outfile).unwrap());
             for (g, item) in group_xy.iter_mut().enumerate() {
-                let c = if g == dg { dcoord } else { *adj.get(&format!("g{}", rank[g])).unwrap_or_else(|| panic!("missing g{} for {name} axis {axis}", rank[g])) };
-                if axis == 0 { item.0 = c; } else { item.1 = c; }
+                let c = if g == dg {
+                    dcoord
+                } else {
+                    *adj.get(&format!("g{}", rank[g]))
+                        .unwrap_or_else(|| panic!("missing g{} for {name} axis {axis}", rank[g]))
+                };
+                if axis == 0 {
+                    item.0 = c;
+                } else {
+                    item.1 = c;
+                }
             }
         }
         // Sanity: production must already match the gold; record the worst gap.
@@ -9482,11 +11530,21 @@ fn generate_gama_golden_fixtures() {
         for (g, mem) in members.iter().enumerate() {
             for &sr in mem {
                 let p = station_coords(&prod, sr);
-                net_worst = net_worst.max((p.x - group_xy[g].0).abs()).max((p.y - group_xy[g].1).abs());
-                rows.push(GoldStation { s: sr.section_id, i: sr.station_index, x: group_xy[g].0, y: group_xy[g].1 });
+                net_worst = net_worst
+                    .max((p.x - group_xy[g].0).abs())
+                    .max((p.y - group_xy[g].1).abs());
+                rows.push(GoldStation {
+                    s: sr.section_id,
+                    i: sr.station_index,
+                    x: group_xy[g].0,
+                    y: group_xy[g].1,
+                });
             }
         }
-        println!("[gama-golden] {name}: groups={} worst={net_worst:.3e} m", members.len());
+        println!(
+            "[gama-golden] {name}: groups={} worst={net_worst:.3e} m",
+            members.len()
+        );
         // Refuse to freeze a fixture production doesn't already reproduce: a large
         // gap here is an emitter/model bug (wrong Δ/σ/sign), not a production
         // regression — writing it would bake a wrong gold standard.
@@ -9499,7 +11557,10 @@ fn generate_gama_golden_fixtures() {
         all.insert(name, rows);
     }
 
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/gama_golden.json");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/gama_golden.json"
+    );
     std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap()).unwrap();
     std::fs::write(path, serde_json::to_string(&all).unwrap()).unwrap();
     println!("[gama-golden] wrote {path}; worst production-vs-gama gap = {worst:.3e} m");
@@ -9508,7 +11569,10 @@ fn generate_gama_golden_fixtures() {
 #[test]
 fn production_matches_gama_golden() {
     use std::collections::BTreeMap;
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/gama_golden.json");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/gama_golden.json"
+    );
     let data = std::fs::read_to_string(path).unwrap_or_else(|_| {
         panic!("missing {path}; regenerate with GAMA_LOCAL=/path/to/gama-local cargo test generate_gama_golden_fixtures -- --ignored")
     });
@@ -9529,7 +11593,9 @@ fn production_matches_gama_golden() {
     );
 
     for (name, rows) in &frozen {
-        let project = nets.get(name).unwrap_or_else(|| panic!("network {name} not in roster"));
+        let project = nets
+            .get(name)
+            .unwrap_or_else(|| panic!("network {name} not in roster"));
         let prod = project.compute_adjusted_station_coordinates(&config);
         // Every production station must be frozen, so added/renumbered stations are
         // not silently left unchecked.
@@ -9548,7 +11614,12 @@ fn production_matches_gama_golden() {
             assert!(
                 (p.x - r.x).abs() < 1e-6 && (p.y - r.y).abs() < 1e-6,
                 "{name} s{}:{}: production ({:.6}, {:.6}) != gama gold ({:.6}, {:.6})",
-                r.s, r.i, p.x, p.y, r.x, r.y,
+                r.s,
+                r.i,
+                p.x,
+                p.y,
+                r.x,
+                r.y,
             );
         }
     }

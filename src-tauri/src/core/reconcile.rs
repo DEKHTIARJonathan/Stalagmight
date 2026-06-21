@@ -20,10 +20,10 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::models::{
-    geo_key, DeleteShotImpact, Project, SectionId, ShotData, ShotId,
+use crate::models::{geo_key, DeleteShotImpact, Project, SectionId, ShotData, ShotId};
+use crate::parsers::tml::{
+    normalize_tml_shot, resolve_tml_depth_in, TmlFile, TmlSection, TmlShotType,
 };
-use crate::parsers::tml::{normalize_tml_shot, resolve_tml_depth_in, TmlFile, TmlSection, TmlShotType};
 
 /// How shots were matched across the round-trip (worst tier used, for warning).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -221,9 +221,7 @@ fn returned_section_shots(section: &TmlSection) -> Vec<ReturnedShot> {
         .shots
         .iter()
         .filter(|s| {
-            s.shot_type != TmlShotType::Closure
-                && s.shot_type != TmlShotType::Start
-                && !s.excluded
+            s.shot_type != TmlShotType::Closure && s.shot_type != TmlShotType::Start && !s.excluded
         })
         .collect();
 
@@ -236,8 +234,7 @@ fn returned_section_shots(section: &TmlSection) -> Vec<ReturnedShot> {
         // authored Comment carries no marker, so the whole text routes to
         // the station — matching Ariane's visual convention where Comment
         // text is centered on the station, not along the shot.
-        let (shot_part, station_part) =
-            crate::core::comment_split::split(data.comment.as_deref());
+        let (shot_part, station_part) = crate::core::comment_split::split(data.comment.as_deref());
         data.comment = shot_part;
         let gk = geo_key(shot.azimuth, shot.length, depth_in, shot.depth);
         out.push(ReturnedShot {
@@ -258,6 +255,10 @@ fn returned_section_shots(section: &TmlSection) -> Vec<ReturnedShot> {
 const F_EPS: f64 = 1e-3;
 
 /// The placeholder date the TML exporter writes when a section has no date.
+#[expect(
+    clippy::expect_used,
+    reason = "2000-01-01 is a valid Gregorian date; from_ymd_opt is infallible here"
+)]
 fn null_date_sentinel() -> chrono::NaiveDate {
     chrono::NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid sentinel date")
 }
@@ -376,8 +377,7 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
         .flat_map(|(_, shots)| shots.iter())
         .filter(|r| baseline_ids.contains(&r.ariane_id))
         .count();
-    let ids_reliable =
-        !baseline_ids.is_empty() && returned_id_overlap * 2 >= baseline_ids.len();
+    let ids_reliable = !baseline_ids.is_empty() && returned_id_overlap * 2 >= baseline_ids.len();
 
     // Stable per-shot identity → owning baseline section. Sections are matched by
     // their shots' identity (UUID, then Ariane id when reliable), NOT by name — so
@@ -391,7 +391,11 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
         .map(|e| (e.uuid.as_str(), e.section_id))
         .collect();
     let arianeid_to_section: HashMap<i64, SectionId> = if ids_reliable {
-        collab.shot_baseline.iter().map(|e| (e.ariane_id, e.section_id)).collect()
+        collab
+            .shot_baseline
+            .iter()
+            .map(|e| (e.ariane_id, e.section_id))
+            .collect()
     } else {
         HashMap::new()
     };
@@ -410,7 +414,11 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
     for (section, shots) in &returned_sections {
         for r in shots {
             if let Some(sid) = shot_owner(r) {
-                *votes.entry(section.name.as_str()).or_default().entry(sid).or_default() += 1;
+                *votes
+                    .entry(section.name.as_str())
+                    .or_default()
+                    .entry(sid)
+                    .or_default() += 1;
             }
         }
     }
@@ -475,7 +483,9 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
     let mut owned_ids: Vec<SectionId> = owned.keys().copied().collect();
     owned_ids.sort_unstable();
     for sid in &owned_ids {
-        let Some(proj_section) = sections_by_id.get(sid) else { continue };
+        let Some(proj_section) = sections_by_id.get(sid) else {
+            continue;
+        };
         let source = owner_source[sid];
 
         let mut meta = Vec::new();
@@ -566,9 +576,18 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
         if owned.contains_key(sid) {
             continue;
         }
-        let Some(proj_section) = sections_by_id.get(sid) else { continue };
+        let Some(proj_section) = sections_by_id.get(sid) else {
+            continue;
+        };
         for e in entries {
-            push_removed(project, proj_section, *sid, e.shot_index, &e.section_name, &mut cs);
+            push_removed(
+                project,
+                proj_section,
+                *sid,
+                e.shot_index,
+                &e.section_name,
+                &mut cs,
+            );
         }
     }
 
@@ -576,7 +595,7 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
     cs
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn align_section(
     project: &Project,
     sid: SectionId,
@@ -641,8 +660,14 @@ fn align_section(
     // pair leftover runs positionally.
     let rem_b: Vec<usize> = (0..baseline.len()).filter(|&i| !b_used[i]).collect();
     let rem_r: Vec<usize> = (0..returned.len()).filter(|&i| !r_used[i]).collect();
-    let rem_b_keys: Vec<&str> = rem_b.iter().map(|&i| baseline[i].geo_key.as_str()).collect();
-    let rem_r_keys: Vec<&str> = rem_r.iter().map(|&i| returned[i].geo_key.as_str()).collect();
+    let rem_b_keys: Vec<&str> = rem_b
+        .iter()
+        .map(|&i| baseline[i].geo_key.as_str())
+        .collect();
+    let rem_r_keys: Vec<&str> = rem_r
+        .iter()
+        .map(|&i| returned[i].geo_key.as_str())
+        .collect();
     let anchors = lcs_pairs(&rem_b_keys, &rem_r_keys);
 
     let mut bi = 0usize;
@@ -713,10 +738,7 @@ fn align_section(
             section_name: section_name.to_string(),
             position: r_idx as u32,
             after_shot_id,
-            uuid: returned[r_idx]
-                .uuid
-                .clone()
-                .filter(|u| !u.is_empty()),
+            uuid: returned[r_idx].uuid.clone().filter(|u| !u.is_empty()),
             data: returned[r_idx].data.clone(),
             station_comment: returned[r_idx].station_comment.clone(),
         });
@@ -732,7 +754,12 @@ fn align_section(
         let r = &returned[r_idx];
         let new = &r.data;
         let baseline_station = entry.station_comment.as_deref();
-        let changes = field_changes(existing, new, baseline_station, r.station_comment.as_deref());
+        let changes = field_changes(
+            existing,
+            new,
+            baseline_station,
+            r.station_comment.as_deref(),
+        );
         if !changes.is_empty() {
             cs.shots_edited.push(EditedShot {
                 section_id: sid,
@@ -776,9 +803,7 @@ fn push_removed(
         None => empty_impact(sid, shot_index),
     };
 
-    if !impact.removed_merges.is_empty()
-        || !impact.removed_closures.is_empty()
-    {
+    if !impact.removed_merges.is_empty() || !impact.removed_closures.is_empty() {
         cs.warnings.push(CollabWarning {
             message: format!(
                 "Removing a shot in '{section_name}' affects {} merge(s) and {} closure(s)",
@@ -948,7 +973,13 @@ fn lcs_pairs(a: &[&str], b: &[&str]) -> Vec<(usize, usize)> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp, clippy::indexing_slicing)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::float_cmp,
+    clippy::indexing_slicing,
+    clippy::never_loop
+)]
 mod tests {
     use super::*;
     use crate::export::tml::export_tml_with_baseline;
@@ -1026,8 +1057,7 @@ mod tests {
 
     /// Seed a pre-built project's collab baseline from its own export.
     fn baseline_for(mut p: Project, dir: &std::path::Path) -> Project {
-        let (baseline, _, synthetic) =
-            export_tml_with_baseline(&p, &dir.join("base.tml")).unwrap();
+        let (baseline, _, synthetic) = export_tml_with_baseline(&p, &dir.join("base.tml")).unwrap();
         set_baseline(&mut p, baseline, synthetic);
         p
     }
@@ -1072,7 +1102,10 @@ mod tests {
         let cs = diff(&base, &ret);
         assert_eq!(cs.shots_edited.len(), 1, "one edited shot");
         assert_eq!(cs.shots_edited[0].shot_index, 1);
-        assert!(cs.shots_edited[0].changes.iter().any(|c| c.field == "length"));
+        assert!(cs.shots_edited[0]
+            .changes
+            .iter()
+            .any(|c| c.field == "length"));
         assert_eq!(cs.shots_added.len(), 0);
         assert_eq!(cs.shots_removed.len(), 0);
     }
@@ -1111,8 +1144,16 @@ mod tests {
         }
 
         let cs = diff(&base, &ret);
-        assert!(cs.shots_removed.is_empty(), "no mass removals: {:?}", cs.shots_removed.len());
-        assert!(cs.shots_added.is_empty(), "no mass adds: {}", cs.shots_added.len());
+        assert!(
+            cs.shots_removed.is_empty(),
+            "no mass removals: {:?}",
+            cs.shots_removed.len()
+        );
+        assert!(
+            cs.shots_added.is_empty(),
+            "no mass adds: {}",
+            cs.shots_added.len()
+        );
         assert_eq!(cs.shots_edited.len(), 1, "exactly the one real edit");
         assert_ne!(cs.match_quality, MatchQuality::Uuid);
     }
@@ -1138,10 +1179,18 @@ mod tests {
         let cs = diff(&base, &ret);
         assert_eq!(cs.shots_added.len(), 1, "exactly one inserted shot");
         assert_eq!(cs.shots_edited.len(), 0, "no edits: {:?}", cs.shots_edited);
-        assert_eq!(cs.shots_removed.len(), 0, "no removals: {:?}", cs.shots_removed);
+        assert_eq!(
+            cs.shots_removed.len(),
+            0,
+            "no removals: {:?}",
+            cs.shots_removed
+        );
 
         let added = &cs.shots_added[0];
-        assert_eq!(added.position, 2, "document index within the returned section");
+        assert_eq!(
+            added.position, 2,
+            "document index within the returned section"
+        );
         let b_id = base.sections[0].shots[1].id;
         assert_eq!(
             added.after_shot_id,
@@ -1156,7 +1205,10 @@ mod tests {
         let base = baseline_project(three(), dir.path());
         let ret = returned(&project_with(three()), dir.path());
         let cs = diff(&base, &ret);
-        assert!(cs.is_empty(), "identical re-export should be a no-op: {cs:?}");
+        assert!(
+            cs.is_empty(),
+            "identical re-export should be a no-op: {cs:?}"
+        );
     }
 
     #[test]
@@ -1242,9 +1294,20 @@ mod tests {
         }
 
         let cs = diff(&base, &ret);
-        assert!(cs.shots_removed.is_empty(), "rename must not remove: {:?}", cs.shots_removed);
-        assert!(cs.shots_added.is_empty(), "rename must not add: {:?}", cs.shots_added);
-        assert!(cs.sections_added.is_empty(), "rename must not create a section");
+        assert!(
+            cs.shots_removed.is_empty(),
+            "rename must not remove: {:?}",
+            cs.shots_removed
+        );
+        assert!(
+            cs.shots_added.is_empty(),
+            "rename must not add: {:?}",
+            cs.shots_added
+        );
+        assert!(
+            cs.sections_added.is_empty(),
+            "rename must not create a section"
+        );
         assert_eq!(cs.section_meta_changed.len(), 1, "one section-meta change");
         assert!(
             cs.section_meta_changed[0]
@@ -1281,7 +1344,10 @@ mod tests {
 
         let ret = returned(&base, dir.path());
         let cs = diff(&base, &ret);
-        assert!(cs.is_empty(), "duplicate-named clean round-trip must be empty: {cs:?}");
+        assert!(
+            cs.is_empty(),
+            "duplicate-named clean round-trip must be empty: {cs:?}"
+        );
     }
 
     #[test]
@@ -1376,7 +1442,10 @@ mod tests {
         // gates on, not the baseline contents).
         collab.last_export_tml_sha256 = Some("placeholder-sha".into());
         base.collab = Some(collab);
-        assert!(base.sections.is_empty(), "fixture must be a zero-shot project");
+        assert!(
+            base.sections.is_empty(),
+            "fixture must be a zero-shot project"
+        );
 
         // Simulate Ariane adding the first section + shots by exporting a
         // populated project at the same sibling path.
@@ -1389,8 +1458,7 @@ mod tests {
             "diff against an empty baseline must surface Ariane's additions \
              as `sections_added`, not silently return empty: got {cs:#?}"
         );
-        let total_shots: usize =
-            cs.sections_added.iter().map(|s| s.shots.len()).sum();
+        let total_shots: usize = cs.sections_added.iter().map(|s| s.shots.len()).sum();
         assert_eq!(
             total_shots, 3,
             "every returned shot must be classified as added"
@@ -1453,11 +1521,22 @@ mod tests {
         let shots_before = p.sections[0].shots.len();
         let skipped = crate::core::apply_changeset(&mut p, &cs);
 
-        assert_eq!(skipped.len(), 2, "both non-finite changes should be skipped: {skipped:?}");
+        assert_eq!(
+            skipped.len(),
+            2,
+            "both non-finite changes should be skipped: {skipped:?}"
+        );
         // Existing geometry untouched, no NaN/inf shot inserted.
-        assert_eq!(p.sections[0].shots.len(), shots_before, "no non-finite shot added");
+        assert_eq!(
+            p.sections[0].shots.len(),
+            shots_before,
+            "no non-finite shot added"
+        );
         assert_eq!(p.sections[0].shots[0].length, orig_len, "edit not applied");
-        assert!(p.sections[0].shots.iter().all(|s| s.all_finite()), "no non-finite geometry leaked in");
+        assert!(
+            p.sections[0].shots.iter().all(|s| s.all_finite()),
+            "no non-finite geometry leaked in"
+        );
     }
 
     #[test]
@@ -1471,7 +1550,11 @@ mod tests {
         let ret = returned(&base, dir.path());
 
         let cs = diff(&base, &ret);
-        assert!(cs.shots_edited.is_empty(), "clean roundtrip: {:?}", cs.shots_edited);
+        assert!(
+            cs.shots_edited.is_empty(),
+            "clean roundtrip: {:?}",
+            cs.shots_edited
+        );
         assert!(cs.shots_added.is_empty());
         assert!(cs.shots_removed.is_empty());
     }
@@ -1511,8 +1594,11 @@ mod tests {
             .iter()
             .find(|e| e.shot_index == 0)
             .expect("shot 0 should have an edit recorded");
-        assert!(edit.changes.iter().any(|c| c.field == "station_comment"),
-            "edit on shot 0 should include a station_comment change: {:?}", edit.changes);
+        assert!(
+            edit.changes.iter().any(|c| c.field == "station_comment"),
+            "edit on shot 0 should include a station_comment change: {:?}",
+            edit.changes
+        );
         assert_eq!(edit.new_station_comment.as_deref(), Some("muddy floor"));
 
         // Apply and verify project.station_comments is updated.
@@ -1534,13 +1620,19 @@ mod tests {
         let base = baseline_for(project_with_comments(), dir.path());
 
         let mut edited = base.clone();
-        edited
-            .station_comments
-            .insert(StationRef::new(0, 2).into(), "junction widened in 2026".into());
+        edited.station_comments.insert(
+            StationRef::new(0, 2).into(),
+            "junction widened in 2026".into(),
+        );
         let ret = returned(&edited, dir.path());
 
         let cs = diff(&base, &ret);
-        assert_eq!(cs.shots_edited.len(), 1, "single station-only edit: {:?}", cs.shots_edited);
+        assert_eq!(
+            cs.shots_edited.len(),
+            1,
+            "single station-only edit: {:?}",
+            cs.shots_edited
+        );
         let e = &cs.shots_edited[0];
         assert_eq!(e.shot_index, 1, "shot whose to-station is station 2");
         let sc_change = e
@@ -1550,7 +1642,10 @@ mod tests {
             .expect("station_comment change present");
         assert_eq!(sc_change.old, "junction with main");
         assert_eq!(sc_change.new, "junction widened in 2026");
-        assert_eq!(e.new_station_comment.as_deref(), Some("junction widened in 2026"));
+        assert_eq!(
+            e.new_station_comment.as_deref(),
+            Some("junction widened in 2026")
+        );
         // The shot-portion of the Comment field didn't change, so no shot
         // comment edit should be emitted.
         assert!(

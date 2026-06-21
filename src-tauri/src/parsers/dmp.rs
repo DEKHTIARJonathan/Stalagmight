@@ -7,8 +7,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use ts_rs::TS;
 use std::path::Path;
+use ts_rs::TS;
 
 // ============================================================================
 // Constants
@@ -266,7 +266,10 @@ fn compute_section_hash(name: &str, direction: DmpDirection, shots: &[DmpShot]) 
     }]);
 
     // Only Standard shots contribute to the content hash
-    for shot in shots.iter().filter(|s| s.shot_type == DmpShotType::Standard) {
+    for shot in shots
+        .iter()
+        .filter(|s| s.shot_type == DmpShotType::Standard)
+    {
         hasher.update(shot.heading_in.to_le_bytes());
         hasher.update(shot.heading_out.to_le_bytes());
         hasher.update(shot.length.to_le_bytes());
@@ -326,9 +329,7 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
     if version >= 5 {
         let magic = buffer.read_n(3)?;
         if magic != SHOT_START_MAGIC {
-            bail!(
-                "Invalid shot start magic: {magic:?}, expected {SHOT_START_MAGIC:?}"
-            );
+            bail!("Invalid shot start magic: {magic:?}, expected {SHOT_START_MAGIC:?}");
         }
     }
 
@@ -375,9 +376,7 @@ fn parse_shot(buffer: &mut IntBuffer, version: u8) -> Result<DmpShot> {
     if version >= 5 {
         let magic = buffer.read_n(3)?;
         if magic != SHOT_END_MAGIC {
-            bail!(
-                "Invalid shot end magic: {magic:?}, expected {SHOT_END_MAGIC:?}"
-            );
+            bail!("Invalid shot end magic: {magic:?}, expected {SHOT_END_MAGIC:?}");
         }
     }
 
@@ -417,9 +416,7 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
     if version > 2 {
         let magic = buffer.read_n(3)?;
         if magic != SECTION_MAGIC {
-            bail!(
-                "Invalid section magic: {magic:?}, expected {SECTION_MAGIC:?}"
-            );
+            bail!("Invalid section magic: {magic:?}, expected {SECTION_MAGIC:?}");
         }
     }
 
@@ -508,10 +505,7 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
     }
 
     // Verify extension
-    let extension = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
     if extension.to_lowercase() != "dmp" {
         bail!("File is not a DMP file: {}", path.display());
@@ -553,9 +547,7 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
     // Get version from first byte
     let version = data[0];
     if !SUPPORTED_VERSIONS.contains(&version) {
-        bail!(
-            "Unsupported DMP version: {version}. Supported: {SUPPORTED_VERSIONS:?}"
-        );
+        bail!("Unsupported DMP version: {version}. Supported: {SUPPORTED_VERSIONS:?}");
     }
 
     tracing::info!(
@@ -672,7 +664,14 @@ impl DmpSection {
 // ============================================================================
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::print_stdout, clippy::float_cmp)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    clippy::float_cmp,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stderr
+)]
 mod tests {
     use super::*;
     use chrono::Datelike;
@@ -784,21 +783,21 @@ mod tests {
 
         // Test cases: (signed_hi_from_file, signed_lo_from_file)
         let cases: &[(i32, i32)] = &[
-            (0, 100),      // +100
-            (0, 0),        // 0
-            (3, 132),      // +900 (heading)
-            (1, 244),      // +500 (length)
-            (0, 50),       // +50 (pitch +5.0°)
-            (-1, -17),     // -17 (pitch -1.7°, from real v5 fixture)
-            (-1, -18),     // -18 (pitch -1.8°, from real v5 fixture)
-            (-1, -50),     // -50 (pitch -5.0°)
-            (-1, -27),     // -27 (pitch -2.7°, from real v2 fixture)
-            (-1, -1),      // -1  (pitch -0.1°, from real v2 fixture)
-            (-1, -73),     // -73 (pitch -7.3°, from real v2 fixture)
-            (-2, -29),     // -285 (pitch -28.5°, steep descent in v2)
-            (-2, 64),      // -448 (pitch -44.8°, from real v2 fixture)
-            (127, 255),    // +32767 (i16::MAX)
-            (-128, 0),     // -32768 (i16::MIN)
+            (0, 100),   // +100
+            (0, 0),     // 0
+            (3, 132),   // +900 (heading)
+            (1, 244),   // +500 (length)
+            (0, 50),    // +50 (pitch +5.0°)
+            (-1, -17),  // -17 (pitch -1.7°, from real v5 fixture)
+            (-1, -18),  // -18 (pitch -1.8°, from real v5 fixture)
+            (-1, -50),  // -50 (pitch -5.0°)
+            (-1, -27),  // -27 (pitch -2.7°, from real v2 fixture)
+            (-1, -1),   // -1  (pitch -0.1°, from real v2 fixture)
+            (-1, -73),  // -73 (pitch -7.3°, from real v2 fixture)
+            (-2, -29),  // -285 (pitch -28.5°, steep descent in v2)
+            (-2, 64),   // -448 (pitch -44.8°, from real v2 fixture)
+            (127, 255), // +32767 (i16::MAX)
+            (-128, 0),  // -32768 (i16::MIN)
         ];
 
         for &(hi, lo) in cases {
@@ -894,7 +893,10 @@ mod tests {
 
         let json = serde_json::to_string(&shot_no_comment).unwrap();
         // With skip_serializing_if, None should be omitted entirely
-        assert!(!json.contains("comment"), "None comment should be omitted from JSON");
+        assert!(
+            !json.contains("comment"),
+            "None comment should be omitted from JSON"
+        );
 
         // Test that Some comment is serialized
         let shot_with_comment = DmpShot {
@@ -903,14 +905,16 @@ mod tests {
         };
 
         let json = serde_json::to_string(&shot_with_comment).unwrap();
-        assert!(json.contains(r#""comment":"Test comment""#), "Some comment should be serialized");
+        assert!(
+            json.contains(r#""comment":"Test comment""#),
+            "Some comment should be serialized"
+        );
     }
 
     // Integration tests with real DMP files
     #[test]
     fn test_parse_v2_dmp() {
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../e2e/fixtures/test_v2.dmp");
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v2.dmp");
         assert!(
             test_file.exists(),
             "Fixture missing: {}",
@@ -926,7 +930,10 @@ mod tests {
 
         // Check first section has shots
         let first_section = &dmp.sections[0];
-        assert!(!first_section.shots.is_empty(), "First section has no shots");
+        assert!(
+            !first_section.shots.is_empty(),
+            "First section has no shots"
+        );
 
         // Print summary for debugging
         println!(
@@ -935,18 +942,25 @@ mod tests {
             dmp.sections.iter().map(|s| s.shots.len()).sum::<usize>()
         );
         for (i, section) in dmp.sections.iter().enumerate() {
-            let standard_shots = section.shots.iter().filter(|s| s.shot_type == DmpShotType::Standard).count();
+            let standard_shots = section
+                .shots
+                .iter()
+                .filter(|s| s.shot_type == DmpShotType::Standard)
+                .count();
             println!(
                 "  Section {}: name='{}', dir={:?}, shots={} (standard={})",
-                i, section.name, section.direction, section.shots.len(), standard_shots
+                i,
+                section.name,
+                section.direction,
+                section.shots.len(),
+                standard_shots
             );
         }
     }
 
     #[test]
     fn test_parse_v5_dmp() {
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../e2e/fixtures/test_v5.dmp");
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v5.dmp");
         assert!(
             test_file.exists(),
             "Fixture missing: {}",
@@ -962,7 +976,10 @@ mod tests {
 
         // Check first section has shots
         let first_section = &dmp.sections[0];
-        assert!(!first_section.shots.is_empty(), "First section has no shots");
+        assert!(
+            !first_section.shots.is_empty(),
+            "First section has no shots"
+        );
 
         // Print summary for debugging
         println!(
@@ -971,10 +988,18 @@ mod tests {
             dmp.sections.iter().map(|s| s.shots.len()).sum::<usize>()
         );
         for (i, section) in dmp.sections.iter().enumerate() {
-            let standard_shots = section.shots.iter().filter(|s| s.shot_type == DmpShotType::Standard).count();
+            let standard_shots = section
+                .shots
+                .iter()
+                .filter(|s| s.shot_type == DmpShotType::Standard)
+                .count();
             println!(
                 "  Section {}: name='{}', dir={:?}, shots={} (standard={})",
-                i, section.name, section.direction, section.shots.len(), standard_shots
+                i,
+                section.name,
+                section.direction,
+                section.shots.len(),
+                standard_shots
             );
         }
     }
@@ -984,12 +1009,16 @@ mod tests {
     /// and still recover sections instead of bailing out.
     #[test]
     fn test_parse_v5_dmp_buggy_eos_is_resilient() {
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../e2e/fixtures/test_v5_buggy_EOS.dmp");
-        assert!(test_file.exists(), "Fixture missing: {}", test_file.display());
+        let test_file =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v5_buggy_EOS.dmp");
+        assert!(
+            test_file.exists(),
+            "Fixture missing: {}",
+            test_file.display()
+        );
 
-        let dmp = parse_dmp(&test_file)
-            .expect("v5 DMP with malformed EOS markers should still parse");
+        let dmp =
+            parse_dmp(&test_file).expect("v5 DMP with malformed EOS markers should still parse");
         assert!(
             !dmp.sections.is_empty(),
             "buggy-EOS DMP should still yield sections"
@@ -1000,9 +1029,13 @@ mod tests {
     /// fail loudly (Err), never silently "succeed" with empty/garbage data.
     #[test]
     fn test_parse_corrupted_dmp_errors() {
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../e2e/fixtures/test_corrupted.dmp");
-        assert!(test_file.exists(), "Fixture missing: {}", test_file.display());
+        let test_file =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_corrupted.dmp");
+        assert!(
+            test_file.exists(),
+            "Fixture missing: {}",
+            test_file.display()
+        );
 
         assert!(
             parse_dmp(&test_file).is_err(),
@@ -1053,16 +1086,20 @@ mod tests {
         values.extend(&[1, 204]); // heading_out 460
         values.extend(&[3, 232]); // length 1000: (3 << 8) + 232 = 1000
         values.extend(&[0, 200]); // depth_in 200
-        values.extend(&[1, 44]);  // depth_out 300: (1 << 8) + 44 = 300
-        values.extend(&[0, 0]);   // pitch_in 0
-        values.extend(&[0, 0]);   // pitch_out 0
+        values.extend(&[1, 44]); // depth_out 300: (1 << 8) + 44 = 300
+        values.extend(&[0, 0]); // pitch_in 0
+        values.extend(&[0, 0]); // pitch_out 0
         values.push(1); // marker_index
 
         // End-of-section marker for v3 (type=3 followed by zeros, total 21 bytes)
         values.push(3); // EOS type
         values.extend(vec![0; 20]); // zeros to complete 21-byte shot
 
-        values.iter().map(ToString::to_string).collect::<Vec<_>>().join(";")
+        values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(";")
     }
 
     /// Helper to build v4 format section data as semicolon-separated string
@@ -1091,11 +1128,11 @@ mod tests {
 
         // heading_in=900 (90.0°)
         values.extend(&[3, 132]); // 900 = (3 << 8) + 132
-        // heading_out=910 (91.0°)
+                                  // heading_out=910 (91.0°)
         values.extend(&[3, 142]); // 910
-        // length=500 (5.00m)
+                                  // length=500 (5.00m)
         values.extend(&[1, 244]); // 500 = (1 << 8) + 244
-        // depth_in=100 (1.00m)
+                                  // depth_in=100 (1.00m)
         values.extend(&[0, 100]);
         // depth_out=150 (1.50m)
         values.extend(&[0, 150]);
@@ -1108,7 +1145,7 @@ mod tests {
         values.extend(&[0, 100]); // left
         values.extend(&[0, 150]); // right
         values.extend(&[0, 200]); // up
-        values.extend(&[0, 80]);  // down
+        values.extend(&[0, 80]); // down
 
         // Temperature: 185 (18.5°C)
         values.extend(&[0, 185]);
@@ -1123,7 +1160,11 @@ mod tests {
         values.push(3); // EOS type
         values.extend(vec![0; 28]); // zeros to complete 29-byte shot
 
-        values.iter().map(ToString::to_string).collect::<Vec<_>>().join(";")
+        values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(";")
     }
 
     /// Test 4.1: Verify DMP version 3 files (21-byte shots) are correctly parsed without LRUD data
@@ -1144,7 +1185,11 @@ mod tests {
         let section = &dmp.sections[0];
         assert_eq!(section.version, 3, "Section version should be 3");
         assert_eq!(section.name, "TST", "Section name should be TST");
-        assert_eq!(section.direction, DmpDirection::In, "Direction should be In");
+        assert_eq!(
+            section.direction,
+            DmpDirection::In,
+            "Direction should be In"
+        );
 
         // Check date parsing
         assert_eq!(section.date.year(), 2024, "Year should be 2024");
@@ -1184,7 +1229,11 @@ mod tests {
         let section = &dmp.sections[0];
         assert_eq!(section.version, 4, "Section version should be 4");
         assert_eq!(section.name, "V4S", "Section name should be V4S");
-        assert_eq!(section.direction, DmpDirection::Out, "Direction should be Out");
+        assert_eq!(
+            section.direction,
+            DmpDirection::Out,
+            "Direction should be Out"
+        );
 
         // Check date parsing
         assert_eq!(section.date.year(), 2024, "Year should be 2024");
@@ -1203,7 +1252,10 @@ mod tests {
         assert_eq!(shot.down, 0.8, "Down LRUD should be 0.8m");
 
         // V4 should have temperature
-        assert!((shot.temperature - 18.5).abs() < 0.1, "Temperature should be 18.5°C");
+        assert!(
+            (shot.temperature - 18.5).abs() < 0.1,
+            "Temperature should be 18.5°C"
+        );
 
         // V4 should have time
         assert_eq!(shot.hour, 14, "Hour should be 14");
@@ -1230,7 +1282,11 @@ mod tests {
         values.extend(&[24, 6, 15, 10, 30]); // Valid date
         values.extend(&[84, 83, 84]); // Name "TST"
         values.push(0); // Direction
-        let content = values.iter().map(ToString::to_string).collect::<Vec<_>>().join(";");
+        let content = values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(";");
 
         let (_file1, path1) = create_dmp_file(&content);
         let result1 = parse_dmp(&path1);
@@ -1292,8 +1348,12 @@ mod tests {
         values2.extend(&[24, 6, 15, 10, 30]); // Date
         values2.extend(&[84, 83, 84]); // Name "TST"
         values2.push(0); // Direction
-        // No shots, no EOS marker
-        let content2 = values2.iter().map(ToString::to_string).collect::<Vec<_>>().join(";");
+                         // No shots, no EOS marker
+        let content2 = values2
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(";");
 
         let (_file2, path2) = create_dmp_file(&content2);
         let result2 = parse_dmp(&path2);
@@ -1309,12 +1369,16 @@ mod tests {
         values3.extend(&[24, 6, 15, 10, 30]); // Date
         values3.extend(&[84, 83, 84]); // Name "TST"
         values3.push(0); // Direction
-        // Partial shot - only type and first heading bytes
+                         // Partial shot - only type and first heading bytes
         values3.push(2); // Shot type
         values3.extend(&[1, 194]); // heading_in
         values3.extend(&[1, 204]); // heading_out
-        // Missing the rest of shot data and EOS marker
-        let content3 = values3.iter().map(ToString::to_string).collect::<Vec<_>>().join(";");
+                                   // Missing the rest of shot data and EOS marker
+        let content3 = values3
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(";");
 
         let (_file3, path3) = create_dmp_file(&content3);
         let result3 = parse_dmp(&path3);
@@ -1332,21 +1396,31 @@ mod tests {
     #[test]
     fn test_parse_dmp_invalid_date_values() {
         // Helper to create section data with specific date values
-        fn make_section_with_date(year_offset: i32, month: i32, day: i32, hour: i32, minute: i32) -> String {
+        fn make_section_with_date(
+            year_offset: i32,
+            month: i32,
+            day: i32,
+            hour: i32,
+            minute: i32,
+        ) -> String {
             let mut values: Vec<i32> = Vec::new();
             values.push(3); // Version 3
             values.extend(&[68, 89, 101]); // Magic
             values.extend(&[year_offset, month, day, hour, minute]); // Date
             values.extend(&[84, 83, 84]); // Name "TST"
             values.push(0); // Direction
-            // Valid shot
+                            // Valid shot
             values.push(2); // type
             values.extend(&[1, 194, 1, 204, 3, 232, 0, 200, 1, 44, 0, 0, 0, 0]); // shot data
             values.push(1); // marker
-            // EOS marker
+                            // EOS marker
             values.push(3);
             values.extend(vec![0; 20]);
-            values.iter().map(ToString::to_string).collect::<Vec<_>>().join(";")
+            values
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(";")
         }
 
         // Test case 1: Month 13 (invalid)
@@ -1381,7 +1455,10 @@ mod tests {
         let result4 = parse_dmp(&path4);
         std::fs::remove_file(&path4).ok();
 
-        assert!(result4.is_err(), "Should fail with year outside valid range");
+        assert!(
+            result4.is_err(),
+            "Should fail with year outside valid range"
+        );
 
         // Test case 5: Hour 25 (invalid)
         let content5 = make_section_with_date(24, 6, 15, 25, 30);
@@ -1470,7 +1547,10 @@ mod tests {
     #[test]
     fn test_split_into_sections_data_shorter_than_pattern() {
         let sections = split_into_sections(&[2, 0, 0], 2);
-        assert!(sections.is_empty(), "data shorter than pattern = no sections");
+        assert!(
+            sections.is_empty(),
+            "data shorter than pattern = no sections"
+        );
     }
 
     #[test]
@@ -1483,8 +1563,14 @@ mod tests {
     fn test_dmp_direction_to_survey_direction() {
         let d_in = DmpDirection::In;
         let d_out = DmpDirection::Out;
-        assert_eq!(d_in.to_survey_direction(), crate::models::SurveyDirection::In);
-        assert_eq!(d_out.to_survey_direction(), crate::models::SurveyDirection::Out);
+        assert_eq!(
+            d_in.to_survey_direction(),
+            crate::models::SurveyDirection::In
+        );
+        assert_eq!(
+            d_out.to_survey_direction(),
+            crate::models::SurveyDirection::Out
+        );
     }
 
     #[test]
@@ -1533,27 +1619,63 @@ mod tests {
         let shots = vec![
             DmpShot {
                 shot_type: DmpShotType::CsA,
-                heading_in: 0.0, heading_out: 0.0, length: 1.0,
-                depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
-                left: 0.0, right: 0.0, up: 0.0, down: 0.0,
-                temperature: 0.0, hour: 0, minute: 0, second: 0,
-                marker_index: 0, comment: None,
+                heading_in: 0.0,
+                heading_out: 0.0,
+                length: 1.0,
+                depth_in: 0.0,
+                depth_out: 0.0,
+                pitch_in: 0.0,
+                pitch_out: 0.0,
+                left: 0.0,
+                right: 0.0,
+                up: 0.0,
+                down: 0.0,
+                temperature: 0.0,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                marker_index: 0,
+                comment: None,
             },
             DmpShot {
                 shot_type: DmpShotType::Standard,
-                heading_in: 90.0, heading_out: 270.0, length: 5.0,
-                depth_in: 0.0, depth_out: 1.0, pitch_in: 0.0, pitch_out: 0.0,
-                left: 1.0, right: 1.0, up: 2.0, down: 0.5,
-                temperature: 18.0, hour: 10, minute: 30, second: 0,
-                marker_index: 1, comment: None,
+                heading_in: 90.0,
+                heading_out: 270.0,
+                length: 5.0,
+                depth_in: 0.0,
+                depth_out: 1.0,
+                pitch_in: 0.0,
+                pitch_out: 0.0,
+                left: 1.0,
+                right: 1.0,
+                up: 2.0,
+                down: 0.5,
+                temperature: 18.0,
+                hour: 10,
+                minute: 30,
+                second: 0,
+                marker_index: 1,
+                comment: None,
             },
             DmpShot {
                 shot_type: DmpShotType::EndOfSurvey,
-                heading_in: 0.0, heading_out: 0.0, length: 0.0,
-                depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
-                left: 0.0, right: 0.0, up: 0.0, down: 0.0,
-                temperature: 0.0, hour: 0, minute: 0, second: 0,
-                marker_index: 0, comment: None,
+                heading_in: 0.0,
+                heading_out: 0.0,
+                length: 0.0,
+                depth_in: 0.0,
+                depth_out: 0.0,
+                pitch_in: 0.0,
+                pitch_out: 0.0,
+                left: 0.0,
+                right: 0.0,
+                up: 0.0,
+                down: 0.0,
+                temperature: 0.0,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                marker_index: 0,
+                comment: None,
             },
         ];
         let hash = compute_section_hash("TST", DmpDirection::Out, &shots);
@@ -1561,17 +1683,27 @@ mod tests {
             version: 4,
             name: "TST".to_string(),
             direction: DmpDirection::Out,
-            date: NaiveDate::from_ymd_opt(2024, 6, 15).unwrap().and_hms_opt(10, 30, 0).unwrap(),
+            date: NaiveDate::from_ymd_opt(2024, 6, 15)
+                .unwrap()
+                .and_hms_opt(10, 30, 0)
+                .unwrap(),
             shots,
             content_hash: hash,
         };
 
         let section_data = section.to_section_data("#ff0000".to_string());
         // Only Standard shots should be included
-        assert_eq!(section_data.shots.len(), 1, "only Standard shots should be included");
+        assert_eq!(
+            section_data.shots.len(),
+            1,
+            "only Standard shots should be included"
+        );
         assert_eq!(section_data.shots[0].length, 5.0);
         assert_eq!(section_data.name.as_deref(), Some("TST"));
-        assert_eq!(section_data.direction, Some(crate::models::SurveyDirection::Out));
+        assert_eq!(
+            section_data.direction,
+            Some(crate::models::SurveyDirection::Out)
+        );
     }
 
     #[test]
@@ -1608,19 +1740,43 @@ mod tests {
         let shots = vec![
             DmpShot {
                 shot_type: DmpShotType::EndOfSurvey,
-                heading_in: 0.0, heading_out: 0.0, length: 0.0,
-                depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
-                left: 0.0, right: 0.0, up: 0.0, down: 0.0,
-                temperature: 0.0, hour: 0, minute: 0, second: 0,
-                marker_index: 0, comment: None,
+                heading_in: 0.0,
+                heading_out: 0.0,
+                length: 0.0,
+                depth_in: 0.0,
+                depth_out: 0.0,
+                pitch_in: 0.0,
+                pitch_out: 0.0,
+                left: 0.0,
+                right: 0.0,
+                up: 0.0,
+                down: 0.0,
+                temperature: 0.0,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                marker_index: 0,
+                comment: None,
             },
             DmpShot {
                 shot_type: DmpShotType::CsA,
-                heading_in: 0.0, heading_out: 0.0, length: 1.0,
-                depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
-                left: 0.0, right: 0.0, up: 0.0, down: 0.0,
-                temperature: 0.0, hour: 0, minute: 0, second: 0,
-                marker_index: 0, comment: None,
+                heading_in: 0.0,
+                heading_out: 0.0,
+                length: 1.0,
+                depth_in: 0.0,
+                depth_out: 0.0,
+                pitch_in: 0.0,
+                pitch_out: 0.0,
+                left: 0.0,
+                right: 0.0,
+                up: 0.0,
+                down: 0.0,
+                temperature: 0.0,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                marker_index: 0,
+                comment: None,
             },
         ];
         let hash = compute_section_hash("TST", DmpDirection::In, &shots);
@@ -1628,13 +1784,19 @@ mod tests {
             version: 3,
             name: "TST".to_string(),
             direction: DmpDirection::In,
-            date: NaiveDate::from_ymd_opt(2024, 6, 15).unwrap().and_hms_opt(10, 30, 0).unwrap(),
+            date: NaiveDate::from_ymd_opt(2024, 6, 15)
+                .unwrap()
+                .and_hms_opt(10, 30, 0)
+                .unwrap(),
             shots,
             content_hash: hash,
         };
 
         let section_data = section.to_section_data("#ff0000".to_string());
-        assert!(section_data.shots.is_empty(), "only non-Standard shots → empty shot list");
+        assert!(
+            section_data.shots.is_empty(),
+            "only non-Standard shots → empty shot list"
+        );
     }
 
     // ========================================================================
@@ -1645,11 +1807,23 @@ mod tests {
     fn test_content_hash_deterministic() {
         let shots = vec![DmpShot {
             shot_type: DmpShotType::Standard,
-            heading_in: 90.0, heading_out: 270.0, length: 5.0,
-            depth_in: 0.0, depth_out: 1.0, pitch_in: 0.0, pitch_out: 0.0,
-            left: 1.0, right: 1.0, up: 2.0, down: 0.5,
-            temperature: 18.0, hour: 10, minute: 30, second: 0,
-            marker_index: 1, comment: None,
+            heading_in: 90.0,
+            heading_out: 270.0,
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
+            pitch_in: 0.0,
+            pitch_out: 0.0,
+            left: 1.0,
+            right: 1.0,
+            up: 2.0,
+            down: 0.5,
+            temperature: 18.0,
+            hour: 10,
+            minute: 30,
+            second: 0,
+            marker_index: 1,
+            comment: None,
         }];
         let h1 = compute_section_hash("ABC", DmpDirection::In, &shots);
         let h2 = compute_section_hash("ABC", DmpDirection::In, &shots);
@@ -1661,11 +1835,23 @@ mod tests {
     fn test_content_hash_changes_with_shot_data() {
         let shots_a = vec![DmpShot {
             shot_type: DmpShotType::Standard,
-            heading_in: 90.0, heading_out: 270.0, length: 5.0,
-            depth_in: 0.0, depth_out: 1.0, pitch_in: 0.0, pitch_out: 0.0,
-            left: 1.0, right: 1.0, up: 2.0, down: 0.5,
-            temperature: 18.0, hour: 10, minute: 30, second: 0,
-            marker_index: 1, comment: None,
+            heading_in: 90.0,
+            heading_out: 270.0,
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
+            pitch_in: 0.0,
+            pitch_out: 0.0,
+            left: 1.0,
+            right: 1.0,
+            up: 2.0,
+            down: 0.5,
+            temperature: 18.0,
+            hour: 10,
+            minute: 30,
+            second: 0,
+            marker_index: 1,
+            comment: None,
         }];
         let mut shots_b = shots_a.clone();
         shots_b[0].length = 5.1; // slightly different length
@@ -1679,11 +1865,23 @@ mod tests {
         // Same shots, different dates — hash should be identical
         let shots = vec![DmpShot {
             shot_type: DmpShotType::Standard,
-            heading_in: 90.0, heading_out: 270.0, length: 5.0,
-            depth_in: 0.0, depth_out: 1.0, pitch_in: 0.0, pitch_out: 0.0,
-            left: 1.0, right: 1.0, up: 2.0, down: 0.5,
-            temperature: 18.0, hour: 10, minute: 30, second: 0,
-            marker_index: 1, comment: None,
+            heading_in: 90.0,
+            heading_out: 270.0,
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
+            pitch_in: 0.0,
+            pitch_out: 0.0,
+            left: 1.0,
+            right: 1.0,
+            up: 2.0,
+            down: 0.5,
+            temperature: 18.0,
+            hour: 10,
+            minute: 30,
+            second: 0,
+            marker_index: 1,
+            comment: None,
         }];
         // Date is not an input to compute_section_hash, so same data = same hash
         let h1 = compute_section_hash("ABC", DmpDirection::In, &shots);
@@ -1696,19 +1894,43 @@ mod tests {
         let shots_with_eos = vec![
             DmpShot {
                 shot_type: DmpShotType::Standard,
-                heading_in: 90.0, heading_out: 270.0, length: 5.0,
-                depth_in: 0.0, depth_out: 1.0, pitch_in: 0.0, pitch_out: 0.0,
-                left: 1.0, right: 1.0, up: 2.0, down: 0.5,
-                temperature: 18.0, hour: 10, minute: 30, second: 0,
-                marker_index: 1, comment: None,
+                heading_in: 90.0,
+                heading_out: 270.0,
+                length: 5.0,
+                depth_in: 0.0,
+                depth_out: 1.0,
+                pitch_in: 0.0,
+                pitch_out: 0.0,
+                left: 1.0,
+                right: 1.0,
+                up: 2.0,
+                down: 0.5,
+                temperature: 18.0,
+                hour: 10,
+                minute: 30,
+                second: 0,
+                marker_index: 1,
+                comment: None,
             },
             DmpShot {
                 shot_type: DmpShotType::EndOfSurvey,
-                heading_in: 0.0, heading_out: 0.0, length: 0.0,
-                depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
-                left: 0.0, right: 0.0, up: 0.0, down: 0.0,
-                temperature: 0.0, hour: 0, minute: 0, second: 0,
-                marker_index: 0, comment: None,
+                heading_in: 0.0,
+                heading_out: 0.0,
+                length: 0.0,
+                depth_in: 0.0,
+                depth_out: 0.0,
+                pitch_in: 0.0,
+                pitch_out: 0.0,
+                left: 0.0,
+                right: 0.0,
+                up: 0.0,
+                down: 0.0,
+                temperature: 0.0,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                marker_index: 0,
+                comment: None,
             },
         ];
         let shots_without = vec![shots_with_eos[0].clone()];
@@ -1726,9 +1948,12 @@ mod tests {
     #[test]
     #[ignore]
     fn kb5_parse_regression() {
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../e2e/fixtures/kb5.dmp");
-        assert!(test_file.exists(), "Fixture missing: {}", test_file.display());
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/kb5.dmp");
+        assert!(
+            test_file.exists(),
+            "Fixture missing: {}",
+            test_file.display()
+        );
 
         let dmp = parse_dmp(&test_file).expect("should parse kb5.dmp");
 
@@ -1742,7 +1967,11 @@ mod tests {
         let names: Vec<&str> = dmp.sections.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, vec!["001", "002", "003", "004", "005"]);
         for section in &dmp.sections {
-            assert_eq!(section.direction, DmpDirection::In, "all sections should be direction In");
+            assert_eq!(
+                section.direction,
+                DmpDirection::In,
+                "all sections should be direction In"
+            );
         }
 
         // DMP shot counts (all shot types)
@@ -1750,47 +1979,91 @@ mod tests {
         assert_eq!(dmp_shot_counts, vec![108, 365, 30, 5, 8]);
 
         // Standard shot counts (after filtering non-Standard types)
-        let standard_counts: Vec<usize> = dmp.sections.iter()
-            .map(|s| s.shots.iter().filter(|sh| sh.shot_type == DmpShotType::Standard).count())
+        let standard_counts: Vec<usize> = dmp
+            .sections
+            .iter()
+            .map(|s| {
+                s.shots
+                    .iter()
+                    .filter(|sh| sh.shot_type == DmpShotType::Standard)
+                    .count()
+            })
             .collect();
         assert_eq!(standard_counts, vec![107, 364, 29, 4, 7]);
 
         // Validate key shot data for each section (first and last standard shots)
-        let assert_shot = |section_idx: usize, shot_idx: usize,
-                           az_in: f64, az_out: f64, len: f64, d_in: f64, d_out: f64| {
-            let standard: Vec<&DmpShot> = dmp.sections[section_idx].shots.iter()
+        let assert_shot = |section_idx: usize,
+                           shot_idx: usize,
+                           az_in: f64,
+                           az_out: f64,
+                           len: f64,
+                           d_in: f64,
+                           d_out: f64| {
+            let standard: Vec<&DmpShot> = dmp.sections[section_idx]
+                .shots
+                .iter()
                 .filter(|s| s.shot_type == DmpShotType::Standard)
                 .collect();
             let shot = standard[shot_idx];
-            assert!((shot.heading_in - az_in).abs() < 0.05,
-                "section[{}] shot[{}] az_in: {} != {}", section_idx, shot_idx, shot.heading_in, az_in);
-            assert!((shot.heading_out - az_out).abs() < 0.05,
-                "section[{}] shot[{}] az_out: {} != {}", section_idx, shot_idx, shot.heading_out, az_out);
-            assert!((shot.length - len).abs() < 0.005,
-                "section[{}] shot[{}] length: {} != {}", section_idx, shot_idx, shot.length, len);
-            assert!((shot.depth_in - d_in).abs() < 0.005,
-                "section[{}] shot[{}] depth_in: {} != {}", section_idx, shot_idx, shot.depth_in, d_in);
-            assert!((shot.depth_out - d_out).abs() < 0.005,
-                "section[{}] shot[{}] depth_out: {} != {}", section_idx, shot_idx, shot.depth_out, d_out);
+            assert!(
+                (shot.heading_in - az_in).abs() < 0.05,
+                "section[{}] shot[{}] az_in: {} != {}",
+                section_idx,
+                shot_idx,
+                shot.heading_in,
+                az_in
+            );
+            assert!(
+                (shot.heading_out - az_out).abs() < 0.05,
+                "section[{}] shot[{}] az_out: {} != {}",
+                section_idx,
+                shot_idx,
+                shot.heading_out,
+                az_out
+            );
+            assert!(
+                (shot.length - len).abs() < 0.005,
+                "section[{}] shot[{}] length: {} != {}",
+                section_idx,
+                shot_idx,
+                shot.length,
+                len
+            );
+            assert!(
+                (shot.depth_in - d_in).abs() < 0.005,
+                "section[{}] shot[{}] depth_in: {} != {}",
+                section_idx,
+                shot_idx,
+                shot.depth_in,
+                d_in
+            );
+            assert!(
+                (shot.depth_out - d_out).abs() < 0.005,
+                "section[{}] shot[{}] depth_out: {} != {}",
+                section_idx,
+                shot_idx,
+                shot.depth_out,
+                d_out
+            );
         };
 
         // Section 001: first, last standard shots
-        assert_shot(0, 0,   209.7, 209.7, 11.360, 8.45, 8.55);
+        assert_shot(0, 0, 209.7, 209.7, 11.360, 8.45, 8.55);
         assert_shot(0, 106, 343.7, 343.7, 12.040, 8.03, 7.89);
 
         // Section 002: first, last standard shots
-        assert_shot(1, 0,    23.2,  23.2,  3.580, 9.22, 9.12);
-        assert_shot(1, 363, 258.1, 258.1,  9.120, 7.42, 7.49);
+        assert_shot(1, 0, 23.2, 23.2, 3.580, 9.22, 9.12);
+        assert_shot(1, 363, 258.1, 258.1, 9.120, 7.42, 7.49);
 
         // Section 003: first, last standard shots
-        assert_shot(2, 0,   229.9, 229.9,  5.210, 9.55, 9.44);
-        assert_shot(2, 28,   59.0,  59.0,  5.480, 7.21, 7.11);
+        assert_shot(2, 0, 229.9, 229.9, 5.210, 9.55, 9.44);
+        assert_shot(2, 28, 59.0, 59.0, 5.480, 7.21, 7.11);
 
         // Section 004: all 4 standard shots
-        assert_shot(3, 0,  45.6, 45.6, 5.090, 9.35, 9.40);
+        assert_shot(3, 0, 45.6, 45.6, 5.090, 9.35, 9.40);
         assert_shot(3, 1, 352.0, 352.0, 3.760, 9.30, 9.35);
-        assert_shot(3, 2,  33.7, 33.7, 5.080, 9.48, 9.49);
-        assert_shot(3, 3,   9.5,  9.5, 5.710, 9.49, 9.39);
+        assert_shot(3, 2, 33.7, 33.7, 5.080, 9.48, 9.49);
+        assert_shot(3, 3, 9.5, 9.5, 5.710, 9.49, 9.39);
 
         // Section 005: first, last standard shots
         assert_shot(4, 0, 256.4, 256.4, 14.010, 8.30, 8.40);
@@ -1804,20 +2077,25 @@ mod tests {
     #[ignore]
     fn kb5_suggestions_regression() {
         use crate::models::placement_suggest::{
-            suggest_all_placements, ImportSectionForSuggestion, ExistingSection,
-            MatchDirection, TargetType,
+            suggest_all_placements, ExistingSection, ImportSectionForSuggestion, MatchDirection,
+            TargetType,
         };
         use crate::models::shot::Shot;
 
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../e2e/fixtures/kb5.dmp");
-        assert!(test_file.exists(), "Fixture missing: {}", test_file.display());
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/kb5.dmp");
+        assert!(
+            test_file.exists(),
+            "Fixture missing: {}",
+            test_file.display()
+        );
 
         let dmp = parse_dmp(&test_file).expect("should parse kb5.dmp");
 
         // Build section 002 as the "existing" project section (simulates it being already imported)
         let section_002 = &dmp.sections[1]; // index 1 = "002"
-        let existing_shots: Vec<Shot> = section_002.shots.iter()
+        let existing_shots: Vec<Shot> = section_002
+            .shots
+            .iter()
             .filter(|s| s.shot_type == DmpShotType::Standard)
             .enumerate()
             .map(|(i, s)| Shot {
@@ -1848,19 +2126,27 @@ mod tests {
         }];
 
         // Build import sections (all 5 from DMP, including 002)
-        let import_sections: Vec<ImportSectionForSuggestion> = dmp.sections.iter()
+        let import_sections: Vec<ImportSectionForSuggestion> = dmp
+            .sections
+            .iter()
             .enumerate()
             .map(|(i, s)| ImportSectionForSuggestion {
                 index: i as u32,
                 name: s.name.clone(),
-                shots: s.shots.iter()
+                shots: s
+                    .shots
+                    .iter()
                     .filter(|sh| sh.shot_type == DmpShotType::Standard)
                     .map(DmpShot::to_shot_data)
                     .collect(),
             })
             .collect();
 
-        let suggestions = suggest_all_placements(&import_sections, &existing_sections, &crate::config::PlacementSuggestionConfig::default());
+        let suggestions = suggest_all_placements(
+            &import_sections,
+            &existing_sections,
+            &crate::config::PlacementSuggestionConfig::default(),
+        );
 
         // Print all suggestions for debugging
         for (i, s) in suggestions.iter().enumerate() {
@@ -1884,67 +2170,102 @@ mod tests {
         // 4. import=0(001) impStn=107 → target=existing:0(002) exStn=182 matched=2 dir=reverse
 
         // Verify the import→existing suggestion exists: 001 → 002
-        let s001_to_002 = suggestions.iter().find(|s|
+        let s001_to_002 = suggestions.iter().find(|s| {
             s.import_section_index == 0
-            && s.target_type == TargetType::Existing
-            && s.existing_section_id == Some(0)
+                && s.target_type == TargetType::Existing
+                && s.existing_section_id == Some(0)
+        });
+        assert!(
+            s001_to_002.is_some(),
+            "should find 001→002 existing suggestion"
         );
-        assert!(s001_to_002.is_some(), "should find 001→002 existing suggestion");
         let s = s001_to_002.unwrap();
-        assert_eq!(s.import_station_index, 107, "001 connects at its last station");
+        assert_eq!(
+            s.import_station_index, 107,
+            "001 connects at its last station"
+        );
         assert_eq!(s.existing_station_index, 182, "connects to 002 station 182");
         assert_eq!(s.matched_shots, 2);
         assert_eq!(s.direction, MatchDirection::Reverse);
 
         // Verify import→import suggestions exist
         // 005 → 001
-        let s005_to_001 = suggestions.iter().find(|s|
-            s.import_section_index == 4
-            && s.target_type == TargetType::Importing
-            && s.target_import_index == Some(0)
-            && s.import_station_index == 7  // back of 005
+        let s005_to_001 = suggestions.iter().find(
+            |s| {
+                s.import_section_index == 4
+                    && s.target_type == TargetType::Importing
+                    && s.target_import_index == Some(0)
+                    && s.import_station_index == 7
+            }, // back of 005
         );
-        assert!(s005_to_001.is_some(), "should find 005→001 importing suggestion");
+        assert!(
+            s005_to_001.is_some(),
+            "should find 005→001 importing suggestion"
+        );
         let s = s005_to_001.unwrap();
         assert_eq!(s.matched_shots, 2);
-        assert_eq!(s.existing_station_index, 25, "005 connects to 001 station 25");
+        assert_eq!(
+            s.existing_station_index, 25,
+            "005 connects to 001 station 25"
+        );
 
         // 004 → 001 (front of 004 connects to station 28 of 001)
-        let s004_to_001 = suggestions.iter().find(|s|
-            s.import_section_index == 3
-            && s.target_type == TargetType::Importing
-            && s.target_import_index == Some(0)
-            && s.import_station_index == 0  // front of 004
+        let s004_to_001 = suggestions.iter().find(
+            |s| {
+                s.import_section_index == 3
+                    && s.target_type == TargetType::Importing
+                    && s.target_import_index == Some(0)
+                    && s.import_station_index == 0
+            }, // front of 004
         );
-        assert!(s004_to_001.is_some(), "should find 004→001 importing suggestion");
+        assert!(
+            s004_to_001.is_some(),
+            "should find 004→001 importing suggestion"
+        );
         let s = s004_to_001.unwrap();
         assert_eq!(s.matched_shots, 2);
-        assert_eq!(s.existing_station_index, 28, "004 connects to 001 station 28");
+        assert_eq!(
+            s.existing_station_index, 28,
+            "004 connects to 001 station 28"
+        );
 
         // 003 → 001 (front of 003 connects to station 27 of 001)
-        let s003_to_001 = suggestions.iter().find(|s|
-            s.import_section_index == 2
-            && s.target_type == TargetType::Importing
-            && s.target_import_index == Some(0)
-            && s.import_station_index == 0  // front of 003
+        let s003_to_001 = suggestions.iter().find(
+            |s| {
+                s.import_section_index == 2
+                    && s.target_type == TargetType::Importing
+                    && s.target_import_index == Some(0)
+                    && s.import_station_index == 0
+            }, // front of 003
         );
-        assert!(s003_to_001.is_some(), "should find 003→001 importing suggestion");
+        assert!(
+            s003_to_001.is_some(),
+            "should find 003→001 importing suggestion"
+        );
         let s = s003_to_001.unwrap();
         assert_eq!(s.matched_shots, 2);
-        assert_eq!(s.existing_station_index, 27, "003 connects to 001 station 27");
+        assert_eq!(
+            s.existing_station_index, 27,
+            "003 connects to 001 station 27"
+        );
 
         // Verify section 004 also has an overlap against existing 002
         // (This was the source of the double-treatment bug)
-        let s004_to_existing = suggestions.iter().find(|s|
-            s.import_section_index == 3
-            && s.target_type == TargetType::Existing
-            && s.import_station_index == 4  // back of 004
+        let s004_to_existing = suggestions.iter().find(
+            |s| {
+                s.import_section_index == 3
+                    && s.target_type == TargetType::Existing
+                    && s.import_station_index == 4
+            }, // back of 004
         );
         assert!(s004_to_existing.is_some(),
             "section 004 should have a back-end overlap with existing 002 (double-treatment regression)");
         let s = s004_to_existing.unwrap();
         assert_eq!(s.matched_shots, 2, "004→002 overlap should be 2 shots");
-        assert_eq!(s.existing_station_index, 257, "004 back connects to 002 station 257");
+        assert_eq!(
+            s.existing_station_index, 257,
+            "004 back connects to 002 station 257"
+        );
     }
 
     /// Simulate overlap treatment for kb5.dmp and validate post-import shot counts.
@@ -1964,19 +2285,25 @@ mod tests {
     #[ignore]
     fn kb5_overlap_treatment_regression() {
         use crate::models::placement_suggest::{
-            suggest_all_placements, ImportSectionForSuggestion, ExistingSection,
-            CrossSectionSuggestion, TargetType,
+            suggest_all_placements, CrossSectionSuggestion, ExistingSection,
+            ImportSectionForSuggestion, TargetType,
         };
         use crate::models::shot::Shot;
         use std::collections::{HashMap, HashSet};
 
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../e2e/fixtures/kb5.dmp");
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/kb5.dmp");
         let dmp = parse_dmp(&test_file).expect("should parse kb5.dmp");
 
         // Raw standard shot counts (pre-treatment)
-        let raw_counts: Vec<usize> = dmp.sections.iter()
-            .map(|s| s.shots.iter().filter(|sh| sh.shot_type == DmpShotType::Standard).count())
+        let raw_counts: Vec<usize> = dmp
+            .sections
+            .iter()
+            .map(|s| {
+                s.shots
+                    .iter()
+                    .filter(|sh| sh.shot_type == DmpShotType::Standard)
+                    .count()
+            })
             .collect();
         assert_eq!(raw_counts[2], 29, "003 raw standard shots");
         assert_eq!(raw_counts[3], 4, "004 raw standard shots");
@@ -1984,37 +2311,57 @@ mod tests {
 
         // Build 002 as existing, all 5 as imports (same setup as suggestions test)
         let section_002 = &dmp.sections[1];
-        let existing_shots: Vec<Shot> = section_002.shots.iter()
+        let existing_shots: Vec<Shot> = section_002
+            .shots
+            .iter()
             .filter(|s| s.shot_type == DmpShotType::Standard)
             .enumerate()
             .map(|(i, s)| Shot {
                 id: i as u32,
-                azimuth_in: s.heading_in, azimuth_out: s.heading_out,
-                length: s.length, depth_in: s.depth_in, depth_out: s.depth_out,
-                pitch_in: Some(s.pitch_in), pitch_out: Some(s.pitch_out),
-                left: Some(s.left), right: Some(s.right),
-                up: Some(s.up), down: Some(s.down),
-                comment: s.comment.clone(), is_reference: false,
+                azimuth_in: s.heading_in,
+                azimuth_out: s.heading_out,
+                length: s.length,
+                depth_in: s.depth_in,
+                depth_out: s.depth_out,
+                pitch_in: Some(s.pitch_in),
+                pitch_out: Some(s.pitch_out),
+                left: Some(s.left),
+                right: Some(s.right),
+                up: Some(s.up),
+                down: Some(s.down),
+                comment: s.comment.clone(),
+                is_reference: false,
                 marker_index: Some(u32::from(s.marker_index)),
                 temperature: Some(s.temperature),
                 uuid: None,
             })
             .collect();
         let existing_sections = vec![ExistingSection {
-            id: 0, name: "002".to_string(), shots: existing_shots,
+            id: 0,
+            name: "002".to_string(),
+            shots: existing_shots,
         }];
-        let import_sections: Vec<ImportSectionForSuggestion> = dmp.sections.iter()
+        let import_sections: Vec<ImportSectionForSuggestion> = dmp
+            .sections
+            .iter()
             .enumerate()
             .map(|(i, s)| ImportSectionForSuggestion {
-                index: i as u32, name: s.name.clone(),
-                shots: s.shots.iter()
+                index: i as u32,
+                name: s.name.clone(),
+                shots: s
+                    .shots
+                    .iter()
                     .filter(|sh| sh.shot_type == DmpShotType::Standard)
                     .map(DmpShot::to_shot_data)
                     .collect(),
             })
             .collect();
 
-        let suggestions = suggest_all_placements(&import_sections, &existing_sections, &crate::config::PlacementSuggestionConfig::default());
+        let suggestions = suggest_all_placements(
+            &import_sections,
+            &existing_sections,
+            &crate::config::PlacementSuggestionConfig::default(),
+        );
 
         // Simulate applyAllOverlapTreatments import-side logic.
         // deleted_shots: section_index → set of shot IDs marked deleted.
@@ -2027,9 +2374,15 @@ mod tests {
         let mut confirmed_sections: HashSet<u32> = HashSet::new();
         let mut confirmed_suggestions: HashSet<usize> = HashSet::new();
         for (i, s) in suggestions.iter().enumerate() {
-            if s.import_section_index == 1 { continue; }
-            if s.target_type == TargetType::Importing && s.target_import_index == Some(1) { continue; }
-            if s.matched_shots == 0 { continue; }
+            if s.import_section_index == 1 {
+                continue;
+            }
+            if s.target_type == TargetType::Importing && s.target_import_index == Some(1) {
+                continue;
+            }
+            if s.matched_shots == 0 {
+                continue;
+            }
             // First (highest-scoring) suggestion per section is the confirmed one
             if confirmed_sections.insert(s.import_section_index) {
                 confirmed_suggestions.insert(i);
@@ -2040,9 +2393,15 @@ mod tests {
         let mut treated_shots: HashSet<String> = HashSet::new();
 
         for (i, s) in suggestions.iter().enumerate() {
-            if s.import_section_index == 1 { continue; }
-            if s.target_type == TargetType::Importing && s.target_import_index == Some(1) { continue; }
-            if s.matched_shots == 0 { continue; }
+            if s.import_section_index == 1 {
+                continue;
+            }
+            if s.target_type == TargetType::Importing && s.target_import_index == Some(1) {
+                continue;
+            }
+            if s.matched_shots == 0 {
+                continue;
+            }
 
             let is_confirmed = confirmed_suggestions.contains(&i);
 
@@ -2056,7 +2415,9 @@ mod tests {
 
             for &shot_id in &overlap_ids {
                 let key = format!("{}:{}", s.import_section_index, shot_id);
-                if treated_shots.contains(&key) { continue; }
+                if treated_shots.contains(&key) {
+                    continue;
+                }
                 treated_shots.insert(key);
 
                 // Import-to-import: always delete (target section keeps the overlap).
@@ -2082,56 +2443,115 @@ mod tests {
         let alive_004 = alive(3);
         let alive_005 = alive(4);
 
-        println!("Section 001: raw={}, deleted={:?}, alive={}",
-            raw_counts[0], deleted_shots.get(&0), alive_001);
-        println!("Section 003: raw={}, deleted={:?}, alive={}",
-            raw_counts[2], deleted_shots.get(&2), alive_003);
-        println!("Section 004: raw={}, deleted={:?}, alive={}",
-            raw_counts[3], deleted_shots.get(&3), alive_004);
-        println!("Section 005: raw={}, deleted={:?}, alive={}",
-            raw_counts[4], deleted_shots.get(&4), alive_005);
+        println!(
+            "Section 001: raw={}, deleted={:?}, alive={}",
+            raw_counts[0],
+            deleted_shots.get(&0),
+            alive_001
+        );
+        println!(
+            "Section 003: raw={}, deleted={:?}, alive={}",
+            raw_counts[2],
+            deleted_shots.get(&2),
+            alive_003
+        );
+        println!(
+            "Section 004: raw={}, deleted={:?}, alive={}",
+            raw_counts[3],
+            deleted_shots.get(&3),
+            alive_004
+        );
+        println!(
+            "Section 005: raw={}, deleted={:?}, alive={}",
+            raw_counts[4],
+            deleted_shots.get(&4),
+            alive_005
+        );
 
-        assert_eq!(alive_001, 105, "001: 107 raw - 2 deleted (confirmed import-to-existing with 002) = 105");
-        assert_eq!(alive_005, 5, "005: 7 raw - 2 deleted (import-to-import with 001) = 5");
-        assert_eq!(alive_004, 2, "004: 4 raw - 2 deleted (front overlap with 001) = 2");
-        assert_eq!(alive_003, 27, "003: 29 raw - 2 deleted (front overlap with 001) = 27");
+        assert_eq!(
+            alive_001, 105,
+            "001: 107 raw - 2 deleted (confirmed import-to-existing with 002) = 105"
+        );
+        assert_eq!(
+            alive_005, 5,
+            "005: 7 raw - 2 deleted (import-to-import with 001) = 5"
+        );
+        assert_eq!(
+            alive_004, 2,
+            "004: 4 raw - 2 deleted (front overlap with 001) = 2"
+        );
+        assert_eq!(
+            alive_003, 27,
+            "003: 29 raw - 2 deleted (front overlap with 001) = 27"
+        );
 
         // Verify attachment stations: all three sections connect to 001
         let find_primary = |import_idx: u32| -> &CrossSectionSuggestion {
-            suggestions.iter().find(|s|
-                s.import_section_index == import_idx
-                && s.target_type == TargetType::Importing
-                && s.target_import_index == Some(0) // 001
-            ).unwrap_or_else(|| panic!("no importing suggestion for section index {}", import_idx))
+            suggestions
+                .iter()
+                .find(
+                    |s| {
+                        s.import_section_index == import_idx
+                            && s.target_type == TargetType::Importing
+                            && s.target_import_index == Some(0)
+                    }, // 001
+                )
+                .unwrap_or_else(|| {
+                    panic!("no importing suggestion for section index {}", import_idx)
+                })
         };
 
         let s005 = find_primary(4);
-        assert_eq!(s005.existing_station_index, 25, "005 attaches to 001 station 25");
+        assert_eq!(
+            s005.existing_station_index, 25,
+            "005 attaches to 001 station 25"
+        );
 
         let s003 = find_primary(2);
-        assert_eq!(s003.existing_station_index, 27, "003 attaches to 001 station 27");
+        assert_eq!(
+            s003.existing_station_index, 27,
+            "003 attaches to 001 station 27"
+        );
 
         let s004 = find_primary(3);
-        assert_eq!(s004.existing_station_index, 28, "004 attaches to 001 station 28");
+        assert_eq!(
+            s004.existing_station_index, 28,
+            "004 attaches to 001 station 28"
+        );
 
         // 001 connects to existing 002 at station 182
-        let s001 = suggestions.iter().find(|s|
-            s.import_section_index == 0
-            && s.target_type == TargetType::Existing
-            && s.existing_section_id == Some(0)
-        ).expect("001 should have an existing suggestion to 002");
-        assert_eq!(s001.import_station_index, 107, "001 connects at its back (station 107)");
-        assert_eq!(s001.existing_station_index, 182, "001 attaches to 002 station 182");
+        let s001 = suggestions
+            .iter()
+            .find(|s| {
+                s.import_section_index == 0
+                    && s.target_type == TargetType::Existing
+                    && s.existing_section_id == Some(0)
+            })
+            .expect("001 should have an existing suggestion to 002");
+        assert_eq!(
+            s001.import_station_index, 107,
+            "001 connects at its back (station 107)"
+        );
+        assert_eq!(
+            s001.existing_station_index, 182,
+            "001 attaches to 002 station 182"
+        );
 
         // Overlap shot raw data for 001→002 connection.
         // Import overlap shots 105, 106 are deleted from 001.
         // Target shots 180, 181 on existing section 002 get interpolated values.
         // Post-import interpolated values are verified in the integration test
         // kb5_import_overlap_interpolation_integration (core/state/tests.rs).
-        let std_001: Vec<_> = dmp.sections[0].shots.iter()
-            .filter(|s| s.shot_type == DmpShotType::Standard).collect();
-        let std_002: Vec<_> = dmp.sections[1].shots.iter()
-            .filter(|s| s.shot_type == DmpShotType::Standard).collect();
+        let std_001: Vec<_> = dmp.sections[0]
+            .shots
+            .iter()
+            .filter(|s| s.shot_type == DmpShotType::Standard)
+            .collect();
+        let std_002: Vec<_> = dmp.sections[1]
+            .shots
+            .iter()
+            .filter(|s| s.shot_type == DmpShotType::Standard)
+            .collect();
 
         // Import side: 001 shots 105, 106 (deleted during import)
         assert_eq!(std_001[105].length, 4.81, "001 shot 105 length");
@@ -2213,8 +2633,7 @@ mod tests {
     #[test]
     fn test_parse_dmp_negative_pitch() {
         let content = build_v4_shot_section(
-            *b"NEG",
-            900,  // heading_in 90.0°
+            *b"NEG", 900,  // heading_in 90.0°
             910,  // heading_out 91.0°
             500,  // length 5.00m
             100,  // depth_in 1.00m
@@ -2233,15 +2652,17 @@ mod tests {
         assert_eq!(shot.depth_in, 1.0);
         assert_eq!(shot.depth_out, 1.5);
         assert_eq!(shot.pitch_in, -15.0, "Negative pitch_in must be preserved");
-        assert_eq!(shot.pitch_out, -30.0, "Negative pitch_out must be preserved");
+        assert_eq!(
+            shot.pitch_out, -30.0,
+            "Negative pitch_out must be preserved"
+        );
     }
 
     /// Steep downward pitch near the -90° limit.
     #[test]
     fn test_parse_dmp_steep_negative_pitch() {
         let content = build_v4_shot_section(
-            *b"STP",
-            1800, // heading_in 180.0°
+            *b"STP", 1800, // heading_in 180.0°
             1810, // heading_out 181.0°
             200,  // length 2.00m
             500,  // depth_in 5.00m
@@ -2262,8 +2683,7 @@ mod tests {
     #[test]
     fn test_parse_dmp_positive_pitch() {
         let content = build_v4_shot_section(
-            *b"UPP",
-            450,  // heading_in 45.0°
+            *b"UPP", 450,  // heading_in 45.0°
             460,  // heading_out 46.0°
             1000, // length 10.00m
             200,  // depth_in 2.00m
@@ -2284,10 +2704,8 @@ mod tests {
     #[test]
     fn test_parse_dmp_zero_pitch() {
         let content = build_v4_shot_section(
-            *b"ZRO",
-            2700, 2710, 300, 100, 100,
-            0,    // pitch_in 0.0°
-            0,    // pitch_out 0.0°
+            *b"ZRO", 2700, 2710, 300, 100, 100, 0, // pitch_in 0.0°
+            0, // pitch_out 0.0°
         );
         let (_file, path) = create_dmp_file(&content);
         let dmp = parse_dmp(&path).expect("should parse zero pitch");
@@ -2302,10 +2720,8 @@ mod tests {
     #[test]
     fn test_parse_dmp_mixed_pitch() {
         let content = build_v4_shot_section(
-            *b"MIX",
-            900, 910, 500, 200, 300,
-            50,   // pitch_in +5.0°
-            -50,  // pitch_out -5.0°
+            *b"MIX", 900, 910, 500, 200, 300, 50,  // pitch_in +5.0°
+            -50, // pitch_out -5.0°
         );
         let (_file, path) = create_dmp_file(&content);
         let dmp = parse_dmp(&path).expect("should parse mixed pitch");
@@ -2320,10 +2736,8 @@ mod tests {
     #[test]
     fn test_parse_dmp_small_negative_pitch() {
         let content = build_v4_shot_section(
-            *b"SML",
-            900, 910, 500, 100, 100,
-            -1,   // pitch_in -0.1°
-            -9,   // pitch_out -0.9°
+            *b"SML", 900, 910, 500, 100, 100, -1, // pitch_in -0.1°
+            -9, // pitch_out -0.9°
         );
         let (_file, path) = create_dmp_file(&content);
         let dmp = parse_dmp(&path).expect("should parse small negative pitch");
@@ -2348,8 +2762,7 @@ mod tests {
     #[test]
     fn test_parse_dmp_large_positive_heading() {
         let content = build_v4_shot_section(
-            *b"HDG",
-            3500, // heading_in 350.0°
+            *b"HDG", 3500, // heading_in 350.0°
             3590, // heading_out 359.0°
             500, 100, 100, 0, 0,
         );
@@ -2366,9 +2779,7 @@ mod tests {
     #[test]
     fn test_negative_pitch_through_to_shot_data() {
         let content = build_v4_shot_section(
-            *b"E2E",
-            900, 910, 500, 100, 150,
-            -200, // pitch_in -20.0°
+            *b"E2E", 900, 910, 500, 100, 150, -200, // pitch_in -20.0°
             -350, // pitch_out -35.0°
         );
         let (_file, path) = create_dmp_file(&content);
@@ -2385,8 +2796,7 @@ mod tests {
     /// test_v5.dmp fixture. Both codebases must produce identical results.
     #[test]
     fn test_parse_v5_fixture_pitch_values() {
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../e2e/fixtures/test_v5.dmp");
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v5.dmp");
         if !test_file.exists() {
             eprintln!("Skipping: fixture not found at {}", test_file.display());
             return;
@@ -2417,8 +2827,7 @@ mod tests {
     /// V2 format has many shots with negative pitch.
     #[test]
     fn test_parse_v2_fixture_pitch_values() {
-        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../e2e/fixtures/test_v2.dmp");
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v2.dmp");
         if !test_file.exists() {
             eprintln!("Skipping: fixture not found at {}", test_file.display());
             return;
@@ -2508,7 +2917,10 @@ mod tests {
         assert_eq!(data, vec![255, 239], "signed -1,-17 → unsigned 255,239");
 
         let mut buffer = IntBuffer::new(data);
-        assert_eq!(buffer.read_int16_be().unwrap(), -17, "should reconstruct -17");
+        assert_eq!(
+            buffer.read_int16_be().unwrap(),
+            -17,
+            "should reconstruct -17"
+        );
     }
-
 }

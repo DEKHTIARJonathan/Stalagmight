@@ -1,37 +1,35 @@
-//! String-to-numeric ID registries for packed telemetry payloads.
+//! Canonical vocabulary of telemetry event and source names.
 //!
-//! Keep in sync with `telemetry-worker/src/registry.ts`.
+//! The wire format sends event names verbatim (self-describing JSON), so these
+//! are no longer a numeric ID map — they exist to back the coverage tests below
+//! (every command / tool / dialog has a tracked event; typo detection).
 
-use std::collections::HashMap;
-use std::sync::OnceLock;
-
-/// Source names indexed by ID. Index = source_id (u8).
+/// Known interaction-source names (appended to an event as `:source`).
 pub(super) const SOURCE_NAMES: &[&str] = &[
-    "",              // 0: no source suffix present
-    "keyboard",      // 1
-    "toolbar",       // 2
-    "map",           // 3
-    "data-table",    // 4
+    "",               // no source suffix present
+    "keyboard",       // 1
+    "toolbar",        // 2
+    "map",            // 3
+    "data-table",     // 4
     "sections-panel", // 5
-    "detail-panel",  // 6
-    "display-menu",  // 7
-    "context-menu",  // 8
-    "dialog",        // 9
-    "unknown",       // 10
-    "mouse",         // 11
-    "touch",         // 12
-    "dblclick",      // 13
+    "detail-panel",   // 6
+    "display-menu",   // 7
+    "context-menu",   // 8
+    "dialog",         // 9
+    "unknown",        // 10
+    "mouse",          // 11
+    "touch",          // 12
+    "dblclick",       // 13
 ];
 
-/// Event base names indexed by ID. Index = event_id (u16).
-/// Keep in sync with `telemetry-worker/src/registry.ts`.
+/// Known event base names (the `:source` suffix is appended at runtime). The
+/// canonical vocabulary the coverage tests check against; order is irrelevant.
 pub(super) const EVENT_NAMES: &[&str] = &[
-    // ── Commands (0-92) ──
-    // The `adjust_loop_closures` command was removed when closure adjustment
-    // became a non-destructive display mode, but event-ID 0 is frozen into packed
-    // payloads from older clients, so its original name is kept verbatim here — the
-    // registry is append-only and frozen entries are never relabeled. It has no
-    // live handler; the command/undo coverage tests skip it via REMOVED_COMMANDS.
+    // ── Commands ──
+    // `adjust_loop_closures` was removed when closure adjustment became a
+    // non-destructive display mode. Its name is kept in the vocabulary for
+    // historical continuity; it has no live handler, so the command/undo
+    // coverage tests skip it via REMOVED_COMMANDS.
     "command.adjust_loop_closures",
     "command.attempt_repair",
     "command.calculate_file_hash",
@@ -331,16 +329,11 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     // ── Dwell: other (284-285) ──
     "dwell.global-view",
     "dwell.placement",
-    // ── Appended after v2 baseline (286+) ──
     "command.track_imported_file",
     "action.dialog.delete-shot-choice",
     "dialog-cancel.delete-shot-choice",
     "dwell.dialog.delete-shot-choice",
     "action.select-add.section",
-    // New IPC commands added since v2 baseline.  Append-only — the
-    // first V2_FROZEN_EVENTS entries above are content-hashed in
-    // `registry_id_stability` and their positions baked into older
-    // clients' payloads.
     "command.load_project_full_binary",
     "command.get_memory_stats",
     "command.parse_compass",
@@ -406,58 +399,83 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.bulk-delete",
     "dialog-cancel.bulk-delete",
     "dwell.dialog.bulk-delete",
+    // Map-tile consumption per provider (#31): `tile.fetch.<provider>` = tiles pulled
+    // fresh from the provider over the network; `tile.cache.<provider>` = tiles served
+    // from the local cache. Add a `tile.fetch.<p>` + `tile.cache.<p>` pair here (and in
+    // the worker registry) when a new provider is added to tile_providers.rs;
+    // unregistered providers still report, via the overflow map.
+    "tile.fetch.esri",
+    "tile.cache.esri",
+    // Active-dwell mirror of every dwell state (#31): like `dwell.<state>` but
+    // only accumulates while the user interacted within the last 15s (active vs
+    // merely open). Keep one per dwell entry (the mirror is asserted by a test).
+    "active-dwell.tool.comment",
+    "active-dwell.tool.delete",
+    "active-dwell.tool.draw",
+    "active-dwell.tool.measure",
+    "active-dwell.tool.merge",
+    "active-dwell.tool.move_comment",
+    "active-dwell.tool.move_segment",
+    "active-dwell.tool.move_shot",
+    "active-dwell.tool.move_station",
+    "active-dwell.tool.pan",
+    "active-dwell.tool.select",
+    "active-dwell.tool.zoom",
+    "active-dwell.dialog.adjust-closures",
+    "active-dwell.dialog.closure",
+    "active-dwell.dialog.confirm-delete",
+    "active-dwell.dialog.confirm-overwrite",
+    "active-dwell.dialog.context-menu",
+    "active-dwell.dialog.corruption-recovery",
+    "active-dwell.dialog.debug",
+    "active-dwell.dialog.dmp-import-new",
+    "active-dwell.dialog.dmp-selection",
+    "active-dwell.dialog.draw-shot",
+    "active-dwell.dialog.edit-section",
+    "active-dwell.dialog.edit-shot",
+    "active-dwell.dialog.edit-station",
+    "active-dwell.dialog.error",
+    "active-dwell.dialog.export",
+    "active-dwell.dialog.gpx-placement",
+    "active-dwell.dialog.gpx-selection",
+    "active-dwell.dialog.import",
+    "active-dwell.dialog.keyboard-shortcuts",
+    "active-dwell.dialog.merge",
+    "active-dwell.dialog.merge-projects",
+    "active-dwell.dialog.new-project",
+    "active-dwell.dialog.new-project-for-import",
+    "active-dwell.dialog.orphan-placement",
+    "active-dwell.dialog.remove-closure",
+    "active-dwell.dialog.section-adjust",
+    "active-dwell.dialog.settings",
+    "active-dwell.dialog.split-section",
+    "active-dwell.dialog.swap-comments",
+    "active-dwell.dialog.tml-import",
+    "active-dwell.dialog.unmerge-stations",
+    "active-dwell.dialog.unsaved-changes",
+    "active-dwell.dialog.zero-datum-config",
+    "active-dwell.dialog.zero-datum-selection",
+    "active-dwell.global-view",
+    "active-dwell.placement",
+    "active-dwell.dialog.delete-shot-choice",
+    "active-dwell.dialog.compass-import",
+    "active-dwell.dialog.collab-review",
+    "active-dwell.dialog.save-permission",
+    // Active-dwell mirrors for the dialogs master added (#57/#95/#118).
+    "active-dwell.dialog.project-settings",
+    "active-dwell.dialog.delete-project",
+    "active-dwell.dialog.bulk-delete",
 ];
 
-/// Lazy source name → source_id map (excludes empty string at index 0).
-pub(super) fn source_map() -> &'static HashMap<&'static str, u8> {
-    static MAP: OnceLock<HashMap<&str, u8>> = OnceLock::new();
-    MAP.get_or_init(|| {
-        SOURCE_NAMES
-            .iter()
-            .enumerate()
-            .filter(|(_, name)| !name.is_empty())
-            .map(|(i, &name)| (name, i as u8))
-            .collect()
-    })
-}
-
-/// Lazy event name → event_id map.
-pub(super) fn event_map() -> &'static HashMap<&'static str, u16> {
-    static MAP: OnceLock<HashMap<&str, u16>> = OnceLock::new();
-    MAP.get_or_init(|| {
-        EVENT_NAMES
-            .iter()
-            .enumerate()
-            .map(|(i, &name)| (name, i as u16))
-            .collect()
-    })
-}
-
-/// Split an event key on the last `:`. If the suffix is a known source,
-/// returns `(base, source_id)`. Otherwise returns `(full_key, 0)`.
-///
-/// This correctly handles keys like `display-state.showGrid:true` where
-/// `:true` is not a known source — the whole string becomes the event name.
-pub(super) fn split_event_key(key: &str) -> (&str, u8) {
-    if let Some(colon_pos) = key.rfind(':') {
-        let suffix = &key[colon_pos + 1..];
-        if let Some(&source_id) = source_map().get(suffix) {
-            return (&key[..colon_pos], source_id);
-        }
-    }
-    (key, 0)
-}
-
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    /// Bare names of commands removed from the app whose registry event-ID slots
-    /// are retained (append-only registry; frozen IDs are never relabeled or
-    /// reused). They intentionally have no live handler and no frontend tracking,
-    /// so the `command.*` and `undo-after.*` coverage checks skip them.
+    /// Bare names of commands removed from the app but kept in the vocabulary.
+    /// They intentionally have no live handler and no frontend tracking, so the
+    /// `command.*` and `undo-after.*` coverage checks skip them.
     const REMOVED_COMMANDS: &[&str] = &["adjust_loop_closures", "resolve_all_warnings"];
 
     /// Dialog keys removed from `App.tsx` whose registry slots are likewise
@@ -496,112 +514,48 @@ mod tests {
     }
 
     #[test]
-    fn split_known_source() {
-        let (base, sid) = split_event_key("command.create_shot:keyboard");
-        assert_eq!(base, "command.create_shot");
-        assert_eq!(sid, 1);
-    }
-
-    #[test]
-    fn split_unknown_suffix() {
-        let (base, sid) = split_event_key("display-state.showGrid:true");
-        assert_eq!(base, "display-state.showGrid:true");
-        assert_eq!(sid, 0);
-    }
-
-    #[test]
-    fn split_no_colon() {
-        let (base, sid) = split_event_key("command.save_project");
-        assert_eq!(base, "command.save_project");
-        assert_eq!(sid, 0);
-    }
-
-    #[test]
-    fn split_unknown_source_literal() {
-        let (base, sid) = split_event_key("action.dialog.import:unknown");
-        assert_eq!(base, "action.dialog.import");
-        assert_eq!(sid, 10);
-    }
-
-    #[test]
-    fn event_map_lookup() {
-        let map = event_map();
-        assert_eq!(map.get("command.adjust_loop_closures"), Some(&0));
-        assert_eq!(map.get("command.update_shot"), Some(&92));
-        assert_eq!(map.get("action.tool.select"), Some(&103));
-        assert_eq!(map.get("dwell.placement"), Some(&285));
-        assert_eq!(map.get("nonexistent.event"), None);
-    }
-
-    #[test]
-    fn source_map_lookup() {
-        let map = source_map();
-        assert_eq!(map.get("keyboard"), Some(&1));
-        assert_eq!(map.get("dblclick"), Some(&13));
-        assert_eq!(map.get(""), None); // empty string excluded
-        assert_eq!(map.get("nonexistent"), None);
-    }
-
-    #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 338);
+        assert_eq!(EVENT_NAMES.len(), 395);
+    }
+
+    /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
+    /// must be a matching `active-dwell.<key>`. Catches a dwell state added without
+    /// its active-dwell twin (which would otherwise silently land in the overflow map).
+    #[test]
+    fn active_dwell_mirrors_dwell() {
+        for name in EVENT_NAMES {
+            if let Some(key) = name.strip_prefix("dwell.") {
+                let mirror = format!("active-dwell.{key}");
+                assert!(
+                    EVENT_NAMES.iter().any(|&e| e == mirror),
+                    "dwell state '{name}' has no '{mirror}' — add it here and in \
+                     telemetry-worker/src/registry.ts"
+                );
+            }
+        }
+    }
+
+    /// Every tile provider must have its per-provider consumption events registered
+    /// (#31), so tile counts land as registered events rather than the overflow map.
+    /// Catches "added a provider but forgot the telemetry events".
+    #[test]
+    fn every_tile_provider_has_consumption_events() {
+        for info in crate::tile_providers::get_all_provider_info() {
+            for kind in ["fetch", "cache"] {
+                let event = format!("tile.{kind}.{}", info.name);
+                assert!(
+                    EVENT_NAMES.iter().any(|&e| e == event),
+                    "provider '{}' missing telemetry event '{event}' — add it to EVENT_NAMES \
+                     here and in telemetry-worker/src/registry.ts",
+                    info.name
+                );
+            }
+        }
     }
 
     #[test]
     fn source_count() {
         assert_eq!(SOURCE_NAMES.len(), 14);
-    }
-
-    /// FNV-1a hash for deterministic, portable snapshots.
-    fn fnv1a(data: &[u8]) -> u64 {
-        let mut hash: u64 = 0xcbf29ce484222325;
-        for &byte in data {
-            hash ^= byte as u64;
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-        hash
-    }
-
-    /// Frozen entry count for the current packed payload version (v2).
-    /// The first V2_FROZEN_EVENTS entries must never change — their indices
-    /// are baked into payloads already sent by older clients.
-    ///
-    /// New entries MUST be appended after this watermark. When a registry
-    /// reorganization is needed (sort, remove, insert), bump
-    /// `PACKED_PAYLOAD_VERSION` to v3, update the watermark and hashes,
-    /// and keep the v2 lookup table in the worker until most users upgrade.
-    const V2_FROZEN_EVENTS: usize = 286;
-    const V2_FROZEN_SOURCES: usize = 14;
-
-    #[test]
-    fn registry_id_stability() {
-        // Assert the frozen portion hasn't been mutated.
-        assert!(
-            EVENT_NAMES.len() >= V2_FROZEN_EVENTS,
-            "EVENT_NAMES shrunk below v2 frozen watermark ({} < {V2_FROZEN_EVENTS})",
-            EVENT_NAMES.len(),
-        );
-        assert!(
-            SOURCE_NAMES.len() >= V2_FROZEN_SOURCES,
-            "SOURCE_NAMES shrunk below v2 frozen watermark ({} < {V2_FROZEN_SOURCES})",
-            SOURCE_NAMES.len(),
-        );
-
-        let event_hash = fnv1a(EVENT_NAMES[..V2_FROZEN_EVENTS].join("\n").as_bytes());
-        let source_hash = fnv1a(SOURCE_NAMES[..V2_FROZEN_SOURCES].join("\n").as_bytes());
-
-        assert_eq!(
-            event_hash, 0xd8c5eaa036bd1155,
-            "EVENT_NAMES v2 snapshot changed! The first {V2_FROZEN_EVENTS} entries are \
-             frozen — their numeric IDs are baked into payloads from older clients. \
-             Append new entries at the end instead. If a reorganization is intentional, \
-             bump PACKED_PAYLOAD_VERSION and update V2_FROZEN_EVENTS / hash."
-        );
-        assert_eq!(
-            source_hash, 0x17b26a8e3506beea,
-            "SOURCE_NAMES v2 snapshot changed! The first {V2_FROZEN_SOURCES} entries are \
-             frozen. Append new sources at the end instead, or bump PACKED_PAYLOAD_VERSION."
-        );
     }
 
     /// Commands registered in `generate_handler![]` that are excluded from
@@ -660,7 +614,7 @@ mod tests {
         let registry_commands: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("command."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .filter(|n| !removed.contains(n))
             .collect();
 
@@ -675,78 +629,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rust_ts_registry_in_sync() {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let ts_path = format!("{manifest_dir}/../telemetry-worker/src/registry.ts");
-        let ts_src = std::fs::read_to_string(&ts_path)
-            .unwrap_or_else(|e| panic!("Failed to read {ts_path}: {e}"));
-
-        /// Extract single-quoted strings from lines between array open/close.
-        fn extract_array(src: &str, array_name: &str) -> Vec<String> {
-            let marker = format!("{array_name}:");
-            let mut inside = false;
-            let mut items = Vec::new();
-            for line in src.lines() {
-                let trimmed = line.trim();
-                if !inside {
-                    if trimmed.contains(&marker) && trimmed.contains('[') {
-                        inside = true;
-                    }
-                    continue;
-                }
-                if trimmed == "];" || trimmed == "]" {
-                    break;
-                }
-                // Extract single-quoted string from lines like:  'keyboard',  // 1
-                if let Some(start) = trimmed.find('\'') {
-                    if let Some(end) = trimmed[start + 1..].find('\'') {
-                        items.push(trimmed[start + 1..start + 1 + end].to_string());
-                    }
-                }
-            }
-            items
-        }
-
-        let ts_sources = extract_array(&ts_src, "SOURCE_NAMES");
-        let ts_events = extract_array(&ts_src, "EVENT_NAMES");
-
-        // Compare element-by-element for exact order
-        assert_eq!(
-            SOURCE_NAMES.len(),
-            ts_sources.len(),
-            "SOURCE_NAMES length mismatch: Rust={} TS={}",
-            SOURCE_NAMES.len(),
-            ts_sources.len(),
-        );
-        for (i, (rust, ts)) in SOURCE_NAMES.iter().zip(ts_sources.iter()).enumerate() {
-            assert_eq!(
-                rust, ts,
-                "SOURCE_NAMES mismatch at index {i}: Rust={rust:?} TS={ts:?}"
-            );
-        }
-
-        assert_eq!(
-            EVENT_NAMES.len(),
-            ts_events.len(),
-            "EVENT_NAMES length mismatch: Rust={} TS={}",
-            EVENT_NAMES.len(),
-            ts_events.len(),
-        );
-        for (i, (rust, ts)) in EVENT_NAMES.iter().zip(ts_events.iter()).enumerate() {
-            assert_eq!(
-                rust, ts,
-                "EVENT_NAMES mismatch at index {i}: Rust={rust:?} TS={ts:?}"
-            );
-        }
-    }
-
     /// Helper: read a frontend source file relative to the project root.
     fn read_frontend_file(rel_path: &str) -> String {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let path = format!("{manifest_dir}/../{rel_path}");
-        std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("Failed to read {path}: {e}"))
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("Failed to read {path}: {e}"))
     }
 
     #[test]
@@ -774,24 +661,23 @@ mod tests {
 
         let code_action: HashSet<String> =
             tools.iter().map(|t| format!("action.tool.{t}")).collect();
-        let code_dwell: HashSet<String> =
-            tools.iter().map(|t| format!("dwell.tool.{t}")).collect();
+        let code_dwell: HashSet<String> = tools.iter().map(|t| format!("dwell.tool.{t}")).collect();
 
         let reg_action: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.tool."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
         let reg_dwell: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("dwell.tool."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
 
-        // Tools removed from the UI whose telemetry IDs stay frozen in the
-        // append-only registry (their events simply never fire anymore). The
-        // registry is allowed to retain these even though they're gone from
-        // ToolType — but every *current* tool must still be covered.
+        // Tools removed from the UI whose event names are kept in the vocabulary
+        // (their events simply never fire anymore). The registry is allowed to
+        // retain these even though they're gone from ToolType — but every
+        // *current* tool must still be covered.
         const RETIRED_TOOLS: &[&str] = &["draw", "delete"];
         let retired_action: HashSet<String> = RETIRED_TOOLS
             .iter()
@@ -866,10 +752,8 @@ mod tests {
             "Failed to parse any UNDOABLE_COMMANDS"
         );
 
-        let code_undo: HashSet<String> = commands
-            .iter()
-            .map(|c| format!("undo-after.{c}"))
-            .collect();
+        let code_undo: HashSet<String> =
+            commands.iter().map(|c| format!("undo-after.{c}")).collect();
 
         // Exclude the retained undo-after slots of removed commands.
         let removed: HashSet<String> = REMOVED_COMMANDS
@@ -879,7 +763,7 @@ mod tests {
         let reg_undo: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("undo-after."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .filter(|n| !removed.contains(n))
             .collect();
 
@@ -918,19 +802,20 @@ mod tests {
                 }
             }
         }
-        assert!(!keys.is_empty(), "Failed to parse any DISPLAY_DEFAULTS keys");
+        assert!(
+            !keys.is_empty(),
+            "Failed to parse any DISPLAY_DEFAULTS keys"
+        );
 
-        let code_toggles: HashSet<String> = keys
-            .iter()
-            .map(|k| format!("action.toggle.{k}"))
-            .collect();
+        let code_toggles: HashSet<String> =
+            keys.iter().map(|k| format!("action.toggle.{k}")).collect();
 
         // Exclude toggles that are intentionally not DISPLAY_DEFAULTS booleans.
-        let extra: HashSet<String> = EXTRA_TOGGLES.iter().map(|s| s.to_string()).collect();
+        let extra: HashSet<String> = EXTRA_TOGGLES.iter().map(|s| (*s).to_string()).collect();
         let reg_toggles: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.toggle."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .filter(|n| !extra.contains(n))
             .collect();
 
@@ -962,7 +847,10 @@ mod tests {
                 search = &search[pos + re_pattern.len()..];
             }
         }
-        assert!(!dialogs.is_empty(), "Failed to parse any dialogs from App.tsx");
+        assert!(
+            !dialogs.is_empty(),
+            "Failed to parse any dialogs from App.tsx"
+        );
 
         // Build expected sets
         let code_action: HashSet<String> = dialogs
@@ -994,19 +882,19 @@ mod tests {
         let reg_action: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.dialog."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .filter(|n| !removed_action.contains(n))
             .collect();
         let reg_cancel: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("dialog-cancel."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .filter(|n| !removed_cancel.contains(n))
             .collect();
         let reg_dwell: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("dwell.dialog."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .filter(|n| !removed_dwell.contains(n))
             .collect();
 
@@ -1046,7 +934,7 @@ mod tests {
         let reg_sources: HashSet<String> = SOURCE_NAMES
             .iter()
             .filter(|s| !excluded.contains(*s))
-            .map(|s| s.to_string())
+            .map(|s| (*s).to_string())
             .collect();
 
         let code_sources: HashSet<String> = sources.into_iter().collect();
@@ -1086,7 +974,10 @@ mod tests {
                 }
             }
         }
-        assert!(!items.is_empty(), "Failed to parse any variants from type {name}");
+        assert!(
+            !items.is_empty(),
+            "Failed to parse any variants from type {name}"
+        );
         items
     }
 
@@ -1095,13 +986,12 @@ mod tests {
         let src = read_frontend_file("src/utils/telemetry.ts");
         let navs = extract_type_union(&src, "NavigationAction");
 
-        let code_action: HashSet<String> =
-            navs.iter().map(|n| format!("action.nav.{n}")).collect();
+        let code_action: HashSet<String> = navs.iter().map(|n| format!("action.nav.{n}")).collect();
 
         let reg_action: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.nav."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
 
         let missing: Vec<_> = code_action.difference(&reg_action).collect();
@@ -1132,12 +1022,12 @@ mod tests {
         let reg_open: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.panel-open."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
         let reg_close: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.panel-close."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
 
         let missing_open: Vec<_> = code_open.difference(&reg_open).collect();
@@ -1163,10 +1053,8 @@ mod tests {
         let src = read_frontend_file("src/utils/telemetry.ts");
         let types = extract_type_union(&src, "SelectionType");
 
-        let code_select: HashSet<String> = types
-            .iter()
-            .map(|t| format!("action.select.{t}"))
-            .collect();
+        let code_select: HashSet<String> =
+            types.iter().map(|t| format!("action.select.{t}")).collect();
         let code_add: HashSet<String> = types
             .iter()
             .map(|t| format!("action.select-add.{t}"))
@@ -1175,12 +1063,12 @@ mod tests {
         let reg_select: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.select."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
         let reg_add: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.select-add."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
 
         let missing_select: Vec<_> = code_select.difference(&reg_select).collect();
@@ -1206,10 +1094,7 @@ mod tests {
         let src = read_frontend_file("src/utils/telemetry.ts");
         let actions = extract_type_union(&src, "ContextMenuAction");
 
-        let code_actions: HashSet<String> = actions
-            .iter()
-            .map(|a| format!("action.{a}"))
-            .collect();
+        let code_actions: HashSet<String> = actions.iter().map(|a| format!("action.{a}")).collect();
 
         let reg_actions: HashSet<String> = EVENT_NAMES
             .iter()
@@ -1222,7 +1107,7 @@ mod tests {
                     && !n.starts_with("action.dialog.")
                     && !n.starts_with("action.panel-")
             })
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
 
         let missing: Vec<_> = code_actions.difference(&reg_actions).collect();

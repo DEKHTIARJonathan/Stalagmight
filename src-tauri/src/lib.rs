@@ -14,13 +14,13 @@ pub mod test_helpers;
 pub mod tile_providers;
 pub mod tilemap_cache;
 
+use image::imageops::FilterType;
+use image::{DynamicImage, GenericImageView, ImageFormat};
 use std::collections::HashMap as StdHashMap;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use image::{DynamicImage, ImageFormat, GenericImageView};
-use image::imageops::FilterType;
 use tauri::{Emitter, Manager};
 
 use cache::TileCache;
@@ -144,7 +144,8 @@ impl TileFetchStats {
     pub fn record_success(&self, latency_ms: u64) {
         self.in_flight.fetch_sub(1, Ordering::Relaxed);
         self.total_fetched.fetch_add(1, Ordering::Relaxed);
-        self.total_latency_ms.fetch_add(latency_ms, Ordering::Relaxed);
+        self.total_latency_ms
+            .fetch_add(latency_ms, Ordering::Relaxed);
         self.last_latency_ms.store(latency_ms, Ordering::Relaxed);
     }
 
@@ -167,14 +168,22 @@ impl TileFetchStats {
 
     /// Emit `tile-transport-error` once per online→offline transition.
     pub fn notify_transport_error<R: tauri::Runtime>(&self, handle: &tauri::AppHandle<R>) {
-        if self.notified_offline.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        if self
+            .notified_offline
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             let _ = handle.emit("tile-transport-error", ());
         }
     }
 
     /// Emit `tile-transport-success` once per offline→online transition.
     pub fn notify_transport_success<R: tauri::Runtime>(&self, handle: &tauri::AppHandle<R>) {
-        if self.notified_offline.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        if self
+            .notified_offline
+            .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             let _ = handle.emit("tile-transport-success", ());
         }
     }
@@ -195,10 +204,8 @@ const DEFAULT_CONTENT_TYPE: &str = "image/jpeg";
 /// Maximum retry attempts for transient network errors (total attempts = 1 + TILE_FETCH_MAX_RETRIES).
 const TILE_FETCH_MAX_RETRIES: u32 = 2;
 /// Backoff delays between retries.
-const TILE_FETCH_RETRY_DELAYS: [Duration; 2] = [
-    Duration::from_millis(200),
-    Duration::from_millis(500),
-];
+const TILE_FETCH_RETRY_DELAYS: [Duration; 2] =
+    [Duration::from_millis(200), Duration::from_millis(500)];
 
 /// Returns true if the error is a transient transport error worth retrying.
 /// HTTP 4xx/5xx are NOT retried since the server understood the request.
@@ -271,15 +278,12 @@ fn fetch_tile_from_network(
 
                 let content_type = sanitize_content_type(raw_content_type);
 
-                let body = response
-                    .into_body()
-                    .read_to_vec()
-                    .map_err(|e| {
-                        if let Some(s) = stats {
-                            s.record_error();
-                        }
-                        format!("Failed to read response body: {e}")
-                    })?;
+                let body = response.into_body().read_to_vec().map_err(|e| {
+                    if let Some(s) = stats {
+                        s.record_error();
+                    }
+                    format!("Failed to read response body: {e}")
+                })?;
 
                 if let Some(s) = stats {
                     s.record_success(latency_ms);
@@ -355,13 +359,14 @@ fn fetch_tilemap(
         .read_to_vec()
         .map_err(|e| format!("Failed to read tilemap response: {e}"))?;
 
-    let tilemap_response: TilemapResponse = serde_json::from_slice(&body)
-        .map_err(|e| format!("Failed to parse tilemap JSON: {e}"))?;
+    let tilemap_response: TilemapResponse =
+        serde_json::from_slice(&body).map_err(|e| format!("Failed to parse tilemap JSON: {e}"))?;
 
     // Convert u8 (0/1) to bool
     let data: Vec<bool> = tilemap_response.data.into_iter().map(|v| v != 0).collect();
 
-    let expected_len = (tilemap_cache::TILEMAP_GRID_SIZE * tilemap_cache::TILEMAP_GRID_SIZE) as usize;
+    let expected_len =
+        (tilemap_cache::TILEMAP_GRID_SIZE * tilemap_cache::TILEMAP_GRID_SIZE) as usize;
     if data.len() != expected_len {
         return Err(format!(
             "Unexpected tilemap data length: got {}, expected {}",
@@ -631,7 +636,16 @@ where
     match fetch_fn(provider, z, y, x) {
         Ok(fetched) => {
             let FetchedTile { data, content_type } = fetched;
-            cache_put_best_effort(tile_cache, provider, z, y, x, &data, &content_type, cache_enabled);
+            cache_put_best_effort(
+                tile_cache,
+                provider,
+                z,
+                y,
+                x,
+                &data,
+                &content_type,
+                cache_enabled,
+            );
             TileFetchOutcome::Tile {
                 tile: TileFetchResult { data, content_type },
             }
@@ -705,7 +719,9 @@ fn derive_tile_from_parent(
     // When overzooming 2 levels, 16 child tiles share the same parent — caching
     // the decoded DynamicImage saves ~15 redundant decodes (~5ms each).
     let img = {
-        let mut cache = DECODED_IMAGE_CACHE.lock().map_err(|e| format!("Cache lock poisoned: {e}"))?;
+        let mut cache = DECODED_IMAGE_CACHE
+            .lock()
+            .map_err(|e| format!("Cache lock poisoned: {e}"))?;
         if let Some(cached) = cache.get(provider, parent_z, parent_y, parent_x) {
             cached
         } else {
@@ -798,7 +814,7 @@ where
     let mut current_y = y;
     // Tracks the last error from `fetch_tile_candidate` (always set before loop exits
     // via `break`, since `Tile` outcomes return immediately).
-    #[allow(unused_assignments)]
+    #[expect(unused_assignments)]
     let mut last_error = None;
 
     // Check tilemap for tile availability before entering the fetch loop.
@@ -822,7 +838,13 @@ where
     loop {
         // For tiles at current_z < z, we can also check tilemap before fetching
         if current_z < z {
-            if let Some(false) = check_tile_availability(tilemap_cache, provider_info, current_z, current_y, current_x) {
+            if let Some(false) = check_tile_availability(
+                tilemap_cache,
+                provider_info,
+                current_z,
+                current_y,
+                current_x,
+            ) {
                 tracing::debug!(
                     provider = %provider,
                     z = current_z,
@@ -903,6 +925,11 @@ where
 }
 
 /// Handle a tile request - check cache, fetch from network, return response
+/// Returns the tile response plus a per-request flag that is `true` only when THIS
+/// request pulled a fresh tile from the provider over the network (its `fetch_fn`
+/// returned a tile). Unlike diffing the shared `TileFetchStats` counter, this is
+/// accurate under the concurrent tile loads the map issues, so it drives the exact
+/// per-provider consumption telemetry (#31).
 fn handle_tile_request(
     provider: &str,
     z: u32,
@@ -912,13 +939,31 @@ fn handle_tile_request(
     tilemap_cache: &Arc<Mutex<TilemapCache>>,
     stats: &Arc<TileFetchStats>,
     cache_config: &config::CacheConfig,
-) -> http::Response<Vec<u8>> {
+) -> (http::Response<Vec<u8>>, bool) {
     let stats_ref = Arc::clone(stats);
+    // Per-request network-hit flag, set when fetch_fn (the real network fetch) returns
+    // Ok for this request. A cache hit / stale fallback never sets it.
+    let network_hit = Arc::new(AtomicBool::new(false));
+    let network_hit_setter = Arc::clone(&network_hit);
     let fetch_fn = move |p: &str, z: u32, y: u32, x: u32| -> Result<FetchedTile, String> {
-        fetch_tile_from_network(p, z, y, x, Some(&stats_ref))
+        let result = fetch_tile_from_network(p, z, y, x, Some(&stats_ref));
+        if result.is_ok() {
+            network_hit_setter.store(true, Ordering::Relaxed);
+        }
+        result
     };
     let cache_enabled = cache_config.is_provider_cache_enabled(provider);
-    handle_tile_request_with_fetcher(provider, z, y, x, tile_cache, tilemap_cache, fetch_fn, cache_enabled)
+    let response = handle_tile_request_with_fetcher(
+        provider,
+        z,
+        y,
+        x,
+        tile_cache,
+        tilemap_cache,
+        fetch_fn,
+        cache_enabled,
+    );
+    (response, network_hit.load(Ordering::Relaxed))
 }
 
 /// Internal implementation that accepts a fetch function for testability.
@@ -945,7 +990,16 @@ where
         );
     }
 
-    match fetch_best_available_with_fetcher(provider, z, y, x, tile_cache, tilemap_cache, &fetch_fn, cache_enabled) {
+    match fetch_best_available_with_fetcher(
+        provider,
+        z,
+        y,
+        x,
+        tile_cache,
+        tilemap_cache,
+        &fetch_fn,
+        cache_enabled,
+    ) {
         Ok(tile) => build_ok_response(tile.data, &tile.content_type),
         Err(e) => build_error_response(http::StatusCode::NOT_FOUND, &e),
     }
@@ -973,8 +1027,17 @@ pub fn tile_fetch_impl(
     let fetch_fn = move |p: &str, z: u32, y: u32, x: u32| -> Result<FetchedTile, String> {
         fetch_tile_from_network(p, z, y, x, Some(&stats_ref))
     };
-    fetch_best_available_with_fetcher(provider, z, y, x, tile_cache, tilemap_cache, &fetch_fn, cache_enabled)
-        .map(|tile| tile.data)
+    fetch_best_available_with_fetcher(
+        provider,
+        z,
+        y,
+        x,
+        tile_cache,
+        tilemap_cache,
+        &fetch_fn,
+        cache_enabled,
+    )
+    .map(|tile| tile.data)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -984,82 +1047,130 @@ pub fn run() {
     #[cfg(not(feature = "e2e"))]
     let builder = tauri::Builder::default();
     #[cfg(feature = "e2e")]
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_webdriver_automation::init());
+    let builder = tauri::Builder::default().plugin(tauri_plugin_webdriver_automation::init());
     let builder = builder
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .register_asynchronous_uri_scheme_protocol("stalagmight-tiles", |ctx, request, responder| {
-            let uri = request.uri().clone();
-            let app_handle = ctx.app_handle().clone();
-            let state = ctx.app_handle().state::<core::state::AppState>();
-            let tile_cache = state.tile_cache();
-            let tilemap_cache = state.tilemap_cache();
-            let tile_fetch_stats = state.tile_fetch_stats();
-            let tile_fetch_stats_notify = Arc::clone(&tile_fetch_stats);
-            let cache_config = state.get_config().cache;
+        .register_asynchronous_uri_scheme_protocol(
+            "stalagmight-tiles",
+            |ctx, request, responder| {
+                let uri = request.uri().clone();
+                let app_handle = ctx.app_handle().clone();
+                let state = ctx.app_handle().state::<core::state::AppState>();
+                let tile_cache = state.tile_cache();
+                let tilemap_cache = state.tilemap_cache();
+                let tile_fetch_stats = state.tile_fetch_stats();
+                let tile_fetch_stats_notify = Arc::clone(&tile_fetch_stats);
+                let cache_config = state.get_config().cache;
 
-            // Use Tauri's async runtime with spawn_blocking for bounded concurrency
-            // This uses a threadpool instead of spawning unbounded threads
-            tauri::async_runtime::spawn(async move {
-                // Parse the tile coordinates from the URI
-                let Some((provider, z, y, x)) = parse_tile_uri(&uri) else {
-                    tracing::warn!(
-                        uri = %uri,
-                        purpose = "handle map tile request",
-                        "Invalid tile URI format; rejecting request"
-                    );
-                    responder.respond(build_error_response(
+                // Use Tauri's async runtime with spawn_blocking for bounded concurrency
+                // This uses a threadpool instead of spawning unbounded threads
+                tauri::async_runtime::spawn(async move {
+                    // Parse the tile coordinates from the URI
+                    let Some((provider, z, y, x)) = parse_tile_uri(&uri) else {
+                        tracing::warn!(
+                            uri = %uri,
+                            purpose = "handle map tile request",
+                            "Invalid tile URI format; rejecting request"
+                        );
+                        responder.respond(build_error_response(
                         http::StatusCode::BAD_REQUEST,
                         "Invalid tile URI format. Expected: /esri/{z}/{y}/{x} or esri/{z}/{y}/{x}",
                     ));
-                    return;
-                };
+                        return;
+                    };
 
-                tracing::debug!(
-                    provider = %provider,
-                    z = z,
-                    y = y,
-                    x = x,
-                    purpose = "render map tiles",
-                    "Processing tile request"
-                );
-
-                // Run the blocking tile fetch in the blocking threadpool.
-                // Snapshot stats before/after to detect whether a network fetch occurred.
-                let result = tauri::async_runtime::spawn_blocking(move || {
-                    let snap_before = tile_fetch_stats.snapshot();
-                    let response = handle_tile_request(&provider, z, y, x, &tile_cache, &tilemap_cache, &tile_fetch_stats, &cache_config);
-                    let snap_after = tile_fetch_stats.snapshot();
-                    let had_network_success = snap_after.total_fetched > snap_before.total_fetched;
-                    let had_network_error = snap_after.total_errors > snap_before.total_errors;
-                    (response, had_network_success, had_network_error)
-                })
-                .await;
-
-                let (response, had_network_success, had_network_error) = result.unwrap_or_else(|e| {
-                    tracing::error!(
-                        error = %e,
+                    tracing::debug!(
+                        provider = %provider,
+                        z = z,
+                        y = y,
+                        x = x,
                         purpose = "render map tiles",
-                        "Tile request task panicked"
+                        "Processing tile request"
                     );
-                    (build_error_response(
-                        http::StatusCode::INTERNAL_SERVER_ERROR,
-                        "Internal error processing tile request",
-                    ), false, false)
+
+                    // Provider for tile-consumption telemetry (#31), kept past the fetch
+                    // closure that moves `provider`.
+                    let provider_for_telemetry = provider.clone();
+
+                    // Run the blocking tile fetch in the blocking threadpool. The global
+                    // stats snapshot drives the (concurrency-tolerant) connectivity
+                    // notifications; `network_hit` is the per-request flag used for the
+                    // exact tile-consumption telemetry below.
+                    let result = tauri::async_runtime::spawn_blocking(move || {
+                        let snap_before = tile_fetch_stats.snapshot();
+                        let (response, network_hit) = handle_tile_request(
+                            &provider,
+                            z,
+                            y,
+                            x,
+                            &tile_cache,
+                            &tilemap_cache,
+                            &tile_fetch_stats,
+                            &cache_config,
+                        );
+                        let snap_after = tile_fetch_stats.snapshot();
+                        let had_network_success =
+                            snap_after.total_fetched > snap_before.total_fetched;
+                        let had_network_error = snap_after.total_errors > snap_before.total_errors;
+                        (
+                            response,
+                            had_network_success,
+                            had_network_error,
+                            network_hit,
+                        )
+                    })
+                    .await;
+
+                    let (response, had_network_success, had_network_error, network_hit) = result
+                        .unwrap_or_else(|e| {
+                            tracing::error!(
+                                error = %e,
+                                purpose = "render map tiles",
+                                "Tile request task panicked"
+                            );
+                            (
+                                build_error_response(
+                                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Internal error processing tile request",
+                                ),
+                                false,
+                                false,
+                                false,
+                            )
+                        });
+
+                    // Notify connectivity changes (debounced — only emits on state transitions)
+                    if had_network_success {
+                        tile_fetch_stats_notify.notify_transport_success(&app_handle);
+                    } else if had_network_error {
+                        tile_fetch_stats_notify.notify_transport_error(&app_handle);
+                    }
+
+                    // Tile-consumption telemetry (#31): one event per SERVED tile, tagged by
+                    // provider — `tile.fetch.<provider>` for a fresh network pull (provider
+                    // consumption) vs `tile.cache.<provider>` for one served from the local
+                    // cache (incl. the stale offline fallback). Uses the PER-REQUEST
+                    // `network_hit` (not the shared stats diff, which concurrent requests
+                    // would cross-contaminate). Errors (no tile served) aren't counted;
+                    // "tiles used by a session for provider P" = fetch + cache. No-op unless
+                    // telemetry is compiled in and enabled.
+                    if response.status().is_success() {
+                        let event = if network_hit {
+                            format!("tile.fetch.{provider_for_telemetry}")
+                        } else {
+                            format!("tile.cache.{provider_for_telemetry}")
+                        };
+                        app_handle
+                            .state::<telemetry::TelemetryCollector>()
+                            .track(&event);
+                    }
+
+                    responder.respond(response);
                 });
-
-                // Notify connectivity changes (debounced — only emits on state transitions)
-                if had_network_success {
-                    tile_fetch_stats_notify.notify_transport_success(&app_handle);
-                } else if had_network_error {
-                    tile_fetch_stats_notify.notify_transport_error(&app_handle);
-                }
-
-                responder.respond(response);
-            });
-        });
+            },
+        );
 
     // Desktop-only: intercept window close to allow frontend confirmation dialogs.
     // Android has no window close button, so this handler is dead code on mobile.
@@ -1084,7 +1195,8 @@ pub fn run() {
         }
     });
 
-    builder.setup(|app| {
+    builder
+        .setup(|app| {
             tracing::info!("Stalagmight starting up");
 
             // Resolve platform directories before anything else needs them.
@@ -1102,7 +1214,8 @@ pub fn run() {
 
             // Initialize telemetry (no-op when feature is disabled)
             let telemetry_config = state.get_config();
-            let collector = telemetry::TelemetryCollector::new(telemetry_config.general.telemetry_enabled);
+            let collector =
+                telemetry::TelemetryCollector::new(telemetry_config.general.telemetry_enabled);
             app.manage(collector.clone());
             telemetry::start_periodic_flush(collector.clone());
             collector.send_buffered();
@@ -1798,10 +1911,24 @@ mod tests {
         let cache = make_test_cache();
         let tilemap_cache = make_test_tilemap_cache();
         let stats = make_test_stats();
-        let response = handle_tile_request("unknown_provider", 10, 500, 250, &cache, &tilemap_cache, &stats, &make_test_cache_config());
+        let (response, _) = handle_tile_request(
+            "unknown_provider",
+            10,
+            500,
+            250,
+            &cache,
+            &tilemap_cache,
+            &stats,
+            &make_test_cache_config(),
+        );
         assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
-        assert_eq!(response.headers().get("content-type").unwrap(), "text/plain");
-        assert!(std::str::from_utf8(response.body()).unwrap().contains("Unknown provider"));
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "text/plain"
+        );
+        assert!(std::str::from_utf8(response.body())
+            .unwrap()
+            .contains("Unknown provider"));
         assert_cors_header(&response);
     }
 
@@ -1819,10 +1946,22 @@ mod tests {
                 .unwrap();
         }
 
-        let response = handle_tile_request("esri", 10, 500, 250, &cache, &tilemap_cache, &stats, &make_test_cache_config());
+        let (response, _) = handle_tile_request(
+            "esri",
+            10,
+            500,
+            250,
+            &cache,
+            &tilemap_cache,
+            &stats,
+            &make_test_cache_config(),
+        );
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"fake_tile_data");
-        assert_eq!(response.headers().get("content-type").unwrap(), "image/jpeg");
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "image/jpeg"
+        );
         assert_cors_header(&response);
     }
 
@@ -1836,15 +1975,22 @@ mod tests {
         {
             let mut guard = cache.lock().unwrap();
             let c = guard.as_mut().unwrap();
-            c.put("esri", 10, 500, 250, b"png_data", "image/png").unwrap();
+            c.put("esri", 10, 500, 250, b"png_data", "image/png")
+                .unwrap();
         }
 
-        let response = handle_tile_request("esri", 10, 500, 250, &cache, &tilemap_cache, &stats, &make_test_cache_config());
-        assert_eq!(response.status(), http::StatusCode::OK);
-        assert_eq!(
-            response.headers().get("content-type").unwrap(),
-            "image/png"
+        let (response, _) = handle_tile_request(
+            "esri",
+            10,
+            500,
+            250,
+            &cache,
+            &tilemap_cache,
+            &stats,
+            &make_test_cache_config(),
         );
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
         assert_cors_header(&response);
     }
 
@@ -1859,11 +2005,24 @@ mod tests {
             Err("Network unavailable".to_string())
         };
 
-        let response =
-            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, &tilemap_cache, mock_fetch, true);
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            10,
+            500,
+            250,
+            &cache,
+            &tilemap_cache,
+            mock_fetch,
+            true,
+        );
         assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
-        assert_eq!(response.headers().get("content-type").unwrap(), "text/plain");
-        assert!(std::str::from_utf8(response.body()).unwrap().contains("Tile not available"));
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "text/plain"
+        );
+        assert!(std::str::from_utf8(response.body())
+            .unwrap()
+            .contains("Tile not available"));
         assert_cors_header(&response);
     }
 
@@ -1881,11 +2040,22 @@ mod tests {
             })
         };
 
-        let response =
-            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, &tilemap_cache, mock_fetch, true);
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            10,
+            500,
+            250,
+            &cache,
+            &tilemap_cache,
+            mock_fetch,
+            true,
+        );
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"fetched_tile_data");
-        assert_eq!(response.headers().get("content-type").unwrap(), "image/jpeg");
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "image/jpeg"
+        );
         assert_cors_header(&response);
     }
 
@@ -1911,15 +2081,31 @@ mod tests {
             })
         };
 
-        let response = handle_tile_request_with_fetcher("esri", 15, 100, 200, &cache, &tilemap_cache, mock_fetch, true);
-        assert_eq!(response.status(), http::StatusCode::OK, "Response should be OK");
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            15,
+            100,
+            200,
+            &cache,
+            &tilemap_cache,
+            mock_fetch,
+            true,
+        );
+        assert_eq!(
+            response.status(),
+            http::StatusCode::OK,
+            "Response should be OK"
+        );
 
         // Check that tile is now in cache
         let cached = {
             let mut guard = cache.lock().unwrap();
             guard.as_mut().unwrap().get("esri", 15, 100, 200)
         };
-        assert!(cached.is_some(), "Tile should be cached after successful fetch");
+        assert!(
+            cached.is_some(),
+            "Tile should be cached after successful fetch"
+        );
         assert_eq!(&cached.unwrap().data, b"fetched_tile");
     }
 
@@ -1936,11 +2122,22 @@ mod tests {
             })
         };
 
-        let response =
-            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, &tilemap_cache, mock_fetch, true);
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            10,
+            500,
+            250,
+            &cache,
+            &tilemap_cache,
+            mock_fetch,
+            true,
+        );
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"tile_data");
-        assert_eq!(response.headers().get("content-type").unwrap(), "image/jpeg");
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "image/jpeg"
+        );
         assert_cors_header(&response);
     }
 
@@ -1954,11 +2151,24 @@ mod tests {
             Err("Connection refused".to_string())
         };
 
-        let response =
-            handle_tile_request_with_fetcher("esri", 10, 500, 250, &cache, &tilemap_cache, mock_fetch, true);
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            10,
+            500,
+            250,
+            &cache,
+            &tilemap_cache,
+            mock_fetch,
+            true,
+        );
         assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
-        assert_eq!(response.headers().get("content-type").unwrap(), "text/plain");
-        assert!(std::str::from_utf8(response.body()).unwrap().contains("Tile not available"));
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "text/plain"
+        );
+        assert!(std::str::from_utf8(response.body())
+            .unwrap()
+            .contains("Tile not available"));
         assert_cors_header(&response);
     }
 
@@ -1980,7 +2190,16 @@ mod tests {
             Err("Network down".to_string())
         };
 
-        let response = handle_tile_request_with_fetcher("esri", 1, 2, 3, &cache, &tilemap_cache, mock_fetch, true);
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            1,
+            2,
+            3,
+            &cache,
+            &tilemap_cache,
+            mock_fetch,
+            true,
+        );
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"stale_tile");
         assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
@@ -1994,7 +2213,17 @@ mod tests {
         let cache = make_test_cache();
         let tilemap_cache = make_test_tilemap_cache();
         let stats = make_test_stats();
-        let err = tile_fetch_impl("unknown", 1, 2, 3, &cache, &tilemap_cache, &stats, &make_test_cache_config()).unwrap_err();
+        let err = tile_fetch_impl(
+            "unknown",
+            1,
+            2,
+            3,
+            &cache,
+            &tilemap_cache,
+            &stats,
+            &make_test_cache_config(),
+        )
+        .unwrap_err();
         assert!(err.contains("Unknown provider"));
     }
 
@@ -2006,10 +2235,19 @@ mod tests {
         {
             let mut guard = cache.lock().unwrap();
             let c = guard.as_mut().unwrap();
-            c.put("esri", 1, 2, 3, b"tile_bytes", "image/png")
-                .unwrap();
+            c.put("esri", 1, 2, 3, b"tile_bytes", "image/png").unwrap();
         }
-        let data = tile_fetch_impl("esri", 1, 2, 3, &cache, &tilemap_cache, &stats, &make_test_cache_config()).unwrap();
+        let data = tile_fetch_impl(
+            "esri",
+            1,
+            2,
+            3,
+            &cache,
+            &tilemap_cache,
+            &stats,
+            &make_test_cache_config(),
+        )
+        .unwrap();
         assert_eq!(data, b"tile_bytes");
     }
 
@@ -2026,7 +2264,9 @@ mod tests {
         let mut providers = HashMap::new();
         providers.insert(
             "esri".to_string(),
-            config::ProviderCacheConfig { offline_caching: false },
+            config::ProviderCacheConfig {
+                offline_caching: false,
+            },
         );
         let cache_config = config::CacheConfig {
             tile_cache_enabled: true,
@@ -2046,7 +2286,14 @@ mod tests {
 
         // Fetch should succeed via network
         let response = handle_tile_request_with_fetcher(
-            "esri", 10, 500, 250, &cache, &tilemap_cache, mock_fetch, cache_enabled,
+            "esri",
+            10,
+            500,
+            250,
+            &cache,
+            &tilemap_cache,
+            mock_fetch,
+            cache_enabled,
         );
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"network_tile");
@@ -2056,7 +2303,10 @@ mod tests {
             let mut guard = cache.lock().unwrap();
             guard.as_mut().unwrap().get("esri", 10, 500, 250)
         };
-        assert!(cached.is_none(), "Tile should not be cached when provider caching is disabled");
+        assert!(
+            cached.is_none(),
+            "Tile should not be cached when provider caching is disabled"
+        );
     }
 
     #[test]
@@ -2070,14 +2320,20 @@ mod tests {
         // Pre-populate cache with a tile
         {
             let mut guard = cache.lock().unwrap();
-            guard.as_mut().unwrap().put("esri", 1, 2, 3, b"stale_tile", "image/png").unwrap();
+            guard
+                .as_mut()
+                .unwrap()
+                .put("esri", 1, 2, 3, b"stale_tile", "image/png")
+                .unwrap();
         }
 
         // Configure esri with caching disabled
         let mut providers = HashMap::new();
         providers.insert(
             "esri".to_string(),
-            config::ProviderCacheConfig { offline_caching: false },
+            config::ProviderCacheConfig {
+                offline_caching: false,
+            },
         );
         let cache_config = config::CacheConfig {
             tile_cache_enabled: true,
@@ -2093,7 +2349,14 @@ mod tests {
 
         // Should NOT fall back to stale cache
         let response = handle_tile_request_with_fetcher(
-            "esri", 1, 2, 3, &cache, &tilemap_cache, mock_fetch, cache_enabled,
+            "esri",
+            1,
+            2,
+            3,
+            &cache,
+            &tilemap_cache,
+            mock_fetch,
+            cache_enabled,
         );
         assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
     }
@@ -2175,7 +2438,16 @@ mod tests {
         {
             let (base_y, base_x) = TilemapCache::get_region_origin(2, 3);
             let mut tc = tilemap_cache.lock().unwrap();
-            tc.insert("esri", 1, base_y, base_x, vec![true; (tilemap_cache::TILEMAP_GRID_SIZE * tilemap_cache::TILEMAP_GRID_SIZE) as usize]);
+            tc.insert(
+                "esri",
+                1,
+                base_y,
+                base_x,
+                vec![
+                    true;
+                    (tilemap_cache::TILEMAP_GRID_SIZE * tilemap_cache::TILEMAP_GRID_SIZE) as usize
+                ],
+            );
         }
         let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<FetchedTile, String> {
             Ok(FetchedTile {
@@ -2183,7 +2455,16 @@ mod tests {
                 content_type: "image/jpeg".to_string(),
             })
         };
-        let response = handle_tile_request_with_fetcher("esri", 1, 2, 3, &cache, &tilemap_cache, mock_fetch, true);
+        let response = handle_tile_request_with_fetcher(
+            "esri",
+            1,
+            2,
+            3,
+            &cache,
+            &tilemap_cache,
+            mock_fetch,
+            true,
+        );
         assert_eq!(response.status(), http::StatusCode::OK);
     }
 
@@ -2396,12 +2677,18 @@ mod tests {
 
     #[test]
     fn test_output_content_type_for_format_png() {
-        assert_eq!(output_content_type_for_format(ImageFormat::Png), "image/png");
+        assert_eq!(
+            output_content_type_for_format(ImageFormat::Png),
+            "image/png"
+        );
     }
 
     #[test]
     fn test_output_content_type_for_format_jpeg() {
-        assert_eq!(output_content_type_for_format(ImageFormat::Jpeg), "image/jpeg");
+        assert_eq!(
+            output_content_type_for_format(ImageFormat::Jpeg),
+            "image/jpeg"
+        );
     }
 
     // === is_retryable_error tests ===
@@ -2418,7 +2705,10 @@ mod tests {
     #[test]
     fn test_is_retryable_error_transport_is_retryable() {
         // Transport errors (connection issues) SHOULD be retried
-        let err = ureq::Error::Io(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset"));
+        let err = ureq::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "reset",
+        ));
         assert!(is_retryable_error(&err));
     }
 }

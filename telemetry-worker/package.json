@@ -7,9 +7,6 @@
     "deploy": "wrangler deploy",
     "db:init": "wrangler d1 execute stalagmight-telemetry --file=schema.sql"
   },
-  "dependencies": {
-    "@msgpack/msgpack": "^3"
-  },
   "devDependencies": {
     "wrangler": "^3"
   }

@@ -33,9 +33,7 @@ pub fn get_collab_state(state: State<AppState>) -> Option<CollabState> {
 /// Preview the changes a collaborator made in the sibling `.tml`, without
 /// applying them. Returns `None` when there is nothing to reconcile.
 #[tauri::command]
-pub fn detect_collab_changes(
-    state: State<AppState>,
-) -> Result<Option<CollabChangeSet>, String> {
+pub fn detect_collab_changes(state: State<AppState>) -> Result<Option<CollabChangeSet>, String> {
     state.detect_collab_changes()
 }
 

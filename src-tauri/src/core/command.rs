@@ -4,23 +4,31 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use crate::models::{
-    shot_display_position, ClosureStrategy, Coordinates, GpsCoordinates, SectionId,
-    SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef, SurveyDirection,
+    shot_display_position, ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates,
+    ShotData, ShotId, ShotUpdates, StationRef, SurveyDirection,
 };
 
 /// Identifies either a station or a shot as a comment holder
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommentHolder {
-    Station { station_ref: StationRef },
-    Shot { section_id: SectionId, shot_id: ShotId },
+    Station {
+        station_ref: StationRef,
+    },
+    Shot {
+        section_id: SectionId,
+        shot_id: ShotId,
+    },
 }
 
 impl std::fmt::Display for CommentHolder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CommentHolder::Station { station_ref } => write!(f, "station {station_ref}"),
-            CommentHolder::Shot { section_id, shot_id } => {
+            CommentHolder::Shot {
+                section_id,
+                shot_id,
+            } => {
                 let pos = shot_display_position(*shot_id, *section_id);
                 write!(f, "shot {section_id}:{pos}")
             }
@@ -349,11 +357,19 @@ impl Command {
                 section_id,
                 shot_id,
                 ..
-            } => format!("Update shot {}:{}", section_id, shot_display_position(*shot_id, *section_id)),
+            } => format!(
+                "Update shot {}:{}",
+                section_id,
+                shot_display_position(*shot_id, *section_id)
+            ),
             Command::DeleteShot {
                 section_id,
                 shot_id,
-            } => format!("Delete shot {}:{}", section_id, shot_display_position(*shot_id, *section_id)),
+            } => format!(
+                "Delete shot {}:{}",
+                section_id,
+                shot_display_position(*shot_id, *section_id)
+            ),
             Command::SetShotReference {
                 section_id,
                 shot_id,
@@ -394,7 +410,10 @@ impl Command {
             Command::RemoveZeroDatum { station_ref } => {
                 format!("Remove zero datum from {station_ref}")
             }
-            Command::SetStationComment { station_ref, comment } => {
+            Command::SetStationComment {
+                station_ref,
+                comment,
+            } => {
                 if comment.is_some() {
                     format!("Set comment on station {station_ref}")
                 } else {
@@ -410,7 +429,11 @@ impl Command {
             Command::MoveStation { station_ref, .. } => {
                 format!("Move station {station_ref}")
             }
-            Command::MoveComment { source, target, swap } => {
+            Command::MoveComment {
+                source,
+                target,
+                swap,
+            } => {
                 if *swap {
                     format!("Swap comments between {source} and {target}")
                 } else {
@@ -568,7 +591,10 @@ mod tests {
                 "Open project 'alpha.stalx'",
             ),
             (
-                Command::SaveProject { path: None, is_autosave: false },
+                Command::SaveProject {
+                    path: None,
+                    is_autosave: false,
+                },
                 "Save project",
             ),
             (
@@ -590,10 +616,7 @@ mod tests {
                 },
                 "Create section 'Main'",
             ),
-            (
-                Command::DeleteSection { section_id: 3 },
-                "Delete section 3",
-            ),
+            (Command::DeleteSection { section_id: 3 }, "Delete section 3"),
             (
                 Command::UpdateSectionMetadata {
                     section_id: 3,
@@ -670,9 +693,7 @@ mod tests {
                 "Unmerge station pair 1:0 and 1:1",
             ),
             (
-                Command::RemoveLoopClosure {
-                    closure_id: 42,
-                },
+                Command::RemoveLoopClosure { closure_id: 42 },
                 "Remove loop closure #42",
             ),
             (
@@ -725,16 +746,25 @@ mod tests {
             ),
             (
                 Command::MoveComment {
-                    source: CommentHolder::Station { station_ref: station_a },
-                    target: CommentHolder::Shot { section_id: 1, shot_id: 0 },
+                    source: CommentHolder::Station {
+                        station_ref: station_a,
+                    },
+                    target: CommentHolder::Shot {
+                        section_id: 1,
+                        shot_id: 0,
+                    },
                     swap: false,
                 },
                 "Move comment from station 1:0 to shot 1:1",
             ),
             (
                 Command::MoveComment {
-                    source: CommentHolder::Station { station_ref: station_a },
-                    target: CommentHolder::Station { station_ref: station_b },
+                    source: CommentHolder::Station {
+                        station_ref: station_a,
+                    },
+                    target: CommentHolder::Station {
+                        station_ref: station_b,
+                    },
                     swap: true,
                 },
                 "Swap comments between station 1:0 and station 1:1",

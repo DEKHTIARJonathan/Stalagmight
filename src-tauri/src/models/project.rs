@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
@@ -229,11 +229,19 @@ pub struct Project {
     #[serde(default)]
     pub section_offsets: HashMap<SectionId, (f64, f64)>,
     /// Station offsets (x, y, z) applied when individual stations are moved
-    #[serde(default, serialize_with = "serialize_station_offsets", deserialize_with = "deserialize_station_offsets")]
+    #[serde(
+        default,
+        serialize_with = "serialize_station_offsets",
+        deserialize_with = "deserialize_station_offsets"
+    )]
     #[ts(skip)]
     pub station_offsets: HashMap<StationKey, (f64, f64, f64)>,
     /// Station comments keyed by StationRef
-    #[serde(default, serialize_with = "serialize_station_comments", deserialize_with = "deserialize_station_comments")]
+    #[serde(
+        default,
+        serialize_with = "serialize_station_comments",
+        deserialize_with = "deserialize_station_comments"
+    )]
     #[ts(skip)]
     pub station_comments: HashMap<StationKey, String>,
     /// SHA256 hashes of imported DMP files (for duplicate detection)
@@ -431,9 +439,21 @@ impl Serialize for ProjectIpc<'_> {
     fn serialize<S: serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let p = self.0;
-        let station_merges: Vec<_> = p.station_merges.iter().filter_map(|m| p.merge_to_wire(m)).collect();
-        let zero_datums: Vec<_> = p.zero_datums.iter().filter_map(|z| p.datum_to_wire(z)).collect();
-        let loop_closures: Vec<_> = p.loop_closures.iter().filter_map(|c| p.closure_to_wire(c)).collect();
+        let station_merges: Vec<_> = p
+            .station_merges
+            .iter()
+            .filter_map(|m| p.merge_to_wire(m))
+            .collect();
+        let zero_datums: Vec<_> = p
+            .zero_datums
+            .iter()
+            .filter_map(|z| p.datum_to_wire(z))
+            .collect();
+        let loop_closures: Vec<_> = p
+            .loop_closures
+            .iter()
+            .filter_map(|c| p.closure_to_wire(c))
+            .collect();
         // Field set + order MUST stay in lockstep with the generated Project.ts
         // (16 ts-exported fields). Adding a ts-exported field to `Project`
         // requires adding it here too, or it silently drops off the IPC payload.
@@ -721,21 +741,24 @@ impl Project {
         self.station_merges.push(merge);
     }
 
-
     /// Query relationships that reference the given section.
     /// Returns merges, closures, offset info, and zero datum count.
     pub fn get_section_relationships(&self, section_id: SectionId) -> SectionRelationships {
         let merges: Vec<StationMergeWire> = self
             .station_merges
             .iter()
-            .filter(|m| m.station_a.section_id == section_id || m.station_b.section_id == section_id)
+            .filter(|m| {
+                m.station_a.section_id == section_id || m.station_b.section_id == section_id
+            })
             .filter_map(|m| self.merge_to_wire(m))
             .collect();
 
         let closures: Vec<LoopClosureWire> = self
             .loop_closures
             .iter()
-            .filter(|lc| lc.station_a.section_id == section_id || lc.station_b.section_id == section_id)
+            .filter(|lc| {
+                lc.station_a.section_id == section_id || lc.station_b.section_id == section_id
+            })
             .filter_map(|lc| self.closure_to_wire(lc))
             .collect();
 
@@ -802,7 +825,10 @@ impl Project {
             }
 
             // Skip if we already processed this group via another station
-            if external_members.iter().any(|s| processed_groups.contains(s)) {
+            if external_members
+                .iter()
+                .any(|s| processed_groups.contains(s))
+            {
                 continue;
             }
             for &s in &external_members {
@@ -811,10 +837,8 @@ impl Project {
 
             // Build components among the external members after removing ALL
             // section stations from the graph
-            let components = self.build_merge_components_excluding_section(
-                &external_members,
-                section_id,
-            );
+            let components =
+                self.build_merge_components_excluding_section(&external_members, section_id);
 
             if components.len() > 1 {
                 // Connect each disconnected component to the first one
@@ -894,9 +918,10 @@ impl Project {
                 continue;
             }
             // Resolve the keys to positional refs for the merge-group walk / checks.
-            let (Some(removed_ref), Some(other_ref)) =
-                (self.resolve_key(&removed_station), self.resolve_key(&other_station))
-            else {
+            let (Some(removed_ref), Some(other_ref)) = (
+                self.resolve_key(&removed_station),
+                self.resolve_key(&other_station),
+            ) else {
                 continue;
             };
 
@@ -956,9 +981,10 @@ impl Project {
             {
                 continue;
             }
-            let (Some(a), Some(b)) =
-                (self.resolve_key(&merge.station_a), self.resolve_key(&merge.station_b))
-            else {
+            let (Some(a), Some(b)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) else {
                 continue;
             };
             if stations.contains(&a) && stations.contains(&b) {
@@ -1027,14 +1053,18 @@ impl Project {
             if external_members.is_empty() {
                 continue;
             }
-            if external_members.iter().any(|s| processed_groups.contains(s)) {
+            if external_members
+                .iter()
+                .any(|s| processed_groups.contains(s))
+            {
                 continue;
             }
             for &s in &external_members {
                 processed_groups.insert(s);
             }
 
-            let components = self.build_merge_components_excluding_stations(&external_members, removed);
+            let components =
+                self.build_merge_components_excluding_stations(&external_members, removed);
             if components.len() > 1 {
                 let base = &components[0];
                 for component in components.iter().skip(1) {
@@ -1096,7 +1126,11 @@ impl Project {
 
         for (closure_id, ref_a, ref_b) in closures_to_rewire {
             let replace_a = removed.contains(&ref_a);
-            let (removed_ref, other_ref) = if replace_a { (ref_a, ref_b) } else { (ref_b, ref_a) };
+            let (removed_ref, other_ref) = if replace_a {
+                (ref_a, ref_b)
+            } else {
+                (ref_b, ref_a)
+            };
             // If both sides are removed, the closure drops with its stations.
             if removed.contains(&other_ref) {
                 continue;
@@ -1150,9 +1184,10 @@ impl Project {
         }
 
         for merge in &self.station_merges {
-            let (Some(a), Some(b)) =
-                (self.resolve_key(&merge.station_a), self.resolve_key(&merge.station_b))
-            else {
+            let (Some(a), Some(b)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) else {
                 continue;
             };
             if removed.contains(&a) || removed.contains(&b) {
@@ -1200,7 +1235,8 @@ impl Project {
     /// re-deriving geometry, when removing a sub-range of a section's stations.
     pub(crate) fn cleanup_removed_station_references(&mut self, removed: &HashSet<StationRef>) {
         let is_removed = |this: &Self, key: &StationKey| -> bool {
-            this.resolve_key(key).is_some_and(|sr| removed.contains(&sr))
+            this.resolve_key(key)
+                .is_some_and(|sr| removed.contains(&sr))
         };
         // `mem::take` so the predicate can borrow `self` immutably (resolve_key
         // reads section shots, not these fields) while we rebuild each list.
@@ -1256,13 +1292,16 @@ impl Project {
         self.remove_section_offset(section_id);
 
         // Remove station offsets referencing this section
-        self.station_offsets.retain(|sr, _| sr.section_id != section_id);
+        self.station_offsets
+            .retain(|sr, _| sr.section_id != section_id);
 
         // Remove station comments referencing this section
-        self.station_comments.retain(|sr, _| sr.section_id != section_id);
+        self.station_comments
+            .retain(|sr, _| sr.section_id != section_id);
 
         // Remove zero datums referencing this section
-        self.zero_datums.retain(|zd| zd.station_ref.section_id != section_id);
+        self.zero_datums
+            .retain(|zd| zd.station_ref.section_id != section_id);
     }
 
     /// Compute the (dx, dy) horizontal displacement of a shot from its data.
@@ -1311,11 +1350,12 @@ impl Project {
     /// Does the merge group containing `section_id` hold a zero datum?
     pub(crate) fn rigid_group_has_datum(&self, id: SectionId) -> bool {
         let group = self.get_merged_section_ids(id);
-        group
-            .iter()
-            .any(|sid| self.zero_datums.iter().any(|zd| zd.station_ref.section_id == *sid))
+        group.iter().any(|sid| {
+            self.zero_datums
+                .iter()
+                .any(|zd| zd.station_ref.section_id == *sid)
+        })
     }
-
 
     /// Assert that all merge points are colocated (within 1cm tolerance).
     /// Only active in debug builds — no-op in release.
@@ -1341,8 +1381,12 @@ impl Project {
                 if merge.station_a.section_id == merge.station_b.section_id {
                     continue;
                 }
-                let a = self.resolve_key(&merge.station_a).and_then(|s| self.compute_station_raw_coords(s));
-                let b = self.resolve_key(&merge.station_b).and_then(|s| self.compute_station_raw_coords(s));
+                let a = self
+                    .resolve_key(&merge.station_a)
+                    .and_then(|s| self.compute_station_raw_coords(s));
+                let b = self
+                    .resolve_key(&merge.station_b)
+                    .and_then(|s| self.compute_station_raw_coords(s));
                 if let (Some(a_pos), Some(b_pos)) = (a, b) {
                     let dist = ((a_pos.x - b_pos.x).powi(2) + (a_pos.y - b_pos.y).powi(2)).sqrt();
                     if dist >= 0.05 {
@@ -1483,9 +1527,10 @@ impl Project {
         }
 
         for merge in &self.station_merges {
-            let (Some(a), Some(b)) =
-                (self.resolve_key(&merge.station_a), self.resolve_key(&merge.station_b))
-            else {
+            let (Some(a), Some(b)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) else {
                 continue;
             };
             if a == removed_station || b == removed_station {
@@ -1602,7 +1647,9 @@ impl Project {
         queue.push_back(station_a);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot, include_closures) {
+            for neighbor in
+                self.station_neighbors_excluding_shot(current, excluded_shot, include_closures)
+            {
                 if visited.insert(neighbor) {
                     if neighbor == station_b {
                         return true;
@@ -1685,7 +1732,8 @@ impl Project {
         // all stations after the insertion point.
         let (dx, dy) = Self::shot_displacement(&data);
         let section = self.get_section_mut(section_id)?;
-        let shot = section.insert_shot_after_with_id(after_shot_id, data, forced_id, forced_uuid)?;
+        let shot =
+            section.insert_shot_after_with_id(after_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
         // Station keys are position-independent: no ref-shifting on insert (the
         // junction the new shot extends from keeps its anchor; shots beyond keep
@@ -1696,7 +1744,9 @@ impl Project {
             let boundary = (pos + 1) as u32;
             let on_tail = |key: &StationKey| -> bool {
                 key.section_id == section_id
-                    && self.resolve_key(key).is_some_and(|sr| sr.station_index > boundary)
+                    && self
+                        .resolve_key(key)
+                        .is_some_and(|sr| sr.station_index > boundary)
             };
             let tail_anchored = self.zero_datums.iter().any(|zd| on_tail(&zd.station_ref))
                 || self.station_merges.iter().any(|m| {
@@ -1712,7 +1762,9 @@ impl Project {
                         && self.has_datum_path_excluding(their.section_id, section_id)
                 })
                 || self.loop_closures.iter().any(|c| {
-                    if !c.is_aligned { return false; }
+                    if !c.is_aligned {
+                        return false;
+                    }
                     let (our, their) = if c.station_a.section_id == section_id {
                         (&c.station_a, &c.station_b)
                     } else if c.station_b.section_id == section_id {
@@ -1770,13 +1822,16 @@ impl Project {
         // back-shifting the offset.
         let (dx, dy) = Self::shot_displacement(&data);
         let section = self.get_section_mut(section_id)?;
-        let shot = section.insert_shot_before_with_id(before_shot_id, data, forced_id, forced_uuid)?;
+        let shot =
+            section.insert_shot_before_with_id(before_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
         // Prepend is the one insert that shifts identity: the old section-start
         // station is now *after* the new first shot, so re-anchor any ref on this
         // section that was `SectionStart` to `AfterShot(new_shot)`. Every other
         // anchor is position-independent and needs no change.
-        let new_uuid = self.get_section(section_id).and_then(|s| s.shots.first()?.uuid.clone());
+        let new_uuid = self
+            .get_section(section_id)
+            .and_then(|s| s.shots.first()?.uuid.clone());
         if let Some(new_uuid) = new_uuid {
             self.map_station_refs(|key| {
                 if key.section_id == section_id && key.anchor == StationAnchor::SectionStart {
@@ -1963,18 +2018,26 @@ impl Project {
             let station_after = StationRef::new(section_id, (pos + 1) as u32);
             let excluded = Some((section_id, pos));
 
-            if self.are_stations_connected_excluding_shot(station_before, station_after, excluded, true) {
+            if self.are_stations_connected_excluding_shot(
+                station_before,
+                station_after,
+                excluded,
+                true,
+            ) {
                 impact.shift_blocked_reasons.push(
-                    "This shot is part of a loop (the two sides are already connected).".to_string(),
+                    "This shot is part of a loop (the two sides are already connected)."
+                        .to_string(),
                 );
             }
 
-            let anchored_before = self.station_reaches_zero_datum_excluding_shot(station_before, excluded);
-            let anchored_after = self.station_reaches_zero_datum_excluding_shot(station_after, excluded);
+            let anchored_before =
+                self.station_reaches_zero_datum_excluding_shot(station_before, excluded);
+            let anchored_after =
+                self.station_reaches_zero_datum_excluding_shot(station_after, excluded);
             if anchored_before && anchored_after {
-                impact.shift_blocked_reasons.push(
-                    "Both sides are anchored to a zero datum.".to_string(),
-                );
+                impact
+                    .shift_blocked_reasons
+                    .push("Both sides are anchored to a zero datum.".to_string());
             }
 
             impact.shift_blocked = !impact.shift_blocked_reasons.is_empty();
@@ -2090,26 +2153,44 @@ impl Project {
             // the resulting geometry is still valid — closures must NOT block
             // (include_closures = false).
             if sim.stations_connected_excluding_range(
-                head, tail, section_id, start_pos, end_pos, &removed_set, false,
+                head,
+                tail,
+                section_id,
+                start_pos,
+                end_pos,
+                &removed_set,
+                false,
             ) {
                 shift_blocked_reasons.push(
                     "This range is part of a loop (the two sides are already connected)."
                         .to_string(),
                 );
             }
-            let head_anchored = sim
-                .station_reaches_datum_excluding_range(head, section_id, start_pos, end_pos, &removed_set);
-            let tail_anchored = sim
-                .station_reaches_datum_excluding_range(tail, section_id, start_pos, end_pos, &removed_set);
+            let head_anchored = sim.station_reaches_datum_excluding_range(
+                head,
+                section_id,
+                start_pos,
+                end_pos,
+                &removed_set,
+            );
+            let tail_anchored = sim.station_reaches_datum_excluding_range(
+                tail,
+                section_id,
+                start_pos,
+                end_pos,
+                &removed_set,
+            );
             if head_anchored && tail_anchored {
-                shift_blocked_reasons
-                    .push("Both sides are anchored to a zero datum.".to_string());
+                shift_blocked_reasons.push("Both sides are anchored to a zero datum.".to_string());
             }
         }
         // The gap-close removes every station in `removed_set`; if any carries a
         // zero datum the survey loses an anchor, so block (use split — which
         // keeps the boundary datums — or remove the datum first).
-        let shift_drops_datum = self.zero_datums.iter().any(|zd| in_removed(&zd.station_ref));
+        let shift_drops_datum = self
+            .zero_datums
+            .iter()
+            .any(|zd| in_removed(&zd.station_ref));
         if shift_drops_datum {
             let reason = "Deleting this range would remove a zero datum.".to_string();
             if !shift_blocked_reasons.contains(&reason) {
@@ -2344,7 +2425,12 @@ impl Project {
         let existing: Vec<(StationRef, StationRef)> = self
             .station_merges
             .iter()
-            .filter_map(|m| Some((self.resolve_key(&m.station_a)?, self.resolve_key(&m.station_b)?)))
+            .filter_map(|m| {
+                Some((
+                    self.resolve_key(&m.station_a)?,
+                    self.resolve_key(&m.station_b)?,
+                ))
+            })
             .collect();
 
         let mut replacement_merges: Vec<StationPair> = Vec::new();
@@ -2362,7 +2448,10 @@ impl Project {
             {
                 continue; // already listed
             }
-            replacement_merges.push(StationPair { station_a: a, station_b: b });
+            replacement_merges.push(StationPair {
+                station_a: a,
+                station_b: b,
+            });
         }
 
         // Closures whose endpoint moved off a removed station onto a survivor.
@@ -2371,9 +2460,10 @@ impl Project {
             let Some(new) = sim.loop_closures.iter().find(|c| c.id == old.id) else {
                 continue;
             };
-            for (old_key, new_key) in
-                [(&old.station_a, &new.station_a), (&old.station_b, &new.station_b)]
-            {
+            for (old_key, new_key) in [
+                (&old.station_a, &new.station_a),
+                (&old.station_b, &new.station_b),
+            ] {
                 let old_ref = self.resolve_key(old_key);
                 let new_ref = sim.resolve_key(new_key);
                 if old_ref != new_ref {
@@ -2436,7 +2526,8 @@ impl Project {
             self.station_offsets.remove(&rk);
             self.station_comments.remove(&rk);
             self.zero_datums.retain(|zd| zd.station_ref != rk);
-            self.station_merges.retain(|m| m.station_a != rk && m.station_b != rk);
+            self.station_merges
+                .retain(|m| m.station_a != rk && m.station_b != rk);
         }
         self.merge_adjacency_cache.clear();
 
@@ -2470,9 +2561,10 @@ impl Project {
 
         for pair in &impact.replacement_merges {
             if !self.has_direct_merge(pair.station_a, pair.station_b) {
-                if let (Some(ka), Some(kb)) =
-                    (self.key_for_ref(pair.station_a), self.key_for_ref(pair.station_b))
-                {
+                if let (Some(ka), Some(kb)) = (
+                    self.key_for_ref(pair.station_a),
+                    self.key_for_ref(pair.station_b),
+                ) {
                     self.record_station_merge(StationMerge {
                         station_a: ka,
                         station_b: kb,
@@ -2486,9 +2578,10 @@ impl Project {
         // endpoints stay declared-coincident but are no longer a true loop (#8).
         for pair in &impact.closure_to_merge {
             if !self.has_direct_merge(pair.station_a, pair.station_b) {
-                if let (Some(ka), Some(kb)) =
-                    (self.key_for_ref(pair.station_a), self.key_for_ref(pair.station_b))
-                {
+                if let (Some(ka), Some(kb)) = (
+                    self.key_for_ref(pair.station_a),
+                    self.key_for_ref(pair.station_b),
+                ) {
                     self.record_station_merge(StationMerge {
                         station_a: ka,
                         station_b: kb,
@@ -2570,7 +2663,9 @@ impl Project {
             let on_tail = |key: &StationKey| -> bool {
                 key.section_id == section_id
                     && !doomed_anchors.contains(key)
-                    && self.resolve_key(key).is_some_and(|sr| sr.station_index > pos as u32)
+                    && self
+                        .resolve_key(key)
+                        .is_some_and(|sr| sr.station_index > pos as u32)
             };
             let tail_anchored = self.zero_datums.iter().any(|zd| on_tail(&zd.station_ref))
                 || self.station_merges.iter().any(|m| {
@@ -2586,7 +2681,9 @@ impl Project {
                         && self.has_datum_path_excluding(their.section_id, section_id)
                 })
                 || self.loop_closures.iter().any(|c| {
-                    if !c.is_aligned { return false; }
+                    if !c.is_aligned {
+                        return false;
+                    }
                     let (our, their) = if c.station_a.section_id == section_id {
                         (&c.station_a, &c.station_b)
                     } else if c.station_b.section_id == section_id {
@@ -2662,9 +2759,10 @@ impl Project {
                             queue.push(merge.station_b.section_id);
                         }
                     } else if merge.station_b.section_id == current
-                        && !connected.contains(&merge.station_a.section_id) {
-                            queue.push(merge.station_a.section_id);
-                        }
+                        && !connected.contains(&merge.station_a.section_id)
+                    {
+                        queue.push(merge.station_a.section_id);
+                    }
                 }
                 // Follow closures as edges (bidirectional, same as merges)
                 for closure in &self.loop_closures {
@@ -2673,9 +2771,10 @@ impl Project {
                             queue.push(closure.station_b.section_id);
                         }
                     } else if closure.station_b.section_id == current
-                        && !connected.contains(&closure.station_a.section_id) {
-                            queue.push(closure.station_a.section_id);
-                        }
+                        && !connected.contains(&closure.station_a.section_id)
+                    {
+                        queue.push(closure.station_a.section_id);
+                    }
                 }
             }
         }
@@ -2697,9 +2796,10 @@ impl Project {
                             queue.push(merge.station_b.section_id);
                         }
                     } else if merge.station_b.section_id == current
-                        && !connected.contains(&merge.station_a.section_id) {
-                            queue.push(merge.station_a.section_id);
-                        }
+                        && !connected.contains(&merge.station_a.section_id)
+                    {
+                        queue.push(merge.station_a.section_id);
+                    }
                 }
                 // Follow aligned closures as edges (bidirectional, same as merges)
                 for closure in &self.loop_closures {
@@ -2711,9 +2811,10 @@ impl Project {
                             queue.push(closure.station_b.section_id);
                         }
                     } else if closure.station_b.section_id == current
-                        && !connected.contains(&closure.station_a.section_id) {
-                            queue.push(closure.station_a.section_id);
-                        }
+                        && !connected.contains(&closure.station_a.section_id)
+                    {
+                        queue.push(closure.station_a.section_id);
+                    }
                 }
             }
         }
@@ -2754,18 +2855,20 @@ impl Project {
         };
         let mut merge_adj: HashMap<SectionId, Vec<(StationRef, StationRef)>> = HashMap::new();
         for m in &self.station_merges {
-            if let (Some(a), Some(b)) =
-                (self.resolve_key(&m.station_a), self.resolve_key(&m.station_b))
-            {
+            if let (Some(a), Some(b)) = (
+                self.resolve_key(&m.station_a),
+                self.resolve_key(&m.station_b),
+            ) {
                 push_edge(&mut merge_adj, a, b);
             }
         }
         let mut closure_adj: HashMap<SectionId, Vec<(StationRef, StationRef)>> = HashMap::new();
         for c in &self.loop_closures {
             if c.is_aligned {
-                if let (Some(a), Some(b)) =
-                    (self.resolve_key(&c.station_a), self.resolve_key(&c.station_b))
-                {
+                if let (Some(a), Some(b)) = (
+                    self.resolve_key(&c.station_a),
+                    self.resolve_key(&c.station_b),
+                ) {
                     push_edge(&mut closure_adj, a, b);
                 }
             }
@@ -2798,7 +2901,13 @@ impl Project {
 
         // Phase 1: BFS over merges only, to full reachability.
         let seed1 = sorted(&authoritative);
-        self.cascade_bfs(&merge_adj, &local, &station_offsets, &mut authoritative, &seed1);
+        self.cascade_bfs(
+            &merge_adj,
+            &local,
+            &station_offsets,
+            &mut authoritative,
+            &seed1,
+        );
 
         // Phase 2: aligned closures bridge to any component merges couldn't
         // reach; merges within that component then continue. A redundant closure
@@ -2810,7 +2919,13 @@ impl Project {
                 combined.entry(section).or_default().extend(edges);
             }
             let seed2 = sorted(&authoritative);
-            self.cascade_bfs(&combined, &local, &station_offsets, &mut authoritative, &seed2);
+            self.cascade_bfs(
+                &combined,
+                &local,
+                &station_offsets,
+                &mut authoritative,
+                &seed2,
+            );
         }
     }
 
@@ -2868,11 +2983,7 @@ impl Project {
     /// aligned closures WITHOUT traversing through `excluded`.  This is used
     /// by the doubly-anchored guard: a merge/closure to a partner is only a
     /// positional constraint if that partner is independently datum-anchored.
-    pub(crate) fn has_datum_path_excluding(
-        &self,
-        start: SectionId,
-        excluded: SectionId,
-    ) -> bool {
+    pub(crate) fn has_datum_path_excluding(&self, start: SectionId, excluded: SectionId) -> bool {
         let mut visited = HashSet::new();
         let mut queue = vec![start];
         while let Some(current) = queue.pop() {
@@ -2890,14 +3001,10 @@ impl Project {
                 return true;
             }
             for m in &self.station_merges {
-                if m.station_a.section_id == current
-                    && !visited.contains(&m.station_b.section_id)
-                {
+                if m.station_a.section_id == current && !visited.contains(&m.station_b.section_id) {
                     queue.push(m.station_b.section_id);
                 }
-                if m.station_b.section_id == current
-                    && !visited.contains(&m.station_a.section_id)
-                {
+                if m.station_b.section_id == current && !visited.contains(&m.station_a.section_id) {
                     queue.push(m.station_a.section_id);
                 }
             }
@@ -2905,14 +3012,10 @@ impl Project {
                 if !c.is_aligned {
                     continue;
                 }
-                if c.station_a.section_id == current
-                    && !visited.contains(&c.station_b.section_id)
-                {
+                if c.station_a.section_id == current && !visited.contains(&c.station_b.section_id) {
                     queue.push(c.station_b.section_id);
                 }
-                if c.station_b.section_id == current
-                    && !visited.contains(&c.station_a.section_id)
-                {
+                if c.station_b.section_id == current && !visited.contains(&c.station_a.section_id) {
                     queue.push(c.station_a.section_id);
                 }
             }
@@ -2958,9 +3061,10 @@ impl Project {
                             queue.push(merge.station_b.section_id);
                         }
                     } else if merge.station_b.section_id == current
-                        && !connected.contains(&merge.station_a.section_id) {
-                            queue.push(merge.station_a.section_id);
-                        }
+                        && !connected.contains(&merge.station_a.section_id)
+                    {
+                        queue.push(merge.station_a.section_id);
+                    }
                 }
             }
         }
@@ -3177,11 +3281,18 @@ impl Project {
     }
 
     /// Compute raw station coordinates for a single station (without global zero datum offset)
-    pub(crate) fn compute_station_raw_coords(&self, station_ref: StationRef) -> Option<Coordinates> {
+    pub(crate) fn compute_station_raw_coords(
+        &self,
+        station_ref: StationRef,
+    ) -> Option<Coordinates> {
         let section = self.get_section(station_ref.section_id)?;
 
         // Get section offset
-        let (offset_x, offset_y) = self.section_offsets.get(&section.id).copied().unwrap_or((0.0, 0.0));
+        let (offset_x, offset_y) = self
+            .section_offsets
+            .get(&section.id)
+            .copied()
+            .unwrap_or((0.0, 0.0));
         let mut coords = Coordinates::new(offset_x, offset_y, 0.0);
 
         // Walk through shots to reach the station (X, Y only)
@@ -3214,20 +3325,33 @@ impl Project {
 
     /// Calculate the path length between two stations through shots, merges, and closures.
     /// Both merges and closures are zero-distance edges.
-    pub(crate) fn calculate_path_length_between(&self, station_a: StationRef, station_b: StationRef) -> f64 {
+    pub(crate) fn calculate_path_length_between(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+    ) -> f64 {
         self.calculate_path_length_impl(station_a, station_b, true)
     }
 
     /// Calculate path length through shots and merges only (no closures).
     /// Use this when only rigid-group survey path length is needed.
     #[cfg(test)]
-    pub(crate) fn calculate_merge_only_path_length(&self, station_a: StationRef, station_b: StationRef) -> f64 {
+    pub(crate) fn calculate_merge_only_path_length(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+    ) -> f64 {
         self.calculate_path_length_impl(station_a, station_b, false)
     }
 
     /// Internal Dijkstra path length implementation.
     /// When `include_closures` is true, loop closures are treated as zero-distance edges.
-    fn calculate_path_length_impl(&self, station_a: StationRef, station_b: StationRef, include_closures: bool) -> f64 {
+    fn calculate_path_length_impl(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+        include_closures: bool,
+    ) -> f64 {
         if !self.station_exists(station_a) || !self.station_exists(station_b) {
             return 0.0;
         }
@@ -3252,7 +3376,10 @@ impl Project {
         let mut dist: HashMap<StationRef, f64> = HashMap::new();
         let mut heap = BinaryHeap::new();
         dist.insert(station_a, 0.0);
-        heap.push(HeapItem { cost: 0.0, node: station_a });
+        heap.push(HeapItem {
+            cost: 0.0,
+            node: station_a,
+        });
 
         while let Some(HeapItem { cost, node }) = heap.pop() {
             if let Some(&known) = dist.get(&node) {
@@ -3281,7 +3408,10 @@ impl Project {
                     let next_cost = cost + shot_len;
                     if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
                         dist.insert(neighbor, next_cost);
-                        heap.push(HeapItem { cost: next_cost, node: neighbor });
+                        heap.push(HeapItem {
+                            cost: next_cost,
+                            node: neighbor,
+                        });
                     }
                 }
             }
@@ -3297,7 +3427,10 @@ impl Project {
                 let next_cost = cost + shot_len;
                 if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
                     dist.insert(neighbor, next_cost);
-                    heap.push(HeapItem { cost: next_cost, node: neighbor });
+                    heap.push(HeapItem {
+                        cost: next_cost,
+                        node: neighbor,
+                    });
                 }
             }
 
@@ -3307,7 +3440,10 @@ impl Project {
                     let next_cost = cost;
                     if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
                         dist.insert(neighbor, next_cost);
-                        heap.push(HeapItem { cost: next_cost, node: neighbor });
+                        heap.push(HeapItem {
+                            cost: next_cost,
+                            node: neighbor,
+                        });
                     }
                 }
             }
@@ -3319,7 +3455,10 @@ impl Project {
                         let next_cost = cost;
                         if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
                             dist.insert(neighbor, next_cost);
-                            heap.push(HeapItem { cost: next_cost, node: neighbor });
+                            heap.push(HeapItem {
+                                cost: next_cost,
+                                node: neighbor,
+                            });
                         }
                     }
                 }
@@ -3333,7 +3472,8 @@ impl Project {
         } else {
             self.get_merged_section_ids(station_a.section_id)
         };
-        fallback_sections.iter()
+        fallback_sections
+            .iter()
             .filter_map(|sid| self.get_section(*sid))
             .flat_map(|s| s.shots.iter())
             .map(|shot| shot.length)
@@ -3471,19 +3611,11 @@ impl Project {
             let (corr_x, corr_y, corr_z) = match distribution {
                 ClosureStrategy::ProportionalByLength => {
                     let weight = shot.length / total_len;
-                    (
-                        signed.x * weight,
-                        signed.y * weight,
-                        signed.z * weight,
-                    )
+                    (signed.x * weight, signed.y * weight, signed.z * weight)
                 }
                 ClosureStrategy::EqualDistribution => {
                     let weight = 1.0 / shot_count as f64;
-                    (
-                        signed.x * weight,
-                        signed.y * weight,
-                        signed.z * weight,
-                    )
+                    (signed.x * weight, signed.y * weight, signed.z * weight)
                 }
                 _ => {
                     return Err("Unsupported distribution strategy for adjustment".to_string());
@@ -3572,12 +3704,7 @@ impl Project {
 
         match method {
             ClosureStrategy::LeastSquaresWeighted => {
-                self.adjust_least_squares(
-                    &component,
-                    &closures,
-                    anchor_station,
-                    config,
-                )?;
+                self.adjust_least_squares(&component, &closures, anchor_station, config)?;
             }
             _ => {
                 return Err("Unsupported adjustment method".to_string());
@@ -3628,12 +3755,23 @@ impl Project {
         }
 
         let mut section_deltas: HashMap<SectionId, Coordinates> = HashMap::new();
-        let mut conflict_samples: Vec<(SectionId, StationRef, StationRef, Coordinates, Coordinates)> = Vec::new();
+        let mut conflict_samples: Vec<(
+            SectionId,
+            StationRef,
+            StationRef,
+            Coordinates,
+            Coordinates,
+        )> = Vec::new();
         let mut conflicted_sections: HashSet<SectionId> = HashSet::new();
         let mut section_station_counts: HashMap<SectionId, usize> = HashMap::new();
-        let mut section_targets: HashMap<SectionId, HashMap<StationRef, Coordinates>> = HashMap::new();
+        let mut section_targets: HashMap<SectionId, HashMap<StationRef, Coordinates>> =
+            HashMap::new();
 
-        for section in self.sections.iter().filter(|s| sections_to_align.contains(&s.id)) {
+        for section in self
+            .sections
+            .iter()
+            .filter(|s| sections_to_align.contains(&s.id))
+        {
             section_station_counts.insert(section.id, section.shots.len());
         }
 
@@ -3687,7 +3825,9 @@ impl Project {
             if delta.z.abs() > 1e-9 {
                 if let Some(shot_count) = section_station_counts.get(section_id).copied() {
                     let keys: Vec<StationKey> = (0..=shot_count)
-                        .filter_map(|idx| self.key_for_ref(StationRef::new(*section_id, idx as u32)))
+                        .filter_map(|idx| {
+                            self.key_for_ref(StationRef::new(*section_id, idx as u32))
+                        })
                         .collect();
                     for key in keys {
                         let entry = self.station_offsets.entry(key).or_insert((0.0, 0.0, 0.0));
@@ -3736,10 +3876,13 @@ impl Project {
                     if ref_delta.z.abs() > 1e-9 {
                         if let Some(shot_count) = section_station_counts.get(&section_id).copied() {
                             let keys: Vec<StationKey> = (0..=shot_count)
-                                .filter_map(|idx| self.key_for_ref(StationRef::new(section_id, idx as u32)))
+                                .filter_map(|idx| {
+                                    self.key_for_ref(StationRef::new(section_id, idx as u32))
+                                })
                                 .collect();
                             for key in keys {
-                                let entry = self.station_offsets.entry(key).or_insert((0.0, 0.0, 0.0));
+                                let entry =
+                                    self.station_offsets.entry(key).or_insert((0.0, 0.0, 0.0));
                                 entry.2 += ref_delta.z;
                             }
                         }
@@ -3753,9 +3896,9 @@ impl Project {
                     if start.station_index == end.station_index {
                         return Ok(());
                     }
-                    let current_end = self
-                        .compute_station_raw_coords(end)
-                        .ok_or_else(|| "Failed to compute merge segment end coordinates".to_string())?;
+                    let current_end = self.compute_station_raw_coords(end).ok_or_else(|| {
+                        "Failed to compute merge segment end coordinates".to_string()
+                    })?;
                     let correction = Self::coords_sub(target_end, current_end);
                     if Self::coords_norm(correction) <= 1e-9 {
                         return Ok(());
@@ -3766,9 +3909,17 @@ impl Project {
                         .get(&section_id)
                         .ok_or_else(|| "Section not found for merge alignment".to_string())?;
                     let (start_idx, end_idx, forward) = if start.station_index < end.station_index {
-                        (start.station_index as usize, end.station_index as usize, true)
+                        (
+                            start.station_index as usize,
+                            end.station_index as usize,
+                            true,
+                        )
                     } else {
-                        (end.station_index as usize, start.station_index as usize, false)
+                        (
+                            end.station_index as usize,
+                            start.station_index as usize,
+                            false,
+                        )
                     };
                     let mut shots: Vec<SegmentShot> = Vec::new();
                     for idx in start_idx..end_idx {
@@ -3871,9 +4022,10 @@ impl Project {
             if component.contains(&merge.station_a.section_id)
                 && component.contains(&merge.station_b.section_id)
             {
-                if let (Some(a), Some(b)) =
-                    (self.resolve_key(&merge.station_a), self.resolve_key(&merge.station_b))
-                {
+                if let (Some(a), Some(b)) = (
+                    self.resolve_key(&merge.station_a),
+                    self.resolve_key(&merge.station_b),
+                ) {
                     unite(&mut parent, a, b);
                 }
             }
@@ -3885,9 +4037,10 @@ impl Project {
             if component.contains(&closure.station_a.section_id)
                 && component.contains(&closure.station_b.section_id)
             {
-                if let (Some(a), Some(b)) =
-                    (self.resolve_key(&closure.station_a), self.resolve_key(&closure.station_b))
-                {
+                if let (Some(a), Some(b)) = (
+                    self.resolve_key(&closure.station_a),
+                    self.resolve_key(&closure.station_b),
+                ) {
                     unite(&mut parent, a, b);
                 }
             }
@@ -3906,11 +4059,13 @@ impl Project {
         }
 
         // Per-section XY walk + individual station offsets.
-        let mut out: HashMap<StationRef, Coordinates> =
-            HashMap::with_capacity(station_list.len());
+        let mut out: HashMap<StationRef, Coordinates> = HashMap::with_capacity(station_list.len());
         for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
-            let (offset_x, offset_y) =
-                self.section_offsets.get(&section.id).copied().unwrap_or((0.0, 0.0));
+            let (offset_x, offset_y) = self
+                .section_offsets
+                .get(&section.id)
+                .copied()
+                .unwrap_or((0.0, 0.0));
             let mut cur = (offset_x, offset_y);
             for idx in 0..=section.shots.len() {
                 if idx > 0 {
@@ -4013,7 +4168,14 @@ impl Project {
                 nbr[u].iter().map(|(&v, &(ox, oy))| (v, ox, oy)).collect();
             let (pcx, pcy) = (cx[u], cy[u]);
             eliminated[u] = true;
-            order.push(Elim { u, nbrs: nbrs.clone(), dxu: pdx, dyu: pdy, cxu: pcx, cyu: pcy });
+            order.push(Elim {
+                u,
+                nbrs: nbrs.clone(),
+                dxu: pdx,
+                dyu: pdy,
+                cxu: pcx,
+                cyu: pcy,
+            });
 
             // Detach u from its neighbours.
             for &(v, _, _) in &nbrs {
@@ -4138,7 +4300,11 @@ impl Project {
         let mut x = x0.to_vec();
         let ax0 = spmv(&x);
         let mut r: Vec<f64> = rhs.iter().zip(ax0.iter()).map(|(&b, &a)| b - a).collect();
-        let mut z: Vec<f64> = r.iter().zip(inv_diag.iter()).map(|(&ri, &mi)| ri * mi).collect();
+        let mut z: Vec<f64> = r
+            .iter()
+            .zip(inv_diag.iter())
+            .map(|(&ri, &mi)| ri * mi)
+            .collect();
         let mut p = z.clone();
         let mut rz: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
 
@@ -4370,11 +4536,21 @@ impl Project {
                 let az = shot.average_azimuth().to_radians();
                 let len = shot.length;
 
-                let sigma_dx = ((az.sin() * sigma_len).powi(2) + (len * az.cos() * sigma_az).powi(2)).sqrt();
-                let sigma_dy = ((az.cos() * sigma_len).powi(2) + (len * az.sin() * sigma_az).powi(2)).sqrt();
+                let sigma_dx =
+                    ((az.sin() * sigma_len).powi(2) + (len * az.cos() * sigma_az).powi(2)).sqrt();
+                let sigma_dy =
+                    ((az.cos() * sigma_len).powi(2) + (len * az.sin() * sigma_az).powi(2)).sqrt();
 
-                let w_x = if sigma_dx > 0.0 { 1.0 / (sigma_dx * sigma_dx) } else { 0.0 };
-                let w_y = if sigma_dy > 0.0 { 1.0 / (sigma_dy * sigma_dy) } else { 0.0 };
+                let w_x = if sigma_dx > 0.0 {
+                    1.0 / (sigma_dx * sigma_dx)
+                } else {
+                    0.0
+                };
+                let w_y = if sigma_dy > 0.0 {
+                    1.0 / (sigma_dy * sigma_dy)
+                } else {
+                    0.0
+                };
 
                 let i_idx = unknown_index.get(&root_i).copied();
                 let j_idx = unknown_index.get(&root_j).copied();
@@ -4382,11 +4558,17 @@ impl Project {
                 let b_x = match (i_idx, j_idx) {
                     (Some(_), Some(_)) => vec.x,
                     (Some(_), None) => {
-                        let xj = fixed_coords.get(&root_j).copied().unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
+                        let xj = fixed_coords
+                            .get(&root_j)
+                            .copied()
+                            .unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
                         vec.x - xj.x
                     }
                     (None, Some(_)) => {
-                        let xi = fixed_coords.get(&root_i).copied().unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
+                        let xi = fixed_coords
+                            .get(&root_i)
+                            .copied()
+                            .unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
                         vec.x + xi.x
                     }
                     (None, None) => 0.0,
@@ -4394,11 +4576,17 @@ impl Project {
                 let b_y = match (i_idx, j_idx) {
                     (Some(_), Some(_)) => vec.y,
                     (Some(_), None) => {
-                        let yj = fixed_coords.get(&root_j).copied().unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
+                        let yj = fixed_coords
+                            .get(&root_j)
+                            .copied()
+                            .unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
                         vec.y - yj.y
                     }
                     (None, Some(_)) => {
-                        let yi = fixed_coords.get(&root_i).copied().unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
+                        let yi = fixed_coords
+                            .get(&root_i)
+                            .copied()
+                            .unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
                         vec.y + yi.y
                     }
                     (None, None) => 0.0,
@@ -4484,9 +4672,8 @@ impl Project {
         // former full-system PCG, which took O(loop-diameter) iterations — i.e.
         // O(n) iterations on a single long loop, making the solve O(n²) (#81).
         // See `solve_reduced_laplacian`.
-        let (sol_x, sol_y) = Self::solve_reduced_laplacian(
-            n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y,
-        );
+        let (sol_x, sol_y) =
+            Self::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y);
 
         // Optimality guard (tests only): the closure adjustment is the minimizer of
         // the weighted misclosure, i.e. the solution of the SPD normal equations
@@ -4535,10 +4722,7 @@ impl Project {
                 continue;
             }
             if let Some(idx) = unknown_index.get(root) {
-                group_coords.insert(
-                    *root,
-                    Coordinates::new(sol_x[*idx], sol_y[*idx], raw_z),
-                );
+                group_coords.insert(*root, Coordinates::new(sol_x[*idx], sol_y[*idx], raw_z));
             }
         }
 
@@ -4588,10 +4772,8 @@ impl Project {
                 pinned.insert(anchor_station);
             }
 
-            let mut degree: HashMap<StationRef, usize> = adj_deg
-                .iter()
-                .map(|(s, nbrs)| (*s, nbrs.len()))
-                .collect();
+            let mut degree: HashMap<StationRef, usize> =
+                adj_deg.iter().map(|(s, nbrs)| (*s, nbrs.len())).collect();
 
             let mut stack: Vec<StationRef> = degree
                 .iter()
@@ -4619,7 +4801,11 @@ impl Project {
         };
 
         // Update shots based on solved coordinates
-        for section in self.sections.iter_mut().filter(|s| component.contains(&s.id)) {
+        for section in self
+            .sections
+            .iter_mut()
+            .filter(|s| component.contains(&s.id))
+        {
             for idx in 0..section.shots.len() {
                 let station_i = StationRef::new(section.id, idx as u32);
                 let station_j = StationRef::new(section.id, (idx + 1) as u32);
@@ -4652,11 +4838,25 @@ impl Project {
                     .get(&root_j)
                     .ok_or_else(|| "Missing solved coordinates".to_string())?;
 
-                let offset_i = station_offsets.get(&station_i).copied().unwrap_or((0.0, 0.0, 0.0));
-                let offset_j = station_offsets.get(&station_j).copied().unwrap_or((0.0, 0.0, 0.0));
+                let offset_i = station_offsets
+                    .get(&station_i)
+                    .copied()
+                    .unwrap_or((0.0, 0.0, 0.0));
+                let offset_j = station_offsets
+                    .get(&station_j)
+                    .copied()
+                    .unwrap_or((0.0, 0.0, 0.0));
 
-                let base_i = Coordinates::new(coords_i.x - offset_i.0, coords_i.y - offset_i.1, coords_i.z - offset_i.2);
-                let base_j = Coordinates::new(coords_j.x - offset_j.0, coords_j.y - offset_j.1, coords_j.z - offset_j.2);
+                let base_i = Coordinates::new(
+                    coords_i.x - offset_i.0,
+                    coords_i.y - offset_i.1,
+                    coords_i.z - offset_i.2,
+                );
+                let base_j = Coordinates::new(
+                    coords_j.x - offset_j.0,
+                    coords_j.y - offset_j.1,
+                    coords_j.z - offset_j.2,
+                );
 
                 let shot = section
                     .shots
@@ -4698,7 +4898,10 @@ impl Project {
                 let dy = target.y - current.y;
                 if let Some((ex, ey)) = delta_xy {
                     if (ex - dx).abs() > 1e-6 || (ey - dy).abs() > 1e-6 {
-                        return Err("Least squares adjustment produced inconsistent section translation".to_string());
+                        return Err(
+                            "Least squares adjustment produced inconsistent section translation"
+                                .to_string(),
+                        );
                     }
                 } else {
                     delta_xy = Some((dx, dy));
@@ -4824,7 +5027,10 @@ impl Project {
         let mut heap = BinaryHeap::new();
 
         dist.insert(start, 0.0);
-        heap.push(HeapItem { cost: 0.0, node: start });
+        heap.push(HeapItem {
+            cost: 0.0,
+            node: start,
+        });
 
         while let Some(HeapItem { cost, node }) = heap.pop() {
             if let Some(&known) = dist.get(&node) {
@@ -4845,7 +5051,10 @@ impl Project {
             if node.station_index > 0 {
                 let prev_index = node.station_index - 1;
                 if (prev_index as usize) <= section.shots.len() {
-                    let shot_len = section.shots.get(prev_index as usize).map_or(0.0, |s| s.length);
+                    let shot_len = section
+                        .shots
+                        .get(prev_index as usize)
+                        .map_or(0.0, |s| s.length);
                     let neighbor = StationRef::new(node.section_id, prev_index);
                     let next_cost = cost + shot_len;
                     if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
@@ -4861,7 +5070,10 @@ impl Project {
                                 },
                             ),
                         );
-                        heap.push(HeapItem { cost: next_cost, node: neighbor });
+                        heap.push(HeapItem {
+                            cost: next_cost,
+                            node: neighbor,
+                        });
                     }
                 }
             }
@@ -4869,7 +5081,10 @@ impl Project {
             // Next station
             if (node.station_index as usize) < section.shots.len() {
                 let next_index = node.station_index + 1;
-                let shot_len = section.shots.get(node.station_index as usize).map_or(0.0, |s| s.length);
+                let shot_len = section
+                    .shots
+                    .get(node.station_index as usize)
+                    .map_or(0.0, |s| s.length);
                 let neighbor = StationRef::new(node.section_id, next_index);
                 let next_cost = cost + shot_len;
                 if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
@@ -4885,7 +5100,10 @@ impl Project {
                             },
                         ),
                     );
-                    heap.push(HeapItem { cost: next_cost, node: neighbor });
+                    heap.push(HeapItem {
+                        cost: next_cost,
+                        node: neighbor,
+                    });
                 }
             }
 
@@ -4896,7 +5114,10 @@ impl Project {
                     if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
                         dist.insert(neighbor, next_cost);
                         prev.insert(neighbor, (node, PathEdge::Merge));
-                        heap.push(HeapItem { cost: next_cost, node: neighbor });
+                        heap.push(HeapItem {
+                            cost: next_cost,
+                            node: neighbor,
+                        });
                     }
                 }
             }
@@ -4918,21 +5139,35 @@ impl Project {
             current = p;
         }
         steps_rev.reverse();
-        Some(StationPath { start, steps: steps_rev })
+        Some(StationPath {
+            start,
+            steps: steps_rev,
+        })
     }
 
-    fn shortest_path_shots_merges(&self, start: StationRef, goal: StationRef) -> Option<StationPath> {
+    fn shortest_path_shots_merges(
+        &self,
+        start: StationRef,
+        goal: StationRef,
+    ) -> Option<StationPath> {
         let (found, prev) = self.shortest_path_with_target(start, |node| node == goal)?;
         Self::reconstruct_path(start, found, &prev)
     }
 
-    fn shortest_path_to_any_zero_datum(&self, start: StationRef) -> Option<(StationRef, StationPath)> {
+    fn shortest_path_to_any_zero_datum(
+        &self,
+        start: StationRef,
+    ) -> Option<(StationRef, StationPath)> {
         if self.zero_datums.is_empty() {
             return None;
         }
-        let zero_set: HashSet<StationRef> =
-            self.zero_datums.iter().filter_map(|zd| self.resolve_key(&zd.station_ref)).collect();
-        let (found, prev) = self.shortest_path_with_target(start, |node| zero_set.contains(&node))?;
+        let zero_set: HashSet<StationRef> = self
+            .zero_datums
+            .iter()
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .collect();
+        let (found, prev) =
+            self.shortest_path_with_target(start, |node| zero_set.contains(&node))?;
         let path = Self::reconstruct_path(start, found, &prev)?;
         Some((found, path))
     }
@@ -4949,10 +5184,7 @@ impl Project {
             }
         }
 
-        fn find(
-            parent: &mut HashMap<StationRef, StationRef>,
-            x: StationRef,
-        ) -> StationRef {
+        fn find(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationRef {
             let mut current = x;
             while let Some(&p) = parent.get(&current) {
                 if p == current {
@@ -4985,8 +5217,12 @@ impl Project {
             let rank_a = *rank.get(&ra).unwrap_or(&0);
             let rank_b = *rank.get(&rb).unwrap_or(&0);
             match rank_a.cmp(&rank_b) {
-                Ordering::Less => { parent.insert(ra, rb); }
-                Ordering::Greater => { parent.insert(rb, ra); }
+                Ordering::Less => {
+                    parent.insert(ra, rb);
+                }
+                Ordering::Greater => {
+                    parent.insert(rb, ra);
+                }
                 Ordering::Equal => {
                     parent.insert(rb, ra);
                     rank.insert(ra, rank_a + 1);
@@ -5039,10 +5275,7 @@ impl Project {
             }
         }
 
-        fn find(
-            parent: &mut HashMap<StationRef, StationRef>,
-            x: StationRef,
-        ) -> StationRef {
+        fn find(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationRef {
             let mut current = x;
             while let Some(&p) = parent.get(&current) {
                 if p == current {
@@ -5075,8 +5308,12 @@ impl Project {
             let rank_a = *rank.get(&ra).unwrap_or(&0);
             let rank_b = *rank.get(&rb).unwrap_or(&0);
             match rank_a.cmp(&rank_b) {
-                Ordering::Less => { parent.insert(ra, rb); }
-                Ordering::Greater => { parent.insert(rb, ra); }
+                Ordering::Less => {
+                    parent.insert(ra, rb);
+                }
+                Ordering::Greater => {
+                    parent.insert(rb, ra);
+                }
                 Ordering::Equal => {
                     parent.insert(rb, ra);
                     rank.insert(ra, rank_a + 1);
@@ -5110,7 +5347,10 @@ impl Project {
         station_ref: StationRef,
         delta: Coordinates,
     ) -> Result<(), String> {
-        if self.zero_datums.iter().any(|zd| self.key_is_ref(&zd.station_ref, station_ref))
+        if self
+            .zero_datums
+            .iter()
+            .any(|zd| self.key_is_ref(&zd.station_ref, station_ref))
             && Self::coords_norm(delta) > 1e-9
         {
             error!(
@@ -5121,12 +5361,18 @@ impl Project {
             );
         }
 
-        let existing = self.station_offset_for_ref(station_ref).unwrap_or((0.0, 0.0, 0.0));
+        let existing = self
+            .station_offset_for_ref(station_ref)
+            .unwrap_or((0.0, 0.0, 0.0));
         let total_dx = existing.0 + delta.x;
         let total_dy = existing.1 + delta.y;
         let total_dz = existing.2 + delta.z;
 
-        let Some(section) = self.sections.iter_mut().find(|s| s.id == station_ref.section_id) else {
+        let Some(section) = self
+            .sections
+            .iter_mut()
+            .find(|s| s.id == station_ref.section_id)
+        else {
             return Err("Section not found".to_string());
         };
 
@@ -5223,9 +5469,13 @@ impl Project {
                 station_to_group.insert(*member, *root);
             }
         }
-        let root_for = |station: StationRef| station_to_group.get(&station).copied().unwrap_or(station);
-        let mut zero_datum_set: HashSet<StationRef> =
-            self.zero_datums.iter().filter_map(|zd| self.resolve_key(&zd.station_ref)).collect();
+        let root_for =
+            |station: StationRef| station_to_group.get(&station).copied().unwrap_or(station);
+        let mut zero_datum_set: HashSet<StationRef> = self
+            .zero_datums
+            .iter()
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .collect();
         if let Some(extra) = extra_fixed {
             zero_datum_set.extend(extra.iter().copied());
         }
@@ -5242,18 +5492,19 @@ impl Project {
             "Starting closure error distribution"
         );
 
-        let is_group_anchored = |station: StationRef, groups: &HashMap<StationRef, Vec<StationRef>>| -> bool {
-            let root = groups
-                .iter()
-                .find(|(_, members)| members.contains(&station))
-                .map(|(r, _)| *r);
-            if let Some(root) = root {
-                if let Some(members) = groups.get(&root) {
-                    return members.iter().any(|m| zero_datum_set.contains(m));
+        let is_group_anchored =
+            |station: StationRef, groups: &HashMap<StationRef, Vec<StationRef>>| -> bool {
+                let root = groups
+                    .iter()
+                    .find(|(_, members)| members.contains(&station))
+                    .map(|(r, _)| *r);
+                if let Some(root) = root {
+                    if let Some(members) = groups.get(&root) {
+                        return members.iter().any(|m| zero_datum_set.contains(m));
+                    }
                 }
-            }
-            false
-        };
+                false
+            };
 
         let a_anchored = is_group_anchored(station_a, &colocated_groups);
         let b_anchored = is_group_anchored(station_b, &colocated_groups);
@@ -5281,8 +5532,16 @@ impl Project {
             .compute_station_raw_coords(station_b)
             .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
 
-        let coords_start = if start == station_a { coords_a_orig } else { coords_b_orig };
-        let coords_end = if end == station_a { coords_a_orig } else { coords_b_orig };
+        let coords_start = if start == station_a {
+            coords_a_orig
+        } else {
+            coords_b_orig
+        };
+        let coords_end = if end == station_a {
+            coords_a_orig
+        } else {
+            coords_b_orig
+        };
 
         let base_correction = Self::coords_sub(coords_end, coords_start);
         let correction = Self::coords_sub(coords_b_orig, coords_a_orig);
@@ -5297,12 +5556,12 @@ impl Project {
         let section_lookup = self.build_section_lookup();
 
         let apply_path_targets = |path: &StationPath,
-                                      start_coords: Coordinates,
-                                      correction_vec: Coordinates,
-                                      sign: f64,
-                                      total_len: f64,
-                                      shot_count: usize,
-                                      targets: &mut HashMap<StationRef, Coordinates>|
+                                  start_coords: Coordinates,
+                                  correction_vec: Coordinates,
+                                  sign: f64,
+                                  total_len: f64,
+                                  shot_count: usize,
+                                  targets: &mut HashMap<StationRef, Coordinates>|
          -> Result<(), String> {
             let mut current = start_coords;
             let mut current_root = root_for(path.start);
@@ -5364,7 +5623,12 @@ impl Project {
                 if next_root == current_root {
                     continue;
                 }
-                if let PathEdge::Shot { section_id, shot_index, .. } = step.edge {
+                if let PathEdge::Shot {
+                    section_id,
+                    shot_index,
+                    ..
+                } = step.edge
+                {
                     if let Some(section) = section_lookup.get(&section_id) {
                         if let Some(shot) = section.shots.get(shot_index) {
                             *total_len += shot.length;
@@ -5391,7 +5655,9 @@ impl Project {
                     zero_nodes.push(node);
                 }
             }
-            zero_nodes.sort_by(|a, b| (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index)));
+            zero_nodes.sort_by(|a, b| {
+                (a.section_id, a.station_index).cmp(&(b.section_id, b.station_index))
+            });
             zero_nodes.dedup();
 
             if zero_nodes.len() > 1 {
@@ -5402,10 +5668,14 @@ impl Project {
                 let anchor = zero_nodes[0];
                 let path_a = self
                     .shortest_path_shots_merges(anchor, station_a)
-                    .ok_or_else(|| "Failed to build path from zero datum to station A".to_string())?;
+                    .ok_or_else(|| {
+                        "Failed to build path from zero datum to station A".to_string()
+                    })?;
                 let path_b = self
                     .shortest_path_shots_merges(anchor, station_b)
-                    .ok_or_else(|| "Failed to build path from zero datum to station B".to_string())?;
+                    .ok_or_else(|| {
+                        "Failed to build path from zero datum to station B".to_string()
+                    })?;
 
                 let mut total_len = 0.0;
                 let mut shot_count = 0usize;
@@ -5418,9 +5688,9 @@ impl Project {
                     return Err("No distributable shots found for zero datum loop path".to_string());
                 }
 
-                let coords_anchor = self
-                    .compute_station_raw_coords(anchor)
-                    .ok_or_else(|| "Failed to compute coordinates for zero datum anchor".to_string())?;
+                let coords_anchor = self.compute_station_raw_coords(anchor).ok_or_else(|| {
+                    "Failed to compute coordinates for zero datum anchor".to_string()
+                })?;
 
                 apply_path_targets(
                     &path_a,
@@ -5465,7 +5735,11 @@ impl Project {
                     return Err("No distributable shots found for closure path".to_string());
                 }
 
-                let coords_start = if path.start == station_a { coords_a_orig } else { coords_b_orig };
+                let coords_start = if path.start == station_a {
+                    coords_a_orig
+                } else {
+                    coords_b_orig
+                };
                 apply_path_targets(
                     &path,
                     coords_start,
@@ -5627,10 +5901,16 @@ impl Project {
             if !b_anchor {
                 if let Some(members) = colocated_groups.get(&b_root) {
                     for member in members {
-                        self.apply_station_move_internal(*member, Self::coords_scale(residual, -1.0))?;
+                        self.apply_station_move_internal(
+                            *member,
+                            Self::coords_scale(residual, -1.0),
+                        )?;
                     }
                 } else {
-                    self.apply_station_move_internal(station_b, Self::coords_scale(residual, -1.0))?;
+                    self.apply_station_move_internal(
+                        station_b,
+                        Self::coords_scale(residual, -1.0),
+                    )?;
                 }
             } else if !a_anchor {
                 if let Some(members) = colocated_groups.get(&a_root) {
@@ -5708,7 +5988,9 @@ impl Project {
         // the same graph the cascade actually solves (catalog #8 / #integrity Root 3).
         let connected_a = self.get_rigid_connected_section_ids(station_a.section_id);
         if connected_a.contains(&station_b.section_id) {
-            return Err("Stations are already connected. Use Create Loop Closure instead.".to_string());
+            return Err(
+                "Stations are already connected. Use Create Loop Closure instead.".to_string(),
+            );
         }
 
         // Check zero datum status - uses transitive connections through existing merges
@@ -5732,9 +6014,11 @@ impl Project {
 
         // Compute current coordinates (includes existing section offsets)
         // Coordinates are in the world coordinate system established by the datum
-        let coords_a = self.compute_station_raw_coords(station_a)
+        let coords_a = self
+            .compute_station_raw_coords(station_a)
             .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
-        let coords_b = self.compute_station_raw_coords(station_b)
+        let coords_b = self
+            .compute_station_raw_coords(station_b)
             .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
 
         // Datum propagation: When merging a section without datum into a datum group,
@@ -5792,8 +6076,7 @@ impl Project {
         // Record the merge via the helper so the merge-adjacency cache
         // stays in sync. (Direct push would silently skip the cache,
         // forcing the next BFS into the O(N) fallback path.)
-        let (Some(key_a), Some(key_b)) =
-            (self.key_for_ref(station_a), self.key_for_ref(station_b))
+        let (Some(key_a), Some(key_b)) = (self.key_for_ref(station_a), self.key_for_ref(station_b))
         else {
             return Err("Cannot merge: station has no stable anchor".to_string());
         };
@@ -5823,9 +6106,11 @@ impl Project {
             purpose = "compute closure metrics",
             "Computing closure metrics"
         );
-        let coords_a = self.compute_station_raw_coords(station_a)
+        let coords_a = self
+            .compute_station_raw_coords(station_a)
             .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
-        let coords_b = self.compute_station_raw_coords(station_b)
+        let coords_b = self
+            .compute_station_raw_coords(station_b)
             .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
 
         let horizontal_misclosure = coords_a.horizontal_distance_to(&coords_b);
@@ -5882,7 +6167,10 @@ impl Project {
 
         // Reject already-merged station pairs
         if self.are_stations_merged(station_a, station_b) {
-            return Err("These stations are already merged. Closures are for unmerged station pairs.".to_string());
+            return Err(
+                "These stations are already merged. Closures are for unmerged station pairs."
+                    .to_string(),
+            );
         }
 
         // Check stations are connected (via merges or closures)
@@ -5922,8 +6210,7 @@ impl Project {
         let next_id = self.next_closure_id;
         self.next_closure_id += 1;
 
-        let (Some(key_a), Some(key_b)) =
-            (self.key_for_ref(station_a), self.key_for_ref(station_b))
+        let (Some(key_a), Some(key_b)) = (self.key_for_ref(station_a), self.key_for_ref(station_b))
         else {
             return Err("Cannot create loop closure: station has no stable anchor".to_string());
         };
@@ -6097,7 +6384,11 @@ impl Project {
             .sections
             .iter()
             .find(|s| s.id == station_ref.section_id)
-            .and_then(|s| s.name.as_ref()).map_or_else(|| format!("Section {}", station_ref.section_id), |name| format!("\"{name}\""));
+            .and_then(|s| s.name.as_ref())
+            .map_or_else(
+                || format!("Section {}", station_ref.section_id),
+                |name| format!("\"{name}\""),
+            );
 
         // Display station index as 0-indexed to match canonical StationRef format
         format!("{} #{}", section_label, station_ref.station_index)
@@ -6240,7 +6531,10 @@ impl Project {
             existing.gps = gps;
             updated_existing = true;
         } else {
-            self.zero_datums.push(ZeroDatum { station_ref: datum_key, gps });
+            self.zero_datums.push(ZeroDatum {
+                station_ref: datum_key,
+                gps,
+            });
         }
 
         self.touch();
@@ -6306,7 +6600,10 @@ impl Project {
             existing.gps = gps;
             updated_existing = true;
         } else {
-            self.zero_datums.push(ZeroDatum { station_ref: datum_key, gps });
+            self.zero_datums.push(ZeroDatum {
+                station_ref: datum_key,
+                gps,
+            });
         }
 
         self.touch();
@@ -6419,26 +6716,28 @@ impl Project {
 
         while let Some(current_section) = queue.pop_front() {
             for merge in &merges {
-                let (this_station, partner_station) =
-                    if merge.station_a.section_id == current_section
-                        && !visited.contains(&merge.station_b.section_id)
-                    {
-                        (&merge.station_a, &merge.station_b)
-                    } else if merge.station_b.section_id == current_section
-                        && !visited.contains(&merge.station_a.section_id)
-                    {
-                        (&merge.station_b, &merge.station_a)
-                    } else {
-                        continue;
-                    };
+                let (this_station, partner_station) = if merge.station_a.section_id
+                    == current_section
+                    && !visited.contains(&merge.station_b.section_id)
+                {
+                    (&merge.station_a, &merge.station_b)
+                } else if merge.station_b.section_id == current_section
+                    && !visited.contains(&merge.station_a.section_id)
+                {
+                    (&merge.station_b, &merge.station_a)
+                } else {
+                    continue;
+                };
 
                 let partner_section = partner_station.section_id;
                 visited.insert(partner_section);
 
                 // this_station's section is already aligned; partner needs adjustment
                 if let (Some(this_pos), Some(partner_pos)) = (
-                    self.resolve_key(this_station).and_then(|sr| self.compute_station_raw_coords(sr)),
-                    self.resolve_key(partner_station).and_then(|sr| self.compute_station_raw_coords(sr)),
+                    self.resolve_key(this_station)
+                        .and_then(|sr| self.compute_station_raw_coords(sr)),
+                    self.resolve_key(partner_station)
+                        .and_then(|sr| self.compute_station_raw_coords(sr)),
                 ) {
                     let delta_x = this_pos.x - partner_pos.x;
                     let delta_y = this_pos.y - partner_pos.y;
@@ -6613,10 +6912,7 @@ impl Project {
         mut on_progress: Option<&mut dyn FnMut(u32, u32)>,
     ) -> Vec<Station> {
         // Calculate total stations first for progress reporting
-        let total_stations: u32 = self.sections
-            .iter()
-            .map(|s| s.shots.len() as u32 + 1)
-            .sum();
+        let total_stations: u32 = self.sections.iter().map(|s| s.shots.len() as u32 + 1).sum();
 
         // Pre-compute absolute station depths using colocated groups.
         // Each station's Z is the average of surrounding shot depths across
@@ -6647,12 +6943,19 @@ impl Project {
 
         for section in &self.sections {
             // Get section offset (from merges)
-            let (offset_x, offset_y) = self.section_offsets.get(&section.id).copied().unwrap_or((0.0, 0.0));
+            let (offset_x, offset_y) = self
+                .section_offsets
+                .get(&section.id)
+                .copied()
+                .unwrap_or((0.0, 0.0));
             let mut current_xy = (offset_x, offset_y);
 
             // First station of section
             let first_station_ref = StationRef::new(section.id, 0);
-            let z = station_depths.get(&first_station_ref).copied().unwrap_or(0.0);
+            let z = station_depths
+                .get(&first_station_ref)
+                .copied()
+                .unwrap_or(0.0);
             let mut station_coords = Coordinates::new(current_xy.0, current_xy.1, z);
             // Apply station offset if exists
             if let Some((ox, oy, oz)) = self.station_offset_for_ref(first_station_ref) {
@@ -6795,9 +7098,11 @@ impl Project {
 
             // Collect merged equivalents for each endpoint
             let a_group: Vec<StationRef> = station_to_group
-                .get(&a_ref).map_or_else(|| vec![a_ref], |&gid| groups[gid].clone());
+                .get(&a_ref)
+                .map_or_else(|| vec![a_ref], |&gid| groups[gid].clone());
             let b_group: Vec<StationRef> = station_to_group
-                .get(&b_ref).map_or_else(|| vec![b_ref], |&gid| groups[gid].clone());
+                .get(&b_ref)
+                .map_or_else(|| vec![b_ref], |&gid| groups[gid].clone());
 
             // Skip if both endpoints are in the same merge group (legacy data edge case)
             let a_group_id = station_to_group.get(&a_ref);
@@ -6883,8 +7188,7 @@ impl Project {
         // so the metrics displayed correspond to that specific loop closure.
         {
             // Collect direct (non-transitive) closure refs for each station
-            let mut direct_closures: HashMap<StationRef, Vec<(u64, StationRef)>> =
-                HashMap::new();
+            let mut direct_closures: HashMap<StationRef, Vec<(u64, StationRef)>> = HashMap::new();
             for station in &stations {
                 for cr in &station.closures_with {
                     if !cr.is_transitive {
@@ -7072,9 +7376,7 @@ impl Project {
             for (i, shot) in section.shots.iter().enumerate() {
                 let from = StationRef::new(section.id, i as u32);
                 let to = StationRef::new(section.id, (i + 1) as u32);
-                if let (Some(&fi), Some(&ti)) =
-                    (station_index.get(&from), station_index.get(&to))
-                {
+                if let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) {
                     let w = match coords {
                         Some(c) => {
                             let (a, b) = (&c[fi], &c[ti]);
@@ -7094,9 +7396,7 @@ impl Project {
                 self.resolve_key(&merge.station_a),
                 self.resolve_key(&merge.station_b),
             ) {
-                if let (Some(&a), Some(&b)) =
-                    (station_index.get(&a_sr), station_index.get(&b_sr))
-                {
+                if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
                     adj[a].push((b, 0.0));
                     adj[b].push((a, 0.0));
                 }
@@ -7109,9 +7409,7 @@ impl Project {
                 self.resolve_key(&closure.station_a),
                 self.resolve_key(&closure.station_b),
             ) {
-                if let (Some(&a), Some(&b)) =
-                    (station_index.get(&a_sr), station_index.get(&b_sr))
-                {
+                if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
                     adj[a].push((b, 0.0));
                     adj[b].push((a, 0.0));
                 }
@@ -7362,7 +7660,10 @@ impl Project {
                     to,
                     t: tt,
                     len,
-                    shot: PathShot { section_id: ep.section_id, shot_id },
+                    shot: PathShot {
+                        section_id: ep.section_id,
+                        shot_id,
+                    },
                 });
             }
             // Station endpoint.
@@ -7388,8 +7689,15 @@ impl Project {
         // after materializing, so it simply competes with the around routes.
         let same_shot_direct: Option<(f64, PathShot)> = match (&ra, &rb) {
             (
-                Resolved::Shot { t: ta, len, shot: sa, .. },
-                Resolved::Shot { t: tb, shot: sb, .. },
+                Resolved::Shot {
+                    t: ta,
+                    len,
+                    shot: sa,
+                    ..
+                },
+                Resolved::Shot {
+                    t: tb, shot: sb, ..
+                },
             ) if sa == sb => Some(((ta - tb).abs() * len, *sa)),
             _ => None,
         };
@@ -7405,7 +7713,10 @@ impl Project {
                 let from = StationRef::new(section.id, i as u32);
                 let to = StationRef::new(section.id, (i + 1) as u32);
                 if let (Some(&fi), Some(&ti)) = (idx.get(&from), idx.get(&to)) {
-                    let ps = PathShot { section_id: section.id, shot_id: shot.id };
+                    let ps = PathShot {
+                        section_id: section.id,
+                        shot_id: shot.id,
+                    };
                     shot_edge.insert((fi, ti), ps);
                     shot_edge.insert((ti, fi), ps);
                 }
@@ -7422,7 +7733,13 @@ impl Project {
         ) -> usize {
             match r {
                 Resolved::Station(i) => i,
-                Resolved::Shot { from, to, t, len, shot } => {
+                Resolved::Shot {
+                    from,
+                    to,
+                    t,
+                    len,
+                    shot,
+                } => {
                     let v = adj.len();
                     adj.push(vec![(from, t * len), (to, (1.0 - t) * len)]);
                     adj[from].push((v, t * len));
@@ -7540,7 +7857,11 @@ impl Project {
             }
         }
 
-        AlongLineResult { along_line: Some(dist[goal]), path_shots, path_stations }
+        AlongLineResult {
+            along_line: Some(dist[goal]),
+            path_shots,
+            path_stations,
+        }
     }
 
     /// Get metadata for this project
@@ -7821,8 +8142,11 @@ impl Project {
         let section_lookup = self.build_section_lookup();
         let merge_adj = self.build_merge_adjacency(&section_lookup);
         let closure_adj = self.build_aligned_closure_adjacency(&section_lookup);
-        let datum_stations: HashSet<StationRef> =
-            self.zero_datums.iter().filter_map(|d| self.resolve_key(&d.station_ref)).collect();
+        let datum_stations: HashSet<StationRef> = self
+            .zero_datums
+            .iter()
+            .filter_map(|d| self.resolve_key(&d.station_ref))
+            .collect();
         self.is_shot_frozen(
             section_id,
             shot_index,
@@ -7848,8 +8172,11 @@ impl Project {
         let section_lookup = self.build_section_lookup();
         let merge_adj = self.build_merge_adjacency(&section_lookup);
         let closure_adj = self.build_aligned_closure_adjacency(&section_lookup);
-        let datum_stations: HashSet<StationRef> =
-            self.zero_datums.iter().filter_map(|d| self.resolve_key(&d.station_ref)).collect();
+        let datum_stations: HashSet<StationRef> = self
+            .zero_datums
+            .iter()
+            .filter_map(|d| self.resolve_key(&d.station_ref))
+            .collect();
 
         // Assign each station a compact integer index
         let mut station_to_idx: HashMap<StationRef, usize> = HashMap::new();
@@ -7997,8 +8324,7 @@ impl Project {
             for shot_index in 0..section.shots.len() {
                 let a = StationRef::new(section.id, shot_index as u32);
                 let b = StationRef::new(section.id, (shot_index + 1) as u32);
-                let (Some(&ai), Some(&bi)) =
-                    (station_to_idx.get(&a), station_to_idx.get(&b))
+                let (Some(&ai), Some(&bi)) = (station_to_idx.get(&a), station_to_idx.get(&b))
                 else {
                     continue;
                 };
@@ -8052,7 +8378,7 @@ impl Project {
         ps_config: &crate::config::PlacementSuggestionConfig,
     ) -> Vec<super::placement_suggest::OrphanPlacementSuggestion> {
         use super::placement_suggest::{
-            ExistingSection, OrphanPlacementSuggestion, suggest_placements,
+            suggest_placements, ExistingSection, OrphanPlacementSuggestion,
         };
 
         let new_set: HashSet<SectionId> = newly_imported_section_ids.iter().copied().collect();
@@ -8080,8 +8406,11 @@ impl Project {
                 if comp.iter().any(|sid| new_set.contains(sid)) {
                     return false;
                 }
-                // Skip if component has a datum
-                let any_member = *comp.iter().next().unwrap();
+                // Skip if component has a datum (an empty component — impossible
+                // here — is treated as non-orphan).
+                let Some(&any_member) = comp.iter().next() else {
+                    return false;
+                };
                 !self.rigid_group_has_datum(any_member)
             })
             .collect();
@@ -8096,7 +8425,10 @@ impl Project {
             .filter_map(|&id| self.get_section(id))
             .map(|s| ExistingSection {
                 id: s.id,
-                name: s.name.clone().unwrap_or_else(|| format!("Section {}", s.id)),
+                name: s
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("Section {}", s.id)),
                 shots: s.shots.clone(),
             })
             .collect();
@@ -8121,9 +8453,8 @@ impl Project {
         };
 
         // Helper: check if a station is constrained (merge or aligned closure)
-        let station_is_constrained = |sr: StationRef| -> bool {
-            station_has_merge(sr) || station_has_aligned_closure(sr)
-        };
+        let station_is_constrained =
+            |sr: StationRef| -> bool { station_has_merge(sr) || station_has_aligned_closure(sr) };
 
         let mut suggestions: Vec<OrphanPlacementSuggestion> = Vec::new();
 
@@ -8248,8 +8579,7 @@ impl Project {
         }
 
         // Sort by score descending
-        suggestions
-            .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+        suggestions.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
 
         suggestions
     }
@@ -8569,7 +8899,8 @@ impl Project {
     /// legitimate caller is the delete-shot impact preview, where an endpoint may
     /// intentionally be the station being removed.
     pub(crate) fn key_to_ref_lossy(&self, key: &StationKey) -> StationRef {
-        self.resolve_key(key).unwrap_or_else(|| StationRef::new(key.section_id, 0))
+        self.resolve_key(key)
+            .unwrap_or_else(|| StationRef::new(key.section_id, 0))
     }
 
     /// Positional wire form of a stored merge, or `None` if either endpoint
@@ -8669,7 +9000,11 @@ impl Project {
         station_offsets: &HashMap<StationRef, (f64, f64, f64)>,
     ) -> Option<(f64, f64)> {
         let &(lx, ly) = local.get(&sr.section_id)?.get(sr.station_index as usize)?;
-        let (ox, oy) = self.section_offsets.get(&sr.section_id).copied().unwrap_or((0.0, 0.0));
+        let (ox, oy) = self
+            .section_offsets
+            .get(&sr.section_id)
+            .copied()
+            .unwrap_or((0.0, 0.0));
         let (mut x, mut y) = (lx + ox, ly + oy);
         if let Some(&(sx, sy, _)) = station_offsets.get(&sr) {
             x += sx;
@@ -8860,8 +9195,11 @@ impl Project {
     /// One authoritative anchor section per connected merge group, preferring a
     /// zero-datum section so the realign keeps the group pinned to GPS.
     fn realign_seeds(&self) -> Vec<SectionId> {
-        let datum_sections: HashSet<SectionId> =
-            self.zero_datums.iter().map(|z| z.station_ref.section_id).collect();
+        let datum_sections: HashSet<SectionId> = self
+            .zero_datums
+            .iter()
+            .map(|z| z.station_ref.section_id)
+            .collect();
         let mut seeds = Vec::new();
         let mut visited: HashSet<SectionId> = HashSet::new();
         for section in &self.sections {
@@ -8937,9 +9275,10 @@ impl Project {
                 if c.station_a.section_id == c.station_b.section_id {
                     return false;
                 }
-                let (Some(a), Some(b)) =
-                    (self.resolve_key(&c.station_a), self.resolve_key(&c.station_b))
-                else {
+                let (Some(a), Some(b)) = (
+                    self.resolve_key(&c.station_a),
+                    self.resolve_key(&c.station_b),
+                ) else {
                     return false;
                 };
                 !self.are_stations_connected_excluding_shot(a, b, None, false)
@@ -9044,5 +9383,12 @@ impl Project {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::float_cmp,
+    clippy::panic,
+    clippy::print_stderr,
+    clippy::print_stdout
+)]
 mod tests;

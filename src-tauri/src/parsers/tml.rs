@@ -290,9 +290,11 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                         // emitting events back to us.
                         let qname = QName(name_bytes);
                         if let Err(err) = reader.read_to_end(qname) {
-                            bail!("XML parse error skipping <{}> at position {}: {err}",
+                            bail!(
+                                "XML parse error skipping <{}> at position {}: {err}",
                                 std::str::from_utf8(name_bytes).unwrap_or("<non-utf8>"),
-                                reader.error_position());
+                                reader.error_position()
+                            );
                         }
                     }
                     _ => {
@@ -342,8 +344,7 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                     // Skip the unescape + trim + alloc unless this is a
                     // known shot field.
                     if let Some(key) = current_element_key {
-                        let text =
-                            e.unescape().unwrap_or_default().trim().to_string();
+                        let text = e.unescape().unwrap_or_default().trim().to_string();
                         if !text.is_empty() {
                             current_fields.insert(key, text);
                         }
@@ -377,7 +378,10 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                 }
             }
             Ok(Event::Eof) => break,
-            Err(e) => bail!("XML parse error at position {}: {e}", reader.error_position()),
+            Err(e) => bail!(
+                "XML parse error at position {}: {e}",
+                reader.error_position()
+            ),
             _ => {}
         }
         buf.clear();
@@ -716,11 +720,8 @@ fn linearize_section(
     let shot_by_id: HashMap<i64, &RawShot> = shots.iter().map(|s| (s.id, *s)).collect();
 
     // Preserve deterministic chain selection by ranking shots in encounter order.
-    let order_rank: HashMap<i64, usize> = shots
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (s.id, i))
-        .collect();
+    let order_rank: HashMap<i64, usize> =
+        shots.iter().enumerate().map(|(i, s)| (s.id, i)).collect();
     let rank_key = |id: &i64| (order_rank.get(id).copied().unwrap_or(usize::MAX), *id);
 
     // Successors constrained to this section, sorted deterministically.
@@ -1003,10 +1004,7 @@ fn collect_linear_chain(
 }
 
 /// Check if any shot in the group has multiple successors within the same group.
-fn has_branching_within(
-    shots: &[&RawShot],
-    successors: &HashMap<i64, Vec<i64>>,
-) -> bool {
+fn has_branching_within(shots: &[&RawShot], successors: &HashMap<i64, Vec<i64>>) -> bool {
     let shot_ids: std::collections::HashSet<i64> = shots.iter().map(|s| s.id).collect();
     for shot in shots {
         if let Some(succs) = successors.get(&shot.id) {
@@ -1173,7 +1171,11 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
 
 /// Convert a parsed TML file into `ImportSectionConfig` values ready for
 /// `execute_import_sections`.
-pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool, comments_on_stations: bool) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>)> {
+pub fn convert_tml_to_import_configs(
+    tml: &TmlFile,
+    include_excluded: bool,
+    comments_on_stations: bool,
+) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>)> {
     if tml.sections.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
@@ -1209,7 +1211,8 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool, comm
         let section_index = si as u32;
 
         // Convert shots to ShotData, using start_depth for correct rebasing
-        let shot_data = convert_shots_to_shot_data(&section.shots, section.start_depth, include_excluded);
+        let shot_data =
+            convert_shots_to_shot_data(&section.shots, section.start_depth, include_excluded);
 
         // Skip sections that end up with zero shots after filtering
         if shot_data.is_empty() {
@@ -1379,7 +1382,11 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
     let dep: Vec<Option<usize>> = configs
         .iter()
         .map(|c| {
-            if let ImportPlacement::FromImporting { target_section_index, .. } = &c.placement {
+            if let ImportPlacement::FromImporting {
+                target_section_index,
+                ..
+            } = &c.placement
+            {
                 pos_of.get(target_section_index).copied()
             } else {
                 None
@@ -1452,7 +1459,11 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 /// Resolve a TML shot's entry depth, handling the `-1.0` "same as previous" sentinel.
 /// `prev_depth` is the previous real shot's cumulative depth (`None` for the first
 /// shot in a section), `start_depth` the parent station's cumulative depth.
-pub(crate) fn resolve_tml_depth_in(shot: &TmlShot, prev_depth: Option<f64>, start_depth: f64) -> f64 {
+pub(crate) fn resolve_tml_depth_in(
+    shot: &TmlShot,
+    prev_depth: Option<f64>,
+    start_depth: f64,
+) -> f64 {
     if shot.depth_in != -1.0 {
         shot.depth_in
     } else {
@@ -1469,7 +1480,13 @@ pub(crate) fn resolve_tml_depth_in(shot: &TmlShot, prev_depth: Option<f64>, star
 /// `depth_in` must already be resolved via [`resolve_tml_depth_in`].
 pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     // LRUD: pass through, using None for zero values
-    let lrud_opt = |v: f64| if v.abs() < f64::EPSILON { None } else { Some(v) };
+    let lrud_opt = |v: f64| {
+        if v.abs() < f64::EPSILON {
+            None
+        } else {
+            Some(v)
+        }
+    };
 
     // Ariane stores azimuths as arbitrary angles (can be negative or >360).
     // Normalize to 0..360 range for Stalagmight's data model.
@@ -1494,7 +1511,11 @@ pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     }
 }
 
-fn convert_shots_to_shot_data(shots: &[TmlShot], start_depth: f64, include_excluded: bool) -> Vec<ShotData> {
+fn convert_shots_to_shot_data(
+    shots: &[TmlShot],
+    start_depth: f64,
+    include_excluded: bool,
+) -> Vec<ShotData> {
     if shots.is_empty() {
         return Vec::new();
     }
@@ -1515,7 +1536,11 @@ fn convert_shots_to_shot_data(shots: &[TmlShot], start_depth: f64, include_exclu
     let mut result = Vec::with_capacity(real_shots.len());
 
     for (i, shot) in real_shots.iter().enumerate() {
-        let prev_depth = if i > 0 { Some(real_shots[i - 1].depth) } else { None };
+        let prev_depth = if i > 0 {
+            Some(real_shots[i - 1].depth)
+        } else {
+            None
+        };
         let depth_in = resolve_tml_depth_in(shot, prev_depth, start_depth);
         result.push(normalize_tml_shot(shot, depth_in));
     }
@@ -1541,8 +1566,7 @@ fn determine_placement(
     if section_index == 0 {
         // Check if first shot has GPS data
         if let Some(first_shot) = section.shots.first() {
-            if first_shot.latitude.abs() > f64::EPSILON
-                || first_shot.longitude.abs() > f64::EPSILON
+            if first_shot.latitude.abs() > f64::EPSILON || first_shot.longitude.abs() > f64::EPSILON
             {
                 return ImportPlacement::ZeroDatum {
                     coordinates: crate::models::GpsCoordinates {
@@ -1606,6 +1630,12 @@ fn determine_placement(
 // ============================================================================
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stderr
+)]
 mod tests {
     use super::*;
 
@@ -1780,15 +1810,20 @@ mod tests {
 
     #[test]
     fn test_parse_tml_long_keys() {
-        let xml = wrap_xml(&[
-            tml_shot_xml(0, -1, "START", "Start"),
-            tml_shot_xml(1, 0, "REAL", "Section 1"),
-        ].join("\n"));
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section 1"),
+            ]
+            .join("\n"),
+        );
 
         let (shots, meta) = parse_raw_shots(&xml).unwrap_or_else(|_| {
             std::process::abort(); // unreachable in tests
-            #[allow(unreachable_code)]
-            { (Vec::new(), FileMetadata::default()) }
+            #[expect(unreachable_code)]
+            {
+                (Vec::new(), FileMetadata::default())
+            }
         });
 
         // Must not panic-unwrap, use assert
@@ -1809,14 +1844,16 @@ mod tests {
 
     #[test]
     fn test_parse_tmlu_short_keys() {
-        let xml = wrap_xml(&[
-            tmlu_shot_xml(0, -1, "START", "Start"),
-            tmlu_shot_xml(1, 0, "REAL", "Sec A"),
-        ].join("\n"));
+        let xml = wrap_xml(
+            &[
+                tmlu_shot_xml(0, -1, "START", "Start"),
+                tmlu_shot_xml(1, 0, "REAL", "Sec A"),
+            ]
+            .join("\n"),
+        );
 
-        let (shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
 
         assert_eq!(shots.len(), 2);
         assert_eq!(shots[1].section, "Sec A");
@@ -1830,15 +1867,17 @@ mod tests {
 
     #[test]
     fn test_start_shots_excluded_from_sections() {
-        let xml = wrap_xml(&[
-            tml_shot_xml(0, -1, "START", "Start"),
-            tml_shot_xml(1, 0, "REAL", "Section 1"),
-            tml_shot_xml(2, 1, "REAL", "Section 1"),
-        ].join("\n"));
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section 1"),
+                tml_shot_xml(2, 1, "REAL", "Section 1"),
+            ]
+            .join("\n"),
+        );
 
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
 
         let (sections, _) = build_sections(raw_shots);
         assert_eq!(sections.len(), 1);
@@ -1912,9 +1951,8 @@ mod tests {
             .join("\n"),
         );
 
-        let (raw_shots, metadata) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, metadata) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, closures) = build_sections(raw_shots);
 
         // geo_coding should be populated from propagated GPS
@@ -1938,7 +1976,8 @@ mod tests {
             closures,
         };
 
-        let (configs, _) = convert_tml_to_import_configs(&tml, false, false).unwrap_or_else(|_| (Vec::new(), Vec::new()));
+        let (configs, _) = convert_tml_to_import_configs(&tml, false, false)
+            .unwrap_or_else(|_| (Vec::new(), Vec::new()));
         assert_eq!(configs.len(), 1);
         match &configs[0].placement {
             ImportPlacement::ZeroDatum {
@@ -1950,10 +1989,7 @@ mod tests {
                 assert_eq!(*station_index, 0);
             }
             other => {
-                assert!(
-                    false,
-                    "Expected ZeroDatum, got {other:?}"
-                );
+                assert!(false, "Expected ZeroDatum, got {other:?}");
             }
         }
     }
@@ -1969,9 +2005,8 @@ mod tests {
             .join("\n"),
         );
 
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, _) = build_sections(raw_shots);
 
         // geo_coding extraction (same logic as parse_tml)
@@ -1998,14 +2033,16 @@ mod tests {
 
     #[test]
     fn test_virtual_shot_detected() {
-        let xml = wrap_xml(&[
-            tml_shot_xml(0, -1, "START", "Start"),
-            tml_shot_xml(1, 0, "VIRTUAL", "Section 1"),
-        ].join("\n"));
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "VIRTUAL", "Section 1"),
+            ]
+            .join("\n"),
+        );
 
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
 
         let (sections, _) = build_sections(raw_shots);
         assert_eq!(sections[0].shots[0].shot_type, TmlShotType::Virtual);
@@ -2044,9 +2081,8 @@ mod tests {
             "#
         ));
 
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, _) = build_sections(raw_shots);
         let shot_data = convert_shots_to_shot_data(&sections[0].shots, 0.0, false);
 
@@ -2081,9 +2117,8 @@ mod tests {
             "#
         ));
 
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, _) = build_sections(raw_shots);
         let shot_data = convert_shots_to_shot_data(&sections[0].shots, 0.0, false);
 
@@ -2105,8 +2140,8 @@ mod tests {
                 from_id: 0,
                 shot_type: TmlShotType::Real,
                 azimuth: 90.0,
-                length: 10.0,   // feet
-                depth: 5.0,     // feet
+                length: 10.0, // feet
+                depth: 5.0,   // feet
                 depth_in: -1.0,
                 inclination: 0.0,
                 left: 3.0,
@@ -2194,16 +2229,18 @@ mod tests {
 
     #[test]
     fn test_linear_no_split() {
-        let xml = wrap_xml(&[
-            tml_shot_xml(0, -1, "START", "Start"),
-            tml_shot_xml(1, 0, "REAL", "Section 1"),
-            tml_shot_xml(2, 1, "REAL", "Section 1"),
-            tml_shot_xml(3, 2, "REAL", "Section 1"),
-        ].join("\n"));
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section 1"),
+                tml_shot_xml(2, 1, "REAL", "Section 1"),
+                tml_shot_xml(3, 2, "REAL", "Section 1"),
+            ]
+            .join("\n"),
+        );
 
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, _) = build_sections(raw_shots);
 
         assert_eq!(sections.len(), 1);
@@ -2215,16 +2252,18 @@ mod tests {
     #[test]
     fn test_branch_detection_and_split() {
         // Shot 1 has two successors (2 and 3) in the same section
-        let xml = wrap_xml(&[
-            tml_shot_xml(0, -1, "START", "Start"),
-            tml_shot_xml(1, 0, "REAL", "Section 1"),
-            tml_shot_xml(2, 1, "REAL", "Section 1"),
-            tml_shot_xml(3, 1, "REAL", "Section 1"), // branches from same shot
-        ].join("\n"));
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section 1"),
+                tml_shot_xml(2, 1, "REAL", "Section 1"),
+                tml_shot_xml(3, 1, "REAL", "Section 1"), // branches from same shot
+            ]
+            .join("\n"),
+        );
 
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, _) = build_sections(raw_shots);
 
         // Should split into 2 branches
@@ -2238,28 +2277,34 @@ mod tests {
         // Interleaved order that used to trigger fallback flattening:
         // 2 branches to (3, 6), and 3 branches to (4, 5). The 6→7→8 chain
         // must stay connected and must not absorb shot 5.
-        let xml = wrap_xml(&[
-            tml_shot_xml(0, -1, "START", "Start"),
-            tml_shot_xml(1, 0, "REAL", "Section 1"),
-            tml_shot_xml(2, 1, "REAL", "Section 1"),
-            tml_shot_xml(3, 2, "REAL", "Section 1"),
-            tml_shot_xml(6, 2, "VIRTUAL", "Section 1"),
-            tml_shot_xml(4, 3, "REAL", "Section 1"),
-            tml_shot_xml(5, 3, "REAL", "Section 1"),
-            tml_shot_xml(7, 6, "REAL", "Section 1"),
-            tml_shot_xml(8, 7, "REAL", "Section 1"),
-        ].join("\n"));
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section 1"),
+                tml_shot_xml(2, 1, "REAL", "Section 1"),
+                tml_shot_xml(3, 2, "REAL", "Section 1"),
+                tml_shot_xml(6, 2, "VIRTUAL", "Section 1"),
+                tml_shot_xml(4, 3, "REAL", "Section 1"),
+                tml_shot_xml(5, 3, "REAL", "Section 1"),
+                tml_shot_xml(7, 6, "REAL", "Section 1"),
+                tml_shot_xml(8, 7, "REAL", "Section 1"),
+            ]
+            .join("\n"),
+        );
 
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, _) = build_sections(raw_shots);
 
         let mut id_to_section: HashMap<i64, usize> = HashMap::new();
         let mut seen = std::collections::HashSet::new();
         for (si, sec) in sections.iter().enumerate() {
             for shot in &sec.shots {
-                assert!(seen.insert(shot.id), "shot {} emitted multiple times", shot.id);
+                assert!(
+                    seen.insert(shot.id),
+                    "shot {} emitted multiple times",
+                    shot.id
+                );
                 id_to_section.insert(shot.id, si);
             }
         }
@@ -2275,7 +2320,10 @@ mod tests {
 
         assert_eq!(sec_6, sec_7, "6 and 7 must stay in the same branch");
         assert_eq!(sec_7, sec_8, "7 and 8 must stay in the same branch");
-        assert_ne!(sec_5, sec_6, "shot 5 must not be merged into the 6→7→8 chain");
+        assert_ne!(
+            sec_5, sec_6,
+            "shot 5 must not be merged into the 6→7→8 chain"
+        );
 
         let chain_6_ids: Vec<i64> = sections[sec_6].shots.iter().map(|s| s.id).collect();
         assert_eq!(chain_6_ids, vec![6, 7, 8], "expected preserved 6→7→8 chain");
@@ -2287,17 +2335,19 @@ mod tests {
     fn test_malformed_cycle_and_self_loop_are_guarded() {
         // Malformed graph with a 2<->3 cycle and a self-loop at 4.
         // Parser should still terminate and emit each shot exactly once.
-        let xml = wrap_xml(&[
-            tml_shot_xml(0, -1, "START", "Start"),
-            tml_shot_xml(1, 0, "REAL", "Section 1"),
-            tml_shot_xml(2, 3, "REAL", "Section 1"),
-            tml_shot_xml(3, 2, "REAL", "Section 1"),
-            tml_shot_xml(4, 4, "REAL", "Section 1"),
-        ].join("\n"));
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section 1"),
+                tml_shot_xml(2, 3, "REAL", "Section 1"),
+                tml_shot_xml(3, 2, "REAL", "Section 1"),
+                tml_shot_xml(4, 4, "REAL", "Section 1"),
+            ]
+            .join("\n"),
+        );
 
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, _) = build_sections(raw_shots);
 
         let ids: Vec<i64> = sections
@@ -2353,9 +2403,8 @@ mod tests {
             "#
         ));
 
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, closures) = build_sections(raw_shots);
 
         assert_eq!(closures.len(), 1);
@@ -2369,14 +2418,16 @@ mod tests {
 
     #[test]
     fn test_closure_to_id_negative_ignored() {
-        let xml = wrap_xml(&[
-            tml_shot_xml(0, -1, "START", "Start"),
-            tml_shot_xml(1, 0, "REAL", "Section 1"),
-        ].join("\n"));
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section 1"),
+            ]
+            .join("\n"),
+        );
 
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (_, closures) = build_sections(raw_shots);
 
         assert!(closures.is_empty());
@@ -2389,9 +2440,8 @@ mod tests {
     #[test]
     fn test_empty_data() {
         let xml = wrap_xml("");
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, closures) = build_sections(raw_shots);
         assert!(sections.is_empty());
         assert!(closures.is_empty());
@@ -2429,17 +2479,19 @@ mod tests {
 
     #[test]
     fn test_multi_section_topology() {
-        let xml = wrap_xml(&[
-            tml_shot_xml(0, -1, "START", "Start"),
-            tml_shot_xml(1, 0, "REAL", "Section A"),
-            tml_shot_xml(2, 1, "REAL", "Section A"),
-            tml_shot_xml(3, 2, "REAL", "Section B"),
-            tml_shot_xml(4, 3, "REAL", "Section B"),
-        ].join("\n"));
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section A"),
+                tml_shot_xml(2, 1, "REAL", "Section A"),
+                tml_shot_xml(3, 2, "REAL", "Section B"),
+                tml_shot_xml(4, 3, "REAL", "Section B"),
+            ]
+            .join("\n"),
+        );
 
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, _) = build_sections(raw_shots);
 
         assert_eq!(sections.len(), 2);
@@ -2455,16 +2507,18 @@ mod tests {
 
     #[test]
     fn test_convert_to_import_configs() {
-        let xml = wrap_xml(&[
-            tml_shot_xml(0, -1, "START", "Start"),
-            tml_shot_xml(1, 0, "REAL", "Section A"),
-            tml_shot_xml(2, 1, "REAL", "Section A"),
-            tml_shot_xml(3, 2, "REAL", "Section B"),
-        ].join("\n"));
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section A"),
+                tml_shot_xml(2, 1, "REAL", "Section A"),
+                tml_shot_xml(3, 2, "REAL", "Section B"),
+            ]
+            .join("\n"),
+        );
 
-        let (raw_shots, metadata) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, metadata) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, closures) = build_sections(raw_shots);
 
         let tml = TmlFile {
@@ -2477,7 +2531,8 @@ mod tests {
             closures,
         };
 
-        let (configs, _) = convert_tml_to_import_configs(&tml, false, false).unwrap_or_else(|_| (Vec::new(), Vec::new()));
+        let (configs, _) = convert_tml_to_import_configs(&tml, false, false)
+            .unwrap_or_else(|_| (Vec::new(), Vec::new()));
         assert_eq!(configs.len(), 2);
 
         // First section → Origin (no GPS)
@@ -2493,9 +2548,15 @@ mod tests {
                 target_section_index,
                 target_station_index,
             } => {
-                assert_eq!(*import_station, 0, "import_station should be 0 (first station)");
+                assert_eq!(
+                    *import_station, 0,
+                    "import_station should be 0 (first station)"
+                );
                 assert_eq!(*target_section_index, 0, "should link to section 0");
-                assert_eq!(*target_station_index, 2, "should link to station 2 (end of shot ID=2)");
+                assert_eq!(
+                    *target_station_index, 2,
+                    "should link to station 2 (end of shot ID=2)"
+                );
             }
             other => panic!("Expected FromImporting, got {:?}", other),
         }
@@ -2513,7 +2574,11 @@ mod tests {
             return;
         }
         let result = parse_tml(&fixture);
-        assert!(result.is_ok(), "Failed to parse test_simple.tml: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse test_simple.tml: {:?}",
+            result.err()
+        );
         let tml = result.unwrap_or_else(|_| TmlFile {
             cave_name: String::new(),
             unit: TmlUnit::Metric,
@@ -2534,7 +2599,11 @@ mod tests {
             return;
         }
         let result = parse_tml(&fixture);
-        assert!(result.is_ok(), "Failed to parse test_simple.tmlu: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse test_simple.tmlu: {:?}",
+            result.err()
+        );
     }
 
     // -------------------------------------------------------------------
@@ -2958,7 +3027,7 @@ mod tests {
                     name: "B".to_string(),
                     shots: vec![
                         make_shot(5, 3, true),   // excluded, from_id=3 is also excluded
-                        make_shot(6, 10, false),  // kept, from_id=10 is in section C
+                        make_shot(6, 10, false), // kept, from_id=10 is in section C
                     ],
                     surveyor: None,
                     date: None,
@@ -3002,8 +3071,14 @@ mod tests {
                 target_station_index,
             } => {
                 assert_eq!(*import_station, 0);
-                assert_eq!(*target_section_index, 2, "should reference section C (raw index 2)");
-                assert_eq!(*target_station_index, 1, "should attach to station 1 (shot 10)");
+                assert_eq!(
+                    *target_section_index, 2,
+                    "should reference section C (raw index 2)"
+                );
+                assert_eq!(
+                    *target_station_index, 1,
+                    "should attach to station 1 (shot 10)"
+                );
             }
             other => panic!("Expected FromImporting, got {:?}", other),
         }
@@ -3011,10 +3086,7 @@ mod tests {
 
     #[test]
     fn test_strip_section_description() {
-        assert_eq!(
-            strip_section_description("Mainline"),
-            "Mainline"
-        );
+        assert_eq!(strip_section_description("Mainline"), "Mainline");
         assert_eq!(
             strip_section_description(
                 "Reel to Mainline Cx<SectionDescription>reel to mainline connection</SectionDescription>"
@@ -3022,7 +3094,9 @@ mod tests {
             "Reel to Mainline Cx"
         );
         assert_eq!(
-            strip_section_description("Eastern Bypass Cavern-side<SectionDescription>notes</SectionDescription>"),
+            strip_section_description(
+                "Eastern Bypass Cavern-side<SectionDescription>notes</SectionDescription>"
+            ),
             "Eastern Bypass Cavern-side"
         );
         assert_eq!(strip_section_description(""), "");
@@ -3054,14 +3128,18 @@ mod tests {
                 <Longitude>0</Longitude><ClosureToID>-1</ClosureToID></SurveyData>"#,
         ));
 
-        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, _) = build_sections(raw_shots);
 
         // Should be 1 section (MySec) with 2 shots (START excluded)
-        assert_eq!(sections.len(), 1, "Expected 1 section, got {}: {:?}",
-            sections.len(), sections.iter().map(|s| &s.name).collect::<Vec<_>>());
+        assert_eq!(
+            sections.len(),
+            1,
+            "Expected 1 section, got {}: {:?}",
+            sections.len(),
+            sections.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
         assert_eq!(sections[0].name, "MySec");
         assert_eq!(sections[0].shots.len(), 2);
     }
@@ -3074,19 +3152,21 @@ mod tests {
     fn test_mid_section_branching_topology() {
         // A: START → shot1 → shot2 → shot3 → shot4
         // B: branches from shot2 (mid-section)
-        let xml = wrap_xml(&[
-            tml_shot_xml(0, -1, "START", "Start"),
-            tml_shot_xml(1, 0, "REAL", "Section A"),
-            tml_shot_xml(2, 1, "REAL", "Section A"),
-            tml_shot_xml(3, 2, "REAL", "Section A"),
-            tml_shot_xml(4, 3, "REAL", "Section A"),
-            tml_shot_xml(5, 2, "REAL", "Section B"), // branches from shot 2 (mid-section A)
-            tml_shot_xml(6, 5, "REAL", "Section B"),
-        ].join("\n"));
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml(0, -1, "START", "Start"),
+                tml_shot_xml(1, 0, "REAL", "Section A"),
+                tml_shot_xml(2, 1, "REAL", "Section A"),
+                tml_shot_xml(3, 2, "REAL", "Section A"),
+                tml_shot_xml(4, 3, "REAL", "Section A"),
+                tml_shot_xml(5, 2, "REAL", "Section B"), // branches from shot 2 (mid-section A)
+                tml_shot_xml(6, 5, "REAL", "Section B"),
+            ]
+            .join("\n"),
+        );
 
-        let (raw_shots, metadata) = parse_raw_shots(&xml).unwrap_or_else(|_| {
-            (Vec::new(), FileMetadata::default())
-        });
+        let (raw_shots, metadata) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
         let (sections, closures) = build_sections(raw_shots);
 
         let tml = TmlFile {
@@ -3116,8 +3196,10 @@ mod tests {
             } => {
                 assert_eq!(*import_station, 0);
                 assert_eq!(*target_section_index, 0);
-                assert_eq!(*target_station_index, 2,
-                    "Should link to station 2 (end of shot ID=2 at import_idx=1)");
+                assert_eq!(
+                    *target_station_index, 2,
+                    "Should link to station 2 (end of shot ID=2 at import_idx=1)"
+                );
             }
             other => panic!("Expected FromImporting, got {:?}", other),
         }
@@ -3133,8 +3215,9 @@ mod tests {
     fn parse_tml_naharon_coordinates() {
         use crate::models::{ImportPlacement, Project, SectionData, StationRef};
 
-        let path_str = std::env::var("TML_NAHARON_PATH")
-            .unwrap_or_else(|_| "/home/user/tmp/467b76f1-5909-4e00-b96f-c30931ac81db/ariane.tml".into());
+        let path_str = std::env::var("TML_NAHARON_PATH").unwrap_or_else(|_| {
+            "/home/user/tmp/467b76f1-5909-4e00-b96f-c30931ac81db/ariane.tml".into()
+        });
         let path = Path::new(&path_str);
         if !path.exists() {
             eprintln!("Skipping: TML file not found at {path_str}");
@@ -3172,12 +3255,15 @@ mod tests {
                 ImportPlacement::ZeroDatum { station_index, .. } => {
                     // First datum station goes to origin; offset so that station is at (0,0)
                     let station_ref = StationRef::new(section_id, *station_index);
-                    let current = project.compute_station_raw_coords(station_ref)
+                    let current = project
+                        .compute_station_raw_coords(station_ref)
                         .expect("station coords for zero datum");
                     let offset_x = -current.x;
                     let offset_y = -current.y;
                     if offset_x.abs() > 1e-9 || offset_y.abs() > 1e-9 {
-                        project.section_offsets.insert(section_id, (offset_x, offset_y));
+                        project
+                            .section_offsets
+                            .insert(section_id, (offset_x, offset_y));
                     }
                 }
                 ImportPlacement::FromExisting { .. } => {
@@ -3188,11 +3274,13 @@ mod tests {
                     target_section_index,
                     target_station_index,
                 } => {
-                    let target_section_id = *created_ids.get(target_section_index)
+                    let target_section_id = *created_ids
+                        .get(target_section_index)
                         .expect("target section should exist");
                     let import_ref = StationRef::new(section_id, *import_station);
                     let target_ref = StationRef::new(target_section_id, *target_station_index);
-                    project.merge_stations(import_ref, target_ref)
+                    project
+                        .merge_stations(import_ref, target_ref)
                         .expect("merge should succeed");
                 }
                 ImportPlacement::Manual { .. } | ImportPlacement::ManualSnap { .. } => {}
@@ -3203,7 +3291,8 @@ mod tests {
         //    For each section, compute station coords independently from shot data
         //    and compare against compute_station_raw_coords (relative to station 0).
         for section in &project.sections {
-            let base = project.compute_station_raw_coords(StationRef::new(section.id, 0))
+            let base = project
+                .compute_station_raw_coords(StationRef::new(section.id, 0))
                 .expect("base station coords");
 
             let mut expected_x = 0.0_f64;
@@ -3216,7 +3305,8 @@ mod tests {
                 expected_y += h * azi_rad.cos();
 
                 let station_idx = (i + 1) as u32;
-                let actual = project.compute_station_raw_coords(StationRef::new(section.id, station_idx))
+                let actual = project
+                    .compute_station_raw_coords(StationRef::new(section.id, station_idx))
                     .expect("station coords");
 
                 let rel_x = actual.x - base.x;
@@ -3227,7 +3317,10 @@ mod tests {
                     "Section '{}' station {}: expected rel ({:.6}, {:.6}), got ({:.6}, {:.6})",
                     section.name.as_deref().unwrap_or("?"),
                     station_idx,
-                    expected_x, expected_y, rel_x, rel_y,
+                    expected_x,
+                    expected_y,
+                    rel_x,
+                    rel_y,
                 );
             }
         }
@@ -3247,7 +3340,11 @@ mod tests {
         // or ZeroDatum). We compare coordinates RELATIVE to that origin.
         // Get the offset applied by ZeroDatum so we can subtract it.
         let first_section_id = *created_ids.get(&configs[0].section_index).unwrap();
-        let origin_offset = project.section_offsets.get(&first_section_id).copied().unwrap_or((0.0, 0.0));
+        let origin_offset = project
+            .section_offsets
+            .get(&first_section_id)
+            .copied()
+            .unwrap_or((0.0, 0.0));
 
         // Helper: get absolute coords relative to START station
         // Expected coordinates computed independently from raw TML data
@@ -3262,13 +3359,37 @@ mod tests {
 
         let expectations = [
             // Reel to Mainline Cx: station 0 = START at origin
-            Expected { section: "Reel to Mainline Cx", station: 0, x: 0.0, y: 0.0, depth: 0.28 },
+            Expected {
+                section: "Reel to Mainline Cx",
+                station: 0,
+                x: 0.0,
+                y: 0.0,
+                depth: 0.28,
+            },
             // Reel to Mainline Cx: station 13 = end of shot 88
-            Expected { section: "Reel to Mainline Cx", station: 13, x: -30.7455, y: 69.9489, depth: 11.06 },
+            Expected {
+                section: "Reel to Mainline Cx",
+                station: 13,
+                x: -30.7455,
+                y: 69.9489,
+                depth: 11.06,
+            },
             // Bypass south: station 11 = end of shot 68
-            Expected { section: "Bypass south", station: 11, x: -21.7235, y: 176.5525, depth: 15.80 },
+            Expected {
+                section: "Bypass south",
+                station: 11,
+                x: -21.7235,
+                y: 176.5525,
+                depth: 15.80,
+            },
             // Haloline (branch 2): station 30 = end of shot 264
-            Expected { section: "Haloline (branch 2)", station: 30, x: -58.9147, y: 413.9500, depth: 12.30 },
+            Expected {
+                section: "Haloline (branch 2)",
+                station: 30,
+                x: -58.9147,
+                y: 413.9500,
+                depth: 12.30,
+            },
         ];
 
         let tolerance = 0.05; // 5cm tolerance for absolute coordinates
@@ -3276,7 +3397,9 @@ mod tests {
             // Section names in the import may differ slightly (our parser strips
             // SectionDescription suffixes and may split at branches). Try to find
             // the section; skip if the parser organized it differently.
-            let section_opt = project.sections.iter()
+            let section_opt = project
+                .sections
+                .iter()
                 .find(|s| s.name.as_deref() == Some(exp.section));
             let Some(section) = section_opt else {
                 eprintln!("  Skipping absolute check: section '{}' not found (parser may have renamed it)", exp.section);
@@ -3287,7 +3410,8 @@ mod tests {
                     exp.section, exp.station, section.shots.len());
                 continue;
             }
-            let c = project.compute_station_raw_coords(StationRef::new(section.id, exp.station))
+            let c = project
+                .compute_station_raw_coords(StationRef::new(section.id, exp.station))
                 .unwrap_or_else(|| panic!("Coords for {}:{}", exp.section, exp.station));
             let (rx, ry) = (c.x - origin_offset.0, c.y - origin_offset.1);
 
@@ -3301,7 +3425,10 @@ mod tests {
             assert!(
                 (c.z - exp.depth).abs() < 0.5,
                 "Depth mismatch for '{}' station {}: expected {:.4}, got {:.4}",
-                exp.section, exp.station, exp.depth, c.z,
+                exp.section,
+                exp.station,
+                exp.depth,
+                c.z,
             );
         }
 
@@ -3309,18 +3436,27 @@ mod tests {
         //    This validates the full import + merge + offset pipeline.
         let merge_tolerance = 1e-6;
         for merge in &project.station_merges {
-            let sa = project.resolve_key(&merge.station_a)
+            let sa = project
+                .resolve_key(&merge.station_a)
                 .unwrap_or_else(|| panic!("Resolve merge station_a {:?}", merge.station_a));
-            let sb = project.resolve_key(&merge.station_b)
+            let sb = project
+                .resolve_key(&merge.station_b)
                 .unwrap_or_else(|| panic!("Resolve merge station_b {:?}", merge.station_b));
-            let ca = project.compute_station_raw_coords(sa)
+            let ca = project
+                .compute_station_raw_coords(sa)
                 .unwrap_or_else(|| panic!("Coords for merge station_a {:?}", merge.station_a));
-            let cb = project.compute_station_raw_coords(sb)
+            let cb = project
+                .compute_station_raw_coords(sb)
                 .unwrap_or_else(|| panic!("Coords for merge station_b {:?}", merge.station_b));
             assert!(
                 (ca.x - cb.x).abs() < merge_tolerance && (ca.y - cb.y).abs() < merge_tolerance,
                 "Merged stations {:?} and {:?} not co-located: ({:.6},{:.6}) vs ({:.6},{:.6})",
-                merge.station_a, merge.station_b, ca.x, ca.y, cb.x, cb.y,
+                merge.station_a,
+                merge.station_b,
+                ca.x,
+                ca.y,
+                cb.x,
+                cb.y,
             );
         }
 

@@ -172,7 +172,9 @@ impl GpsCoordinates {
             return Err(format!("Longitude must be finite, got {longitude}"));
         }
         if !depth_reference.is_finite() {
-            return Err(format!("Depth reference must be finite, got {depth_reference}"));
+            return Err(format!(
+                "Depth reference must be finite, got {depth_reference}"
+            ));
         }
         if !(-90.0..=90.0).contains(&latitude) {
             return Err(format!("Latitude must be in [-90, 90], got {latitude}"));
@@ -242,9 +244,7 @@ impl Coordinates {
     /// where it silently poisons every downstream distance/alignment comparison.
     pub fn new_checked(x: f64, y: f64, z: f64) -> Result<Self, String> {
         if !x.is_finite() || !y.is_finite() || !z.is_finite() {
-            return Err(format!(
-                "Coordinates must be finite, got ({x}, {y}, {z})"
-            ));
+            return Err(format!("Coordinates must be finite, got ({x}, {y}, {z})"));
         }
         Ok(Self { x, y, z })
     }
@@ -270,8 +270,8 @@ impl Coordinates {
     /// Examples: "5.3m NNW", "5.3m NNW, 1.2m down", "1.2m up", "no movement"
     pub fn display_offset(&self) -> String {
         const COMPASS: [&str; 16] = [
-            "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+            "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW",
+            "NW", "NNW",
         ];
 
         let horiz_dist = (self.x * self.x + self.y * self.y).sqrt();
@@ -489,8 +489,14 @@ mod tests {
 
     #[test]
     fn display_offset_no_movement() {
-        assert_eq!(Coordinates::new(0.0, 0.0, 0.0).display_offset(), "no movement");
-        assert_eq!(Coordinates::new(0.005, 0.005, 0.005).display_offset(), "no movement");
+        assert_eq!(
+            Coordinates::new(0.0, 0.0, 0.0).display_offset(),
+            "no movement"
+        );
+        assert_eq!(
+            Coordinates::new(0.005, 0.005, 0.005).display_offset(),
+            "no movement"
+        );
     }
 
     #[test]
@@ -527,7 +533,10 @@ mod tests {
 
     #[test]
     fn display_offset_vertical_only() {
-        assert_eq!(Coordinates::new(0.0, 0.0, 3.0).display_offset(), "3.0m down");
+        assert_eq!(
+            Coordinates::new(0.0, 0.0, 3.0).display_offset(),
+            "3.0m down"
+        );
         assert_eq!(Coordinates::new(0.0, 0.0, -2.5).display_offset(), "2.5m up");
     }
 

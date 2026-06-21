@@ -1,6 +1,8 @@
 //! Command wrapper tests focused on critical/edge behaviors.
 
-use super::{cache, config, export, history, import, project, raw_data, section, shot, station, validation};
+use super::{
+    cache, config, export, history, import, project, raw_data, section, shot, station, validation,
+};
 use crate::core::{AppState, CommandResult};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
@@ -73,7 +75,11 @@ impl Drop for EnvVarGuard {
 }
 
 fn assert_success(result: &CommandResult) {
-    assert!(result.success, "expected success, got error: {:?}", result.error);
+    assert!(
+        result.success,
+        "expected success, got error: {:?}",
+        result.error
+    );
     assert!(result.error.is_none());
 }
 
@@ -191,7 +197,12 @@ fn test_update_data_table_view_roundtrip() {
         config::update_data_table_view_impl(
             state(&app).inner(),
             Some(vec!["length".to_string(), "_azimuth_avg".to_string()]),
-            Some(vec!["left".to_string(), "right".to_string(), "up".to_string(), "down".to_string()]),
+            Some(vec![
+                "left".to_string(),
+                "right".to_string(),
+                "up".to_string(),
+                "down".to_string(),
+            ]),
             Some("inout".to_string()),
             None,
             Some(vec!["_zeroDatum".to_string(), "_x".to_string()]),
@@ -199,13 +210,25 @@ fn test_update_data_table_view_roundtrip() {
         )
         .expect("update data-table view");
         let cfg = config::get_config(state(&app));
-        assert_eq!(cfg.panels.data_table_shot_column_order, vec!["length", "_azimuth_avg"]);
-        assert_eq!(cfg.panels.data_table_shot_hidden_columns, vec!["left", "right", "up", "down"]);
+        assert_eq!(
+            cfg.panels.data_table_shot_column_order,
+            vec!["length", "_azimuth_avg"]
+        );
+        assert_eq!(
+            cfg.panels.data_table_shot_hidden_columns,
+            vec!["left", "right", "up", "down"]
+        );
         assert_eq!(cfg.panels.data_table_azimuth_mode, "inout");
         // untouched field keeps its default
         assert_eq!(cfg.panels.data_table_inclination_mode, "off");
-        assert_eq!(cfg.panels.data_table_station_column_order, vec!["_zeroDatum", "_x"]);
-        assert_eq!(cfg.panels.data_table_station_hidden_columns, vec!["_connections"]);
+        assert_eq!(
+            cfg.panels.data_table_station_column_order,
+            vec!["_zeroDatum", "_x"]
+        );
+        assert_eq!(
+            cfg.panels.data_table_station_hidden_columns,
+            vec!["_connections"]
+        );
         // invalid mode is rejected, config untouched
         let err = config::update_data_table_view_impl(
             state(&app).inner(),
@@ -217,7 +240,12 @@ fn test_update_data_table_view_roundtrip() {
             None,
         );
         assert!(err.is_err());
-        assert_eq!(config::get_config(state(&app)).panels.data_table_azimuth_mode, "inout");
+        assert_eq!(
+            config::get_config(state(&app))
+                .panels
+                .data_table_azimuth_mode,
+            "inout"
+        );
     });
 }
 
@@ -276,8 +304,14 @@ fn test_update_panel_sizes_sections_only() {
             config::update_panel_sizes(state(&app), Some(333), None, None).unwrap();
             let after = config::get_config(state(&app));
             assert_eq!(after.panels.sections_panel_width, 333);
-            assert_eq!(after.panels.detail_panel_width, before.panels.detail_panel_width);
-            assert_eq!(after.panels.data_table_height, before.panels.data_table_height);
+            assert_eq!(
+                after.panels.detail_panel_width,
+                before.panels.detail_panel_width
+            );
+            assert_eq!(
+                after.panels.data_table_height,
+                before.panels.data_table_height
+            );
         });
     });
 }
@@ -291,8 +325,14 @@ fn test_update_panel_sizes_detail_only() {
             config::update_panel_sizes(state(&app), None, Some(444), None).unwrap();
             let after = config::get_config(state(&app));
             assert_eq!(after.panels.detail_panel_width, 444);
-            assert_eq!(after.panels.sections_panel_width, before.panels.sections_panel_width);
-            assert_eq!(after.panels.data_table_height, before.panels.data_table_height);
+            assert_eq!(
+                after.panels.sections_panel_width,
+                before.panels.sections_panel_width
+            );
+            assert_eq!(
+                after.panels.data_table_height,
+                before.panels.data_table_height
+            );
         });
     });
 }
@@ -306,8 +346,14 @@ fn test_update_panel_sizes_data_only() {
             config::update_panel_sizes(state(&app), None, None, Some(555)).unwrap();
             let after = config::get_config(state(&app));
             assert_eq!(after.panels.data_table_height, 555);
-            assert_eq!(after.panels.sections_panel_width, before.panels.sections_panel_width);
-            assert_eq!(after.panels.detail_panel_width, before.panels.detail_panel_width);
+            assert_eq!(
+                after.panels.sections_panel_width,
+                before.panels.sections_panel_width
+            );
+            assert_eq!(
+                after.panels.detail_panel_width,
+                before.panels.detail_panel_width
+            );
         });
     });
 }
@@ -334,9 +380,18 @@ fn test_update_panel_sizes_none_keeps_values() {
             let before = config::get_config(state(&app));
             config::update_panel_sizes(state(&app), None, None, None).unwrap();
             let after = config::get_config(state(&app));
-            assert_eq!(after.panels.sections_panel_width, before.panels.sections_panel_width);
-            assert_eq!(after.panels.detail_panel_width, before.panels.detail_panel_width);
-            assert_eq!(after.panels.data_table_height, before.panels.data_table_height);
+            assert_eq!(
+                after.panels.sections_panel_width,
+                before.panels.sections_panel_width
+            );
+            assert_eq!(
+                after.panels.detail_panel_width,
+                before.panels.detail_panel_width
+            );
+            assert_eq!(
+                after.panels.data_table_height,
+                before.panels.data_table_height
+            );
         });
     });
 }
@@ -585,11 +640,7 @@ fn test_redo_to_fails_when_stack_empty() {
 #[test]
 fn test_create_project_success() {
     let app = app_with_state();
-    let result = project::create_project(
-        state(&app),
-        "Demo".to_string(),
-        Some("Loc".to_string()),
-    );
+    let result = project::create_project(state(&app), "Demo".to_string(), Some("Loc".to_string()));
     assert_success(&result);
     let project_state = project::get_project_state(state(&app)).expect("project state");
     assert_eq!(project_state.project.name, "Demo");
@@ -775,10 +826,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
         perms.set_mode(0o555);
         fs::set_permissions(readonly_dir.path(), perms).unwrap();
 
-        let _env_guard = EnvVarGuard::set(
-            "XDG_CONFIG_HOME",
-            readonly_dir.path().to_str().unwrap(),
-        );
+        let _env_guard = EnvVarGuard::set("XDG_CONFIG_HOME", readonly_dir.path().to_str().unwrap());
 
         let app = app_with_state();
         let project_dir = TempDir::new().unwrap();
@@ -836,10 +884,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
 
         // On macOS, directories crate uses ~/Library/Application Support/...
         // Setting HOME to a read-only dir makes create_dir_all fail for config save.
-        let _env_guard = EnvVarGuard::set(
-            "HOME",
-            readonly_dir.path().to_str().unwrap(),
-        );
+        let _env_guard = EnvVarGuard::set("HOME", readonly_dir.path().to_str().unwrap());
 
         let app = app_with_state();
         let project_dir = TempDir::new().unwrap();
@@ -888,11 +933,7 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
             let path_b = dir.path().join("b.stalx");
             let path_c = dir.path().join("c.stalx");
 
-            for (path, name) in [
-                (&path_a, "A"),
-                (&path_b, "B"),
-                (&path_c, "C"),
-            ] {
+            for (path, name) in [(&path_a, "A"), (&path_b, "B"), (&path_c, "C")] {
                 let mut project = Project::new(name.to_string(), None);
                 project.add_section(SectionData {
                     shots: vec![shot_data(1.0)],
@@ -907,7 +948,10 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
             assert_success(&project::open_project(state(&app), path_c.clone()));
 
             let cfg = config::get_config(state(&app));
-            assert_eq!(cfg.general.recent_projects, vec![path_c.clone(), path_b.clone()]);
+            assert_eq!(
+                cfg.general.recent_projects,
+                vec![path_c.clone(), path_b.clone()]
+            );
 
             assert_success(&project::open_project(state(&app), path_b.clone()));
             let cfg = config::get_config(state(&app));
@@ -970,12 +1014,17 @@ fn test_import_sections_persists_deferred_new_project() {
         let mut project = Project::new("New Import".to_string(), None);
         project.file_path = Some(project_path.clone());
         state(&app).inner().set_project_for_tests(project);
-        state(&app).inner().set_initial_save_deferred_for_tests(true);
+        state(&app)
+            .inner()
+            .set_initial_save_deferred_for_tests(true);
         assert!(
             state(&app).initial_save_deferred(),
             "precondition: project must be deferred (never saved)"
         );
-        assert!(!project_path.exists(), "precondition: .stalx must not exist yet");
+        assert!(
+            !project_path.exists(),
+            "precondition: .stalx must not exist yet"
+        );
 
         // Import one origin-placed section through the command.
         let sections = vec![crate::models::ImportSectionConfig {
@@ -1007,6 +1056,170 @@ fn test_import_sections_persists_deferred_new_project() {
     });
 }
 
+// #92 / #112: the adversarial twin of the success test above. When the deferred
+// save *fails* (here: the save's parent directory is missing, so the temp
+// `.stalx.tmp` can't be created), `finalize_deferred_import` must return a PARTIAL
+// success —
+// keep the import's `success` (so the frontend refreshes + marks dirty, keeping
+// the in-memory import under the close-guard), attach a warning, and never
+// phantom-add the never-written project to Recent Projects. A hard failure (or a
+// silent "saved") would put us back in the #92 data-loss class.
+#[test]
+fn test_import_sections_deferred_save_failure_warns_no_phantom() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let dir = TempDir::new().unwrap();
+        // Force the deferred save to fail: point it at a path whose PARENT directory
+        // doesn't exist, so the atomic save can't create the temp `.stalx.tmp`
+        // (`Database::open` returns "Failed to create save file"). NB a directory
+        // squatting the *exact* reserved path does NOT fail — the first implicit save
+        // auto-renames around a collision (`next_available_project_path`) and
+        // succeeds; and a read-only dir wouldn't fail under the root-in-container NUC
+        // CI. A missing parent fails the create regardless of uid. (This drives the
+        // GENERIC save-failure branch; the permission-denied humanization in
+        // `finalize_deferred_import` needs `dir_present && EACCES`, which isn't
+        // root-safe to induce here — that sub-branch is covered by the
+        // permission-denied twin test below.)
+        let project_path = dir.path().join("missing-subdir").join("new-import.stalx");
+
+        let mut project = Project::new("New Import".to_string(), None);
+        project.file_path = Some(project_path.clone());
+        state(&app).inner().set_project_for_tests(project);
+        state(&app)
+            .inner()
+            .set_initial_save_deferred_for_tests(true);
+        assert!(
+            state(&app).initial_save_deferred(),
+            "precondition: project must be deferred (never saved)"
+        );
+
+        // Import one origin-placed section through the command — same shape as the
+        // success test, only the save target differs.
+        let sections = vec![crate::models::ImportSectionConfig {
+            section_index: 0,
+            name: Some("Imported".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot_data(5.0)],
+            station_comments: Vec::new(),
+            placement: crate::models::ImportPlacement::Origin,
+        }];
+        let result = import::import_sections(state(&app), sections, None, None, None);
+
+        // Partial success: the import itself still succeeds, but a warning flags the
+        // failed save instead of reporting a phantom "saved".
+        assert_success(&result);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("could not save")),
+            "a failed deferred save must surface a warning, not a phantom save: {:?}",
+            result.warnings
+        );
+
+        // No phantom: the never-written project must NOT appear in Recent Projects,
+        // and it must remain deferred (still unsaved) so the app keeps prompting.
+        let cfg = config::get_config(state(&app));
+        assert!(
+            !cfg.general.recent_projects.contains(&project_path),
+            "a project whose save failed must not be added to Recent Projects"
+        );
+        assert!(
+            state(&app).initial_save_deferred(),
+            "a failed deferred save must leave the project deferred (still unsaved)"
+        );
+
+        // ...and the just-imported section must still be in memory: the partial-
+        // success contract keeps the import under the close-guard so it isn't lost.
+        // A regression that returns success+warning while dropping the in-memory
+        // import would be the #92 data-loss class on the failure path — assert the
+        // CommandResult flag (above) is NOT enough on its own.
+        let project_state = state(&app).inner().get_project_state().unwrap();
+        assert_eq!(
+            project_state.sections.len(),
+            1,
+            "the imported section must survive in memory after a failed deferred save"
+        );
+    });
+}
+
+// #92 / #112: the permission-denied face of the failure path — the macOS "folder
+// access revoked" scenario the deferred-save warning was built for. When the save
+// fails with a permission-classified error, `finalize_deferred_import` must HUMANIZE
+// it ("permission denied (check folder access ...)") and must NOT leak the internal
+// `FS_PERMISSION_DENIED` marker into the user-facing warning (import.rs:143-152).
+//
+// We can't induce a literal EACCES root-safely (container-root holds
+// CAP_DAC_OVERRIDE, so mode bits don't bite), so we drive the same branch via the
+// classifier's documented string fallback: a directory squatting the `.stalx.tmp`
+// temp path makes SQLite report "unable to open database file", which
+// `is_permission_denied` (loading.rs) treats as permission-denied — and because the
+// parent dir is present, `save_failure` keeps the marker prefix. The partial-success
+// invariants (no phantom, in-memory survival, still-deferred) are already covered by
+// the generic-failure twin above; this test focuses on the message mapping.
+#[test]
+fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let dir = TempDir::new().unwrap();
+        let project_path = dir.path().join("new-import.stalx");
+        // Squat a DIRECTORY at the atomic-save temp path (`<stem>.stalx.tmp`). The
+        // reserved `.stalx` path itself stays absent (so no collision auto-rename),
+        // but `Database::open` on the temp dir fails with "unable to open database
+        // file" — classified as permission-denied — while the parent dir exists.
+        let temp_squat = dir.path().join("new-import.stalx.tmp");
+        fs::create_dir_all(&temp_squat).unwrap();
+
+        let mut project = Project::new("New Import".to_string(), None);
+        project.file_path = Some(project_path.clone());
+        state(&app).inner().set_project_for_tests(project);
+        state(&app)
+            .inner()
+            .set_initial_save_deferred_for_tests(true);
+        assert!(
+            state(&app).initial_save_deferred(),
+            "precondition: project must be deferred (never saved)"
+        );
+
+        let sections = vec![crate::models::ImportSectionConfig {
+            section_index: 0,
+            name: Some("Imported".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot_data(5.0)],
+            station_comments: Vec::new(),
+            placement: crate::models::ImportPlacement::Origin,
+        }];
+        let result = import::import_sections(state(&app), sections, None, None, None);
+
+        // Partial success carrying a HUMANIZED permission warning...
+        assert_success(&result);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("permission denied (check folder access")),
+            "a permission-classified save failure must be humanized: {:?}",
+            result.warnings
+        );
+        // ...and the internal marker must never reach the user-facing message.
+        assert!(
+            result.warnings.iter().all(|w| !w
+                .message
+                .contains(crate::core::loading::PERMISSION_DENIED_CODE)),
+            "the internal FS_PERMISSION_DENIED marker must be stripped, not leaked: {:?}",
+            result.warnings
+        );
+    });
+}
+
 // #104 review: "deferred" is tracked by an explicit flag, not inferred from the DB
 // handle or file existence (both ambiguous — dropped handles after a save, and
 // reserved-path collisions). A persisted project must never read as deferred; a
@@ -1019,11 +1232,15 @@ fn test_initial_save_deferred_uses_explicit_flag() {
         .set_project_for_tests(Project::new("P".to_string(), None));
 
     // Persisted (flag cleared) — not deferred, even with no DB handle.
-    state(&app).inner().set_initial_save_deferred_for_tests(false);
+    state(&app)
+        .inner()
+        .set_initial_save_deferred_for_tests(false);
     assert!(!state(&app).initial_save_deferred());
 
     // Deferred new project (flag set) — deferred.
-    state(&app).inner().set_initial_save_deferred_for_tests(true);
+    state(&app)
+        .inner()
+        .set_initial_save_deferred_for_tests(true);
     assert!(state(&app).initial_save_deferred());
 }
 
@@ -1061,7 +1278,8 @@ fn test_remove_from_recent_projects_success() {
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let saved_path = save_project_to_temp(&app, &dir);
-            let remove_result = project::remove_from_recent_projects(state(&app), saved_path.clone());
+            let remove_result =
+                project::remove_from_recent_projects(state(&app), saved_path.clone());
             assert_success(&remove_result);
             let recent = project::list_recent_projects(state(&app));
             assert!(!recent.iter().any(|p| p.file_path == saved_path));
@@ -1085,7 +1303,10 @@ fn test_delete_project_removes_file_and_recent() {
 
             let result = project::delete_project(state(&app), saved_path.clone(), false);
             assert_success(&result);
-            assert!(!saved_path.exists(), "project file should be deleted from disk");
+            assert!(
+                !saved_path.exists(),
+                "project file should be deleted from disk"
+            );
             let recent = project::list_recent_projects(state(&app));
             assert!(!recent.iter().any(|p| p.file_path == saved_path));
         });
@@ -1177,7 +1398,10 @@ fn test_delete_project_partial_failure_still_prunes_recents() {
 
             let result = project::delete_project(state(&app), saved_path.clone(), true);
 
-            assert!(result.success, "primary delete succeeded → overall success, not failure");
+            assert!(
+                result.success,
+                "primary delete succeeded → overall success, not failure"
+            );
             assert!(!saved_path.exists(), "project .stalx should be trashed");
             assert!(tml.exists(), "the un-trashable sibling is left in place");
             assert!(
@@ -1480,7 +1704,10 @@ fn test_create_shot_returns_warning_for_short() {
     let result = shot::create_shot(state(&app), id, shot_data(0.05), None, None);
     assert!(result.success);
     assert!(!result.warnings.is_empty());
-    assert!(result.shot_id.is_some(), "shot_id must be returned even when warnings are present");
+    assert!(
+        result.shot_id.is_some(),
+        "shot_id must be returned even when warnings are present"
+    );
 }
 
 #[test]
@@ -1500,10 +1727,16 @@ fn test_create_shot_before_inserts_at_position() {
     // Insert before the first shot (position 0)
     let result = shot::create_shot(state(&app), id, shot_data(5.0), None, Some(0));
     assert_success(&result);
-    assert!(result.shot_id.is_some(), "shot_id must be returned on success");
+    assert!(
+        result.shot_id.is_some(),
+        "shot_id must be returned on success"
+    );
     let section = section::get_section(state(&app), id).unwrap();
     assert_eq!(section.shots.len(), 3);
-    assert_eq!(section.shots[0].length, 5.0, "New shot should be at position 0 (prepended)");
+    assert_eq!(
+        section.shots[0].length, 5.0,
+        "New shot should be at position 0 (prepended)"
+    );
     assert_eq!(section.shots[1].length, 1.0);
     assert_eq!(section.shots[2].length, 2.0);
 }
@@ -1569,10 +1802,7 @@ fn test_delete_shot_removes_shot() {
 fn test_delete_shot_and_split_creates_new_section() {
     let app = app_with_state();
     create_project(&app);
-    let id = create_section_with_shots(
-        &app,
-        vec![shot_data(1.0), shot_data(2.0), shot_data(3.0)],
-    );
+    let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0), shot_data(3.0)]);
     let section_state = section::get_section(state(&app), id).unwrap();
     let shot_id = section_state.shots[1].id;
 
@@ -1643,11 +1873,7 @@ fn test_set_shot_reference_sets_false() {
 #[test]
 fn test_merge_stations_fails_without_project() {
     let app = app_with_state();
-    let result = station::merge_stations(
-        state(&app),
-        StationRef::new(0, 0),
-        StationRef::new(1, 0),
-    );
+    let result = station::merge_stations(state(&app), StationRef::new(0, 0), StationRef::new(1, 0));
     assert_failure_contains(&result, "No project open");
 }
 
@@ -1656,11 +1882,7 @@ fn test_merge_stations_fails_same_section() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::merge_stations(
-        state(&app),
-        StationRef::new(0, 0),
-        StationRef::new(0, 1),
-    );
+    let result = station::merge_stations(state(&app), StationRef::new(0, 0), StationRef::new(0, 1));
     assert_failure_contains(&result, "same section");
 }
 
@@ -1670,11 +1892,7 @@ fn test_merge_stations_success_between_sections() {
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = station::merge_stations(
-        state(&app),
-        StationRef::new(0, 1),
-        StationRef::new(1, 0),
-    );
+    let result = station::merge_stations(state(&app), StationRef::new(0, 1), StationRef::new(1, 0));
     assert_success(&result);
 }
 
@@ -1693,11 +1911,7 @@ fn test_unmerge_stations_removes_merge() {
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = station::merge_stations(
-        state(&app),
-        StationRef::new(0, 1),
-        StationRef::new(1, 0),
-    );
+    let _ = station::merge_stations(state(&app), StationRef::new(0, 1), StationRef::new(1, 0));
     let result = station::unmerge_stations(state(&app), StationRef::new(0, 1));
     assert_success(&result);
 }
@@ -1815,7 +2029,10 @@ fn test_import_dmp_missing_file_err() {
 fn test_calculate_file_hash_empty() {
     let file = NamedTempFile::new().unwrap();
     let hash = import::calculate_file_hash(file.path().to_path_buf()).unwrap();
-    assert_eq!(hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    assert_eq!(
+        hash,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
 }
 
 #[test]
@@ -1823,7 +2040,10 @@ fn test_calculate_file_hash_known_abc() {
     let file = NamedTempFile::new().unwrap();
     fs::write(file.path(), b"abc").unwrap();
     let hash = import::calculate_file_hash(file.path().to_path_buf()).unwrap();
-    assert_eq!(hash, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    assert_eq!(
+        hash,
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
 }
 
 #[test]
@@ -1831,7 +2051,10 @@ fn test_calculate_file_hash_known_linebreak() {
     let file = NamedTempFile::new().unwrap();
     fs::write(file.path(), b"line1\n").unwrap();
     let hash = import::calculate_file_hash(file.path().to_path_buf()).unwrap();
-    assert_eq!(hash, "cd205f1f8b8ab1bf7da554fd3460b5d377c587eb7fa4f394c3f403af3a787a1b");
+    assert_eq!(
+        hash,
+        "cd205f1f8b8ab1bf7da554fd3460b5d377c587eb7fa4f394c3f403af3a787a1b"
+    );
 }
 
 #[test]
@@ -1895,7 +2118,8 @@ fn test_export_json_fails_no_project() {
 fn test_export_image_fails_no_project() {
     let app = app_with_state();
     let options = crate::export::ExportImageOptions::default();
-    let result = export::export_image_impl(state(&app).inner(), PathBuf::from("/tmp/out.png"), options);
+    let result =
+        export::export_image_impl(state(&app).inner(), PathBuf::from("/tmp/out.png"), options);
     assert!(result.is_err());
 }
 
@@ -2135,14 +2359,9 @@ fn test_fetch_tile_cache_hit_returns_data() {
         let c = guard.as_mut().unwrap();
         c.put("esri", 1, 2, 3, b"data", "image/png").unwrap();
     }
-    let bytes = tauri::async_runtime::block_on(cache::fetch_tile(
-        state(&app),
-        "esri".to_string(),
-        1,
-        2,
-        3,
-    ))
-    .unwrap();
+    let bytes =
+        tauri::async_runtime::block_on(cache::fetch_tile(state(&app), "esri".to_string(), 1, 2, 3))
+            .unwrap();
     assert_eq!(bytes, b"data");
 }
 
@@ -2254,25 +2473,14 @@ fn test_get_project_warnings_detects_large_depth_change() {
 #[test]
 fn test_resolve_warning_fails_without_db() {
     let app = app_with_state();
-    let result = validation::resolve_warning(
-        state(&app),
-        0,
-        0,
-        "SHORT_SHOT".to_string(),
-        None,
-    );
+    let result = validation::resolve_warning(state(&app), 0, 0, "SHORT_SHOT".to_string(), None);
     assert!(result.is_err());
 }
 
 #[test]
 fn test_unresolve_warning_fails_without_db() {
     let app = app_with_state();
-    let result = validation::unresolve_warning(
-        state(&app),
-        0,
-        0,
-        "SHORT_SHOT".to_string(),
-    );
+    let result = validation::unresolve_warning(state(&app), 0, 0, "SHORT_SHOT".to_string());
     assert!(result.is_err());
 }
 
@@ -2312,7 +2520,10 @@ fn test_resolve_warning_marks_resolved_in_list() {
         .iter()
         .find(|r| r.warning_code == "SHORT_SHOT")
         .expect("persisted resolved row");
-    assert!(row.shot_uuid.is_some(), "a fresh ignore must store a shot UUID");
+    assert!(
+        row.shot_uuid.is_some(),
+        "a fresh ignore must store a shot UUID"
+    );
 }
 
 #[test]
@@ -2339,7 +2550,11 @@ fn test_resolve_warning_refuses_when_shot_missing() {
     );
     assert!(result.is_err(), "resolving a vanished shot must be refused");
     assert!(
-        state(&app).inner().load_resolved_warnings().unwrap().is_empty(),
+        state(&app)
+            .inner()
+            .load_resolved_warnings()
+            .unwrap()
+            .is_empty(),
         "no position-keyed row may be persisted for a missing shot"
     );
 }
@@ -2421,7 +2636,10 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
         .expect("short shot warning");
     assert_eq!(w.shot_uuid.as_deref(), Some(uuid.as_str()));
     assert_ne!(w.shot_id, original_shot_id, "precondition: shot_id changed");
-    assert!(w.is_resolved, "ignore must follow the shot UUID across an id change");
+    assert!(
+        w.is_resolved,
+        "ignore must follow the shot UUID across an id change"
+    );
 }
 
 #[test]
@@ -2439,7 +2657,10 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
         .into_iter()
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
-    assert!(warning.shot_uuid.is_some(), "loaded shot already carries a uuid");
+    assert!(
+        warning.shot_uuid.is_some(),
+        "loaded shot already carries a uuid"
+    );
     assert!(!warning.is_resolved);
 
     // Insert a LEGACY suppression row with NO shot_uuid, keyed by position only.
@@ -2477,12 +2698,18 @@ fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
     let app = app_with_custom_state(app_state);
 
     let warnings = validation::get_project_warnings(state(&app));
-    let mut zero: Vec<_> = warnings.into_iter().filter(|w| w.code == "SHORT_SHOT").collect();
+    let mut zero: Vec<_> = warnings
+        .into_iter()
+        .filter(|w| w.code == "SHORT_SHOT")
+        .collect();
     assert_eq!(zero.len(), 2, "expected a short-shot warning per shot");
     zero.sort_by_key(|w| w.shot_id);
     let shot_uuid_hit = zero[0].clone();
     let shot_pos_hit = zero[1].clone();
-    let uuid = shot_uuid_hit.shot_uuid.clone().expect("loaded shot has a uuid");
+    let uuid = shot_uuid_hit
+        .shot_uuid
+        .clone()
+        .expect("loaded shot has a uuid");
 
     // UUID branch: a row carrying the shot's UUID.
     state(&app)
@@ -2518,8 +2745,14 @@ fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
         .iter()
         .find(|w| w.code == "SHORT_SHOT" && w.shot_id == shot_pos_hit.shot_id)
         .expect("position-keyed warning");
-    assert!(a.is_resolved, "UUID-keyed row must suppress via the UUID branch");
-    assert!(b.is_resolved, "NULL-uuid row must suppress via the position-fallback branch");
+    assert!(
+        a.is_resolved,
+        "UUID-keyed row must suppress via the UUID branch"
+    );
+    assert!(
+        b.is_resolved,
+        "NULL-uuid row must suppress via the position-fallback branch"
+    );
 }
 
 #[test]
@@ -2554,7 +2787,10 @@ fn test_resolved_warning_survives_save() {
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
-    assert!(w.is_resolved, "resolved/ignored warning must survive a save");
+    assert!(
+        w.is_resolved,
+        "resolved/ignored warning must survive a save"
+    );
 }
 
 #[test]
@@ -2586,7 +2822,8 @@ fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
         .collect();
     assert_eq!(zero.len(), 2, "expected a short-shot warning per section");
     for w in &zero {
-        validation::resolve_warning(state(&app), w.section_id, w.shot_id, w.code.clone(), None).unwrap();
+        validation::resolve_warning(state(&app), w.section_id, w.shot_id, w.code.clone(), None)
+            .unwrap();
     }
     let surviving_section = zero[1].section_id;
 
@@ -2659,8 +2896,10 @@ fn test_save_preserves_by_uuid_ignore_when_a_renumber_lands_another_shot_on_its_
 
     // Both by-UUID ignores must survive — neither was REPLACE-deleted.
     let after = state(&app).inner().load_resolved_warnings().unwrap();
-    let surviving: std::collections::HashSet<_> =
-        after.iter().filter_map(|r| r.shot_uuid.as_deref()).collect();
+    let surviving: std::collections::HashSet<_> = after
+        .iter()
+        .filter_map(|r| r.shot_uuid.as_deref())
+        .collect();
     assert!(
         surviving.contains(uuid_a.as_str()),
         "shot A's by-UUID ignore must survive the renumber-onto-its-position"
@@ -2726,7 +2965,11 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     // ...and the deleted shot's dead row must have been pruned (one row, keyed to
     // the survivor), so dead rows don't accumulate across saves.
     let rows = state(&app).inner().load_resolved_warnings().unwrap();
-    assert_eq!(rows.len(), 1, "the deleted shot's dead resolved row must be pruned");
+    assert_eq!(
+        rows.len(),
+        1,
+        "the deleted shot's dead resolved row must be pruned"
+    );
     assert_eq!(
         rows[0].shot_uuid.as_deref(),
         Some(survivor_uuid.as_str()),
@@ -2791,7 +3034,10 @@ fn test_update_project_settings_is_undoable() {
         "Renamed Cave".to_string(),
         validation_cfg,
     ));
-    assert!(history::can_undo(state(&app)), "settings change must be undoable");
+    assert!(
+        history::can_undo(state(&app)),
+        "settings change must be undoable"
+    );
     let applied = state(&app).get_project_state().unwrap();
     assert_eq!(applied.name, "Renamed Cave");
     assert_eq!(applied.validation.warn_shot_length_min, 2.0);
@@ -2821,7 +3067,11 @@ fn test_resolve_warning_refuses_to_ignore_over_anchoring() {
     .unwrap();
 
     assert!(
-        state(&app).inner().load_resolved_warnings().unwrap().is_empty(),
+        state(&app)
+            .inner()
+            .load_resolved_warnings()
+            .unwrap()
+            .is_empty(),
         "over-anchoring must never be recorded as an ignored warning"
     );
 }
@@ -2858,12 +3108,20 @@ fn test_resolve_warning_refuses_error_severity_codes() {
     )
     .unwrap();
     assert!(
-        state(&app).inner().load_resolved_warnings().unwrap().is_empty(),
+        state(&app)
+            .inner()
+            .load_resolved_warnings()
+            .unwrap()
+            .is_empty(),
         "an error-severity warning must never be persisted as ignored"
     );
     let after = validation::get_project_warnings(state(&app));
     assert!(
-        !after.iter().find(|w| w.code == "ZERO_LENGTH").unwrap().is_resolved,
+        !after
+            .iter()
+            .find(|w| w.code == "ZERO_LENGTH")
+            .unwrap()
+            .is_resolved,
         "an error stays unresolved even after a resolve attempt"
     );
 }
@@ -2876,10 +3134,16 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
     // is keyed by (section_id, uuid, code), not the UUID alone.
     let mut project = Project::new("Dup UUID".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot_data(0.1)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot_data(0.1)],
+            ..Default::default()
+        })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot_data(0.1)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot_data(0.1)],
+            ..Default::default()
+        })
         .id;
     // Force the same (cross-section) UUID on both shots — a legal duplicate.
     for section in &mut project.sections {
@@ -2893,7 +3157,9 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
         .iter()
         .find(|w| w.section_id == a && w.code == "SHORT_SHOT")
         .expect("section A short-shot warning");
-    assert!(warnings.iter().any(|w| w.section_id == b && w.code == "SHORT_SHOT"));
+    assert!(warnings
+        .iter()
+        .any(|w| w.section_id == b && w.code == "SHORT_SHOT"));
 
     validation::resolve_warning(
         state(&app),
@@ -2906,11 +3172,19 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
 
     let after = validation::get_project_warnings(state(&app));
     assert!(
-        after.iter().find(|w| w.section_id == a && w.code == "SHORT_SHOT").unwrap().is_resolved,
+        after
+            .iter()
+            .find(|w| w.section_id == a && w.code == "SHORT_SHOT")
+            .unwrap()
+            .is_resolved,
         "section A's ignore is recorded"
     );
     assert!(
-        !after.iter().find(|w| w.section_id == b && w.code == "SHORT_SHOT").unwrap().is_resolved,
+        !after
+            .iter()
+            .find(|w| w.section_id == b && w.code == "SHORT_SHOT")
+            .unwrap()
+            .is_resolved,
         "section B's shot shares the UUID but a different section — it must NOT be suppressed"
     );
 
@@ -2939,11 +3213,19 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
     .unwrap();
     let cleared = validation::get_project_warnings(state(&app));
     assert!(
-        !cleared.iter().find(|w| w.section_id == a && w.code == "SHORT_SHOT").unwrap().is_resolved,
+        !cleared
+            .iter()
+            .find(|w| w.section_id == a && w.code == "SHORT_SHOT")
+            .unwrap()
+            .is_resolved,
         "section A was un-ignored"
     );
     assert!(
-        cleared.iter().find(|w| w.section_id == b && w.code == "SHORT_SHOT").unwrap().is_resolved,
+        cleared
+            .iter()
+            .find(|w| w.section_id == b && w.code == "SHORT_SHOT")
+            .unwrap()
+            .is_resolved,
         "section B's ignore (same UUID, different section) must survive A's un-ignore"
     );
 }
@@ -2957,10 +3239,16 @@ fn test_over_anchoring_warning_is_never_suppressible() {
 
     let mut project = Project::new("OverAnchored".to_string(), None);
     let a = project
-        .add_section(SectionData { shots: vec![shot_data(10.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot_data(10.0)],
+            ..Default::default()
+        })
         .id;
     let b = project
-        .add_section(SectionData { shots: vec![shot_data(10.0)], ..Default::default() })
+        .add_section(SectionData {
+            shots: vec![shot_data(10.0)],
+            ..Default::default()
+        })
         .id;
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1).into(),
@@ -3266,8 +3554,14 @@ fn test_get_segment_geometry_single_section() {
     assert_eq!(geom.sections[0].shot_lines.len(), 2);
     // First station is the anchor, so first shot line starts at (0, 0)
     let first_line = &geom.sections[0].shot_lines[0];
-    assert!((first_line[0][0]).abs() < 1e-6, "First station X should be 0 (anchor)");
-    assert!((first_line[0][1]).abs() < 1e-6, "First station Y should be 0 (anchor)");
+    assert!(
+        (first_line[0][0]).abs() < 1e-6,
+        "First station X should be 0 (anchor)"
+    );
+    assert!(
+        (first_line[0][1]).abs() < 1e-6,
+        "First station Y should be 0 (anchor)"
+    );
 }
 
 #[test]
@@ -3286,7 +3580,11 @@ fn test_get_segment_geometry_connected_sections() {
 
     // Query segment from section A
     let geom = section::get_segment_geometry_impl(state(&app).inner(), id_a).unwrap();
-    assert_eq!(geom.sections.len(), 2, "Both connected sections should be in the segment");
+    assert_eq!(
+        geom.sections.len(),
+        2,
+        "Both connected sections should be in the segment"
+    );
 
     // Both sections should have shot lines
     let section_ids: Vec<u32> = geom.sections.iter().map(|s| s.section_id).collect();
@@ -3295,13 +3593,23 @@ fn test_get_segment_geometry_connected_sections() {
 
     // Section A should have 1 shot line, section B should have 1 shot line
     for s in &geom.sections {
-        assert_eq!(s.shot_lines.len(), 1, "Each section has 1 shot → 1 shot line");
+        assert_eq!(
+            s.shot_lines.len(),
+            1,
+            "Each section has 1 shot → 1 shot line"
+        );
     }
 
     // Coordinates should be relative to section A station 0 (the anchor)
     let sec_a = geom.sections.iter().find(|s| s.section_id == id_a).unwrap();
-    assert!((sec_a.shot_lines[0][0][0]).abs() < 1e-6, "Section A starts at anchor origin");
-    assert!((sec_a.shot_lines[0][0][1]).abs() < 1e-6, "Section A starts at anchor origin");
+    assert!(
+        (sec_a.shot_lines[0][0][0]).abs() < 1e-6,
+        "Section A starts at anchor origin"
+    );
+    assert!(
+        (sec_a.shot_lines[0][0][1]).abs() < 1e-6,
+        "Section A starts at anchor origin"
+    );
 }
 
 #[test]
@@ -3313,7 +3621,11 @@ fn test_get_segment_geometry_unconnected_section_excluded() {
 
     // No merge — sections are disconnected
     let geom = section::get_segment_geometry_impl(state(&app).inner(), id_a).unwrap();
-    assert_eq!(geom.sections.len(), 1, "Only the queried section should be returned");
+    assert_eq!(
+        geom.sections.len(),
+        1,
+        "Only the queried section should be returned"
+    );
     assert_eq!(geom.sections[0].section_id, id_a);
 }
 
@@ -3336,8 +3648,14 @@ fn test_get_segment_geometry_queried_from_either_end() {
 
     // Coordinates should now be relative to section B station 0
     let sec_b = geom.sections.iter().find(|s| s.section_id == id_b).unwrap();
-    assert!((sec_b.shot_lines[0][0][0]).abs() < 1e-6, "Section B starts at anchor origin");
-    assert!((sec_b.shot_lines[0][0][1]).abs() < 1e-6, "Section B starts at anchor origin");
+    assert!(
+        (sec_b.shot_lines[0][0][0]).abs() < 1e-6,
+        "Section B starts at anchor origin"
+    );
+    assert!(
+        (sec_b.shot_lines[0][0][1]).abs() < 1e-6,
+        "Section B starts at anchor origin"
+    );
 }
 
 // === Raw data commands ===
@@ -3350,7 +3668,10 @@ fn test_get_raw_table_names_lists_project_tables() {
 
     let names = raw_data::get_raw_table_names_impl(state(&app).inner()).unwrap();
     for expected in ["project", "sections", "shots"] {
-        assert!(names.iter().any(|n| n == expected), "missing table {expected}");
+        assert!(
+            names.iter().any(|n| n == expected),
+            "missing table {expected}"
+        );
     }
     assert!(!names.iter().any(|n| n.starts_with("sqlite_")));
 }
@@ -3398,7 +3719,10 @@ fn test_get_raw_table_rejects_injection_names() {
     for name in ["shots; DROP TABLE shots", "sqlite_master"] {
         let err = raw_data::get_raw_table_impl(state(&app).inner(), name.to_string(), 100, 0)
             .unwrap_err();
-        assert!(err.contains("Unknown table"), "expected rejection for {name:?}, got: {err}");
+        assert!(
+            err.contains("Unknown table"),
+            "expected rejection for {name:?}, got: {err}"
+        );
     }
 }
 
@@ -3409,7 +3733,7 @@ fn test_raw_data_commands_fail_without_db() {
     let err = raw_data::get_raw_table_names_impl(state(&app).inner()).unwrap_err();
     assert!(err.contains("save the project"), "got: {err}");
 
-    let err = raw_data::get_raw_table_impl(state(&app).inner(), "shots".to_string(), 100, 0)
-        .unwrap_err();
+    let err =
+        raw_data::get_raw_table_impl(state(&app).inner(), "shots".to_string(), 100, 0).unwrap_err();
     assert!(err.contains("save the project"), "got: {err}");
 }

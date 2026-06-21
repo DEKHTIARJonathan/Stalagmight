@@ -1,7 +1,7 @@
 use crate::core::{Command, CommandResult, UndoData};
 use crate::models::{
-    ClosureStrategy, Section, SectionData, SectionId,
-    SectionUpdates, Shot, ShotData, ShotId, ShotUpdates,
+    ClosureStrategy, Section, SectionData, SectionId, SectionUpdates, Shot, ShotData, ShotId,
+    ShotUpdates,
 };
 
 use super::AppState;
@@ -20,7 +20,7 @@ impl AppState {
         match cmd {
             // For create commands, we'll fill in the ID after execution
             Command::CreateSection { .. } => UndoData::None, // Will be finalized after execution
-            Command::CreateShot { .. } => UndoData::None, // Will be finalized after execution
+            Command::CreateShot { .. } => UndoData::None,    // Will be finalized after execution
 
             // For DeleteSection, capture full project snapshot (before/after pair)
             // because cleanup_section_references removes merges, closures, offsets, and
@@ -229,7 +229,9 @@ impl AppState {
             }
 
             // For create loop closure, capture snapshot when it mutates shot data
-            Command::CreateLoopClosure { closure_strategy, .. } => {
+            Command::CreateLoopClosure {
+                closure_strategy, ..
+            } => {
                 if matches!(
                     closure_strategy,
                     ClosureStrategy::ProportionalByLength | ClosureStrategy::EqualDistribution
@@ -247,7 +249,8 @@ impl AppState {
             }
 
             Command::RemoveLoopClosure { closure_id } => {
-                if let Some(closure) = project.loop_closures.iter().find(|lc| lc.id == *closure_id) {
+                if let Some(closure) = project.loop_closures.iter().find(|lc| lc.id == *closure_id)
+                {
                     UndoData::ClosureInfo {
                         closure: closure.clone(),
                     }
@@ -627,14 +630,18 @@ impl AppState {
                 // Restore previous values
                 if let Some(shot_id) = shot_id {
                     // Restore shot values
-                    if let Ok(prev_updates) = serde_json::from_str::<ShotUpdates>(values_json.as_str()) {
+                    if let Ok(prev_updates) =
+                        serde_json::from_str::<ShotUpdates>(values_json.as_str())
+                    {
                         self.update_shot(*section_id, *shot_id, prev_updates)
                     } else {
                         CommandResult::failure("Failed to parse undo data".to_string())
                     }
                 } else {
                     // Restore section values
-                    if let Ok(prev_updates) = serde_json::from_str::<SectionUpdates>(values_json.as_str()) {
+                    if let Ok(prev_updates) =
+                        serde_json::from_str::<SectionUpdates>(values_json.as_str())
+                    {
                         self.update_section(*section_id, prev_updates)
                     } else {
                         CommandResult::failure("Failed to parse undo data".to_string())
@@ -650,9 +657,7 @@ impl AppState {
                 self.restore_section(*section_id, section_data.clone())
             }
 
-            UndoData::CreatedSectionSnapshot {
-                section_id, ..
-            } => {
+            UndoData::CreatedSectionSnapshot { section_id, .. } => {
                 // Undo a CreateSection by deleting the section
                 self.delete_section(*section_id)
             }
@@ -668,7 +673,13 @@ impl AppState {
                 // and original UUID. (Live DeleteShot now captures a full
                 // ProjectSnapshotPair; this path serves legacy persisted entries,
                 // where `uuid` is None and a fresh one is minted.)
-                self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position, uuid.clone())
+                self.restore_shot(
+                    *section_id,
+                    *shot_id,
+                    shot_data.clone(),
+                    *position,
+                    uuid.clone(),
+                )
             }
 
             UndoData::CreatedShotSnapshot {
@@ -716,7 +727,8 @@ impl AppState {
                         if let Ok(mut proj_guard) = self.project.lock() {
                             if let Some(project) = proj_guard.as_mut() {
                                 for closure in removed_closures {
-                                    project.next_closure_id = project.next_closure_id.max(closure.id + 1);
+                                    project.next_closure_id =
+                                        project.next_closure_id.max(closure.id + 1);
                                     project.loop_closures.push(closure.clone());
                                 }
                                 project.touch();
@@ -729,9 +741,10 @@ impl AppState {
                     match self.project.lock() {
                         Ok(mut proj_guard) => match proj_guard.as_mut() {
                             Some(project) => {
-                                if let (Some(key_a), Some(key_b)) =
-                                    (project.key_for_ref(*station_a), project.key_for_ref(*station_b))
-                                {
+                                if let (Some(key_a), Some(key_b)) = (
+                                    project.key_for_ref(*station_a),
+                                    project.key_for_ref(*station_b),
+                                ) {
                                     project.station_merges.push(crate::models::StationMerge {
                                         station_a: key_a,
                                         station_b: key_b,
@@ -744,7 +757,8 @@ impl AppState {
                                 project.merge_adjacency_cache.clear();
                                 // Restore removed closures and bump next_closure_id
                                 for closure in removed_closures {
-                                    project.next_closure_id = project.next_closure_id.max(closure.id + 1);
+                                    project.next_closure_id =
+                                        project.next_closure_id.max(closure.id + 1);
                                     project.loop_closures.push(closure.clone());
                                 }
                                 project.touch();
@@ -795,9 +809,7 @@ impl AppState {
                             Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                         }
                     }
-                    _ => CommandResult::failure(
-                        "Unsupported closure undo command".to_string(),
-                    ),
+                    _ => CommandResult::failure("Unsupported closure undo command".to_string()),
                 }
             }
 
@@ -848,8 +860,7 @@ impl AppState {
             }
 
             UndoData::SegmentMoveInfo {
-                previous_offsets,
-                ..
+                previous_offsets, ..
             } => {
                 // Restore previous offsets for each affected section
                 match self.project.lock() {
@@ -883,7 +894,9 @@ impl AppState {
                             if let Some(section) = section {
                                 // Restore preceding shot
                                 if let Some((shot_id, shot_data)) = prev_shot_before {
-                                    if let Some(shot) = section.shots.iter_mut().find(|s| s.id == *shot_id) {
+                                    if let Some(shot) =
+                                        section.shots.iter_mut().find(|s| s.id == *shot_id)
+                                    {
                                         shot.azimuth_in = shot_data.azimuth_in;
                                         shot.azimuth_out = shot_data.azimuth_out;
                                         shot.length = shot_data.length;
@@ -893,7 +906,9 @@ impl AppState {
                                 }
                                 // Restore following shot
                                 if let Some((shot_id, shot_data)) = prev_shot_after {
-                                    if let Some(shot) = section.shots.iter_mut().find(|s| s.id == *shot_id) {
+                                    if let Some(shot) =
+                                        section.shots.iter_mut().find(|s| s.id == *shot_id)
+                                    {
                                         shot.azimuth_in = shot_data.azimuth_in;
                                         shot.azimuth_out = shot_data.azimuth_out;
                                         shot.length = shot_data.length;
@@ -916,7 +931,9 @@ impl AppState {
                             // Restore section offset
                             match prev_section_offset {
                                 Some(offset) => {
-                                    project.section_offsets.insert(station_ref.section_id, *offset);
+                                    project
+                                        .section_offsets
+                                        .insert(station_ref.section_id, *offset);
                                 }
                                 None => {
                                     project.section_offsets.remove(&station_ref.section_id);
@@ -960,9 +977,7 @@ impl AppState {
                 }
             }
 
-            UndoData::None => {
-                CommandResult::failure("This command cannot be undone".to_string())
-            }
+            UndoData::None => CommandResult::failure("This command cannot be undone".to_string()),
         };
 
         // Epilogue: push to redo stack on success, push back to undo stack on failure
@@ -1022,20 +1037,16 @@ impl AppState {
         // This handles cases where re-execution would create different IDs.
         // IMPORTANT: No early returns after the pop — all paths flow through the epilogue.
         let result = match &entry.undo_data {
-            UndoData::ProjectSnapshotPair { before: _, after } => {
-                match self.project.lock() {
-                    Ok(mut proj) => {
-                        if Self::restore_snapshot_into(&mut proj, after.as_str()) {
-                            CommandResult::success()
-                        } else {
-                            CommandResult::failure("Failed to parse project snapshot".to_string())
-                        }
-                    }
-                    Err(_) => {
-                        CommandResult::failure("Failed to lock project".to_string())
+            UndoData::ProjectSnapshotPair { before: _, after } => match self.project.lock() {
+                Ok(mut proj) => {
+                    if Self::restore_snapshot_into(&mut proj, after.as_str()) {
+                        CommandResult::success()
+                    } else {
+                        CommandResult::failure("Failed to parse project snapshot".to_string())
                     }
                 }
-            }
+                Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+            },
             UndoData::CreatedSectionSnapshot {
                 section_id,
                 section_data,
@@ -1073,11 +1084,23 @@ impl AppState {
                 };
                 let ok = if let Some(before_id) = before_shot_id {
                     project
-                        .insert_shot_before(*section_id, *before_id, shot_data.clone(), Some(*shot_id), uuid.clone())
+                        .insert_shot_before(
+                            *section_id,
+                            *before_id,
+                            shot_data.clone(),
+                            Some(*shot_id),
+                            uuid.clone(),
+                        )
                         .is_some()
                 } else if let Some(after_id) = after_shot_id {
                     project
-                        .insert_shot_after(*section_id, *after_id, shot_data.clone(), Some(*shot_id), uuid.clone())
+                        .insert_shot_after(
+                            *section_id,
+                            *after_id,
+                            shot_data.clone(),
+                            Some(*shot_id),
+                            uuid.clone(),
+                        )
                         .is_some()
                 } else {
                     // Both anchors absent. For a CURRENT entry this is an append to an
@@ -1088,7 +1111,9 @@ impl AppState {
                     // re-anchors SectionStart on a prepend and cascades offsets on a
                     // mid-insert — instead of a raw insert that would mis-place anchored
                     // tails or start-station refs.
-                    let section_len = project.get_section(*section_id).map_or(0, |s| s.shots.len());
+                    let section_len = project
+                        .get_section(*section_id)
+                        .map_or(0, |s| s.shots.len());
                     let pos = (*position).min(section_len);
                     if pos == 0 && section_len > 0 {
                         // Prepend before the current first shot.
@@ -1097,7 +1122,13 @@ impl AppState {
                             .and_then(|s| s.shots.first().map(|sh| sh.id));
                         match first_id {
                             Some(fid) => project
-                                .insert_shot_before(*section_id, fid, shot_data.clone(), Some(*shot_id), uuid.clone())
+                                .insert_shot_before(
+                                    *section_id,
+                                    fid,
+                                    shot_data.clone(),
+                                    Some(*shot_id),
+                                    uuid.clone(),
+                                )
                                 .is_some(),
                             None => false,
                         }
@@ -1108,7 +1139,13 @@ impl AppState {
                             .and_then(|s| s.shots.get(pos - 1).map(|sh| sh.id));
                         match prev_id {
                             Some(pid) => project
-                                .insert_shot_after(*section_id, pid, shot_data.clone(), Some(*shot_id), uuid.clone())
+                                .insert_shot_after(
+                                    *section_id,
+                                    pid,
+                                    shot_data.clone(),
+                                    Some(*shot_id),
+                                    uuid.clone(),
+                                )
                                 .is_some(),
                             None => false,
                         }
@@ -1120,7 +1157,9 @@ impl AppState {
                             if id >= section.next_shot_id {
                                 section.next_shot_id = id + 1;
                             }
-                            section.shots.insert(pos, Shot::with_uuid(id, shot_data.clone(), uuid.clone()));
+                            section
+                                .shots
+                                .insert(pos, Shot::with_uuid(id, shot_data.clone(), uuid.clone()));
                             project.touch();
                             true
                         } else {
@@ -1150,7 +1189,11 @@ impl AppState {
                                 if !existing.contains(sid) {
                                     continue;
                                 }
-                                let current = project.section_offsets.get(sid).copied().unwrap_or((0.0, 0.0));
+                                let current = project
+                                    .section_offsets
+                                    .get(sid)
+                                    .copied()
+                                    .unwrap_or((0.0, 0.0));
                                 let new_offset = (current.0 + offset.0, current.1 + offset.1);
                                 project.section_offsets.insert(*sid, new_offset);
                             }
@@ -1200,9 +1243,7 @@ impl AppState {
                             Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                         }
                     }
-                    _ => CommandResult::failure(
-                        "Unsupported closure redo command".to_string(),
-                    ),
+                    _ => CommandResult::failure("Unsupported closure redo command".to_string()),
                 }
             }
             _ => {
@@ -1308,7 +1349,10 @@ impl AppState {
                 station_ref,
                 comment,
             } => self.set_station_comment(*station_ref, comment.clone()),
-            Command::MoveStation { station_ref, offset } => self.move_station(*station_ref, *offset),
+            Command::MoveStation {
+                station_ref,
+                offset,
+            } => self.move_station(*station_ref, *offset),
             Command::Batch { commands } => self.execute_batch(commands.clone(), false),
             _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),
         }
@@ -1384,7 +1428,12 @@ impl AppState {
 
         project.touch();
 
-        tracing::info!(section_id, shot_id = original_shot_id, position, "Shot restored");
+        tracing::info!(
+            section_id,
+            shot_id = original_shot_id,
+            position,
+            "Shot restored"
+        );
         CommandResult::success()
     }
 
@@ -1415,9 +1464,9 @@ impl AppState {
             .lock()
             .ok()
             .and_then(|guard| {
-                guard.as_ref().map(|p| {
-                    p.sections.iter().map(|s| (s.id, s.name.clone())).collect()
-                })
+                guard
+                    .as_ref()
+                    .map(|p| p.sections.iter().map(|s| (s.id, s.name.clone())).collect())
             })
             .unwrap_or_default();
 
@@ -1428,11 +1477,7 @@ impl AppState {
                     .undo_entries()
                     .enumerate()
                     .map(|(idx, entry)| {
-                        crate::commands::history::entry_to_history_item(
-                            entry,
-                            idx,
-                            &section_names,
-                        )
+                        crate::commands::history::entry_to_history_item(entry, idx, &section_names)
                     })
                     .collect()
             })
@@ -1446,9 +1491,9 @@ impl AppState {
             .lock()
             .ok()
             .and_then(|guard| {
-                guard.as_ref().map(|p| {
-                    p.sections.iter().map(|s| (s.id, s.name.clone())).collect()
-                })
+                guard
+                    .as_ref()
+                    .map(|p| p.sections.iter().map(|s| (s.id, s.name.clone())).collect())
             })
             .unwrap_or_default();
 
@@ -1459,11 +1504,7 @@ impl AppState {
                     .redo_entries()
                     .enumerate()
                     .map(|(idx, entry)| {
-                        crate::commands::history::entry_to_history_item(
-                            entry,
-                            idx,
-                            &section_names,
-                        )
+                        crate::commands::history::entry_to_history_item(entry, idx, &section_names)
                     })
                     .collect()
             })

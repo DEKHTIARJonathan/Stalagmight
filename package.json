@@ -20,6 +20,7 @@
     "test:ui:smoke": "playwright test --grep @smoke",
     "test:ui:headed": "playwright test --headed",
     "test:ui:debug": "playwright test --debug",
+    "lint:e2e-parallel": "node scripts/check-e2e-parallel-safe.mjs",
     "coverage:ui": "E2E_COVERAGE=1 VITE_COVERAGE=1 pnpm test:ui",
     "coverage:e2e": "E2E_COVERAGE=1 VITE_COVERAGE=1 pnpm test:e2e",
     "coverage:merge": "node scripts/merge-coverage.mjs",

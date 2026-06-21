@@ -8,7 +8,7 @@
 //! `COLLAB_FUZZ_ITERS` (default 64; bump for local/nightly soak).
 
 #![cfg(test)]
-#![expect(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp, clippy::indexing_slicing)]
+#![expect(clippy::unwrap_used, clippy::indexing_slicing, clippy::print_stderr)]
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -19,7 +19,8 @@ use crate::core::reconcile::diff;
 use crate::core::state::apply_changeset;
 use crate::export::tml::export_tml_with_baseline;
 use crate::models::{
-    CollabState, GpsCoordinates, Project, SectionData, ShotData, StationMerge, StationRef, ZeroDatum,
+    CollabState, GpsCoordinates, Project, SectionData, ShotData, StationMerge, StationRef,
+    ZeroDatum,
 };
 use crate::parsers::tml::{parse_tml, TmlFile, TmlShotType};
 
@@ -51,7 +52,6 @@ impl Rng {
     fn range(&mut self, lo: usize, hi: usize) -> usize {
         lo + self.below(hi - lo + 1)
     }
-
 }
 
 fn iters() -> u64 {
@@ -190,8 +190,7 @@ fn gen_project(rng: &mut Rng, kind: Kind) -> Project {
 
 /// Seed `p.collab` from its own export, exactly like the save pipeline.
 fn seed_baseline(p: &mut Project, dir: &Path) {
-    let (baseline, _sha, synthetic) =
-        export_tml_with_baseline(p, &dir.join("base.tml")).unwrap();
+    let (baseline, _sha, synthetic) = export_tml_with_baseline(p, &dir.join("base.tml")).unwrap();
     let mut seen = HashSet::new();
     let mut name_map = Vec::new();
     for e in &baseline {
@@ -436,12 +435,17 @@ fn prop_anchors_survive_interleaved_edits(seed: u64) {
     let mut p = gen_project(&mut rng, Kind::Merge);
     // Canonicalize anchors, exactly as a load does, then confirm it starts sound.
     p.redrive_offsets_after_load();
-    assert!(!has_dangling_ref(&p), "seed={seed}: project starts with a dangling ref");
+    assert!(
+        !has_dangling_ref(&p),
+        "seed={seed}: project starts with a dangling ref"
+    );
 
     let root_id = p.sections[0].id;
     let ops = rng.range(3, 12);
     for _ in 0..ops {
-        let Some(shots_len) = p.get_section(root_id).map(|s| s.shots.len()) else { break };
+        let Some(shots_len) = p.get_section(root_id).map(|s| s.shots.len()) else {
+            break;
+        };
         if shots_len == 0 {
             break;
         }
@@ -531,7 +535,7 @@ fn fuzz_uuid_survives_local_insert() {
 #[test]
 fn fuzz_anchors_survive_interleaved_edits() {
     for i in 0..iters() {
-        let seed = i ^  0xC011AB_0006;
+        let seed = i ^ 0xC011AB_0006;
         prop_anchors_survive_interleaved_edits(seed);
     }
 }
@@ -577,7 +581,10 @@ fn corpus_replay_real_ariane_history() {
     };
     let versions = files_with_ext(&dir, "tml");
     if versions.is_empty() {
-        eprintln!("corpus_replay: skipped (no .tml versions in {})", dir.display());
+        eprintln!(
+            "corpus_replay: skipped (no .tml versions in {})",
+            dir.display()
+        );
         return;
     }
 
@@ -613,5 +620,9 @@ fn corpus_replay_real_ariane_history() {
             cs2.section_meta_changed.len(),
         );
     }
-    eprintln!("corpus_replay: replayed {} versions from {}", versions.len(), dir.display());
+    eprintln!(
+        "corpus_replay: replayed {} versions from {}",
+        versions.len(),
+        dir.display()
+    );
 }

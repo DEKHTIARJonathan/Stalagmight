@@ -170,7 +170,11 @@ impl AppState {
     pub(super) fn init_tile_cache(config: &Config) -> Result<TileCache> {
         let cache_dir = crate::app_dirs::cache_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine app cache directory"))?;
-        TileCache::open(cache_dir, config.cache.tile_cache_max_mb, config.cache.tile_ttl_days)
+        TileCache::open(
+            cache_dir,
+            config.cache.tile_cache_max_mb,
+            config.cache.tile_ttl_days,
+        )
     }
 
     /// Get a clone of the tile cache Arc for sharing across threads
@@ -203,7 +207,10 @@ impl AppState {
     /// Start a new loading operation, cancelling any existing one.
     /// Returns the cancellation token for the new operation.
     pub fn start_new_load(&self) -> Arc<AtomicBool> {
-        let mut guard = self.active_loading.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut guard = self
+            .active_loading
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // Cancel any existing load
         if let Some(old_token) = guard.take() {

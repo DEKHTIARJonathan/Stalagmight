@@ -297,7 +297,9 @@ mod tests {
             content_type_hint: "image/png".to_string(),
             api_key_env: None,
             auth_header: None,
-            tilemap_url_template: Some("https://example.com/tilemap/{z}/{y}/{x}/128/128".to_string()),
+            tilemap_url_template: Some(
+                "https://example.com/tilemap/{z}/{y}/{x}/128/128".to_string(),
+            ),
         };
         let url = expand_tilemap_url(&provider, 3, 4, 5).unwrap();
         assert_eq!(url, "https://example.com/tilemap/3/4/5/128/128");

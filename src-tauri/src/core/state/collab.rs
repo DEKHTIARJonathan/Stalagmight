@@ -237,7 +237,10 @@ impl AppState {
     }
 
     fn sibling_changed(&self) -> Result<bool, String> {
-        let guard = self.project.lock().map_err(|_| "Failed to lock project".to_string())?;
+        let guard = self
+            .project
+            .lock()
+            .map_err(|_| "Failed to lock project".to_string())?;
         let Some(project) = guard.as_ref() else {
             return Ok(false);
         };
@@ -257,7 +260,10 @@ impl AppState {
     /// Compute the change set plus the returned file's content hash, if the
     /// sibling `.tml` differs from what we last wrote.
     fn compute_collab(&self) -> Result<Option<(CollabChangeSet, String)>, String> {
-        let guard = self.project.lock().map_err(|_| "Failed to lock project".to_string())?;
+        let guard = self
+            .project
+            .lock()
+            .map_err(|_| "Failed to lock project".to_string())?;
         let Some(project) = guard.as_ref() else {
             return Ok(None);
         };
@@ -430,7 +436,9 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
         // re-anchor use the final UUID, so no orphan is ever created.
         let uuid_to_adopt = a.uuid.as_ref().and_then(|u| {
             let free = project.get_section(sid).map_or(true, |s| {
-                s.shots.iter().all(|sh| sh.uuid.as_deref() != Some(u.as_str()))
+                s.shots
+                    .iter()
+                    .all(|sh| sh.uuid.as_deref() != Some(u.as_str()))
             });
             free.then(|| u.clone())
         });
@@ -487,15 +495,17 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
     // without a returned UUID (Ariane ≤25 or shot lacked `<UUID>`)
     // keep the fresh UUID `Shot::new` minted.
     for s in &cs.sections_added {
-        let new_sid = project.add_section(SectionData {
-            name: Some(s.name.clone()),
-            surveyor: s.surveyor.clone(),
-            date: s.date,
-            color: s.color.clone(),
-            direction: None,
-            quality: 1.0,
-            shots: s.shots.clone(),
-        }).id;
+        let new_sid = project
+            .add_section(SectionData {
+                name: Some(s.name.clone()),
+                surveyor: s.surveyor.clone(),
+                date: s.date,
+                color: s.color.clone(),
+                direction: None,
+                quality: 1.0,
+                shots: s.shots.clone(),
+            })
+            .id;
         if !s.shot_uuids.is_empty() {
             if let Some(section) = project.get_section_mut(new_sid) {
                 // Adopt each collaborator UUID only if it has not already been
@@ -575,7 +585,7 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::core::reconcile::{
@@ -604,7 +614,12 @@ mod tests {
             color: "#000000".into(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(10.0, 5.0), shot(20.0, 6.0), shot(30.0, 7.0), shot(40.0, 8.0)],
+            shots: vec![
+                shot(10.0, 5.0),
+                shot(20.0, 6.0),
+                shot(30.0, 7.0),
+                shot(40.0, 8.0),
+            ],
         });
         p
     }
@@ -686,9 +701,16 @@ mod tests {
         let mut deduped = uuids.clone();
         deduped.sort_unstable();
         deduped.dedup();
-        assert_eq!(uuids.len(), deduped.len(), "no duplicate shot UUIDs after apply");
+        assert_eq!(
+            uuids.len(),
+            deduped.len(),
+            "no duplicate shot UUIDs after apply"
+        );
         // The original shot kept its UUID; the inserted one did not steal it.
-        assert_eq!(p.sections[0].shots[0].uuid.as_deref(), Some(existing_uuid.as_str()));
+        assert_eq!(
+            p.sections[0].shots[0].uuid.as_deref(),
+            Some(existing_uuid.as_str())
+        );
         assert!(!p.has_critical_integrity_violations());
     }
 
@@ -847,22 +869,29 @@ mod tests {
         let mut p = Project::new("Cave".into(), None);
 
         let mut cs = CollabChangeSet::empty();
-        cs.sections_added.push(crate::core::reconcile::AddedSection {
-            name: "New".into(),
-            color: "#000000".into(),
-            surveyor: None,
-            date: None,
-            shots: vec![shot(10.0, 5.0), shot(20.0, 6.0)],
-            shot_uuids: vec![Some("dup".into()), Some("dup".into())],
-            shot_station_comments: vec![None, Some("second station note".into())],
-        });
+        cs.sections_added
+            .push(crate::core::reconcile::AddedSection {
+                name: "New".into(),
+                color: "#000000".into(),
+                surveyor: None,
+                date: None,
+                shots: vec![shot(10.0, 5.0), shot(20.0, 6.0)],
+                shot_uuids: vec![Some("dup".into()), Some("dup".into())],
+                shot_station_comments: vec![None, Some("second station note".into())],
+            });
         apply_changeset(&mut p, &cs);
 
         let sec = &p.sections[0];
         let u0 = sec.shots[0].uuid.clone().unwrap();
         let u1 = sec.shots[1].uuid.clone().unwrap();
-        assert_ne!(u0, u1, "duplicate collaborator UUIDs must not both be adopted");
-        assert_eq!(u0, "dup", "the first occurrence keeps the collaborator UUID");
+        assert_ne!(
+            u0, u1,
+            "duplicate collaborator UUIDs must not both be adopted"
+        );
+        assert_eq!(
+            u0, "dup",
+            "the first occurrence keeps the collaborator UUID"
+        );
 
         let sid = sec.id;
         // The comment was attached to the SECOND station (after shot index 1 = 2).

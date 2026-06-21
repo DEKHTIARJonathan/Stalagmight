@@ -14,9 +14,13 @@ This document describes the testing infrastructure, conventions, and best practi
 ## Test Infrastructure
 
 Stalagmight uses a multi-layered testing approach. Beyond speed, note the
-**mocked-IPC vs. real-backend** axis: every automated tier except WebdriverIO
-mocks the Tauri backend, so only the on-demand WDIO suite exercises real file
-I/O / Recent Projects / persistence.
+**mocked-IPC vs. real-backend** axis: every *frontend* tier (Vitest unit/
+component, Playwright, smoke) mocks the Tauri backend. The real backend — actual
+file I/O, Recent Projects, the save/import persistence pipeline — is exercised by
+the **Rust command-layer tests** (`src-tauri/src/commands/command_tests.rs`), which
+run in the CI-gated `check` job against real `TempDir` files with no display or
+Tauri build. The on-demand WDIO suite is the only tier that drives the **real Tauri
+app** end-to-end (webview + Rust), but it runs nowhere automatically.
 
 | Layer | Framework | Env | Purpose | Speed |
 |-------|-----------|-----|---------|-------|
@@ -140,9 +144,12 @@ keep first component tests on leaf components to avoid heavy setup.
 
 > **Why this tier exists:** before #107 there was no way to render a component
 > in a unit test (0 `render()` calls), so UI-wiring bugs like #92 (import
-> completion never triggered a save) shipped on manual verification alone. Note
-> the component tier mocks IPC — the real-backend persistence path (file on disk
-> + Recent Projects) still needs a Rust/WDIO guard.
+> completion never triggered a save) shipped on manual verification alone. The
+> component tier mocks IPC, so the **real-backend** persistence path (file on
+> disk + Recent Projects) is owned separately by the Rust command-layer tests
+> `test_import_sections_persists_deferred_new_project` (success path) and
+> `test_import_sections_deferred_save_failure_warns_no_phantom` (failed save →
+> warning, no phantom) in `src-tauri/src/commands/command_tests.rs` (#112).
 
 ## Playwright E2E Tests
 
@@ -161,7 +168,7 @@ e2e-playwright/
 ├── settings-shortcuts.spec.ts  # Shortcut configuration tests
 ├── dmp-import.spec.ts     # DMP import dialog tests
 ├── debug.spec.ts          # Debugging helper test
-└── ...                    # 67 spec files total
+└── ...                    # 89 spec files total
 ```
 
 ### Configuration
@@ -171,6 +178,36 @@ See `playwright.config.ts` for settings:
 - Auto-starts dev server via `webServer` config
 - Uses Chromium browser
 - Generates traces, screenshots, and videos on failure
+
+### Parallel-safety invariant
+
+This tier runs with `fullyParallel: true` at multiple workers (`workers: '100%'`
+on CI). That is safe **only** because of the mocked-IPC architecture, not any
+per-test discipline:
+
+- IPC is mocked **per page** (`mocks/tauri-ipc.ts`); all backend state lives on
+  `window.*` inside each isolated browser context.
+- The single shared `webServer` (Vite, `:1420`) is **stateless** — it serves the
+  bundle only.
+- The one real disk write (`fixtures/coverage.ts`) is uniquely named per
+  `test + workerIndex` and gated behind `E2E_COVERAGE=1`.
+
+So a spec must **never** introduce shared state that survives across pages/workers:
+no `createServer(`/`.listen(` (a test binding its own port), no fixed-path
+`writeFileSync`/`writeFile`/`copyFileSync`, no hardcoded `localhost:<port>` other
+than `:1420`, and no forced serial mode (`test.describe.serial(...)` or
+`test.describe.configure({ mode: 'serial' })`). On a 2-core runner at multiple
+workers, that kind of bad hygiene surfaces as flake.
+
+**Enforcement:** `pnpm lint:e2e-parallel` (`scripts/check-e2e-parallel-safe.mjs`)
+fails on any of the patterns above. It runs in the **`smoke` CI job** — the only
+job that runs the Playwright tier on `e2e-playwright/**` changes (the `check` job
+path-ignores them, so a gate there would be a no-op for an e2e-playwright-only
+change). Run it locally before pushing. `fixtures/coverage.ts` is the one
+allow-listed write; a genuinely necessary exception goes in the `ALLOW` list in
+that script with a written reason. The scanner is a line-based tripwire for the
+common, accidental regression — not a parser; it intentionally does not inspect
+`page.screenshot({path})` (framework I/O) or the root `playwright.config.ts`.
 
 ### Writing Playwright Tests
 

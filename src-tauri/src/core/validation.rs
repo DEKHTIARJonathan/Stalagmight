@@ -44,7 +44,12 @@ impl Validator {
         if shot.length < 0.0 {
             warnings.push(warn(
                 "NEGATIVE_LENGTH",
-                format!("Shot {}:{} has negative length: {:.1}m", section_id, shot_index + 1, shot.length),
+                format!(
+                    "Shot {}:{} has negative length: {:.1}m",
+                    section_id,
+                    shot_index + 1,
+                    shot.length
+                ),
             ));
         }
 
@@ -136,7 +141,12 @@ impl Validator {
             if left < 0.0 {
                 warnings.push(warn(
                     "NEGATIVE_LRUD",
-                    format!("Shot {}:{} has negative left distance: {:.1}m", section_id, shot_index + 1, left),
+                    format!(
+                        "Shot {}:{} has negative left distance: {:.1}m",
+                        section_id,
+                        shot_index + 1,
+                        left
+                    ),
                 ));
             }
         }
@@ -145,7 +155,12 @@ impl Validator {
             if right < 0.0 {
                 warnings.push(warn(
                     "NEGATIVE_LRUD",
-                    format!("Shot {}:{} has negative right distance: {:.1}m", section_id, shot_index + 1, right),
+                    format!(
+                        "Shot {}:{} has negative right distance: {:.1}m",
+                        section_id,
+                        shot_index + 1,
+                        right
+                    ),
                 ));
             }
         }
@@ -154,7 +169,12 @@ impl Validator {
             if up < 0.0 {
                 warnings.push(warn(
                     "NEGATIVE_LRUD",
-                    format!("Shot {}:{} has negative up distance: {:.1}m", section_id, shot_index + 1, up),
+                    format!(
+                        "Shot {}:{} has negative up distance: {:.1}m",
+                        section_id,
+                        shot_index + 1,
+                        up
+                    ),
                 ));
             }
         }
@@ -163,7 +183,12 @@ impl Validator {
             if down < 0.0 {
                 warnings.push(warn(
                     "NEGATIVE_LRUD",
-                    format!("Shot {}:{} has negative down distance: {:.1}m", section_id, shot_index + 1, down),
+                    format!(
+                        "Shot {}:{} has negative down distance: {:.1}m",
+                        section_id,
+                        shot_index + 1,
+                        down
+                    ),
                 ));
             }
         }
@@ -338,7 +363,11 @@ mod tests {
         };
         let warnings = Validator::validate_shot(&zero_shot, &config, 4, 2);
         let w = warnings.iter().find(|w| w.code == "ZERO_LENGTH").unwrap();
-        assert!(w.message.starts_with("Shot 4:3 "), "Expected 'Shot 4:3 ...' but got: {}", w.message);
+        assert!(
+            w.message.starts_with("Shot 4:3 "),
+            "Expected 'Shot 4:3 ...' but got: {}",
+            w.message
+        );
 
         // SHORT_SHOT with section_id=7, shot_index=0 → "Shot 7:1 length ..."
         let short_shot = ShotData {
@@ -349,7 +378,11 @@ mod tests {
         };
         let warnings = Validator::validate_shot(&short_shot, &config, 7, 0);
         let w = warnings.iter().find(|w| w.code == "SHORT_SHOT").unwrap();
-        assert!(w.message.starts_with("Shot 7:1 "), "Expected 'Shot 7:1 ...' but got: {}", w.message);
+        assert!(
+            w.message.starts_with("Shot 7:1 "),
+            "Expected 'Shot 7:1 ...' but got: {}",
+            w.message
+        );
 
         // INVALID_AZIMUTH with section_id=2, shot_index=5 → "Shot 2:6 has invalid azimuth_in..."
         let bad_azimuth = ShotData {
@@ -359,8 +392,15 @@ mod tests {
             ..Default::default()
         };
         let warnings = Validator::validate_shot(&bad_azimuth, &config, 2, 5);
-        let w = warnings.iter().find(|w| w.code == "INVALID_AZIMUTH").unwrap();
-        assert!(w.message.starts_with("Shot 2:6 "), "Expected 'Shot 2:6 ...' but got: {}", w.message);
+        let w = warnings
+            .iter()
+            .find(|w| w.code == "INVALID_AZIMUTH")
+            .unwrap();
+        assert!(
+            w.message.starts_with("Shot 2:6 "),
+            "Expected 'Shot 2:6 ...' but got: {}",
+            w.message
+        );
 
         // NEGATIVE_LRUD with section_id=10, shot_index=3 → "Shot 10:4 has negative left..."
         let neg_lrud = ShotData {
@@ -372,7 +412,11 @@ mod tests {
         };
         let warnings = Validator::validate_shot(&neg_lrud, &config, 10, 3);
         let w = warnings.iter().find(|w| w.code == "NEGATIVE_LRUD").unwrap();
-        assert!(w.message.starts_with("Shot 10:4 "), "Expected 'Shot 10:4 ...' but got: {}", w.message);
+        assert!(
+            w.message.starts_with("Shot 10:4 "),
+            "Expected 'Shot 10:4 ...' but got: {}",
+            w.message
+        );
     }
 
     /// Test 5.1: Verify shot length validation (must be positive, reasonable max)
@@ -792,21 +836,37 @@ mod tests {
             ..Default::default()
         };
         let warnings = Validator::validate_shot(&bad, &config, 0, 0);
-        assert!(warnings.iter().any(|w| w.code == "LENGTH_BELOW_DEPTH_CHANGE"));
+        assert!(warnings
+            .iter()
+            .any(|w| w.code == "LENGTH_BELOW_DEPTH_CHANGE"));
         assert!(Validator::has_errors(&warnings));
 
         // Sign-agnostic: a 5m rise with a 3m slope is equally impossible.
-        let bad_up = ShotData { depth_in: 5.0, depth_out: 0.0, ..bad.clone() };
+        let bad_up = ShotData {
+            depth_in: 5.0,
+            depth_out: 0.0,
+            ..bad.clone()
+        };
         assert!(Validator::validate_shot(&bad_up, &config, 0, 0)
             .iter()
             .any(|w| w.code == "LENGTH_BELOW_DEPTH_CHANGE"));
 
         // length == |dz| (vertical shot) is valid; length > |dz| is valid.
-        let vertical = ShotData { length: 5.0, depth_in: 0.0, depth_out: 5.0, ..bad.clone() };
+        let vertical = ShotData {
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 5.0,
+            ..bad.clone()
+        };
         assert!(Validator::validate_shot(&vertical, &config, 0, 0)
             .iter()
             .all(|w| w.code != "LENGTH_BELOW_DEPTH_CHANGE"));
-        let ok = ShotData { length: 10.0, depth_in: 0.0, depth_out: 5.0, ..bad.clone() };
+        let ok = ShotData {
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 5.0,
+            ..bad.clone()
+        };
         assert!(Validator::validate_shot(&ok, &config, 0, 0)
             .iter()
             .all(|w| w.code != "LENGTH_BELOW_DEPTH_CHANGE"));
@@ -836,44 +896,107 @@ mod tests {
         };
 
         // Recorded -30° (descending) agrees in sign and magnitude with the -30° implied.
-        let consistent = ShotData { pitch_in: Some(-30.0), pitch_out: Some(-30.0), ..down.clone() };
-        assert!(!has_mismatch(&consistent), "-30° matches the -30° implied for a downward shot");
+        let consistent = ShotData {
+            pitch_in: Some(-30.0),
+            pitch_out: Some(-30.0),
+            ..down.clone()
+        };
+        assert!(
+            !has_mismatch(&consistent),
+            "-30° matches the -30° implied for a downward shot"
+        );
 
         // Recorded +30° has the right MAGNITUDE but the WRONG DIRECTION (says the
         // shot ascends while the depth change says it descends) — flagged (finding #7).
-        let reversed = ShotData { pitch_in: Some(30.0), pitch_out: Some(30.0), ..down.clone() };
-        assert!(has_mismatch(&reversed), "+30° contradicts the downward depth change and must be flagged");
+        let reversed = ShotData {
+            pitch_in: Some(30.0),
+            pitch_out: Some(30.0),
+            ..down.clone()
+        };
+        assert!(
+            has_mismatch(&reversed),
+            "+30° contradicts the downward depth change and must be flagged"
+        );
 
         // Genuine magnitude disagreement is still flagged.
         for recorded in [10.0_f64, -10.0_f64, -80.0_f64] {
-            let mismatched = ShotData { pitch_in: Some(recorded), pitch_out: Some(recorded), ..down.clone() };
-            assert!(has_mismatch(&mismatched), "recorded {recorded}° disagrees with the -30° implied and must be flagged");
+            let mismatched = ShotData {
+                pitch_in: Some(recorded),
+                pitch_out: Some(recorded),
+                ..down.clone()
+            };
+            assert!(
+                has_mismatch(&mismatched),
+                "recorded {recorded}° disagrees with the -30° implied and must be flagged"
+            );
         }
 
         // Symmetry: a shot going UP (dz -5) implies +30°; +30° is consistent, -30° reversed.
-        let up = ShotData { depth_in: 5.0, depth_out: 0.0, ..down.clone() };
-        let up_consistent = ShotData { pitch_in: Some(30.0), pitch_out: Some(30.0), ..up.clone() };
-        assert!(!has_mismatch(&up_consistent), "+30° matches the +30° implied for an upward shot");
-        let up_reversed = ShotData { pitch_in: Some(-30.0), pitch_out: Some(-30.0), ..up.clone() };
-        assert!(has_mismatch(&up_reversed), "-30° contradicts the upward depth change and must be flagged");
+        let up = ShotData {
+            depth_in: 5.0,
+            depth_out: 0.0,
+            ..down.clone()
+        };
+        let up_consistent = ShotData {
+            pitch_in: Some(30.0),
+            pitch_out: Some(30.0),
+            ..up.clone()
+        };
+        assert!(
+            !has_mismatch(&up_consistent),
+            "+30° matches the +30° implied for an upward shot"
+        );
+        let up_reversed = ShotData {
+            pitch_in: Some(-30.0),
+            pitch_out: Some(-30.0),
+            ..up.clone()
+        };
+        assert!(
+            has_mismatch(&up_reversed),
+            "-30° contradicts the upward depth change and must be flagged"
+        );
 
         // A vertical shot (length == |dz|) implies ∓90°; recording it clears it.
         // This is exactly what "set length to depth change" does (it also sets the
         // pitch to the matching ∓90°), so that fix must not re-raise the warning.
         // Downward (depth increases) ⇒ -90° in the +up convention.
-        let vertical = ShotData { length: 5.0, depth_in: 0.0, depth_out: 5.0, pitch_in: Some(-90.0), pitch_out: Some(-90.0), ..down.clone() };
-        assert!(!has_mismatch(&vertical), "a vertical downward shot with -90° pitch is consistent");
+        let vertical = ShotData {
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 5.0,
+            pitch_in: Some(-90.0),
+            pitch_out: Some(-90.0),
+            ..down.clone()
+        };
+        assert!(
+            !has_mismatch(&vertical),
+            "a vertical downward shot with -90° pitch is consistent"
+        );
 
         // No recorded inclination → nothing to cross-check, not flagged.
-        let no_pitch = ShotData { pitch_in: None, pitch_out: None, ..down.clone() };
+        let no_pitch = ShotData {
+            pitch_in: None,
+            pitch_out: None,
+            ..down.clone()
+        };
         assert!(!has_mismatch(&no_pitch));
 
         // An out-of-range pitch is flagged as INVALID_PITCH, and the geometry
         // cross-check is skipped for it (no duplicate INCLINATION_DEPTH_MISMATCH).
-        let out_of_range = ShotData { pitch_in: Some(120.0), pitch_out: Some(120.0), ..down.clone() };
+        let out_of_range = ShotData {
+            pitch_in: Some(120.0),
+            pitch_out: Some(120.0),
+            ..down.clone()
+        };
         let w = Validator::validate_shot(&out_of_range, &config, 0, 0);
-        assert!(w.iter().any(|w| w.code == "INVALID_PITCH"), "120° pitch is out of range");
-        assert!(w.iter().all(|w| w.code != "INCLINATION_DEPTH_MISMATCH"), "skip the cross-check for an invalid pitch");
+        assert!(
+            w.iter().any(|w| w.code == "INVALID_PITCH"),
+            "120° pitch is out of range"
+        );
+        assert!(
+            w.iter().all(|w| w.code != "INCLINATION_DEPTH_MISMATCH"),
+            "skip the cross-check for an invalid pitch"
+        );
     }
 
     /// Pitch outside [-90°, 90°] is physically impossible → INVALID_PITCH error.
@@ -891,21 +1014,37 @@ mod tests {
 
         // In range (inclusive of the ±90° bounds): no INVALID_PITCH.
         for p in [0.0_f64, 45.0, -45.0, 90.0, -90.0] {
-            let ok = ShotData { pitch_in: Some(p), pitch_out: Some(p), ..base.clone() };
+            let ok = ShotData {
+                pitch_in: Some(p),
+                pitch_out: Some(p),
+                ..base.clone()
+            };
             assert!(
-                Validator::validate_shot(&ok, &config, 0, 0).iter().all(|w| w.code != "INVALID_PITCH"),
+                Validator::validate_shot(&ok, &config, 0, 0)
+                    .iter()
+                    .all(|w| w.code != "INVALID_PITCH"),
                 "{p}° is a valid pitch"
             );
         }
 
         // Out of range on either leg → error.
-        let bad_in = ShotData { pitch_in: Some(91.0), pitch_out: Some(0.0), ..base.clone() };
+        let bad_in = ShotData {
+            pitch_in: Some(91.0),
+            pitch_out: Some(0.0),
+            ..base.clone()
+        };
         let warnings = Validator::validate_shot(&bad_in, &config, 0, 0);
         assert!(warnings.iter().any(|w| w.code == "INVALID_PITCH"));
         assert!(Validator::has_errors(&warnings));
 
-        let bad_out = ShotData { pitch_in: Some(0.0), pitch_out: Some(-100.0), ..base.clone() };
-        assert!(Validator::validate_shot(&bad_out, &config, 0, 0).iter().any(|w| w.code == "INVALID_PITCH"));
+        let bad_out = ShotData {
+            pitch_in: Some(0.0),
+            pitch_out: Some(-100.0),
+            ..base.clone()
+        };
+        assert!(Validator::validate_shot(&bad_out, &config, 0, 0)
+            .iter()
+            .any(|w| w.code == "INVALID_PITCH"));
     }
 
     /// `severity_for_code` is the single source of truth, so every warning the
@@ -918,15 +1057,20 @@ mod tests {
         let shot = ShotData {
             azimuth_in: 400.0, // INVALID_AZIMUTH (error)
             azimuth_out: 90.0,
-            length: 0.0,       // ZERO_LENGTH (error)
+            length: 0.0, // ZERO_LENGTH (error)
             depth_in: 0.0,
             depth_out: 0.0,
-            left: Some(-1.0),  // NEGATIVE_LRUD (error)
+            left: Some(-1.0),      // NEGATIVE_LRUD (error)
             pitch_in: Some(120.0), // INVALID_PITCH (error)
             ..Default::default()
         };
         for w in Validator::validate_shot(&shot, &config, 0, 0) {
-            assert_eq!(w.severity, severity_for_code(&w.code), "severity drift for {}", w.code);
+            assert_eq!(
+                w.severity,
+                severity_for_code(&w.code),
+                "severity drift for {}",
+                w.code
+            );
         }
     }
 }

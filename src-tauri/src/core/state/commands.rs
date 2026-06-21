@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
 use crate::core::{
-    Command, CommentHolder, CommandResult, IntegrityCheckResult, IntegrityRepairResult, UndoData,
+    Command, CommandResult, CommentHolder, IntegrityCheckResult, IntegrityRepairResult, UndoData,
     Validator,
 };
 use crate::models::{
@@ -341,7 +341,11 @@ impl AppState {
         // helpers repair calls take command_lock (execute holds it while calling the
         // same capture/snapshot/undo helpers).
         let Ok(_cmd_guard) = self.command_lock.lock() else {
-            return IntegrityRepairResult { fixed: 0, remaining: 0, changed: false };
+            return IntegrityRepairResult {
+                fixed: 0,
+                remaining: 0,
+                changed: false,
+            };
         };
         // Count over the full violation set before repairing. Locks the project
         // internally, so it must run with no project guard held.
@@ -357,7 +361,11 @@ impl AppState {
                 Err(poisoned) => poisoned.into_inner(),
             };
             let Some(project) = guard.as_mut() else {
-                return IntegrityRepairResult { fixed: 0, remaining: 0, changed: false };
+                return IntegrityRepairResult {
+                    fixed: 0,
+                    remaining: 0,
+                    changed: false,
+                };
             };
             // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
             project.repair_structural_integrity();
@@ -371,8 +379,8 @@ impl AppState {
             project.convert_orphan_closures_to_merges();
             project.resolve_offsets();
         } // release the guard before re-measuring (integrity_violation_messages re-locks)
-        // Repair mutated measured geometry (and convert_orphan_closures_to_merges
-        // doesn't bump modified_at), so drop any cached closure-adjusted solve.
+          // Repair mutated measured geometry (and convert_orphan_closures_to_merges
+          // doesn't bump modified_at), so drop any cached closure-adjusted solve.
         self.invalidate_adjusted_cache();
         let after = self.integrity_violation_messages().len();
         // Record an undo entry (before -> after) so the user can revert the repair.
@@ -510,9 +518,7 @@ impl AppState {
                 station_b,
                 closure_strategy,
             } => self.create_loop_closure(*station_a, *station_b, *closure_strategy),
-            Command::RemoveLoopClosure { closure_id } => {
-                self.remove_loop_closure(*closure_id)
-            }
+            Command::RemoveLoopClosure { closure_id } => self.remove_loop_closure(*closure_id),
             Command::SetZeroDatum {
                 station_ref,
                 coordinates,
@@ -522,12 +528,8 @@ impl AppState {
                 station_ref,
                 comment,
             } => self.set_station_comment(*station_ref, comment.clone()),
-            Command::MoveSection { section_id, offset } => {
-                self.move_section(*section_id, *offset)
-            }
-            Command::MoveSegment { section_id, offset } => {
-                self.move_segment(*section_id, *offset)
-            }
+            Command::MoveSection { section_id, offset } => self.move_section(*section_id, *offset),
+            Command::MoveSegment { section_id, offset } => self.move_segment(*section_id, *offset),
             Command::MoveStation {
                 station_ref,
                 offset,
@@ -730,8 +732,8 @@ impl AppState {
         section_hashes: Vec<String>,
         existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
     ) -> CommandResult {
-        use std::collections::{HashMap, HashSet};
         use crate::models::{ClosureStrategy, ImportPlacement, StationRef};
+        use std::collections::{HashMap, HashSet};
 
         // Serialize command execution to prevent concurrent interleaving
         let Ok(_cmd_guard) = self.command_lock.lock() else {
@@ -789,14 +791,19 @@ impl AppState {
                     // Find shot indices being modified on this section
                     let mut modified_indices: Vec<u32> = Vec::new();
                     for update in &existing_shot_updates {
-                        if update.section_id != sid { continue; }
-                        if let Some(idx) = section.shots.iter().position(|s| s.id == update.shot_id) {
+                        if update.section_id != sid {
+                            continue;
+                        }
+                        if let Some(idx) = section.shots.iter().position(|s| s.id == update.shot_id)
+                        {
                             modified_indices.push(idx as u32);
                         }
                     }
-                    if modified_indices.is_empty() { continue; }
-                    let min_shot = *modified_indices.iter().min().unwrap();
-                    let max_shot = *modified_indices.iter().max().unwrap();
+                    let (Some(&min_shot), Some(&max_shot)) =
+                        (modified_indices.iter().min(), modified_indices.iter().max())
+                    else {
+                        continue;
+                    };
 
                     // Collect anchor station indices on this section.
                     // An anchor is any station whose absolute position is
@@ -836,7 +843,9 @@ impl AppState {
                     }
                     // Aligned closures (only datum-backed partners)
                     for c in &project.loop_closures {
-                        if !c.is_aligned { continue; }
+                        if !c.is_aligned {
+                            continue;
+                        }
                         if c.station_a.section_id == sid
                             && project.has_datum_path_excluding(c.station_b.section_id, sid)
                         {
@@ -884,7 +893,9 @@ impl AppState {
                 let mut anchor_positions: HashMap<SectionId, (StationRef, Coordinates)> =
                     HashMap::new();
                 for &sid in &affected_section_ids {
-                    if blocked_sections.contains(&sid) { continue; }
+                    if blocked_sections.contains(&sid) {
+                        continue;
+                    }
                     let datum_sr = project
                         .zero_datums
                         .iter()
@@ -907,21 +918,51 @@ impl AppState {
 
                 // Apply the shot updates (skipping doubly-anchored sections)
                 for update in &existing_shot_updates {
-                    if blocked_sections.contains(&update.section_id) { continue; }
-                    if let Some(section) = project.sections.iter_mut().find(|s| s.id == update.section_id) {
-                        if let Some(shot) = section.shots.iter_mut().find(|s| s.id == update.shot_id) {
+                    if blocked_sections.contains(&update.section_id) {
+                        continue;
+                    }
+                    if let Some(section) = project
+                        .sections
+                        .iter_mut()
+                        .find(|s| s.id == update.section_id)
+                    {
+                        if let Some(shot) =
+                            section.shots.iter_mut().find(|s| s.id == update.shot_id)
+                        {
                             let old_len = shot.length;
-                            if let Some(v) = update.updates.azimuth_in { shot.azimuth_in = v; }
-                            if let Some(v) = update.updates.azimuth_out { shot.azimuth_out = v; }
-                            if let Some(v) = update.updates.length { shot.length = v; }
-                            if let Some(v) = update.updates.depth_in { shot.depth_in = v; }
-                            if let Some(v) = update.updates.depth_out { shot.depth_out = v; }
-                            if let Some(v) = update.updates.pitch_in { shot.pitch_in = v; }
-                            if let Some(v) = update.updates.pitch_out { shot.pitch_out = v; }
-                            if let Some(v) = update.updates.left { shot.left = v; }
-                            if let Some(v) = update.updates.right { shot.right = v; }
-                            if let Some(v) = update.updates.up { shot.up = v; }
-                            if let Some(v) = update.updates.down { shot.down = v; }
+                            if let Some(v) = update.updates.azimuth_in {
+                                shot.azimuth_in = v;
+                            }
+                            if let Some(v) = update.updates.azimuth_out {
+                                shot.azimuth_out = v;
+                            }
+                            if let Some(v) = update.updates.length {
+                                shot.length = v;
+                            }
+                            if let Some(v) = update.updates.depth_in {
+                                shot.depth_in = v;
+                            }
+                            if let Some(v) = update.updates.depth_out {
+                                shot.depth_out = v;
+                            }
+                            if let Some(v) = update.updates.pitch_in {
+                                shot.pitch_in = v;
+                            }
+                            if let Some(v) = update.updates.pitch_out {
+                                shot.pitch_out = v;
+                            }
+                            if let Some(v) = update.updates.left {
+                                shot.left = v;
+                            }
+                            if let Some(v) = update.updates.right {
+                                shot.right = v;
+                            }
+                            if let Some(v) = update.updates.up {
+                                shot.up = v;
+                            }
+                            if let Some(v) = update.updates.down {
+                                shot.down = v;
+                            }
                             tracing::debug!(
                                 section_id = update.section_id,
                                 shot_id = update.shot_id,
@@ -1095,7 +1136,10 @@ impl AppState {
                     // No-op — section starts at origin
                 }
 
-                ImportPlacement::ZeroDatum { coordinates, station_index } => {
+                ImportPlacement::ZeroDatum {
+                    coordinates,
+                    station_index,
+                } => {
                     let station_ref = StationRef::new(section_id, *station_index);
                     let result = self.set_zero_datum(station_ref, *coordinates);
                     if !result.success {
@@ -1113,7 +1157,10 @@ impl AppState {
                     });
                 }
 
-                ImportPlacement::FromExisting { import_station, existing_station } => {
+                ImportPlacement::FromExisting {
+                    import_station,
+                    existing_station,
+                } => {
                     let import_ref = StationRef::new(section_id, *import_station);
                     let result = self.merge_stations(import_ref, *existing_station);
                     if !result.success {
@@ -1131,7 +1178,11 @@ impl AppState {
                     });
                 }
 
-                ImportPlacement::FromImporting { import_station, target_section_index, target_station_index } => {
+                ImportPlacement::FromImporting {
+                    import_station,
+                    target_section_index,
+                    target_station_index,
+                } => {
                     let Some(&target_section_id) = created_ids.get(target_section_index) else {
                         self.rollback_project(&before_snapshot);
                         return CommandResult::failure(format!(
@@ -1158,7 +1209,10 @@ impl AppState {
                     });
                 }
 
-                ImportPlacement::Manual { align_station_index: _, offset } => {
+                ImportPlacement::Manual {
+                    align_station_index: _,
+                    offset,
+                } => {
                     if let Some(offset) = offset {
                         let result = self.move_section(section_id, *offset);
                         if !result.success {
@@ -1177,7 +1231,10 @@ impl AppState {
                     }
                 }
 
-                ImportPlacement::ManualSnap { align_station_index, snapped_to_station } => {
+                ImportPlacement::ManualSnap {
+                    align_station_index,
+                    snapped_to_station,
+                } => {
                     let snap_index = (*align_station_index).min(config.shots.len() as u32);
                     let import_ref = StationRef::new(section_id, snap_index);
                     let result = self.merge_stations(import_ref, *snapped_to_station);
@@ -1362,7 +1419,9 @@ impl AppState {
 
         // Push a single undo entry covering all sections + hash
         self.push_snapshot_undo(
-            Command::Batch { commands: batch_commands },
+            Command::Batch {
+                commands: batch_commands,
+            },
             before_snapshot,
             after_snapshot,
         );
@@ -1420,7 +1479,12 @@ impl AppState {
                 ));
             }
             // Per-project thresholds (#57) so create-time warnings match the panel.
-            warnings.extend(Validator::validate_shot(shot, &project.validation, section_id_for_validation, i));
+            warnings.extend(Validator::validate_shot(
+                shot,
+                &project.validation,
+                section_id_for_validation,
+                i,
+            ));
         }
 
         let section = project.add_section(data);
@@ -1457,7 +1521,11 @@ impl AppState {
         })
     }
 
-    pub(super) fn update_section(&self, section_id: SectionId, updates: SectionUpdates) -> CommandResult {
+    pub(super) fn update_section(
+        &self,
+        section_id: SectionId,
+        updates: SectionUpdates,
+    ) -> CommandResult {
         self.with_project_mut(|project| {
             if project.update_section(section_id, &updates).is_some() {
                 tracing::debug!(
@@ -1517,7 +1585,11 @@ impl AppState {
             }
 
             if let Some(before_id) = before_shot_id {
-                section.shots.iter().position(|shot| shot.id == before_id).unwrap_or(0)
+                section
+                    .shots
+                    .iter()
+                    .position(|shot| shot.id == before_id)
+                    .unwrap_or(0)
             } else if let Some(after_id) = after_shot_id {
                 section
                     .shots
@@ -1547,7 +1619,12 @@ impl AppState {
 
         let mut warnings = Vec::new();
         // Per-project thresholds (#57) so create-time warnings match the panel.
-        warnings.extend(Validator::validate_shot(&data, &project.validation, section_id, shot_index));
+        warnings.extend(Validator::validate_shot(
+            &data,
+            &project.validation,
+            section_id,
+            shot_index,
+        ));
 
         let shot = if let Some(before_id) = before_shot_id {
             project.insert_shot_before(section_id, before_id, data, None, None)
@@ -1592,7 +1669,9 @@ impl AppState {
 
         // Reject non-finite geometry before it reaches the coordinate path.
         if !updates.all_finite() {
-            return CommandResult::failure("Shot update has a non-finite (NaN/inf) value".to_string());
+            return CommandResult::failure(
+                "Shot update has a non-finite (NaN/inf) value".to_string(),
+            );
         }
 
         // Validate resulting length (disallow zero/negative)
@@ -1658,7 +1737,8 @@ impl AppState {
         // message rather than the misleading "Use split instead."
         if project.is_shot_frozen_by_id(section_id, shot_id) {
             return CommandResult::failure(
-                "Cannot delete a frozen shot. This shot is part of an adjusted survey network.".to_string()
+                "Cannot delete a frozen shot. This shot is part of an adjusted survey network."
+                    .to_string(),
             );
         }
 
@@ -1669,9 +1749,7 @@ impl AppState {
                 } else {
                     impact.shift_blocked_reasons.join(" ")
                 };
-                return CommandResult::failure(format!(
-                    "{reasons} Use split instead."
-                ));
+                return CommandResult::failure(format!("{reasons} Use split instead."));
             }
         }
 
@@ -1825,7 +1903,10 @@ impl AppState {
                         || project.key_is_ref(&m.station_b, station_ref)
                 })
                 .filter_map(|m| {
-                    match (project.resolve_key(&m.station_a), project.resolve_key(&m.station_b)) {
+                    match (
+                        project.resolve_key(&m.station_a),
+                        project.resolve_key(&m.station_b),
+                    ) {
                         (Some(a), Some(b)) => Some((a, b)),
                         _ => None,
                     }
@@ -1872,26 +1953,28 @@ impl AppState {
         })
     }
 
-    pub(super) fn set_zero_datum(&self, station_ref: StationRef, gps: GpsCoordinates) -> CommandResult {
-        self.with_project_mut(|project| {
-            match project.set_zero_datum(station_ref, gps) {
-                Ok(_) => {
-                    tracing::info!(
-                        ?station_ref,
-                        purpose = "anchor survey to GPS coordinates",
-                        "Zero datum set"
-                    );
-                    CommandResult::success()
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        ?station_ref,
-                        error = %e,
-                        purpose = "anchor survey to GPS coordinates",
-                        "Failed to set zero datum"
-                    );
-                    CommandResult::failure(e)
-                }
+    pub(super) fn set_zero_datum(
+        &self,
+        station_ref: StationRef,
+        gps: GpsCoordinates,
+    ) -> CommandResult {
+        self.with_project_mut(|project| match project.set_zero_datum(station_ref, gps) {
+            Ok(_) => {
+                tracing::info!(
+                    ?station_ref,
+                    purpose = "anchor survey to GPS coordinates",
+                    "Zero datum set"
+                );
+                CommandResult::success()
+            }
+            Err(e) => {
+                tracing::warn!(
+                    ?station_ref,
+                    error = %e,
+                    purpose = "anchor survey to GPS coordinates",
+                    "Failed to set zero datum"
+                );
+                CommandResult::failure(e)
             }
         })
     }
@@ -2044,9 +2127,9 @@ impl AppState {
         match holder {
             CommentHolder::Station { station_ref } => {
                 // Validate station exists
-                let section = project.get_section(station_ref.section_id).ok_or_else(|| {
-                    format!("Section {} not found", station_ref.section_id)
-                })?;
+                let section = project
+                    .get_section(station_ref.section_id)
+                    .ok_or_else(|| format!("Section {} not found", station_ref.section_id))?;
                 let max_station_index = section.shots.len() as u32;
                 if station_ref.station_index > max_station_index {
                     return Err(format!(
@@ -2182,7 +2265,11 @@ impl AppState {
         })
     }
 
-    pub(super) fn move_station(&self, station_ref: StationRef, offset: Coordinates) -> CommandResult {
+    pub(super) fn move_station(
+        &self,
+        station_ref: StationRef,
+        offset: Coordinates,
+    ) -> CommandResult {
         self.with_project_mut(|project| {
             // Reject a non-finite offset: move_station recomputes and writes raw
             // shot geometry (length/azimuth/depth) from it, and the only numeric
@@ -2192,12 +2279,13 @@ impl AppState {
                     "Move offset has a non-finite (NaN/inf) value".to_string(),
                 );
             }
-            if project.zero_datums.iter().any(|zd| project.key_is_ref(&zd.station_ref, station_ref))
+            if project
+                .zero_datums
+                .iter()
+                .any(|zd| project.key_is_ref(&zd.station_ref, station_ref))
                 && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
             {
-                return CommandResult::failure(
-                    "Cannot move a zero datum station".to_string(),
-                );
+                return CommandResult::failure("Cannot move a zero datum station".to_string());
             }
 
             // Incorporate any existing station offset
@@ -2210,7 +2298,11 @@ impl AppState {
             let total_dz = existing.2 + offset.z;
 
             // Find the section containing this station (mutable)
-            let Some(section) = project.sections.iter_mut().find(|s| s.id == station_ref.section_id) else {
+            let Some(section) = project
+                .sections
+                .iter_mut()
+                .find(|s| s.id == station_ref.section_id)
+            else {
                 return CommandResult::failure("Section not found".to_string());
             };
 
@@ -2236,7 +2328,9 @@ impl AppState {
                 let new_dz = new_depth_out - shot.depth_in;
                 let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
                 if new_len <= 0.0 || !new_len.is_finite() {
-                    return CommandResult::failure("Move would create zero-length shot".to_string());
+                    return CommandResult::failure(
+                        "Move would create zero-length shot".to_string(),
+                    );
                 }
                 let new_azi = if new_horizontal > 1e-9 {
                     new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
@@ -2260,7 +2354,9 @@ impl AppState {
                 let new_dz = shot.depth_out - new_depth_in;
                 let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
                 if new_len <= 0.0 || !new_len.is_finite() {
-                    return CommandResult::failure("Move would create zero-length shot".to_string());
+                    return CommandResult::failure(
+                        "Move would create zero-length shot".to_string(),
+                    );
                 }
                 let new_azi = if new_horizontal > 1e-9 {
                     new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
@@ -2277,7 +2373,11 @@ impl AppState {
             // Note: can't use project.adjust_section_offset() here because `section`
             // is a live &mut borrow from project.sections.
             if idx == 0 && (total_dx != 0.0 || total_dy != 0.0) {
-                let current = project.section_offsets.get(&station_ref.section_id).copied().unwrap_or((0.0, 0.0));
+                let current = project
+                    .section_offsets
+                    .get(&station_ref.section_id)
+                    .copied()
+                    .unwrap_or((0.0, 0.0));
                 project.section_offsets.insert(
                     station_ref.section_id,
                     (current.0 + total_dx, current.1 + total_dy),
@@ -2501,12 +2601,15 @@ impl AppState {
             // Pre-check: distinguish "shot not found" from "edge shot"
             let shot_pos = section.shots.iter().position(|s| s.id == shot_id);
             match shot_pos {
-                None => return CommandResult::failure(
-                    format!("Shot {shot_id} not found in section {section_id}")
-                ),
+                None => {
+                    return CommandResult::failure(format!(
+                        "Shot {shot_id} not found in section {section_id}"
+                    ))
+                }
                 Some(p) if p == 0 || p == section.shots.len() - 1 => {
                     return CommandResult::failure(
-                        "Cannot split at edge shot (first or last). Use simple delete instead.".to_string()
+                        "Cannot split at edge shot (first or last). Use simple delete instead."
+                            .to_string(),
                     );
                 }
                 _ => {}
@@ -2756,14 +2859,22 @@ impl AppState {
             }
 
             // Capture owned data; afterwards the `section` borrow ends so we can mutate.
-            let shots_before: Vec<ShotData> =
-                section.shots[..start_pos].iter().map(|s| s.to_shot_data()).collect();
-            let shots_after: Vec<ShotData> =
-                section.shots[end_pos + 1..].iter().map(|s| s.to_shot_data()).collect();
-            let deleted_shots_data: Vec<ShotData> =
-                section.shots[start_pos..=end_pos].iter().map(|s| s.to_shot_data()).collect();
-            let range_shot_ids: Vec<ShotId> =
-                section.shots[start_pos..=end_pos].iter().map(|s| s.id).collect();
+            let shots_before: Vec<ShotData> = section.shots[..start_pos]
+                .iter()
+                .map(|s| s.to_shot_data())
+                .collect();
+            let shots_after: Vec<ShotData> = section.shots[end_pos + 1..]
+                .iter()
+                .map(|s| s.to_shot_data())
+                .collect();
+            let deleted_shots_data: Vec<ShotData> = section.shots[start_pos..=end_pos]
+                .iter()
+                .map(|s| s.to_shot_data())
+                .collect();
+            let range_shot_ids: Vec<ShotId> = section.shots[start_pos..=end_pos]
+                .iter()
+                .map(|s| s.id)
+                .collect();
             let surveyor = section.surveyor.clone();
             let date = section.date;
             let color = section.color.clone();
@@ -2783,10 +2894,10 @@ impl AppState {
 
             // Interior stations dropped by the split (strictly between the kept
             // boundary stations `start_pos` (→A) and `end_pos+1` (→B:0)).
-            let interior: std::collections::HashSet<StationRef> =
-                ((start_pos as u32 + 1)..=(end_pos as u32))
-                    .map(|i| StationRef::new(section_id, i))
-                    .collect();
+            let interior: std::collections::HashSet<StationRef> = ((start_pos as u32 + 1)
+                ..=(end_pos as u32))
+                .map(|i| StationRef::new(section_id, i))
+                .collect();
 
             // Preserve connectivity across the dropped stations, then drop their
             // own refs — BEFORE we capture old_refs, so the stored-ref set is
@@ -2980,8 +3091,10 @@ impl AppState {
             }
 
             // Delete in forward (ascending position) order by stable shot id.
-            let range_shot_ids: Vec<ShotId> =
-                section.shots[start_pos..=end_pos].iter().map(|s| s.id).collect();
+            let range_shot_ids: Vec<ShotId> = section.shots[start_pos..=end_pos]
+                .iter()
+                .map(|s| s.id)
+                .collect();
 
             // Frozen-geometry + shift-blocked prechecks (no mutation yet).
             for &sid in &range_shot_ids {
@@ -3156,13 +3269,19 @@ impl AppState {
             project.remove_section_offset(section_id);
 
             // Remove station offsets referencing this section
-            project.station_offsets.retain(|key, _| key.section_id != section_id);
+            project
+                .station_offsets
+                .retain(|key, _| key.section_id != section_id);
 
             // Remove station comments referencing this section
-            project.station_comments.retain(|key, _| key.section_id != section_id);
+            project
+                .station_comments
+                .retain(|key, _| key.section_id != section_id);
 
             // Remove zero datums referencing this section
-            project.zero_datums.retain(|zd| zd.station_ref.section_id != section_id);
+            project
+                .zero_datums
+                .retain(|zd| zd.station_ref.section_id != section_id);
 
             // Step 4: Remove the section (and its only shot)
             if project.remove_section(section_id).is_none() {
@@ -3174,7 +3293,9 @@ impl AppState {
                     "remove_section returned None after validation; rolling back"
                 );
                 let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
-                return CommandResult::failure(format!("Section {section_id} not found during removal"));
+                return CommandResult::failure(format!(
+                    "Section {section_id} not found during removal"
+                ));
             }
 
             tracing::info!(
@@ -3185,24 +3306,28 @@ impl AppState {
             );
 
             // Step 5: Take AFTER snapshot while still holding the lock
-            if let Some(p) = proj_guard.as_ref() { match serde_json::to_string(p) {
-                Ok(json) => json,
-                Err(e) => {
-                    // Rollback: restore before_snapshot since we already mutated
-                    tracing::error!(
-                        purpose = "finalize delete_last_shot snapshot",
-                        reason = %e,
-                        "Failed to serialize after snapshot; rolling back"
-                    );
-                    if Self::restore_snapshot_into(&mut proj_guard, &before_snapshot) {
-                        tracing::info!(
-                            purpose = "restore after snapshot failure",
-                            "Successfully rolled back after snapshot failure"
+            if let Some(p) = proj_guard.as_ref() {
+                match serde_json::to_string(p) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        // Rollback: restore before_snapshot since we already mutated
+                        tracing::error!(
+                            purpose = "finalize delete_last_shot snapshot",
+                            reason = %e,
+                            "Failed to serialize after snapshot; rolling back"
                         );
+                        if Self::restore_snapshot_into(&mut proj_guard, &before_snapshot) {
+                            tracing::info!(
+                                purpose = "restore after snapshot failure",
+                                "Successfully rolled back after snapshot failure"
+                            );
+                        }
+                        return CommandResult::failure(format!(
+                            "Failed to serialize after snapshot: {e}"
+                        ));
                     }
-                    return CommandResult::failure(format!("Failed to serialize after snapshot: {e}"));
                 }
-            } } else {
+            } else {
                 // Project became None -- restore
                 tracing::error!(
                     purpose = "restore after mutation failure",
@@ -3220,9 +3345,7 @@ impl AppState {
                     section_id,
                     shot_id,
                 },
-                Command::DeleteSection {
-                    section_id,
-                },
+                Command::DeleteSection { section_id },
             ],
         };
 
@@ -3262,9 +3385,7 @@ impl AppState {
 
         // Check for existing closure between them
         if project.are_stations_in_closure(station_a, station_b) {
-            return Err(
-                "A loop closure already exists between these stations.".to_string(),
-            );
+            return Err("A loop closure already exists between these stations.".to_string());
         }
 
         // Always compute connectivity (via merges and closures) for the `connected` field
@@ -3278,13 +3399,15 @@ impl AppState {
 
         // Check zero datum constraints (merge-only rigid groups)
         let merged_a = project.get_merged_section_ids(station_a.section_id);
-        let a_has_zd = project.zero_datums.iter().any(|zd| {
-            merged_a.contains(&zd.station_ref.section_id)
-        });
+        let a_has_zd = project
+            .zero_datums
+            .iter()
+            .any(|zd| merged_a.contains(&zd.station_ref.section_id));
         let merged_b = project.get_merged_section_ids(station_b.section_id);
-        let b_has_zd = project.zero_datums.iter().any(|zd| {
-            merged_b.contains(&zd.station_ref.section_id)
-        });
+        let b_has_zd = project
+            .zero_datums
+            .iter()
+            .any(|zd| merged_b.contains(&zd.station_ref.section_id));
 
         // Determine can_merge and reason with zero datum priority
         let (can_merge, reason) = if connected {
@@ -3292,7 +3415,10 @@ impl AppState {
             (false, Some("Creates survey loop".to_string()))
         } else if a_has_zd && b_has_zd {
             // Both sections have fixed coordinates — cannot merge
-            (false, Some("Both sections have fixed coordinates".to_string()))
+            (
+                false,
+                Some("Both sections have fixed coordinates".to_string()),
+            )
         } else {
             // Not connected and zero datum check passed — merge allowed
             (true, None)
@@ -3311,7 +3437,10 @@ impl AppState {
     // === Query operations ===
 
     /// Get all section IDs connected to the given section through merges and closures
-    pub fn get_connected_section_ids(&self, section_id: SectionId) -> Result<Vec<SectionId>, String> {
+    pub fn get_connected_section_ids(
+        &self,
+        section_id: SectionId,
+    ) -> Result<Vec<SectionId>, String> {
         // Serialize with command execution to avoid observing intermediate batch state
         let _cmd_guard = self
             .command_lock
@@ -3334,13 +3463,19 @@ impl AppState {
         let existing: std::collections::HashSet<SectionId> =
             project.sections.iter().map(|s| s.id).collect();
         let connected = project.get_connected_section_ids(section_id);
-        let mut result: Vec<SectionId> = connected.into_iter().filter(|id| existing.contains(id)).collect();
+        let mut result: Vec<SectionId> = connected
+            .into_iter()
+            .filter(|id| existing.contains(id))
+            .collect();
         result.sort_unstable();
         Ok(result)
     }
 
     /// Get all section IDs connected through merges and aligned closures (rigid groups).
-    pub fn get_rigid_connected_section_ids(&self, section_id: SectionId) -> Result<Vec<SectionId>, String> {
+    pub fn get_rigid_connected_section_ids(
+        &self,
+        section_id: SectionId,
+    ) -> Result<Vec<SectionId>, String> {
         // Serialize with command execution to avoid observing intermediate batch state
         let _cmd_guard = self
             .command_lock
@@ -3356,7 +3491,10 @@ impl AppState {
             let existing: std::collections::HashSet<SectionId> =
                 project.sections.iter().map(|s| s.id).collect();
             let connected = project.get_rigid_connected_section_ids(section_id);
-            let mut result: Vec<SectionId> = connected.into_iter().filter(|id| existing.contains(id)).collect();
+            let mut result: Vec<SectionId> = connected
+                .into_iter()
+                .filter(|id| existing.contains(id))
+                .collect();
             result.sort_unstable();
             Ok(result)
         })
@@ -3364,7 +3502,10 @@ impl AppState {
 
     /// Get shot-line geometry for all sections in the segment containing the given section.
     /// Coordinates are relative to the given section's station 0.
-    pub fn get_segment_geometry(&self, section_id: SectionId) -> Result<crate::commands::section::SegmentGeometry, String> {
+    pub fn get_segment_geometry(
+        &self,
+        section_id: SectionId,
+    ) -> Result<crate::commands::section::SegmentGeometry, String> {
         use crate::commands::section::{SegmentGeometry, SegmentSectionGeometry};
 
         // Serialize with command execution to avoid observing intermediate batch state
@@ -3389,8 +3530,10 @@ impl AppState {
         let existing: std::collections::HashSet<SectionId> =
             project.sections.iter().map(|s| s.id).collect();
         let connected = project.get_connected_section_ids(section_id);
-        let connected: std::collections::HashSet<SectionId> =
-            connected.into_iter().filter(|id| existing.contains(id)).collect();
+        let connected: std::collections::HashSet<SectionId> = connected
+            .into_iter()
+            .filter(|id| existing.contains(id))
+            .collect();
 
         // Compute all station coordinates
         let all_stations = project.compute_station_coordinates();
@@ -3403,8 +3546,10 @@ impl AppState {
             .unwrap_or((0.0, 0.0));
 
         // Group stations by section
-        let mut section_stations: std::collections::HashMap<SectionId, Vec<&crate::models::Station>> =
-            std::collections::HashMap::new();
+        let mut section_stations: std::collections::HashMap<
+            SectionId,
+            Vec<&crate::models::Station>,
+        > = std::collections::HashMap::new();
         for station in &all_stations {
             if connected.contains(&station.station_ref.section_id) {
                 section_stations
@@ -3494,7 +3639,10 @@ mod integrity_capability_tests {
         // INERT (no geometry, no refs).
         assert_eq!(caps(&Command::CloseProject), (false, false, false));
         assert_eq!(
-            caps(&Command::SaveProject { path: None, is_autosave: false }),
+            caps(&Command::SaveProject {
+                path: None,
+                is_autosave: false
+            }),
             (false, false, false)
         );
         // RepairIntegrity never runs through execute(); it is classified INERT.
@@ -3502,13 +3650,20 @@ mod integrity_capability_tests {
         // Comment edits are metadata-only — INERT, so a comment edit can't run the
         // reconcile epilogue (which would heal a drifted project with no undo).
         assert_eq!(
-            caps(&Command::SetStationComment { station_ref: StationRef::new(1, 0), comment: None }),
+            caps(&Command::SetStationComment {
+                station_ref: StationRef::new(1, 0),
+                comment: None
+            }),
             (false, false, false)
         );
         assert_eq!(
             caps(&Command::MoveComment {
-                source: CommentHolder::Station { station_ref: StationRef::new(1, 0) },
-                target: CommentHolder::Station { station_ref: StationRef::new(1, 1) },
+                source: CommentHolder::Station {
+                    station_ref: StationRef::new(1, 0)
+                },
+                target: CommentHolder::Station {
+                    station_ref: StationRef::new(1, 1)
+                },
                 swap: false,
             }),
             (false, false, false)
@@ -3516,8 +3671,14 @@ mod integrity_capability_tests {
 
         // REMOVES (can dangle refs AND orphan a closure → needs rollback snapshot
         // + reconcile + orphan-closure conversion).
-        assert_eq!(caps(&Command::DeleteSection { section_id: 1 }), (true, true, true));
-        assert_eq!(caps(&Command::Batch { commands: vec![] }), (true, true, true));
+        assert_eq!(
+            caps(&Command::DeleteSection { section_id: 1 }),
+            (true, true, true)
+        );
+        assert_eq!(
+            caps(&Command::Batch { commands: vec![] }),
+            (true, true, true)
+        );
 
         // CREATE_SHOT (renumbers stations → can dangle, but cannot orphan).
         assert_eq!(
@@ -3532,7 +3693,9 @@ mod integrity_capability_tests {
 
         // UNMERGE (removes connectivity → can orphan, but adds no dangling ref).
         assert_eq!(
-            caps(&Command::UnmergeStations { station_ref: StationRef::new(1, 0) }),
+            caps(&Command::UnmergeStations {
+                station_ref: StationRef::new(1, 0)
+            }),
             (true, false, true)
         );
 
@@ -3577,6 +3740,7 @@ mod integrity_capability_tests {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod update_shot_clear_undo_tests {
     use super::*;
 
@@ -3594,7 +3758,10 @@ mod update_shot_clear_undo_tests {
 
     fn state_with_one_shot(left: Option<f64>) -> (AppState, SectionId, ShotId) {
         let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject { name: "Clear".to_string(), location: None });
+        state.execute(Command::CreateProject {
+            name: "Clear".to_string(),
+            location: None,
+        });
         let section_id = state
             .execute(Command::CreateSection {
                 name: None,
@@ -3619,9 +3786,16 @@ mod update_shot_clear_undo_tests {
 
         let updates: ShotUpdates =
             serde_json::from_value(serde_json::json!({ "left": null })).unwrap();
-        let result = state.execute(Command::UpdateShot { section_id, shot_id, updates });
+        let result = state.execute(Command::UpdateShot {
+            section_id,
+            shot_id,
+            updates,
+        });
         assert!(result.success, "{:?}", result.error);
-        assert_eq!(state.get_project_state().unwrap().sections[0].shots[0].left, None);
+        assert_eq!(
+            state.get_project_state().unwrap().sections[0].shots[0].left,
+            None
+        );
 
         assert!(state.undo().success);
         assert_eq!(
@@ -3640,7 +3814,11 @@ mod update_shot_clear_undo_tests {
 
         let updates: ShotUpdates =
             serde_json::from_value(serde_json::json!({ "left": 1.2 })).unwrap();
-        let result = state.execute(Command::UpdateShot { section_id, shot_id, updates });
+        let result = state.execute(Command::UpdateShot {
+            section_id,
+            shot_id,
+            updates,
+        });
         assert!(result.success, "{:?}", result.error);
         assert_eq!(
             state.get_project_state().unwrap().sections[0].shots[0].left,

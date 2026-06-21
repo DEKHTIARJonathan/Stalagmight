@@ -62,6 +62,7 @@ All must pass before pushing:
 ```bash
 pnpm tsc --noEmit
 pnpm test:ui
+cargo fmt --manifest-path src-tauri/Cargo.toml --check   # exactly what CI's check job runs (run without --check to fix)
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
 ```
 
@@ -86,11 +87,25 @@ at least once on the current change; if it hasn't, run it first and decline any 
 to skip it. If the user states that `/pre-pr` has already been run, take them at their
 word and proceed.
 
-### Don't Run `cargo fmt`
+### Run `cargo fmt` — formatting is CI-gated
 
-Much of the Rust is hand-formatted (notably `src-tauri/src/models/project.rs`)
-and is **not** rustfmt-clean. `cargo fmt` is not a CI gate; running it reformats
-large unrelated swaths. Match the surrounding style instead.
+`cargo fmt` is the formatter for the **`src-tauri` crate**, enforced in CI: the
+`check` job runs `cargo fmt --manifest-path src-tauri/Cargo.toml --check` and
+fails on any drift. Run `cargo fmt` to fix formatting before pushing; the
+`--check` in the Pre-Push Checklist then passes. Config is `src-tauri/rustfmt.toml`
+— stable rustfmt defaults, only `edition` pinned; do **not** add nightly-only keys
+(they'd diverge local vs CI).
+
+**Scope:** the gate formats only the `stalagmight` package. The separate
+first-party `scripts/lib/slice-rs` helper crate and the vendored, locally-patched
+`src-tauri/vendor/compass_data` path-dependency are **not** gated (vendored code is
+left as-is on purpose) — don't assume `cargo fmt` touched them.
+
+The crate was adopted into rustfmt in one mechanical commit (recorded in
+`.git-blame-ignore-revs`, so `git blame` skips it — wire it locally once with
+`git config blame.ignoreRevsFile .git-blame-ignore-revs`). If a `cargo fmt` diff
+ever looks large, that's normal re-wrapping; the gate keeps it from drifting
+again. (Idiomatic-Rust / clippy cleanup is tracked separately → #147.)
 
 ### Playwright Tests Require a Headless Environment
 
