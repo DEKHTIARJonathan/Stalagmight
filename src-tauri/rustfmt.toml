@@ -1,0 +1,9 @@
+# Formatting config for the src-tauri crate.
+#
+# Stable rustfmt defaults — only the edition is pinned, so `cargo fmt` and the
+# CI-gated `cargo fmt --check` produce identical output on every machine.
+#
+# Do NOT add nightly-only keys (group_imports, imports_granularity, wrap_comments,
+# etc.): stable rustfmt ignores them with a warning, which would make local and CI
+# formatting silently diverge. Keep this minimal.
+edition = "2021"
