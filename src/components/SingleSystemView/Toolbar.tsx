@@ -170,9 +170,8 @@ export default function Toolbar({
             onClick={() => onImport()}
             disabled={placementModeActive || geometryReadOnly}
             size="sm"
-            className="sh-tool ml-1"
-            style={{ '--o': 'var(--sh-comment)' } as CSSProperties}
-            icon={showToolbarIcons ? <span style={{ color: 'var(--o)' } as CSSProperties}><DownloadIcon size={16} /></span> : undefined}
+            className="ml-1"
+            icon={showToolbarIcons ? <span style={{ color: 'var(--sh-comment)' }}><DownloadIcon size={16} /></span> : undefined}
             data-testid="toolbar-import-button"
           >
             {t('common.actions.import')}
