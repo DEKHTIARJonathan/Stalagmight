@@ -158,6 +158,25 @@ large_futures = "warn"
 explicit_into_iter_loop = "deny"
 semicolon_if_nothing_returned = "deny"
 
+# ── Extended AI-slop guardrails (2026-06). Rationale + the lints we considered
+#    and deliberately DEFERRED (indexing_slicing, get_unwrap, map_err_ignore, …)
+#    are recorded in docs/linting.md so they aren't naively re-litigated. ──
+# Panic safety, cont.: a Result-returning fn that unwraps internally instead of `?`.
+unwrap_in_result = "deny"
+# Clone-spam, cont.: force explicit Rc::clone(&x) over x.clone(); no Rc clones in vec![x; n].
+clone_on_ref_ptr = "deny"
+rc_clone_in_vec_init = "deny"
+# String nonsense, cont.: String.to_string() is a pointless re-alloc.
+string_to_string = "deny"
+# Misc AI footguns: redundant type annotations, mem::forget leaks, lossy float literals.
+redundant_type_annotations = "deny"
+mem_forget = "deny"
+lossy_float_literal = "deny"
+# API hygiene: don't request &mut you never use.
+needless_pass_by_ref_mut = "deny"
+# Dependency hygiene: no `version = "*"` deps.
+wildcard_dependencies = "deny"
+
 [lints.rust]
 unsafe_code = "deny"
 unused_must_use = "deny"

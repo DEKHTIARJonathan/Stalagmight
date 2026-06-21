@@ -290,7 +290,7 @@ impl TileCache {
 
     /// Evict a single least-recently-used tile.
     /// Returns the number of bytes freed (0 if cache is empty).
-    fn evict_one_lru(&mut self) -> Result<u64> {
+    fn evict_one_lru(&self) -> Result<u64> {
         // Find and delete the least recently accessed tile
         // Use id as tie-breaker for deterministic behavior when timestamps match
         let oldest: Result<(i64, i64), _> = self.conn.query_row(
