@@ -387,30 +387,49 @@ export function DatabaseIcon(props: IconProps) {
 }
 
 export function EyeIcon(props: IconProps) {
+  // Filled (lens band knocked out via evenodd + filled pupil) rather than
+  // stroked, so it holds weight at any UI scale (WebKit fattens thin strokes
+  // under page-zoom; fills rasterize cleanly).
   return (
     <BaseIcon {...props}>
-      <path d="M2 10s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5Z" />
-      <circle cx="10" cy="10" r="2.5" />
+      <path
+        fillRule="evenodd"
+        fill="currentColor"
+        stroke="none"
+        d="M2 10 C2 10 5 5 10 5 C15 5 18 10 18 10 C18 10 15 15 10 15 C5 15 2 10 2 10 Z M3.9 10 C3.9 10 6.34 6.34 10 6.9 C13.66 6.34 16.1 10 16.1 10 C16.1 10 13.66 13.66 10 13.1 C6.34 13.66 3.9 10 3.9 10 Z"
+      />
+      <circle cx="10" cy="10" r="2.5" fill="currentColor" stroke="none" />
     </BaseIcon>
   );
 }
 
 export function MapIcon(props: IconProps) {
+  // Hollow folded-map outline (band) + the two fold creases, rendered as fills.
   return (
     <BaseIcon {...props}>
-      <path d="M3 4 L8 2 L12 4 L17 2 V16 L12 18 L8 16 L3 18 Z" />
-      <line x1="8" y1="2" x2="8" y2="16" />
-      <line x1="12" y1="4" x2="12" y2="18" />
+      <path
+        fillRule="evenodd"
+        fill="currentColor"
+        stroke="none"
+        d="M3 4 L8 2 L12 4 L17 2 V16 L12 18 L8 16 L3 18 Z M4.44 5.24 L8.46 3.84 L11.4 5.8 L15.75 3.43 L15.56 14.76 L11.54 16.16 L8.6 14.2 L4.25 16.57 Z"
+      />
+      <path
+        fill="currentColor"
+        stroke="none"
+        d="M7.05 4.3 H8.95 V13.8 H7.05 Z M11.05 6.3 H12.95 V15.8 H11.05 Z"
+      />
     </BaseIcon>
   );
 }
 
 export function DownloadIcon(props: IconProps) {
+  // Faithful outline download (shaft bar + chevron band + tray frame) as fills,
+  // so it keeps weight at any UI scale (WebKit fattens thin strokes at zoom).
   return (
     <BaseIcon {...props}>
-      <line x1="10" y1="3" x2="10" y2="11" />
-      <polyline points="6 9 10 13 14 9" />
-      <rect x="4" y="14" width="12" height="3" rx="1" />
+      <path fill="currentColor" stroke="none" d="M9.05 3 H10.95 V11.5 H9.05 Z" />
+      <path fill="currentColor" stroke="none" d="M6 9 L10 13 L14 9 L12.3 7.85 L10 11.1 L7.7 7.85 Z" />
+      <rect x="4" y="15.05" width="12" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
     </BaseIcon>
   );
 }
@@ -477,13 +496,20 @@ export function LinkOffIcon(props: IconProps) {
 }
 
 export function RulerIcon(props: IconProps) {
+  // Hollow ruler frame (outline) + tick marks, rendered as fills.
   return (
     <BaseIcon {...props}>
-      <rect x="3" y="6" width="14" height="8" rx="1" />
-      <line x1="6" y1="6" x2="6" y2="9" />
-      <line x1="9" y1="6" x2="9" y2="10" />
-      <line x1="12" y1="6" x2="12" y2="9" />
-      <line x1="15" y1="6" x2="15" y2="10" />
+      <path
+        fillRule="evenodd"
+        fill="currentColor"
+        stroke="none"
+        d="M4 6 H16 A1 1 0 0 1 17 7 V13 A1 1 0 0 1 16 14 H4 A1 1 0 0 1 3 13 V7 A1 1 0 0 1 4 6 Z M4.9 7.9 H15.1 V12.1 H4.9 Z"
+      />
+      <path
+        fill="currentColor"
+        stroke="none"
+        d="M5.05 6 H6.95 V9.3 H5.05 Z M8.05 6 H9.95 V10.3 H8.05 Z M11.05 6 H12.95 V9.3 H11.05 Z M14.05 6 H15.95 V10.3 H14.05 Z"
+      />
     </BaseIcon>
   );
 }
@@ -575,10 +601,20 @@ export function MagnifierIcon(props: IconProps) {
 }
 
 export function LayersIcon(props: IconProps) {
+  // Hollow top diamond (outline band) + a chevron band hinting the layer below.
   return (
     <BaseIcon {...props}>
-      <path d="M3 8 L10 4 L17 8 L10 12 Z" />
-      <path d="M3 12 L10 16 L17 12" />
+      <path
+        fillRule="evenodd"
+        fill="currentColor"
+        stroke="none"
+        d="M3 8 L10 4 L17 8 L10 12 Z M4.9 8 L10 5.9 L15.1 8 L10 10.1 Z"
+      />
+      <path
+        fill="currentColor"
+        stroke="none"
+        d="M3 12 L10 16 L17 12 L15.2 11.2 L10 14.1 L4.8 11.2 Z"
+      />
     </BaseIcon>
   );
 }
@@ -610,9 +646,15 @@ export function LockIcon(props: IconProps) {
 }
 
 export function MessageIcon(props: IconProps) {
+  // Hollow speech-bubble outline (band), rendered as a fill.
   return (
     <BaseIcon {...props}>
-      <path d="M4 4 H16 A1 1 0 0 1 17 5 V13 A1 1 0 0 1 16 14 H8 L5 17 V14 H4 A1 1 0 0 1 3 13 V5 A1 1 0 0 1 4 4 Z" />
+      <path
+        fillRule="evenodd"
+        fill="currentColor"
+        stroke="none"
+        d="M4 4 H16 A1 1 0 0 1 17 5 V13 A1 1 0 0 1 16 14 H8 L5 17 V14 H4 A1 1 0 0 1 3 13 V5 A1 1 0 0 1 4 4 Z M5.4 5.9 H14.6 A0.5 0.5 0 0 1 15.1 6.4 V11.6 A0.5 0.5 0 0 1 14.6 12.1 H8.2 L6.4 13.9 V12.1 H5.4 A0.5 0.5 0 0 1 4.9 11.6 V6.4 A0.5 0.5 0 0 1 5.4 5.9 Z"
+      />
     </BaseIcon>
   );
 }
@@ -649,11 +691,14 @@ export function BugIcon(props: IconProps) {
 }
 
 export function MenuIcon(props: IconProps) {
+  // Filled bars (not strokes) so the icon keeps a consistent weight at any UI
+  // scale — WebKit/WKWebView render thin strokes heavy under page-zoom, but
+  // fills rasterize cleanly. Matches the duotone glyphs' filled base.
   return (
     <BaseIcon {...props}>
-      <line x1="3" y1="5" x2="17" y2="5" />
-      <line x1="3" y1="10" x2="17" y2="10" />
-      <line x1="3" y1="15" x2="17" y2="15" />
+      <rect x="3" y="4.05" width="14" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
+      <rect x="3" y="9.05" width="14" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
+      <rect x="3" y="14.05" width="14" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
     </BaseIcon>
   );
 }
@@ -730,12 +775,13 @@ export function InfoIcon(props: IconProps) {
 }
 
 export function SlidersIcon(props: IconProps) {
+  // Filled tracks + knobs.
   return (
     <BaseIcon {...props}>
-      <line x1="3" y1="6" x2="17" y2="6" />
-      <line x1="3" y1="14" x2="17" y2="14" />
-      <circle cx="8" cy="6" r="2" />
-      <circle cx="13" cy="14" r="2" />
+      <rect x="3" y="5.05" width="14" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
+      <rect x="3" y="13.05" width="14" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="6" r="2.5" fill="currentColor" stroke="none" />
+      <circle cx="13" cy="14" r="2.5" fill="currentColor" stroke="none" />
     </BaseIcon>
   );
 }
