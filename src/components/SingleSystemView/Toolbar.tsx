@@ -159,7 +159,7 @@ export default function Toolbar({
             }
             onClick={() => { setSource('toolbar'); exitDataTableFullScreen(); }}
             size="sm"
-            className="sh-tool"
+            className="sh-tool ml-1"
             style={{ '--o': toolAccentVar('pan') } as CSSProperties}
             data-testid="toolbar-map-view-button"
           >
@@ -170,7 +170,9 @@ export default function Toolbar({
             onClick={() => onImport()}
             disabled={placementModeActive || geometryReadOnly}
             size="sm"
-            icon={showToolbarIcons ? <span style={{ color: 'var(--sh-comment)' }}><DownloadIcon size={16} /></span> : undefined}
+            className="sh-tool ml-1"
+            style={{ '--o': 'var(--sh-comment)' } as CSSProperties}
+            icon={showToolbarIcons ? <span style={{ color: 'var(--o)' } as CSSProperties}><DownloadIcon size={16} /></span> : undefined}
             data-testid="toolbar-import-button"
           >
             {t('common.actions.import')}
