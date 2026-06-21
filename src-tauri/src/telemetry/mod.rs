@@ -113,7 +113,12 @@ impl TelemetryCollector {
             if !inner.enabled {
                 return;
             }
-            *inner.events.entry(0).or_default().entry(event.to_string()).or_insert(0) += 1;
+            *inner
+                .events
+                .entry(0)
+                .or_default()
+                .entry(event.to_string())
+                .or_insert(0) += 1;
         }
     }
 
@@ -254,8 +259,7 @@ impl TelemetryCollector {
 fn send_payload(payload: &TelemetryPayload) -> Result<(), String> {
     let json = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
 
-    let mut encoder =
-        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(&json).map_err(|e| e.to_string())?;
     let body = encoder.finish().map_err(|e| e.to_string())?;
 
@@ -266,7 +270,10 @@ fn send_payload(payload: &TelemetryPayload) -> Result<(), String> {
 
     let response = agent
         .post(ENDPOINT_URL)
-        .header("User-Agent", &format!("Stalagmight/{}", env!("APP_VERSION")))
+        .header(
+            "User-Agent",
+            &format!("Stalagmight/{}", env!("APP_VERSION")),
+        )
         .header("Content-Encoding", "gzip")
         .content_type("application/json")
         .send(&body[..]);
@@ -481,11 +488,17 @@ mod tests {
 
         let inner = collector.inner.lock().unwrap();
         assert_eq!(
-            inner.events.get(&1).and_then(|b| b.get("command.create_shot")),
+            inner
+                .events
+                .get(&1)
+                .and_then(|b| b.get("command.create_shot")),
             Some(&2)
         );
         assert_eq!(
-            inner.events.get(&2).and_then(|b| b.get("command.create_shot")),
+            inner
+                .events
+                .get(&2)
+                .and_then(|b| b.get("command.create_shot")),
             Some(&3)
         );
     }
@@ -546,8 +559,7 @@ mod tests {
         };
 
         let json = serde_json::to_vec(&payload).unwrap();
-        let mut encoder =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         encoder.write_all(&json).unwrap();
         let gzipped = encoder.finish().unwrap();
         assert!(gzipped.len() < json.len(), "gzip should shrink the payload");

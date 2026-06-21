@@ -79,7 +79,9 @@ mod linux {
         // We do up to 3 passes so grandchildren are picked up even if the
         // directory listing order is parent-after-child.
         // Read our own euid from /proc to avoid a libc dependency.
-        let our_uid = read_name_ppid_uid(our_pid).map(|(_, _, u)| u).unwrap_or(u32::MAX);
+        let our_uid = read_name_ppid_uid(our_pid)
+            .map(|(_, _, u)| u)
+            .unwrap_or(u32::MAX);
         let entries: Vec<_> = fs::read_dir("/proc")?
             .filter_map(|r| r.ok())
             .filter_map(|d| {
@@ -94,7 +96,9 @@ mod linux {
                 if descendants.contains(&pid) {
                     continue;
                 }
-                let Ok((name, ppid, proc_uid)) = read_name_ppid_uid(pid) else { continue };
+                let Ok((name, ppid, proc_uid)) = read_name_ppid_uid(pid) else {
+                    continue;
+                };
                 if proc_uid != our_uid {
                     continue;
                 }
@@ -235,7 +239,11 @@ mod tests {
         let stats = get_memory_stats().unwrap();
         assert_eq!(stats.backend.pid, std::process::id());
         // The test binary itself uses at least a few MB.
-        assert!(stats.backend.rss_kb > 1024, "expected RSS > 1 MB, got {} kB", stats.backend.rss_kb);
+        assert!(
+            stats.backend.rss_kb > 1024,
+            "expected RSS > 1 MB, got {} kB",
+            stats.backend.rss_kb
+        );
         assert!(stats.backend.vm_size_kb >= stats.backend.rss_kb);
         assert!(stats.webkit_enumeration_supported);
     }
@@ -244,7 +252,11 @@ mod tests {
     fn does_not_include_unrelated_processes() {
         let stats = get_memory_stats().unwrap();
         // The test binary has no WebKit children.
-        assert!(stats.webkit_processes.is_empty(), "unexpected children: {:?}", stats.webkit_processes);
+        assert!(
+            stats.webkit_processes.is_empty(),
+            "unexpected children: {:?}",
+            stats.webkit_processes
+        );
         assert_eq!(stats.total_rss_kb, stats.backend.rss_kb);
     }
 }

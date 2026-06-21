@@ -197,7 +197,11 @@ fn names_for_path(path: &Path) -> &'static Names {
         .and_then(|e| e.to_str())
         .map(str::to_lowercase)
         .unwrap_or_default();
-    if ext == "tml" { &LONG } else { &SHORT }
+    if ext == "tml" {
+        &LONG
+    } else {
+        &SHORT
+    }
 }
 
 fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
@@ -236,8 +240,7 @@ fn build_xml(
     // not real exported sections and (b) carry a synthetic suffix. The "not a real
     // section" guard means a section legitimately named "X (reversed)" is never
     // misflagged — its own forward shots put that name in `real_names`.
-    let real_names: HashSet<&str> =
-        baseline.iter().map(|e| e.section_name.as_str()).collect();
+    let real_names: HashSet<&str> = baseline.iter().map(|e| e.section_name.as_str()).collect();
     let synthetic_section_names: Vec<String> = shots
         .iter()
         .map(|s| s.section.as_str())
@@ -252,8 +255,10 @@ fn build_xml(
     // Map Ariane shot ID -> UUID so write_shot can emit <UUID> only for real
     // (baseline-tracked) forward shots; synthesized START/CLOSURE/reverse legs
     // have no entry and emit no UUID.
-    let uuid_by_ariane: HashMap<i64, &str> =
-        baseline.iter().map(|e| (e.ariane_id, e.uuid.as_str())).collect();
+    let uuid_by_ariane: HashMap<i64, &str> = baseline
+        .iter()
+        .map(|e| (e.ariane_id, e.uuid.as_str()))
+        .collect();
 
     let mut buf = Vec::new();
     let mut writer = Writer::new_with_indent(Cursor::new(&mut buf), b' ', 4);
@@ -752,7 +757,12 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                             shot_index: shot_idx as u32,
                             ariane_id: shot_ariane_id,
                             uuid: pick_uuid(shot, &existing_uuids, section.id, shot_idx as u32),
-                            geo_key: geo_key(shot.azimuth_in, shot.length, shot.depth_in, shot.depth_out),
+                            geo_key: geo_key(
+                                shot.azimuth_in,
+                                shot.length,
+                                shot.depth_in,
+                                shot.depth_out,
+                            ),
                             section_name: section_name.clone(),
                             // Filled in below after all shots/merges are wired.
                             station_comment: None,
@@ -786,12 +796,11 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                         let reversed_depth_out = shot.depth_in;
                         let prev_depth = cumulative_depth;
                         cumulative_depth = reversed_depth_out;
-                        let depth_in_val =
-                            if (reversed_depth_in - prev_depth).abs() < 1e-9 {
-                                -1.0
-                            } else {
-                                reversed_depth_in
-                            };
+                        let depth_in_val = if (reversed_depth_in - prev_depth).abs() < 1e-9 {
+                            -1.0
+                        } else {
+                            reversed_depth_in
+                        };
 
                         rev_shots.push(ExportShot {
                             id: shot_ariane_id,
@@ -821,8 +830,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                         });
 
                         // Reversed shot ends at original station shot_idx.
-                        station_to_ariane
-                            .insert((section.id, shot_idx as u32), shot_ariane_id);
+                        station_to_ariane.insert((section.id, shot_idx as u32), shot_ariane_id);
                     }
 
                     blocks.push(SectionBlock {
@@ -837,8 +845,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                     // End-of-section merge: reverse the entire section.
                     let rev_name = format!("{section_name} (reversed)");
                     let mut rev_shots = Vec::new();
-                    let mut cumulative_depth =
-                        station_depth(section, section.shots.len());
+                    let mut cumulative_depth = station_depth(section, section.shots.len());
 
                     for shot_idx in (0..section.shots.len()).rev() {
                         let shot = &section.shots[shot_idx];
@@ -855,12 +862,11 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                         let reversed_depth_out = shot.depth_in;
                         let prev_depth = cumulative_depth;
                         cumulative_depth = reversed_depth_out;
-                        let depth_in_val =
-                            if (reversed_depth_in - prev_depth).abs() < 1e-9 {
-                                -1.0
-                            } else {
-                                reversed_depth_in
-                            };
+                        let depth_in_val = if (reversed_depth_in - prev_depth).abs() < 1e-9 {
+                            -1.0
+                        } else {
+                            reversed_depth_in
+                        };
 
                         rev_shots.push(ExportShot {
                             id: shot_ariane_id,
@@ -890,8 +896,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                         });
 
                         // Reversed shot ends at original station shot_idx.
-                        station_to_ariane
-                            .insert((section.id, shot_idx as u32), shot_ariane_id);
+                        station_to_ariane.insert((section.id, shot_idx as u32), shot_ariane_id);
                     }
 
                     blocks.push(SectionBlock {
@@ -1094,7 +1099,10 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                 );
                 continue;
             };
-            comments_by_ariane.entry(ariane_id).or_default().push((sr, text));
+            comments_by_ariane
+                .entry(ariane_id)
+                .or_default()
+                .push((sr, text));
         }
 
         // Apply to each block's REAL/VIRTUAL shots (skip START so its
@@ -1113,10 +1121,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                     .map(|(_, t)| *t)
                     .collect::<Vec<_>>()
                     .join("\n");
-                shot.comment = comment_split::merge(
-                    shot.comment.as_deref(),
-                    Some(&joined_station),
-                );
+                shot.comment = comment_split::merge(shot.comment.as_deref(), Some(&joined_station));
             }
         }
 
@@ -1305,7 +1310,10 @@ fn reverse_pre_zero_azimuth(azimuth_in: f64) -> f64 {
 /// Returns: child_section_id → (parent_station_ref, child_station_index)
 ///
 /// Parent links are chosen by traversing the merge graph from `root_section_id`.
-fn build_parent_map(project: &Project, root_section_id: SectionId) -> HashMap<SectionId, ParentLink> {
+fn build_parent_map(
+    project: &Project,
+    root_section_id: SectionId,
+) -> HashMap<SectionId, ParentLink> {
     #[derive(Debug, Clone, Copy)]
     struct NeighborLink {
         neighbor_section_id: SectionId,
@@ -1458,7 +1466,11 @@ mod tests {
 
         let (baseline, sha, _) = export_tml_with_baseline(&project, &path).unwrap();
         assert!(!sha.is_empty(), "sha256 should be returned");
-        assert_eq!(baseline.len(), total_shots, "one baseline entry per real shot");
+        assert_eq!(
+            baseline.len(),
+            total_shots,
+            "one baseline entry per real shot"
+        );
         for e in &baseline {
             assert!(!e.uuid.is_empty(), "baseline entry must carry a UUID");
             assert!(!e.geo_key.is_empty(), "baseline entry must carry a geo_key");
@@ -1487,9 +1499,17 @@ mod tests {
             .filter_map(|sh| sh.uuid.clone())
             .collect();
 
-        assert_eq!(parsed_uuids.len(), baseline.len(), "all UUIDs survive export->parse");
+        assert_eq!(
+            parsed_uuids.len(),
+            baseline.len(),
+            "all UUIDs survive export->parse"
+        );
         for e in &baseline {
-            assert!(parsed_uuids.contains(&e.uuid), "uuid {} lost in round-trip", e.uuid);
+            assert!(
+                parsed_uuids.contains(&e.uuid),
+                "uuid {} lost in round-trip",
+                e.uuid
+            );
         }
     }
 
@@ -1541,8 +1561,10 @@ mod tests {
         // shot_index has shifted by 1.
         for (i, prev_uuid) in uuids_v1.iter().enumerate() {
             assert_eq!(
-                &uuids_v2[i + 1], prev_uuid,
-                "pre-existing shot at new index {} lost its uuid", i + 1
+                &uuids_v2[i + 1],
+                prev_uuid,
+                "pre-existing shot at new index {} lost its uuid",
+                i + 1
             );
         }
         // The new shot got its OWN, distinct uuid.
@@ -1771,11 +1793,13 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 1,
-            }.into(),
+            }
+            .into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 0,
-            }.into(),
+            }
+            .into(),
             merged_at: chrono::Utc::now(),
         });
 
@@ -1850,11 +1874,13 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 2,
-            }.into(),
+            }
+            .into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 1,
-            }.into(),
+            }
+            .into(),
             merged_at: chrono::Utc::now(),
         });
 
@@ -1915,11 +1941,13 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 1,
-            }.into(),
+            }
+            .into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 0,
-            }.into(),
+            }
+            .into(),
             merged_at: chrono::Utc::now(),
         });
 
@@ -1929,11 +1957,13 @@ mod tests {
             station_a: StationRef {
                 section_id: 1,
                 station_index: 0,
-            }.into(),
+            }
+            .into(),
             station_b: StationRef {
                 section_id: 0,
                 station_index: 2,
-            }.into(),
+            }
+            .into(),
             path_length: 10.0,
             misclosure_distance: 0.4,
             error_percentage: 4.0,
@@ -1976,11 +2006,13 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 1,
-            }.into(),
+            }
+            .into(),
             station_b: StationRef {
                 section_id: 0,
                 station_index: 2,
-            }.into(),
+            }
+            .into(),
             path_length: 8.0,
             misclosure_distance: 0.2,
             error_percentage: 2.5,
@@ -2032,7 +2064,8 @@ mod tests {
             station_ref: StationRef {
                 section_id: 0,
                 station_index: 2,
-            }.into(),
+            }
+            .into(),
             gps: GpsCoordinates::new(20.25, -87.5, 12.0).unwrap(),
         });
 
@@ -2085,7 +2118,8 @@ mod tests {
             station_ref: StationRef {
                 section_id: 0,
                 station_index: 2,
-            }.into(),
+            }
+            .into(),
             gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
         });
 
@@ -2099,11 +2133,15 @@ mod tests {
             .collect();
         assert_eq!(from_start.len(), 2);
         assert!(
-            from_start.iter().any(|s| (s.azimuth - 30.0).abs() < f64::EPSILON),
+            from_start
+                .iter()
+                .any(|s| (s.azimuth - 30.0).abs() < f64::EPSILON),
             "forward branch should keep original azimuth at datum"
         );
         assert!(
-            from_start.iter().any(|s| (s.azimuth - 200.0).abs() < f64::EPSILON),
+            from_start
+                .iter()
+                .any(|s| (s.azimuth - 200.0).abs() < f64::EPSILON),
             "reverse branch should invert forward azimuth of prefix shot"
         );
     }
@@ -2149,18 +2187,21 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 1,
-            }.into(),
+            }
+            .into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 2,
-            }.into(),
+            }
+            .into(),
             merged_at: chrono::Utc::now(),
         });
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
                 section_id: 1,
                 station_index: 2,
-            }.into(),
+            }
+            .into(),
             gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
         });
 
@@ -2387,11 +2428,13 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 1,
-            }.into(),
+            }
+            .into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 2,
-            }.into(),
+            }
+            .into(),
             merged_at: chrono::Utc::now(),
         });
 
@@ -2487,11 +2530,13 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 2,
-            }.into(),
+            }
+            .into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 3,
-            }.into(),
+            }
+            .into(),
             merged_at: chrono::Utc::now(),
         });
 
@@ -2587,11 +2632,13 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 1,
-            }.into(),
+            }
+            .into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 1,
-            }.into(),
+            }
+            .into(),
             merged_at: chrono::Utc::now(),
         });
 
@@ -2600,11 +2647,13 @@ mod tests {
             station_a: StationRef {
                 section_id: 1,
                 station_index: 3,
-            }.into(),
+            }
+            .into(),
             station_b: StationRef {
                 section_id: 2,
                 station_index: 0,
-            }.into(),
+            }
+            .into(),
             merged_at: chrono::Utc::now(),
         });
 

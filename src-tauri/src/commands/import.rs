@@ -8,14 +8,14 @@ use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::state::AppState;
 use crate::core::CommandResult;
 use crate::models::placement_suggest::{
-    CrossSectionSuggestion, ExistingSection, ImportSectionForSuggestion,
-    OrphanPlacementSuggestion, PlacementSuggestion, suggest_all_placements, suggest_placements,
+    suggest_all_placements, suggest_placements, CrossSectionSuggestion, ExistingSection,
+    ImportSectionForSuggestion, OrphanPlacementSuggestion, PlacementSuggestion,
 };
 use crate::models::ShotData;
-use crate::parsers::DmpFile;
 use crate::parsers::compass::{CompassFile, CompassImportOptions};
 use crate::parsers::gpx::{GpxFile, GpxSectionPlacement};
 use crate::parsers::tml::TmlFile;
+use crate::parsers::DmpFile;
 
 /// Import a DMP file and return parsed data
 #[tauri::command]
@@ -81,7 +81,9 @@ pub(crate) fn check_duplicate_import_impl(state: &AppState, hash: String) -> Res
         purpose = "detect duplicate imports",
         "Checking whether file hash was previously imported"
     );
-    state.check_duplicate_import(&hash).map_err(|e| e.to_string())
+    state
+        .check_duplicate_import(&hash)
+        .map_err(|e| e.to_string())
 }
 
 /// Track an imported file hash in the project
@@ -111,7 +113,9 @@ pub fn check_section_hashes(
         purpose = "detect duplicate section imports",
         "Checking section content hashes"
     );
-    state.check_section_hashes(&hashes).map_err(|e| e.to_string())
+    state
+        .check_section_hashes(&hashes)
+        .map_err(|e| e.to_string())
 }
 
 /// #92: durably persist a newly-imported project. A project whose initial save is
@@ -235,7 +239,11 @@ pub fn execute_tml_import(
     emitter.complete_phase(LoadingPhase::ImportParsing);
 
     emitter.start_phase(LoadingPhase::ImportConverting);
-    let (sections, closures) = match crate::parsers::tml::convert_tml_to_import_configs(&tml, include_excluded, comments_on_stations) {
+    let (sections, closures) = match crate::parsers::tml::convert_tml_to_import_configs(
+        &tml,
+        include_excluded,
+        comments_on_stations,
+    ) {
         Ok(result) => result,
         Err(e) => {
             tracing::error!(
@@ -467,13 +475,20 @@ pub fn suggest_import_placement(
         .iter()
         .map(|s| ExistingSection {
             id: s.id,
-            name: s.name.clone().unwrap_or_else(|| format!("Section {}", s.id)),
+            name: s
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Section {}", s.id)),
             shots: s.shots.clone(),
         })
         .collect();
 
     let config = state.get_config();
-    Ok(suggest_placements(&shots, &existing_sections, &config.placement_suggestion))
+    Ok(suggest_placements(
+        &shots,
+        &existing_sections,
+        &config.placement_suggestion,
+    ))
 }
 
 /// Suggest placements for ALL import sections against BOTH existing project
@@ -489,7 +504,10 @@ pub fn suggest_all_import_placements(
             .iter()
             .map(|s| ExistingSection {
                 id: s.id,
-                name: s.name.clone().unwrap_or_else(|| format!("Section {}", s.id)),
+                name: s
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("Section {}", s.id)),
                 shots: s.shots.clone(),
             })
             .collect(),
@@ -497,7 +515,11 @@ pub fn suggest_all_import_placements(
     };
 
     let config = state.get_config();
-    Ok(suggest_all_placements(&import_sections, &existing_sections, &config.placement_suggestion))
+    Ok(suggest_all_placements(
+        &import_sections,
+        &existing_sections,
+        &config.placement_suggestion,
+    ))
 }
 
 /// Suggest placements for orphaned sections' leaf ends against newly imported sections.
@@ -509,5 +531,8 @@ pub fn suggest_orphan_placements(
 ) -> Result<Vec<OrphanPlacementSuggestion>, String> {
     let project = state.get_project_state().ok_or("No project open")?;
     let config = state.get_config();
-    Ok(project.suggest_orphan_placements(&newly_imported_section_ids, &config.placement_suggestion))
+    Ok(
+        project
+            .suggest_orphan_placements(&newly_imported_section_ids, &config.placement_suggestion),
+    )
 }

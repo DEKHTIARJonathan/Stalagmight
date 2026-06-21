@@ -1,12 +1,12 @@
+use super::types::{default_sigma_azimuth_deg, default_sigma_depth_m, default_sigma_length_m};
 use super::{
-    AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig, ProviderCacheConfig,
+    AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
     DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
-    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, StationConfig,
-    SyntacticHighlightingConfig, UnitsConfig, ValidationConfig,
+    ProviderCacheConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
+    StationConfig, SyntacticHighlightingConfig, UnitsConfig, ValidationConfig,
 };
-use super::types::{default_sigma_azimuth_deg, default_sigma_depth_m, default_sigma_length_m};
 
 #[expect(clippy::derivable_impls)]
 impl Default for Config {
@@ -279,7 +279,9 @@ impl Default for CacheConfig {
             tile_ttl_days: 30,
             providers: std::collections::HashMap::from([(
                 "esri".to_string(),
-                ProviderCacheConfig { offline_caching: false },
+                ProviderCacheConfig {
+                    offline_caching: false,
+                },
             )]),
         }
     }

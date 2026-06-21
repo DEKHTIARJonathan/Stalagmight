@@ -1,8 +1,14 @@
 //! Comprehensive integration tests for Stalagmight
 //!
 //! Tests are organized by category. Run `cargo test` to execute all tests.
-#![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_cmp)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::float_cmp
+)]
 
+use chrono::Utc;
 use stalagmight_lib::config::{CacheConfig, Config, ValidationConfig};
 use stalagmight_lib::core::{Command, UndoData, UndoEntry, UndoStack, Validator};
 use stalagmight_lib::models::{
@@ -10,7 +16,6 @@ use stalagmight_lib::models::{
     SectionUpdates, Shot, ShotData, ShotUpdates, StationMerge, StationRef,
 };
 use stalagmight_lib::persistence::Database;
-use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tempfile::NamedTempFile;
@@ -62,8 +67,8 @@ fn test_station_coordinates_computed_correctly() {
     project.add_section(create_section_with_shots(
         "Main",
         vec![
-            shot_a,   // North 10m (horizontal)
-            shot_b.clone(),   // East 10m (slope)
+            shot_a,         // North 10m (horizontal)
+            shot_b.clone(), // East 10m (slope)
         ],
     ));
 
@@ -101,9 +106,7 @@ fn test_zero_datum_propagation() {
         longitude: -122.0,
         depth_reference: 5.0,
     };
-    project
-        .set_zero_datum(StationRef::new(0, 0), gps)
-        .unwrap();
+    project.set_zero_datum(StationRef::new(0, 0), gps).unwrap();
 
     let stations = project.compute_station_coordinates();
 
@@ -213,10 +216,7 @@ fn test_station_merge_repositioning() {
 
     // Merge station 0:1 (end of A at y=10) with station 1:0 (start of B)
     // Since A has zero datum, B will move to align
-    let result = project.merge_stations(
-        StationRef::new(0, 1),
-        StationRef::new(1, 0),
-    );
+    let result = project.merge_stations(StationRef::new(0, 1), StationRef::new(1, 0));
     assert!(result.is_ok());
 
     let stations = project.compute_station_coordinates();
@@ -252,10 +252,7 @@ fn test_unmerge_keeps_position() {
 
     // Merge then unmerge
     project
-        .merge_stations(
-            StationRef::new(0, 1),
-            StationRef::new(1, 0),
-        )
+        .merge_stations(StationRef::new(0, 1), StationRef::new(1, 0))
         .unwrap();
 
     let merged = project.are_stations_merged(StationRef::new(0, 1), StationRef::new(1, 0));
@@ -282,17 +279,11 @@ fn test_duplicate_merge_rejection() {
     ));
 
     // First merge succeeds
-    let result1 = project.merge_stations(
-        StationRef::new(0, 1),
-        StationRef::new(1, 0),
-    );
+    let result1 = project.merge_stations(StationRef::new(0, 1), StationRef::new(1, 0));
     assert!(result1.is_ok());
 
     // Second merge fails
-    let result2 = project.merge_stations(
-        StationRef::new(0, 1),
-        StationRef::new(1, 0),
-    );
+    let result2 = project.merge_stations(StationRef::new(0, 1), StationRef::new(1, 0));
     assert!(result2.is_err());
     assert!(result2.unwrap_err().contains("already merged"));
 }
@@ -312,10 +303,7 @@ fn test_delete_section_cleanup() {
     ));
 
     project
-        .merge_stations(
-            StationRef::new(0, 1),
-            StationRef::new(1, 0),
-        )
+        .merge_stations(StationRef::new(0, 1), StationRef::new(1, 0))
         .unwrap();
 
     assert_eq!(project.station_merges.len(), 1);
@@ -348,7 +336,9 @@ fn test_multiple_zero_datums_disconnected() {
         longitude: -122.0,
         depth_reference: 5.0,
     };
-    project.set_zero_datum(StationRef::new(0, 0), gps_a).unwrap();
+    project
+        .set_zero_datum(StationRef::new(0, 0), gps_a)
+        .unwrap();
 
     // Set zero datum on section B (disconnected, should succeed)
     let gps_b = GpsCoordinates {
@@ -406,10 +396,7 @@ fn test_loop_detection_simple() {
 
     // First merge end of A to start of B (connects them)
     project
-        .merge_stations(
-            StationRef::new(0, 2),
-            StationRef::new(1, 0),
-        )
+        .merge_stations(StationRef::new(0, 2), StationRef::new(1, 0))
         .unwrap();
 
     // Create loop closure between start of A and end of B (already connected)
@@ -581,10 +568,7 @@ fn test_batch_command_structure() {
 
     // And deserialized
     let restored = UndoStack::deserialize_entry(&cmd_json, &data_json).unwrap();
-    assert!(matches!(
-        restored.command,
-        Command::CreateSection { .. }
-    ));
+    assert!(matches!(restored.command, Command::CreateSection { .. }));
 }
 
 /// Test 41: Undo persistence - serialize and deserialize entries
@@ -824,7 +808,7 @@ fn test_project_stats() {
     assert_eq!(stats.section_count, 2);
     assert_eq!(stats.shot_count, 3);
     assert!((stats.total_length - 45.0).abs() < 0.001); // 10 + 15 + 20
-    // Depth is accumulated z-coordinates: Section A: 0→1→3, Section B: 0→2
+                                                        // Depth is accumulated z-coordinates: Section A: 0→1→3, Section B: 0→2
     assert!((stats.min_depth - 0.0).abs() < 0.001);
     assert!((stats.max_depth - 3.0).abs() < 0.001);
     assert_eq!(stats.station_count, 5); // 3 + 2 stations
@@ -933,9 +917,18 @@ fn test_undo_limit_config() {
 #[test]
 fn test_cache_config_defaults() {
     let cache = CacheConfig::default();
-    assert!(cache.tile_cache_enabled, "tile_cache_enabled should default to true");
-    assert_eq!(cache.tile_cache_max_mb, 500, "tile_cache_max_mb should default to 500 per SPEC.md");
-    assert_eq!(cache.tile_ttl_days, 30, "tile_ttl_days should default to 30");
+    assert!(
+        cache.tile_cache_enabled,
+        "tile_cache_enabled should default to true"
+    );
+    assert_eq!(
+        cache.tile_cache_max_mb, 500,
+        "tile_cache_max_mb should default to 500 per SPEC.md"
+    );
+    assert_eq!(
+        cache.tile_ttl_days, 30,
+        "tile_ttl_days should default to 30"
+    );
 }
 
 /// Test: Config includes CacheConfig with correct defaults
@@ -954,9 +947,16 @@ fn test_cache_config_partial_toml_deserialization() {
     let toml_str = r"
         tile_cache_enabled = false
     ";
-    let cache: CacheConfig = toml::from_str(toml_str).expect("Should deserialize partial CacheConfig");
-    assert!(!cache.tile_cache_enabled, "Explicit value should be respected");
-    assert_eq!(cache.tile_cache_max_mb, 500, "Missing field should use default");
+    let cache: CacheConfig =
+        toml::from_str(toml_str).expect("Should deserialize partial CacheConfig");
+    assert!(
+        !cache.tile_cache_enabled,
+        "Explicit value should be respected"
+    );
+    assert_eq!(
+        cache.tile_cache_max_mb, 500,
+        "Missing field should use default"
+    );
     assert_eq!(cache.tile_ttl_days, 30, "Missing field should use default");
 }
 
@@ -964,7 +964,8 @@ fn test_cache_config_partial_toml_deserialization() {
 #[test]
 fn test_cache_config_empty_toml_deserialization() {
     let toml_str = "";
-    let cache: CacheConfig = toml::from_str(toml_str).expect("Should deserialize empty CacheConfig");
+    let cache: CacheConfig =
+        toml::from_str(toml_str).expect("Should deserialize empty CacheConfig");
     assert!(cache.tile_cache_enabled);
     assert_eq!(cache.tile_cache_max_mb, 500);
     assert_eq!(cache.tile_ttl_days, 30);
@@ -1059,12 +1060,16 @@ enabled_measure = false
 threshold_pixels = 20
 "##;
 
-    let config: Config = toml::from_str(old_config_toml)
-        .expect("Config with deprecated fields should parse - serde ignores unknown fields by default");
+    let config: Config = toml::from_str(old_config_toml).expect(
+        "Config with deprecated fields should parse - serde ignores unknown fields by default",
+    );
 
     // Verify custom values were preserved
     assert_eq!(config.general.auto_save_interval_seconds, 60);
-    assert_eq!(config.units.depth, stalagmight_lib::config::LengthUnit::Feet);
+    assert_eq!(
+        config.units.depth,
+        stalagmight_lib::config::LengthUnit::Feet
+    );
     assert_eq!(config.display.font_size, 14);
     assert!(config.display.depth_gradient.enabled);
     assert_eq!(config.map.satellite_provider, "esri");
@@ -1089,12 +1094,24 @@ threshold_pixels = 20
 /// Test: Config normalization clamps and validates values
 #[test]
 fn test_config_normalize_clamps_values() {
-    use stalagmight_lib::config::{MapConfig, StationConfig, ShotConfig, MapSnapConfig};
+    use stalagmight_lib::config::{MapConfig, MapSnapConfig, ShotConfig, StationConfig};
 
     let mut map_config = MapConfig {
-        station: StationConfig { radius: 0.1, hit_area: 0.5, ..Default::default() },  // Below min
-        shot: ShotConfig { width: 100.0, hit_area: 50.0, ..Default::default() },       // Above max
-        snap: MapSnapConfig { threshold: -5.0, enabled_merge: true, enabled_measure: true },
+        station: StationConfig {
+            radius: 0.1,
+            hit_area: 0.5,
+            ..Default::default()
+        }, // Below min
+        shot: ShotConfig {
+            width: 100.0,
+            hit_area: 50.0,
+            ..Default::default()
+        }, // Above max
+        snap: MapSnapConfig {
+            threshold: -5.0,
+            enabled_merge: true,
+            enabled_measure: true,
+        },
         ..Default::default()
     };
 
@@ -1102,7 +1119,7 @@ fn test_config_normalize_clamps_values() {
 
     // Station: radius clamped to 1.0, hit_area clamped to 1.0 then max'd to radius
     assert_eq!(map_config.station.radius, 1.0);
-    assert_eq!(map_config.station.hit_area, 1.0);  // max(1.0, 1.0)
+    assert_eq!(map_config.station.hit_area, 1.0); // max(1.0, 1.0)
 
     // Shot: width clamped to 20.0, hit_area clamped to 20.0 then max'd to width
     assert_eq!(map_config.shot.width, 20.0);
@@ -1115,12 +1132,24 @@ fn test_config_normalize_clamps_values() {
 /// Test: Config normalization handles NaN/inf values
 #[test]
 fn test_config_normalize_handles_nan_inf() {
-    use stalagmight_lib::config::{MapConfig, StationConfig, ShotConfig, MapSnapConfig};
+    use stalagmight_lib::config::{MapConfig, MapSnapConfig, ShotConfig, StationConfig};
 
     let mut map_config = MapConfig {
-        station: StationConfig { radius: f64::NAN, hit_area: f64::INFINITY, ..Default::default() },
-        shot: ShotConfig { width: f64::NEG_INFINITY, hit_area: f64::NAN, ..Default::default() },
-        snap: MapSnapConfig { threshold: f64::NAN, enabled_merge: true, enabled_measure: true },
+        station: StationConfig {
+            radius: f64::NAN,
+            hit_area: f64::INFINITY,
+            ..Default::default()
+        },
+        shot: ShotConfig {
+            width: f64::NEG_INFINITY,
+            hit_area: f64::NAN,
+            ..Default::default()
+        },
+        snap: MapSnapConfig {
+            threshold: f64::NAN,
+            enabled_merge: true,
+            enabled_measure: true,
+        },
         ..Default::default()
     };
 
@@ -1137,11 +1166,19 @@ fn test_config_normalize_handles_nan_inf() {
 /// Test: hit_area must be >= radius/width after normalization
 #[test]
 fn test_config_normalize_hit_area_ge_visual_size() {
-    use stalagmight_lib::config::{MapConfig, StationConfig, ShotConfig};
+    use stalagmight_lib::config::{MapConfig, ShotConfig, StationConfig};
 
     let mut map_config = MapConfig {
-        station: StationConfig { radius: 20.0, hit_area: 5.0, ..Default::default() },  // hit_area < radius
-        shot: ShotConfig { width: 15.0, hit_area: 3.0, ..Default::default() },          // hit_area < width
+        station: StationConfig {
+            radius: 20.0,
+            hit_area: 5.0,
+            ..Default::default()
+        }, // hit_area < radius
+        shot: ShotConfig {
+            width: 15.0,
+            hit_area: 3.0,
+            ..Default::default()
+        }, // hit_area < width
         ..Default::default()
     };
 
@@ -1149,10 +1186,10 @@ fn test_config_normalize_hit_area_ge_visual_size() {
 
     // hit_area should be raised to match radius/width
     assert_eq!(map_config.station.radius, 20.0);
-    assert_eq!(map_config.station.hit_area, 20.0);  // raised to radius
+    assert_eq!(map_config.station.hit_area, 20.0); // raised to radius
 
     assert_eq!(map_config.shot.width, 15.0);
-    assert_eq!(map_config.shot.hit_area, 15.0);  // raised to width
+    assert_eq!(map_config.shot.hit_area, 15.0); // raised to width
 }
 
 // ============================================================================
@@ -1621,7 +1658,10 @@ fn test_short_shot_warning() {
     assert!(warnings.iter().any(|w| w.code == "SHORT_SHOT"));
     // SHORT_SHOT is a warning, not error
     let short_warning = warnings.iter().find(|w| w.code == "SHORT_SHOT").unwrap();
-    assert_eq!(short_warning.severity, stalagmight_lib::core::WarningSeverity::Warning);
+    assert_eq!(
+        short_warning.severity,
+        stalagmight_lib::core::WarningSeverity::Warning
+    );
 }
 
 /// Coverage Test 3: Long shot warning
@@ -1916,7 +1956,13 @@ fn test_project_insert_shot_after() {
     ));
 
     let first_shot_id = project.sections[0].shots[0].id;
-    let result = project.insert_shot_after(0, first_shot_id, create_shot_data(45.0, 5.0, 5.0, 5.0), None, None);
+    let result = project.insert_shot_after(
+        0,
+        first_shot_id,
+        create_shot_data(45.0, 5.0, 5.0, 5.0),
+        None,
+        None,
+    );
 
     assert!(result.is_some());
     assert_eq!(project.sections[0].shots.len(), 3);
@@ -2029,8 +2075,12 @@ fn test_gps_metadata_multiple_datums() {
         longitude: -123.0,
         depth_reference: 0.0,
     };
-    project.set_zero_datum(StationRef::new(0, 0), gps_a).unwrap();
-    project.set_zero_datum(StationRef::new(1, 0), gps_b).unwrap();
+    project
+        .set_zero_datum(StationRef::new(0, 0), gps_a)
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(1, 0), gps_b)
+        .unwrap();
 
     let metadata = project.metadata().unwrap();
 
@@ -2084,9 +2134,15 @@ fn test_gps_metadata_dateline_crossing() {
         longitude: 178.0,
         depth_reference: 0.0,
     };
-    project.set_zero_datum(StationRef::new(0, 0), gps_a).unwrap();
-    project.set_zero_datum(StationRef::new(1, 0), gps_b).unwrap();
-    project.set_zero_datum(StationRef::new(2, 0), gps_c).unwrap();
+    project
+        .set_zero_datum(StationRef::new(0, 0), gps_a)
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(1, 0), gps_b)
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(2, 0), gps_c)
+        .unwrap();
 
     let metadata = project.metadata().unwrap();
 
@@ -2120,7 +2176,9 @@ fn test_gps_metadata_center_stability() {
         longitude: -122.0,
         depth_reference: 0.0,
     };
-    project.set_zero_datum(StationRef::new(0, 0), gps_a).unwrap();
+    project
+        .set_zero_datum(StationRef::new(0, 0), gps_a)
+        .unwrap();
 
     // Get initial center
     let metadata = project.metadata().unwrap();
@@ -2132,7 +2190,9 @@ fn test_gps_metadata_center_stability() {
         longitude: -123.0,
         depth_reference: 0.0,
     };
-    project.set_zero_datum(StationRef::new(1, 0), gps_b).unwrap();
+    project
+        .set_zero_datum(StationRef::new(1, 0), gps_b)
+        .unwrap();
 
     // Center should still be from first datum
     let metadata = project.metadata().unwrap();
@@ -2164,7 +2224,9 @@ fn test_gps_metadata_update_preserves_order() {
         longitude: -122.0,
         depth_reference: 0.0,
     };
-    project.set_zero_datum(StationRef::new(0, 0), gps_a).unwrap();
+    project
+        .set_zero_datum(StationRef::new(0, 0), gps_a)
+        .unwrap();
 
     // Add second datum
     let gps_b = GpsCoordinates {
@@ -2172,7 +2234,9 @@ fn test_gps_metadata_update_preserves_order() {
         longitude: -123.0,
         depth_reference: 0.0,
     };
-    project.set_zero_datum(StationRef::new(1, 0), gps_b).unwrap();
+    project
+        .set_zero_datum(StationRef::new(1, 0), gps_b)
+        .unwrap();
 
     // Update the first datum with new GPS (should update in-place, not reorder)
     let gps_a_updated = GpsCoordinates {
@@ -2180,7 +2244,9 @@ fn test_gps_metadata_update_preserves_order() {
         longitude: -122.5,
         depth_reference: 0.0,
     };
-    project.set_zero_datum(StationRef::new(0, 0), gps_a_updated).unwrap();
+    project
+        .set_zero_datum(StationRef::new(0, 0), gps_a_updated)
+        .unwrap();
 
     // Center should still be from first datum (now with updated values)
     // (lng, lat order for MapLibre)
@@ -2188,8 +2254,14 @@ fn test_gps_metadata_update_preserves_order() {
     let (center_lng, center_lat) = metadata.gps_center.unwrap();
 
     // Verify center is the updated first datum, not the second
-    assert!((center_lat - 45.5).abs() < 0.0001, "Center should be updated first datum lat");
-    assert!((center_lng - (-122.5)).abs() < 0.0001, "Center should be updated first datum lng");
+    assert!(
+        (center_lat - 45.5).abs() < 0.0001,
+        "Center should be updated first datum lat"
+    );
+    assert!(
+        (center_lng - (-122.5)).abs() < 0.0001,
+        "Center should be updated first datum lng"
+    );
 }
 
 /// Test that invalid GPS coordinates are rejected
@@ -2207,7 +2279,9 @@ fn test_gps_invalid_coordinates_rejected() {
         longitude: -122.0,
         depth_reference: 0.0,
     };
-    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_nan).is_err());
+    assert!(project
+        .set_zero_datum(StationRef::new(0, 0), gps_nan)
+        .is_err());
 
     // Infinity longitude should be rejected
     let gps_inf = GpsCoordinates {
@@ -2215,7 +2289,9 @@ fn test_gps_invalid_coordinates_rejected() {
         longitude: f64::INFINITY,
         depth_reference: 0.0,
     };
-    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_inf).is_err());
+    assert!(project
+        .set_zero_datum(StationRef::new(0, 0), gps_inf)
+        .is_err());
 
     // Out of range latitude should be rejected
     let gps_oob_lat = GpsCoordinates {
@@ -2223,7 +2299,9 @@ fn test_gps_invalid_coordinates_rejected() {
         longitude: -122.0,
         depth_reference: 0.0,
     };
-    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_oob_lat).is_err());
+    assert!(project
+        .set_zero_datum(StationRef::new(0, 0), gps_oob_lat)
+        .is_err());
 
     // Out of range longitude should be rejected
     let gps_oob_lng = GpsCoordinates {
@@ -2231,7 +2309,9 @@ fn test_gps_invalid_coordinates_rejected() {
         longitude: 181.0,
         depth_reference: 0.0,
     };
-    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_oob_lng).is_err());
+    assert!(project
+        .set_zero_datum(StationRef::new(0, 0), gps_oob_lng)
+        .is_err());
 
     // Valid coordinates should work
     let gps_valid = GpsCoordinates {
@@ -2239,7 +2319,9 @@ fn test_gps_invalid_coordinates_rejected() {
         longitude: -122.0,
         depth_reference: 0.0,
     };
-    assert!(project.set_zero_datum(StationRef::new(0, 0), gps_valid).is_ok());
+    assert!(project
+        .set_zero_datum(StationRef::new(0, 0), gps_valid)
+        .is_ok());
 }
 
 // ============================================================================
@@ -2297,7 +2379,10 @@ fn test_merge_projects_basic() {
     let loaded2 = db2.load_project().unwrap();
 
     // Create merged project
-    let mut merged = Project::new("Merged Cave".to_string(), Some("Location A, Location B".to_string()));
+    let mut merged = Project::new(
+        "Merged Cave".to_string(),
+        Some("Location A, Location B".to_string()),
+    );
 
     // Add sections from project 1
     for section in &loaded1.sections {
@@ -2432,13 +2517,17 @@ fn test_merge_projects_preserves_zero_datums() {
     assert_eq!(merged.zero_datums.len(), 2);
 
     // First zero datum from project 1 (section 0, station 0)
-    let mzd0 = merged.resolve_key(&merged.zero_datums[0].station_ref).unwrap();
+    let mzd0 = merged
+        .resolve_key(&merged.zero_datums[0].station_ref)
+        .unwrap();
     assert_eq!(mzd0.section_id, 0);
     assert_eq!(mzd0.station_index, 0);
     assert!((merged.zero_datums[0].gps.latitude - 45.0).abs() < 0.001);
 
     // Second zero datum from project 2 (section 1, station 1)
-    let mzd1 = merged.resolve_key(&merged.zero_datums[1].station_ref).unwrap();
+    let mzd1 = merged
+        .resolve_key(&merged.zero_datums[1].station_ref)
+        .unwrap();
     assert_eq!(mzd1.section_id, 1);
     assert_eq!(mzd1.station_index, 1);
     assert!((merged.zero_datums[1].gps.latitude - 46.0).abs() < 0.001);
@@ -2527,8 +2616,12 @@ fn test_merge_projects_preserves_station_merges() {
 
     // Verify station merge was preserved with remapped IDs
     assert_eq!(merged.station_merges.len(), 1);
-    let msa = merged.resolve_key(&merged.station_merges[0].station_a).unwrap();
-    let msb = merged.resolve_key(&merged.station_merges[0].station_b).unwrap();
+    let msa = merged
+        .resolve_key(&merged.station_merges[0].station_a)
+        .unwrap();
+    let msb = merged
+        .resolve_key(&merged.station_merges[0].station_b)
+        .unwrap();
     assert_eq!(msa.section_id, 0);
     assert_eq!(msa.station_index, 1);
     assert_eq!(msb.section_id, 1);

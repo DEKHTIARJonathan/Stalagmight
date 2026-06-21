@@ -109,8 +109,8 @@ pub fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let dlat = (lat2 - lat1).to_radians();
     let dlon = (lon2 - lon1).to_radians();
 
-    let a = (dlat / 2.0).sin().powi(2)
-        + lat1_rad.cos() * lat2_rad.cos() * (dlon / 2.0).sin().powi(2);
+    let a =
+        (dlat / 2.0).sin().powi(2) + lat1_rad.cos() * lat2_rad.cos() * (dlon / 2.0).sin().powi(2);
     let c = 2.0 * a.sqrt().asin();
 
     EARTH_RADIUS * c
@@ -126,8 +126,7 @@ pub fn initial_bearing(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let dlon_rad = (lon2 - lon1).to_radians();
 
     let x = dlon_rad.sin() * lat2_rad.cos();
-    let y = lat1_rad.cos() * lat2_rad.sin()
-        - lat1_rad.sin() * lat2_rad.cos() * dlon_rad.cos();
+    let y = lat1_rad.cos() * lat2_rad.sin() - lat1_rad.sin() * lat2_rad.cos() * dlon_rad.cos();
 
     let bearing = x.atan2(y).to_degrees();
     (bearing + 360.0) % 360.0
@@ -252,7 +251,10 @@ mod tests {
     fn geodetic_to_ecef_basic() {
         // At equator, lon=0: should be on X axis at ~6378137m
         let (x, y, z) = geodetic_to_ecef(0.0, 0.0, 0.0);
-        assert!((x - WGS84_A).abs() < 1.0, "X at equator/prime meridian should be ~a");
+        assert!(
+            (x - WGS84_A).abs() < 1.0,
+            "X at equator/prime meridian should be ~a"
+        );
         assert!(y.abs() < 1.0, "Y should be ~0");
         assert!(z.abs() < 1.0, "Z should be ~0");
 

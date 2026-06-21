@@ -311,9 +311,21 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     // `project` out. A dangling ref (its anchoring shot was deleted) is OMITTED
     // rather than collapsed to a phantom station-0 relationship; the integrity
     // banner surfaces it and offers repair.
-    let station_merges = project.station_merges.iter().filter_map(|m| project.merge_to_wire(m)).collect();
-    let zero_datums = project.zero_datums.iter().filter_map(|zd| project.datum_to_wire(zd)).collect();
-    let loop_closures = project.loop_closures.iter().filter_map(|c| project.closure_to_wire(c)).collect();
+    let station_merges = project
+        .station_merges
+        .iter()
+        .filter_map(|m| project.merge_to_wire(m))
+        .collect();
+    let zero_datums = project
+        .zero_datums
+        .iter()
+        .filter_map(|zd| project.datum_to_wire(zd))
+        .collect();
+    let loop_closures = project
+        .loop_closures
+        .iter()
+        .filter_map(|c| project.closure_to_wire(c))
+        .collect();
     let station_offsets = project
         .station_offsets
         .iter()
@@ -397,9 +409,7 @@ fn hashmap_to_pairs<K: Eq + std::hash::Hash, V>(map: HashMap<K, V>) -> Vec<(K, V
 mod tests {
     use super::*;
     use crate::core::loading::DisplaySettings;
-    use crate::models::{
-        Coordinates, Project, ProjectStats, Section, Shot, Station, StationRef,
-    };
+    use crate::models::{Coordinates, Project, ProjectStats, Section, Shot, Station, StationRef};
     use chrono::Utc;
     use serde::Deserialize;
 
@@ -596,9 +606,8 @@ mod tests {
 
         assert_eq!(decoded.shot_count, 1);
         // pitch_out at f32 index 6
-        let bytes_at = |i: usize| -> [u8; 4] {
-            decoded.shots_floats[i * 4..i * 4 + 4].try_into().unwrap()
-        };
+        let bytes_at =
+            |i: usize| -> [u8; 4] { decoded.shots_floats[i * 4..i * 4 + 4].try_into().unwrap() };
         let pitch_in = f32::from_le_bytes(bytes_at(5));
         let pitch_out = f32::from_le_bytes(bytes_at(6));
         assert!((pitch_in - 10.0).abs() < 1e-3);

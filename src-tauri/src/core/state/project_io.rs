@@ -45,7 +45,11 @@ impl AppState {
     ///
     /// # Returns
     /// The full path to the project file (e.g., `/path/to/dir/ProjectName.stalx`)
-    fn resolve_project_path(&self, name: &str, directory: Option<&PathBuf>) -> Result<PathBuf, String> {
+    fn resolve_project_path(
+        &self,
+        name: &str,
+        directory: Option<&PathBuf>,
+    ) -> Result<PathBuf, String> {
         // Validate name is not empty
         if name.trim().is_empty() {
             return Err("Project name cannot be empty".to_string());
@@ -60,7 +64,9 @@ impl AppState {
         // Remove leading/trailing whitespace and ensure not empty after sanitization
         let sanitized_name = sanitized_name.trim();
         if sanitized_name.is_empty() {
-            return Err("Project name must contain at least one alphanumeric character".to_string());
+            return Err(
+                "Project name must contain at least one alphanumeric character".to_string(),
+            );
         }
 
         // Determine the directory to use
@@ -92,9 +98,8 @@ impl AppState {
 
             // Ensure the app default directory exists.
             if !app_dir.exists() {
-                std::fs::create_dir_all(&app_dir).map_err(|e| {
-                    format!("Failed to create default project directory: {e}")
-                })?;
+                std::fs::create_dir_all(&app_dir)
+                    .map_err(|e| format!("Failed to create default project directory: {e}"))?;
             }
 
             app_dir
@@ -550,7 +555,6 @@ impl AppState {
             }
         }
 
-
         // Don't let geometric corruption persist silently: a release-mode warning
         // when drifted merges are about to be written. (The frontend re-checks
         // after save and offers a repair via the integrity banner.)
@@ -583,11 +587,7 @@ impl AppState {
 
         // On the first implicit save (path omitted), avoid overwriting an existing file.
         // Deferred new projects can reserve a canonical path; if it now exists, auto-rename.
-        let has_open_database = self
-            .database
-            .lock()
-            .map(|db| db.is_some())
-            .unwrap_or(false);
+        let has_open_database = self.database.lock().map(|db| db.is_some()).unwrap_or(false);
         if is_implicit_save && !has_open_database {
             let candidate_path = Self::next_available_project_path(&save_path);
             if candidate_path != save_path {
@@ -613,13 +613,16 @@ impl AppState {
         // Load display settings from current database or in-memory cache
         let display_settings = {
             let db_guard = self.database.lock().ok();
-            let from_db = db_guard.as_ref().and_then(|db| db.as_ref())
+            let from_db = db_guard
+                .as_ref()
+                .and_then(|db| db.as_ref())
                 .and_then(|db| db.load_display_settings().ok())
                 .unwrap_or_default();
 
             // If DB had settings, use those; otherwise use the in-memory cache
             if from_db.is_empty() {
-                self.display_settings_cache.lock()
+                self.display_settings_cache
+                    .lock()
                     .map(|cache| cache.clone())
                     .unwrap_or_default()
             } else {
@@ -661,7 +664,10 @@ impl AppState {
                     // UUID and a uuid-only key would collapse both live shots into one
                     // entry — remapping section A's ignore to whichever section won the
                     // collect, losing A's ignore and mis-suppressing B (issue #57 / Codex).
-                    let live_positions: std::collections::HashMap<(SectionId, &str), (SectionId, u32)> = project
+                    let live_positions: std::collections::HashMap<
+                        (SectionId, &str),
+                        (SectionId, u32),
+                    > = project
                         .sections
                         .iter()
                         .flat_map(|s| {
@@ -669,7 +675,10 @@ impl AppState {
                                 sh.uuid.as_deref().map(|u| {
                                     (
                                         (s.id, u),
-                                        (s.id, s.id * crate::models::FEATURE_ID_STRIDE + seq as u32),
+                                        (
+                                            s.id,
+                                            s.id * crate::models::FEATURE_ID_STRIDE + seq as u32,
+                                        ),
                                     )
                                 })
                             })
@@ -683,7 +692,10 @@ impl AppState {
                     // AND its now-persisted UUID. Without this, its stale in-memory
                     // shot_id could point at a different shot (or none) after an
                     // insert/delete on the next load (issue #57 / Codex).
-                    let live_by_id: std::collections::HashMap<(SectionId, u32), (&str, (SectionId, u32))> = project
+                    let live_by_id: std::collections::HashMap<
+                        (SectionId, u32),
+                        (&str, (SectionId, u32)),
+                    > = project
                         .sections
                         .iter()
                         .flat_map(|s| {
@@ -691,7 +703,14 @@ impl AppState {
                                 sh.uuid.as_deref().map(|u| {
                                     (
                                         (s.id, sh.id),
-                                        (u, (s.id, s.id * crate::models::FEATURE_ID_STRIDE + seq as u32)),
+                                        (
+                                            u,
+                                            (
+                                                s.id,
+                                                s.id * crate::models::FEATURE_ID_STRIDE
+                                                    + seq as u32,
+                                            ),
+                                        ),
                                     )
                                 })
                             })
@@ -927,9 +946,10 @@ impl AppState {
         // — when that flag is `false` we skip the .tml rewrite on
         // background saves so the file Ariane is editing doesn't churn
         // every 30 seconds; manual / explicit saves always rewrite.
-        let collab_writes_tml = project.collab.as_ref().is_some_and(|c| {
-            c.enabled && (!is_autosave || c.write_tml_on_autosave)
-        });
+        let collab_writes_tml = project
+            .collab
+            .as_ref()
+            .is_some_and(|c| c.enabled && (!is_autosave || c.write_tml_on_autosave));
         let mut collab_sibling_error: Option<String> = None;
         if collab_writes_tml {
             if let Err(e) = Self::write_collab_sibling(project, &save_path, &db) {
@@ -1070,10 +1090,7 @@ impl AppState {
         self.clear_display_settings_cache();
         self.invalidate_adjusted_cache();
 
-        tracing::info!(
-            purpose = "release project resources",
-            "Project closed"
-        );
+        tracing::info!(purpose = "release project resources", "Project closed");
         tracing::debug!("close_project: returning success");
         CommandResult::success()
     }
@@ -1096,7 +1113,9 @@ impl AppState {
         }
 
         if source_paths.len() < 2 {
-            return CommandResult::failure("At least two projects are required for merge".to_string());
+            return CommandResult::failure(
+                "At least two projects are required for merge".to_string(),
+            );
         }
 
         // Check that output path doesn't already exist
@@ -1110,7 +1129,10 @@ impl AppState {
         // Verify all source files exist
         for path in &source_paths {
             if !path.exists() {
-                return CommandResult::failure(format!("Source file not found: {}", path.display()));
+                return CommandResult::failure(format!(
+                    "Source file not found: {}",
+                    path.display()
+                ));
             }
         }
 
@@ -1202,7 +1224,9 @@ impl AppState {
             // Copy section offsets with remapped IDs
             for (old_section_id, offset) in &source_project.section_offsets {
                 if let Some(&new_section_id) = section_id_map.get(&(proj_idx, *old_section_id)) {
-                    merged_project.section_offsets.insert(new_section_id, *offset);
+                    merged_project
+                        .section_offsets
+                        .insert(new_section_id, *offset);
                 } else {
                     tracing::warn!(
                         project = %source_project.name,
@@ -1269,7 +1293,9 @@ impl AppState {
                     };
                     let new_station_ref = StationRef::new(new_section_id, src_sr.station_index);
                     // Use store-only helper to avoid triggering repositioning during merge
-                    if let Err(e) = merged_project.store_zero_datum_without_repositioning(new_station_ref, zd.gps) {
+                    if let Err(e) = merged_project
+                        .store_zero_datum_without_repositioning(new_station_ref, zd.gps)
+                    {
                         return CommandResult::failure(format!(
                             "Failed to copy zero datum from source project {}: {}",
                             source_project.name, e
@@ -1297,11 +1323,13 @@ impl AppState {
                     ) else {
                         continue;
                     };
-                    merged_project.station_merges.push(crate::models::StationMerge {
-                        station_a: StationKey::positional(new_a_section, a_sr.station_index),
-                        station_b: StationKey::positional(new_b_section, b_sr.station_index),
-                        merged_at: merge.merged_at,
-                    });
+                    merged_project
+                        .station_merges
+                        .push(crate::models::StationMerge {
+                            station_a: StationKey::positional(new_a_section, a_sr.station_index),
+                            station_b: StationKey::positional(new_b_section, b_sr.station_index),
+                            merged_at: merge.merged_at,
+                        });
                 } else {
                     tracing::warn!(
                         project = %source_project.name,
@@ -1325,18 +1353,20 @@ impl AppState {
                     ) else {
                         continue;
                     };
-                    merged_project.loop_closures.push(crate::models::LoopClosure {
-                        id: 0, // Reset to 0; assign_closure_ids() will reassign unique IDs
-                        station_a: StationKey::positional(new_a_section, a_sr.station_index),
-                        station_b: StationKey::positional(new_b_section, b_sr.station_index),
-                        path_length: closure.path_length,
-                        misclosure_distance: closure.misclosure_distance,
-                        error_percentage: closure.error_percentage,
-                        horizontal_misclosure: closure.horizontal_misclosure,
-                        vertical_misclosure: closure.vertical_misclosure,
-                        strategy: closure.strategy,
-                        is_aligned: closure.is_aligned,
-                    });
+                    merged_project
+                        .loop_closures
+                        .push(crate::models::LoopClosure {
+                            id: 0, // Reset to 0; assign_closure_ids() will reassign unique IDs
+                            station_a: StationKey::positional(new_a_section, a_sr.station_index),
+                            station_b: StationKey::positional(new_b_section, b_sr.station_index),
+                            path_length: closure.path_length,
+                            misclosure_distance: closure.misclosure_distance,
+                            error_percentage: closure.error_percentage,
+                            horizontal_misclosure: closure.horizontal_misclosure,
+                            vertical_misclosure: closure.vertical_misclosure,
+                            strategy: closure.strategy,
+                            is_aligned: closure.is_aligned,
+                        });
                 } else {
                     tracing::warn!(
                         project = %source_project.name,
@@ -1495,7 +1525,8 @@ impl AppState {
             DisplaySettings, LoadError, LoadProjectFullResult, LoadingPhase, ProgressEmitter,
         };
 
-        let handle = self.get_app_handle()
+        let handle = self
+            .get_app_handle()
             .ok_or_else(|| LoadError::internal("AppHandle not initialized"))?;
 
         tracing::info!(
@@ -1671,11 +1702,12 @@ impl AppState {
             .map(|s| s.shots.len() as u32 + 1)
             .sum();
         progress.update_phase(LoadingPhase::ComputingStations, 0, expected_station_total);
-        let stations = project.compute_station_coordinates_with_progress(Some(&mut |current, total| {
-            if !progress.is_cancelled() {
-                progress.update_phase(LoadingPhase::ComputingStations, current, total);
-            }
-        }));
+        let stations =
+            project.compute_station_coordinates_with_progress(Some(&mut |current, total| {
+                if !progress.is_cancelled() {
+                    progress.update_phase(LoadingPhase::ComputingStations, current, total);
+                }
+            }));
         check_cancelled!();
         progress.complete_phase(LoadingPhase::ComputingStations);
 
@@ -1765,10 +1797,16 @@ impl AppState {
         // inconsistent state that is harder to diagnose.
 
         // Commit 1: Project state mutation
-        *self.project.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
+        *self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
 
         // Commit 2: Database handle mutation
-        *self.database.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
+        *self
+            .database
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
         // Loaded an existing project from disk — its initial save is not deferred.
         self.initial_save_deferred
             .store(false, std::sync::atomic::Ordering::Relaxed);
@@ -1779,7 +1817,10 @@ impl AppState {
 
         // Commit 4: Undo/redo stack restore
         {
-            let mut undo_stack = self.undo_stack.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut undo_stack = self
+                .undo_stack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if undo_entries.is_empty() && redo_entries.is_empty() {
                 undo_stack.clear();
             } else {
@@ -1794,7 +1835,10 @@ impl AppState {
 
         // Commit 5: Recent projects update
         {
-            let mut recent = self.recent_projects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut recent = self
+                .recent_projects
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             recent.retain(|p| p != &path);
             recent.insert(0, path.clone());
             if let Ok(mut config) = self.config.lock() {
@@ -1861,12 +1905,14 @@ impl AppState {
         save_directory: Option<PathBuf>,
         save_path: Option<PathBuf>,
         defer_initial_save: bool,
-    ) -> Result<crate::core::loading::CreateProjectFullResult, crate::core::loading::LoadError> {
+    ) -> Result<crate::core::loading::CreateProjectFullResult, crate::core::loading::LoadError>
+    {
         use crate::core::loading::{
             CreateProjectFullResult, DisplaySettings, LoadError, LoadingPhase, ProgressEmitter,
         };
 
-        let handle = self.get_app_handle()
+        let handle = self
+            .get_app_handle()
             .ok_or_else(|| LoadError::internal("AppHandle not initialized"))?;
 
         // Start new load - cancels any existing load
@@ -1940,7 +1986,10 @@ impl AppState {
             match Database::open(&db_path) {
                 Ok(db) => Some(db),
                 Err(e) => {
-                    early_return_err!(LoadError::new("DATABASE", format!("Failed to create database: {e}")));
+                    early_return_err!(LoadError::new(
+                        "DATABASE",
+                        format!("Failed to create database: {e}")
+                    ));
                 }
             }
         };
@@ -1957,7 +2006,10 @@ impl AppState {
 
         if let Some(ref mut database) = db {
             if let Err(e) = database.save_project(&project) {
-                early_return_err!(LoadError::new("DATABASE", format!("Failed to save project: {e}")));
+                early_return_err!(LoadError::new(
+                    "DATABASE",
+                    format!("Failed to save project: {e}")
+                ));
             }
         }
         check_cancelled!();
@@ -1971,15 +2023,30 @@ impl AppState {
         // Convert display_settings to HashMap for storage
         let settings_map = vec![
             ("showStations", display_settings.show_stations.to_string()),
-            ("showSectionNames", display_settings.show_section_names.to_string()),
-            ("showStationLabels", display_settings.show_station_labels.to_string()),
+            (
+                "showSectionNames",
+                display_settings.show_section_names.to_string(),
+            ),
+            (
+                "showStationLabels",
+                display_settings.show_station_labels.to_string(),
+            ),
             ("showShotData", display_settings.show_shot_data.to_string()),
-            ("showReferenceShots", display_settings.show_reference_shots.to_string()),
-            ("showZeroDatum", display_settings.show_zero_datum.to_string()),
+            (
+                "showReferenceShots",
+                display_settings.show_reference_shots.to_string(),
+            ),
+            (
+                "showZeroDatum",
+                display_settings.show_zero_datum.to_string(),
+            ),
             ("showGrid", display_settings.show_grid.to_string()),
             ("showScaleBar", display_settings.show_scale_bar.to_string()),
             ("showSatellite", display_settings.show_satellite.to_string()),
-            ("showDepthGradient", display_settings.show_depth_gradient.to_string()),
+            (
+                "showDepthGradient",
+                display_settings.show_depth_gradient.to_string(),
+            ),
             ("gridSpacing", display_settings.grid_spacing.to_string()),
         ];
 
@@ -2004,13 +2071,22 @@ impl AppState {
         // data is written even if a previous panic poisoned a mutex.
 
         // Commit 1: Project state mutation
-        *self.project.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
+        *self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
 
         // Commit 2: Database handle mutation
-        *self.database.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = db;
+        *self
+            .database
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = db;
 
         // Commit 3: Clear undo stack (new project)
-        self.undo_stack.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+        self.undo_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
 
         // Track whether the initial save is still pending: a deferred new project
         // has no file on disk yet, so its first import must durably persist it.
@@ -2019,7 +2095,10 @@ impl AppState {
 
         // Commit 4: Display settings cache
         if defer_initial_save {
-            let mut cache = self.display_settings_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut cache = self
+                .display_settings_cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             cache.clear();
             for (key, value) in &settings_map {
                 cache.insert((*key).to_string(), value.clone());
@@ -2031,7 +2110,10 @@ impl AppState {
 
         // Commit 5: Add to recent projects only after a real file exists.
         if !defer_initial_save {
-            let mut recent = self.recent_projects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut recent = self
+                .recent_projects
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             recent.retain(|p| p != &db_path);
             recent.insert(0, db_path.clone());
             if let Ok(mut config) = self.config.lock() {
@@ -2125,20 +2207,34 @@ mod tests {
             .resolve_project_path("@#$%^&", Some(&temp_dir.path().to_path_buf()))
             .unwrap();
         let filename = resolved.file_name().unwrap().to_str().unwrap();
-        assert_eq!(filename, "______.stalx", "special chars should be replaced with underscores");
+        assert_eq!(
+            filename, "______.stalx",
+            "special chars should be replaced with underscores"
+        );
     }
 
     #[test]
     fn resolve_project_path_default_directory() {
         let state = AppState::new().unwrap();
         let result = state.resolve_project_path("TestProject", None);
-        assert!(result.is_ok(), "should resolve with default dir: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "should resolve with default dir: {:?}",
+            result.err()
+        );
         let path = result.unwrap();
         // Must be absolute: a relative default (e.g. "./stalagmight/...") breaks
         // saving. Regression guard for app_dirs::document_dir() returning "."
         // instead of None and short-circuiting the $HOME/Documents fallback.
-        assert!(path.is_absolute(), "default project path must be absolute: {}", path.display());
-        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "TestProject.stalx");
+        assert!(
+            path.is_absolute(),
+            "default project path must be absolute: {}",
+            path.display()
+        );
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "TestProject.stalx"
+        );
         let parent = path.parent().expect("default path should have parent");
         assert_eq!(parent.file_name().unwrap().to_str().unwrap(), "stalagmight");
     }

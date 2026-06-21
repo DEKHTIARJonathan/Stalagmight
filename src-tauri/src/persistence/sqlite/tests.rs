@@ -15,8 +15,14 @@ fn load_project_validation_returns_none_when_table_absent() {
         .execute("DROP TABLE IF EXISTS project_settings", [])
         .unwrap();
     let result = db.load_project_validation();
-    assert!(result.is_ok(), "a missing project_settings table must not error");
-    assert!(result.unwrap().is_none(), "absent validation resolves to None");
+    assert!(
+        result.is_ok(),
+        "a missing project_settings table must not error"
+    );
+    assert!(
+        result.unwrap().is_none(),
+        "absent validation resolves to None"
+    );
 }
 
 #[test]
@@ -83,7 +89,11 @@ fn bulk_upsert_keeps_uuid_row_over_colliding_legacy_null_row() {
         db.save_resolved_warnings_bulk(&batch).unwrap();
         let rows = db.load_resolved_warnings().unwrap();
         assert_eq!(rows.len(), 1, "the colliding rows collapse to one");
-        assert_eq!(rows[0].shot_uuid.as_deref(), Some("ccc"), "the UUID row wins");
+        assert_eq!(
+            rows[0].shot_uuid.as_deref(),
+            Some("ccc"),
+            "the UUID row wins"
+        );
     }
 }
 
@@ -144,7 +154,11 @@ fn save_resolved_warning_collision_preserves_the_prior_ignore() {
     assert!(db.save_resolved_warning(&row(5, "aaa")).is_err());
     let mut rows = db.load_resolved_warnings().unwrap();
     rows.sort_by_key(|r| r.shot_id);
-    assert_eq!(rows.len(), 2, "both shots' ignores survive the refused collision");
+    assert_eq!(
+        rows.len(),
+        2,
+        "both shots' ignores survive the refused collision"
+    );
     assert_eq!(rows[0].shot_id, 3);
     assert_eq!(rows[0].shot_uuid.as_deref(), Some("aaa"));
     assert_eq!(rows[1].shot_id, 5);
@@ -277,7 +291,10 @@ fn test_save_load_multiple_sections() {
     let db_path = temp_dir.path().join("test_sections.stalx");
 
     // Create a project with multiple sections
-    let mut project = Project::new("Multi-Section Cave".to_string(), Some("Test Location".to_string()));
+    let mut project = Project::new(
+        "Multi-Section Cave".to_string(),
+        Some("Test Location".to_string()),
+    );
 
     // Section 1: Main passage
     let section1 = SectionData {
@@ -322,19 +339,17 @@ fn test_save_load_multiple_sections() {
         color: "#33ff57".to_string(),
         direction: Some(SurveyDirection::Out),
         quality: 1.0,
-        shots: vec![
-            ShotData {
-                azimuth_in: 90.0,
-                azimuth_out: 270.0,
-                length: 5.0,
-                depth_in: 6.0,
-                depth_out: 6.5,
-                is_reference: true,
-                marker_index: Some(42),
-                temperature: Some(18.5),
-                ..Default::default()
-            },
-        ],
+        shots: vec![ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 270.0,
+            length: 5.0,
+            depth_in: 6.0,
+            depth_out: 6.5,
+            is_reference: true,
+            marker_index: Some(42),
+            temperature: Some(18.5),
+            ..Default::default()
+        }],
     };
 
     // Section 3: No metadata (testing None values)
@@ -421,8 +436,22 @@ fn test_save_load_station_merges() {
         name: Some("Section A".to_string()),
         color: "#ff0000".to_string(),
         shots: vec![
-            ShotData { azimuth_in: 0.0, azimuth_out: 180.0, length: 5.0, depth_in: 0.0, depth_out: 1.0, ..Default::default() },
-            ShotData { azimuth_in: 45.0, azimuth_out: 225.0, length: 7.0, depth_in: 1.0, depth_out: 2.0, ..Default::default() },
+            ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 180.0,
+                length: 5.0,
+                depth_in: 0.0,
+                depth_out: 1.0,
+                ..Default::default()
+            },
+            ShotData {
+                azimuth_in: 45.0,
+                azimuth_out: 225.0,
+                length: 7.0,
+                depth_in: 1.0,
+                depth_out: 2.0,
+                ..Default::default()
+            },
         ],
         ..Default::default()
     };
@@ -430,9 +459,14 @@ fn test_save_load_station_merges() {
     let section2 = SectionData {
         name: Some("Section B".to_string()),
         color: "#00ff00".to_string(),
-        shots: vec![
-            ShotData { azimuth_in: 90.0, azimuth_out: 270.0, length: 4.0, depth_in: 0.0, depth_out: 0.5, ..Default::default() },
-        ],
+        shots: vec![ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 270.0,
+            length: 4.0,
+            depth_in: 0.0,
+            depth_out: 0.5,
+            ..Default::default()
+        }],
         ..Default::default()
     };
 
@@ -467,15 +501,23 @@ fn test_save_load_station_merges() {
 
     assert_eq!(loaded.station_merges.len(), 2);
 
-    let m1a = loaded.resolve_key(&loaded.station_merges[0].station_a).unwrap();
-    let m1b = loaded.resolve_key(&loaded.station_merges[0].station_b).unwrap();
+    let m1a = loaded
+        .resolve_key(&loaded.station_merges[0].station_a)
+        .unwrap();
+    let m1b = loaded
+        .resolve_key(&loaded.station_merges[0].station_b)
+        .unwrap();
     assert_eq!(m1a.section_id, 0);
     assert_eq!(m1a.station_index, 1);
     assert_eq!(m1b.section_id, 1);
     assert_eq!(m1b.station_index, 0);
 
-    let m2a = loaded.resolve_key(&loaded.station_merges[1].station_a).unwrap();
-    let m2b = loaded.resolve_key(&loaded.station_merges[1].station_b).unwrap();
+    let m2a = loaded
+        .resolve_key(&loaded.station_merges[1].station_a)
+        .unwrap();
+    let m2b = loaded
+        .resolve_key(&loaded.station_merges[1].station_b)
+        .unwrap();
     assert_eq!(m2a.section_id, 0);
     assert_eq!(m2a.station_index, 2);
     assert_eq!(m2b.section_id, 1);
@@ -494,9 +536,14 @@ fn test_save_load_zero_datums() {
     let section = SectionData {
         name: Some("Main".to_string()),
         color: "#ffffff".to_string(),
-        shots: vec![
-            ShotData { azimuth_in: 0.0, azimuth_out: 180.0, length: 10.0, depth_in: 0.0, depth_out: 5.0, ..Default::default() },
-        ],
+        shots: vec![ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 180.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 5.0,
+            ..Default::default()
+        }],
         ..Default::default()
     };
     project.add_section(section);
@@ -564,14 +611,23 @@ fn test_save_load_section_offsets() {
         let section = SectionData {
             name: Some(format!("Section {i}")),
             color: "#000000".to_string(),
-            shots: vec![ShotData { azimuth_in: 0.0, azimuth_out: 180.0, length: 5.0, depth_in: 0.0, depth_out: 1.0, ..Default::default() }],
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 180.0,
+                length: 5.0,
+                depth_in: 0.0,
+                depth_out: 1.0,
+                ..Default::default()
+            }],
             ..Default::default()
         };
         project.add_section(section);
     }
 
     // Add section offsets with varying precision
-    project.section_offsets.insert(0, (10.123_456_789, -20.987_654_321));
+    project
+        .section_offsets
+        .insert(0, (10.123_456_789, -20.987_654_321));
     project.section_offsets.insert(1, (0.0, 0.0));
     project.section_offsets.insert(2, (-100.5, 200.75));
 
@@ -682,9 +738,14 @@ fn test_delete_section_cascades_shots() {
     let section1 = SectionData {
         name: Some("Section to keep".to_string()),
         color: "#111111".to_string(),
-        shots: vec![
-            ShotData { azimuth_in: 0.0, azimuth_out: 180.0, length: 5.0, depth_in: 0.0, depth_out: 1.0, ..Default::default() },
-        ],
+        shots: vec![ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 180.0,
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
+            ..Default::default()
+        }],
         ..Default::default()
     };
 
@@ -692,9 +753,30 @@ fn test_delete_section_cascades_shots() {
         name: Some("Section to delete".to_string()),
         color: "#222222".to_string(),
         shots: vec![
-            ShotData { azimuth_in: 45.0, azimuth_out: 225.0, length: 10.0, depth_in: 1.0, depth_out: 3.0, ..Default::default() },
-            ShotData { azimuth_in: 90.0, azimuth_out: 270.0, length: 8.0, depth_in: 3.0, depth_out: 5.0, ..Default::default() },
-            ShotData { azimuth_in: 135.0, azimuth_out: 315.0, length: 6.0, depth_in: 5.0, depth_out: 7.0, ..Default::default() },
+            ShotData {
+                azimuth_in: 45.0,
+                azimuth_out: 225.0,
+                length: 10.0,
+                depth_in: 1.0,
+                depth_out: 3.0,
+                ..Default::default()
+            },
+            ShotData {
+                azimuth_in: 90.0,
+                azimuth_out: 270.0,
+                length: 8.0,
+                depth_in: 3.0,
+                depth_out: 5.0,
+                ..Default::default()
+            },
+            ShotData {
+                azimuth_in: 135.0,
+                azimuth_out: 315.0,
+                length: 6.0,
+                depth_in: 5.0,
+                depth_out: 7.0,
+                ..Default::default()
+            },
         ],
         ..Default::default()
     };
@@ -702,9 +784,14 @@ fn test_delete_section_cascades_shots() {
     let section3 = SectionData {
         name: Some("Another section to keep".to_string()),
         color: "#333333".to_string(),
-        shots: vec![
-            ShotData { azimuth_in: 180.0, azimuth_out: 0.0, length: 12.0, depth_in: 0.0, depth_out: 2.0, ..Default::default() },
-        ],
+        shots: vec![ShotData {
+            azimuth_in: 180.0,
+            azimuth_out: 0.0,
+            length: 12.0,
+            depth_in: 0.0,
+            depth_out: 2.0,
+            ..Default::default()
+        }],
         ..Default::default()
     };
 
@@ -736,7 +823,10 @@ fn test_delete_section_cascades_shots() {
 
     assert_eq!(loaded.sections.len(), 2);
     assert_eq!(loaded.sections[0].name, Some("Section to keep".to_string()));
-    assert_eq!(loaded.sections[1].name, Some("Another section to keep".to_string()));
+    assert_eq!(
+        loaded.sections[1].name,
+        Some("Another section to keep".to_string())
+    );
 
     // Verify shots from deleted section are gone
     let total_shots: usize = loaded.sections.iter().map(|s| s.shots.len()).sum();
@@ -754,9 +844,14 @@ fn test_database_transaction_rollback() {
     let section = SectionData {
         name: Some("Original Section".to_string()),
         color: "#abcdef".to_string(),
-        shots: vec![
-            ShotData { azimuth_in: 0.0, azimuth_out: 180.0, length: 5.0, depth_in: 0.0, depth_out: 1.0, ..Default::default() },
-        ],
+        shots: vec![ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 180.0,
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
+            ..Default::default()
+        }],
         ..Default::default()
     };
     project.add_section(section);
@@ -773,7 +868,10 @@ fn test_database_transaction_rollback() {
         let loaded = db.load_project().unwrap();
         assert_eq!(loaded.name, "Rollback Test");
         assert_eq!(loaded.sections.len(), 1);
-        assert_eq!(loaded.sections[0].name, Some("Original Section".to_string()));
+        assert_eq!(
+            loaded.sections[0].name,
+            Some("Original Section".to_string())
+        );
     }
 
     // Modify and save again - this simulates a successful transaction
@@ -789,7 +887,10 @@ fn test_database_transaction_rollback() {
         let db = Database::open_existing(&db_path).unwrap();
         let loaded = db.load_project().unwrap();
         assert_eq!(loaded.name, "Modified Project");
-        assert_eq!(loaded.sections[0].name, Some("Modified Section".to_string()));
+        assert_eq!(
+            loaded.sections[0].name,
+            Some("Modified Section".to_string())
+        );
     }
 
     // Test that the transaction is atomic - all data is cleared and rewritten
@@ -819,7 +920,10 @@ fn test_database_transaction_rollback() {
     assert_eq!(loaded.name, "Completely New");
     assert_eq!(loaded.sections.len(), 2);
     // The old "Modified Section" should be completely gone
-    assert!(loaded.sections.iter().all(|s| s.name != Some("Modified Section".to_string())));
+    assert!(loaded
+        .sections
+        .iter()
+        .all(|s| s.name != Some("Modified Section".to_string())));
 }
 
 // === Test 3.8: Open Existing vs Open New ===
@@ -833,7 +937,10 @@ fn test_open_existing_vs_open_new() {
     let result = Database::open_existing(&nonexistent_path);
     assert!(result.is_err());
     let err_msg = result.err().unwrap().to_string();
-    assert!(err_msg.contains("does not exist"), "Expected 'does not exist' error, got: {err_msg}");
+    assert!(
+        err_msg.contains("does not exist"),
+        "Expected 'does not exist' error, got: {err_msg}"
+    );
 
     // Test 2: open() on nonexistent file should create it
     {
@@ -847,7 +954,10 @@ fn test_open_existing_vs_open_new() {
         let result = Database::open_existing(&db_path);
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
-        assert!(err_msg.contains("valid Stalagmight project"), "Expected 'valid Stalagmight project' error, got: {err_msg}");
+        assert!(
+            err_msg.contains("valid Stalagmight project"),
+            "Expected 'valid Stalagmight project' error, got: {err_msg}"
+        );
     }
 
     // Test 4: Save a project, then open_existing should succeed
@@ -887,9 +997,14 @@ fn test_save_load_loop_closures() {
     project.add_section(SectionData {
         name: Some("Section 1".to_string()),
         color: "#ff0000".to_string(),
-        shots: vec![
-            ShotData { azimuth_in: 0.0, azimuth_out: 180.0, length: 10.0, depth_in: 0.0, depth_out: 5.0, ..Default::default() },
-        ],
+        shots: vec![ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 180.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 5.0,
+            ..Default::default()
+        }],
         ..Default::default()
     });
 
@@ -942,12 +1057,18 @@ fn test_display_settings_persistence() {
     assert_eq!(settings.get("custom_value"), Some(&"42.5".to_string()));
 
     // Get individual setting
-    assert_eq!(db.get_display_setting("scale_bar").unwrap(), Some("true".to_string()));
+    assert_eq!(
+        db.get_display_setting("scale_bar").unwrap(),
+        Some("true".to_string())
+    );
     assert_eq!(db.get_display_setting("nonexistent").unwrap(), None);
 
     // Update setting
     db.save_display_setting("scale_bar", "false").unwrap();
-    assert_eq!(db.get_display_setting("scale_bar").unwrap(), Some("false".to_string()));
+    assert_eq!(
+        db.get_display_setting("scale_bar").unwrap(),
+        Some("false".to_string())
+    );
 }
 
 #[test]
@@ -956,9 +1077,18 @@ fn test_undo_stack_persistence() {
 
     // Save undo entries
     let entries = vec![
-        (r#"{"type":"AddSection"}"#.to_string(), r#"{"section_id":0}"#.to_string()),
-        (r#"{"type":"AddShot"}"#.to_string(), r#"{"shot_id":1}"#.to_string()),
-        (r#"{"type":"UpdateShot"}"#.to_string(), r#"{"old_data":{}}"#.to_string()),
+        (
+            r#"{"type":"AddSection"}"#.to_string(),
+            r#"{"section_id":0}"#.to_string(),
+        ),
+        (
+            r#"{"type":"AddShot"}"#.to_string(),
+            r#"{"shot_id":1}"#.to_string(),
+        ),
+        (
+            r#"{"type":"UpdateShot"}"#.to_string(),
+            r#"{"old_data":{}}"#.to_string(),
+        ),
     ];
     db.save_undo_stack(entries).unwrap();
 
@@ -983,7 +1113,10 @@ fn test_resolved_warnings_persistence() {
 
     // Save project first (to have tables)
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    project.add_section(SectionData {
+        color: "#000".to_string(),
+        ..Default::default()
+    });
     let mut db = db;
     db.save_project(&project).unwrap();
 
@@ -1004,10 +1137,14 @@ fn test_resolved_warnings_persistence() {
     assert_eq!(loaded[0].section_id, 0);
     assert_eq!(loaded[0].shot_id, 1);
     assert_eq!(loaded[0].warning_code, "AZIMUTH_DIFF");
-    assert_eq!(loaded[0].resolved_comment, Some("Verified in field".to_string()));
+    assert_eq!(
+        loaded[0].resolved_comment,
+        Some("Verified in field".to_string())
+    );
 
     // Delete resolved warning
-    db.delete_resolved_warning(0, 1, "AZIMUTH_DIFF", None).unwrap();
+    db.delete_resolved_warning(0, 1, "AZIMUTH_DIFF", None)
+        .unwrap();
     let loaded_after_delete = db.load_resolved_warnings().unwrap();
     assert!(loaded_after_delete.is_empty());
 }
@@ -1020,7 +1157,10 @@ fn test_resolved_warning_dedup_and_delete_by_uuid() {
     // it regardless of the shot_id supplied.
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    project.add_section(SectionData {
+        color: "#000".to_string(),
+        ..Default::default()
+    });
     db.save_project(&project).unwrap();
 
     let base = ResolvedWarning {
@@ -1033,7 +1173,11 @@ fn test_resolved_warning_dedup_and_delete_by_uuid() {
     };
     db.save_resolved_warning(&base).unwrap();
     // Same UUID, drifted shot_id (as an insert-before would produce on reload).
-    db.save_resolved_warning(&ResolvedWarning { shot_id: 5, ..base.clone() }).unwrap();
+    db.save_resolved_warning(&ResolvedWarning {
+        shot_id: 5,
+        ..base.clone()
+    })
+    .unwrap();
 
     let loaded = db.load_resolved_warnings().unwrap();
     assert_eq!(loaded.len(), 1, "same UUID must dedup to a single row");
@@ -1041,7 +1185,8 @@ fn test_resolved_warning_dedup_and_delete_by_uuid() {
     assert_eq!(loaded[0].shot_id, 5, "latest position wins");
 
     // Deleting by UUID clears it even with an unrelated shot_id.
-    db.delete_resolved_warning(0, 999, "ZERO_LENGTH", Some("uuid-1")).unwrap();
+    db.delete_resolved_warning(0, 999, "ZERO_LENGTH", Some("uuid-1"))
+        .unwrap();
     assert!(db.load_resolved_warnings().unwrap().is_empty());
 }
 
@@ -1054,7 +1199,10 @@ fn test_resolved_warnings_bulk_tolerates_duplicate_keys() {
     // save must not abort on the legacy UNIQUE constraint.
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    project.add_section(SectionData {
+        color: "#000".to_string(),
+        ..Default::default()
+    });
     db.save_project(&project).unwrap();
 
     let w = ResolvedWarning {
@@ -1066,7 +1214,8 @@ fn test_resolved_warnings_bulk_tolerates_duplicate_keys() {
         shot_uuid: Some("uuid-1".to_string()),
     };
     // Two identical-key rows in one batch must not raise a UNIQUE error.
-    db.save_resolved_warnings_bulk(&[w.clone(), w.clone()]).unwrap();
+    db.save_resolved_warnings_bulk(&[w.clone(), w.clone()])
+        .unwrap();
     assert_eq!(
         db.load_resolved_warnings().unwrap().len(),
         1,
@@ -1082,7 +1231,10 @@ fn test_resolved_warning_uuid_save_does_not_delete_other_shots_ignore() {
     // uuid-X if Y's params happened to target X's position.
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    project.add_section(SectionData {
+        color: "#000".to_string(),
+        ..Default::default()
+    });
     db.save_project(&project).unwrap();
 
     // Shot X ignored at position shot_id=1.
@@ -1108,9 +1260,14 @@ fn test_resolved_warning_uuid_save_does_not_delete_other_shots_ignore() {
 
     let loaded = db.load_resolved_warnings().unwrap();
     assert_eq!(loaded.len(), 2, "both distinct-UUID ignores must survive");
-    let uuids: std::collections::HashSet<_> =
-        loaded.iter().filter_map(|r| r.shot_uuid.as_deref()).collect();
-    assert!(uuids.contains("uuid-X"), "uuid-X's ignore must not be deleted");
+    let uuids: std::collections::HashSet<_> = loaded
+        .iter()
+        .filter_map(|r| r.shot_uuid.as_deref())
+        .collect();
+    assert!(
+        uuids.contains("uuid-X"),
+        "uuid-X's ignore must not be deleted"
+    );
     assert!(uuids.contains("uuid-Y"), "uuid-Y's ignore must survive");
 }
 
@@ -1123,7 +1280,10 @@ fn test_unresolve_with_uuid_clears_same_shots_legacy_position_row_only() {
     // touching a DIFFERENT shot's by-UUID row that occupies the same position.
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    project.add_section(SectionData {
+        color: "#000".to_string(),
+        ..Default::default()
+    });
     db.save_project(&project).unwrap();
 
     // Legacy NULL-uuid suppression of the shot at position (0, 1).
@@ -1162,7 +1322,8 @@ fn test_unresolve_with_uuid_clears_same_shots_legacy_position_row_only() {
         "the legacy NULL-uuid row for the same shot/position must be cleared by un-ignore"
     );
     assert!(
-        rows.iter().any(|r| r.shot_uuid.as_deref() == Some("uuid-other")),
+        rows.iter()
+            .any(|r| r.shot_uuid.as_deref() == Some("uuid-other")),
         "a different shot's by-UUID row at another position must NOT be deleted"
     );
 }
@@ -1174,7 +1335,10 @@ fn test_backfill_resolved_warning_uuids_upgrades_and_is_idempotent() {
     // Idempotent, and a row with no live shot is left NULL (never mis-keyed).
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    project.add_section(SectionData {
+        color: "#000".to_string(),
+        ..Default::default()
+    });
     db.save_project(&project).unwrap();
 
     // Legacy row keyed by position (no UUID) that maps to a live shot.
@@ -1218,7 +1382,10 @@ fn test_backfill_resolved_warning_uuids_upgrades_and_is_idempotent() {
         .iter()
         .find(|r| r.shot_id == 7 && r.warning_code == "SHORT_SHOT")
         .expect("the orphan row should still exist");
-    assert_eq!(orphan.shot_uuid, None, "the unmapped legacy row stays position-keyed");
+    assert_eq!(
+        orphan.shot_uuid, None,
+        "the unmapped legacy row stays position-keyed"
+    );
 
     // Idempotent: a second backfill upgrades nothing.
     let upgraded_again = db.backfill_resolved_warning_uuids(&live).unwrap();
@@ -1229,8 +1396,8 @@ fn test_backfill_resolved_warning_uuids_upgrades_and_is_idempotent() {
 #[test]
 #[ignore]
 fn test_merged_with_from_fractal_iter2() {
-    use std::path::Path;
     use crate::models::StationRef;
+    use std::path::Path;
 
     // Use the fractal_plant_iter2 fixture
     let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1240,7 +1407,10 @@ fn test_merged_with_from_fractal_iter2() {
         .join("fractal_plant_iter2.stalx");
 
     // Make sure the fixture exists
-    assert!(fixture_path.exists(), "Fixture file not found: {fixture_path:?}");
+    assert!(
+        fixture_path.exists(),
+        "Fixture file not found: {fixture_path:?}"
+    );
 
     // Load the project
     let db = Database::open_existing(&fixture_path).unwrap();
@@ -1257,7 +1427,9 @@ fn test_merged_with_from_fractal_iter2() {
 
     // Find station S1.st0
     let s1_st0_ref = StationRef::new(1, 0);
-    let s1_st0 = stations.iter().find(|s| s.station_ref == s1_st0_ref)
+    let s1_st0 = stations
+        .iter()
+        .find(|s| s.station_ref == s1_st0_ref)
         .expect("Station 1:0 should exist");
 
     println!("Station 1:0 merged_with: {:?}", s1_st0.merged_with);
@@ -1287,7 +1459,9 @@ fn test_merged_with_from_fractal_iter2() {
 
     // Verify transitive merge groups - 0:2 should also show merged with 2:0
     // since they're all in the same merge group (0:2 ↔ 1:0 ↔ 2:0)
-    let s0_st2_station = stations.iter().find(|s| s.station_ref == s0_st2)
+    let s0_st2_station = stations
+        .iter()
+        .find(|s| s.station_ref == s0_st2)
         .expect("Station 0:2 should exist");
     println!("Station 0:2 merged_with: {:?}", s0_st2_station.merged_with);
 
@@ -1309,7 +1483,9 @@ fn test_merged_with_from_fractal_iter2() {
     );
 
     // Verify 2:0 also shows the full group
-    let s2_st0_station = stations.iter().find(|s| s.station_ref == s2_st0)
+    let s2_st0_station = stations
+        .iter()
+        .find(|s| s.station_ref == s2_st0)
         .expect("Station 2:0 should exist");
     println!("Station 2:0 merged_with: {:?}", s2_st0_station.merged_with);
 
@@ -1335,8 +1511,8 @@ fn test_merged_with_from_fractal_iter2() {
 #[test]
 #[ignore]
 fn test_merged_with_from_fractal_iter4() {
-    use std::path::Path;
     use crate::models::StationRef;
+    use std::path::Path;
 
     // Use the fractal_plant_iter4 fixture
     let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1346,7 +1522,10 @@ fn test_merged_with_from_fractal_iter4() {
         .join("fractal_plant_iter4.stalx");
 
     // Make sure the fixture exists
-    assert!(fixture_path.exists(), "Fixture file not found: {fixture_path:?}");
+    assert!(
+        fixture_path.exists(),
+        "Fixture file not found: {fixture_path:?}"
+    );
 
     // Load the project
     let db = Database::open_existing(&fixture_path).unwrap();
@@ -1359,7 +1538,9 @@ fn test_merged_with_from_fractal_iter4() {
 
     // Find station S1.st0
     let s1_st0_ref = StationRef::new(1, 0);
-    let s1_st0 = stations.iter().find(|s| s.station_ref == s1_st0_ref)
+    let s1_st0 = stations
+        .iter()
+        .find(|s| s.station_ref == s1_st0_ref)
         .expect("Station 1:0 should exist");
 
     println!("Station 1:0 merged_with: {:?}", s1_st0.merged_with);
@@ -1402,7 +1583,10 @@ fn test_integrity_check_passes_on_valid_db() {
     let db = Database::open_existing(&db_path).unwrap();
     // full_integrity_check should also pass
     let errors = db.full_integrity_check().unwrap();
-    assert!(errors.is_empty(), "Expected no integrity errors, got: {errors:?}");
+    assert!(
+        errors.is_empty(),
+        "Expected no integrity errors, got: {errors:?}"
+    );
 }
 
 #[test]
@@ -1436,7 +1620,10 @@ fn test_integrity_check_fails_on_corrupt_file() {
 fn test_full_integrity_check_on_in_memory() {
     let db = Database::in_memory().unwrap();
     let errors = db.full_integrity_check().unwrap();
-    assert!(errors.is_empty(), "In-memory DB should pass integrity check");
+    assert!(
+        errors.is_empty(),
+        "In-memory DB should pass integrity check"
+    );
 }
 
 // === Open Existing edge cases ===
@@ -1524,8 +1711,12 @@ fn test_save_load_station_offsets_individual() {
     // Add individual station offsets
     let ref_a = StationRef::new(section_id, 0);
     let ref_b = StationRef::new(section_id, 1);
-    project.station_offsets.insert(ref_a.into(), (1.5, -2.3, 0.1));
-    project.station_offsets.insert(ref_b.into(), (-0.5, 0.8, -0.3));
+    project
+        .station_offsets
+        .insert(ref_a.into(), (1.5, -2.3, 0.1));
+    project
+        .station_offsets
+        .insert(ref_b.into(), (-0.5, 0.8, -0.3));
 
     // Save
     {
@@ -1556,9 +1747,17 @@ fn test_undo_stack_timestamps_round_trip() {
     let db = Database::in_memory().unwrap();
 
     let entries = vec![
-        ("cmd1".to_string(), "undo1".to_string(), Some("2025-01-15T10:00:00+00:00".to_string())),
+        (
+            "cmd1".to_string(),
+            "undo1".to_string(),
+            Some("2025-01-15T10:00:00+00:00".to_string()),
+        ),
         ("cmd2".to_string(), "undo2".to_string(), None),
-        ("cmd3".to_string(), "undo3".to_string(), Some("2025-01-15T12:00:00+00:00".to_string())),
+        (
+            "cmd3".to_string(),
+            "undo3".to_string(),
+            Some("2025-01-15T12:00:00+00:00".to_string()),
+        ),
     ];
 
     db.save_undo_stack_with_timestamps(entries).unwrap();
@@ -1574,7 +1773,10 @@ fn test_undo_stack_timestamps_round_trip() {
 
     // Entry 1: generated timestamp (should exist, not None)
     assert_eq!(loaded[1].1, "cmd2");
-    assert!(loaded[1].3.is_some(), "Auto-generated timestamp should be present");
+    assert!(
+        loaded[1].3.is_some(),
+        "Auto-generated timestamp should be present"
+    );
 
     // Entry 2: explicit timestamp
     assert_eq!(loaded[2].3.as_deref(), Some("2025-01-15T12:00:00+00:00"));
@@ -1585,7 +1787,11 @@ fn test_redo_stack_timestamps_round_trip() {
     let db = Database::in_memory().unwrap();
 
     let entries = vec![
-        ("redo_cmd1".to_string(), "redo_undo1".to_string(), Some("2025-02-01T08:00:00+00:00".to_string())),
+        (
+            "redo_cmd1".to_string(),
+            "redo_undo1".to_string(),
+            Some("2025-02-01T08:00:00+00:00".to_string()),
+        ),
         ("redo_cmd2".to_string(), "redo_undo2".to_string(), None),
     ];
 
@@ -1689,10 +1895,9 @@ fn test_legacy_v6_undo_history_dropped_on_open_existing() {
 
     // Sanity: the legacy payload IS the dangerous shape — under the new
     // deserializer its explicit nulls decode to Some(None) ("clear field").
-    let dangerous: crate::models::ShotUpdates = serde_json::from_str(
-        r#"{"length":2.0,"left":null,"pitch_in":null,"comment":null}"#,
-    )
-    .unwrap();
+    let dangerous: crate::models::ShotUpdates =
+        serde_json::from_str(r#"{"length":2.0,"left":null,"pitch_in":null,"comment":null}"#)
+            .unwrap();
     assert_eq!(dangerous.left, Some(None));
     assert_eq!(dangerous.pitch_in, Some(None));
     assert_eq!(dangerous.comment, Some(None));
@@ -1902,10 +2107,14 @@ fn test_resolved_warnings_round_trip() {
     assert_eq!(loaded[0].section_id, section_id);
     assert_eq!(loaded[0].shot_id, shot_id);
     assert_eq!(loaded[0].warning_code, "azimuth_deviation");
-    assert_eq!(loaded[0].resolved_comment.as_deref(), Some("Verified in field"));
+    assert_eq!(
+        loaded[0].resolved_comment.as_deref(),
+        Some("Verified in field")
+    );
 
     // Delete it
-    db.delete_resolved_warning(section_id, shot_id, "azimuth_deviation", None).unwrap();
+    db.delete_resolved_warning(section_id, shot_id, "azimuth_deviation", None)
+        .unwrap();
     let remaining = db.load_resolved_warnings().unwrap();
     assert!(remaining.is_empty());
 }
@@ -1917,60 +2126,65 @@ fn test_save_load_complex_project_round_trip() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("complex_roundtrip.stalx");
 
-    let mut project = Project::new("Complex Cave".to_string(), Some("Deep Location".to_string()));
+    let mut project = Project::new(
+        "Complex Cave".to_string(),
+        Some("Deep Location".to_string()),
+    );
 
     // Add section with detailed shots
-    let section_a = project.add_section(SectionData {
-        name: Some("North Passage".to_string()),
-        surveyor: Some("Alice".to_string()),
-        date: NaiveDate::from_ymd_opt(2025, 6, 15),
-        color: "#ff0000".to_string(),
-        direction: Some(SurveyDirection::In),
-        quality: 0.8,
-        shots: vec![
-            ShotData {
-                azimuth_in: 0.0,
-                azimuth_out: 0.0,
-                length: 10.0,
-                depth_in: 0.0,
-                depth_out: 2.0,
-                left: Some(1.0),
-                right: Some(2.0),
-                up: Some(3.0),
-                down: Some(0.5),
-                pitch_in: Some(5.0),
-                pitch_out: Some(-3.0),
-                comment: Some("Good visibility".to_string()),
-                ..Default::default()
-            },
-            ShotData {
-                azimuth_in: 45.0,
-                azimuth_out: 45.0,
-                length: 8.0,
-                depth_in: 2.0,
-                depth_out: 4.0,
-                ..Default::default()
-            },
-        ],
-    }).id;
+    let section_a = project
+        .add_section(SectionData {
+            name: Some("North Passage".to_string()),
+            surveyor: Some("Alice".to_string()),
+            date: NaiveDate::from_ymd_opt(2025, 6, 15),
+            color: "#ff0000".to_string(),
+            direction: Some(SurveyDirection::In),
+            quality: 0.8,
+            shots: vec![
+                ShotData {
+                    azimuth_in: 0.0,
+                    azimuth_out: 0.0,
+                    length: 10.0,
+                    depth_in: 0.0,
+                    depth_out: 2.0,
+                    left: Some(1.0),
+                    right: Some(2.0),
+                    up: Some(3.0),
+                    down: Some(0.5),
+                    pitch_in: Some(5.0),
+                    pitch_out: Some(-3.0),
+                    comment: Some("Good visibility".to_string()),
+                    ..Default::default()
+                },
+                ShotData {
+                    azimuth_in: 45.0,
+                    azimuth_out: 45.0,
+                    length: 8.0,
+                    depth_in: 2.0,
+                    depth_out: 4.0,
+                    ..Default::default()
+                },
+            ],
+        })
+        .id;
 
-    let section_b = project.add_section(SectionData {
-        name: Some("East Branch".to_string()),
-        color: "#00ff00".to_string(),
-        direction: Some(SurveyDirection::Out),
-        quality: 1.0,
-        shots: vec![
-            ShotData {
+    let section_b = project
+        .add_section(SectionData {
+            name: Some("East Branch".to_string()),
+            color: "#00ff00".to_string(),
+            direction: Some(SurveyDirection::Out),
+            quality: 1.0,
+            shots: vec![ShotData {
                 azimuth_in: 90.0,
                 azimuth_out: 90.0,
                 length: 5.0,
                 depth_in: 0.0,
                 depth_out: 1.0,
                 ..Default::default()
-            },
-        ],
-        ..Default::default()
-    }).id;
+            }],
+            ..Default::default()
+        })
+        .id;
 
     // Add section offsets
     project.section_offsets.insert(section_a, (10.0, -5.0));
@@ -2003,7 +2217,9 @@ fn test_save_load_complex_project_round_trip() {
     });
 
     // Add station offset
-    project.station_offsets.insert(StationRef::new(section_a, 1).into(), (0.1, -0.2, 0.05));
+    project
+        .station_offsets
+        .insert(StationRef::new(section_a, 1).into(), (0.1, -0.2, 0.05));
 
     // Save
     {
@@ -2020,7 +2236,11 @@ fn test_save_load_complex_project_round_trip() {
     assert_eq!(loaded.sections.len(), 2);
 
     // Verify section A
-    let s_a = loaded.sections.iter().find(|s| s.name == Some("North Passage".to_string())).unwrap();
+    let s_a = loaded
+        .sections
+        .iter()
+        .find(|s| s.name == Some("North Passage".to_string()))
+        .unwrap();
     assert_eq!(s_a.direction, SurveyDirection::In);
     assert!((s_a.quality - 0.8).abs() < 1e-6);
     assert_eq!(s_a.shots.len(), 2);
@@ -2036,7 +2256,13 @@ fn test_save_load_complex_project_round_trip() {
 
     // Verify merges
     assert_eq!(loaded.station_merges.len(), 1);
-    assert_eq!(loaded.resolve_key(&loaded.station_merges[0].station_a).unwrap().station_index, 2);
+    assert_eq!(
+        loaded
+            .resolve_key(&loaded.station_merges[0].station_a)
+            .unwrap()
+            .station_index,
+        2
+    );
 
     // Verify zero datums
     assert_eq!(loaded.zero_datums.len(), 1);
@@ -2048,7 +2274,9 @@ fn test_save_load_complex_project_round_trip() {
     assert_eq!(loaded.loop_closures[0].strategy, ClosureStrategy::Move);
 
     // Verify station offsets
-    let st_offset = loaded.station_offset_for_ref(StationRef::new(s_a_id, 1)).unwrap();
+    let st_offset = loaded
+        .station_offset_for_ref(StationRef::new(s_a_id, 1))
+        .unwrap();
     assert!((st_offset.0 - 0.1).abs() < 1e-10);
     assert!((st_offset.1 - (-0.2)).abs() < 1e-10);
     assert!((st_offset.2 - 0.05).abs() < 1e-10);
@@ -2204,7 +2432,10 @@ fn test_open_for_recovery_valid_db_succeeds() {
     // Open for recovery should succeed even on a healthy file
     let db = Database::open_for_recovery(&db_path).unwrap();
     // Should be able to query basic info
-    let result: String = db.conn.query_row("PRAGMA quick_check", [], |row| row.get(0)).unwrap();
+    let result: String = db
+        .conn
+        .query_row("PRAGMA quick_check", [], |row| row.get(0))
+        .unwrap();
     assert_eq!(result, "ok");
 }
 
@@ -2223,7 +2454,10 @@ fn test_attempt_repair_on_healthy_db() {
     drop(db);
 
     let (backup_path, ok) = Database::attempt_repair(&db_path).unwrap();
-    assert!(ok, "Healthy database should pass integrity check after repair");
+    assert!(
+        ok,
+        "Healthy database should pass integrity check after repair"
+    );
     assert!(backup_path.exists(), "Backup should exist");
 
     // Verify original file is still valid
@@ -2445,15 +2679,33 @@ fn test_migrate_schema_adds_closure_columns() {
 
     let db = Database::open_existing(&db_path).unwrap();
     // Verify migration added closure_id, strategy, and is_aligned columns
-    let has_closure_id: bool = db.conn
-        .query_row("SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='closure_id'", [], |row| row.get::<_, i64>(0))
-        .map(|c| c > 0).unwrap();
-    let has_strategy: bool = db.conn
-        .query_row("SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='strategy'", [], |row| row.get::<_, i64>(0))
-        .map(|c| c > 0).unwrap();
-    let has_is_aligned: bool = db.conn
-        .query_row("SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='is_aligned'", [], |row| row.get::<_, i64>(0))
-        .map(|c| c > 0).unwrap();
+    let has_closure_id: bool = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='closure_id'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|c| c > 0)
+        .unwrap();
+    let has_strategy: bool = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='strategy'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|c| c > 0)
+        .unwrap();
+    let has_is_aligned: bool = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='is_aligned'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|c| c > 0)
+        .unwrap();
 
     assert!(has_closure_id, "migration should add closure_id column");
     assert!(has_strategy, "migration should add strategy column");
@@ -2620,12 +2872,18 @@ fn test_save_load_round_trip_all_metadata() {
     });
 
     let gps = GpsCoordinates::new(48.8566, 2.3522, 5.0).unwrap();
-    project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
+    project
+        .set_zero_datum(StationRef::new(section_id, 0), gps)
+        .unwrap();
 
     // set_zero_datum creates section offsets for all connected sections (A and B are merged),
     // so we don't add a manual section_offset — we just verify the ones set_zero_datum created.
-    project.station_offsets.insert(StationRef::new(section_id, 1).into(), (1.0, 2.0, 3.0));
-    project.imported_file_hashes.push("abc123def456".to_string());
+    project
+        .station_offsets
+        .insert(StationRef::new(section_id, 1).into(), (1.0, 2.0, 3.0));
+    project
+        .imported_file_hashes
+        .push("abc123def456".to_string());
     project.next_closure_id = 42;
 
     db.save_project(&project).unwrap();
@@ -2659,7 +2917,10 @@ fn test_save_load_round_trip_loop_closures_with_strategy() {
     let mut project = Project::new("Closures".to_string(), None);
     project.add_section(SectionData {
         color: "#ff0000".to_string(),
-        shots: vec![ShotData { length: 5.0, ..Default::default() }],
+        shots: vec![ShotData {
+            length: 5.0,
+            ..Default::default()
+        }],
         ..Default::default()
     });
     let sec_id = project.sections[0].id;
@@ -2720,7 +2981,10 @@ fn test_compress_decompress_round_trip() {
 #[test]
 fn test_compress_produces_gzip_magic_bytes() {
     let compressed = compress_json("hello");
-    assert!(compressed.len() >= 2, "compressed output should have at least 2 bytes");
+    assert!(
+        compressed.len() >= 2,
+        "compressed output should have at least 2 bytes"
+    );
     assert_eq!(compressed[0], 0x1f, "first magic byte");
     assert_eq!(compressed[1], 0x8b, "second magic byte");
 }
@@ -2749,7 +3013,10 @@ fn test_compress_empty_string() {
 #[test]
 fn test_compress_large_json() {
     // Large repetitive JSON compresses well
-    let large = format!(r#"{{"data":[{}]}}"#, "1,".repeat(10_000).trim_end_matches(','));
+    let large = format!(
+        r#"{{"data":[{}]}}"#,
+        "1,".repeat(10_000).trim_end_matches(',')
+    );
     let compressed = compress_json(&large);
     let decompressed = decompress_json(&compressed).unwrap();
     assert_eq!(decompressed, large);
@@ -2782,9 +3049,10 @@ fn test_undo_stack_round_trips_through_compression() {
     // Verify the full pipeline: save → (compress) → load → (decompress) matches
     let db = Database::in_memory().unwrap();
     let json_with_special_chars = r##"{"color":"#ff0000","value":"hello\nworld"}"##;
-    let entries = vec![
-        (json_with_special_chars.to_string(), r#"{"undo":"data"}"#.to_string()),
-    ];
+    let entries = vec![(
+        json_with_special_chars.to_string(),
+        r#"{"undo":"data"}"#.to_string(),
+    )];
     db.save_undo_stack(entries).unwrap();
     let loaded = db.load_undo_stack().unwrap();
     assert_eq!(loaded.len(), 1);
@@ -2860,9 +3128,14 @@ fn test_save_collab_state_upsert() {
     db.save_project(&project).unwrap();
 
     // Upsert a state without rewriting the whole project.
-    db.save_collab_state(Some(&CollabState::new("up.tml".to_string()))).unwrap();
+    db.save_collab_state(Some(&CollabState::new("up.tml".to_string())))
+        .unwrap();
     assert_eq!(
-        db.load_project().unwrap().collab.unwrap().sibling_tml_relative,
+        db.load_project()
+            .unwrap()
+            .collab
+            .unwrap()
+            .sibling_tml_relative,
         "up.tml"
     );
     // Upsert again (ON CONFLICT path).
@@ -2870,7 +3143,12 @@ fn test_save_collab_state_upsert() {
     c2.last_export_tml_sha256 = Some("abc".to_string());
     db.save_collab_state(Some(&c2)).unwrap();
     assert_eq!(
-        db.load_project().unwrap().collab.unwrap().last_export_tml_sha256.as_deref(),
+        db.load_project()
+            .unwrap()
+            .collab
+            .unwrap()
+            .last_export_tml_sha256
+            .as_deref(),
         Some("abc")
     );
     // Clearing removes the row.
@@ -2890,17 +3168,22 @@ fn two_dangling_station_offsets_in_one_section_save_without_pk_collision() {
     let mut project = Project::new("Dangling".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![ShotData { length: 5.0, ..Default::default() }],
+            shots: vec![ShotData {
+                length: 5.0,
+                ..Default::default()
+            }],
             ..Default::default()
         })
         .id;
     project.ensure_shot_uuids();
-    project
-        .station_offsets
-        .insert(StationKey::new(a, StationAnchor::AfterShot("ghost-1".into())), (1.0, 0.0, 0.0));
-    project
-        .station_offsets
-        .insert(StationKey::new(a, StationAnchor::AfterShot("ghost-2".into())), (2.0, 0.0, 0.0));
+    project.station_offsets.insert(
+        StationKey::new(a, StationAnchor::AfterShot("ghost-1".into())),
+        (1.0, 0.0, 0.0),
+    );
+    project.station_offsets.insert(
+        StationKey::new(a, StationAnchor::AfterShot("ghost-2".into())),
+        (2.0, 0.0, 0.0),
+    );
 
     db.save_project(&project)
         .expect("save must not PK-collide on two dangling offsets");
@@ -3015,6 +3298,12 @@ fn test_format_blob_placeholder_units() {
     assert_eq!(format_blob_placeholder(1024), "<blob 1.0 KB>");
     assert_eq!(format_blob_placeholder(4300), "<blob 4.2 KB>");
     assert_eq!(format_blob_placeholder(1024 * 1024), "<blob 1.0 MB>");
-    assert_eq!(format_blob_placeholder(3 * 1024 * 1024 + 512 * 1024), "<blob 3.5 MB>");
-    assert_eq!(format_blob_placeholder(2 * 1024 * 1024 * 1024), "<blob 2.0 GB>");
+    assert_eq!(
+        format_blob_placeholder(3 * 1024 * 1024 + 512 * 1024),
+        "<blob 3.5 MB>"
+    );
+    assert_eq!(
+        format_blob_placeholder(2 * 1024 * 1024 * 1024),
+        "<blob 2.0 GB>"
+    );
 }

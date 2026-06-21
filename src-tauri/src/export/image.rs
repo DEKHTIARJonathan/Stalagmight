@@ -229,10 +229,10 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
     let mut min_y = f64::MAX;
     let mut max_y = f64::MIN;
     let extend = |c: &crate::models::Coordinates,
-                      mnx: &mut f64,
-                      mxx: &mut f64,
-                      mny: &mut f64,
-                      mxy: &mut f64| {
+                  mnx: &mut f64,
+                  mxx: &mut f64,
+                  mny: &mut f64,
+                  mxy: &mut f64| {
         *mnx = mnx.min(c.x);
         *mxx = mxx.max(c.x);
         *mny = mny.min(c.y);
@@ -246,16 +246,34 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
             let from = StationRef::new(section.id, i as u32);
             let to = StationRef::new(section.id, (i + 1) as u32);
             if let Some(s) = station_by_ref.get(&from) {
-                extend(&s.coordinates, &mut min_x, &mut max_x, &mut min_y, &mut max_y);
+                extend(
+                    &s.coordinates,
+                    &mut min_x,
+                    &mut max_x,
+                    &mut min_y,
+                    &mut max_y,
+                );
             }
             if let Some(s) = station_by_ref.get(&to) {
-                extend(&s.coordinates, &mut min_x, &mut max_x, &mut min_y, &mut max_y);
+                extend(
+                    &s.coordinates,
+                    &mut min_x,
+                    &mut max_x,
+                    &mut min_y,
+                    &mut max_y,
+                );
             }
         }
     }
     for s in &stations {
         if s.is_zero_datum {
-            extend(&s.coordinates, &mut min_x, &mut max_x, &mut min_y, &mut max_y);
+            extend(
+                &s.coordinates,
+                &mut min_x,
+                &mut max_x,
+                &mut min_y,
+                &mut max_y,
+            );
         }
     }
     if min_x >= f64::MAX {
@@ -264,7 +282,13 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
         // coords so we still emit something locally meaningful; if even
         // that is empty, use a 100×100 placeholder box.
         for s in &stations {
-            extend(&s.coordinates, &mut min_x, &mut max_x, &mut min_y, &mut max_y);
+            extend(
+                &s.coordinates,
+                &mut min_x,
+                &mut max_x,
+                &mut min_y,
+                &mut max_y,
+            );
         }
         if min_x >= f64::MAX {
             min_x = 0.0;
@@ -550,8 +574,7 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
             }
             let from = StationRef::new(section.id, i as u32);
             let to = StationRef::new(section.id, (i + 1) as u32);
-            let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to))
-            else {
+            let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
                 continue;
             };
             let f_phys = physical_uf.find(fi);
@@ -722,8 +745,12 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
             svg.push_str("<g class=\"zero-datums\" fill=\"#000000\">\n");
             had_zero_datum = true;
         }
-        let points =
-            star_polygon_points(station.coordinates.x, -station.coordinates.y, star_outer, star_inner);
+        let points = star_polygon_points(
+            station.coordinates.x,
+            -station.coordinates.y,
+            star_outer,
+            star_inner,
+        );
         let _ = writeln!(svg, r#"<polygon points="{points}"/>"#);
     }
     if had_zero_datum {
@@ -851,10 +878,7 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
                     }
                 }
                 if let Some((lx, ly, bb)) = chosen {
-                    let _ = writeln!(
-                        svg,
-                        r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,
-                    );
+                    let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
                     placed.push(bb);
                 }
                 // If every candidate collided, drop the label rather
@@ -953,15 +977,14 @@ fn label_open_space_angle(
     let si_pos = stations[station_idx].coordinates;
     let eps = 1e-6_f64;
     let mut dirs: Vec<f64> = Vec::new();
-    let push_dir =
-        |dirs: &mut Vec<f64>, sx: f64, sy: f64, ox: f64, oy: f64| {
-            let dx = ox - sx;
-            // Screen y is flipped relative to world y.
-            let dy = -(oy - sy);
-            if dx.abs() > eps || dy.abs() > eps {
-                dirs.push(dy.atan2(dx));
-            }
-        };
+    let push_dir = |dirs: &mut Vec<f64>, sx: f64, sy: f64, ox: f64, oy: f64| {
+        let dx = ox - sx;
+        // Screen y is flipped relative to world y.
+        let dy = -(oy - sy);
+        if dx.abs() > eps || dy.abs() > eps {
+            dirs.push(dy.atan2(dx));
+        }
+    };
     for section in &project.sections {
         for (i, shot) in section.shots.iter().enumerate() {
             if shot.is_reference {
@@ -969,8 +992,7 @@ fn label_open_space_angle(
             }
             let from_ref = StationRef::new(section.id, i as u32);
             let to_ref = StationRef::new(section.id, (i + 1) as u32);
-            let (Some(&fi), Some(&ti)) =
-                (station_index.get(&from_ref), station_index.get(&to_ref))
+            let (Some(&fi), Some(&ti)) = (station_index.get(&from_ref), station_index.get(&to_ref))
             else {
                 continue;
             };
@@ -994,7 +1016,11 @@ fn label_open_space_angle(
     let mut best_mid = 0.0_f64;
     for i in 0..n {
         let a = dirs[i];
-        let b = if i + 1 < n { dirs[i + 1] } else { dirs[0] + two_pi };
+        let b = if i + 1 < n {
+            dirs[i + 1]
+        } else {
+            dirs[0] + two_pi
+        };
         let gap = b - a;
         if gap > best_gap {
             best_gap = gap;
@@ -1003,7 +1029,6 @@ fn label_open_space_angle(
     }
     best_mid
 }
-
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1117,7 +1142,10 @@ mod tests {
     #[test]
     fn svg_has_white_background() {
         let svg = generate_svg_string(&simple_project(), &ExportImageOptions::default()).unwrap();
-        assert!(svg.contains(r##"fill="#ffffff""##), "background should be white: {svg}");
+        assert!(
+            svg.contains(r##"fill="#ffffff""##),
+            "background should be white: {svg}"
+        );
     }
 
     #[test]
@@ -1327,7 +1355,9 @@ mod tests {
             dpi: 2000,
             branching_threshold: 2,
         };
-        let err = export_png(&project, &path, &options).unwrap_err().to_string();
+        let err = export_png(&project, &path, &options)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("16384"), "{err}");
     }
 
@@ -1341,7 +1371,9 @@ mod tests {
             dpi: 0,
             branching_threshold: 2,
         };
-        let err = export_png(&project, &path, &options).unwrap_err().to_string();
+        let err = export_png(&project, &path, &options)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("DPI"), "{err}");
     }
 
@@ -1357,11 +1389,11 @@ mod tests {
             name: Some("S".to_string()),
             color: "#000000".to_string(),
             shots: vec![
-                make_shot(10.0, 0.0, false),   // 0 -> 1
-                make_shot(10.0, 90.0, false),  // 1 -> 2
-                make_shot(10.0, 90.0, true),   // 2 -> 3  (reference)
-                make_shot(10.0, 0.0, false),   // 3 -> 4
-                make_shot(10.0, 90.0, false),  // 4 -> 5
+                make_shot(10.0, 0.0, false),  // 0 -> 1
+                make_shot(10.0, 90.0, false), // 1 -> 2
+                make_shot(10.0, 90.0, true),  // 2 -> 3  (reference)
+                make_shot(10.0, 0.0, false),  // 3 -> 4
+                make_shot(10.0, 90.0, false), // 4 -> 5
             ],
             ..Default::default()
         });
@@ -1474,10 +1506,7 @@ mod tests {
             .add_section(SectionData {
                 name: Some("Trunk".to_string()),
                 color: "#000000".to_string(),
-                shots: vec![
-                    make_shot(50.0, 90.0, false),
-                    make_shot(50.0, 90.0, false),
-                ],
+                shots: vec![make_shot(50.0, 90.0, false), make_shot(50.0, 90.0, false)],
                 ..Default::default()
             })
             .id;
@@ -1679,9 +1708,13 @@ mod tests {
             let Some(close) = after.find('>') else { break };
             let attrs = &after[..close];
             rest = &after[close..];
-            let Some(p_start) = attrs.find(r#"points=""#) else { continue };
+            let Some(p_start) = attrs.find(r#"points=""#) else {
+                continue;
+            };
             let body = &attrs[p_start + 8..];
-            let Some(p_end) = body.find('"') else { continue };
+            let Some(p_end) = body.find('"') else {
+                continue;
+            };
             let pts: Vec<(f64, f64)> = body[..p_end]
                 .split_whitespace()
                 .filter_map(|tok| {
@@ -1703,14 +1736,23 @@ mod tests {
         // Layout: real, real, REF, real, real → two runs of two shots
         // each, one polyline per run.
         let polyline_count = svg.matches("<polyline").count();
-        assert_eq!(polyline_count, 2, "expected one polyline per non-ref run: {svg}");
+        assert_eq!(
+            polyline_count, 2,
+            "expected one polyline per non-ref run: {svg}"
+        );
         // 5 shots total minus 1 ref = 4 non-ref shots → 4 "segment edges",
         // i.e. (3 vertices) + (3 vertices) = 6 commas in points strings.
         let comma_count = svg.matches(',').count();
-        assert_eq!(comma_count, 6, "expected 6 polyline vertices in total: {svg}");
+        assert_eq!(
+            comma_count, 6,
+            "expected 6 polyline vertices in total: {svg}"
+        );
         // And the ref shot itself MUST NOT appear as its own polyline or
         // line element.
-        assert!(!svg.contains("<line "), "no <line> elements expected: {svg}");
+        assert!(
+            !svg.contains("<line "),
+            "no <line> elements expected: {svg}"
+        );
     }
 
     #[test]
@@ -1797,10 +1839,7 @@ mod tests {
             .add_section(SectionData {
                 name: Some("Trunk".to_string()),
                 color: "#000000".to_string(),
-                shots: vec![
-                    make_shot(10.0, 0.0, false),
-                    make_shot(10.0, 0.0, false),
-                ],
+                shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
                 ..Default::default()
             })
             .id;
@@ -1909,10 +1948,7 @@ mod tests {
             .add_section(SectionData {
                 name: Some("Chain".to_string()),
                 color: "#000000".to_string(),
-                shots: vec![
-                    make_shot(1.0, 90.0, true),
-                    make_shot(1.0, 90.0, true),
-                ],
+                shots: vec![make_shot(1.0, 90.0, true), make_shot(1.0, 90.0, true)],
                 ..Default::default()
             })
             .id;
@@ -2122,7 +2158,9 @@ mod tests {
         let mut project = simple_project();
         let section_id = project.sections[0].id;
         let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
-        project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
+        project
+            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .unwrap();
 
         let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
         // Exactly one polygon (the zero datum).
@@ -2204,10 +2242,7 @@ mod tests {
             .add_section(SectionData {
                 name: Some("Trunk".to_string()),
                 color: "#000000".to_string(),
-                shots: vec![
-                    make_shot(100.0, 0.0, false),
-                    make_shot(150.0, 0.0, false),
-                ],
+                shots: vec![make_shot(100.0, 0.0, false), make_shot(150.0, 0.0, false)],
                 ..Default::default()
             })
             .id;
@@ -2255,10 +2290,14 @@ mod tests {
         let mut rest = svg;
         while let Some(start) = rest.find("<text ") {
             let after = &rest[start + 6..];
-            let Some(close_tag) = after.find('>') else { break };
+            let Some(close_tag) = after.find('>') else {
+                break;
+            };
             let attrs = &after[..close_tag];
             let body_start = close_tag + 1;
-            let Some(end) = after[body_start..].find("</text>") else { break };
+            let Some(end) = after[body_start..].find("</text>") else {
+                break;
+            };
             let body = &after[body_start..body_start + end];
             let parse_attr = |name: &str| -> Option<f64> {
                 let needle = format!("{name}=\"");
@@ -2353,10 +2392,7 @@ mod tests {
             .add_section(SectionData {
                 name: Some("Chain".to_string()),
                 color: "#000000".to_string(),
-                shots: vec![
-                    make_shot(1.0, 90.0, true),
-                    make_shot(1.0, 90.0, true),
-                ],
+                shots: vec![make_shot(1.0, 90.0, true), make_shot(1.0, 90.0, true)],
                 ..Default::default()
             })
             .id;
@@ -2403,7 +2439,10 @@ mod tests {
             ..Default::default()
         });
         let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-        assert!(!svg.contains("#ff0000"), "section color must not bleed in: {svg}");
+        assert!(
+            !svg.contains("#ff0000"),
+            "section color must not bleed in: {svg}"
+        );
     }
 
     #[test]

@@ -6,20 +6,20 @@
 
 /// Known interaction-source names (appended to an event as `:source`).
 pub(super) const SOURCE_NAMES: &[&str] = &[
-    "",              // no source suffix present
-    "keyboard",      // 1
-    "toolbar",       // 2
-    "map",           // 3
-    "data-table",    // 4
+    "",               // no source suffix present
+    "keyboard",       // 1
+    "toolbar",        // 2
+    "map",            // 3
+    "data-table",     // 4
     "sections-panel", // 5
-    "detail-panel",  // 6
-    "display-menu",  // 7
-    "context-menu",  // 8
-    "dialog",        // 9
-    "unknown",       // 10
-    "mouse",         // 11
-    "touch",         // 12
-    "dblclick",      // 13
+    "detail-panel",   // 6
+    "display-menu",   // 7
+    "context-menu",   // 8
+    "dialog",         // 9
+    "unknown",        // 10
+    "mouse",          // 11
+    "touch",          // 12
+    "dblclick",       // 13
 ];
 
 /// Known event base names (the `:source` suffix is appended at runtime). The
@@ -633,8 +633,7 @@ mod tests {
     fn read_frontend_file(rel_path: &str) -> String {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let path = format!("{manifest_dir}/../{rel_path}");
-        std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("Failed to read {path}: {e}"))
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("Failed to read {path}: {e}"))
     }
 
     #[test]
@@ -662,8 +661,7 @@ mod tests {
 
         let code_action: HashSet<String> =
             tools.iter().map(|t| format!("action.tool.{t}")).collect();
-        let code_dwell: HashSet<String> =
-            tools.iter().map(|t| format!("dwell.tool.{t}")).collect();
+        let code_dwell: HashSet<String> = tools.iter().map(|t| format!("dwell.tool.{t}")).collect();
 
         let reg_action: HashSet<String> = EVENT_NAMES
             .iter()
@@ -754,10 +752,8 @@ mod tests {
             "Failed to parse any UNDOABLE_COMMANDS"
         );
 
-        let code_undo: HashSet<String> = commands
-            .iter()
-            .map(|c| format!("undo-after.{c}"))
-            .collect();
+        let code_undo: HashSet<String> =
+            commands.iter().map(|c| format!("undo-after.{c}")).collect();
 
         // Exclude the retained undo-after slots of removed commands.
         let removed: HashSet<String> = REMOVED_COMMANDS
@@ -806,12 +802,13 @@ mod tests {
                 }
             }
         }
-        assert!(!keys.is_empty(), "Failed to parse any DISPLAY_DEFAULTS keys");
+        assert!(
+            !keys.is_empty(),
+            "Failed to parse any DISPLAY_DEFAULTS keys"
+        );
 
-        let code_toggles: HashSet<String> = keys
-            .iter()
-            .map(|k| format!("action.toggle.{k}"))
-            .collect();
+        let code_toggles: HashSet<String> =
+            keys.iter().map(|k| format!("action.toggle.{k}")).collect();
 
         // Exclude toggles that are intentionally not DISPLAY_DEFAULTS booleans.
         let extra: HashSet<String> = EXTRA_TOGGLES.iter().map(|s| s.to_string()).collect();
@@ -850,7 +847,10 @@ mod tests {
                 search = &search[pos + re_pattern.len()..];
             }
         }
-        assert!(!dialogs.is_empty(), "Failed to parse any dialogs from App.tsx");
+        assert!(
+            !dialogs.is_empty(),
+            "Failed to parse any dialogs from App.tsx"
+        );
 
         // Build expected sets
         let code_action: HashSet<String> = dialogs
@@ -974,7 +974,10 @@ mod tests {
                 }
             }
         }
-        assert!(!items.is_empty(), "Failed to parse any variants from type {name}");
+        assert!(
+            !items.is_empty(),
+            "Failed to parse any variants from type {name}"
+        );
         items
     }
 
@@ -983,8 +986,7 @@ mod tests {
         let src = read_frontend_file("src/utils/telemetry.ts");
         let navs = extract_type_union(&src, "NavigationAction");
 
-        let code_action: HashSet<String> =
-            navs.iter().map(|n| format!("action.nav.{n}")).collect();
+        let code_action: HashSet<String> = navs.iter().map(|n| format!("action.nav.{n}")).collect();
 
         let reg_action: HashSet<String> = EVENT_NAMES
             .iter()
@@ -1051,10 +1053,8 @@ mod tests {
         let src = read_frontend_file("src/utils/telemetry.ts");
         let types = extract_type_union(&src, "SelectionType");
 
-        let code_select: HashSet<String> = types
-            .iter()
-            .map(|t| format!("action.select.{t}"))
-            .collect();
+        let code_select: HashSet<String> =
+            types.iter().map(|t| format!("action.select.{t}")).collect();
         let code_add: HashSet<String> = types
             .iter()
             .map(|t| format!("action.select-add.{t}"))
@@ -1094,10 +1094,7 @@ mod tests {
         let src = read_frontend_file("src/utils/telemetry.ts");
         let actions = extract_type_union(&src, "ContextMenuAction");
 
-        let code_actions: HashSet<String> = actions
-            .iter()
-            .map(|a| format!("action.{a}"))
-            .collect();
+        let code_actions: HashSet<String> = actions.iter().map(|a| format!("action.{a}")).collect();
 
         let reg_actions: HashSet<String> = EVENT_NAMES
             .iter()

@@ -10,10 +10,9 @@ use std::io::{Read as _, Write as _};
 use std::path::Path;
 
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot,
-    StationKey, StationMerge, SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE,
+    ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot, StationKey,
+    StationMerge, SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE,
 };
-
 
 /// Schema version for migrations
 ///
@@ -153,25 +152,28 @@ impl Database {
         // shot SELECT and the integrity check don't re-fault from
         // mmap. 32 MiB covers the 11 MB 92.stalx with headroom for
         // the indexes; SQLite caps this against its own limits.
-        let _ = db
-            .conn
-            .pragma_update(None, "cache_size", -32_000i64); // negative = KiB
-        // Skip syncing on read-only-equivalent operations.
-        // (load path doesn't write — this is harmless on writes too;
-        // we already use a single transaction in save_project.)
-        let _ = db
-            .conn
-            .pragma_update(None, "temp_store", "MEMORY");
+        let _ = db.conn.pragma_update(None, "cache_size", -32_000i64); // negative = KiB
+                                                                       // Skip syncing on read-only-equivalent operations.
+                                                                       // (load path doesn't write — this is harmless on writes too;
+                                                                       // we already use a single transaction in save_project.)
+        let _ = db.conn.pragma_update(None, "temp_store", "MEMORY");
 
         // Run quick integrity check before reading any data (SPEC 14.4)
         let t = std::time::Instant::now();
-        db.validate_integrity().context("Database file may be corrupted")?;
-        tracing::debug!(ms = t.elapsed().as_millis() as u64, "open_existing: validate_integrity");
+        db.validate_integrity()
+            .context("Database file may be corrupted")?;
+        tracing::debug!(
+            ms = t.elapsed().as_millis() as u64,
+            "open_existing: validate_integrity"
+        );
 
         // Check if the project table exists and has data
         let t = std::time::Instant::now();
         let has_data = db.has_project_data()?;
-        tracing::debug!(ms = t.elapsed().as_millis() as u64, "open_existing: has_project_data");
+        tracing::debug!(
+            ms = t.elapsed().as_millis() as u64,
+            "open_existing: has_project_data"
+        );
 
         if !has_data {
             tracing::error!("File does not contain valid Stalagmight project data");
@@ -181,11 +183,17 @@ impl Database {
         // Run lightweight migrations to ensure newer tables exist in legacy projects
         let t = std::time::Instant::now();
         db.ensure_schema_version()?;
-        tracing::debug!(ms = t.elapsed().as_millis() as u64, "open_existing: ensure_schema_version");
+        tracing::debug!(
+            ms = t.elapsed().as_millis() as u64,
+            "open_existing: ensure_schema_version"
+        );
 
         let t = std::time::Instant::now();
         db.validate_foreign_keys()?;
-        tracing::debug!(ms = t.elapsed().as_millis() as u64, "open_existing: validate_foreign_keys");
+        tracing::debug!(
+            ms = t.elapsed().as_millis() as u64,
+            "open_existing: validate_foreign_keys"
+        );
 
         Ok(db)
     }
@@ -205,11 +213,8 @@ impl Database {
         if !path.exists() {
             anyhow::bail!("File does not exist: {}", path.display());
         }
-        let conn = Connection::open_with_flags(
-            path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .context("Failed to open database read-only for metadata")?;
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .context("Failed to open database read-only for metadata")?;
         Ok(Self { conn })
     }
 
@@ -230,17 +235,15 @@ impl Database {
         }
 
         // Open in read-only mode - no writes possible
-        let conn = Connection::open_with_flags(
-            path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .context("Failed to open database read-only")?;
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .context("Failed to open database read-only")?;
 
         let db = Self { conn };
         db.enable_foreign_keys()?;
 
         // Run quick integrity check before reading any data (SPEC 14.4)
-        db.validate_integrity().context("Database file may be corrupted")?;
+        db.validate_integrity()
+            .context("Database file may be corrupted")?;
 
         if let Ok(version) = db.get_user_version() {
             if version > SCHEMA_VERSION {
@@ -284,7 +287,8 @@ impl Database {
 
         // Add direction column to sections table if it doesn't exist (added for direction field)
         // Check if column exists first
-        let has_direction_column: bool = self.conn
+        let has_direction_column: bool = self
+            .conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='direction'",
                 [],
@@ -302,7 +306,8 @@ impl Database {
         }
 
         // Add quality column to sections table if it doesn't exist (added for weighted adjustments)
-        let has_quality_column: bool = self.conn
+        let has_quality_column: bool = self
+            .conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='quality'",
                 [],
@@ -368,7 +373,8 @@ impl Database {
         )?;
 
         // Add closure_id column to loop_closures table if it doesn't exist (added for closure ID tracking)
-        let has_closure_id: bool = self.conn
+        let has_closure_id: bool = self
+            .conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='closure_id'",
                 [],
@@ -395,7 +401,8 @@ impl Database {
         }
 
         // Add strategy column to loop_closures table if it doesn't exist
-        let has_strategy: bool = self.conn
+        let has_strategy: bool = self
+            .conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='strategy'",
                 [],
@@ -421,7 +428,8 @@ impl Database {
         }
 
         // Add is_aligned column to loop_closures table if it doesn't exist
-        let has_is_aligned: bool = self.conn
+        let has_is_aligned: bool = self
+            .conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='is_aligned'",
                 [],
@@ -447,7 +455,8 @@ impl Database {
         }
 
         // Add next_closure_id column to project table if it doesn't exist (persists monotonic counter)
-        let has_next_closure_id: bool = self.conn
+        let has_next_closure_id: bool = self
+            .conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('project') WHERE name='next_closure_id'",
                 [],
@@ -523,8 +532,10 @@ impl Database {
             .map(|c| c > 0)
             .unwrap_or(false);
         if !has_resolved_warnings_uuid_column {
-            self.conn
-                .execute("ALTER TABLE resolved_warnings ADD COLUMN shot_uuid TEXT", [])?;
+            self.conn.execute(
+                "ALTER TABLE resolved_warnings ADD COLUMN shot_uuid TEXT",
+                [],
+            )?;
             // Backfill the UUID for existing rows so suppressions survive the
             // migration. The legacy key stored `shot_id`, which on load is
             // `section_id * FEATURE_ID_STRIDE + sequence_order`, so we can
@@ -558,13 +569,9 @@ impl Database {
         tracing::info!("Renaming is_virtual → is_reference in shots table (v3→v4)");
         // Only rename the column if it still has the old name (earlier migrations
         // may have already created the table with `is_reference` directly).
-        let needs_rename = conn
-            .prepare("SELECT is_virtual FROM shots LIMIT 0")
-            .is_ok();
+        let needs_rename = conn.prepare("SELECT is_virtual FROM shots LIMIT 0").is_ok();
         if needs_rename {
-            conn.execute_batch(
-                "ALTER TABLE shots RENAME COLUMN is_virtual TO is_reference;"
-            )?;
+            conn.execute_batch("ALTER TABLE shots RENAME COLUMN is_virtual TO is_reference;")?;
         }
         // Always update display_settings key (idempotent UPDATE).
         conn.execute_batch(
@@ -653,9 +660,7 @@ impl Database {
             if !self.table_exists(table)? {
                 continue;
             }
-            let removed = self
-                .conn
-                .execute(&format!("DELETE FROM {table}"), [])?;
+            let removed = self.conn.execute(&format!("DELETE FROM {table}"), [])?;
             if removed > 0 {
                 tracing::info!(
                     table,
@@ -690,7 +695,8 @@ impl Database {
             return Ok(None);
         }
 
-        let has_column: bool = self.conn
+        let has_column: bool = self
+            .conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('project') WHERE name='schema_version'",
                 [],
@@ -703,9 +709,11 @@ impl Database {
             return Ok(None);
         }
 
-        let version: i32 = self
-            .conn
-            .query_row("SELECT schema_version FROM project LIMIT 1", [], |row| row.get(0))?;
+        let version: i32 =
+            self.conn
+                .query_row("SELECT schema_version FROM project LIMIT 1", [], |row| {
+                    row.get(0)
+                })?;
         Ok(Some(version))
     }
 
@@ -744,7 +752,10 @@ impl Database {
         if errors.is_empty() {
             tracing::info!("Full integrity check passed");
         } else {
-            tracing::error!(error_count = errors.len(), "Full integrity check found errors");
+            tracing::error!(
+                error_count = errors.len(),
+                "Full integrity check found errors"
+            );
         }
 
         Ok(errors)
@@ -805,22 +816,34 @@ impl Database {
             tx.execute("ALTER TABLE shots RENAME TO shots_old", [])?;
         }
         if has_station_merges {
-            tx.execute("ALTER TABLE station_merges RENAME TO station_merges_old", [])?;
+            tx.execute(
+                "ALTER TABLE station_merges RENAME TO station_merges_old",
+                [],
+            )?;
         }
         if has_zero_datums {
             tx.execute("ALTER TABLE zero_datums RENAME TO zero_datums_old", [])?;
         }
         if has_section_offsets {
-            tx.execute("ALTER TABLE section_offsets RENAME TO section_offsets_old", [])?;
+            tx.execute(
+                "ALTER TABLE section_offsets RENAME TO section_offsets_old",
+                [],
+            )?;
         }
         if has_station_offsets {
-            tx.execute("ALTER TABLE station_offsets RENAME TO station_offsets_old", [])?;
+            tx.execute(
+                "ALTER TABLE station_offsets RENAME TO station_offsets_old",
+                [],
+            )?;
         }
         if has_loop_closures {
             tx.execute("ALTER TABLE loop_closures RENAME TO loop_closures_old", [])?;
         }
         if has_resolved_warnings {
-            tx.execute("ALTER TABLE resolved_warnings RENAME TO resolved_warnings_old", [])?;
+            tx.execute(
+                "ALTER TABLE resolved_warnings RENAME TO resolved_warnings_old",
+                [],
+            )?;
         }
 
         // Recreate tables with FK constraints
@@ -1053,7 +1076,10 @@ impl Database {
         }
 
         // Recreate indexes
-        tx.execute("CREATE INDEX IF NOT EXISTS idx_shots_section ON shots(section_id)", [])?;
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS idx_shots_section ON shots(section_id)",
+            [],
+        )?;
 
         tx.commit()?;
         self.enable_foreign_keys()?;
@@ -1062,13 +1088,16 @@ impl Database {
 
     /// Read the current schema version from PRAGMA user_version.
     fn get_user_version(&self) -> Result<i32> {
-        let version: i32 = self.conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let version: i32 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
         Ok(version)
     }
 
     /// Persist the schema version to PRAGMA user_version.
     fn set_user_version(&self, version: i32) -> Result<()> {
-        self.conn.execute(&format!("PRAGMA user_version = {version}"), [])?;
+        self.conn
+            .execute(&format!("PRAGMA user_version = {version}"), [])?;
         Ok(())
     }
 
@@ -1135,11 +1164,9 @@ impl Database {
         }
 
         // Check if project table has any rows
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM project",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM project", [], |row| row.get(0))?;
 
         Ok(count > 0)
     }
@@ -1347,7 +1374,11 @@ impl Database {
 
     /// Save a project to the database
     pub fn save_project(&mut self, project: &Project) -> Result<()> {
-        tracing::debug!("Saving project: name={}, sections={}", project.name, project.sections.len());
+        tracing::debug!(
+            "Saving project: name={}, sections={}",
+            project.name,
+            project.sections.len()
+        );
 
         let tx = match self.conn.transaction() {
             Ok(t) => t,
@@ -1376,8 +1407,12 @@ impl Database {
         )?;
 
         // Save project metadata (including next_closure_id for monotonic ID persistence)
-        let next_closure_id_i64 = i64::try_from(project.next_closure_id)
-            .map_err(|_| anyhow::anyhow!("next_closure_id {} exceeds i64 range", project.next_closure_id))?;
+        let next_closure_id_i64 = i64::try_from(project.next_closure_id).map_err(|_| {
+            anyhow::anyhow!(
+                "next_closure_id {} exceeds i64 range",
+                project.next_closure_id
+            )
+        })?;
         tx.execute(
             "INSERT INTO project (id, name, location, created_at, modified_at, schema_version, next_closure_id) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
             params![
@@ -1541,8 +1576,7 @@ impl Database {
 
         // Save collaboration state (single-row JSON blob)
         if let Some(collab) = &project.collab {
-            let json = serde_json::to_string(collab)
-                .context("Failed to serialize collab state")?;
+            let json = serde_json::to_string(collab).context("Failed to serialize collab state")?;
             tx.execute(
                 "INSERT INTO collab_state (id, state_json) VALUES (1, ?1)",
                 params![json],
@@ -1656,11 +1690,10 @@ impl Database {
         tracing::debug!("Transaction committed");
 
         // Verify the data was written
-        let verify_count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM project",
-            [],
-            |row| row.get(0),
-        ).unwrap_or(0);
+        let verify_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM project", [], |row| row.get(0))
+            .unwrap_or(0);
         tracing::debug!("Save verification: project table has {} rows", verify_count);
 
         Ok(())
@@ -1674,19 +1707,24 @@ impl Database {
     /// used by `list_recent_projects`, which was responsible for the
     /// multi-second freeze when returning to the global view with a
     /// large project in the recent list.
-    pub fn load_metadata(&self, file_path: std::path::PathBuf) -> Result<crate::models::ProjectMetadata> {
+    pub fn load_metadata(
+        &self,
+        file_path: std::path::PathBuf,
+    ) -> Result<crate::models::ProjectMetadata> {
         use crate::models::{GpsBounds, GpsCoordinates, Project, ProjectMetadata};
         use std::cmp::Ordering;
         use std::time::Instant;
         let start = Instant::now();
 
         // Tiny project header read.
-        let (name, location, modified_at_raw): (String, Option<String>, String) =
-            self.conn.query_row(
+        let (name, location, modified_at_raw): (String, Option<String>, String) = self
+            .conn
+            .query_row(
                 "SELECT name, location, modified_at FROM project LIMIT 1",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            ).context("Failed to read project metadata header")?;
+            )
+            .context("Failed to read project metadata header")?;
         let t_header = start.elapsed();
 
         let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at_raw)
@@ -1707,7 +1745,9 @@ impl Database {
         // COALESCE so an empty shots table returns 0.0 instead of NULL.
         let total_length: f64 = self
             .conn
-            .query_row("SELECT COALESCE(SUM(length), 0.0) FROM shots", [], |row| row.get(0))
+            .query_row("SELECT COALESCE(SUM(length), 0.0) FROM shots", [], |row| {
+                row.get(0)
+            })
             .unwrap_or(0.0);
         let t_sum_length = start.elapsed();
 
@@ -1820,11 +1860,10 @@ impl Database {
         tracing::debug!("Loading project from database");
 
         // First check if project table has data and log what's there
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM project",
-            [],
-            |row| row.get(0),
-        ).unwrap_or(0);
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM project", [], |row| row.get(0))
+            .unwrap_or(0);
         tracing::debug!("Project table row count: {}", count);
 
         if count == 0 {
@@ -1833,7 +1872,8 @@ impl Database {
 
         // Load project metadata - get the first row (don't require id = 1)
         // Read next_closure_id if the column exists (added for monotonic ID persistence)
-        let has_next_closure_id_col: bool = self.conn
+        let has_next_closure_id_col: bool = self
+            .conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('project') WHERE name='next_closure_id'",
                 [],
@@ -1842,21 +1882,36 @@ impl Database {
             .map(|c| c > 0)
             .unwrap_or(false);
 
-        let (name, location, created_at, modified_at, persisted_next_closure_id): (String, Option<String>, String, String, Option<u64>) =
-            if has_next_closure_id_col {
-                self.conn.query_row(
+        let (name, location, created_at, modified_at, persisted_next_closure_id): (
+            String,
+            Option<String>,
+            String,
+            String,
+            Option<u64>,
+        ) = if has_next_closure_id_col {
+            self.conn.query_row(
                     "SELECT name, location, created_at, modified_at, next_closure_id FROM project LIMIT 1",
                     [],
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, Some(row.get::<_, i64>(4).unwrap_or(1).max(1) as u64))),
                 ).context("Failed to read project metadata")?
-            } else {
-                let (n, l, c, m) = self.conn.query_row(
+        } else {
+            let (n, l, c, m) = self
+                .conn
+                .query_row(
                     "SELECT name, location, created_at, modified_at FROM project LIMIT 1",
                     [],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
-                ).context("Failed to read project metadata")?;
-                (n, l, c, m, None)
-            };
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                        ))
+                    },
+                )
+                .context("Failed to read project metadata")?;
+            (n, l, c, m, None)
+        };
 
         let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc);
         let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at)?.with_timezone(&Utc);
@@ -1866,7 +1921,8 @@ impl Database {
         let mut next_section_id = 0u32;
 
         {
-            let has_quality_column: bool = self.conn
+            let has_quality_column: bool = self
+                .conn
                 .query_row(
                     "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='quality'",
                     [],
@@ -1990,9 +2046,7 @@ impl Database {
                             // rows return NULL here.  Treat NULL and empty
                             // string the same — the next save mints a
                             // fresh UUID and persists it.
-                            uuid: row
-                                .get::<_, Option<String>>(17)?
-                                .filter(|s| !s.is_empty()),
+                            uuid: row.get::<_, Option<String>>(17)?.filter(|s| !s.is_empty()),
                         },
                     ))
                 })?;
@@ -2097,9 +2151,9 @@ impl Database {
         // Load section offsets
         let mut section_offsets: HashMap<u32, (f64, f64)> = HashMap::new();
         {
-            let mut stmt = self.conn.prepare(
-                "SELECT section_id, offset_x, offset_y FROM section_offsets",
-            )?;
+            let mut stmt = self
+                .conn
+                .prepare("SELECT section_id, offset_x, offset_y FROM section_offsets")?;
             let offset_rows = stmt.query_map([], |row| {
                 Ok((
                     row.get::<_, u32>(0)?,
@@ -2233,9 +2287,9 @@ impl Database {
 
     /// Load undo stack from database
     pub fn load_undo_stack(&self) -> Result<Vec<(i64, String, String)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT sequence, command_json, undo_data_json FROM undo_stack ORDER BY sequence")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT sequence, command_json, undo_data_json FROM undo_stack ORDER BY sequence",
+        )?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
@@ -2255,7 +2309,9 @@ impl Database {
     }
 
     /// Load undo stack from database with timestamps
-    pub fn load_undo_stack_with_timestamps(&self) -> Result<Vec<(i64, String, String, Option<String>)>> {
+    pub fn load_undo_stack_with_timestamps(
+        &self,
+    ) -> Result<Vec<(i64, String, String, Option<String>)>> {
         let mut stmt = self
             .conn
             .prepare("SELECT sequence, command_json, undo_data_json, executed_at FROM undo_stack ORDER BY sequence")?;
@@ -2290,12 +2346,12 @@ impl Database {
             handles
                 .into_iter()
                 .map(|(seq, h_cmd, h_undo, ts)| {
-                    let cmd = h_cmd.join().map_err(|_| {
-                        anyhow::anyhow!("undo decompress thread panicked")
-                    })??;
-                    let undo = h_undo.join().map_err(|_| {
-                        anyhow::anyhow!("undo decompress thread panicked")
-                    })??;
+                    let cmd = h_cmd
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("undo decompress thread panicked"))??;
+                    let undo = h_undo
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("undo decompress thread panicked"))??;
                     Ok((seq, cmd, undo, ts))
                 })
                 .collect()
@@ -2332,14 +2388,19 @@ impl Database {
     }
 
     /// Save undo stack with timestamps (clear existing and save new entries)
-    pub fn save_undo_stack_with_timestamps(&self, entries: Vec<(String, String, Option<String>)>) -> Result<()> {
+    pub fn save_undo_stack_with_timestamps(
+        &self,
+        entries: Vec<(String, String, Option<String>)>,
+    ) -> Result<()> {
         // Clear existing
         self.conn.execute("DELETE FROM undo_stack", [])?;
 
         // Save new entries
         for (seq, (command_json, undo_data_json, timestamp_str)) in entries.iter().enumerate() {
             // Use provided timestamp or fall back to current time
-            let executed_at = timestamp_str.clone().unwrap_or_else(|| Utc::now().to_rfc3339());
+            let executed_at = timestamp_str
+                .clone()
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
             let cmd_compressed = compress_json(command_json);
             let undo_compressed = compress_json(undo_data_json);
             self.conn.execute(
@@ -2348,12 +2409,17 @@ impl Database {
             )?;
         }
 
-        tracing::debug!(count = entries.len(), "Saved undo stack with timestamps to database");
+        tracing::debug!(
+            count = entries.len(),
+            "Saved undo stack with timestamps to database"
+        );
         Ok(())
     }
 
     /// Load redo stack from database with timestamps
-    pub fn load_redo_stack_with_timestamps(&self) -> Result<Vec<(i64, String, String, Option<String>)>> {
+    pub fn load_redo_stack_with_timestamps(
+        &self,
+    ) -> Result<Vec<(i64, String, String, Option<String>)>> {
         let mut stmt = self
             .conn
             .prepare("SELECT sequence, command_json, undo_data_json, executed_at FROM redo_stack ORDER BY sequence")?;
@@ -2384,12 +2450,12 @@ impl Database {
             handles
                 .into_iter()
                 .map(|(seq, h_cmd, h_undo, ts)| {
-                    let cmd = h_cmd.join().map_err(|_| {
-                        anyhow::anyhow!("redo decompress thread panicked")
-                    })??;
-                    let undo = h_undo.join().map_err(|_| {
-                        anyhow::anyhow!("redo decompress thread panicked")
-                    })??;
+                    let cmd = h_cmd
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("redo decompress thread panicked"))??;
+                    let undo = h_undo
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("redo decompress thread panicked"))??;
                     Ok((seq, cmd, undo, ts))
                 })
                 .collect()
@@ -2399,11 +2465,16 @@ impl Database {
     }
 
     /// Save redo stack with timestamps (clear existing and save new entries)
-    pub fn save_redo_stack_with_timestamps(&self, entries: Vec<(String, String, Option<String>)>) -> Result<()> {
+    pub fn save_redo_stack_with_timestamps(
+        &self,
+        entries: Vec<(String, String, Option<String>)>,
+    ) -> Result<()> {
         self.conn.execute("DELETE FROM redo_stack", [])?;
 
         for (seq, (command_json, undo_data_json, timestamp_str)) in entries.iter().enumerate() {
-            let executed_at = timestamp_str.clone().unwrap_or_else(|| Utc::now().to_rfc3339());
+            let executed_at = timestamp_str
+                .clone()
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
             let cmd_compressed = compress_json(command_json);
             let undo_compressed = compress_json(undo_data_json);
             self.conn.execute(
@@ -2420,18 +2491,23 @@ impl Database {
         let mut closures = Vec::new();
 
         // Check if table exists (for backwards compatibility with older files)
-        let table_exists: bool = self.conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='loop_closures'",
-            [],
-            |row| row.get::<_, i64>(0),
-        ).map(|c| c > 0).unwrap_or(false);
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='loop_closures'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
 
         if !table_exists {
             return Ok(closures);
         }
 
         // Check which optional columns exist
-        let has_closure_id: bool = self.conn
+        let has_closure_id: bool = self
+            .conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='closure_id'",
                 [],
@@ -2439,7 +2515,8 @@ impl Database {
             )
             .map(|c| c > 0)
             .unwrap_or(false);
-        let has_strategy: bool = self.conn
+        let has_strategy: bool = self
+            .conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='strategy'",
                 [],
@@ -2447,7 +2524,8 @@ impl Database {
             )
             .map(|c| c > 0)
             .unwrap_or(false);
-        let has_is_aligned: bool = self.conn
+        let has_is_aligned: bool = self
+            .conn
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('loop_closures') WHERE name='is_aligned'",
                 [],
@@ -2480,7 +2558,9 @@ impl Database {
                 let v = row.get::<_, i64>(col).unwrap_or(0).max(0) as u64;
                 col += 1;
                 v
-            } else { 0 };
+            } else {
+                0
+            };
             let strategy = if has_strategy {
                 let s: String = row.get::<_, String>(col).unwrap_or_default();
                 col += 1;
@@ -2520,11 +2600,15 @@ impl Database {
         let mut offsets = HashMap::new();
 
         // Check if table exists (for backwards compatibility with older files)
-        let table_exists: bool = self.conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='station_offsets'",
-            [],
-            |row| row.get::<_, i64>(0),
-        ).map(|c| c > 0).unwrap_or(false);
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='station_offsets'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
 
         if !table_exists {
             return Ok(offsets);
@@ -2559,19 +2643,23 @@ impl Database {
         let mut comments = HashMap::new();
 
         // Check if table exists (for backwards compatibility with older files)
-        let table_exists: bool = self.conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='station_comments'",
-            [],
-            |row| row.get::<_, i64>(0),
-        ).map(|c| c > 0).unwrap_or(false);
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='station_comments'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
 
         if !table_exists {
             return Ok(comments);
         }
 
-        let mut stmt = self.conn.prepare(
-            "SELECT section_id, station_index, comment FROM station_comments",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT section_id, station_index, comment FROM station_comments")?;
 
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -2583,10 +2671,7 @@ impl Database {
 
         for row in rows {
             let (section_id, station_index, comment) = row?;
-            comments.insert(
-                StationKey::positional(section_id, station_index),
-                comment,
-            );
+            comments.insert(StationKey::positional(section_id, station_index), comment);
         }
 
         Ok(comments)
@@ -2595,21 +2680,28 @@ impl Database {
     /// Load collaboration state from the single-row `collab_state` table.
     /// Returns `None` for pre-v5 projects (table absent) or when no row is present.
     fn load_collab_state(&self) -> Result<Option<crate::models::CollabState>> {
-        let table_exists: bool = self.conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='collab_state'",
-            [],
-            |row| row.get::<_, i64>(0),
-        ).map(|c| c > 0).unwrap_or(false);
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='collab_state'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
 
         if !table_exists {
             return Ok(None);
         }
 
-        let json: Option<String> = self.conn.query_row(
-            "SELECT state_json FROM collab_state WHERE id = 1",
-            [],
-            |row| row.get::<_, String>(0),
-        ).ok();
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT state_json FROM collab_state WHERE id = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .ok();
 
         match json {
             Some(j) => Ok(Some(
@@ -2632,8 +2724,8 @@ impl Database {
         )?;
         match collab {
             Some(state) => {
-                let json = serde_json::to_string(state)
-                    .context("Failed to serialize collab state")?;
+                let json =
+                    serde_json::to_string(state).context("Failed to serialize collab state")?;
                 self.conn.execute(
                     "INSERT INTO collab_state (id, state_json) VALUES (1, ?1)
                      ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json",
@@ -2702,7 +2794,9 @@ impl Database {
             return Ok(hashes);
         }
 
-        let mut stmt = self.conn.prepare("SELECT hash FROM imported_section_hashes")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT hash FROM imported_section_hashes")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
 
         for row in rows {
@@ -2734,7 +2828,8 @@ impl Database {
 
         let rows = stmt.query_map([], |row| {
             let resolved_at_str: String = row.get(3)?;
-            let resolved_at = chrono::DateTime::parse_from_rfc3339(&resolved_at_str).map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc));
+            let resolved_at = chrono::DateTime::parse_from_rfc3339(&resolved_at_str)
+                .map_or_else(|_| Utc::now(), |dt| dt.with_timezone(&Utc));
             Ok(ResolvedWarning {
                 section_id: row.get(0)?,
                 shot_id: row.get(1)?,
@@ -2876,7 +2971,11 @@ impl Database {
                 "SELECT id, section_id, shot_id FROM resolved_warnings WHERE shot_uuid IS NULL",
             )?;
             let rows = stmt.query_map([], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, u32>(1)?, r.get::<_, u32>(2)?))
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, u32>(1)?,
+                    r.get::<_, u32>(2)?,
+                ))
             })?;
             for row in rows {
                 let (id, sec, shot) = row?;
@@ -2979,7 +3078,9 @@ impl Database {
 
     /// Load all display settings from database
     pub fn load_display_settings(&self) -> Result<HashMap<String, String>> {
-        let mut stmt = self.conn.prepare("SELECT key, value FROM display_settings")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key, value FROM display_settings")?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
@@ -3048,16 +3149,20 @@ impl Database {
         let limit = limit.min(MAX_RAW_PAGE_ROWS);
         let ident = format!("\"{}\"", table.replace('"', "\"\""));
 
-        let total_rows: u32 = self.conn.query_row(
-            &format!("SELECT COUNT(*) FROM {ident}"),
-            [],
-            |row| row.get(0),
-        )?;
+        let total_rows: u32 =
+            self.conn
+                .query_row(&format!("SELECT COUNT(*) FROM {ident}"), [], |row| {
+                    row.get(0)
+                })?;
 
         let mut stmt = self
             .conn
             .prepare(&format!("SELECT * FROM {ident} LIMIT ?1 OFFSET ?2"))?;
-        let columns: Vec<String> = stmt.column_names().iter().map(|c| (*c).to_string()).collect();
+        let columns: Vec<String> = stmt
+            .column_names()
+            .iter()
+            .map(|c| (*c).to_string())
+            .collect();
         let column_count = columns.len();
         let mapped = stmt.query_map(params![limit, offset], |row| {
             let mut values = Vec::with_capacity(column_count);
@@ -3119,8 +3224,7 @@ impl Database {
         tracing::info!("Created backup at: {:?}", backup_path);
 
         // 2. Open read-write (skip our integrity check wrapper)
-        let conn = Connection::open(path)
-            .context("Failed to open database for repair")?;
+        let conn = Connection::open(path).context("Failed to open database for repair")?;
 
         // 3. Rebuild indexes
         if let Err(e) = conn.execute_batch("REINDEX;") {
@@ -3161,7 +3265,9 @@ impl Database {
                 salvaged.project_location = location;
             }
             Ok(None) => salvaged.errors.push("Project table is empty".into()),
-            Err(e) => salvaged.errors.push(format!("Failed to read project metadata: {e}")),
+            Err(e) => salvaged
+                .errors
+                .push(format!("Failed to read project metadata: {e}")),
         }
 
         // Sections
@@ -3170,7 +3276,9 @@ impl Database {
                 salvaged.section_count = sections.len();
                 salvaged.sections_json = serde_json::to_string(&sections).ok();
             }
-            Err(e) => salvaged.errors.push(format!("Failed to read sections: {e}")),
+            Err(e) => salvaged
+                .errors
+                .push(format!("Failed to read sections: {e}")),
         }
 
         // Shots
@@ -3182,7 +3290,9 @@ impl Database {
         // Station merges
         match db.try_read_merge_count() {
             Ok(count) => salvaged.merge_count = count,
-            Err(e) => salvaged.errors.push(format!("Failed to read station merges: {e}")),
+            Err(e) => salvaged
+                .errors
+                .push(format!("Failed to read station merges: {e}")),
         }
 
         // Full project (best-effort)
@@ -3190,7 +3300,9 @@ impl Database {
             Ok(project) => {
                 salvaged.full_project_json = serde_json::to_string(&project).ok();
             }
-            Err(e) => salvaged.errors.push(format!("Failed to load full project: {e}")),
+            Err(e) => salvaged
+                .errors
+                .push(format!("Failed to load full project: {e}")),
         }
 
         Ok(salvaged)
@@ -3257,15 +3369,17 @@ impl Database {
         if !self.table_exists("project")? {
             return Ok(None);
         }
-        let count: i64 = self.conn.query_row("SELECT COUNT(*) FROM project", [], |row| row.get(0))?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM project", [], |row| row.get(0))?;
         if count == 0 {
             return Ok(None);
         }
-        let (name, location): (String, Option<String>) = self.conn.query_row(
-            "SELECT name, location FROM project LIMIT 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
+        let (name, location): (String, Option<String>) =
+            self.conn
+                .query_row("SELECT name, location FROM project LIMIT 1", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?;
         Ok(Some((name, location)))
     }
 
@@ -3273,9 +3387,9 @@ impl Database {
         if !self.table_exists("sections")? {
             return Ok(Vec::new());
         }
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, surveyor, date, color FROM sections ORDER BY id",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, surveyor, date, color FROM sections ORDER BY id")?;
         let rows = stmt.query_map([], |row| {
             Ok(SalvagedSection {
                 id: row.get(0)?,
@@ -3296,7 +3410,9 @@ impl Database {
         if !self.table_exists("shots")? {
             return Ok(0);
         }
-        let count: i64 = self.conn.query_row("SELECT COUNT(*) FROM shots", [], |row| row.get(0))?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM shots", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 
@@ -3304,7 +3420,9 @@ impl Database {
         if !self.table_exists("station_merges")? {
             return Ok(0);
         }
-        let count: i64 = self.conn.query_row("SELECT COUNT(*) FROM station_merges", [], |row| row.get(0))?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM station_merges", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 }
@@ -3384,5 +3502,10 @@ pub struct ResolvedWarning {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout, clippy::float_cmp)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
+    clippy::float_cmp
+)]
 mod tests;

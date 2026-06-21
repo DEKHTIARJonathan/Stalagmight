@@ -182,10 +182,7 @@ pub enum UndoData {
     /// (e.g., batch operations that create sections with dynamic IDs)
     /// - before: Snapshot before the operation (used for undo)
     /// - after: Snapshot after the operation (used for redo)
-    ProjectSnapshotPair {
-        before: String,
-        after: String,
-    },
+    ProjectSnapshotPair { before: String, after: String },
 
     /// No undo data (for commands that can't be undone)
     None,
@@ -343,7 +340,10 @@ impl UndoStack {
     }
 
     /// Get redo entries to persist (last N entries up to persist_limit)
-    pub fn redo_entries_to_persist(&self, persist_limit: usize) -> impl Iterator<Item = &UndoEntry> {
+    pub fn redo_entries_to_persist(
+        &self,
+        persist_limit: usize,
+    ) -> impl Iterator<Item = &UndoEntry> {
         let skip = if self.redo_stack.len() > persist_limit {
             self.redo_stack.len() - persist_limit
         } else {
@@ -362,7 +362,9 @@ impl UndoStack {
 
     /// Serialize an entry with timestamp for database persistence
     /// Returns (command_json, undo_data_json, timestamp_iso8601)
-    pub fn serialize_entry_with_timestamp(entry: &UndoEntry) -> Option<(String, String, Option<String>)> {
+    pub fn serialize_entry_with_timestamp(
+        entry: &UndoEntry,
+    ) -> Option<(String, String, Option<String>)> {
         let command_json = serde_json::to_string(&entry.command).ok()?;
         let undo_data_json = serde_json::to_string(&entry.undo_data).ok()?;
         let timestamp_str = entry.timestamp.map(|t| t.to_rfc3339());
@@ -416,7 +418,8 @@ impl UndoStack {
             }
         };
         let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
-        let timestamp = timestamp_str.and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        let timestamp = timestamp_str
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));
         Some(UndoEntry {
             command,
@@ -509,7 +512,12 @@ impl UndoStack {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_cmp)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::float_cmp
+)]
 mod tests {
     use super::*;
     use crate::models::ShotData;
@@ -1442,10 +1450,7 @@ mod tests {
 
         for (i, original) in test_cases.iter().enumerate() {
             let serialized = UndoStack::serialize_entry(original);
-            assert!(
-                serialized.is_some(),
-                "Failed to serialize test case {i}"
-            );
+            assert!(serialized.is_some(), "Failed to serialize test case {i}");
 
             let (cmd_json, undo_json) = serialized.unwrap();
             let deserialized = UndoStack::deserialize_entry(&cmd_json, &undo_json);
@@ -1477,15 +1482,13 @@ mod tests {
                 station_b: StationRef::new(2, 3),
                 closure_strategy: crate::models::ClosureStrategy::ProportionalByLength,
             },
-            undo_data: UndoData::ClosureInfo {
-                closure,
-            },
+            undo_data: UndoData::ClosureInfo { closure },
             timestamp: None,
         };
 
         // Serialize
-        let (cmd_json, undo_json) = UndoStack::serialize_entry(&entry)
-            .expect("ClosureInfo should serialize");
+        let (cmd_json, undo_json) =
+            UndoStack::serialize_entry(&entry).expect("ClosureInfo should serialize");
 
         // Deserialize
         let restored = UndoStack::deserialize_entry(&cmd_json, &undo_json)
@@ -1493,7 +1496,9 @@ mod tests {
 
         // Verify roundtrip
         match &restored.undo_data {
-            UndoData::ClosureInfo { closure: restored_closure } => {
+            UndoData::ClosureInfo {
+                closure: restored_closure,
+            } => {
                 // Pure serialization roundtrip (no project / no reanchor): the
                 // transitional Index anchors survive verbatim, so compare keys directly.
                 assert_eq!(restored_closure.station_a, StationRef::new(1, 0).into());
@@ -1508,7 +1513,11 @@ mod tests {
         }
 
         match &restored.command {
-            Command::CreateLoopClosure { station_a, station_b, .. } => {
+            Command::CreateLoopClosure {
+                station_a,
+                station_b,
+                ..
+            } => {
                 assert_eq!(*station_a, StationRef::new(1, 0));
                 assert_eq!(*station_b, StationRef::new(2, 3));
             }

@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::Serialize;
-use ts_rs::TS;
 use tauri::State;
+use ts_rs::TS;
 
 use crate::core::AppState;
 
@@ -65,7 +65,9 @@ pub(crate) fn get_cache_stats_impl(state: &AppState) -> Result<CacheStats, Strin
     // Derive totals from provider map to ensure internal consistency
     let (total_tiles, total_bytes) = provider_stats
         .values()
-        .fold((0u64, 0u64), |(tiles, bytes), (t, b)| (tiles + t, bytes + b));
+        .fold((0u64, 0u64), |(tiles, bytes), (t, b)| {
+            (tiles + t, bytes + b)
+        });
 
     Ok(CacheStats {
         total_tiles,
@@ -149,7 +151,16 @@ pub(crate) async fn fetch_tile_impl(
 
     // Run blocking I/O in a separate thread
     let result = tauri::async_runtime::spawn_blocking(move || {
-        tile_fetch_impl(&provider, z, y, x, &tile_cache, &tilemap_cache, &tile_fetch_stats, &cache_config)
+        tile_fetch_impl(
+            &provider,
+            z,
+            y,
+            x,
+            &tile_cache,
+            &tilemap_cache,
+            &tile_fetch_stats,
+            &cache_config,
+        )
     })
     .await
     .map_err(|e| format!("Tile fetch task failed: {e}"))?;

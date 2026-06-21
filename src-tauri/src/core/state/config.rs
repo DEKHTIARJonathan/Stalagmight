@@ -7,15 +7,16 @@ use super::AppState;
 impl AppState {
     /// Get config
     pub fn get_config(&self) -> Config {
-        self.config.lock().ok().map(|c| c.clone()).unwrap_or_default()
+        self.config
+            .lock()
+            .ok()
+            .map(|c| c.clone())
+            .unwrap_or_default()
     }
 
     /// Update config
     pub fn update_config(&self, mut config: Config) -> Result<()> {
-        tracing::info!(
-            purpose = "apply user settings",
-            "Updating configuration"
-        );
+        tracing::info!(purpose = "apply user settings", "Updating configuration");
         // Check if cache setting changed before saving
         let old_cache_enabled = self
             .config
@@ -40,10 +41,7 @@ impl AppState {
                     // Enable cache - create new cache
                     match Self::init_tile_cache(&config) {
                         Ok(cache) => {
-                            tracing::info!(
-                                purpose = "enable offline tiles",
-                                "Tile cache enabled"
-                            );
+                            tracing::info!(purpose = "enable offline tiles", "Tile cache enabled");
                             *cache_guard = Some(cache);
                         }
                         Err(e) => {
@@ -56,10 +54,7 @@ impl AppState {
                     }
                 } else {
                     // Disable cache - set to None (existing cache data remains on disk)
-                    tracing::info!(
-                        purpose = "disable offline tiles",
-                        "Tile cache disabled"
-                    );
+                    tracing::info!(purpose = "disable offline tiles", "Tile cache disabled");
                     *cache_guard = None;
                 }
             }

@@ -9,8 +9,8 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use tauri::Manager;
+use ts_rs::TS;
 
 use crate::core::AppState;
 use crate::models::{GpsCoordinates, Project, SectionId, StationRef};
@@ -160,12 +160,17 @@ fn get_survey_geometry_for_file_impl(path: &Path) -> Result<SurveyGeometry, Surv
 
 /// Compute survey geometry from a project struct.
 /// Shared implementation used by both AppState-based and file-based commands.
-fn get_survey_geometry_for_project(project: &Project) -> Result<SurveyGeometry, SurveyGeometryError> {
+fn get_survey_geometry_for_project(
+    project: &Project,
+) -> Result<SurveyGeometry, SurveyGeometryError> {
     // Find zero datum for GPS origin
-    let zero_datum = project.zero_datums.first().ok_or_else(|| SurveyGeometryError {
-        message: "Project has no GPS reference. Set a zero datum with GPS coordinates first."
-            .to_string(),
-    })?;
+    let zero_datum = project
+        .zero_datums
+        .first()
+        .ok_or_else(|| SurveyGeometryError {
+            message: "Project has no GPS reference. Set a zero datum with GPS coordinates first."
+                .to_string(),
+        })?;
 
     let origin_gps = &zero_datum.gps;
     let origin = [origin_gps.longitude, origin_gps.latitude];
@@ -174,23 +179,20 @@ fn get_survey_geometry_for_project(project: &Project) -> Result<SurveyGeometry, 
     let stations = project.compute_station_coordinates();
 
     // Build a map for quick station lookup
-    let station_map: std::collections::HashMap<StationRef, &crate::models::Station> = stations
-        .iter()
-        .map(|s| (s.station_ref, s))
-        .collect();
+    let station_map: std::collections::HashMap<StationRef, &crate::models::Station> =
+        stations.iter().map(|s| (s.station_ref, s)).collect();
 
     // Find the zero-datum station's local coordinates (x0, y0)
     // All other coordinates are relative to this point. Resolve the stored
     // anchor to its current positional ref for the lookup into station_map.
-    let datum_ref =
-        project
-            .resolve_key(&zero_datum.station_ref)
-            .ok_or_else(|| SurveyGeometryError {
-                message: format!(
-                    "Zero datum station {} anchor no longer resolves",
-                    zero_datum.station_ref
-                ),
-            })?;
+    let datum_ref = project
+        .resolve_key(&zero_datum.station_ref)
+        .ok_or_else(|| SurveyGeometryError {
+            message: format!(
+                "Zero datum station {} anchor no longer resolves",
+                zero_datum.station_ref
+            ),
+        })?;
     let datum_station = station_map
         .get(&datum_ref)
         .ok_or_else(|| SurveyGeometryError {
@@ -210,12 +212,16 @@ fn get_survey_geometry_for_project(project: &Project) -> Result<SurveyGeometry, 
             let from_ref = StationRef::new(section.id, shot_idx as u32);
             let to_ref = StationRef::new(section.id, (shot_idx + 1) as u32);
 
-            let from_station = station_map.get(&from_ref).ok_or_else(|| SurveyGeometryError {
-                message: format!("Station {from_ref} not found in computed stations"),
-            })?;
-            let to_station = station_map.get(&to_ref).ok_or_else(|| SurveyGeometryError {
-                message: format!("Station {to_ref} not found in computed stations"),
-            })?;
+            let from_station = station_map
+                .get(&from_ref)
+                .ok_or_else(|| SurveyGeometryError {
+                    message: format!("Station {from_ref} not found in computed stations"),
+                })?;
+            let to_station = station_map
+                .get(&to_ref)
+                .ok_or_else(|| SurveyGeometryError {
+                    message: format!("Station {to_ref} not found in computed stations"),
+                })?;
 
             // Compute coordinates relative to zero-datum station (x0, y0)
             let from_east = from_station.coordinates.x - x0;
@@ -244,9 +250,11 @@ pub(crate) fn get_survey_geometry_impl(
     state: &AppState,
 ) -> Result<SurveyGeometry, SurveyGeometryError> {
     // Get project state
-    let project = state.get_project_state().ok_or_else(|| SurveyGeometryError {
-        message: "No project loaded".to_string(),
-    })?;
+    let project = state
+        .get_project_state()
+        .ok_or_else(|| SurveyGeometryError {
+            message: "No project loaded".to_string(),
+        })?;
 
     get_survey_geometry_for_project(&project)
 }
@@ -403,12 +411,7 @@ mod tests {
         let state = AppState::new().unwrap();
         let result = get_survey_geometry_impl(&state);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .message
-                .contains("No project loaded")
-        );
+        assert!(result.unwrap_err().message.contains("No project loaded"));
     }
 
     #[test]
@@ -428,12 +431,7 @@ mod tests {
 
         let result = get_survey_geometry_for_project(&project);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .message
-                .contains("no GPS reference")
-        );
+        assert!(result.unwrap_err().message.contains("no GPS reference"));
     }
 
     #[test]
@@ -460,12 +458,7 @@ mod tests {
 
         let result = get_survey_geometry_for_project(&project);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .message
-                .contains("Zero datum station")
-        );
+        assert!(result.unwrap_err().message.contains("Zero datum station"));
     }
 
     #[test]

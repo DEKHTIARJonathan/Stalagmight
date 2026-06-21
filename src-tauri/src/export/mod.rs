@@ -5,7 +5,9 @@ pub mod json;
 pub mod tml;
 
 pub use csv::*;
-pub use depth_colors::{get_depth_color, get_depth_preset_colors, ColorStop, DepthPreset, DepthPresetColors};
+pub use depth_colors::{
+    get_depth_color, get_depth_preset_colors, ColorStop, DepthPreset, DepthPresetColors,
+};
 pub use image::*;
 pub use json::*;
 pub use tml::*;

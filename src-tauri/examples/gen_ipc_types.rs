@@ -11,40 +11,44 @@ use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryIt
 use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
 use stalagmight_lib::commands::project::ProjectState;
 use stalagmight_lib::commands::section::{SegmentGeometry, SegmentSectionGeometry};
-use stalagmight_lib::commands::survey_geometry::{GeometryShot, SurveyGeometry, SurveyGeometryError};
-use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
+use stalagmight_lib::commands::survey_geometry::{
+    GeometryShot, SurveyGeometry, SurveyGeometryError,
+};
 use stalagmight_lib::config::{
-    AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config, ProviderCacheConfig,
+    AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
     DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig,
-    PlacementSuggestionConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
-    StationConfig, SyntacticHighlightingConfig, SyntacticHighlightLevel, SyntacticHighlightPreset,
-    ThemeMode, UnitsConfig, ValidationConfig,
+    PlacementSuggestionConfig, ProviderCacheConfig, SectionColorsConfig, ShortcutFeedback,
+    ShortcutsConfig, ShotConfig, StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset,
+    SyntacticHighlightingConfig, ThemeMode, UnitsConfig, ValidationConfig,
 };
-use stalagmight_lib::core::command::{CommandResult, CommentHolder, IntegrityCheckResult, IntegrityRepairResult, ValidationWarning, WarningSeverity};
+use stalagmight_lib::core::command::{
+    CommandResult, CommentHolder, IntegrityCheckResult, IntegrityRepairResult, ValidationWarning,
+    WarningSeverity,
+};
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
-};
-use stalagmight_lib::export::{
-    ColorStop, DepthPreset, DepthPresetColors, ExportImageOptions, ImageFormat,
-};
-use stalagmight_lib::models::{
-    AlongLineResult, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CollabState,
-    ConnectivityResult, Coordinates, DeleteShotImpact, DeleteShotRangeImpact, DistanceField, FrozenShotRef,
-    GpsBounds, GpsCoordinates, PathShot, RangeDeleteKind, RulerEndpoint,
-    ImportPlacement, ExistingShotUpdate, ImportSectionConfig, Project, ProjectMetadata,
-    ProjectStats, ProjectWarning, Section, SectionData, SectionRelationships, SectionStats,
-    SectionUpdates, Shot, ShotBaselineEntry, ShotData, ShotUpdates, Station, StationMergeWire,
-    StationPair, StationRef, SurveyDirection, ZeroDatumWire, LoopClosureWire,
 };
 use stalagmight_lib::core::reconcile::{
     AddedSection, AddedShot, CollabChangeSet, CollabFieldChange, CollabWarning, EditedShot,
     MatchQuality, RemovedShot, SectionMetaChange,
 };
+use stalagmight_lib::export::{
+    ColorStop, DepthPreset, DepthPresetColors, ExportImageOptions, ImageFormat,
+};
 use stalagmight_lib::models::placement_suggest::{
-    CrossSectionSuggestion, ImportSectionForSuggestion, MatchDirection,
-    OrphanPlacementSuggestion, PlacementSuggestion, SuggestionConfidence, TargetType,
+    CrossSectionSuggestion, ImportSectionForSuggestion, MatchDirection, OrphanPlacementSuggestion,
+    PlacementSuggestion, SuggestionConfidence, TargetType,
+};
+use stalagmight_lib::models::{
+    AlongLineResult, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate,
+    CollabState, ConnectivityResult, Coordinates, DeleteShotImpact, DeleteShotRangeImpact,
+    DistanceField, ExistingShotUpdate, FrozenShotRef, GpsBounds, GpsCoordinates, ImportPlacement,
+    ImportSectionConfig, LoopClosureWire, PathShot, Project, ProjectMetadata, ProjectStats,
+    ProjectWarning, RangeDeleteKind, RulerEndpoint, Section, SectionData, SectionRelationships,
+    SectionStats, SectionUpdates, Shot, ShotBaselineEntry, ShotData, ShotUpdates, Station,
+    StationMergeWire, StationPair, StationRef, SurveyDirection, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -55,6 +59,7 @@ use stalagmight_lib::parsers::gpx::{
 use stalagmight_lib::parsers::tml::{
     TmlClosure, TmlFile, TmlGeoCoding, TmlSection, TmlShot, TmlShotType, TmlUnit,
 };
+use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
 fn export<T: TS + 'static>(out_dir: &Path) {
@@ -66,8 +71,7 @@ fn export<T: TS + 'static>(out_dir: &Path) {
 }
 
 fn main() {
-    let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../src/types/ipc");
+    let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/types/ipc");
     fs::create_dir_all(&out_dir).expect("Failed to create ipc types directory");
 
     // Core command/result types
@@ -410,9 +414,8 @@ fn main() {
         "ColorTheme",
     ];
 
-    let mut generated = String::from(
-        "// This file is generated by `pnpm gen:ipc-types`. Do not edit by hand.\n",
-    );
+    let mut generated =
+        String::from("// This file is generated by `pnpm gen:ipc-types`. Do not edit by hand.\n");
     for name in export_list {
         let _ = writeln!(generated, "export * from './ipc/{name}';");
     }
@@ -467,7 +470,10 @@ fn ensure_imports(file: &Path, imports: &[(&str, &str)]) {
 
     for (name, path) in imports {
         let line = format!("import type {{ {name} }} from \"{path}\";");
-        if !import_lines.iter().any(|l| l.contains(&format!("{{ {name} }}"))) {
+        if !import_lines
+            .iter()
+            .any(|l| l.contains(&format!("{{ {name} }}")))
+        {
             import_lines.push(line);
         }
     }

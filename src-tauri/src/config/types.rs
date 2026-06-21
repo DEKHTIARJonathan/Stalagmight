@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
-
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Config {
@@ -583,9 +582,7 @@ impl SyntacticHighlightingConfig {
 /// Whether a string is a `#rrggbb` hex color (case-insensitive).
 fn is_valid_hex_color(s: &str) -> bool {
     let bytes = s.as_bytes();
-    bytes.len() == 7
-        && bytes[0] == b'#'
-        && bytes[1..].iter().all(|b| b.is_ascii_hexdigit())
+    bytes.len() == 7 && bytes[0] == b'#' && bytes[1..].iter().all(|b| b.is_ascii_hexdigit())
 }
 
 /// How overlap shots are handled during import connection
@@ -733,12 +730,24 @@ impl DecimalPrecision {
     }
 }
 
-fn default_precision_length() -> u8 { 1 }
-fn default_precision_coordinates() -> u8 { 2 }
-fn default_precision_depth() -> u8 { 1 }
-fn default_precision_azimuth() -> u8 { 1 }
-fn default_precision_inclination() -> u8 { 1 }
-fn default_precision_gps() -> u8 { 6 }
+fn default_precision_length() -> u8 {
+    1
+}
+fn default_precision_coordinates() -> u8 {
+    2
+}
+fn default_precision_depth() -> u8 {
+    1
+}
+fn default_precision_azimuth() -> u8 {
+    1
+}
+fn default_precision_inclination() -> u8 {
+    1
+}
+fn default_precision_gps() -> u8 {
+    6
+}
 
 /// Custom deserializer for backward compatibility: accepts either a bare integer
 /// (old `decimal_precision = 1` format) or the new struct format.
@@ -1047,29 +1056,111 @@ impl PlacementSuggestionConfig {
     /// Normalize all values to valid ranges, resetting NaN/Inf to defaults.
     pub fn normalize(&mut self) {
         fn fix(val: &mut f64, default: f64, min: f64, max: f64) {
-            if !val.is_finite() { *val = default; }
+            if !val.is_finite() {
+                *val = default;
+            }
             *val = val.clamp(min, max);
         }
 
-        fix(&mut self.azimuth_sigma, default_ps_azimuth_sigma(), 0.1, 180.0);
-        fix(&mut self.length_sigma, default_ps_length_sigma(), 0.01, 100.0);
+        fix(
+            &mut self.azimuth_sigma,
+            default_ps_azimuth_sigma(),
+            0.1,
+            180.0,
+        );
+        fix(
+            &mut self.length_sigma,
+            default_ps_length_sigma(),
+            0.01,
+            100.0,
+        );
         fix(&mut self.depth_sigma, default_ps_depth_sigma(), 0.01, 100.0);
-        fix(&mut self.azimuth_weight, default_ps_azimuth_weight(), 0.0, 1.0);
-        fix(&mut self.length_weight, default_ps_length_weight(), 0.0, 1.0);
-        fix(&mut self.depth_in_weight, default_ps_depth_in_weight(), 0.0, 1.0);
-        fix(&mut self.depth_out_weight, default_ps_depth_out_weight(), 0.0, 1.0);
-        fix(&mut self.min_shot_score, default_ps_min_shot_score(), 0.0, 1.0);
-        fix(&mut self.min_aggregate_score, default_ps_min_aggregate_score(), 0.0, 1.0);
+        fix(
+            &mut self.azimuth_weight,
+            default_ps_azimuth_weight(),
+            0.0,
+            1.0,
+        );
+        fix(
+            &mut self.length_weight,
+            default_ps_length_weight(),
+            0.0,
+            1.0,
+        );
+        fix(
+            &mut self.depth_in_weight,
+            default_ps_depth_in_weight(),
+            0.0,
+            1.0,
+        );
+        fix(
+            &mut self.depth_out_weight,
+            default_ps_depth_out_weight(),
+            0.0,
+            1.0,
+        );
+        fix(
+            &mut self.min_shot_score,
+            default_ps_min_shot_score(),
+            0.0,
+            1.0,
+        );
+        fix(
+            &mut self.min_aggregate_score,
+            default_ps_min_aggregate_score(),
+            0.0,
+            1.0,
+        );
         self.max_reference_shots = self.max_reference_shots.clamp(1, 50);
         self.max_suggestions = self.max_suggestions.clamp(1, 100);
-        fix(&mut self.min_partial_ratio, default_ps_min_partial_ratio(), 0.0, 1.0);
-        fix(&mut self.short_shot_threshold, default_ps_short_shot_threshold(), 0.0, 100.0);
-        fix(&mut self.single_shot_penalty, default_ps_single_shot_penalty(), 0.0, 1.0);
-        fix(&mut self.max_azimuth_error_full, default_ps_max_azimuth_error_full(), 0.0, 180.0);
-        fix(&mut self.max_azimuth_error_partial, default_ps_max_azimuth_error_partial(), 0.0, 180.0);
-        fix(&mut self.max_depth_error, default_ps_max_depth_error(), 0.0, 100.0);
-        fix(&mut self.max_length_error_fraction, default_ps_max_length_error_fraction(), 0.0, 1.0);
-        fix(&mut self.max_length_error_floor, default_ps_max_length_error_floor(), 0.0, 100.0);
+        fix(
+            &mut self.min_partial_ratio,
+            default_ps_min_partial_ratio(),
+            0.0,
+            1.0,
+        );
+        fix(
+            &mut self.short_shot_threshold,
+            default_ps_short_shot_threshold(),
+            0.0,
+            100.0,
+        );
+        fix(
+            &mut self.single_shot_penalty,
+            default_ps_single_shot_penalty(),
+            0.0,
+            1.0,
+        );
+        fix(
+            &mut self.max_azimuth_error_full,
+            default_ps_max_azimuth_error_full(),
+            0.0,
+            180.0,
+        );
+        fix(
+            &mut self.max_azimuth_error_partial,
+            default_ps_max_azimuth_error_partial(),
+            0.0,
+            180.0,
+        );
+        fix(
+            &mut self.max_depth_error,
+            default_ps_max_depth_error(),
+            0.0,
+            100.0,
+        );
+        fix(
+            &mut self.max_length_error_fraction,
+            default_ps_max_length_error_fraction(),
+            0.0,
+            1.0,
+        );
+        fix(
+            &mut self.max_length_error_floor,
+            default_ps_max_length_error_floor(),
+            0.0,
+            100.0,
+        );
     }
 }
 
@@ -1099,25 +1190,63 @@ impl Default for PlacementSuggestionConfig {
     }
 }
 
-pub fn default_ps_azimuth_sigma() -> f64 { 18.0 }
-pub fn default_ps_length_sigma() -> f64 { 0.8 }
-pub fn default_ps_depth_sigma() -> f64 { 0.35 }
-pub fn default_ps_azimuth_weight() -> f64 { 0.35 }
-pub fn default_ps_length_weight() -> f64 { 0.25 }
-pub fn default_ps_depth_in_weight() -> f64 { 0.20 }
-pub fn default_ps_depth_out_weight() -> f64 { 0.20 }
-pub fn default_ps_min_shot_score() -> f64 { 0.15 }
-pub fn default_ps_min_aggregate_score() -> f64 { 0.45 }
-pub fn default_ps_max_reference_shots() -> u32 { 5 }
-pub fn default_ps_max_suggestions() -> u32 { 10 }
-pub fn default_ps_min_partial_ratio() -> f64 { 0.15 }
-pub fn default_ps_short_shot_threshold() -> f64 { 0.5 }
-pub fn default_ps_single_shot_penalty() -> f64 { 0.6 }
-pub fn default_ps_max_azimuth_error_full() -> f64 { 25.0 }
-pub fn default_ps_max_azimuth_error_partial() -> f64 { 35.0 }
-pub fn default_ps_max_depth_error() -> f64 { 0.30 }
-pub fn default_ps_max_length_error_fraction() -> f64 { 0.03 }
-pub fn default_ps_max_length_error_floor() -> f64 { 0.4 }
+pub fn default_ps_azimuth_sigma() -> f64 {
+    18.0
+}
+pub fn default_ps_length_sigma() -> f64 {
+    0.8
+}
+pub fn default_ps_depth_sigma() -> f64 {
+    0.35
+}
+pub fn default_ps_azimuth_weight() -> f64 {
+    0.35
+}
+pub fn default_ps_length_weight() -> f64 {
+    0.25
+}
+pub fn default_ps_depth_in_weight() -> f64 {
+    0.20
+}
+pub fn default_ps_depth_out_weight() -> f64 {
+    0.20
+}
+pub fn default_ps_min_shot_score() -> f64 {
+    0.15
+}
+pub fn default_ps_min_aggregate_score() -> f64 {
+    0.45
+}
+pub fn default_ps_max_reference_shots() -> u32 {
+    5
+}
+pub fn default_ps_max_suggestions() -> u32 {
+    10
+}
+pub fn default_ps_min_partial_ratio() -> f64 {
+    0.15
+}
+pub fn default_ps_short_shot_threshold() -> f64 {
+    0.5
+}
+pub fn default_ps_single_shot_penalty() -> f64 {
+    0.6
+}
+pub fn default_ps_max_azimuth_error_full() -> f64 {
+    25.0
+}
+pub fn default_ps_max_azimuth_error_partial() -> f64 {
+    35.0
+}
+pub fn default_ps_max_depth_error() -> f64 {
+    0.30
+}
+pub fn default_ps_max_length_error_fraction() -> f64 {
+    0.03
+}
+pub fn default_ps_max_length_error_floor() -> f64 {
+    0.4
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ExportConfig {
@@ -1228,7 +1357,9 @@ impl ShortcutsConfig {
         if self.move_shot.is_empty() && self.toggle_depth_gradient == vec!["G".to_string()] {
             self.toggle_depth_gradient = vec!["Shift+D".to_string()];
             self.move_shot = vec!["G".to_string()];
-            tracing::info!("Migrated toggle_depth_gradient shortcut: G -> Shift+D (G now used by move_shot)");
+            tracing::info!(
+                "Migrated toggle_depth_gradient shortcut: G -> Shift+D (G now used by move_shot)"
+            );
         }
 
         // Normalize each field
@@ -1237,11 +1368,27 @@ impl ShortcutsConfig {
         normalize_shortcut_field(&mut self.zoom, &defaults.zoom, "zoom");
         normalize_shortcut_field(&mut self.merge, &defaults.merge, "merge");
         normalize_shortcut_field(&mut self.measure, &defaults.measure, "measure");
-        normalize_shortcut_field(&mut self.move_station, &defaults.move_station, "move_station");
-        normalize_shortcut_field(&mut self.move_segment, &defaults.move_segment, "move_segment");
+        normalize_shortcut_field(
+            &mut self.move_station,
+            &defaults.move_station,
+            "move_station",
+        );
+        normalize_shortcut_field(
+            &mut self.move_segment,
+            &defaults.move_segment,
+            "move_segment",
+        );
         normalize_shortcut_field(&mut self.move_shot, &defaults.move_shot, "move_shot");
-        normalize_shortcut_field(&mut self.comment_tool, &defaults.comment_tool, "comment_tool");
-        normalize_shortcut_field(&mut self.move_comment_tool, &defaults.move_comment_tool, "move_comment_tool");
+        normalize_shortcut_field(
+            &mut self.comment_tool,
+            &defaults.comment_tool,
+            "comment_tool",
+        );
+        normalize_shortcut_field(
+            &mut self.move_comment_tool,
+            &defaults.move_comment_tool,
+            "move_comment_tool",
+        );
         normalize_shortcut_field(&mut self.undo, &defaults.undo, "undo");
         normalize_shortcut_field(&mut self.redo, &defaults.redo, "redo");
         normalize_shortcut_field(
@@ -1330,7 +1477,9 @@ fn normalize_shortcut_field(field: &mut Vec<String>, defaults: &[String], field_
     // Normalize each shortcut
     let mut normalized: Vec<String> = Vec::with_capacity(field.len());
     for shortcut in field.iter() {
-        if let Some(n) = normalize_shortcut(shortcut) { normalized.push(n) } else {
+        if let Some(n) = normalize_shortcut(shortcut) {
+            normalized.push(n)
+        } else {
             tracing::warn!(
                 "Invalid shortcut '{}' for '{}', falling back to default",
                 shortcut,
@@ -1529,7 +1678,8 @@ impl Config {
     pub fn load_from_path(path: &Path) -> Result<Self> {
         if path.exists() {
             let contents = std::fs::read_to_string(path).context("Failed to read config file")?;
-            let mut config: Config = toml::from_str(&contents).context("Failed to parse config file")?;
+            let mut config: Config =
+                toml::from_str(&contents).context("Failed to parse config file")?;
             config.migrate_legacy();
             config.normalize();
             tracing::info!(config_path = ?path, "Loaded config from file");
@@ -1565,8 +1715,8 @@ impl Config {
             return Ok(dir.join("config.toml"));
         }
         // Fallback for pre-setup calls on desktop
-        let dirs =
-            directories::ProjectDirs::from("com", "stalagmight", "Stalagmight").context("No home directory")?;
+        let dirs = directories::ProjectDirs::from("com", "stalagmight", "Stalagmight")
+            .context("No home directory")?;
         Ok(dirs.config_dir().join("config.toml"))
     }
 

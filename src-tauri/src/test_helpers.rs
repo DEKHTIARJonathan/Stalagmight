@@ -116,7 +116,10 @@ pub fn isolated_config() -> IsolatedConfig {
     *config_override_cell()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(dir.path().to_path_buf());
-    IsolatedConfig { _dir: dir, _guard: guard }
+    IsolatedConfig {
+        _dir: dir,
+        _guard: guard,
+    }
 }
 
 /// Run `f` with the config path redirected to a fresh temp dir (see

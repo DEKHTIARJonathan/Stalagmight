@@ -4,7 +4,9 @@ use std::fmt;
 use std::str::FromStr;
 use ts_rs::TS;
 
-use super::{Coordinates, GpsCoordinates, Shot, ShotData, ShotId, ShotUpdates, StationRef, FEATURE_ID_STRIDE};
+use super::{
+    Coordinates, GpsCoordinates, Shot, ShotData, ShotId, ShotUpdates, StationRef, FEATURE_ID_STRIDE,
+};
 
 /// Unique identifier for a section
 pub type SectionId = u32;
@@ -434,8 +436,12 @@ impl Section {
             return None;
         }
 
-        let shots_before: Vec<ShotData> = self.shots[..pos].iter().map(Shot::to_shot_data).collect();
-        let shots_after: Vec<ShotData> = self.shots[pos + 1..].iter().map(Shot::to_shot_data).collect();
+        let shots_before: Vec<ShotData> =
+            self.shots[..pos].iter().map(Shot::to_shot_data).collect();
+        let shots_after: Vec<ShotData> = self.shots[pos + 1..]
+            .iter()
+            .map(Shot::to_shot_data)
+            .collect();
 
         Some((pos, shots_before, shots_after))
     }
@@ -497,12 +503,30 @@ mod tests {
 
     #[test]
     fn test_survey_direction_from_str_valid() {
-        assert_eq!(SurveyDirection::from_str("in").unwrap(), SurveyDirection::In);
-        assert_eq!(SurveyDirection::from_str("In").unwrap(), SurveyDirection::In);
-        assert_eq!(SurveyDirection::from_str("IN").unwrap(), SurveyDirection::In);
-        assert_eq!(SurveyDirection::from_str("out").unwrap(), SurveyDirection::Out);
-        assert_eq!(SurveyDirection::from_str("Out").unwrap(), SurveyDirection::Out);
-        assert_eq!(SurveyDirection::from_str("OUT").unwrap(), SurveyDirection::Out);
+        assert_eq!(
+            SurveyDirection::from_str("in").unwrap(),
+            SurveyDirection::In
+        );
+        assert_eq!(
+            SurveyDirection::from_str("In").unwrap(),
+            SurveyDirection::In
+        );
+        assert_eq!(
+            SurveyDirection::from_str("IN").unwrap(),
+            SurveyDirection::In
+        );
+        assert_eq!(
+            SurveyDirection::from_str("out").unwrap(),
+            SurveyDirection::Out
+        );
+        assert_eq!(
+            SurveyDirection::from_str("Out").unwrap(),
+            SurveyDirection::Out
+        );
+        assert_eq!(
+            SurveyDirection::from_str("OUT").unwrap(),
+            SurveyDirection::Out
+        );
     }
 
     #[test]
@@ -618,7 +642,11 @@ mod tests {
     #[test]
     fn test_section_new_with_shots() {
         let data = SectionData {
-            shots: vec![test_shot_data(5.0), test_shot_data(7.0), test_shot_data(3.0)],
+            shots: vec![
+                test_shot_data(5.0),
+                test_shot_data(7.0),
+                test_shot_data(3.0),
+            ],
             ..Default::default()
         };
 
@@ -690,10 +718,13 @@ mod tests {
 
     #[test]
     fn test_insert_shot_after() {
-        let mut section = Section::new(0, SectionData {
-            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
-            ..Default::default()
-        });
+        let mut section = Section::new(
+            0,
+            SectionData {
+                shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+                ..Default::default()
+            },
+        );
 
         // Insert after shot 0
         let inserted = section.insert_shot_after(0, test_shot_data(10.0));
@@ -711,10 +742,13 @@ mod tests {
 
     #[test]
     fn test_insert_shot_after_nonexistent() {
-        let mut section = Section::new(0, SectionData {
-            shots: vec![test_shot_data(5.0)],
-            ..Default::default()
-        });
+        let mut section = Section::new(
+            0,
+            SectionData {
+                shots: vec![test_shot_data(5.0)],
+                ..Default::default()
+            },
+        );
 
         let result = section.insert_shot_after(999, test_shot_data(10.0));
 
@@ -724,10 +758,13 @@ mod tests {
 
     #[test]
     fn test_get_shot() {
-        let section = Section::new(0, SectionData {
-            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
-            ..Default::default()
-        });
+        let section = Section::new(
+            0,
+            SectionData {
+                shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+                ..Default::default()
+            },
+        );
 
         let shot = section.get_shot(1);
         assert!(shot.is_some());
@@ -739,10 +776,13 @@ mod tests {
 
     #[test]
     fn test_get_shot_mut() {
-        let mut section = Section::new(0, SectionData {
-            shots: vec![test_shot_data(5.0)],
-            ..Default::default()
-        });
+        let mut section = Section::new(
+            0,
+            SectionData {
+                shots: vec![test_shot_data(5.0)],
+                ..Default::default()
+            },
+        );
 
         {
             let shot = section.get_shot_mut(0);
@@ -755,10 +795,17 @@ mod tests {
 
     #[test]
     fn test_remove_shot() {
-        let mut section = Section::new(0, SectionData {
-            shots: vec![test_shot_data(5.0), test_shot_data(7.0), test_shot_data(3.0)],
-            ..Default::default()
-        });
+        let mut section = Section::new(
+            0,
+            SectionData {
+                shots: vec![
+                    test_shot_data(5.0),
+                    test_shot_data(7.0),
+                    test_shot_data(3.0),
+                ],
+                ..Default::default()
+            },
+        );
 
         let removed = section.remove_shot(1);
 
@@ -771,10 +818,13 @@ mod tests {
 
     #[test]
     fn test_remove_shot_nonexistent() {
-        let mut section = Section::new(0, SectionData {
-            shots: vec![test_shot_data(5.0)],
-            ..Default::default()
-        });
+        let mut section = Section::new(
+            0,
+            SectionData {
+                shots: vec![test_shot_data(5.0)],
+                ..Default::default()
+            },
+        );
 
         let result = section.remove_shot(999);
 
@@ -798,10 +848,13 @@ mod tests {
 
     #[test]
     fn test_apply_updates_clear_name() {
-        let mut section = Section::new(0, SectionData {
-            name: Some("Original".to_string()),
-            ..Default::default()
-        });
+        let mut section = Section::new(
+            0,
+            SectionData {
+                name: Some("Original".to_string()),
+                ..Default::default()
+            },
+        );
 
         section.apply_updates(&SectionUpdates {
             name: Some(None), // Set to None
@@ -835,12 +888,15 @@ mod tests {
 
     #[test]
     fn test_apply_updates_partial() {
-        let mut section = Section::new(0, SectionData {
-            name: Some("Original".to_string()),
-            surveyor: Some("Original Surveyor".to_string()),
-            color: "#000000".to_string(),
-            ..Default::default()
-        });
+        let mut section = Section::new(
+            0,
+            SectionData {
+                name: Some("Original".to_string()),
+                surveyor: Some("Original Surveyor".to_string()),
+                color: "#000000".to_string(),
+                ..Default::default()
+            },
+        );
 
         // Only update color
         section.apply_updates(&SectionUpdates {
@@ -871,10 +927,13 @@ mod tests {
     fn test_stats_single_shot() {
         // Shot with depth_in=5.0, depth_out=8.0 → dz=3.0
         // Station 0: z=0, Station 1: z=3.0
-        let section = Section::new(0, SectionData {
-            shots: vec![test_shot_data_with_depths(10.0, 5.0, 8.0)],
-            ..Default::default()
-        });
+        let section = Section::new(
+            0,
+            SectionData {
+                shots: vec![test_shot_data_with_depths(10.0, 5.0, 8.0)],
+                ..Default::default()
+            },
+        );
 
         let stats = section.stats();
 
@@ -890,34 +949,40 @@ mod tests {
         // Shot 1: dz = 12-10 = 2, z: 0→2
         // Shot 2: dz = 15-12 = 3, z: 2→5
         // Shot 3: dz = 8-15 = -7, z: 5→-2
-        let section = Section::new(0, SectionData {
-            shots: vec![
-                test_shot_data_with_depths(5.0, 10.0, 12.0),
-                test_shot_data_with_depths(7.0, 12.0, 15.0),
-                test_shot_data_with_depths(3.0, 15.0, 8.0),
-            ],
-            ..Default::default()
-        });
+        let section = Section::new(
+            0,
+            SectionData {
+                shots: vec![
+                    test_shot_data_with_depths(5.0, 10.0, 12.0),
+                    test_shot_data_with_depths(7.0, 12.0, 15.0),
+                    test_shot_data_with_depths(3.0, 15.0, 8.0),
+                ],
+                ..Default::default()
+            },
+        );
 
         let stats = section.stats();
 
         assert_eq!(stats.shot_count, 3);
         assert_eq!(stats.total_length, 15.0); // 5 + 7 + 3
         assert_eq!(stats.min_depth, -2.0); // Station 3 at z=-2
-        assert_eq!(stats.max_depth, 5.0);  // Station 2 at z=5
+        assert_eq!(stats.max_depth, 5.0); // Station 2 at z=5
     }
 
     #[test]
     fn test_stats_with_reference_shots() {
-        let section = Section::new(0, SectionData {
-            shots: vec![
-                test_shot_data(5.0),
-                test_reference_shot_data(3.0),
-                test_shot_data(7.0),
-                test_reference_shot_data(2.0),
-            ],
-            ..Default::default()
-        });
+        let section = Section::new(
+            0,
+            SectionData {
+                shots: vec![
+                    test_shot_data(5.0),
+                    test_reference_shot_data(3.0),
+                    test_shot_data(7.0),
+                    test_reference_shot_data(2.0),
+                ],
+                ..Default::default()
+            },
+        );
 
         let stats = section.stats();
 
@@ -930,17 +995,20 @@ mod tests {
     fn test_stats_negative_depths() {
         // Shot 1: dz = -5 - (-10) = 5, z: 0→5
         // Shot 2: dz = 2 - (-5) = 7, z: 5→12
-        let section = Section::new(0, SectionData {
-            shots: vec![
-                test_shot_data_with_depths(5.0, -10.0, -5.0),
-                test_shot_data_with_depths(3.0, -5.0, 2.0),
-            ],
-            ..Default::default()
-        });
+        let section = Section::new(
+            0,
+            SectionData {
+                shots: vec![
+                    test_shot_data_with_depths(5.0, -10.0, -5.0),
+                    test_shot_data_with_depths(3.0, -5.0, 2.0),
+                ],
+                ..Default::default()
+            },
+        );
 
         let stats = section.stats();
 
-        assert_eq!(stats.min_depth, 0.0);  // First station at z=0
+        assert_eq!(stats.min_depth, 0.0); // First station at z=0
         assert_eq!(stats.max_depth, 12.0); // Last station at z=12
     }
 
@@ -982,21 +1050,19 @@ mod tests {
             color: "#123456".to_string(),
             direction: Some(SurveyDirection::In),
             quality: 1.0,
-            shots: vec![
-                ShotData {
-                    azimuth_in: 90.0,
-                    azimuth_out: 270.0,
-                    length: 10.0,
-                    depth_in: 5.0,
-                    depth_out: 8.0,
-                    left: Some(1.0),
-                    right: Some(2.0),
-                    up: Some(3.0),
-                    down: Some(4.0),
-                    comment: Some("Test comment".to_string()),
-                    ..Default::default()
-                },
-            ],
+            shots: vec![ShotData {
+                azimuth_in: 90.0,
+                azimuth_out: 270.0,
+                length: 10.0,
+                depth_in: 5.0,
+                depth_out: 8.0,
+                left: Some(1.0),
+                right: Some(2.0),
+                up: Some(3.0),
+                down: Some(4.0),
+                comment: Some("Test comment".to_string()),
+                ..Default::default()
+            }],
         };
 
         let section = Section::new(0, original_data);
@@ -1046,10 +1112,13 @@ mod tests {
 
     #[test]
     fn test_section_stats_clone() {
-        let section = Section::new(0, SectionData {
-            shots: vec![test_shot_data(10.0)],
-            ..Default::default()
-        });
+        let section = Section::new(
+            0,
+            SectionData {
+                shots: vec![test_shot_data(10.0)],
+                ..Default::default()
+            },
+        );
 
         let stats = section.stats();
         let cloned = stats.clone();
@@ -1083,16 +1152,19 @@ mod tests {
     #[test]
     fn test_split_shots_at_middle() {
         // 5-shot section, split at index 2 -> A has 2 shots, B has 2 shots
-        let section = Section::new(0, SectionData {
-            shots: vec![
-                test_shot_data(5.0),
-                test_shot_data(7.0),
-                test_shot_data(3.0), // shot to delete (index 2)
-                test_shot_data(4.0),
-                test_shot_data(6.0),
-            ],
-            ..Default::default()
-        });
+        let section = Section::new(
+            0,
+            SectionData {
+                shots: vec![
+                    test_shot_data(5.0),
+                    test_shot_data(7.0),
+                    test_shot_data(3.0), // shot to delete (index 2)
+                    test_shot_data(4.0),
+                    test_shot_data(6.0),
+                ],
+                ..Default::default()
+            },
+        );
 
         let shot_id = section.shots[2].id; // middle shot
         let result = section.split_shots_at(shot_id);
@@ -1110,14 +1182,17 @@ mod tests {
 
     #[test]
     fn test_split_shots_rejects_first_shot() {
-        let section = Section::new(0, SectionData {
-            shots: vec![
-                test_shot_data(5.0),
-                test_shot_data(7.0),
-                test_shot_data(3.0),
-            ],
-            ..Default::default()
-        });
+        let section = Section::new(
+            0,
+            SectionData {
+                shots: vec![
+                    test_shot_data(5.0),
+                    test_shot_data(7.0),
+                    test_shot_data(3.0),
+                ],
+                ..Default::default()
+            },
+        );
 
         let first_shot_id = section.shots[0].id;
         assert!(section.split_shots_at(first_shot_id).is_none());
@@ -1125,14 +1200,17 @@ mod tests {
 
     #[test]
     fn test_split_shots_rejects_last_shot() {
-        let section = Section::new(0, SectionData {
-            shots: vec![
-                test_shot_data(5.0),
-                test_shot_data(7.0),
-                test_shot_data(3.0),
-            ],
-            ..Default::default()
-        });
+        let section = Section::new(
+            0,
+            SectionData {
+                shots: vec![
+                    test_shot_data(5.0),
+                    test_shot_data(7.0),
+                    test_shot_data(3.0),
+                ],
+                ..Default::default()
+            },
+        );
 
         let last_shot_id = section.shots[2].id;
         assert!(section.split_shots_at(last_shot_id).is_none());
@@ -1140,10 +1218,13 @@ mod tests {
 
     #[test]
     fn test_split_shots_rejects_nonexistent() {
-        let section = Section::new(0, SectionData {
-            shots: vec![test_shot_data(5.0)],
-            ..Default::default()
-        });
+        let section = Section::new(
+            0,
+            SectionData {
+                shots: vec![test_shot_data(5.0)],
+                ..Default::default()
+            },
+        );
 
         assert!(section.split_shots_at(999).is_none());
     }
@@ -1151,14 +1232,17 @@ mod tests {
     #[test]
     fn test_split_shots_at_index_1_of_3() {
         // 3-shot section, split at index 1 -> A has 1 shot, B has 1 shot
-        let section = Section::new(0, SectionData {
-            shots: vec![
-                test_shot_data(5.0),
-                test_shot_data(7.0), // shot to delete
-                test_shot_data(3.0),
-            ],
-            ..Default::default()
-        });
+        let section = Section::new(
+            0,
+            SectionData {
+                shots: vec![
+                    test_shot_data(5.0),
+                    test_shot_data(7.0), // shot to delete
+                    test_shot_data(3.0),
+                ],
+                ..Default::default()
+            },
+        );
 
         let shot_id = section.shots[1].id;
         let result = section.split_shots_at(shot_id);

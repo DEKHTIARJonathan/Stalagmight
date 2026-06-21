@@ -346,9 +346,9 @@ impl TileCache {
             let bytes_to_free = stats.total_bytes.saturating_sub(target_bytes);
 
             {
-                let mut stmt = self.conn.prepare(
-                    "SELECT id, size_bytes FROM tiles ORDER BY accessed_at ASC, id ASC",
-                )?;
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT id, size_bytes FROM tiles ORDER BY accessed_at ASC, id ASC")?;
                 let mut rows = stmt.query([])?;
 
                 while let Some(row) = rows.next()? {
@@ -407,18 +407,18 @@ impl TileCache {
 
         let total_bytes: i64 = self
             .conn
-            .query_row("SELECT COALESCE(SUM(size_bytes), 0) FROM tiles", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COALESCE(SUM(size_bytes), 0) FROM tiles",
+                [],
+                |row| row.get(0),
+            )
             .unwrap_or(0);
 
         let provider_count: i64 = self
             .conn
-            .query_row(
-                "SELECT COUNT(DISTINCT provider) FROM tiles",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(DISTINCT provider) FROM tiles", [], |row| {
+                row.get(0)
+            })
             .unwrap_or(0);
 
         CacheStats {
@@ -526,7 +526,14 @@ mod tests {
     }
 
     // Helper to set accessed_at directly in DB for deterministic LRU testing
-    fn set_accessed_at(cache: &TileCache, provider: &str, z: u32, y: u32, x: u32, accessed_at: i64) {
+    fn set_accessed_at(
+        cache: &TileCache,
+        provider: &str,
+        z: u32,
+        y: u32,
+        x: u32,
+        accessed_at: i64,
+    ) {
         cache
             .conn
             .execute(
@@ -573,7 +580,9 @@ mod tests {
             .put("esri", 10, 500, 250, tile_data, "image/jpeg")
             .unwrap();
 
-        let entry = cache.get("esri", 10, 500, 250).expect("Should get cached tile");
+        let entry = cache
+            .get("esri", 10, 500, 250)
+            .expect("Should get cached tile");
         assert_eq!(entry.data, tile_data);
         assert_eq!(entry.content_type, "image/jpeg");
         assert_eq!(entry.size_bytes, tile_data.len() as u64);
@@ -617,8 +626,8 @@ mod tests {
         // tile1 is oldest, tile2 is middle, tile3 is newest
         let base_time = TileCache::now();
         set_accessed_at(&cache, "esri", 1, 0, 0, base_time - 100); // oldest
-        set_accessed_at(&cache, "esri", 1, 0, 1, base_time - 50);  // middle
-        set_accessed_at(&cache, "esri", 1, 0, 2, base_time);       // newest
+        set_accessed_at(&cache, "esri", 1, 0, 1, base_time - 50); // middle
+        set_accessed_at(&cache, "esri", 1, 0, 2, base_time); // newest
 
         // Trigger eviction explicitly
         let _freed = cache.evict_lru().unwrap();
@@ -637,8 +646,14 @@ mod tests {
         );
 
         // tile2 and tile3 should still exist
-        assert!(cache.get("esri", 1, 0, 1).is_some(), "Middle tile should remain");
-        assert!(cache.get("esri", 1, 0, 2).is_some(), "Newest tile should remain");
+        assert!(
+            cache.get("esri", 1, 0, 1).is_some(),
+            "Middle tile should remain"
+        );
+        assert!(
+            cache.get("esri", 1, 0, 2).is_some(),
+            "Newest tile should remain"
+        );
     }
 
     // === Test 4: TTL expiration (stale tiles not returned) ===
@@ -802,7 +817,9 @@ mod tests {
 
         // Use a real temp directory for thread safety
         let temp_dir = tempfile::tempdir().unwrap();
-        let cache = Arc::new(Mutex::new(TileCache::open(temp_dir.path(), 100, 30).unwrap()));
+        let cache = Arc::new(Mutex::new(
+            TileCache::open(temp_dir.path(), 100, 30).unwrap(),
+        ));
 
         let mut handles = vec![];
 
@@ -865,9 +882,7 @@ mod tests {
         let mut cache = TileCache::in_memory(100, 30).unwrap();
 
         // Store an empty tile (valid "no data" marker)
-        cache
-            .put("esri", 10, 500, 250, &[], "image/jpeg")
-            .unwrap();
+        cache.put("esri", 10, 500, 250, &[], "image/jpeg").unwrap();
 
         let entry = cache.get("esri", 10, 500, 250).unwrap();
         assert!(entry.data.is_empty());
@@ -888,17 +903,12 @@ mod tests {
         ];
 
         for (i, ct) in content_types.iter().enumerate() {
-            cache
-                .put("test", 10, 0, i as u32, b"data", ct)
-                .unwrap();
+            cache.put("test", 10, 0, i as u32, b"data", ct).unwrap();
         }
 
         for (i, ct) in content_types.iter().enumerate() {
             let entry = cache.get("test", 10, 0, i as u32).unwrap();
-            assert_eq!(
-                &entry.content_type, *ct,
-                "Content type should be preserved"
-            );
+            assert_eq!(&entry.content_type, *ct, "Content type should be preserved");
         }
     }
 
@@ -1025,7 +1035,10 @@ mod tests {
         );
 
         // The oldest tile should have been evicted
-        assert!(cache.get("esri", 1, 0, 0).is_none(), "Oldest tile should be evicted");
+        assert!(
+            cache.get("esri", 1, 0, 0).is_none(),
+            "Oldest tile should be evicted"
+        );
     }
 
     // === Test 17: tile larger than cache is rejected ===
