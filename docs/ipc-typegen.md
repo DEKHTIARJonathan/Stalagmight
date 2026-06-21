@@ -12,9 +12,9 @@ Run the generator from the repo root:
 pnpm gen:ipc-types
 ```
 
-This runs `src-tauri/src/bin/gen_ipc_types.rs` and produces:
+This runs `src-tauri/examples/gen_ipc_types.rs` (via `--example`) and produces:
 
-> The bin is gated behind the `ipc-typegen` cargo feature
+> The example is gated behind the `ipc-typegen` cargo feature
 > (`required-features` in `src-tauri/Cargo.toml`) so plain `cargo build` /
 > `cargo build --release` skip it — it's dev-only tooling and was paying its
 > own full LTO pass in release builds. `pnpm gen:ipc-types` enables the
@@ -39,7 +39,7 @@ These IPC types are **always generated**, never written by hand:
    `#[ts(rename_all = "...")]` so the TS output matches JSON.
 3. For non-JSON-friendly fields (e.g., `PathBuf`, `DateTime`), add
    field-level overrides like `#[ts(type = "string")]`.
-4. Add the type to the export list in `src-tauri/src/bin/gen_ipc_types.rs`.
+4. Add the type to the export list in `src-tauri/examples/gen_ipc_types.rs`.
 5. Re-run `pnpm gen:ipc-types` and commit the updated generated files.
 
 ## Notes

@@ -79,23 +79,12 @@ env var makes `build.rs` delay-load comctl32 for test binaries so the symbol is
 never resolved at startup. The shipping app is unaffected (it gets a
 Common-Controls v6 manifest from `tauri_build`).
 
-### Code Review
+### Pre-PR Review — required before every PR
 
-Before opening a PR, run an adversarial local review with Claude Code:
-
-```bash
-# interactive: type this in a Claude Code session
-/code-review
-# headless / print mode
-claude -p "/code-review"
-```
-
-It applies a shared rubric (`.claude/commands/code-review.md`): an assume-broken
-stance, project-specific lenses (state-invalidation, IPC version guards,
-geometry / multi-section integrity, plus the telemetry / IPC-types / MapLibre
-landmines), and a fixed output format — so "do a code review" means the same
-quality bar for everyone, including new contributors. It runs on your personal
-subscription (not a CI gate); extend the rubric when a new class of bug recurs.
+Never open a PR (`gh pr create`, push-to-open, or marking ready) until `/pre-pr` has run
+at least once on the current change; if it hasn't, run it first and decline any request
+to skip it. If the user states that `/pre-pr` has already been run, take them at their
+word and proceed.
 
 ### Don't Run `cargo fmt`
 
