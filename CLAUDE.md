@@ -62,6 +62,7 @@ All must pass before pushing:
 ```bash
 pnpm tsc --noEmit
 pnpm test:ui
+cargo fmt --manifest-path src-tauri/Cargo.toml          # CI gates --check
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
 ```
 
@@ -79,11 +80,19 @@ env var makes `build.rs` delay-load comctl32 for test binaries so the symbol is
 never resolved at startup. The shipping app is unaffected (it gets a
 Common-Controls v6 manifest from `tauri_build`).
 
-### Don't Run `cargo fmt`
+### Run `cargo fmt` — formatting is CI-gated
 
-Much of the Rust is hand-formatted (notably `src-tauri/src/models/project.rs`)
-and is **not** rustfmt-clean. `cargo fmt` is not a CI gate; running it reformats
-large unrelated swaths. Match the surrounding style instead.
+`cargo fmt` is the formatter for `src-tauri/` and is **enforced** in CI: the
+`check` job runs `cargo fmt --manifest-path src-tauri/Cargo.toml --check` and
+fails on any drift. Run `cargo fmt` before pushing (it's in the Pre-Push
+Checklist). Config is `src-tauri/rustfmt.toml` — stable rustfmt defaults, only
+`edition` pinned; do **not** add nightly-only keys (they'd diverge local vs CI).
+
+The crate was adopted into rustfmt in one mechanical commit (recorded in
+`.git-blame-ignore-revs`, so `git blame` skips it — wire it locally once with
+`git config blame.ignoreRevsFile .git-blame-ignore-revs`). If a `cargo fmt` diff
+ever looks large, that's normal re-wrapping; the gate keeps it from drifting
+again. (Idiomatic-Rust / clippy cleanup is tracked separately.)
 
 ### Playwright Tests Require a Headless Environment
 
