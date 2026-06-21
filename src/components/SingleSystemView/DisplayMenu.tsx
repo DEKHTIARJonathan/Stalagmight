@@ -15,7 +15,14 @@ import {
   RulerIcon,
   SlidersIcon,
 } from '../common/icons';
-import { EntitySymbol, EntityReferenceSymbol, EntityDatumSymbol } from '../common/toolIcons';
+import {
+  EntitySymbol,
+  EntityReferenceSymbol,
+  EntityDatumSymbol,
+  EntityCommentSymbol,
+  EntityDataSymbol,
+  EntityLabelSymbol,
+} from '../common/toolIcons';
 import {
   syntacticLevelAtLeast,
   syntacticVarName,
@@ -48,8 +55,8 @@ interface ToggleItem {
   /** Element this pill refers to: drives the entity icon + the pill's tint
    *  (--sh-<entity>, the same color the data-table/legend chips use). */
   entity?: BlobEntity;
-  /** Badged entity-symbol variant (jump/reference or zero-datum). */
-  symbol?: 'reference' | 'datum';
+  /** Badged entity-symbol variant overlaid on the entity glyph. */
+  symbol?: 'reference' | 'datum' | 'comment' | 'data' | 'label';
 }
 
 const MAP_ELEMENTS: ToggleItem[] = [
@@ -69,11 +76,11 @@ const OVERLAYS: ToggleItem[] = [
 // PARENT entity's color — station comments read as station-colored, etc. —
 // rather than the generic 'comment' role color.
 const COMMENTS_LABELS: ToggleItem[] = [
-  { key: 'showSectionNames', labelKey: 'displayMenu.items.sectionNames', descriptionKey: 'displayMenu.descriptions.sectionNames', entity: 'section' },
-  { key: 'showStationLabels', labelKey: 'displayMenu.items.stationLabels', descriptionKey: 'displayMenu.descriptions.stationLabels', entity: 'station' },
-  { key: 'showStationComments', labelKey: 'displayMenu.items.stationComments', descriptionKey: 'displayMenu.descriptions.stationComments', entity: 'station' },
-  { key: 'showShotComments', labelKey: 'displayMenu.items.shotComments', descriptionKey: 'displayMenu.descriptions.shotComments', disabledWhen: 'showShots', entity: 'shot' },
-  { key: 'showShotData', labelKey: 'displayMenu.items.shotData', descriptionKey: 'displayMenu.descriptions.shotData', disabledWhen: 'showShots', entity: 'shot' },
+  { key: 'showSectionNames', labelKey: 'displayMenu.items.sectionNames', descriptionKey: 'displayMenu.descriptions.sectionNames', entity: 'section', symbol: 'label' },
+  { key: 'showStationLabels', labelKey: 'displayMenu.items.stationLabels', descriptionKey: 'displayMenu.descriptions.stationLabels', entity: 'station', symbol: 'label' },
+  { key: 'showStationComments', labelKey: 'displayMenu.items.stationComments', descriptionKey: 'displayMenu.descriptions.stationComments', entity: 'station', symbol: 'comment' },
+  { key: 'showShotComments', labelKey: 'displayMenu.items.shotComments', descriptionKey: 'displayMenu.descriptions.shotComments', disabledWhen: 'showShots', entity: 'shot', symbol: 'comment' },
+  { key: 'showShotData', labelKey: 'displayMenu.items.shotData', descriptionKey: 'displayMenu.descriptions.shotData', disabledWhen: 'showShots', entity: 'shot', symbol: 'data' },
 ];
 
 type ColorMode = 'section' | 'depth' | 'distance' | 'issues';
@@ -262,9 +269,14 @@ export default function DisplayMenu() {
 
   const entitySymbolFor = (item: ToggleItem): ReactNode => {
     if (!item.entity || !showIcons) return undefined;
-    if (item.symbol === 'reference') return <EntityReferenceSymbol entity={item.entity} size={14} />;
-    if (item.symbol === 'datum') return <EntityDatumSymbol entity={item.entity} size={14} />;
-    return <EntitySymbol entity={item.entity} size={14} />;
+    switch (item.symbol) {
+      case 'reference': return <EntityReferenceSymbol entity={item.entity} size={14} />;
+      case 'datum': return <EntityDatumSymbol entity={item.entity} size={14} />;
+      case 'comment': return <EntityCommentSymbol entity={item.entity} size={14} />;
+      case 'data': return <EntityDataSymbol entity={item.entity} size={14} />;
+      case 'label': return <EntityLabelSymbol entity={item.entity} size={14} />;
+      default: return <EntitySymbol entity={item.entity} size={14} />;
+    }
   };
 
   const renderTogglePill = (item: ToggleItem) => {

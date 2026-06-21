@@ -351,6 +351,48 @@ const brokenChain: BadgeContent = (cx, cy, r) => {
   );
 };
 
+/** Chat bubble (comments) — a rounded speech bubble with a small tail. */
+const chatBubble: BadgeContent = (cx, cy, r) => {
+  const w = r * 1.4, h = r * 0.96, rx = r * 0.32;
+  const x = cx - w / 2;
+  const y = cy - h / 2 - r * 0.16;
+  const by = y + h;
+  const tail = `M${(cx - w * 0.18).toFixed(2)} ${(by - r * 0.08).toFixed(2)} L${(cx - w * 0.02).toFixed(2)} ${(by + r * 0.46).toFixed(2)} L${(cx + w * 0.22).toFixed(2)} ${(by - r * 0.08).toFixed(2)} Z`;
+  return (
+    <g>
+      <rect className="chat-bubble" x={x.toFixed(2)} y={y.toFixed(2)} width={w.toFixed(2)} height={h.toFixed(2)} rx={rx.toFixed(2)} ry={rx.toFixed(2)} />
+      <path className="chat-bubble" d={tail} />
+    </g>
+  );
+};
+
+/** "Data rows" / hamburger (shot data) — three stacked lines. */
+const dataLines: BadgeContent = (cx, cy, r) => {
+  const hw = r * 0.6, gap = r * 0.44;
+  const line = (dy: number) => `M${(cx - hw).toFixed(2)} ${(cy + dy).toFixed(2)} H${(cx + hw).toFixed(2)}`;
+  return (
+    <g>
+      <path className="data-lines" d={line(-gap)} />
+      <path className="data-lines" d={line(0)} />
+      <path className="data-lines" d={line(gap)} />
+    </g>
+  );
+};
+
+/** Capital "A" (labels / names). */
+const letterA: BadgeContent = (cx, cy, r) => (
+  <text
+    className="label-a"
+    x={cx.toFixed(2)}
+    y={cy.toFixed(2)}
+    fontSize={(r * 1.72).toFixed(2)}
+    textAnchor="middle"
+    dominantBaseline="central"
+  >
+    A
+  </text>
+);
+
 /** Bottom-right action-badge placement (cx/cy/r) per entity. The entity itself is
  * the centered object glyph; the badge sits in the bottom-right corner (overlap
  * with the object is expected). */
@@ -423,6 +465,18 @@ export function EntityAddSymbol(props: EntitySymbolProps) {
  * closure / unmerge. */
 export function EntityUnlinkSymbol(props: EntitySymbolProps) {
   return <EntityBadgedSymbol {...props} content={brokenChain} />;
+}
+/** Duotone "<entity> comment" (entity color + chat-bubble badge). */
+export function EntityCommentSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={chatBubble} />;
+}
+/** Duotone "<entity> data" (entity color + data-rows/hamburger badge). */
+export function EntityDataSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={dataLines} />;
+}
+/** Duotone "<entity> label/name" (entity color + capital-A badge). */
+export function EntityLabelSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={letterA} />;
 }
 
 /** CSS `var(--sh-<role>)` reference for a tool's accent color (icon + button tint). */

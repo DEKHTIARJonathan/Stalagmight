@@ -1468,6 +1468,25 @@ tr[data-selected="true"]:hover {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+/* comment badge: amber speech bubble */
+.duotone .chat-bubble {
+  fill: var(--sh-comment, #eab946);
+  stroke: none;
+}
+/* shot-data badge: slate "data rows" (hamburger) */
+.duotone .data-lines {
+  fill: none;
+  stroke: #b8c6d6;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+/* label/name badge: slate capital A */
+.duotone .label-a {
+  fill: #b8c6d6;
+  stroke: none;
+  font-weight: 800;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
 /* move compass */
 .duotone .mvf {
   fill: var(--sh-move);
