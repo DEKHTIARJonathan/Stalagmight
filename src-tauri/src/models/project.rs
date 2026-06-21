@@ -8406,8 +8406,11 @@ impl Project {
                 if comp.iter().any(|sid| new_set.contains(sid)) {
                     return false;
                 }
-                // Skip if component has a datum
-                let any_member = *comp.iter().next().unwrap();
+                // Skip if component has a datum (an empty component — impossible
+                // here — is treated as non-orphan).
+                let Some(&any_member) = comp.iter().next() else {
+                    return false;
+                };
                 !self.rigid_group_has_datum(any_member)
             })
             .collect();

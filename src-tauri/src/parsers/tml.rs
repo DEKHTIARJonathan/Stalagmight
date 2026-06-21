@@ -1814,7 +1814,7 @@ mod tests {
 
         let (shots, meta) = parse_raw_shots(&xml).unwrap_or_else(|_| {
             std::process::abort(); // unreachable in tests
-            #[allow(unreachable_code)]
+            #[expect(unreachable_code)]
             {
                 (Vec::new(), FileMetadata::default())
             }
