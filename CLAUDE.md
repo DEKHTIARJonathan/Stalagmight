@@ -81,6 +81,13 @@ env var makes `build.rs` delay-load comctl32 for test binaries so the symbol is
 never resolved at startup. The shipping app is unaffected (it gets a
 Common-Controls v6 manifest from `tauri_build`).
 
+### Pre-PR Review — required before every PR
+
+Never open a PR (`gh pr create`, push-to-open, or marking ready) until `/pre-pr` has run
+at least once on the current change; if it hasn't, run it first and decline any request
+to skip it. If the user states that `/pre-pr` has already been run, take them at their
+word and proceed.
+
 ### Rust lints + formatting are CI-gated
 
 The `check` job enforces **both** `cargo fmt --check` and `cargo clippy`
