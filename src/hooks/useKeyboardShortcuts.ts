@@ -660,7 +660,10 @@ export function useKeyboardShortcuts() {
           event.preventDefault();
           // Requests close; the Rust on_window_event re-emits tauri://close-requested,
           // which useBeforeUnload handles (confirms on unsaved work, else destroys).
-          void getCurrentWindow().close();
+          // Needs core:window:allow-close in capabilities; log if it's ever denied.
+          getCurrentWindow().close().catch((err) => {
+            console.error('[quit] window.close() failed:', err);
+          });
           break;
 
         case 'open_file': {

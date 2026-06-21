@@ -401,9 +401,12 @@ export function useGlobalViewShortcuts({
 
         case 'quit':
           e.preventDefault();
-          // Requests close; the App-level useBeforeUnload listener handles the
-          // tauri://close-requested event (confirms on unsaved work, else closes).
-          void getCurrentWindow().close();
+          // Requests close; the Rust on_window_event re-emits tauri://close-requested,
+          // which useBeforeUnload handles (confirms on unsaved work, else destroys).
+          // Needs core:window:allow-close in capabilities; log if it's ever denied.
+          getCurrentWindow().close().catch((err) => {
+            console.error('[quit] window.close() failed:', err);
+          });
           break;
       }
     },
