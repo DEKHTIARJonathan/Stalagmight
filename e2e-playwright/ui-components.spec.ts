@@ -223,26 +223,20 @@ test.describe('UI Components', () => {
       await page.getByTestId('display-menu-button').click();
       await expect(page.locator('button:has-text("Station Labels")')).toBeVisible({ timeout: 2000 });
 
-      // Station Labels is off by default (showStationLabels: false in uiStore)
-      // The toggle button has a checkmark indicator that shows bg-accent when enabled
+      // Station Labels is off by default (showStationLabels: false in uiStore).
+      // It's an element pill (tinted in the station color), so its on/off state is
+      // read from aria-pressed rather than a bg-accent fill.
       const stationLabelsButton = page.locator('button:has-text("Station Labels")');
       await expect(stationLabelsButton).toBeVisible();
-
-      // Verify initial state - checkbox indicator should NOT have bg-accent (off state)
-      const initialCheckbox = stationLabelsButton;
-      await expect(initialCheckbox).not.toHaveClass(/bg-accent/);
+      await expect(stationLabelsButton).toHaveAttribute('aria-pressed', 'false');
 
       // Toggle station labels on
       await page.click('button:has-text("Station Labels")');
-
-      // Verify the toggle is now on - checkbox should have bg-accent class
-      await expect(initialCheckbox).toHaveClass(/bg-accent/);
+      await expect(stationLabelsButton).toHaveAttribute('aria-pressed', 'true');
 
       // Toggle back off
       await page.click('button:has-text("Station Labels")');
-
-      // Verify the toggle is back off - checkbox should NOT have bg-accent
-      await expect(initialCheckbox).not.toHaveClass(/bg-accent/);
+      await expect(stationLabelsButton).toHaveAttribute('aria-pressed', 'false');
 
       // Button should still be visible and functional
       await expect(stationLabelsButton).toBeVisible();

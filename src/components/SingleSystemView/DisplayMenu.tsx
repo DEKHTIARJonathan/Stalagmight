@@ -1,11 +1,26 @@
-import { useState, useRef, useEffect, type ReactNode } from 'react';
+import { useState, useRef, useEffect, type ReactNode, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type DisplayToggleKey } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useShallow } from 'zustand/react/shallow';
 import { GRID_SPACING_OPTIONS } from '../Map/GridOverlay';
 import { formatNumber } from '../../i18n/format';
-import { ChevronDownIcon, ChevronUpIcon, EyeIcon } from '../common/icons';
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  EyeIcon,
+  MapIcon,
+  LayersIcon,
+  MessageIcon,
+  RulerIcon,
+  SlidersIcon,
+} from '../common/icons';
+import { EntitySymbol, EntityReferenceSymbol, EntityDatumSymbol } from '../common/toolIcons';
+import {
+  syntacticLevelAtLeast,
+  syntacticVarName,
+  type BlobEntity,
+} from '../../theme/syntacticPalette';
 import { setSource } from '../../utils/telemetry';
 import { hasEligibleClosures } from '../../utils/closures';
 
@@ -28,13 +43,18 @@ interface ToggleItem {
   labelKey: string;
   descriptionKey?: string;
   disabledWhen?: 'showShots';
+  /** Element this pill refers to: drives the entity icon + the pill's tint
+   *  (--sh-<entity>, the same color the data-table/legend chips use). */
+  entity?: BlobEntity;
+  /** Badged entity-symbol variant (jump/reference or zero-datum). */
+  symbol?: 'reference' | 'datum';
 }
 
 const MAP_ELEMENTS: ToggleItem[] = [
-  { key: 'showStations', labelKey: 'displayMenu.items.stations', descriptionKey: 'displayMenu.descriptions.stations' },
-  { key: 'showShots', labelKey: 'displayMenu.items.shots', descriptionKey: 'displayMenu.descriptions.shots' },
-  { key: 'showReferenceShots', labelKey: 'displayMenu.items.referenceShots', descriptionKey: 'displayMenu.descriptions.referenceShots', disabledWhen: 'showShots' },
-  { key: 'showZeroDatum', labelKey: 'displayMenu.items.zeroDatum', descriptionKey: 'displayMenu.descriptions.zeroDatum' },
+  { key: 'showStations', labelKey: 'displayMenu.items.stations', descriptionKey: 'displayMenu.descriptions.stations', entity: 'station' },
+  { key: 'showShots', labelKey: 'displayMenu.items.shots', descriptionKey: 'displayMenu.descriptions.shots', entity: 'shot' },
+  { key: 'showReferenceShots', labelKey: 'displayMenu.items.referenceShots', descriptionKey: 'displayMenu.descriptions.referenceShots', disabledWhen: 'showShots', entity: 'shot', symbol: 'reference' },
+  { key: 'showZeroDatum', labelKey: 'displayMenu.items.zeroDatum', descriptionKey: 'displayMenu.descriptions.zeroDatum', entity: 'station', symbol: 'datum' },
 ];
 
 const OVERLAYS: ToggleItem[] = [
@@ -42,17 +62,31 @@ const OVERLAYS: ToggleItem[] = [
   { key: 'showSatellite', labelKey: 'displayMenu.items.satellite', descriptionKey: 'displayMenu.descriptions.satellite' },
 ];
 
+// Each pill is tinted/iconned by the element it annotates (the category header
+// already carries the comment glyph), so the comment/label pills inherit their
+// PARENT entity's color — station comments read as station-colored, etc. —
+// rather than the generic 'comment' role color.
 const COMMENTS_LABELS: ToggleItem[] = [
-  { key: 'showSectionNames', labelKey: 'displayMenu.items.sectionNames', descriptionKey: 'displayMenu.descriptions.sectionNames' },
-  { key: 'showStationLabels', labelKey: 'displayMenu.items.stationLabels', descriptionKey: 'displayMenu.descriptions.stationLabels' },
-  { key: 'showStationComments', labelKey: 'displayMenu.items.stationComments', descriptionKey: 'displayMenu.descriptions.stationComments' },
-  { key: 'showShotComments', labelKey: 'displayMenu.items.shotComments', descriptionKey: 'displayMenu.descriptions.shotComments', disabledWhen: 'showShots' },
-  { key: 'showShotData', labelKey: 'displayMenu.items.shotData', descriptionKey: 'displayMenu.descriptions.shotData', disabledWhen: 'showShots' },
+  { key: 'showSectionNames', labelKey: 'displayMenu.items.sectionNames', descriptionKey: 'displayMenu.descriptions.sectionNames', entity: 'section' },
+  { key: 'showStationLabels', labelKey: 'displayMenu.items.stationLabels', descriptionKey: 'displayMenu.descriptions.stationLabels', entity: 'station' },
+  { key: 'showStationComments', labelKey: 'displayMenu.items.stationComments', descriptionKey: 'displayMenu.descriptions.stationComments', entity: 'station' },
+  { key: 'showShotComments', labelKey: 'displayMenu.items.shotComments', descriptionKey: 'displayMenu.descriptions.shotComments', disabledWhen: 'showShots', entity: 'shot' },
+  { key: 'showShotData', labelKey: 'displayMenu.items.shotData', descriptionKey: 'displayMenu.descriptions.shotData', disabledWhen: 'showShots', entity: 'shot' },
 ];
 
 type ColorMode = 'section' | 'depth' | 'distance' | 'issues';
 
-/** A pill toggle: filled (accent) when active, outlined when off, dimmed when disabled. */
+/**
+ * A pill toggle. When `entity` is set, the pill is tinted in that element's
+ * color via the shared `.sh-tool` wash (`--o` = `var(--sh-<entity>)`, the same
+ * setting-wired palette the data-table/legend chips use; it neutralizes to gray
+ * at the 'off' highlighting level). Otherwise it fills with the theme accent.
+ * Filled (stronger) when active, a soft highlight when off, dimmed when disabled.
+ *
+ * We use `.sh-tool` (the tinted *toggle button* style, with an active ring)
+ * rather than `.sh-pill` (which styles static entity hyperlinks in tables) —
+ * these pills are stateful on/off toggles, not links.
+ */
 function Pill({
   label,
   active,
@@ -60,6 +94,8 @@ function Pill({
   onClick,
   testId,
   title,
+  entity,
+  icon,
 }: {
   label: string;
   active: boolean;
@@ -67,7 +103,20 @@ function Pill({
   onClick: () => void;
   testId: string;
   title?: string;
+  entity?: BlobEntity | undefined;
+  icon?: ReactNode;
 }) {
+  const base = 'px-3 py-1 text-xs rounded-full inline-flex items-center gap-1.5 transition-colors';
+  const className = entity
+    ? `${base} sh-tool ${active ? 'sh-tool--active' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`
+    : `${base} border ${
+        disabled
+          ? 'opacity-50 cursor-not-allowed bg-background border-border text-text-secondary'
+          : active
+            ? 'bg-accent text-accent-on border-accent'
+            : 'bg-background border-border text-text-primary hover:bg-background-50'
+      }`;
+  const style = entity ? ({ '--o': `var(${syntacticVarName(entity)})` } as CSSProperties) : undefined;
   return (
     <button
       type="button"
@@ -76,24 +125,21 @@ function Pill({
       aria-pressed={active}
       title={title}
       data-testid={testId}
-      className={`px-3 py-1 text-xs rounded-full border transition-colors ${
-        disabled
-          ? 'opacity-50 cursor-not-allowed bg-background border-border text-text-secondary'
-          : active
-            ? 'bg-accent text-accent-on border-accent'
-            : 'bg-background border-border text-text-primary hover:bg-background-50'
-      }`}
+      className={className}
+      style={style}
     >
+      {icon}
       {label}
     </button>
   );
 }
 
-/** A labelled category block with its pills wrapping below. */
-function Category({ label, children }: { label: string; children: ReactNode }) {
+/** A labelled category block (optional leading icon) with its pills wrapping below. */
+function Category({ label, icon, children }: { label: string; icon?: ReactNode; children: ReactNode }) {
   return (
     <div>
-      <div className="px-0.5 pb-1.5 text-xs font-medium text-text-secondary uppercase tracking-wide">
+      <div className="px-0.5 pb-1.5 text-xs font-medium text-text-secondary uppercase tracking-wide flex items-center gap-1.5">
+        {icon}
         {label}
       </div>
       <div className="flex flex-wrap gap-1.5">{children}</div>
@@ -125,6 +171,7 @@ export default function DisplayMenu() {
     showIssueSeverity,
     gridSpacing,
     geometryMode,
+    syntacticLevel,
     toggleDisplay,
     toggleDistanceGradient,
     setIssueSeverity,
@@ -147,6 +194,7 @@ export default function DisplayMenu() {
     showIssueSeverity: s.showIssueSeverity,
     gridSpacing: s.gridSpacing,
     geometryMode: s.geometryMode,
+    syntacticLevel: s.syntacticLevel,
     toggleDisplay: s.toggleDisplay,
     toggleDistanceGradient: s.toggleDistanceGradient,
     setIssueSeverity: s.setIssueSeverity,
@@ -200,6 +248,16 @@ export default function DisplayMenu() {
     }
   };
 
+  // Element icons + colored pills appear once the highlighting level reaches 'icons'.
+  const showIcons = syntacticLevelAtLeast(syntacticLevel, 'icons');
+
+  const entitySymbolFor = (item: ToggleItem): ReactNode => {
+    if (!item.entity || !showIcons) return undefined;
+    if (item.symbol === 'reference') return <EntityReferenceSymbol entity={item.entity} size={14} />;
+    if (item.symbol === 'datum') return <EntityDatumSymbol entity={item.entity} size={14} />;
+    return <EntitySymbol entity={item.entity} size={14} />;
+  };
+
   const renderTogglePill = (item: ToggleItem) => {
     const disabled = item.disabledWhen ? !toggleValues[item.disabledWhen] : false;
     return (
@@ -211,6 +269,8 @@ export default function DisplayMenu() {
         disabled={disabled}
         onClick={() => { setSource('display-menu'); toggleDisplay(item.key); }}
         testId={`display-toggle-${item.key}`}
+        entity={item.entity}
+        icon={entitySymbolFor(item)}
       />
     );
   };
@@ -340,7 +400,7 @@ export default function DisplayMenu() {
         >
           <div className="grid grid-cols-2 gap-x-5 gap-y-4">
             {/* Color (single-select) */}
-            <Category label={t('displayMenu.groups.color')}>
+            <Category label={t('displayMenu.groups.color')} icon={showIcons ? <SlidersIcon size={14} /> : undefined}>
               <Pill label={t('displayMenu.items.section')} active={colorMode === 'section'} onClick={() => selectColorMode('section')} testId="display-color-section" />
               <Pill label={t('displayMenu.items.depthGradient')} title={t('displayMenu.descriptions.depthGradient')} active={colorMode === 'depth'} onClick={() => selectColorMode('depth')} testId="display-toggle-showDepthGradient" />
               <Pill label={t('displayMenu.items.distanceGradient')} title={t('displayMenu.descriptions.distanceGradient')} active={colorMode === 'distance'} onClick={() => selectColorMode('distance')} testId="display-toggle-showDistanceGradient" />
@@ -348,12 +408,12 @@ export default function DisplayMenu() {
             </Category>
 
             {/* Map Elements (multi-toggle) */}
-            <Category label={t('displayMenu.groups.mapElements')}>
+            <Category label={t('displayMenu.groups.mapElements')} icon={showIcons ? <MapIcon size={14} /> : undefined}>
               {MAP_ELEMENTS.map(renderTogglePill)}
             </Category>
 
             {/* Overlays (multi-toggle) + grid spacing */}
-            <Category label={t('displayMenu.groups.overlays')}>
+            <Category label={t('displayMenu.groups.overlays')} icon={showIcons ? <LayersIcon size={14} /> : undefined}>
               {OVERLAYS.map(renderTogglePill)}
               {showGrid && (
                 <div className="basis-full flex items-center gap-2 pt-1">
@@ -375,13 +435,13 @@ export default function DisplayMenu() {
             </Category>
 
             {/* Comments & Labels (multi-toggle) */}
-            <Category label={t('displayMenu.groups.commentsLabels')}>
+            <Category label={t('displayMenu.groups.commentsLabels')} icon={showIcons ? <MessageIcon size={14} /> : undefined}>
               {COMMENTS_LABELS.map(renderTogglePill)}
             </Category>
 
             {/* Geometry (single-select), full width */}
             <div className="col-span-2 border-t border-border pt-3">
-              <Category label={t('displayMenu.geometry.groupLabel')}>
+              <Category label={t('displayMenu.geometry.groupLabel')} icon={showIcons ? <RulerIcon size={14} /> : undefined}>
                 <Pill
                   label={t('displayMenu.geometry.measured')}
                   active={geometryMode === 'measured'}
