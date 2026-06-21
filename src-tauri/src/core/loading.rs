@@ -4,12 +4,12 @@
 //! and display settings during project load operations.
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
+use ts_rs::TS;
 
 // ============================================================================
 // LoadError
@@ -35,7 +35,11 @@ impl LoadError {
     }
 
     /// Create a new LoadError with details.
-    pub fn with_details(code: &str, message: impl Into<String>, details: impl Into<String>) -> Self {
+    pub fn with_details(
+        code: &str,
+        message: impl Into<String>,
+        details: impl Into<String>,
+    ) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -144,7 +148,9 @@ fn escape_json_string(s: &str) -> String {
 impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // ALWAYS produce valid JSON - use serde_json with fallback
-        if let Ok(json) = serde_json::to_string(self) { write!(f, "{json}") } else {
+        if let Ok(json) = serde_json::to_string(self) {
+            write!(f, "{json}")
+        } else {
             // Fallback: manually construct valid JSON with fully escaped strings
             let escaped_code = escape_json_string(&self.code);
             let escaped_msg = escape_json_string(&self.message);
@@ -234,7 +240,8 @@ impl DisplaySettings {
             show_section_names: map.get("showSectionNames").is_none_or(|s| s == "true"),
             show_station_labels: map.get("showStationLabels").is_some_and(|s| s == "true"),
             show_shot_data: map.get("showShotData").is_some_and(|s| s == "true"),
-            show_reference_shots: map.get("showReferenceShots")
+            show_reference_shots: map
+                .get("showReferenceShots")
                 .or_else(|| map.get("showVirtualShots"))
                 .is_none_or(|s| s == "true"),
             show_zero_datum: map.get("showZeroDatum").is_none_or(|s| s == "true"),
@@ -243,7 +250,10 @@ impl DisplaySettings {
             show_satellite: map.get("showSatellite").is_some_and(|s| s == "true"),
             show_depth_gradient: map.get("showDepthGradient").is_some_and(|s| s == "true"),
             show_station_comments: map.get("showStationComments").is_some_and(|s| s == "true"),
-            grid_spacing: map.get("gridSpacing").and_then(|s| s.parse().ok()).unwrap_or(10.0),
+            grid_spacing: map
+                .get("gridSpacing")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10.0),
             geometry_mode: map
                 .get("geometryMode")
                 .filter(|s| s.as_str() == "measured" || s.as_str() == "closureAdjusted")
@@ -508,14 +518,20 @@ impl ProgressEmitter {
         Self::new(handle, weights, dummy_cancelled)
     }
 
-    fn new(handle: AppHandle, phase_weights: Vec<(LoadingPhase, f32)>, cancelled: Arc<AtomicBool>) -> Self {
+    fn new(
+        handle: AppHandle,
+        phase_weights: Vec<(LoadingPhase, f32)>,
+        cancelled: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             handle,
             loading_id: LOADING_ID_COUNTER.fetch_add(1, Ordering::SeqCst),
             cancelled,
             phase_weights,
             current_phase_idx: 0,
-            last_emit: Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or(Instant::now()), // Ensure first emit goes through
+            last_emit: Instant::now()
+                .checked_sub(Duration::from_secs(10))
+                .unwrap_or(Instant::now()), // Ensure first emit goes through
             last_item: 0,
         }
     }
@@ -701,7 +717,8 @@ mod tests {
         let display = error.to_string();
 
         // Should be valid JSON
-        let parsed: serde_json::Value = serde_json::from_str(&display).expect("Display should produce valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&display).expect("Display should produce valid JSON");
         assert_eq!(parsed["code"], "TEST_ERROR");
         assert_eq!(parsed["message"], "Test message");
     }
@@ -712,7 +729,8 @@ mod tests {
         let display = error.to_string();
 
         // Should be valid JSON even with quotes in message
-        let parsed: serde_json::Value = serde_json::from_str(&display).expect("Display should produce valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&display).expect("Display should produce valid JSON");
         assert_eq!(parsed["message"], r#"Message with "quotes""#);
     }
 
@@ -722,7 +740,8 @@ mod tests {
         let display = error.to_string();
 
         // Should be valid JSON even with control characters
-        let parsed: serde_json::Value = serde_json::from_str(&display).expect("Display should produce valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&display).expect("Display should produce valid JSON");
         assert_eq!(parsed["message"], "Line1\nLine2\tTabbed");
     }
 
@@ -748,17 +767,17 @@ mod tests {
         let defaults = DisplaySettings::default();
 
         // Verify defaults match DISPLAY_DEFAULTS in uiStore
-        assert!(defaults.show_stations);           // true
-        assert!(defaults.show_section_names);      // true
-        assert!(!defaults.show_station_labels);    // false
-        assert!(!defaults.show_shot_data);         // false
-        assert!(defaults.show_reference_shots);     // true
-        assert!(defaults.show_zero_datum);         // true
-        assert!(!defaults.show_grid);              // false
-        assert!(defaults.show_scale_bar);          // true
-        assert!(!defaults.show_satellite);         // false
-        assert!(!defaults.show_depth_gradient);    // false
-        assert!((defaults.grid_spacing - 10.0).abs() < 0.001);  // 10.0
+        assert!(defaults.show_stations); // true
+        assert!(defaults.show_section_names); // true
+        assert!(!defaults.show_station_labels); // false
+        assert!(!defaults.show_shot_data); // false
+        assert!(defaults.show_reference_shots); // true
+        assert!(defaults.show_zero_datum); // true
+        assert!(!defaults.show_grid); // false
+        assert!(defaults.show_scale_bar); // true
+        assert!(!defaults.show_satellite); // false
+        assert!(!defaults.show_depth_gradient); // false
+        assert!((defaults.grid_spacing - 10.0).abs() < 0.001); // 10.0
     }
 
     #[test]
@@ -767,17 +786,17 @@ mod tests {
         let settings = DisplaySettings::from_stored(&empty);
 
         // Verify defaults match DISPLAY_DEFAULTS in uiStore
-        assert!(settings.show_stations);           // true
-        assert!(settings.show_section_names);      // true
-        assert!(!settings.show_station_labels);    // false
-        assert!(!settings.show_shot_data);         // false
-        assert!(settings.show_reference_shots);     // true
-        assert!(settings.show_zero_datum);         // true
-        assert!(!settings.show_grid);              // false
-        assert!(settings.show_scale_bar);          // true
-        assert!(!settings.show_satellite);         // false
-        assert!(!settings.show_depth_gradient);    // false
-        assert!((settings.grid_spacing - 10.0).abs() < 0.001);  // 10.0
+        assert!(settings.show_stations); // true
+        assert!(settings.show_section_names); // true
+        assert!(!settings.show_station_labels); // false
+        assert!(!settings.show_shot_data); // false
+        assert!(settings.show_reference_shots); // true
+        assert!(settings.show_zero_datum); // true
+        assert!(!settings.show_grid); // false
+        assert!(settings.show_scale_bar); // true
+        assert!(!settings.show_satellite); // false
+        assert!(!settings.show_depth_gradient); // false
+        assert!((settings.grid_spacing - 10.0).abs() < 0.001); // 10.0
     }
 
     #[test]
@@ -814,16 +833,31 @@ mod tests {
 
         // Verify all 11 fields - each should be the opposite of the default
         assert!(!settings.show_stations, "showStations should be false");
-        assert!(!settings.show_section_names, "showSectionNames should be false");
-        assert!(settings.show_station_labels, "showStationLabels should be true");
+        assert!(
+            !settings.show_section_names,
+            "showSectionNames should be false"
+        );
+        assert!(
+            settings.show_station_labels,
+            "showStationLabels should be true"
+        );
         assert!(settings.show_shot_data, "showShotData should be true");
-        assert!(!settings.show_reference_shots, "showReferenceShots should be false");
+        assert!(
+            !settings.show_reference_shots,
+            "showReferenceShots should be false"
+        );
         assert!(!settings.show_zero_datum, "showZeroDatum should be false");
         assert!(settings.show_grid, "showGrid should be true");
         assert!(!settings.show_scale_bar, "showScaleBar should be false");
         assert!(settings.show_satellite, "showSatellite should be true");
-        assert!(settings.show_depth_gradient, "showDepthGradient should be true");
-        assert!((settings.grid_spacing - 25.5).abs() < 0.001, "gridSpacing should be 25.5");
+        assert!(
+            settings.show_depth_gradient,
+            "showDepthGradient should be true"
+        );
+        assert!(
+            (settings.grid_spacing - 25.5).abs() < 0.001,
+            "gridSpacing should be 25.5"
+        );
     }
 
     #[test]
@@ -850,8 +884,14 @@ mod tests {
     #[test]
     fn test_loading_phase_labels() {
         assert_eq!(LoadingPhase::OpeningDatabase.label(), "Opening database...");
-        assert_eq!(LoadingPhase::ComputingStations.label(), "Calculating station positions...");
-        assert_eq!(LoadingPhase::CreatingDatabase.label(), "Creating database...");
+        assert_eq!(
+            LoadingPhase::ComputingStations.label(),
+            "Calculating station positions..."
+        );
+        assert_eq!(
+            LoadingPhase::CreatingDatabase.label(),
+            "Creating database..."
+        );
     }
 
     #[test]
@@ -867,7 +907,10 @@ mod tests {
             LoadingPhase::Finalizing,
         ];
         let sum: f32 = open_phases.iter().map(LoadingPhase::weight).sum();
-        assert!((sum - 100.0).abs() < 0.01, "Open phases should sum to 100, got {sum}");
+        assert!(
+            (sum - 100.0).abs() < 0.01,
+            "Open phases should sum to 100, got {sum}"
+        );
     }
 
     #[test]
@@ -878,7 +921,10 @@ mod tests {
             LoadingPhase::SavingSettings,
         ];
         let sum: f32 = create_phases.iter().map(LoadingPhase::weight).sum();
-        assert!((sum - 100.0).abs() < 0.01, "Create phases should sum to 100, got {sum}");
+        assert!(
+            (sum - 100.0).abs() < 0.01,
+            "Create phases should sum to 100, got {sum}"
+        );
     }
 
     #[test]
@@ -899,25 +945,36 @@ mod tests {
         let token2 = token1.clone();
 
         token1.cancel();
-        assert!(token2.is_cancelled(), "Cloned token should see cancellation");
+        assert!(
+            token2.is_cancelled(),
+            "Cloned token should see cancellation"
+        );
     }
 
     #[test]
     fn load_and_create_results_serialize_project_cross_refs_in_wire_form() {
-        use crate::models::{Project, ProjectStats, SectionData, ShotData, StationKey, StationMerge};
+        use crate::models::{
+            Project, ProjectStats, SectionData, ShotData, StationKey, StationMerge,
+        };
 
         // A project with one resolvable station merge, stored in the internal
         // StationKey form.
         let mut project = Project::new("Wire".to_string(), None);
         let a = project
             .add_section(SectionData {
-                shots: vec![ShotData { length: 1.0, ..Default::default() }],
+                shots: vec![ShotData {
+                    length: 1.0,
+                    ..Default::default()
+                }],
                 ..Default::default()
             })
             .id;
         let b = project
             .add_section(SectionData {
-                shots: vec![ShotData { length: 1.0, ..Default::default() }],
+                shots: vec![ShotData {
+                    length: 1.0,
+                    ..Default::default()
+                }],
                 ..Default::default()
             })
             .id;

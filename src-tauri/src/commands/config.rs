@@ -128,7 +128,9 @@ pub(crate) fn update_panel_sizes_impl(
 
 /// Load all display settings from the current project database
 #[tauri::command]
-pub fn load_display_settings(state: State<AppState>) -> Result<std::collections::HashMap<String, String>, String> {
+pub fn load_display_settings(
+    state: State<AppState>,
+) -> Result<std::collections::HashMap<String, String>, String> {
     load_display_settings_impl(state.inner())
 }
 
@@ -140,7 +142,11 @@ pub(crate) fn load_display_settings_impl(
 
 /// Save a display setting to the current project database
 #[tauri::command]
-pub fn save_display_setting(state: State<AppState>, key: String, value: String) -> Result<(), String> {
+pub fn save_display_setting(
+    state: State<AppState>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
     save_display_setting_impl(state.inner(), key, value)
 }
 
@@ -149,7 +155,9 @@ pub(crate) fn save_display_setting_impl(
     key: String,
     value: String,
 ) -> Result<(), String> {
-    state.save_display_setting(&key, &value).map_err(|e| e.to_string())
+    state
+        .save_display_setting(&key, &value)
+        .map_err(|e| e.to_string())
 }
 
 /// Get a single display setting from the current project database

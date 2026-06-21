@@ -19,7 +19,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -188,7 +188,8 @@ pub fn parse_compass(path: &Path) -> Result<ParsedCompass> {
 }
 
 fn parse_mak(path: &Path) -> Result<ParsedCompass> {
-    let project = Project::read(path).map_err(|e| anyhow!("Failed to read Compass project: {e}"))?;
+    let project =
+        Project::read(path).map_err(|e| anyhow!("Failed to read Compass project: {e}"))?;
     let loaded = project
         .load_survey_files()
         .map_err(|e| anyhow!("Failed to load Compass survey files: {e}"))?;
@@ -589,8 +590,7 @@ fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
     // back_inc_deg is the TO→FROM slope in Compass +up; the double sign
     // flip (TO→FROM ⇒ FROM→TO, then +up ⇒ +down) cancels, so the value
     // we store IS that degree-converted reading.
-    let back_inc_deg =
-        inclination_to_degrees(back_inc, &ctx.inclination_units, slope_length_raw);
+    let back_inc_deg = inclination_to_degrees(back_inc, &ctx.inclination_units, slope_length_raw);
     let pitch_out_down_positive = back_inc_deg;
     Some((azimuth_out_fore_direction, pitch_out_down_positive))
 }
@@ -650,7 +650,9 @@ fn build_ctx(
         Some(LengthUnits::Meters) => 1.0,
         _ => FEET_TO_METERS,
     };
-    let inclination_units = format.inclination_units().unwrap_or(InclinationUnits::Degrees);
+    let inclination_units = format
+        .inclination_units()
+        .unwrap_or(InclinationUnits::Degrees);
     if matches!(inclination_units, InclinationUnits::DepthGauge) {
         warnings.push(format!(
             "Survey '{}': inclination unit is DepthGauge (W); each shot's inclination \
@@ -660,7 +662,12 @@ fn build_ctx(
             survey.name
         ));
     }
-    let declination = survey_declination(file_state.declination_mode, survey, anchor_lat_lng, warnings);
+    let declination = survey_declination(
+        file_state.declination_mode,
+        survey,
+        anchor_lat_lng,
+        warnings,
+    );
     let convergence_angle = if file_state.convergence_applied {
         file_state.convergence
     } else {
@@ -700,11 +707,7 @@ fn build_ctx(
 ///                                length is zero we fall back to 0° (a
 ///                                parse-time warning has already fired
 ///                                for DepthGauge surveys).
-fn inclination_to_degrees(
-    raw: f64,
-    units: &InclinationUnits,
-    slope_length_raw: f64,
-) -> f64 {
+fn inclination_to_degrees(raw: f64, units: &InclinationUnits, slope_length_raw: f64) -> f64 {
     match units {
         InclinationUnits::Degrees => raw,
         InclinationUnits::Grads => raw * 0.9,
@@ -805,25 +808,11 @@ fn hemisphere_from_datum(datum: Datum) -> Option<bool> {
     use Datum::*;
     match datum {
         // Unambiguously northern.
-        NorthAmerican1927
-        | NorthAmerican1983
-        | European1950
-        | European1979
-        | OrdinanceSurvey1936
-        | HongKong1963
-        | HuTzuShan
-        | Tokyo
-        | Oman
-        | Adindan => Some(false),
+        NorthAmerican1927 | NorthAmerican1983 | European1950 | European1979
+        | OrdinanceSurvey1936 | HongKong1963 | HuTzuShan | Tokyo | Oman | Adindan => Some(false),
         // Unambiguously southern.
-        Australian1966
-        | Australian1984
-        | SouthAmerican1956
-        | SouthAmerican1969
-        | Arc1950
-        | Cape
-        | Geodetic1949
-        | CampAreaAstro => Some(true),
+        Australian1966 | Australian1984 | SouthAmerican1956 | SouthAmerican1969 | Arc1950
+        | Cape | Geodetic1949 | CampAreaAstro => Some(true),
         // Worldwide / equatorial — caller defaults to north.
         WGS1984 | WGS1972 | Pulkovo1942 | Indian | Arc1960 => None,
     }
@@ -933,10 +922,7 @@ fn resolve_anchor(parsed: &ParsedCompass, warnings: &mut Vec<String>) -> Option<
     // multi-`#file` projects whose first fixed station lives outside
     // file 0 project in their own frame instead of file 0's.
     let zone = station.utm_zone.or(parsed.utm_zone)?;
-    let datum = station
-        .datum
-        .or(parsed.datum)
-        .unwrap_or(Datum::WGS1984);
+    let datum = station.datum.or(parsed.datum).unwrap_or(Datum::WGS1984);
     let (lon, lat) = utm_to_wgs84(station.easting, station.northing, zone, datum, warnings)?;
     let coordinates = GpsCoordinates::new(lat, lon, 0.0)
         .map_err(|e| warnings.push(format!("Ignoring invalid GPS anchor: {e}")))
@@ -1058,7 +1044,13 @@ pub fn convert_compass_to_import_configs(
     let mut edges: Vec<(String, String, f64)> = Vec::new();
     for survey_with_state in &parsed.surveys {
         let survey = &survey_with_state.survey;
-        let ctx = build_ctx(survey, &survey_with_state.state, anchor_lat_lng, opts, &mut warnings);
+        let ctx = build_ctx(
+            survey,
+            &survey_with_state.state,
+            anchor_lat_lng,
+            opts,
+            &mut warnings,
+        );
         let mut shots = Vec::new();
         for shot in &survey.shots {
             let flags = parse_flags(shot.flags.as_ref());
@@ -1077,11 +1069,7 @@ pub fn convert_compass_to_import_configs(
             ));
             shots.push(shot);
         }
-        kept.push(KeptSurvey {
-            survey,
-            ctx,
-            shots,
-        });
+        kept.push(KeptSurvey { survey, ctx, shots });
     }
 
     let elevation = build_elevation(&edges, anchor_name.as_deref(), anchor_elevation);
@@ -1195,21 +1183,18 @@ pub fn convert_compass_to_import_configs(
     }
 
     // Find a station shared between two chains, returning (child_idx, parent_idx).
-    let shared_station =
-        |child: &PendingChain, parent: &PendingChain| -> Option<(u32, u32)> {
-            for (ci, cname) in child.names.iter().enumerate() {
-                if let Some(pi) = parent.names.iter().position(|pn| pn == cname) {
-                    return Some((ci as u32, pi as u32));
-                }
+    let shared_station = |child: &PendingChain, parent: &PendingChain| -> Option<(u32, u32)> {
+        for (ci, cname) in child.names.iter().enumerate() {
+            if let Some(pi) = parent.names.iter().position(|pn| pn == cname) {
+                return Some((ci as u32, pi as u32));
             }
-            None
-        };
+        }
+        None
+    };
 
-    let anchor_chain_idx = anchor_name.as_deref().and_then(|a| {
-        chains
-            .iter()
-            .position(|ch| ch.names.iter().any(|n| n == a))
-    });
+    let anchor_chain_idx = anchor_name
+        .as_deref()
+        .and_then(|a| chains.iter().position(|ch| ch.names.iter().any(|n| n == a)));
 
     let mut placement: Vec<Option<ImportPlacement>> = vec![None; chains.len()];
     let mut placement_merge_station: Vec<Option<u32>> = vec![None; chains.len()];
@@ -1300,8 +1285,7 @@ pub fn convert_compass_to_import_configs(
         std::collections::HashSet::new();
     for (ci, chain) in chains.iter().enumerate() {
         let merge_st = placement_merge_station[ci];
-        let parent_section = placement_parent[ci]
-            .map(|p| chains[p].section_index);
+        let parent_section = placement_parent[ci].map(|p| chains[p].section_index);
         for (k, name) in chain.names.iter().enumerate() {
             if let Some(&(canon_sec, canon_st)) = canonical.get(name.as_str()) {
                 if canon_sec == chain.section_index {
@@ -1329,9 +1313,7 @@ pub fn convert_compass_to_import_configs(
     let mut configs: Vec<ImportSectionConfig> = Vec::with_capacity(chains.len());
     for ci in creation_order {
         let chain = &chains[ci];
-        let p = placement[ci]
-            .clone()
-            .unwrap_or(ImportPlacement::Origin);
+        let p = placement[ci].clone().unwrap_or(ImportPlacement::Origin);
         configs.push(ImportSectionConfig {
             section_index: chain.section_index,
             name: Some(chain.label.clone()),
@@ -1437,8 +1419,7 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
         }
     }
 
-    let mut reordered: Vec<Option<ImportSectionConfig>> =
-        configs.drain(..).map(Some).collect();
+    let mut reordered: Vec<Option<ImportSectionConfig>> = configs.drain(..).map(Some).collect();
     for idx in order {
         if let Some(config) = reordered[idx].take() {
             configs.push(config);
@@ -1573,11 +1554,9 @@ mod tests {
         // `#|X#`-flagged; including excluded shots must add shots, which
         // are imported as reference shots.
         assert!(total_shots(&included_configs) > total_shots(&default_configs));
-        assert!(
-            included_configs
-                .iter()
-                .any(|c| c.shots.iter().any(|s| s.is_reference))
-        );
+        assert!(included_configs
+            .iter()
+            .any(|c| c.shots.iter().any(|s| s.is_reference)));
     }
 
     #[test]
@@ -1587,7 +1566,10 @@ mod tests {
         let survey = &parsed.surveys[0].survey;
         assert!(survey.parameters.format_parameters.has_backsights());
         assert!(survey.shots[0].back_azimuth.is_some());
-        assert!(survey.shots.iter().any(|s| s.flags.as_deref() == Some("PC")));
+        assert!(survey
+            .shots
+            .iter()
+            .any(|s| s.flags.as_deref() == Some("PC")));
         assert!(survey.shots.iter().any(|s| s.comment.is_some()));
     }
 
@@ -1599,8 +1581,7 @@ mod tests {
         // Zone 31's central meridian is +3°, so EPSG:32631 → EPSG:4326
         // must round-trip to exactly (lon=3, lat=0).
         let mut warnings = Vec::new();
-        let (lon, lat) =
-            utm_to_wgs84(500_000.0, 0.0, 31, Datum::WGS1984, &mut warnings).unwrap();
+        let (lon, lat) = utm_to_wgs84(500_000.0, 0.0, 31, Datum::WGS1984, &mut warnings).unwrap();
         assert!(lat.abs() < 1e-6, "lat {lat}");
         assert!((lon - 3.0).abs() < 1e-6, "lon {lon}");
     }
@@ -1614,14 +1595,8 @@ mod tests {
         // heuristic picked south because |-30| < |+60|; the new
         // datum-defaulting heuristic must pick NORTH for WGS-84.
         let mut warnings = Vec::new();
-        let (_lon, lat) = utm_to_wgs84(
-            500_000.0,
-            6_700_000.0,
-            30,
-            Datum::WGS1984,
-            &mut warnings,
-        )
-        .unwrap();
+        let (_lon, lat) =
+            utm_to_wgs84(500_000.0, 6_700_000.0, 30, Datum::WGS1984, &mut warnings).unwrap();
         assert!(lat > 55.0 && lat < 65.0, "expected lat ≈ +60°, got {lat}");
     }
 
@@ -1790,11 +1765,9 @@ mod tests {
         );
         assert!(divergence_warnings.iter().any(|w| w.contains("DATUM")));
         assert!(divergence_warnings.iter().any(|w| w.contains("UTM zone")));
-        assert!(
-            divergence_warnings
-                .iter()
-                .any(|w| w.contains("declination mode"))
-        );
+        assert!(divergence_warnings
+            .iter()
+            .any(|w| w.contains("declination mode")));
         // Each survey carries its own file's state; the surveys from
         // file 0 should differ in declination_mode from those of file 1.
         let modes: Vec<DeclinationMode> = parsed
@@ -1807,9 +1780,7 @@ mod tests {
             "at least one survey should use Auto (from file 1), got {modes:?}"
         );
         assert!(
-            modes
-                .iter()
-                .any(|m| !matches!(m, DeclinationMode::Auto)),
+            modes.iter().any(|m| !matches!(m, DeclinationMode::Auto)),
             "at least one survey should NOT use Auto (from file 0), got {modes:?}"
         );
 
@@ -1840,11 +1811,8 @@ mod tests {
         // reading stored as if it were degrees), which is the regression
         // this test pins.
         let parsed = parse_compass(&fixture("backsight_grads.dat")).unwrap();
-        let (configs, _, _) = convert_compass_to_import_configs(
-            &parsed,
-            &CompassImportOptions::default(),
-        )
-        .unwrap();
+        let (configs, _, _) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         let shot = configs
             .iter()
             .flat_map(|c| c.shots.iter())
@@ -1857,7 +1825,9 @@ mod tests {
         );
         // Sanity: pitch_in is also degree-converted on the fore-sight
         // path.  +100 grads → +90° up; Stalagmight stores as -90° (+down).
-        let pitch_in = shot.pitch_in.expect("fore inclination should populate pitch_in");
+        let pitch_in = shot
+            .pitch_in
+            .expect("fore inclination should populate pitch_in");
         assert!(
             (pitch_in + 90.0).abs() < 0.01,
             "pitch_in should be -90° after Grads→degrees + +down; got {pitch_in}"

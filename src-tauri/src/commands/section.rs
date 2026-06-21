@@ -4,7 +4,10 @@ use tauri::State;
 use ts_rs::TS;
 
 use crate::core::{AppState, Command, CommandResult};
-use crate::models::{ClosureStrategy, Coordinates, Section, SectionId, SectionRelationships, SectionUpdates, ShotData, StationRef, SurveyDirection};
+use crate::models::{
+    ClosureStrategy, Coordinates, Section, SectionId, SectionRelationships, SectionUpdates,
+    ShotData, StationRef, SurveyDirection,
+};
 
 /// Shot-line geometry for a single section within a segment.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -128,10 +131,7 @@ pub fn move_segment(
 
 /// Execute a batch of commands as a single undo/redo unit
 #[tauri::command]
-pub fn execute_batch(
-    state: State<AppState>,
-    commands: Vec<Command>,
-) -> CommandResult {
+pub fn execute_batch(state: State<AppState>, commands: Vec<Command>) -> CommandResult {
     state.execute(Command::Batch { commands })
 }
 
@@ -155,9 +155,7 @@ pub fn get_rigid_connected_section_ids(
 
 /// Get all section IDs belonging to segments that contain a zero datum
 #[tauri::command]
-pub fn get_anchored_section_ids(
-    state: State<AppState>,
-) -> Result<Vec<SectionId>, String> {
+pub fn get_anchored_section_ids(state: State<AppState>) -> Result<Vec<SectionId>, String> {
     state.get_anchored_section_ids()
 }
 
@@ -237,7 +235,9 @@ pub(crate) fn get_section_relationships_impl(
     state: &AppState,
     section_id: SectionId,
 ) -> Result<SectionRelationships, String> {
-    let project = state.get_project_state().ok_or_else(|| "No project open".to_string())?;
+    let project = state
+        .get_project_state()
+        .ok_or_else(|| "No project open".to_string())?;
 
     if project.get_section(section_id).is_none() {
         return Err(format!("Section {section_id} not found"));

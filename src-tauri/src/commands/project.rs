@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use tauri::{Manager, State};
 use ts_rs::TS;
 
-use crate::core::{AppState, Command, CommandResult};
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
+use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
     AlongLineResult, DistanceField, FrozenShotRef, Project, ProjectMetadata, ProjectStats,
     RulerEndpoint, Station, StationRef,
@@ -199,10 +199,7 @@ pub fn remove_from_recent_projects(state: State<AppState>, path: PathBuf) -> Com
     remove_from_recent_projects_impl(state.inner(), path)
 }
 
-pub(crate) fn remove_from_recent_projects_impl(
-    state: &AppState,
-    path: PathBuf,
-) -> CommandResult {
+pub(crate) fn remove_from_recent_projects_impl(state: &AppState, path: PathBuf) -> CommandResult {
     state.remove_from_recent_projects(path)
 }
 
@@ -247,7 +244,13 @@ pub fn merge_projects(
     output_name: String,
     archive_originals: bool,
 ) -> CommandResult {
-    merge_projects_impl(state.inner(), source_paths, output_path, output_name, archive_originals)
+    merge_projects_impl(
+        state.inner(),
+        source_paths,
+        output_path,
+        output_name,
+        archive_originals,
+    )
 }
 
 pub(crate) fn merge_projects_impl(

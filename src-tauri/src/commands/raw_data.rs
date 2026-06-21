@@ -34,5 +34,7 @@ pub(crate) fn get_raw_table_impl(
     limit: u32,
     offset: u32,
 ) -> Result<RawTableData, String> {
-    state.read_raw_table(&table, limit, offset).map_err(|e| e.to_string())
+    state
+        .read_raw_table(&table, limit, offset)
+        .map_err(|e| e.to_string())
 }

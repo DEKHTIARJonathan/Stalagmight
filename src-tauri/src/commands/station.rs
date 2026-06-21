@@ -1,6 +1,6 @@
 use tauri::State;
 
-use crate::core::{AppState, Command, CommentHolder, CommandResult};
+use crate::core::{AppState, Command, CommandResult, CommentHolder};
 use crate::models::{ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates, StationRef};
 
 /// Check merge connectivity between two stations (read-only, NOT a Command)
@@ -47,17 +47,11 @@ pub(crate) fn create_loop_closure_impl(
 
 /// Remove a loop closure by ID
 #[tauri::command]
-pub fn remove_loop_closure(
-    state: State<AppState>,
-    closure_id: u64,
-) -> CommandResult {
+pub fn remove_loop_closure(state: State<AppState>, closure_id: u64) -> CommandResult {
     remove_loop_closure_impl(state.inner(), closure_id)
 }
 
-pub(crate) fn remove_loop_closure_impl(
-    state: &AppState,
-    closure_id: u64,
-) -> CommandResult {
+pub(crate) fn remove_loop_closure_impl(state: &AppState, closure_id: u64) -> CommandResult {
     state.execute(Command::RemoveLoopClosure { closure_id })
 }
 

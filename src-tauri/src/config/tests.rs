@@ -52,7 +52,11 @@ fn test_debug_config_defaults() {
 
 #[test]
 fn test_station_validation_accepts_minimum_bound() {
-    let mut config = StationConfig { radius: 1.0, hit_area: 1.0, ..Default::default() };
+    let mut config = StationConfig {
+        radius: 1.0,
+        hit_area: 1.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.radius, 1.0);
     assert_eq!(config.hit_area, 1.0);
@@ -60,7 +64,11 @@ fn test_station_validation_accepts_minimum_bound() {
 
 #[test]
 fn test_station_validation_accepts_mid_range() {
-    let mut config = StationConfig { radius: 25.0, hit_area: 25.0, ..Default::default() };
+    let mut config = StationConfig {
+        radius: 25.0,
+        hit_area: 25.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.radius, 25.0);
     assert_eq!(config.hit_area, 25.0);
@@ -68,7 +76,11 @@ fn test_station_validation_accepts_mid_range() {
 
 #[test]
 fn test_station_validation_accepts_maximum_bound() {
-    let mut config = StationConfig { radius: 50.0, hit_area: 50.0, ..Default::default() };
+    let mut config = StationConfig {
+        radius: 50.0,
+        hit_area: 50.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.radius, 50.0);
     assert_eq!(config.hit_area, 50.0);
@@ -76,7 +88,11 @@ fn test_station_validation_accepts_maximum_bound() {
 
 #[test]
 fn test_station_validation_rejects_zero() {
-    let mut config = StationConfig { radius: 0.0, hit_area: 0.0, ..Default::default() };
+    let mut config = StationConfig {
+        radius: 0.0,
+        hit_area: 0.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.radius, 1.0); // clamped to min
     assert_eq!(config.hit_area, 1.0); // clamped to min
@@ -84,7 +100,11 @@ fn test_station_validation_rejects_zero() {
 
 #[test]
 fn test_station_validation_rejects_negative() {
-    let mut config = StationConfig { radius: -1.0, hit_area: -1.0, ..Default::default() };
+    let mut config = StationConfig {
+        radius: -1.0,
+        hit_area: -1.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.radius, 1.0); // clamped to min
     assert_eq!(config.hit_area, 1.0); // clamped to min
@@ -92,7 +112,11 @@ fn test_station_validation_rejects_negative() {
 
 #[test]
 fn test_station_validation_rejects_above_max() {
-    let mut config = StationConfig { radius: 51.0, hit_area: 51.0, ..Default::default() };
+    let mut config = StationConfig {
+        radius: 51.0,
+        hit_area: 51.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.radius, 50.0); // clamped to max
     assert_eq!(config.hit_area, 50.0); // clamped to max
@@ -100,7 +124,11 @@ fn test_station_validation_rejects_above_max() {
 
 #[test]
 fn test_station_validation_rejects_large_values() {
-    let mut config = StationConfig { radius: 100.0, hit_area: 100.0, ..Default::default() };
+    let mut config = StationConfig {
+        radius: 100.0,
+        hit_area: 100.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.radius, 50.0); // clamped to max
     assert_eq!(config.hit_area, 50.0); // clamped to max
@@ -108,7 +136,11 @@ fn test_station_validation_rejects_large_values() {
 
 #[test]
 fn test_station_validation_handles_nan() {
-    let mut config = StationConfig { radius: f64::NAN, hit_area: f64::NAN, ..Default::default() };
+    let mut config = StationConfig {
+        radius: f64::NAN,
+        hit_area: f64::NAN,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.radius, 4.0); // default
     assert_eq!(config.hit_area, 10.0); // default
@@ -116,7 +148,11 @@ fn test_station_validation_handles_nan() {
 
 #[test]
 fn test_station_validation_handles_infinity() {
-    let mut config = StationConfig { radius: f64::INFINITY, hit_area: f64::INFINITY, ..Default::default() };
+    let mut config = StationConfig {
+        radius: f64::INFINITY,
+        hit_area: f64::INFINITY,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.radius, 4.0); // default
     assert_eq!(config.hit_area, 10.0); // default
@@ -124,7 +160,11 @@ fn test_station_validation_handles_infinity() {
 
 #[test]
 fn test_station_validation_handles_neg_infinity() {
-    let mut config = StationConfig { radius: f64::NEG_INFINITY, hit_area: f64::NEG_INFINITY, ..Default::default() };
+    let mut config = StationConfig {
+        radius: f64::NEG_INFINITY,
+        hit_area: f64::NEG_INFINITY,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.radius, 4.0); // default
     assert_eq!(config.hit_area, 10.0); // default
@@ -132,7 +172,11 @@ fn test_station_validation_handles_neg_infinity() {
 
 #[test]
 fn test_station_hit_area_enforced_gte_radius() {
-    let mut config = StationConfig { radius: 20.0, hit_area: 10.0, ..Default::default() };
+    let mut config = StationConfig {
+        radius: 20.0,
+        hit_area: 10.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.radius, 20.0);
     assert_eq!(config.hit_area, 20.0); // enforced >= radius
@@ -144,7 +188,11 @@ fn test_station_hit_area_enforced_gte_radius() {
 
 #[test]
 fn test_shot_validation_accepts_minimum_bound() {
-    let mut config = ShotConfig { width: 0.5, hit_area: 0.5, ..Default::default() };
+    let mut config = ShotConfig {
+        width: 0.5,
+        hit_area: 0.5,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.width, 0.5);
     assert_eq!(config.hit_area, 0.5);
@@ -152,7 +200,11 @@ fn test_shot_validation_accepts_minimum_bound() {
 
 #[test]
 fn test_shot_validation_accepts_mid_range() {
-    let mut config = ShotConfig { width: 10.0, hit_area: 10.0, ..Default::default() };
+    let mut config = ShotConfig {
+        width: 10.0,
+        hit_area: 10.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.width, 10.0);
     assert_eq!(config.hit_area, 10.0);
@@ -160,7 +212,11 @@ fn test_shot_validation_accepts_mid_range() {
 
 #[test]
 fn test_shot_validation_accepts_maximum_bound() {
-    let mut config = ShotConfig { width: 20.0, hit_area: 20.0, ..Default::default() };
+    let mut config = ShotConfig {
+        width: 20.0,
+        hit_area: 20.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.width, 20.0);
     assert_eq!(config.hit_area, 20.0);
@@ -168,7 +224,11 @@ fn test_shot_validation_accepts_maximum_bound() {
 
 #[test]
 fn test_shot_validation_rejects_zero() {
-    let mut config = ShotConfig { width: 0.0, hit_area: 0.0, ..Default::default() };
+    let mut config = ShotConfig {
+        width: 0.0,
+        hit_area: 0.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.width, 0.5); // clamped to min
     assert_eq!(config.hit_area, 0.5); // clamped to min
@@ -176,7 +236,11 @@ fn test_shot_validation_rejects_zero() {
 
 #[test]
 fn test_shot_validation_rejects_negative() {
-    let mut config = ShotConfig { width: -1.0, hit_area: -1.0, ..Default::default() };
+    let mut config = ShotConfig {
+        width: -1.0,
+        hit_area: -1.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.width, 0.5); // clamped to min
     assert_eq!(config.hit_area, 0.5); // clamped to min
@@ -184,7 +248,11 @@ fn test_shot_validation_rejects_negative() {
 
 #[test]
 fn test_shot_validation_rejects_above_max() {
-    let mut config = ShotConfig { width: 21.0, hit_area: 21.0, ..Default::default() };
+    let mut config = ShotConfig {
+        width: 21.0,
+        hit_area: 21.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.width, 20.0); // clamped to max
     assert_eq!(config.hit_area, 20.0); // clamped to max
@@ -192,7 +260,11 @@ fn test_shot_validation_rejects_above_max() {
 
 #[test]
 fn test_shot_validation_rejects_large_values() {
-    let mut config = ShotConfig { width: 100.0, hit_area: 100.0, ..Default::default() };
+    let mut config = ShotConfig {
+        width: 100.0,
+        hit_area: 100.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.width, 20.0); // clamped to max
     assert_eq!(config.hit_area, 20.0); // clamped to max
@@ -200,7 +272,11 @@ fn test_shot_validation_rejects_large_values() {
 
 #[test]
 fn test_shot_validation_handles_nan() {
-    let mut config = ShotConfig { width: f64::NAN, hit_area: f64::NAN, ..Default::default() };
+    let mut config = ShotConfig {
+        width: f64::NAN,
+        hit_area: f64::NAN,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.width, 2.0); // default
     assert_eq!(config.hit_area, 8.0); // default
@@ -208,7 +284,11 @@ fn test_shot_validation_handles_nan() {
 
 #[test]
 fn test_shot_validation_handles_infinity() {
-    let mut config = ShotConfig { width: f64::INFINITY, hit_area: f64::INFINITY, ..Default::default() };
+    let mut config = ShotConfig {
+        width: f64::INFINITY,
+        hit_area: f64::INFINITY,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.width, 2.0); // default
     assert_eq!(config.hit_area, 8.0); // default
@@ -216,7 +296,11 @@ fn test_shot_validation_handles_infinity() {
 
 #[test]
 fn test_shot_hit_area_enforced_gte_width() {
-    let mut config = ShotConfig { width: 15.0, hit_area: 5.0, ..Default::default() };
+    let mut config = ShotConfig {
+        width: 15.0,
+        hit_area: 5.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.width, 15.0);
     assert_eq!(config.hit_area, 15.0); // enforced >= width
@@ -228,56 +312,80 @@ fn test_shot_hit_area_enforced_gte_width() {
 
 #[test]
 fn test_snap_validation_accepts_minimum_bound() {
-    let mut config = MapSnapConfig { threshold: 1.0, ..Default::default() };
+    let mut config = MapSnapConfig {
+        threshold: 1.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.threshold, 1.0);
 }
 
 #[test]
 fn test_snap_validation_accepts_mid_range() {
-    let mut config = MapSnapConfig { threshold: 25.0, ..Default::default() };
+    let mut config = MapSnapConfig {
+        threshold: 25.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.threshold, 25.0);
 }
 
 #[test]
 fn test_snap_validation_accepts_maximum_bound() {
-    let mut config = MapSnapConfig { threshold: 50.0, ..Default::default() };
+    let mut config = MapSnapConfig {
+        threshold: 50.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.threshold, 50.0);
 }
 
 #[test]
 fn test_snap_validation_rejects_zero() {
-    let mut config = MapSnapConfig { threshold: 0.0, ..Default::default() };
+    let mut config = MapSnapConfig {
+        threshold: 0.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.threshold, 1.0); // clamped to min
 }
 
 #[test]
 fn test_snap_validation_rejects_negative() {
-    let mut config = MapSnapConfig { threshold: -1.0, ..Default::default() };
+    let mut config = MapSnapConfig {
+        threshold: -1.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.threshold, 1.0); // clamped to min
 }
 
 #[test]
 fn test_snap_validation_rejects_above_max() {
-    let mut config = MapSnapConfig { threshold: 51.0, ..Default::default() };
+    let mut config = MapSnapConfig {
+        threshold: 51.0,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.threshold, 50.0); // clamped to max
 }
 
 #[test]
 fn test_snap_validation_handles_nan() {
-    let mut config = MapSnapConfig { threshold: f64::NAN, ..Default::default() };
+    let mut config = MapSnapConfig {
+        threshold: f64::NAN,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.threshold, 10.0); // default
 }
 
 #[test]
 fn test_snap_validation_handles_infinity() {
-    let mut config = MapSnapConfig { threshold: f64::INFINITY, ..Default::default() };
+    let mut config = MapSnapConfig {
+        threshold: f64::INFINITY,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.threshold, 10.0); // default
 }
@@ -563,7 +671,8 @@ redo = "Ctrl+Y"
 save = "Ctrl+S"
 "##;
 
-    let config: Config = toml::from_str(toml_str).expect("Config with partial station should parse");
+    let config: Config =
+        toml::from_str(toml_str).expect("Config with partial station should parse");
 
     // Explicit value
     assert_eq!(config.map.station.radius, 8.0);
@@ -583,11 +692,17 @@ fn test_config_serialization_roundtrip() {
 
     // Verify key values survived roundtrip
     assert_eq!(deserialized.map.station.radius, original.map.station.radius);
-    assert_eq!(deserialized.map.station.hit_area, original.map.station.hit_area);
+    assert_eq!(
+        deserialized.map.station.hit_area,
+        original.map.station.hit_area
+    );
     assert_eq!(deserialized.map.shot.width, original.map.shot.width);
     assert_eq!(deserialized.map.shot.hit_area, original.map.shot.hit_area);
     assert_eq!(deserialized.map.snap.threshold, original.map.snap.threshold);
-    assert_eq!(deserialized.debug.map.show_hitboxes, original.debug.map.show_hitboxes);
+    assert_eq!(
+        deserialized.debug.map.show_hitboxes,
+        original.debug.map.show_hitboxes
+    );
 }
 
 #[test]
@@ -710,8 +825,8 @@ enabled_measure = false
 threshold_pixels = 25
 "##;
 
-    let mut config: Config = toml::from_str(old_config_toml)
-        .expect("Config with legacy [snap] should parse");
+    let mut config: Config =
+        toml::from_str(old_config_toml).expect("Config with legacy [snap] should parse");
 
     // Before migration, map.snap has defaults
     assert_eq!(config.map.snap.threshold, 10.0);
@@ -820,8 +935,8 @@ enabled_measure = false
 threshold_pixels = 25
 "##;
 
-    let mut config: Config = toml::from_str(mixed_config_toml)
-        .expect("Config with both snap configs should parse");
+    let mut config: Config =
+        toml::from_str(mixed_config_toml).expect("Config with both snap configs should parse");
 
     // map.snap has explicit values (not defaults)
     assert_eq!(config.map.snap.threshold, 30.0);
@@ -887,7 +1002,8 @@ fn test_shortcut_missing_fields_use_defaults() {
     let toml_str = r#"
 select = "S"
 "#;
-    let mut config: ShortcutsConfig = toml::from_str(toml_str).expect("Partial config should parse");
+    let mut config: ShortcutsConfig =
+        toml::from_str(toml_str).expect("Partial config should parse");
     config.normalize();
 
     // Explicit value
@@ -895,7 +1011,10 @@ select = "S"
     // Missing fields should have defaults after normalize
     assert_eq!(config.pan, vec!["P".to_string()]);
     assert_eq!(config.undo, vec!["Ctrl+Z".to_string()]);
-    assert_eq!(config.zoom_in, vec!["Equal".to_string(), "Plus".to_string()]);
+    assert_eq!(
+        config.zoom_in,
+        vec!["Equal".to_string(), "Plus".to_string()]
+    );
 }
 
 // ========================================================================
@@ -916,16 +1035,31 @@ fn test_normalize_shortcut_with_modifiers() {
     assert_eq!(normalize_shortcut("Ctrl+S"), Some("Ctrl+S".to_string()));
     assert_eq!(normalize_shortcut("ctrl+s"), Some("Ctrl+S".to_string()));
     assert_eq!(normalize_shortcut("CTRL+S"), Some("Ctrl+S".to_string()));
-    assert_eq!(normalize_shortcut("Ctrl+Digit1"), Some("Ctrl+1".to_string()));
-    assert_eq!(normalize_shortcut("Ctrl+Numpad1"), Some("Ctrl+1".to_string()));
+    assert_eq!(
+        normalize_shortcut("Ctrl+Digit1"),
+        Some("Ctrl+1".to_string())
+    );
+    assert_eq!(
+        normalize_shortcut("Ctrl+Numpad1"),
+        Some("Ctrl+1".to_string())
+    );
 }
 
 #[test]
 fn test_normalize_shortcut_modifier_order() {
     // Modifiers should always be Ctrl+Alt+Shift+Key
-    assert_eq!(normalize_shortcut("Shift+Ctrl+S"), Some("Ctrl+Shift+S".to_string()));
-    assert_eq!(normalize_shortcut("Alt+Ctrl+S"), Some("Ctrl+Alt+S".to_string()));
-    assert_eq!(normalize_shortcut("Shift+Alt+Ctrl+S"), Some("Ctrl+Alt+Shift+S".to_string()));
+    assert_eq!(
+        normalize_shortcut("Shift+Ctrl+S"),
+        Some("Ctrl+Shift+S".to_string())
+    );
+    assert_eq!(
+        normalize_shortcut("Alt+Ctrl+S"),
+        Some("Ctrl+Alt+S".to_string())
+    );
+    assert_eq!(
+        normalize_shortcut("Shift+Alt+Ctrl+S"),
+        Some("Ctrl+Alt+Shift+S".to_string())
+    );
 }
 
 #[test]
@@ -947,7 +1081,10 @@ fn test_normalize_shortcut_special_keys() {
     assert_eq!(normalize_shortcut("Esc"), Some("Escape".to_string()));
     assert_eq!(normalize_shortcut("ArrowUp"), Some("ArrowUp".to_string()));
     assert_eq!(normalize_shortcut("Up"), Some("ArrowUp".to_string()));
-    assert_eq!(normalize_shortcut("ArrowDown"), Some("ArrowDown".to_string()));
+    assert_eq!(
+        normalize_shortcut("ArrowDown"),
+        Some("ArrowDown".to_string())
+    );
     assert_eq!(normalize_shortcut("Down"), Some("ArrowDown".to_string()));
 }
 
@@ -987,25 +1124,52 @@ fn test_normalize_shortcut_trailing_plus() {
     assert_eq!(normalize_shortcut("Shift+"), Some("Shift+Plus".to_string()));
     // "Ctrl++" is also valid and means Ctrl+Plus (common representation)
     assert_eq!(normalize_shortcut("Ctrl++"), Some("Ctrl+Plus".to_string()));
-    assert_eq!(normalize_shortcut("Shift++"), Some("Shift+Plus".to_string()));
+    assert_eq!(
+        normalize_shortcut("Shift++"),
+        Some("Shift+Plus".to_string())
+    );
     // Multiple modifiers with trailing +
-    assert_eq!(normalize_shortcut("Ctrl+Shift+"), Some("Ctrl+Shift+Plus".to_string()));
-    assert_eq!(normalize_shortcut("Ctrl+Shift++"), Some("Ctrl+Shift+Plus".to_string()));
+    assert_eq!(
+        normalize_shortcut("Ctrl+Shift+"),
+        Some("Ctrl+Shift+Plus".to_string())
+    );
+    assert_eq!(
+        normalize_shortcut("Ctrl+Shift++"),
+        Some("Ctrl+Shift+Plus".to_string())
+    );
 }
 
 #[test]
 fn test_normalize_shortcut_remaining_special_keys() {
     // Arrow keys (all directions)
-    assert_eq!(normalize_shortcut("ArrowLeft"), Some("ArrowLeft".to_string()));
-    assert_eq!(normalize_shortcut("arrowleft"), Some("ArrowLeft".to_string()));
+    assert_eq!(
+        normalize_shortcut("ArrowLeft"),
+        Some("ArrowLeft".to_string())
+    );
+    assert_eq!(
+        normalize_shortcut("arrowleft"),
+        Some("ArrowLeft".to_string())
+    );
     assert_eq!(normalize_shortcut("Left"), Some("ArrowLeft".to_string()));
-    assert_eq!(normalize_shortcut("ArrowRight"), Some("ArrowRight".to_string()));
-    assert_eq!(normalize_shortcut("arrowright"), Some("ArrowRight".to_string()));
+    assert_eq!(
+        normalize_shortcut("ArrowRight"),
+        Some("ArrowRight".to_string())
+    );
+    assert_eq!(
+        normalize_shortcut("arrowright"),
+        Some("ArrowRight".to_string())
+    );
     assert_eq!(normalize_shortcut("Right"), Some("ArrowRight".to_string()));
 
     // Backspace
-    assert_eq!(normalize_shortcut("Backspace"), Some("Backspace".to_string()));
-    assert_eq!(normalize_shortcut("backspace"), Some("Backspace".to_string()));
+    assert_eq!(
+        normalize_shortcut("Backspace"),
+        Some("Backspace".to_string())
+    );
+    assert_eq!(
+        normalize_shortcut("backspace"),
+        Some("Backspace".to_string())
+    );
     assert_eq!(normalize_shortcut("Back"), Some("Backspace".to_string()));
 
     // Delete
@@ -1034,11 +1198,23 @@ fn test_normalize_shortcut_remaining_special_keys() {
 
 #[test]
 fn test_normalize_shortcut_special_keys_with_modifiers() {
-    assert_eq!(normalize_shortcut("Ctrl+ArrowLeft"), Some("Ctrl+ArrowLeft".to_string()));
-    assert_eq!(normalize_shortcut("Shift+Delete"), Some("Shift+Delete".to_string()));
-    assert_eq!(normalize_shortcut("Ctrl+Backspace"), Some("Ctrl+Backspace".to_string()));
+    assert_eq!(
+        normalize_shortcut("Ctrl+ArrowLeft"),
+        Some("Ctrl+ArrowLeft".to_string())
+    );
+    assert_eq!(
+        normalize_shortcut("Shift+Delete"),
+        Some("Shift+Delete".to_string())
+    );
+    assert_eq!(
+        normalize_shortcut("Ctrl+Backspace"),
+        Some("Ctrl+Backspace".to_string())
+    );
     assert_eq!(normalize_shortcut("Alt+Tab"), Some("Alt+Tab".to_string()));
-    assert_eq!(normalize_shortcut("Ctrl+Home"), Some("Ctrl+Home".to_string()));
+    assert_eq!(
+        normalize_shortcut("Ctrl+Home"),
+        Some("Ctrl+Home".to_string())
+    );
     assert_eq!(normalize_shortcut("Ctrl+End"), Some("Ctrl+End".to_string()));
 }
 
@@ -1095,7 +1271,10 @@ fn test_shortcut_new_actions_defaults() {
     assert_eq!(config.toggle_station_labels, vec!["L".to_string()]);
     assert_eq!(config.toggle_shot_labels, vec!["Shift+L".to_string()]);
     assert_eq!(config.toggle_section_labels, vec!["Ctrl+L".to_string()]);
-    assert_eq!(config.zoom_in, vec!["Equal".to_string(), "Plus".to_string()]);
+    assert_eq!(
+        config.zoom_in,
+        vec!["Equal".to_string(), "Plus".to_string()]
+    );
     assert_eq!(config.zoom_out, vec!["Minus".to_string()]);
     assert_eq!(config.toggle_depth_gradient, vec!["Shift+D".to_string()]);
     assert_eq!(config.move_segment, vec!["V".to_string()]);
@@ -1116,7 +1295,10 @@ fn test_shortcut_config_serialization_roundtrip() {
 
     assert_eq!(deserialized.select, original.select);
     assert_eq!(deserialized.zoom_in, original.zoom_in);
-    assert_eq!(deserialized.toggle_station_labels, original.toggle_station_labels);
+    assert_eq!(
+        deserialized.toggle_station_labels,
+        original.toggle_station_labels
+    );
 }
 
 // ========================================================================
@@ -1134,8 +1316,12 @@ fn test_shortcut_feedback_default() {
 fn test_shortcut_feedback_serialize_none() {
     // TOML requires key-value pairs, so use wrapper struct
     #[derive(Serialize)]
-    struct Wrapper { value: ShortcutFeedback }
-    let w = Wrapper { value: ShortcutFeedback::None };
+    struct Wrapper {
+        value: ShortcutFeedback,
+    }
+    let w = Wrapper {
+        value: ShortcutFeedback::None,
+    };
     let serialized = toml::to_string(&w).expect("Should serialize");
     assert!(serialized.contains("value = \"none\""));
 }
@@ -1143,8 +1329,12 @@ fn test_shortcut_feedback_serialize_none() {
 #[test]
 fn test_shortcut_feedback_serialize_non_obvious() {
     #[derive(Serialize)]
-    struct Wrapper { value: ShortcutFeedback }
-    let w = Wrapper { value: ShortcutFeedback::NonObvious };
+    struct Wrapper {
+        value: ShortcutFeedback,
+    }
+    let w = Wrapper {
+        value: ShortcutFeedback::NonObvious,
+    };
     let serialized = toml::to_string(&w).expect("Should serialize");
     assert!(serialized.contains("value = \"non_obvious\""));
 }
@@ -1152,8 +1342,12 @@ fn test_shortcut_feedback_serialize_non_obvious() {
 #[test]
 fn test_shortcut_feedback_serialize_all() {
     #[derive(Serialize)]
-    struct Wrapper { value: ShortcutFeedback }
-    let w = Wrapper { value: ShortcutFeedback::All };
+    struct Wrapper {
+        value: ShortcutFeedback,
+    }
+    let w = Wrapper {
+        value: ShortcutFeedback::All,
+    };
     let serialized = toml::to_string(&w).expect("Should serialize");
     assert!(serialized.contains("value = \"all\""));
 }
@@ -1161,7 +1355,9 @@ fn test_shortcut_feedback_serialize_all() {
 #[test]
 fn test_shortcut_feedback_deserialize_none() {
     #[derive(Deserialize)]
-    struct Wrapper { value: ShortcutFeedback }
+    struct Wrapper {
+        value: ShortcutFeedback,
+    }
     let w: Wrapper = toml::from_str("value = \"none\"").expect("Should deserialize");
     assert_eq!(w.value, ShortcutFeedback::None);
 }
@@ -1169,7 +1365,9 @@ fn test_shortcut_feedback_deserialize_none() {
 #[test]
 fn test_shortcut_feedback_deserialize_non_obvious() {
     #[derive(Deserialize)]
-    struct Wrapper { value: ShortcutFeedback }
+    struct Wrapper {
+        value: ShortcutFeedback,
+    }
     let w: Wrapper = toml::from_str("value = \"non_obvious\"").expect("Should deserialize");
     assert_eq!(w.value, ShortcutFeedback::NonObvious);
 }
@@ -1177,7 +1375,9 @@ fn test_shortcut_feedback_deserialize_non_obvious() {
 #[test]
 fn test_shortcut_feedback_deserialize_all() {
     #[derive(Deserialize)]
-    struct Wrapper { value: ShortcutFeedback }
+    struct Wrapper {
+        value: ShortcutFeedback,
+    }
     let w: Wrapper = toml::from_str("value = \"all\"").expect("Should deserialize");
     assert_eq!(w.value, ShortcutFeedback::All);
 }
@@ -1286,7 +1486,9 @@ fn test_appearance_config_defaults() {
 #[test]
 fn test_theme_mode_deserialize_valid_values() {
     #[derive(Deserialize)]
-    struct Wrapper { theme: ThemeMode }
+    struct Wrapper {
+        theme: ThemeMode,
+    }
     let dark: Wrapper = toml::from_str("theme = \"dark\"").expect("dark should parse");
     assert_eq!(dark.theme, ThemeMode::Dark);
     let light: Wrapper = toml::from_str("theme = \"light\"").expect("light should parse");
@@ -1299,29 +1501,44 @@ fn test_theme_mode_deserialize_valid_values() {
 fn test_theme_mode_deserialize_unknown_value() {
     // Unknown theme values should deserialize as Unknown (not error)
     #[derive(Deserialize)]
-    struct Wrapper { theme: ThemeMode }
-    let unknown: Wrapper = toml::from_str("theme = \"neon\"").expect("unknown theme should parse via #[serde(other)]");
+    struct Wrapper {
+        theme: ThemeMode,
+    }
+    let unknown: Wrapper =
+        toml::from_str("theme = \"neon\"").expect("unknown theme should parse via #[serde(other)]");
     assert_eq!(unknown.theme, ThemeMode::Unknown);
 }
 
 #[test]
 fn test_appearance_normalize_unknown_to_dark() {
-    let mut config = AppearanceConfig { theme: ThemeMode::Unknown, ..Default::default() };
+    let mut config = AppearanceConfig {
+        theme: ThemeMode::Unknown,
+        ..Default::default()
+    };
     config.normalize();
     assert_eq!(config.theme, ThemeMode::Dark);
 }
 
 #[test]
 fn test_appearance_normalize_valid_themes_unchanged() {
-    let mut dark = AppearanceConfig { theme: ThemeMode::Dark, ..Default::default() };
+    let mut dark = AppearanceConfig {
+        theme: ThemeMode::Dark,
+        ..Default::default()
+    };
     dark.normalize();
     assert_eq!(dark.theme, ThemeMode::Dark);
 
-    let mut light = AppearanceConfig { theme: ThemeMode::Light, ..Default::default() };
+    let mut light = AppearanceConfig {
+        theme: ThemeMode::Light,
+        ..Default::default()
+    };
     light.normalize();
     assert_eq!(light.theme, ThemeMode::Light);
 
-    let mut auto = AppearanceConfig { theme: ThemeMode::Auto, ..Default::default() };
+    let mut auto = AppearanceConfig {
+        theme: ThemeMode::Auto,
+        ..Default::default()
+    };
     auto.normalize();
     assert_eq!(auto.theme, ThemeMode::Auto);
 }
@@ -1400,7 +1617,8 @@ redo = "Ctrl+Y"
 save = "Ctrl+S"
 "##;
 
-    let config: Config = toml::from_str(toml_str).expect("Config without [appearance] should parse");
+    let config: Config =
+        toml::from_str(toml_str).expect("Config without [appearance] should parse");
     assert_eq!(config.appearance.theme, ThemeMode::Dark);
 }
 
@@ -1480,7 +1698,8 @@ save = "Ctrl+S"
 theme = "neon"
 "##;
 
-    let mut config: Config = toml::from_str(toml_str).expect("Config with invalid theme should still parse");
+    let mut config: Config =
+        toml::from_str(toml_str).expect("Config with invalid theme should still parse");
     assert_eq!(config.appearance.theme, ThemeMode::Unknown);
     config.normalize();
     assert_eq!(config.appearance.theme, ThemeMode::Dark);
@@ -1937,10 +2156,7 @@ fn test_next_section_color_skips_multiple_used() {
 #[test]
 fn test_next_section_color_all_used_wraps_to_first() {
     let mut config = Config::default();
-    config.section_colors.palette = vec![
-        "#ff0000".to_string(),
-        "#00ff00".to_string(),
-    ];
+    config.section_colors.palette = vec!["#ff0000".to_string(), "#00ff00".to_string()];
     let used = vec!["#ff0000".to_string(), "#00ff00".to_string()];
     // All used → returns first color
     assert_eq!(config.next_section_color(&used), "#ff0000");
@@ -1956,20 +2172,14 @@ fn test_next_section_color_empty_palette_returns_hardcoded() {
 #[test]
 fn test_next_section_color_no_used_returns_first() {
     let mut config = Config::default();
-    config.section_colors.palette = vec![
-        "#aabbcc".to_string(),
-        "#ddeeff".to_string(),
-    ];
+    config.section_colors.palette = vec!["#aabbcc".to_string(), "#ddeeff".to_string()];
     assert_eq!(config.next_section_color(&[]), "#aabbcc");
 }
 
 #[test]
 fn test_next_section_color_used_colors_not_in_palette_ignored() {
     let mut config = Config::default();
-    config.section_colors.palette = vec![
-        "#ff0000".to_string(),
-        "#00ff00".to_string(),
-    ];
+    config.section_colors.palette = vec!["#ff0000".to_string(), "#00ff00".to_string()];
     let used = vec!["#999999".to_string()]; // not in palette
     assert_eq!(config.next_section_color(&used), "#ff0000");
 }
@@ -2029,10 +2239,7 @@ fn test_syntactic_highlighting_serde_round_trip() {
         toml::from_str(&serialized).expect("deserialize");
     assert_eq!(deserialized.level, SyntacticHighlightLevel::ToolbarOnly);
     assert_eq!(deserialized.preset, SyntacticHighlightPreset::Deuteranopia);
-    assert_eq!(
-        deserialized.overrides["deuteranopia"]["station"],
-        "#36b96a"
-    );
+    assert_eq!(deserialized.overrides["deuteranopia"]["station"], "#36b96a");
 }
 
 #[test]

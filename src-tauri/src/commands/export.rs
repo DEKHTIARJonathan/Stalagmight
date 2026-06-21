@@ -13,17 +13,15 @@ fn export_format_impl(
     format: &str,
     export_fn: fn(&Project, &Path) -> Result<(), anyhow::Error>,
 ) -> Result<(), String> {
-    let project = state
-        .get_project_state()
-        .ok_or_else(|| {
-            tracing::warn!(
-                path = ?path,
-                purpose = "export project for sharing",
-                format = format,
-                "Export requested with no project open"
-            );
-            "No project open".to_string()
-        })?;
+    let project = state.get_project_state().ok_or_else(|| {
+        tracing::warn!(
+            path = ?path,
+            purpose = "export project for sharing",
+            format = format,
+            "Export requested with no project open"
+        );
+        "No project open".to_string()
+    })?;
 
     tracing::info!(
         path = ?path,
@@ -97,17 +95,15 @@ pub async fn export_image(
     path: PathBuf,
     options: ExportImageOptions,
 ) -> Result<(), String> {
-    let project = state
-        .get_project_state()
-        .ok_or_else(|| {
-            tracing::warn!(
-                path = ?path,
-                purpose = "export map image for sharing",
-                format = ?options.format,
-                "Export requested with no project open"
-            );
-            "No project open".to_string()
-        })?;
+    let project = state.get_project_state().ok_or_else(|| {
+        tracing::warn!(
+            path = ?path,
+            purpose = "export map image for sharing",
+            format = ?options.format,
+            "Export requested with no project open"
+        );
+        "No project open".to_string()
+    })?;
     let format = options.format;
     let log_path = path.clone();
 
@@ -177,17 +173,15 @@ pub(crate) fn export_image_impl(
     path: PathBuf,
     options: ExportImageOptions,
 ) -> Result<(), String> {
-    let project = state
-        .get_project_state()
-        .ok_or_else(|| {
-            tracing::warn!(
-                path = ?path,
-                purpose = "export map image for sharing",
-                format = ?options.format,
-                "Export requested with no project open"
-            );
-            "No project open".to_string()
-        })?;
+    let project = state.get_project_state().ok_or_else(|| {
+        tracing::warn!(
+            path = ?path,
+            purpose = "export map image for sharing",
+            format = ?options.format,
+            "Export requested with no project open"
+        );
+        "No project open".to_string()
+    })?;
 
     tracing::info!(
         path = ?path,

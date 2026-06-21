@@ -162,34 +162,70 @@ pub struct ShotUpdates {
     #[serde(default)]
     #[ts(optional)]
     pub depth_out: Option<f64>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
     pub pitch_in: Option<Option<f64>>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
     pub pitch_out: Option<Option<f64>>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
     pub left: Option<Option<f64>>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
     pub right: Option<Option<f64>>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
     pub up: Option<Option<f64>>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
     pub down: Option<Option<f64>>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
     pub comment: Option<Option<String>>,
     #[serde(default, alias = "is_virtual")]
     #[ts(optional)]
     pub is_reference: Option<bool>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
     pub marker_index: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
     pub temperature: Option<Option<f64>>,
 }
@@ -609,8 +645,7 @@ mod tests {
     fn apply_updates_json_null_clears_nullable_fields() {
         let mut shot = Shot::new(1, base_shot_data());
         let updates: ShotUpdates =
-            serde_json::from_value(serde_json::json!({ "left": null, "comment": null }))
-                .unwrap();
+            serde_json::from_value(serde_json::json!({ "left": null, "comment": null })).unwrap();
         shot.apply_updates(&updates);
         assert!(shot.left.is_none(), "null should clear left");
         assert!(shot.comment.is_none(), "null should clear comment");
@@ -660,9 +695,9 @@ mod tests {
     fn shot_display_position_post_reload_ids() {
         // After reload: shot_id = section_id * FEATURE_ID_STRIDE + sequence_order
         assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 13 + 4, 13), 5); // section 13, seq 4 → pos 5
-        assert_eq!(shot_display_position(FEATURE_ID_STRIDE, 1), 1);       // section 1, seq 0 → pos 1
-        assert_eq!(shot_display_position(FEATURE_ID_STRIDE + 9, 1), 10);  // section 1, seq 9 → pos 10
-        assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 5 + 2, 5), 3);   // section 5, seq 2 → pos 3
+        assert_eq!(shot_display_position(FEATURE_ID_STRIDE, 1), 1); // section 1, seq 0 → pos 1
+        assert_eq!(shot_display_position(FEATURE_ID_STRIDE + 9, 1), 10); // section 1, seq 9 → pos 10
+        assert_eq!(shot_display_position(FEATURE_ID_STRIDE * 5 + 2, 5), 3); // section 5, seq 2 → pos 3
     }
 
     // ========================================================================
@@ -672,28 +707,34 @@ mod tests {
     #[test]
     fn vertical_shot_has_zero_horizontal_length() {
         // Pure vertical shot: dz == length → horizontal = 0
-        let shot = Shot::new(1, ShotData {
-            length: 10.0,
-            depth_in: 0.0,
-            depth_out: 10.0, // dz == length
-            azimuth_in: 45.0,
-            azimuth_out: 225.0,
-            ..Default::default()
-        });
+        let shot = Shot::new(
+            1,
+            ShotData {
+                length: 10.0,
+                depth_in: 0.0,
+                depth_out: 10.0, // dz == length
+                azimuth_in: 45.0,
+                azimuth_out: 225.0,
+                ..Default::default()
+            },
+        );
         assert_eq!(shot.horizontal_length(), 0.0);
     }
 
     #[test]
     fn nearly_vertical_shot_small_horizontal_length() {
         // dz almost equals length — should produce small positive horizontal
-        let shot = Shot::new(1, ShotData {
-            length: 10.0,
-            depth_in: 0.0,
-            depth_out: 9.99,
-            azimuth_in: 0.0,
-            azimuth_out: 0.0,
-            ..Default::default()
-        });
+        let shot = Shot::new(
+            1,
+            ShotData {
+                length: 10.0,
+                depth_in: 0.0,
+                depth_out: 9.99,
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                ..Default::default()
+            },
+        );
         let h = shot.horizontal_length();
         assert!(h > 0.0 && h < 0.5, "nearly vertical shot h={h}");
     }
@@ -712,50 +753,64 @@ mod tests {
 
     #[test]
     fn average_azimuth_same_in_out() {
-        let shot = Shot::new(1, ShotData {
-            azimuth_in: 90.0,
-            azimuth_out: 90.0,
-            length: 1.0,
-            ..Default::default()
-        });
+        let shot = Shot::new(
+            1,
+            ShotData {
+                azimuth_in: 90.0,
+                azimuth_out: 90.0,
+                length: 1.0,
+                ..Default::default()
+            },
+        );
         assert!((shot.average_azimuth() - 90.0).abs() < 1e-6);
     }
 
     #[test]
     fn average_azimuth_wraps_around_north() {
         // 350° and 10° should average to 0° (or 360°)
-        let shot = Shot::new(1, ShotData {
-            azimuth_in: 350.0,
-            azimuth_out: 10.0,
-            length: 1.0,
-            ..Default::default()
-        });
+        let shot = Shot::new(
+            1,
+            ShotData {
+                azimuth_in: 350.0,
+                azimuth_out: 10.0,
+                length: 1.0,
+                ..Default::default()
+            },
+        );
         let avg = shot.average_azimuth();
-        assert!(avg < 1.0 || avg > 359.0,
-            "350-10 wrap should give ~0/360, got {avg}");
+        assert!(
+            avg < 1.0 || avg > 359.0,
+            "350-10 wrap should give ~0/360, got {avg}"
+        );
     }
 
     #[test]
     fn average_azimuth_wraps_around_south() {
         // 170° and 190° should average to 180°
-        let shot = Shot::new(1, ShotData {
-            azimuth_in: 170.0,
-            azimuth_out: 190.0,
-            length: 1.0,
-            ..Default::default()
-        });
+        let shot = Shot::new(
+            1,
+            ShotData {
+                azimuth_in: 170.0,
+                azimuth_out: 190.0,
+                length: 1.0,
+                ..Default::default()
+            },
+        );
         assert!((shot.average_azimuth() - 180.0).abs() < 1e-6);
     }
 
     #[test]
     fn average_azimuth_opposite_direction() {
         // in=0, out=180 → diff = (180+540)%360-180 = -180 → avg = (0 + -90 + 360)%360 = 270
-        let shot = Shot::new(1, ShotData {
-            azimuth_in: 0.0,
-            azimuth_out: 180.0,
-            length: 1.0,
-            ..Default::default()
-        });
+        let shot = Shot::new(
+            1,
+            ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 180.0,
+                length: 1.0,
+                ..Default::default()
+            },
+        );
         assert!((shot.average_azimuth() - 270.0).abs() < 1e-6);
     }
 

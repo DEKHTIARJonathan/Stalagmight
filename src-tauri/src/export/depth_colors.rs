@@ -629,11 +629,20 @@ mod tests {
         for preset in presets {
             for depth in [0.0, 25.0, 50.0, 75.0, 100.0] {
                 let color = get_depth_color(depth, 0.0, 100.0, preset);
-                assert!(color.starts_with('#'), "Preset {preset:?} at depth {depth} should produce hex color starting with #");
-                assert_eq!(color.len(), 7, "Preset {preset:?} at depth {depth} should produce #RRGGBB format, got {color}");
+                assert!(
+                    color.starts_with('#'),
+                    "Preset {preset:?} at depth {depth} should produce hex color starting with #"
+                );
+                assert_eq!(
+                    color.len(),
+                    7,
+                    "Preset {preset:?} at depth {depth} should produce #RRGGBB format, got {color}"
+                );
                 // Verify all characters after # are valid hex
-                assert!(color[1..].chars().all(|c| c.is_ascii_hexdigit()),
-                    "Preset {preset:?} at depth {depth} produced invalid hex: {color}");
+                assert!(
+                    color[1..].chars().all(|c| c.is_ascii_hexdigit()),
+                    "Preset {preset:?} at depth {depth} produced invalid hex: {color}"
+                );
             }
         }
     }
@@ -673,7 +682,10 @@ mod tests {
         let color_12 = get_depth_color(12.5, 0.0, 100.0, DepthPreset::Thermal);
         let (_r12, g12, b12) = hex_to_rgb(&color_12);
         // Should be cyan-ish (high green and blue, low red)
-        assert!(g12 > 200, "At 12.5%, green should be high (cyan area): g={g12}");
+        assert!(
+            g12 > 200,
+            "At 12.5%, green should be high (cyan area): g={g12}"
+        );
         assert!(b12 > 100, "At 12.5%, blue should be present: b={b12}");
 
         // At 37.5% (between stop 1 and 2), should be in green range
@@ -695,7 +707,10 @@ mod tests {
         let (r87, _g87, b87) = hex_to_rgb(&color_87);
         // Should be orange/red-ish
         assert!(r87 > 200, "At 87.5%, red should be high: r={r87}");
-        assert!(b87 < 100, "At 87.5%, blue should be low (not purple): b={b87}");
+        assert!(
+            b87 < 100,
+            "At 87.5%, blue should be low (not purple): b={b87}"
+        );
 
         // Critically: none of the intermediate colors should be purple (high red AND blue, low green)
         for depth in [12.5, 25.0, 37.5, 50.0, 62.5, 75.0, 87.5] {
@@ -703,7 +718,10 @@ mod tests {
             let (r, g, b) = hex_to_rgb(&color);
             // Purple would be: r > 100 AND b > 100 AND g < 100
             let is_purple = r > 100 && b > 100 && g < 100;
-            assert!(!is_purple, "At depth {depth}, color {color} should NOT be purple (r={r}, g={g}, b={b})");
+            assert!(
+                !is_purple,
+                "At depth {depth}, color {color} should NOT be purple (r={r}, g={g}, b={b})"
+            );
         }
     }
 
@@ -711,27 +729,42 @@ mod tests {
     fn test_thermal_min_max_clamp() {
         // Test clamping specifically for Thermal preset (as mentioned in spec)
         let shallow = get_depth_color(0.0, 0.0, 100.0, DepthPreset::Thermal);
-        assert_eq!(shallow, "#00bfff", "Thermal at min depth should be first stop");
+        assert_eq!(
+            shallow, "#00bfff",
+            "Thermal at min depth should be first stop"
+        );
 
         let deep = get_depth_color(100.0, 0.0, 100.0, DepthPreset::Thermal);
         assert_eq!(deep, "#ff4444", "Thermal at max depth should be last stop");
 
         let below = get_depth_color(-10.0, 0.0, 100.0, DepthPreset::Thermal);
-        assert_eq!(below, "#00bfff", "Thermal below min should clamp to first stop");
+        assert_eq!(
+            below, "#00bfff",
+            "Thermal below min should clamp to first stop"
+        );
 
         let above = get_depth_color(150.0, 0.0, 100.0, DepthPreset::Thermal);
-        assert_eq!(above, "#ff4444", "Thermal above max should clamp to last stop");
+        assert_eq!(
+            above, "#ff4444",
+            "Thermal above max should clamp to last stop"
+        );
     }
 
     #[test]
     fn test_thermal_nan_returns_shallow() {
         let result = get_depth_color(f64::NAN, 0.0, 100.0, DepthPreset::Thermal);
-        assert_eq!(result, "#00bfff", "Thermal with NaN depth should return first stop");
+        assert_eq!(
+            result, "#00bfff",
+            "Thermal with NaN depth should return first stop"
+        );
     }
 
     #[test]
     fn test_thermal_same_min_max_returns_shallow() {
         let result = get_depth_color(50.0, 50.0, 50.0, DepthPreset::Thermal);
-        assert_eq!(result, "#00bfff", "Thermal with equal min/max should return first stop");
+        assert_eq!(
+            result, "#00bfff",
+            "Thermal with equal min/max should return first stop"
+        );
     }
 }

@@ -1,0 +1,12 @@
+# Revisions skipped by `git blame` so mechanical, whole-tree reformats don't
+# clobber line authorship. GitHub honors this file automatically in its blame UI.
+# Wire it up locally once:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# A listed SHA only takes effect if it exists on the branch. This assumes the
+# rustfmt PR landed as a MERGE commit (preserves the SHA, as is this repo's
+# convention). A squash/rebase merge would rewrite it — if that happens, replace
+# the SHA below with the one that actually landed on master.
+
+# style(rust): cargo fmt --all (no logic changes)
+416ea342a583532aab8260f7af5aa16766db6c01

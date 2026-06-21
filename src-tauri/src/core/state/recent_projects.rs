@@ -123,8 +123,10 @@ impl AppState {
             let tml = path.with_extension("tml");
             if tml != path && tml.exists() {
                 if let Err(e) = send_to_trash(&tml) {
-                    let msg =
-                        format!("Project deleted, but its collab file {} could not be removed: {e}", tml.display());
+                    let msg = format!(
+                        "Project deleted, but its collab file {} could not be removed: {e}",
+                        tml.display()
+                    );
                     tracing::warn!("{}", msg);
                     warnings.push(ValidationWarning {
                         code: "delete_project_sibling_failed".to_string(),

@@ -7,7 +7,9 @@ use super::AppState;
 impl AppState {
     /// Check if a file hash has already been imported to the project
     pub fn check_duplicate_import(&self, hash: &str) -> Result<bool> {
-        let proj_guard = self.project.lock()
+        let proj_guard = self
+            .project
+            .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock project"))?;
 
         if let Some(project) = proj_guard.as_ref() {
@@ -38,11 +40,16 @@ impl AppState {
     /// Batch-check which section hashes have already been imported.
     /// Returns a parallel `Vec<bool>` (true = already imported).
     pub fn check_section_hashes(&self, hashes: &[String]) -> Result<Vec<bool>> {
-        let proj_guard = self.project.lock()
+        let proj_guard = self
+            .project
+            .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock project"))?;
 
         if let Some(project) = proj_guard.as_ref() {
-            Ok(hashes.iter().map(|h| project.imported_section_hashes.contains(h)).collect())
+            Ok(hashes
+                .iter()
+                .map(|h| project.imported_section_hashes.contains(h))
+                .collect())
         } else {
             Ok(vec![false; hashes.len()])
         }
