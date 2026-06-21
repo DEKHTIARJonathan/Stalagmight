@@ -5,9 +5,11 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button, IconButton } from '../common/Button';
 import {
   ChevronDownIcon,
+  DownloadIcon,
   ShrinkIcon,
 } from '../common/icons';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
+import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
 import type { CSSProperties } from 'react';
 import DisplayMenu from './DisplayMenu';
@@ -129,6 +131,10 @@ export default function Toolbar({
   const activeTool = useUIStore((s) => s.activeTool);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
   const exitDataTableFullScreen = useUIStore((s) => s.exitDataTableFullScreen);
+  // Toolbar icons appear at the 'toolbar_only' syntactic level and up; the
+  // `--sh-*` color vars are the role colors there and a neutral gray at 'off'.
+  const syntacticLevel = useUIStore((s) => s.syntacticLevel);
+  const showToolbarIcons = syntacticLevelAtLeast(syntacticLevel, 'toolbar_only');
   // The closure-adjusted view is read-only: geometry-mutating tools are disabled
   // there (edits are made in the measured view).
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
@@ -164,6 +170,7 @@ export default function Toolbar({
             onClick={() => onImport()}
             disabled={placementModeActive || geometryReadOnly}
             size="sm"
+            icon={showToolbarIcons ? <span style={{ color: 'var(--sh-comment)' }}><DownloadIcon size={16} /></span> : undefined}
             data-testid="toolbar-import-button"
           >
             {t('common.actions.import')}
