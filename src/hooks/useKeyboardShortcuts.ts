@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { exists } from '@tauri-apps/plugin-fs';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
@@ -59,7 +60,8 @@ type ShortcutAction =
   | 'save'
   | 'save_as'
   | 'import_dmp'
-  | 'export';
+  | 'export'
+  | 'quit';
 
 /**
  * Map of action names to the corresponding tool types.
@@ -141,6 +143,7 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   save_as: 'Save As',
   import_dmp: 'Import DMP',
   export: 'Export',
+  quit: 'Quit',
 };
 
 /**
@@ -223,6 +226,7 @@ function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutActio
     'save_as',
     'import_dmp',
     'export',
+    'quit',
   ];
 
   for (const action of actions) {
@@ -650,6 +654,13 @@ export function useKeyboardShortcuts() {
           setProjectActionSource('keyboard');
           openDialog('new-project');
           maybeShowToast(action);
+          break;
+
+        case 'quit':
+          event.preventDefault();
+          // Requests close; the Rust on_window_event re-emits tauri://close-requested,
+          // which useBeforeUnload handles (confirms on unsaved work, else destroys).
+          void getCurrentWindow().close();
           break;
 
         case 'open_file': {
