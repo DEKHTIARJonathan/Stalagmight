@@ -1,5 +1,5 @@
 import { test, expect, Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, waitForMapReady, openSettingsFromMenu, CUSTOM_TILE_URL_RE } from './helpers/app';
+import { setupMockedPage, createProject, waitForMapReady, openSettingsFromMenu, closeProjectViaMenu, CUSTOM_TILE_URL_RE } from './helpers/app';
 
 /**
  * Helper to open the Display menu
@@ -220,18 +220,8 @@ test.describe('Satellite Edge Cases', () => {
       // Close display menu
       await page.keyboard.press('Escape');
 
-      // Go back to home (close project) using the "← Back" button
-      await page.getByTestId('back-button').click();
-
-      // Handle unsaved changes dialog if it appears
-      const discardButton = page.locator('button:has-text("Discard Changes")');
-      const needsDiscard = await discardButton.waitFor({ state: 'visible', timeout: 1500 }).then(() => true).catch(() => false);
-      if (needsDiscard) {
-        await discardButton.click();
-      }
-
-      // Wait for GlobalView
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("Stalagmight")', { timeout: 8000 });
+      // Go back to home (close project) via the hamburger menu
+      await closeProjectViaMenu(page);
 
       // Create a new project
       await createProject(page, 'Satellite Test Project 2');
@@ -261,18 +251,8 @@ test.describe('Satellite Edge Cases', () => {
      * the unsaved-changes dialog with timing issues in the mock environment.
      */
     test('should toggle with empty project (no stations)', async ({ page }) => {
-      // Go back to home and create empty project using the "← Back" button
-      await page.getByTestId('back-button').click();
-
-      // Handle unsaved changes dialog if it appears
-      const discardButton = page.locator('button:has-text("Discard Changes")');
-      const needsDiscard = await discardButton.waitFor({ state: 'visible', timeout: 1500 }).then(() => true).catch(() => false);
-      if (needsDiscard) {
-        await discardButton.click();
-      }
-
-      // Wait for GlobalView
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("Stalagmight")', { timeout: 8000 });
+      // Go back to home and create empty project via the hamburger menu
+      await closeProjectViaMenu(page);
 
       // Create new project (mock has default sections, but test the flow)
       await createProject(page, 'Empty Satellite Test');
@@ -381,18 +361,8 @@ test.describe('Satellite Edge Cases', () => {
      * Settings is only accessible from the GlobalView, not from within a project
      */
     async function openSettingsFromGlobalView(page: Page): Promise<void> {
-      // Go back to GlobalView (close project) using the "← Back" button
-      await page.getByTestId('back-button').click();
-
-      // Handle unsaved changes dialog if it appears
-      const discardButton = page.locator('button:has-text("Discard Changes")');
-      const needsDiscard = await discardButton.waitFor({ state: 'visible', timeout: 1500 }).then(() => true).catch(() => false);
-      if (needsDiscard) {
-        await discardButton.click();
-      }
-
-      // Wait for GlobalView to load
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("Stalagmight")', { timeout: 8000 });
+      // Go back to GlobalView (close project) via the hamburger menu
+      await closeProjectViaMenu(page);
 
       // Open Settings via the hamburger menu (Settings moved into the app menu)
       await openSettingsFromMenu(page);

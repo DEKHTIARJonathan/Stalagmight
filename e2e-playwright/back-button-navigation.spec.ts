@@ -42,6 +42,18 @@ async function createProject(page: import('./fixtures/coverage').Page, name: str
   await page.waitForSelector('canvas', { timeout: 10000 });
 }
 
+/** Open the in-project hamburger menu. */
+async function openMenu(page: import('./fixtures/coverage').Page) {
+  await page.locator('[data-testid="app-menu-trigger"]').click();
+  await page.waitForSelector('[data-testid="app-menu"]', { timeout: 5000 });
+}
+
+/** Close the project via the hamburger "Close Project" item (now in the menu). */
+async function clickBack(page: import('./fixtures/coverage').Page) {
+  await openMenu(page);
+  await page.click('[data-testid="back-button"]');
+}
+
 test.describe('Back Button Navigation', () => {
   test.beforeEach(async ({ page }) => {
     // Capture page errors - test will fail if any occur
@@ -77,8 +89,8 @@ test.describe('Back Button Navigation', () => {
     // Verify we're in SingleSystemView (canvas is visible)
     await expect(page.locator('canvas').first()).toBeVisible();
 
-    // Click Back button
-    await page.click('[data-testid="back-button"]');
+    // Close the project via the hamburger menu
+    await clickBack(page);
 
     // Verify we're back at Global View
     await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 10000 });
@@ -105,8 +117,8 @@ test.describe('Back Button Navigation', () => {
       }
     });
 
-    // Click Back button
-    await page.click('[data-testid="back-button"]');
+    // Close the project via the hamburger menu
+    await clickBack(page);
 
     // Verify unsaved changes dialog appears
     await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 5000 });
@@ -142,8 +154,8 @@ test.describe('Back Button Navigation', () => {
       }
     });
 
-    // Click Back button
-    await page.click('[data-testid="back-button"]');
+    // Close the project via the hamburger menu
+    await clickBack(page);
 
     // Verify unsaved changes dialog appears
     await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 5000 });
@@ -165,13 +177,13 @@ test.describe('Back Button Navigation', () => {
     // Wait for project to be fully loaded
     await expect(page.locator('canvas').first()).toBeVisible();
 
-    // Rapidly click Back button multiple times using force: true to click even if navigating
+    // Open the menu and rapidly click "Close Project" (now a menu item).
+    await openMenu(page);
     const backButton = page.locator('[data-testid="back-button"]');
 
-    // Use Promise.all to fire clicks as fast as possible
-    // The first click may already navigate, but subsequent clicks should be ignored gracefully
+    // The first click navigates (and closes the menu); the menu item then
+    // disappears, so the extra force-clicks should be ignored gracefully.
     await backButton.click();
-    // Try additional clicks without waiting - they should be ignored by the guard
     await backButton.click({ force: true, timeout: 1000 }).catch(() => {});
     await backButton.click({ force: true, timeout: 1000 }).catch(() => {});
 
@@ -183,8 +195,8 @@ test.describe('Back Button Navigation', () => {
     // Create a project
     await createProject(page, 'Immediate Back Test Project');
 
-    // Click Back button immediately (don't wait for map to fully load)
-    await page.click('[data-testid="back-button"]');
+    // Close immediately (don't wait for map to fully load), via the menu
+    await clickBack(page);
 
     // Should return to Global View without crashing
     await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 10000 });
@@ -214,8 +226,8 @@ test.describe('Back Button Navigation', () => {
     // Wait for grid to render
     await page.waitForTimeout(500);
 
-    // Click Back button
-    await page.click('[data-testid="back-button"]');
+    // Close the project via the hamburger menu
+    await clickBack(page);
 
     // Should return to Global View without crashing (grid cleanup should work)
     await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 10000 });
@@ -242,8 +254,8 @@ test.describe('Back Button Navigation', () => {
       }
     });
 
-    // Click Back button
-    await page.click('[data-testid="back-button"]');
+    // Close the project via the hamburger menu
+    await clickBack(page);
 
     // Should return to Global View without crashing
     await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 10000 });

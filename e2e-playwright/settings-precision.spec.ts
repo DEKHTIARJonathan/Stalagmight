@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { openSettingsFromMenu } from './helpers/app';
+import { openSettingsFromMenu, closeProjectViaMenu } from './helpers/app';
 
 /**
  * E2E tests for Decimal Precision settings (per-category).
@@ -28,11 +28,8 @@ async function createProject(page: Page, name: string): Promise<void> {
 }
 
 async function goBackToGlobalView(page: Page): Promise<void> {
-  const backButton = page.locator('[data-testid="back-button"]');
-  if (await backButton.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await backButton.click();
-    await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 5000 });
-  }
+  if (await page.getByTestId('global-view').isVisible().catch(() => false)) return;
+  await closeProjectViaMenu(page);
 }
 
 async function openSettingsDialog(page: Page): Promise<void> {

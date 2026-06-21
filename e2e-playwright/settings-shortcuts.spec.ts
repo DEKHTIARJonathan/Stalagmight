@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { openSettingsFromMenu } from './helpers/app';
+import { openSettingsFromMenu, closeProjectViaMenu } from './helpers/app';
 
 /**
  * E2E tests for keyboard shortcuts configuration in Settings dialog.
@@ -40,12 +40,10 @@ async function createProject(page: Page, name: string): Promise<void> {
  * Helper to go back to GlobalView from a project view
  */
 async function goBackToGlobalView(page: Page): Promise<void> {
-  const backButton = page.locator('[data-testid="back-button"]');
-  if (await backButton.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await backButton.click();
-    // Wait for GlobalView to appear
-    await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 5000 });
-  }
+  // Close Project is now a hamburger-menu item; closeProjectViaMenu opens the
+  // menu, clicks the back-button item, and waits for global-view.
+  if (await page.getByTestId('global-view').isVisible().catch(() => false)) return;
+  await closeProjectViaMenu(page);
 }
 
 /**

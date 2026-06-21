@@ -5,6 +5,7 @@ import {
   seedProjectWithSections,
   waitForMapReady,
   waitForNoDialogs,
+  openAppMenu,
   type SectionSeed,
 } from './helpers/app';
 
@@ -147,8 +148,10 @@ test.describe('Data table fullscreen mode', () => {
   test('Escape closes an open dialog before exiting fullscreen', async ({ page }) => {
     await enterFullScreen(page);
 
-    // The debug button stays in the reduced toolbar; open its dialog.
-    await page.getByTestId('toolbar-debug-button').click();
+    // Open a dialog (Debug Logs, via the hamburger menu, which stays in the
+    // reduced toolbar) to verify Escape closes it before exiting fullscreen.
+    await openAppMenu(page);
+    await page.getByTestId('global-debug-button').click();
     await expect(page.getByTestId('debug-dialog')).toBeVisible();
 
     // First Escape closes the dialog and stays fullscreen.
@@ -175,29 +178,25 @@ test.describe('Data table fullscreen mode', () => {
     await expect(page.getByTestId('data-table')).toHaveCount(0);
   });
 
-  test('reduced toolbar: tools give way to the table picker, Import/Export gray out', async ({ page }) => {
+  test('reduced toolbar: tools give way to the table picker, Import button drops out', async ({ page }) => {
     await enterFullScreen(page);
 
     // Center title instead of the active map tool.
     await expect(page.getByTestId('toolbar-data-table-title')).toHaveText('Data table');
     await expect(page.getByTestId('toolbar-active-tool')).toHaveCount(0);
 
-    // Map tools and the display menu are gone; only the table picker (and the
-    // debug button) remain on the right.
+    // Map tools and the display menu are gone; only the table picker remains on the right.
     await expect(page.getByTestId('toolbar-tools-group')).toHaveCount(0);
     await expect(page.getByTestId('display-menu-button')).toHaveCount(0);
     await expect(page.getByTestId('table-select-dropdown')).toBeVisible();
-    await expect(page.getByTestId('toolbar-debug-button')).toBeVisible();
 
-    // The project-close button is replaced by the "Back to Map" button in the
-    // left slot; Save/Undo/Redo stay; Import/Export are gone.
-    await expect(page.getByTestId('back-button')).toHaveCount(0);
-    await expect(page.getByTestId('toolbar-save-button')).toBeEnabled();
+    // The hamburger menu (Save/Export/Close/Debug live there) stays; the Import
+    // button is replaced by the "Back to Map" button; Undo/Redo stay.
+    await expect(page.getByTestId('app-menu-trigger')).toBeVisible();
     await expect(page.getByTestId('toolbar-undo-button')).toBeVisible();
     await expect(page.getByTestId('toolbar-redo-button')).toBeVisible();
     await expect(page.getByTestId('toolbar-import-button')).toHaveCount(0);
-    await expect(page.getByTestId('toolbar-export-button')).toHaveCount(0);
-    // The "Back to Map" button now lives on the left, in place of Close.
+    // The "Back to Map" button lives on the left, in place of Import.
     await expect(page.getByTestId('toolbar-map-view-button')).toHaveText('Back to Map');
     await expect(
       page.getByTestId('toolbar-file-controls').getByTestId('toolbar-map-view-button'),
@@ -210,9 +209,8 @@ test.describe('Data table fullscreen mode', () => {
     await expect(page.getByTestId('display-menu-button')).toBeVisible();
     await expect(page.getByTestId('table-select-dropdown')).toHaveCount(0);
     await expect(page.getByTestId('toolbar-map-view-button')).toHaveCount(0);
+    await expect(page.getByTestId('app-menu-trigger')).toBeVisible();
     await expect(page.getByTestId('toolbar-import-button')).toBeEnabled();
-    await expect(page.getByTestId('toolbar-export-button')).toBeEnabled();
-    await expect(page.getByTestId('toolbar-map-view-button')).toHaveCount(0);
   });
 
   test('blocks tool and import/export shortcuts but keeps save/undo alive', async ({ page }) => {

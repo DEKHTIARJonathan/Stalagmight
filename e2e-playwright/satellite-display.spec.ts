@@ -272,7 +272,8 @@ test.describe('Satellite Display', () => {
      * Settings is only accessible from the GlobalView, not from within a project
      */
     async function openSettingsFromGlobalView(page: Page): Promise<void> {
-      // Go back to GlobalView (close project) using the toolbar Close button
+      // Open the hamburger menu, then click Close Project (now a menu item)
+      await openAppMenu(page);
       await page.getByTestId('back-button').click();
 
       // Handle unsaved changes dialog if it appears

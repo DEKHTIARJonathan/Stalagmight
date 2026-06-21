@@ -16,6 +16,7 @@ import {
   seedProjectWithSections,
   waitForMapIdle,
   waitForNoDialogs,
+  openAppMenu,
   type SectionSeed,
 } from './helpers/app';
 
@@ -237,6 +238,7 @@ test.describe('section pill hover highlighting', () => {
     // Navigate back to the GlobalView, which unmounts the DataTable. Its
     // cleanup effect must clear the highlight it set. The seeded project has
     // unsaved changes, so discard them when prompted.
+    await openAppMenu(page);
     await page.getByTestId('back-button').click();
     const unsavedDialog = page.getByTestId('unsaved-changes-dialog');
     await expect(unsavedDialog).toBeVisible({ timeout: 3000 });

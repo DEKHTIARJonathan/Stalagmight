@@ -489,8 +489,8 @@ test.describe('Section Highlighting', () => {
 
       // Move mouse away from the row to the toolbar area (above sections panel, outside map)
       // The toolbar buttons are a safe area that won't trigger map hover
-      const backButton = page.locator('[data-testid="back-button"]');
-      await backButton.hover();
+      const toolbarSafeArea = page.locator('[data-testid="toolbar-import-button"]');
+      await toolbarSafeArea.hover();
 
       // Poll for hoveredSectionId to clear
       const hoveredId = await pollHoveredSectionId(page, (id) => id === null);
