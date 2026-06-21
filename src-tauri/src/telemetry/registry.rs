@@ -21,10 +21,10 @@ pub(super) const SOURCE_NAMES: &[&str] = &[
     "touch",          // 12
     "dblclick",       // 13
     // Project open/create/import entry-point attribution.
-    "recent-list",  // recent-projects list (card/table) double-click
-    "recent-map",   // recent-projects map marker
-    "hamburger",    // global-view hamburger application menu
-    "empty-state",  // empty-state cards (first run)
+    "recent-list", // recent-projects list (card/table) double-click
+    "recent-map",  // recent-projects map marker
+    "hamburger",   // global-view hamburger application menu
+    "empty-state", // empty-state cards (first run)
 ];
 
 /// Known event base names (the `:source` suffix is appended at runtime). The
