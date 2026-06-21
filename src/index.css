@@ -1525,6 +1525,30 @@ button.sh-tool.sh-tool--active {
   background: color-mix(in oklab, var(--o) 22%, var(--cc-panel));
   border-color: color-mix(in oklab, var(--o) 48%, var(--cc-border));
 }
+
+/* Display-menu entity TOGGLE pill: off = no fill, just a faint entity-colored
+   outline; on = a full entity-color fill. `--o` is the element's --sh-<entity>;
+   `--pill-oncolor` is the JS-computed contrast color used for the label + glyph
+   on the filled state (the descendant rule below recolors the duotone glyph,
+   whose own inline `--o` is beaten by `!important`). */
+button.sh-epill {
+  background: transparent;
+  border: 1px solid color-mix(in oklab, var(--o) 45%, var(--cc-border));
+  color: var(--cc-text-primary);
+  transition-property: background-color, border-color, color;
+}
+button.sh-epill:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--o) 12%, transparent);
+  border-color: color-mix(in oklab, var(--o) 65%, var(--cc-border));
+}
+button.sh-epill.sh-epill--on {
+  background: var(--o);
+  border-color: var(--o);
+  color: var(--pill-oncolor);
+}
+button.sh-epill.sh-epill--on .duotone {
+  --o: var(--pill-oncolor) !important;
+}
 /* The fully-qualified id after a divider, at the SAME font/size as the pill text
    (just dimmer). The divider is a SHORT centered vertical bar (pseudo-element),
    not a full-height border, so it doesn't span the whole line. */

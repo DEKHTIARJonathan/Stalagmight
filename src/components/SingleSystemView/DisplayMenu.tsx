@@ -21,6 +21,8 @@ import {
   syntacticVarName,
   type BlobEntity,
 } from '../../theme/syntacticPalette';
+import { getThemeColor } from '../../utils/themeColors';
+import { getContrastColor } from '../../utils/colors';
 import { setSource } from '../../utils/telemetry';
 import { hasEligibleClosures } from '../../utils/closures';
 
@@ -77,15 +79,12 @@ const COMMENTS_LABELS: ToggleItem[] = [
 type ColorMode = 'section' | 'depth' | 'distance' | 'issues';
 
 /**
- * A pill toggle. When `entity` is set, the pill is tinted in that element's
- * color via the shared `.sh-tool` wash (`--o` = `var(--sh-<entity>)`, the same
- * setting-wired palette the data-table/legend chips use; it neutralizes to gray
- * at the 'off' highlighting level). Otherwise it fills with the theme accent.
- * Filled (stronger) when active, a soft highlight when off, dimmed when disabled.
- *
- * We use `.sh-tool` (the tinted *toggle button* style, with an active ring)
- * rather than `.sh-pill` (which styles static entity hyperlinks in tables) —
- * these pills are stateful on/off toggles, not links.
+ * A pill toggle. When `entityColored` is set, the pill carries its element's
+ * color (`--o` = `var(--sh-<entity>)`, the same setting-wired palette the
+ * data-table/legend chips use): off shows just a faint entity-tinted outline,
+ * on fills with the full element color (with `onColor` — a contrast color — for
+ * the label + glyph). Otherwise it fills with the theme accent. Dimmed when
+ * disabled.
  */
 function Pill({
   label,
@@ -95,6 +94,8 @@ function Pill({
   testId,
   title,
   entity,
+  entityColored,
+  onColor,
   icon,
 }: {
   label: string;
@@ -104,11 +105,15 @@ function Pill({
   testId: string;
   title?: string;
   entity?: BlobEntity | undefined;
+  /** Apply the element-colored outline/fill (true only once colors are enabled). */
+  entityColored?: boolean;
+  /** Contrast color for the filled (on) state's label + glyph. */
+  onColor?: string | undefined;
   icon?: ReactNode;
 }) {
   const base = 'px-3 py-1 text-xs rounded-full inline-flex items-center gap-1.5 transition-colors';
-  const className = entity
-    ? `${base} sh-tool ${active ? 'sh-tool--active' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`
+  const className = entity && entityColored
+    ? `${base} sh-epill ${active ? 'sh-epill--on' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`
     : `${base} border ${
         disabled
           ? 'opacity-50 cursor-not-allowed bg-background border-border text-text-secondary'
@@ -116,7 +121,9 @@ function Pill({
             ? 'bg-accent text-accent-on border-accent'
             : 'bg-background border-border text-text-primary hover:bg-background-50'
       }`;
-  const style = entity ? ({ '--o': `var(${syntacticVarName(entity)})` } as CSSProperties) : undefined;
+  const style = entity && entityColored
+    ? ({ '--o': `var(${syntacticVarName(entity)})`, '--pill-oncolor': onColor ?? '#ffffff' } as CSSProperties)
+    : undefined;
   return (
     <button
       type="button"
@@ -248,8 +255,10 @@ export default function DisplayMenu() {
     }
   };
 
-  // Element icons + colored pills appear once the highlighting level reaches 'icons'.
+  // Element icons appear at the 'icons' level; the element-color outline/fill
+  // kicks in as soon as colors are on ('toolbar_only'+), like the rest of the chrome.
   const showIcons = syntacticLevelAtLeast(syntacticLevel, 'icons');
+  const colorsOn = syntacticLevelAtLeast(syntacticLevel, 'toolbar_only');
 
   const entitySymbolFor = (item: ToggleItem): ReactNode => {
     if (!item.entity || !showIcons) return undefined;
@@ -260,16 +269,25 @@ export default function DisplayMenu() {
 
   const renderTogglePill = (item: ToggleItem) => {
     const disabled = item.disabledWhen ? !toggleValues[item.disabledWhen] : false;
+    const active = toggleValues[item.key];
+    const entityColored = !!item.entity && colorsOn;
+    // Contrast color for the filled (on) state, derived from the resolved
+    // (possibly user-overridden) element color so the label + glyph stay legible.
+    const onColor = entityColored && active && item.entity
+      ? getContrastColor(getThemeColor(syntacticVarName(item.entity)))
+      : undefined;
     return (
       <Pill
         key={item.key}
         label={t(item.labelKey)}
         title={item.descriptionKey ? t(item.descriptionKey) : ''}
-        active={toggleValues[item.key]}
+        active={active}
         disabled={disabled}
         onClick={() => { setSource('display-menu'); toggleDisplay(item.key); }}
         testId={`display-toggle-${item.key}`}
         entity={item.entity}
+        entityColored={entityColored}
+        onColor={onColor}
         icon={entitySymbolFor(item)}
       />
     );
