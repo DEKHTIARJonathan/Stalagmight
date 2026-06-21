@@ -16,7 +16,10 @@ import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
-import { setSource, withTrackingSuppressed } from '../../utils/telemetry';
+import { open } from '@tauri-apps/plugin-dialog';
+import { dmpGpxOpenFilters } from '../../utils/fileDialogs';
+import { useProjectMenuItems } from './useProjectMenuItems';
+import { setSource, withTrackingSuppressed, setProjectActionSource, clearProjectActionSource } from '../../utils/telemetry';
 import { useTranslation } from 'react-i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -36,8 +39,8 @@ export default function SingleSystemView() {
     project,
     stats,
     handleSaveProject: rawSave,
-    handleCloseProject,
     handleImportDmp,
+    handleImportGpx,
     canUndo,
     canRedo,
     undo,
@@ -52,6 +55,26 @@ export default function SingleSystemView() {
     autoSave.cancelPending();
     return rawSave();
   }, [autoSave, rawSave]);
+
+  // Toolbar "Import" button: a single picker for the two formats importable into
+  // an open project (DMP + GPX), routed by extension.
+  const handleImportDmpOrGpx = useCallback(async () => {
+    setProjectActionSource('toolbar');
+    const selected = await open({ multiple: false, filters: dmpGpxOpenFilters() });
+    if (!selected || typeof selected !== 'string') {
+      clearProjectActionSource();
+      return;
+    }
+    if (selected.toLowerCase().endsWith('.gpx')) {
+      await handleImportGpx(true, selected);
+    } else {
+      await handleImportDmp(true, selected);
+    }
+  }, [handleImportDmp, handleImportGpx]);
+
+  // Hamburger menu items (file/project actions). Built here so it can use the
+  // autosave-aware wrapped save.
+  const menuItems = useProjectMenuItems({ onSave: handleSaveProject });
 
   const {
     sectionsPanelOpen,
@@ -314,9 +337,8 @@ export default function SingleSystemView() {
       </h1>
       {/* Toolbar */}
       <Toolbar
-        onBack={handleCloseProject}
-        onSave={handleSaveProject}
-        onImport={handleImportDmp}
+        menuItems={menuItems}
+        onImport={handleImportDmpOrGpx}
         onUndo={undo}
         onRedo={redo}
         canUndo={canUndo}

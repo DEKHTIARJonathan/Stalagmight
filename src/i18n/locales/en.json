@@ -2004,6 +2004,14 @@
   },
   "singleView": {
     "empty": "No project open.",
+    "menu": {
+      "aria": "Project menu",
+      "saveAs": "Save As",
+      "saveAndClose": "Save and Close",
+      "closeProject": "Close Project",
+      "projectSettings": "Project Settings",
+      "projectDetails": "Project Details"
+    },
     "status": {
       "depthRange": "Depth range: {{min}} - {{max}}",
       "summary": "Sections: {{sections}} | Shots: {{shots}} | Length: {{length}}",

@@ -12,6 +12,7 @@ import { Button } from '../common/Button';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
 import { BugIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIcon, QuitIcon, SettingsIcon } from '../common/icons';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
+import { MENU_ICON_COLORS } from '../common/menuColors';
 import { setProjectActionSource } from '../../utils/telemetry';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
@@ -69,20 +70,6 @@ function formatPhaseLabel(
 }
 
 type ViewTab = 'map' | 'list';
-
-/**
- * Fixed icon tints for the hamburger menu actions. These are menu-action colors
- * (not survey-entity syntactic roles), so they live here rather than in the
- * syntactic palette. Hexes reuse the app's existing palette where natural.
- */
-const MENU_ICON_COLORS = {
-  new: '#5fcf83', // green
-  open: '#0070dd', // blue
-  import: '#eab946', // amber
-  settings: '#9aa6b2', // gray
-  debug: '#a335ee', // purple
-  quit: '#f75d59', // red
-} as const;
 
 interface ContextMenuState {
   visible: boolean;

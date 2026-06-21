@@ -696,3 +696,46 @@ export function ListIcon(props: IconProps) {
     </BaseIcon>
   );
 }
+
+export function SaveIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      {/* Floppy disk */}
+      <path d="M4 4 H13 L16 7 V16 H4 Z" />
+      <path d="M6 4 H12 V8 H6 Z" />
+      <rect x="6" y="11" width="8" height="5" />
+    </BaseIcon>
+  );
+}
+
+export function ExportIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      {/* Box with an arrow leaving upward */}
+      <polyline points="6 8 10 4 14 8" />
+      <line x1="10" y1="4" x2="10" y2="13" />
+      <path d="M4 12 V16 H16 V12" />
+    </BaseIcon>
+  );
+}
+
+export function InfoIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <circle cx="10" cy="10" r="7" />
+      <line x1="10" y1="9" x2="10" y2="14" />
+      <line x1="10" y1="6.5" x2="10" y2="6.6" />
+    </BaseIcon>
+  );
+}
+
+export function SlidersIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <line x1="3" y1="6" x2="17" y2="6" />
+      <line x1="3" y1="14" x2="17" y2="14" />
+      <circle cx="8" cy="6" r="2" />
+      <circle cx="13" cy="14" r="2" />
+    </BaseIcon>
+  );
+}

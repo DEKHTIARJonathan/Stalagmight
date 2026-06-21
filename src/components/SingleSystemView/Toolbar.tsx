@@ -4,10 +4,10 @@ import { useUIStore, type ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button, IconButton } from '../common/Button';
 import {
-  BugIcon,
   ChevronDownIcon,
   ShrinkIcon,
 } from '../common/icons';
+import { AppMenu, type AppMenuItem } from '../common/AppMenu';
 import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
 import type { CSSProperties } from 'react';
 import DisplayMenu from './DisplayMenu';
@@ -19,17 +19,17 @@ import { setSource } from '../../utils/telemetry';
 import { defaultConfig } from '../../types/config';
 
 interface ToolbarProps {
-  onBack: () => void;
-  onSave: () => void;
+  /** Items for the left-side hamburger (AppMenu): file/project actions. */
+  menuItems: AppMenuItem[];
   onImport: () => void;
   onUndo: () => void;
   onRedo: () => void;
   canUndo: boolean;
   canRedo: boolean;
   placementModeActive: boolean;
-  /** Reduced variant while the data table is fullscreen: the project-close
-   *  button becomes the "Back to Map" button, Save/Undo/Redo stay, Import/Export
-   *  drop out, and the map tools give way to the table picker. */
+  /** Reduced variant while the data table is fullscreen: the left slot shows the
+   *  "Back to Map" button instead of the Import button; the hamburger + Undo/Redo
+   *  stay, and the map tools give way to the table picker. */
   dataTableFullScreen: boolean;
 }
 
@@ -116,8 +116,7 @@ const TOOLBAR_ITEMS: ToolbarItem[] = [
 ];
 
 export default function Toolbar({
-  onBack,
-  onSave,
+  menuItems,
   onImport,
   onUndo,
   onRedo,
@@ -129,7 +128,6 @@ export default function Toolbar({
   const { t } = useTranslation();
   const activeTool = useUIStore((s) => s.activeTool);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
-  const openDialog = useUIStore((s) => s.openDialog);
   const exitDataTableFullScreen = useUIStore((s) => s.exitDataTableFullScreen);
   // The closure-adjusted view is read-only: geometry-mutating tools are disabled
   // there (edits are made in the measured view).
@@ -137,14 +135,15 @@ export default function Toolbar({
 
   return (
     <header className="relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
-      {/* Left section */}
+      {/* Left section: hamburger menu, Import, then Undo/Redo */}
       <div
         className={`flex items-center gap-2 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
         data-testid="toolbar-file-controls"
       >
-        {/* Fullscreen table mode has no project-close affordance here; the
-            left slot becomes the "Back to Map" button (the relocated, relabeled
-            shrink button), keeping the same pan-accent + sh-tool wash. */}
+        <AppMenu items={menuItems} aria-label={t('singleView.menu.aria')} />
+        {/* In fullscreen table mode the left slot shows the "Back to Map" button
+            (the relabeled shrink button) instead of Import; both Save/Export/Close
+            live in the hamburger now. */}
         {dataTableFullScreen ? (
           <Button
             icon={
@@ -162,36 +161,13 @@ export default function Toolbar({
           </Button>
         ) : (
           <Button
-            onClick={onBack}
-            disabled={placementModeActive}
+            onClick={() => onImport()}
+            disabled={placementModeActive || geometryReadOnly}
             size="sm"
-            data-testid="back-button"
+            data-testid="toolbar-import-button"
           >
-            {t('common.actions.close')}
+            {t('common.actions.import')}
           </Button>
-        )}
-        <Button onClick={() => { setSource('toolbar'); onSave(); }} disabled={placementModeActive} size="sm" data-testid="toolbar-save-button">
-          {t('common.actions.save')}
-        </Button>
-        {!dataTableFullScreen && (
-          <>
-            <Button
-              onClick={() => { setSource('toolbar'); onImport(); }}
-              disabled={placementModeActive || geometryReadOnly}
-              size="sm"
-              data-testid="toolbar-import-button"
-            >
-              {t('common.actions.import')}
-            </Button>
-            <Button
-              onClick={() => { setSource('toolbar'); openDialog('export'); }}
-              disabled={placementModeActive}
-              size="sm"
-              data-testid="toolbar-export-button"
-            >
-              {t('common.actions.export')}
-            </Button>
-          </>
         )}
         <div className="w-px h-6 bg-border mx-2" />
         <UndoHistoryDropdown
@@ -303,16 +279,6 @@ export default function Toolbar({
             <DisplayMenu />
           </>
         )}
-        <IconButton
-          icon={<BugIcon />}
-          onClick={() => { setSource('toolbar'); openDialog('debug'); }}
-          tooltip="Debug Logs"
-          aria-label="Debug Logs"
-          size="sm"
-          disabled={placementModeActive}
-          className={placementModeActive ? 'opacity-45 grayscale' : ''}
-          data-testid="toolbar-debug-button"
-        />
       </div>
     </header>
   );

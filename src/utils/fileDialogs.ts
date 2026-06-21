@@ -64,6 +64,19 @@ export function gpxOpenFilters() {
   ];
 }
 
+/**
+ * Filters for the in-project "Import" button: the only formats importable into
+ * an already-open project (Ariane/Compass create new projects, so are excluded).
+ */
+export function dmpGpxOpenFilters() {
+  return [
+    { name: 'Survey Files', extensions: [DMP_EXTENSION, GPX_EXTENSION] },
+    { name: 'mNemo DMP', extensions: [DMP_EXTENSION] },
+    { name: 'GPX Files', extensions: [GPX_EXTENSION] },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+}
+
 export function importOpenFilters() {
   return [
     { name: 'Survey Files', extensions: [DMP_EXTENSION, ...TML_EXTENSIONS, GPX_EXTENSION, ...COMPASS_EXTENSIONS] },
