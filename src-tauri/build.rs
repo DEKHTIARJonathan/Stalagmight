@@ -49,8 +49,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // When the telemetry feature is enabled, TELEMETRY_ENDPOINT must be set.
     // This prevents forks from accidentally reporting to our server.
     if std::env::var("CARGO_FEATURE_TELEMETRY").is_ok() {
-        let endpoint = std::env::var("TELEMETRY_ENDPOINT")
-            .map_err(|_| "TELEMETRY_ENDPOINT must be set when building with --features telemetry")?;
+        let endpoint = std::env::var("TELEMETRY_ENDPOINT").map_err(|_| {
+            "TELEMETRY_ENDPOINT must be set when building with --features telemetry"
+        })?;
         println!("cargo::rustc-env=TELEMETRY_ENDPOINT={endpoint}");
     }
 
