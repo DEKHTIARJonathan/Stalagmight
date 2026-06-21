@@ -476,7 +476,7 @@ export function AppMenu({
             role="menu"
             aria-label={ariaLabel}
             data-testid={menuTestId}
-            className="bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[220px]"
+            className="bg-panel border border-border rounded-lg shadow-[0_16px_40px_rgba(0,0,0,0.6)] py-1 min-w-[220px]"
             style={menuStyle}
             onKeyDown={onMenuKeyDown}
           >
@@ -495,7 +495,7 @@ export function AppMenu({
             role="menu"
             aria-label={items.find((i) => i.id === openSubmenuId)?.label ?? 'Submenu'}
             data-testid={`${menuTestId}-submenu-${openSubmenuId}`}
-            className="bg-panel border border-border rounded-lg shadow-xl py-1 min-w-[200px]"
+            className="bg-panel border border-border rounded-lg shadow-[0_16px_40px_rgba(0,0,0,0.6)] py-1 min-w-[200px]"
             style={submenuStyle}
             onKeyDown={(e) => onSubmenuKeyDown(e, activeSubmenu)}
           >
