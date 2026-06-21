@@ -151,24 +151,38 @@ test.describe('Data table column preferences', () => {
       'depth_in',
     ]);
 
-    // The persisted order is the FULL key list (hidden columns keep their
-    // slots so they reappear in place when re-shown).
-    const call = await waitForSingleViewCall(page);
-    const order = call.columnOrder as string[];
-    expect(order.indexOf('depth_out')).toBe(order.indexOf('length') - 1);
-    expect(order).toContain('section_id');
-    expect(order).toContain('shot_id');
-
+    // The persisted order is the FULL key list (hidden columns keep their slots
+    // so they reappear in place when re-shown). Assert on the LATEST recorded
+    // `update_data_table_view` call — its order has depth_out immediately before
+    // length — never an exact call count or the first call. Under slower /
+    // contended CI timing the debounced save (DataTable.tsx) was observed to
+    // record more than one call and/or an earlier call carrying a non-final
+    // order, so the old "exactly one call, read calls[0]" assertion flaked two
+    // ways on the self-hosted nightly runner. The trailing debounce always
+    // wins, so the latest recorded call is authoritative. (The post-save
+    // loadConfig() re-sync is NOT the cause — its re-seed effect is ref-guarded
+    // against re-firing the save.)
     await page.waitForFunction(
       () => {
-        const stored = ((window as any).__E2E_TEST__?.projectStore.getState().config?.panels
-          ?.data_table_shot_column_order ?? []) as string[];
-        return stored.length > 0;
+        const calls = ((window as any).__MOCK_DATA_TABLE_VIEW_CALLS__ ?? []) as Array<{
+          columnOrder?: string[];
+        }>;
+        const order = (calls[calls.length - 1]?.columnOrder ?? []) as string[];
+        return order.indexOf('depth_out') === order.indexOf('length') - 1;
       },
       undefined,
       { timeout: 5000 },
     );
-    expect((await getPanelsConfig(page)).data_table_shot_column_order).toEqual(order);
+    const recorded = await getViewCalls(page);
+    const order = recorded[recorded.length - 1]!.columnOrder as string[];
+    expect(order.indexOf('depth_out')).toBe(order.indexOf('length') - 1);
+    expect(order).toContain('section_id');
+    expect(order).toContain('shot_id');
+
+    // The post-save config re-sync settles on that same persisted order.
+    await expect
+      .poll(async () => (await getPanelsConfig(page)).data_table_shot_column_order, { timeout: 5000 })
+      .toEqual(order);
   });
 
   test('header right-click hide entry hides the column and persists', async ({ page }) => {
