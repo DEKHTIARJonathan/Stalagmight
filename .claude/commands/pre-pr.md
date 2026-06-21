@@ -92,7 +92,10 @@ Subagents 1–8 each own exactly one numbered lens:
   tests pass; new commands use `command.<name>`. (`docs/telemetry.md`.)
 - IPC types are **generated** — never hand-edit `src/types/ipc/`; regen via
   `pnpm gen:ipc-types`. (`docs/ipc-typegen.md`)
-- **Never** `cargo fmt` (hand-formatted Rust); match surrounding style. (`CLAUDE.md`)
+- Rust **formatting + lints are CI-gated** (`check` job): `cargo fmt --check` and
+  `cargo clippy` (deny-level) on `src-tauri` must pass — run `cargo fmt` and clear
+  clippy before pushing; flag any drift. Match the surrounding style. (`CLAUDE.md`,
+  `docs/linting.md`)
 - Heavy O(N) cross-checks must be `#[cfg(debug_assertions)]`; hot-path logs via
   `debugLog()`, not `console.log`. (`docs/debug-gates.md`, `docs/performance.md`)
 - Cross-platform: macOS/Linux vs Windows tile-URL forms; Windows tests need
