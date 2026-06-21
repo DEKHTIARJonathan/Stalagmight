@@ -30,42 +30,18 @@ prompted on first launch via `TelemetryOptInDialog`.
 
 ## Payload
 
-### v2 — Packed MsgPack (current wire format)
+### v3 — Self-describing JSON + gzip (wire format)
 
-Sent with `Content-Type: application/msgpack`. Event keys are replaced with
-numeric IDs from a shared registry, session ID is 16 raw bytes, and the whole
-payload is msgpack-encoded.
-
-```
-{
-  v: 2,                          // version
-  a: "0.8.0",                   // app_version
-  o: "linux",                   // os
-  s: <16 bytes>,                // session_id (binary UUID)
-  d: 3600,                      // duration_secs
-  p: 1,                         // project_seq
-  e: [16, 1, 42, 95, 1, 10],   // flat [event_id, source_id, count, ...]
-  x: { "display-state.showGrid:true": 1 }  // overflow (unregistered keys)
-}
-```
-
-The `e` array is a flat sequence of `(event_id, source_id, count)` triples.
-IDs are defined in `src-tauri/src/telemetry/registry.rs` (Rust) and
-`telemetry-worker/src/registry.ts` (worker). Source ID 0 means no source
-suffix; known sources (keyboard, toolbar, etc.) map to IDs 1-13.
-
-Events not found in the registry go into the `x` overflow map with their
-original string keys — no data is ever lost.
-
-### v1 — JSON (disk buffer / legacy)
-
-Used for on-disk buffering and backward compatibility. Sent with
-`Content-Type: application/json`.
+Sent with `Content-Type: application/json` and `Content-Encoding: gzip`. Event
+names are sent **verbatim** as a `{name: count}` map — there is no numeric ID
+registry on the wire, so a new event can never be silently dropped by an older
+worker. This is also the on-disk buffer format, so the wire and buffer formats
+are identical (no re-encoding on retry).
 
 ```json
 {
-  "v": 1,
-  "app_version": "0.8.0",
+  "v": 3,
+  "app_version": "0.8.0-9f3c1a2b",
   "os": "linux",
   "session_id": "a1b2c3d4-...",
   "duration_secs": 3600,
@@ -73,23 +49,25 @@ Used for on-disk buffering and backward compatibility. Sent with
   "events": {
     "command.create_shot": 42,
     "action.tool.merge:keyboard": 10,
-    "dialog-cancel.import": 2
+    "tile.fetch.esri": 250,
+    "display-state.showGrid:true": 1
   }
 }
 ```
 
-Buffered v1 payloads are automatically converted to v2 packed format when
-retried via `send_buffered()`.
+The client gzips the JSON before POSTing (`flate2::write::GzEncoder` in
+`send_payload`); the worker decompresses with `DecompressionStream('gzip')` and
+parses the JSON (uncompressed JSON is also accepted, e.g. for manual testing).
+Self-describing JSON+gzip is ~2.4× the size of the old packed format but still
+sub-2 KB per flush, and D1 storage is unchanged (it always stored string names).
 
-### Registry files
+### Event vocabulary
 
-| File | Role |
-|------|------|
-| `src-tauri/src/telemetry/registry.rs` | Rust: event/source name → numeric ID |
-| `telemetry-worker/src/registry.ts` | Worker: numeric ID → event/source name |
-
-Both files must stay in sync. See [Registry ID Stability](#registry-id-stability)
-below for the append-only policy and how to add new entries.
+`src-tauri/src/telemetry/registry.rs` keeps `EVENT_NAMES` / `SOURCE_NAMES` as the
+canonical list of event names the app emits. It is **not** a wire ID map — it
+exists only to back the coverage tests (every command / tool / dialog has a
+tracked event; typo detection). Order is irrelevant, and there is no worker-side
+copy to keep in sync.
 
 **`project_seq`** — auto-incrementing project context counter. `0` means global
 view (no project open) or Rust-originated events. Each time the user opens a
@@ -209,9 +187,8 @@ prevents timer resets from redundant calls.
 | `src/utils/ipc.ts` | Calls `trackCommand` for every IPC invocation |
 | `src/store/uiStore.ts` | Wires tracking into `closeDialog`, `openDialog`, `setSelection`, `addToSelection`, panel toggles, display settings |
 | `src-tauri/src/telemetry/mod.rs` | Rust collector, HTTP send, disk buffer, periodic flush |
-| `src-tauri/src/telemetry/registry.rs` | Event/source string ↔ numeric ID registry |
+| `src-tauri/src/telemetry/registry.rs` | Canonical event/source name vocabulary (backs the coverage tests) |
 | `src-tauri/src/commands/telemetry.rs` | IPC commands: `track_events`, `flush_telemetry`, etc. |
-| `telemetry-worker/src/registry.ts` | Worker-side reverse lookup arrays (ID → string) |
 | `src/store/displaySelectors.ts` | `DISPLAY_DEFAULTS` — single source of truth for default values |
 
 ## Source Tracking
@@ -255,65 +232,35 @@ import { withTrackingSuppressed } from '../../utils/telemetry';
 withTrackingSuppressed(() => toggleSectionsPanel());
 ```
 
-## Registry ID Stability
+## Event Vocabulary & Coverage
 
-Event and source IDs are positional — the index in the `EVENT_NAMES` /
-`SOURCE_NAMES` arrays is the numeric ID sent on the wire. Older desktop clients
-that haven't updated continue sending the IDs they were compiled with, so
-**existing IDs must never change**.
+`EVENT_NAMES` / `SOURCE_NAMES` in `src-tauri/src/telemetry/registry.rs` are the
+canonical list of event names the app emits. Because the wire format sends names
+verbatim (self-describing JSON), this is **not** an ID map — order is irrelevant,
+entries can be added/renamed/removed freely, and there is no worker-side copy to
+keep in sync. The vocabulary exists only to power the coverage tests below, which
+guarantee every command / tool / dialog actually emits telemetry and catch typos
+before they reach the database.
 
-### Append-only policy (tied to `v`)
+### Adding a new event name
 
-The packed payload version (`v: 2`) implicitly defines a frozen registry
-baseline. For v2, the first 286 event entries and 14 source entries are locked.
-New entries must be appended after the `// ── Appended after v2 baseline ──`
-comment in both `registry.rs` and `registry.ts`.
+1. Add the bare event name (e.g. `command.my_command`) to `EVENT_NAMES` in
+   `registry.rs` — anywhere; order does not matter — and bump the `event_count`
+   test.
+2. Run `cargo test --manifest-path src-tauri/Cargo.toml --features telemetry -- telemetry::registry`.
 
-A compile-time test (`registry_id_stability`) enforces this by hashing the
-frozen portion and failing if any entry is modified, inserted, or removed.
+The coverage tests flag a new command / tool / dialog that is missing its event
+name (or an event name with no corresponding feature).
 
-### What is safe
-
-| Operation | Safe? | Reason |
-|-----------|-------|--------|
-| Append new entry at end | Yes | Existing IDs unchanged |
-| Change a string value | **No** | Hash changes, test fails |
-| Insert mid-array | **No** | Shifts all subsequent IDs |
-| Remove an entry | **No** | Shifts all subsequent IDs |
-| Reorder entries | **No** | Changes ID ↔ name mapping |
-
-### Adding a new registry entry
-
-1. Append the entry at the end of `EVENT_NAMES` in `registry.rs` (after the
-   `// ── Appended after v2 baseline ──` comment).
-2. Append the same entry at the same position in `registry.ts`.
-3. Update `event_count` test if needed.
-4. Run `cargo test --manifest-path src-tauri/Cargo.toml --features telemetry -- registry::tests`
-   to verify all checks pass.
-
-### Registry reorganization (version bump)
-
-When the append-at-end approach becomes unwieldy (e.g., after many additions),
-you can reorganize the arrays by bumping the payload version:
-
-1. Increment `PACKED_PAYLOAD_VERSION` in `telemetry/mod.rs` (e.g., 2 → 3).
-2. Reorganize `EVENT_NAMES` / `SOURCE_NAMES` freely (sort, remove stale
-   entries, etc.).
-3. Update `V2_FROZEN_EVENTS`, `V2_FROZEN_SOURCES`, and both FNV hashes in the
-   `registry_id_stability` test to reflect the new baseline (rename to V3).
-4. In the Cloudflare Worker, keep the v2 lookup table alongside the new v3
-   table so payloads from older clients still decode correctly.
-5. After enough time has passed for most users to upgrade, drop the v2 table.
-
-### Automated tests
+### Coverage tests
 
 | Test | What it checks |
 |------|----------------|
-| `registry_id_stability` | FNV-1a hash of frozen entries — catches insertions, removals, renames |
 | `registry_covers_all_commands` | Every `generate_handler![]` command has a `command.*` entry (and vice versa) |
-| `rust_ts_registry_in_sync` | Rust and TypeScript registries are identical element-by-element |
 | `no_duplicate_event_names` | No duplicate strings in `EVENT_NAMES` |
 | `event_count` / `source_count` | Array lengths match expected totals |
+| `active_dwell_mirrors_dwell` | Every `dwell.<state>` has a matching `active-dwell.<state>` |
+| `every_tile_provider_has_consumption_events` | Every tile provider has `tile.fetch.*` / `tile.cache.*` |
 | `registry_covers_all_tools` | `ToolType` union ↔ `action.tool.*` / `dwell.tool.*` |
 | `registry_covers_all_undoable_commands` | `UNDOABLE_COMMANDS` ↔ `undo-after.*` |
 | `registry_covers_all_display_toggles` | `DISPLAY_DEFAULTS` keys ↔ `action.toggle.*` |
@@ -359,21 +306,20 @@ corresponding type union that is parsed by Rust exhaustiveness tests.
 Automatic — `invokeIpc` calls `trackCommand` for all non-telemetry commands.
 If the command is undoable, add it to `UNDOABLE_COMMANDS` in `telemetry.ts`.
 
-You must also add a `command.<name>` entry to both registries — append it at the
-end (see [Registry ID Stability](#registry-id-stability)). The
+You must also add a `command.<name>` entry to `EVENT_NAMES` in `registry.rs`. The
 `registry_covers_all_commands` test will fail if you forget.
 
 ### New tool
 
 1. Add the tool name to `ToolType` in `uiStore.ts`.
-2. Add `action.tool.<name>` and `dwell.tool.<name>` to both registries.
+2. Add `action.tool.<name>` and `dwell.tool.<name>` to `EVENT_NAMES`.
 3. The `registry_covers_all_tools` test will fail if anything is missing.
 
 ### New navigation action
 
 1. Add the action to the `NavigationAction` type union in `telemetry.ts`.
 2. Use `trackNav('my-action')` at the call site.
-3. Add `action.nav.<name>` to both registries.
+3. Add `action.nav.<name>` to `EVENT_NAMES`.
 4. The `registry_covers_all_nav_events` test will fail if anything is missing.
 
 ### New panel
@@ -388,7 +334,7 @@ end (see [Registry ID Stability](#registry-id-stability)). The
 
 1. Add the source to the `SourceName` type union in `telemetry.ts`.
 2. Call `setSource('my-panel')` before `setSelection()` or `addToSelection()`.
-3. Add the source to `SOURCE_NAMES` in both registries.
+3. Add the source to `SOURCE_NAMES` in `registry.rs`.
 4. The `registry_covers_all_sources` test will fail if anything is missing.
 
 ### New keyboard shortcut
@@ -400,7 +346,7 @@ For keyboard handlers elsewhere, call `setSource('keyboard')` before the action.
 
 1. Add the action to the `ContextMenuAction` type union in `telemetry.ts`.
 2. Use `trackContextMenuAction('my-action', 'context-menu')` at the call site.
-3. Add `action.<name>` to both registries.
+3. Add `action.<name>` to `EVENT_NAMES`.
 4. The `registry_covers_all_context_menu_actions` test will fail if anything
    is missing.
 
@@ -516,9 +462,7 @@ subrequests).
 | Tag | Status | Meaning |
 |-----|--------|---------|
 | `ok` | 200 | Successful ingestion (includes app version, event count, project_seq) |
-| `msgpack_decode_failed` | 400 | Body is not valid msgpack |
-| `invalid_packed_payload` | 400 | Decoded but wrong shape/types (logs field types + keys) |
-| `event_array_bad_length` | 400 | Event array length not divisible by 3 |
+| `invalid_payload` | 400 | Body is not valid gzip/JSON, or the JSON has the wrong shape |
 | `field_too_long` | 400 | session_id, app_version, or os exceeds length limit |
 | `too_many_events` | 400 | >500 distinct events in one payload |
 | `payload_too_large` | 413 | Body exceeds 64 KB |

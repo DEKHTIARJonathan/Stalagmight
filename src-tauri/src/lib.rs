@@ -903,6 +903,11 @@ where
 }
 
 /// Handle a tile request - check cache, fetch from network, return response
+/// Returns the tile response plus a per-request flag that is `true` only when THIS
+/// request pulled a fresh tile from the provider over the network (its `fetch_fn`
+/// returned a tile). Unlike diffing the shared `TileFetchStats` counter, this is
+/// accurate under the concurrent tile loads the map issues, so it drives the exact
+/// per-provider consumption telemetry (#31).
 fn handle_tile_request(
     provider: &str,
     z: u32,
@@ -912,13 +917,23 @@ fn handle_tile_request(
     tilemap_cache: &Arc<Mutex<TilemapCache>>,
     stats: &Arc<TileFetchStats>,
     cache_config: &config::CacheConfig,
-) -> http::Response<Vec<u8>> {
+) -> (http::Response<Vec<u8>>, bool) {
     let stats_ref = Arc::clone(stats);
+    // Per-request network-hit flag, set when fetch_fn (the real network fetch) returns
+    // Ok for this request. A cache hit / stale fallback never sets it.
+    let network_hit = Arc::new(AtomicBool::new(false));
+    let network_hit_setter = Arc::clone(&network_hit);
     let fetch_fn = move |p: &str, z: u32, y: u32, x: u32| -> Result<FetchedTile, String> {
-        fetch_tile_from_network(p, z, y, x, Some(&stats_ref))
+        let result = fetch_tile_from_network(p, z, y, x, Some(&stats_ref));
+        if result.is_ok() {
+            network_hit_setter.store(true, Ordering::Relaxed);
+        }
+        result
     };
     let cache_enabled = cache_config.is_provider_cache_enabled(provider);
-    handle_tile_request_with_fetcher(provider, z, y, x, tile_cache, tilemap_cache, fetch_fn, cache_enabled)
+    let response =
+        handle_tile_request_with_fetcher(provider, z, y, x, tile_cache, tilemap_cache, fetch_fn, cache_enabled);
+    (response, network_hit.load(Ordering::Relaxed))
 }
 
 /// Internal implementation that accepts a fetch function for testability.
@@ -1026,19 +1041,25 @@ pub fn run() {
                     "Processing tile request"
                 );
 
-                // Run the blocking tile fetch in the blocking threadpool.
-                // Snapshot stats before/after to detect whether a network fetch occurred.
+                // Provider for tile-consumption telemetry (#31), kept past the fetch
+                // closure that moves `provider`.
+                let provider_for_telemetry = provider.clone();
+
+                // Run the blocking tile fetch in the blocking threadpool. The global
+                // stats snapshot drives the (concurrency-tolerant) connectivity
+                // notifications; `network_hit` is the per-request flag used for the
+                // exact tile-consumption telemetry below.
                 let result = tauri::async_runtime::spawn_blocking(move || {
                     let snap_before = tile_fetch_stats.snapshot();
-                    let response = handle_tile_request(&provider, z, y, x, &tile_cache, &tilemap_cache, &tile_fetch_stats, &cache_config);
+                    let (response, network_hit) = handle_tile_request(&provider, z, y, x, &tile_cache, &tilemap_cache, &tile_fetch_stats, &cache_config);
                     let snap_after = tile_fetch_stats.snapshot();
                     let had_network_success = snap_after.total_fetched > snap_before.total_fetched;
                     let had_network_error = snap_after.total_errors > snap_before.total_errors;
-                    (response, had_network_success, had_network_error)
+                    (response, had_network_success, had_network_error, network_hit)
                 })
                 .await;
 
-                let (response, had_network_success, had_network_error) = result.unwrap_or_else(|e| {
+                let (response, had_network_success, had_network_error, network_hit) = result.unwrap_or_else(|e| {
                     tracing::error!(
                         error = %e,
                         purpose = "render map tiles",
@@ -1047,7 +1068,7 @@ pub fn run() {
                     (build_error_response(
                         http::StatusCode::INTERNAL_SERVER_ERROR,
                         "Internal error processing tile request",
-                    ), false, false)
+                    ), false, false, false)
                 });
 
                 // Notify connectivity changes (debounced — only emits on state transitions)
@@ -1055,6 +1076,25 @@ pub fn run() {
                     tile_fetch_stats_notify.notify_transport_success(&app_handle);
                 } else if had_network_error {
                     tile_fetch_stats_notify.notify_transport_error(&app_handle);
+                }
+
+                // Tile-consumption telemetry (#31): one event per SERVED tile, tagged by
+                // provider — `tile.fetch.<provider>` for a fresh network pull (provider
+                // consumption) vs `tile.cache.<provider>` for one served from the local
+                // cache (incl. the stale offline fallback). Uses the PER-REQUEST
+                // `network_hit` (not the shared stats diff, which concurrent requests
+                // would cross-contaminate). Errors (no tile served) aren't counted;
+                // "tiles used by a session for provider P" = fetch + cache. No-op unless
+                // telemetry is compiled in and enabled.
+                if response.status().is_success() {
+                    let event = if network_hit {
+                        format!("tile.fetch.{provider_for_telemetry}")
+                    } else {
+                        format!("tile.cache.{provider_for_telemetry}")
+                    };
+                    app_handle
+                        .state::<telemetry::TelemetryCollector>()
+                        .track(&event);
                 }
 
                 responder.respond(response);
@@ -1798,7 +1838,7 @@ mod tests {
         let cache = make_test_cache();
         let tilemap_cache = make_test_tilemap_cache();
         let stats = make_test_stats();
-        let response = handle_tile_request("unknown_provider", 10, 500, 250, &cache, &tilemap_cache, &stats, &make_test_cache_config());
+        let (response, _) = handle_tile_request("unknown_provider", 10, 500, 250, &cache, &tilemap_cache, &stats, &make_test_cache_config());
         assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
         assert_eq!(response.headers().get("content-type").unwrap(), "text/plain");
         assert!(std::str::from_utf8(response.body()).unwrap().contains("Unknown provider"));
@@ -1819,7 +1859,7 @@ mod tests {
                 .unwrap();
         }
 
-        let response = handle_tile_request("esri", 10, 500, 250, &cache, &tilemap_cache, &stats, &make_test_cache_config());
+        let (response, _) = handle_tile_request("esri", 10, 500, 250, &cache, &tilemap_cache, &stats, &make_test_cache_config());
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(response.body(), b"fake_tile_data");
         assert_eq!(response.headers().get("content-type").unwrap(), "image/jpeg");
@@ -1839,7 +1879,7 @@ mod tests {
             c.put("esri", 10, 500, 250, b"png_data", "image/png").unwrap();
         }
 
-        let response = handle_tile_request("esri", 10, 500, 250, &cache, &tilemap_cache, &stats, &make_test_cache_config());
+        let (response, _) = handle_tile_request("esri", 10, 500, 250, &cache, &tilemap_cache, &stats, &make_test_cache_config());
         assert_eq!(response.status(), http::StatusCode::OK);
         assert_eq!(
             response.headers().get("content-type").unwrap(),
