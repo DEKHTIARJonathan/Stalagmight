@@ -241,6 +241,16 @@ interface ProjectStore {
   closeProject: () => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   /**
+   * Mark the project dirty (unsaved changes) without running a command. The DMP
+   * import wizard applies sections via direct `import_sections` IPC calls that
+   * bypass `executeCommand`, so they don't set `isDirty` themselves; the wizard
+   * calls this after each successful batch so the imported sections register as
+   * unsaved — powering autosave and the project-close guard (`handleCloseProject`).
+   * (Window-close during the wizard is guarded separately, by `isImportInProgress`
+   * in App.tsx.) (#110)
+   */
+  markDirty: () => void;
+  /**
    * Fetch closure-adjusted geometry for the adjusted display mode (lazy, cached).
    * Resolves true on success / no-op, false only on a genuine fetch failure (so
    * the caller can fall back to the measured view rather than getting stuck).
@@ -982,6 +992,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
     return result;
   },
+
+  markDirty: () => set({ isDirty: true }),
 
   saveAfterImport: async (): Promise<boolean> => {
     // Import into an existing project: just mark dirty so we don't silently

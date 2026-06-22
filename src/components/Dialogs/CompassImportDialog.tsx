@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { deferredSaveWarnings, surfaceImportWarnings } from '../../utils/saveFeedback';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -62,6 +63,22 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
           title: 'Import Errors',
           message: result.error ?? 'Unknown error during import',
         });
+        return;
+      }
+
+      // A partial-success import (new-project deferred save failed) returns
+      // success WITH a "SYSTEM" save-failure warning. Surface ONLY that, before
+      // the optional orphan step, so "unsaved — save manually" isn't buried.
+      // Routine per-shot validation warnings (LONG_SHOT, …) also ride along on a
+      // successful import but are surfaced via the data-table UI — they must not
+      // modal here or skip orphan placement (#110).
+      const saveWarnings = deferredSaveWarnings(result.warnings);
+      if (saveWarnings.length > 0) {
+        trackDialogComplete('compass-import');
+        closeDialog();
+        setView('single');
+        triggerFitToBounds();
+        surfaceImportWarnings(saveWarnings, openDialog);
         return;
       }
 
