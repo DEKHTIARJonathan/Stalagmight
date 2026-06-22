@@ -260,6 +260,11 @@
 .sg-col-resize:hover {
   background-color: var(--sg-blue);
 }
+/* Last column: keep the handle inside the cell so it doesn't push the scroll
+   width a few px past the fill width (phantom horizontal scrollbar). */
+.sg-col-resize-end {
+  right: 0;
+}
 
 /* Sticky-header drop shadow once the body is scrolled. */
 .sg-header-bar {
