@@ -74,6 +74,12 @@ export function Dock({
     },
   });
 
+  // Resize affordance is "active" while hovering the handle or dragging it; both
+  // the panel's inner-edge border and the opener tab border tint accent then, so
+  // the highlight is identical on both and wraps around the tab.
+  const [resizeHover, setResizeHover] = useState(false);
+  const resizeActive = isResizing || resizeHover;
+
   // Keep content mounted through the slide-out so closing animates (single
   // instance — never remounts on pin/unpin/hover).
   const open = reveal.isOpen;
@@ -148,7 +154,7 @@ export function Dock({
           only a pointer convenience, so it is not a focusable/announced control. */}
       <div
         ref={clipRef}
-        className={`absolute inset-0 overflow-hidden bg-panel ${borderCls} border-border ${reveal.isFloatingOpen ? 'shadow-xl' : ''} ${!open ? 'cursor-pointer hover:bg-background-80 transition-colors' : ''}`}
+        className={`absolute inset-0 overflow-hidden bg-panel ${borderCls} ${resizeActive ? 'border-accent' : 'border-border'} transition-colors ${reveal.isFloatingOpen ? 'shadow-xl' : ''} ${!open ? 'cursor-pointer hover:bg-background-80' : ''}`}
         onClick={!open ? reveal.openClick : undefined}
         data-testid={`${testId}-panel-bar`}
       >
@@ -166,11 +172,15 @@ export function Dock({
       </div>
 
       {/* Resize handle on the inner edge whenever the panel is open (pinned or
-          hover-floating), so hover panels can be resized too. */}
+          hover-floating), so hover panels can be resized too. Transparent hit
+          area only — the visible highlight is the edge border + tab border tint
+          (driven by resizeActive), so nothing draws under the tab. */}
       {reveal.isOpen && !fullscreen && (
         <div
-          className={`absolute bg-transparent hover:bg-accent-50 transition-colors ${handleClass} ${isResizing ? 'bg-accent-50' : ''}`}
+          className={`absolute bg-transparent ${handleClass}`}
           style={{ touchAction: 'none', zIndex: 1 }}
+          onMouseEnter={() => setResizeHover(true)}
+          onMouseLeave={() => setResizeHover(false)}
           {...handleProps}
         />
       )}
@@ -185,7 +195,7 @@ export function Dock({
             closeArrow={closeArrow}
             testId={testId}
             labels={tabLabels}
-            resizing={isResizing}
+            resizing={resizeActive}
           />
         </div>
       )}

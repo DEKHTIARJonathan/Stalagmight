@@ -50,7 +50,7 @@ export function PanelOpenerTab({
         : 'border-x border-t rounded-t -mb-px';
 
   const box = [
-    `flex items-center justify-center ${resizing ? 'border-accent' : 'border-border'} bg-panel text-text-secondary select-none`,
+    `flex items-center justify-center transition-colors ${resizing ? 'border-accent' : 'border-border'} bg-panel text-text-secondary select-none`,
     vertical ? 'flex-col gap-1 w-7 py-2' : 'flex-row gap-1 h-7 px-2',
     edgeCls,
   ].join(' ');
