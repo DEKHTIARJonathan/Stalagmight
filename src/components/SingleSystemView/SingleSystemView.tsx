@@ -465,7 +465,7 @@ export default function SingleSystemView() {
           closeArrow={<ChevronRightIcon size={14} />}
           testId="detail"
           tabLabels={tabLabels(panelName.detail)}
-          tabTop={38}
+          tabTop={79}
         >
           {detailContent}
         </Dock>

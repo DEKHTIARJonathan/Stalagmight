@@ -8,6 +8,9 @@ interface PanelProps {
   defaultOpen?: boolean;
   className?: string;
   headerActions?: ReactNode;
+  /** Drop the outer card border + rounding (the title divider is kept). Used
+   *  where the surrounding container is already the visual frame. */
+  bare?: boolean;
 }
 
 export function Panel({
@@ -17,11 +20,12 @@ export function Panel({
   defaultOpen = true,
   className = '',
   headerActions,
+  bare = false,
 }: PanelProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
-    <div className={`bg-panel border border-border rounded ${className}`}>
+    <div className={`bg-panel ${bare ? '' : 'border border-border rounded'} ${className}`}>
       {title && (
         <div
           className={`

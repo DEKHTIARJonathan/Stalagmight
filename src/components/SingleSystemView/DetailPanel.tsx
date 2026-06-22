@@ -764,7 +764,7 @@ function StationDetail({ station }: { station: Station }) {
 
   return (
     <div className="h-full bg-panel overflow-auto" data-testid="station-detail">
-      <Panel title={t('detailPanel.station.title')} headerActions={centerButton}>
+      <Panel bare title={t('detailPanel.station.title')} headerActions={centerButton}>
         <div className="space-y-3">
           <DetailRow
             label={t('detailPanel.labels.id')}
@@ -1050,7 +1050,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
 
   return (
     <div className="h-full bg-panel overflow-auto">
-      <Panel title={t('detailPanel.shot.title')} headerActions={centerButton}>
+      <Panel bare title={t('detailPanel.shot.title')} headerActions={centerButton}>
         <div className="space-y-3">
           <DetailRow label={t('detailPanel.labels.id')} value={formatShotId(section.id, shotPosition)} />
           <DetailRow label={t('detailPanel.labels.section')} value={section.name ?? t('sections.defaultName', { id: section.id })} />
@@ -1270,7 +1270,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
 
   return (
     <div className="h-full bg-panel overflow-auto" data-testid="section-detail">
-      <Panel title={t('detailPanel.section.title')} headerActions={centerButton}>
+      <Panel bare title={t('detailPanel.section.title')} headerActions={centerButton}>
         <div className="space-y-4">
           {/* Section info */}
           <div className="space-y-2">
@@ -1435,7 +1435,9 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
 
     return (
       <div className="h-full bg-panel overflow-auto">
-      <Panel title={t('detailPanel.projectStats.title')}>
+      {/* `bare`: no surrounding card border — the panel itself is the container.
+          The title's border-b is the "Project stats / PROJECT" divider line. */}
+      <Panel bare title={t('detailPanel.projectStats.title')}>
         <div className="space-y-4">
           {/* Project name + file path (#51: relocated from the toolbar center). */}
           <div className="space-y-1">
