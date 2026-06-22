@@ -586,8 +586,18 @@ function SaveStatus({
       break;
   }
 
+  // Faint bottom-weighted glow behind the status: green when saved, yellow while
+  // there are pending/unsaved changes (none while saving or on error).
+  const saved = status === 'saved' || (status === 'idle' && !isDirty);
+  const pending = status === 'pending' || (status === 'idle' && isDirty);
+  const tone = saved
+    ? 'bg-gradient-to-t from-green-500/20 via-green-500/5 to-transparent'
+    : pending
+      ? 'bg-gradient-to-t from-yellow-500/20 via-yellow-500/5 to-transparent'
+      : '';
+
   return (
-    <span data-testid="save-status" className={className}>
+    <span data-testid="save-status" className={`rounded px-2 py-0.5 ${tone} ${className}`}>
       {text}
     </span>
   );
