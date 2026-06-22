@@ -773,6 +773,12 @@ export default function MapCanvas() {
       // zoom in — anchoring on the feature's world coord makes IT (not the
       // imprecise click point) track the cursor through zoom (#79). A station grab
       // snaps to the station; a shot grab snaps to the nearest point on the shot.
+      // NOTE: this baseline reads `activeStations` (geometry-mode-aware), while the
+      // per-frame handleMoveDragMove and the commit read raw `stations`. They diverge
+      // only in `closureAdjusted` mode — but move tools are mutating, so the tool is
+      // forced back to `select` there (isMutatingTool effect), making the move-drag
+      // path unreachable in that mode. If that disable is ever relaxed, switch this to
+      // `stations` so the baseline and per-frame origin share one coordinate set.
       if (data.stationRef) {
         const st = activeStations?.find(
           (s) =>
@@ -1738,6 +1744,17 @@ export default function MapCanvas() {
       delete (window as unknown as { __stalagmight_map__?: maplibregl.Map }).__stalagmight_map__;
     };
   }, [mapLoaded]);
+
+  // Expose the active meters transform for E2E commit-offset assertions — lets a test
+  // predict a committed move offset with the SAME mapCoordsToMeters + gpsOrigin the
+  // component uses (the no-GPS linear fallback vs the ENU transform are not equivalent).
+  useEffect(() => {
+    (window as unknown as { __stalagmight_to_meters__?: (lng: number, lat: number) => { x: number; y: number } })
+      .__stalagmight_to_meters__ = (lng, lat) => mapCoordsToMeters(lng, lat, gpsOrigin);
+    return () => {
+      delete (window as unknown as { __stalagmight_to_meters__?: unknown }).__stalagmight_to_meters__;
+    };
+  }, [gpsOrigin]);
 
   // Update survey layer when data changes or map loads.
   // useLayoutEffect ensures setData() runs before the browser paints — critical
