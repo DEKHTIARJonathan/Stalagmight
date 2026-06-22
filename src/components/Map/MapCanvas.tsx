@@ -1100,6 +1100,11 @@ export default function MapCanvas() {
   // synchronously since setPaintProperty is essentially free (shader uniform).
   const handleMoveDragMove = useCallback(
     (clientX: number, clientY: number) => {
+      // While the snap-merge dialog is up the drag is paused (moveDrag is held alive
+      // so Cancel can resume it) — don't let the map-'move' listener re-apply the
+      // preview and clobber the held position. Mirrors handleMoveDragStart/End, which
+      // both already guard on this; this is the only drag-move entry that didn't.
+      if (snapMergeDialogPendingRef.current) return;
       if (!moveDrag || !map.current || !mapContainer.current) return;
 
       const rect = mapContainer.current.getBoundingClientRect();

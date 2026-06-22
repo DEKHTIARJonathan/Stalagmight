@@ -18,16 +18,22 @@ import {
  *   - #20 (grab precision): the grab baselined on `unproject(click)`, which at low
  *     zoom lands meters off the feature. Each test clicks a few px OFF the feature
  *     and asserts the *feature* (snapped: a station, or the nearest point on a shot)
- *     — not the click point — sits under the cursor at the grab zoom (the `before`
- *     assertions; on un-fixed code these fail first).
+ *     — not the click point — sits under the cursor at the grab zoom (the `at grab
+ *     zoom` checks; on un-fixed code these fail first).
  *   - #79 (zoom drift): the translate was a fixed offset from the grab's screen
  *     point, so on a mid-drag zoom the re-projected feature drifted. The fix
  *     re-projects the grab's world point each frame and re-applies on every map
- *     `move`. The `after` assertions zoom+pan mid-drag and re-check tracking.
+ *     `move`. The `after mid-drag zoom` checks zoom+pan mid-drag and re-verify.
  *
- * Two grab paths are covered because they take different code: a station grab
- * (`stationRef` → station coords) and a shot grab (`queryNearestShotPoint` →
- * nearest point on the shot line). There was no prior E2E for move-tool dragging.
+ * Three grab paths, because they take different code: move_segment grabbed on a
+ * station (`stationRef` → station coords, `updateDragPreview`), move_segment grabbed
+ * on a shot line (`queryNearestShotPoint`, `updateDragPreview`), and move_station
+ * (`updateStationDragPreview` — translate + per-shot geometry rebuild). There was no
+ * prior E2E for move-tool dragging.
+ *
+ * Gap reads use `toPass` (not one-shot `evaluate`): the segment preview layer is
+ * created after an async `getConnectedSectionIds` IPC, so a one-shot read can race
+ * its creation on a slow CI runner.
  */
 
 const SECTION_SEEDS: SectionSeed[] = [
@@ -119,16 +125,49 @@ async function featureGap(page: Page, lngLat: { lng: number; lat: number }, curs
   );
 }
 
-test('move-segment grabbed on a STATION snaps + tracks across a mid-drag zoom (#79, #20)', async ({ page }) => {
+/**
+ * Poll until the grabbed feature (rendered at `lngLat` + the preview translate) sits
+ * within `maxMag` px of `cursor`. `toPass` retries to ride out the async preview-layer
+ * creation + the per-frame re-apply settling after a zoom.
+ */
+async function expectTracksCursor(
+  page: Page,
+  lngLat: { lng: number; lat: number },
+  cursor: { x: number; y: number },
+  label: string,
+  maxMag = 3,
+) {
+  await expect(async () => {
+    const g = await featureGap(page, lngLat, cursor);
+    expect(g.hasPreview, `${label}: drag preview present`).toBe(true);
+    expect(Math.hypot(g.gx, g.gy), `${label}: gap from cursor (px)`).toBeLessThanOrEqual(maxMag);
+  }).toPass({ timeout: 5000, intervals: [50, 100, 200, 400, 800] });
+}
+
+/** Zoom in +3 and pan (so the feature is off the zoom anchor) WITHOUT moving the mouse. */
+async function zoomInAndPan(page: Page) {
+  await page.evaluate(() => {
+    const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
+    if (!map) return;
+    map.setZoom(map.getZoom() + 3);
+    map.panBy([120, 90], { duration: 0 });
+  });
+  await waitForMapIdle(page);
+}
+
+async function activateTool(page: Page, key: string, tool: string) {
+  await page.getByTestId('map-canvas').click({ position: { x: 4, y: 4 } });
+  await page.keyboard.press(key);
+  await waitForActiveTool(page, tool);
+}
+
+test('move_segment grabbed on a STATION snaps + tracks across a mid-drag zoom (#79, #20)', async ({ page }) => {
   await setupMockedPage(page);
   await createProject(page, 'Station Grab Move Test');
   await waitForMapReady(page);
   await seedProjectWithSections(page, SECTION_SEEDS);
   await waitForMapIdle(page);
-
-  await page.getByTestId('map-canvas').click({ position: { x: 4, y: 4 } });
-  await page.keyboard.press('v');
-  await waitForActiveTool(page, 'move_segment');
+  await activateTool(page, 'v', 'move_segment');
 
   const box = await page.getByTestId('map-canvas').boundingBox();
   if (!box) throw new Error('no canvas box');
@@ -142,45 +181,23 @@ test('move-segment grabbed on a STATION snaps + tracks across a mid-drag zoom (#
   const cursor = { x: s.x + 60, y: s.y - 40 };
   await page.mouse.move(box.x + cursor.x, box.y + cursor.y, { steps: 6 });
 
-  // #20: at the original zoom the grabbed station (not the +6px click) sits under
-  // the cursor — proves the snap-to-station baseline. (Un-fixed code fails HERE.)
-  const before = await featureGap(page, lngLat, cursor);
-  expect(before.hasPreview, 'drag preview exists after grab+move').toBe(true);
-  expect(Math.abs(before.gx), 'x gap at grab zoom (station snap)').toBeLessThanOrEqual(3);
-  expect(Math.abs(before.gy), 'y gap at grab zoom (station snap)').toBeLessThanOrEqual(3);
+  await expectTracksCursor(page, lngLat, cursor, '#20 station snap at grab zoom');
+  await zoomInAndPan(page);
+  await expectTracksCursor(page, lngLat, cursor, '#79 station after mid-drag zoom');
 
-  // #79: zoom IN mid-drag (and pan, so the station is off the zoom anchor) WITHOUT
-  // moving the mouse. Pre-fix the preview drifts; post-fix it re-projects.
-  await page.evaluate(() => {
-    const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
-    if (!map) return;
-    map.setZoom(map.getZoom() + 3);
-    map.panBy([120, 90], { duration: 0 });
-  });
-  await waitForMapIdle(page);
-
-  const after = await featureGap(page, lngLat, cursor);
-  expect(after.hasPreview, 'drag preview survives the zoom').toBe(true);
-  expect(Math.abs(after.gx), 'x gap after mid-drag zoom (station grab)').toBeLessThanOrEqual(3);
-  expect(Math.abs(after.gy), 'y gap after mid-drag zoom (station grab)').toBeLessThanOrEqual(3);
-
-  // Drop with a click at the current cursor — the UX is click-to-grab -> move ->
-  // click-to-drop, so there's no mouse.down() to pair an up() with; a click is the
-  // real drop and exercises the commit path.
+  // Drop with a click at the current cursor (click-to-grab → move → click-to-drop;
+  // there's no mouse.down() to pair an up() with — a click is the real drop).
   await page.mouse.click(box.x + cursor.x, box.y + cursor.y);
   await waitForMapIdle(page);
 });
 
-test('move-segment grabbed on a SHOT line snaps + tracks across a mid-drag zoom (#79, #20)', async ({ page }) => {
+test('move_segment grabbed on a SHOT line snaps + tracks across a mid-drag zoom (#79, #20)', async ({ page }) => {
   await setupMockedPage(page);
   await createProject(page, 'Shot Grab Move Test');
   await waitForMapReady(page);
   await seedProjectWithSections(page, SECTION_SEEDS);
   await waitForMapIdle(page);
-
-  await page.getByTestId('map-canvas').click({ position: { x: 4, y: 4 } });
-  await page.keyboard.press('v');
-  await waitForActiveTool(page, 'move_segment');
+  await activateTool(page, 'v', 'move_segment');
 
   const box = await page.getByTestId('map-canvas').boundingBox();
   if (!box) throw new Error('no canvas box');
@@ -191,34 +208,44 @@ test('move-segment grabbed on a SHOT line snaps + tracks across a mid-drag zoom 
 
   // Click 3px PERPENDICULAR off the midpoint — inside the 8px-wide shot hitbox, but
   // off the centerline. The snap must pull to the nearest point ON the shot (≈ the
-  // midpoint), so the midpoint — not the off-line click — tracks the cursor.
+  // midpoint), so the midpoint — not the off-line click — tracks the cursor. Asserting
+  // gap MAGNITUDE ≤1.5 cleanly separates snap (~0) from no-snap (~3px = the offset).
   await page.mouse.click(box.x + s.x + perp.x * 3, box.y + s.y + perp.y * 3);
   const cursor = { x: s.x + 60, y: s.y - 40 };
   await page.mouse.move(box.x + cursor.x, box.y + cursor.y, { steps: 6 });
 
-  // Assert on gap MAGNITUDE (not per-axis): without the snap the grabbed point would
-  // sit ~3px off (the perpendicular click offset); the snap collapses it to ~0. 1.5px
-  // cleanly separates the two. (Un-fixed code fails HERE — proves the shot snap.)
-  const before = await featureGap(page, lngLat, cursor);
-  expect(before.hasPreview, 'drag preview exists after shot grab+move').toBe(true);
-  expect(Math.hypot(before.gx, before.gy), 'gap at grab zoom (shot snap)').toBeLessThanOrEqual(1.5);
+  await expectTracksCursor(page, lngLat, cursor, '#20 shot snap at grab zoom', 1.5);
+  await zoomInAndPan(page);
+  await expectTracksCursor(page, lngLat, cursor, '#79 shot after mid-drag zoom');
 
-  await page.evaluate(() => {
-    const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
-    if (!map) return;
-    map.setZoom(map.getZoom() + 3);
-    map.panBy([120, 90], { duration: 0 });
-  });
+  await page.mouse.click(box.x + cursor.x, box.y + cursor.y);
   await waitForMapIdle(page);
+});
 
-  const after = await featureGap(page, lngLat, cursor);
-  expect(after.hasPreview, 'drag preview survives the zoom').toBe(true);
-  expect(Math.abs(after.gx), 'x gap after mid-drag zoom (shot grab)').toBeLessThanOrEqual(3);
-  expect(Math.abs(after.gy), 'y gap after mid-drag zoom (shot grab)').toBeLessThanOrEqual(3);
+test('move_station grabbed off-center snaps + tracks across a mid-drag zoom (#79, #20)', async ({ page }) => {
+  // Distinct rendering path: move_station uses updateStationDragPreview (translate +
+  // per-shot geometry rebuild), not the segment translate of the tests above.
+  await setupMockedPage(page);
+  await createProject(page, 'Station Move Test');
+  await waitForMapReady(page);
+  await seedProjectWithSections(page, SECTION_SEEDS);
+  await waitForMapIdle(page);
+  await activateTool(page, 't', 'move_station');
 
-  // Drop with a click at the current cursor — the UX is click-to-grab -> move ->
-  // click-to-drop, so there's no mouse.down() to pair an up() with; a click is the
-  // real drop and exercises the commit path.
+  const box = await page.getByTestId('map-canvas').boundingBox();
+  if (!box) throw new Error('no canvas box');
+
+  const { screen: s, lngLat } = await centerOnStation(page, 18);
+
+  // Grab the station a few px off-center; the baseline must snap to the exact station.
+  await page.mouse.click(box.x + s.x + 6, box.y + s.y);
+  const cursor = { x: s.x + 60, y: s.y - 40 };
+  await page.mouse.move(box.x + cursor.x, box.y + cursor.y, { steps: 6 });
+
+  await expectTracksCursor(page, lngLat, cursor, '#20 move_station snap at grab zoom');
+  await zoomInAndPan(page);
+  await expectTracksCursor(page, lngLat, cursor, '#79 move_station after mid-drag zoom');
+
   await page.mouse.click(box.x + cursor.x, box.y + cursor.y);
   await waitForMapIdle(page);
 });
