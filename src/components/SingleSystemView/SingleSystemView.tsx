@@ -445,10 +445,6 @@ export default function SingleSystemView() {
             closeArrow={<ChevronDownIcon size={14} />}
             testId="data"
             tabLabels={tabLabels(panelName.data)}
-            // Push the Data tab clear of a floating (hover-open) Details panel so
-            // it stays visible. When Details is pinned the center column already
-            // shrinks, moving the tab left for free.
-            tabInset={8 + (detailReveal.isFloatingOpen ? detailPanelWidth : 0)}
             fullscreen={dataTableFullScreen}
           >
             {dataInner}
