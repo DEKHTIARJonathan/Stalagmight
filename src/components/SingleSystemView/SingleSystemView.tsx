@@ -133,15 +133,24 @@ export default function SingleSystemView() {
   // is open (covering the gap left by a compressed side bar), or sits between the
   // closed bars (BAR inset) when the Data panel is itself closed.
   const [mainEl, setMainEl] = useState<HTMLDivElement | null>(null);
-  // While the Data panel is being resized, the side bars track its edge with no
-  // transition lag (their bottom inset follows dataTableHeight live).
+  // Resize-drag flags so each panel's edge that follows a sibling can track it
+  // live (no transition lag): the side bars follow the Data panel's height, and
+  // the Data overlay's left/right follow the side panels' widths.
   const [dataResizing, setDataResizing] = useState(false);
-  const dataOverlayLeft = sectionsReveal.isPinnedOpen
+  const [sectionsResizing, setSectionsResizing] = useState(false);
+  const [detailResizing, setDetailResizing] = useState(false);
+  const sidePanelResizing = sectionsResizing || detailResizing;
+  // Stop the Data overlay at ANY open side panel's edge — pinned OR hover-floating
+  // (both render the full panel at its persisted width); only fill to the window
+  // edge when the side is minimized and the Data panel is open, else sit between
+  // the closed bars. (isOpen, not isPinnedOpen, or a floating side panel overlaps
+  // the Data panel and hides its tab.)
+  const dataOverlayLeft = sectionsReveal.isOpen
     ? sectionsPanelWidth
     : dataReveal.isOpen
       ? 0
       : BAR;
-  const dataOverlayRight = detailReveal.isPinnedOpen
+  const dataOverlayRight = detailReveal.isOpen
     ? detailPanelWidth
     : dataReveal.isOpen
       ? 0
@@ -436,7 +445,8 @@ export default function SingleSystemView() {
           // bar (if minimized) so it stops at the Data panel's top instead of
           // running alongside it.
           closedBottomInset={dataReveal.isOpen ? dataTableHeight : 0}
-          suspendBottomTransition={dataResizing}
+          suspendSiblingTransition={dataResizing}
+          onResizingChange={setSectionsResizing}
         >
           {sectionsContent}
         </Dock>
@@ -481,6 +491,7 @@ export default function SingleSystemView() {
             overlayLeft={dataOverlayLeft}
             overlayRight={dataOverlayRight}
             onResizingChange={setDataResizing}
+            suspendSiblingTransition={sidePanelResizing}
           >
             {dataInner}
           </Dock>
@@ -502,7 +513,8 @@ export default function SingleSystemView() {
           tabLabels={tabLabels(panelName.detail)}
           tabTop={79}
           closedBottomInset={dataReveal.isOpen ? dataTableHeight : 0}
-          suspendBottomTransition={dataResizing}
+          suspendSiblingTransition={dataResizing}
+          onResizingChange={setDetailResizing}
         >
           {detailContent}
         </Dock>

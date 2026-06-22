@@ -54,10 +54,11 @@ interface DockProps {
   /** Notified when this Dock's resize-drag starts/ends, so a sibling can react
    *  (e.g. side bars tracking the Data panel's edge live during its resize). */
   onResizingChange?: (resizing: boolean) => void;
-  /** Drop the `bottom` transition so a closedBottomInset change tracks instantly
-   *  — set while the Data panel is being resized so the bar's bottom doesn't lag
-   *  the dragged edge (the transition is kept for open/close animations). */
-  suspendBottomTransition?: boolean;
+  /** Drop the transition on the edges that follow a sibling panel's size so they
+   *  track 1:1 (no easing lag): a side bar's `bottom` follows the Data panel, and
+   *  the bottom panel's `left`/`right` follow the side panels. Set while that
+   *  sibling is being dragged; kept otherwise so open/close still animates. */
+  suspendSiblingTransition?: boolean;
 }
 
 /**
@@ -90,7 +91,7 @@ export function Dock({
   overlayLeft = 0,
   overlayRight = 0,
   onResizingChange,
-  suspendBottomTransition = false,
+  suspendSiblingTransition = false,
 }: DockProps) {
   const vertical = edge === 'left' || edge === 'right';
   const clipRef = useRef<HTMLDivElement>(null);
@@ -148,16 +149,16 @@ export function Dock({
   const spacerSize = reveal.isPinnedOpen ? size : BAR;
   // Inline transition (robust vs a Tailwind arbitrary value) — suspended while
   // dragging so the panel edge + spacer track the pointer 1:1.
+  // Edges that follow a sibling's size: the bottom panel's left/right follow the
+  // side panels; a side bar's bottom follows the Data panel. Drop their easing
+  // while that sibling is dragged so they track 1:1 (no lag).
+  const trackingEdges = edge === 'bottom' ? ['left', 'right'] : ['bottom'];
   const sizeTransition = isResizing
     ? 'none'
     : [
         'width 150ms ease-out',
         'height 150ms ease-out',
-        'left 150ms ease-out',
-        'right 150ms ease-out',
-        // While the Data panel is dragged, the bar's bottom must follow its edge
-        // 1:1 (no easing lag); keep the eased transition otherwise.
-        ...(suspendBottomTransition ? [] : ['bottom 150ms ease-out']),
+        ...(suspendSiblingTransition ? [] : trackingEdges.map((p) => `${p} 150ms ease-out`)),
       ].join(', ');
 
   // ── Reflow spacer (flow): only this pushes the map. ──
@@ -269,10 +270,22 @@ export function Dock({
     </div>
   );
 
+  // Portal mode (overlayContainer prop passed, even if momentarily null): render
+  // into the container once the ref resolves, never inline — an inline first
+  // paint would position against the wrong ancestor and then remount the whole
+  // overlay (incl. the DataTable) when it reparents. Inline mode (prop omitted)
+  // renders the overlay in place, as the side Docks do.
+  const portalMode = overlayContainer !== undefined;
+  const overlayNode = portalMode
+    ? overlayContainer
+      ? createPortal(overlay, overlayContainer)
+      : null
+    : overlay;
+
   return (
     <>
       {spacer}
-      {overlayContainer ? createPortal(overlay, overlayContainer) : overlay}
+      {overlayNode}
     </>
   );
 }
