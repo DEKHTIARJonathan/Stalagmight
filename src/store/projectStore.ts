@@ -244,8 +244,10 @@ interface ProjectStore {
    * Mark the project dirty (unsaved changes) without running a command. The DMP
    * import wizard applies sections via direct `import_sections` IPC calls that
    * bypass `executeCommand`, so they don't set `isDirty` themselves; the wizard
-   * calls this after each successful batch so the close-guard protects the
-   * un-finalized in-memory sections throughout the wizard (#110).
+   * calls this after each successful batch so the imported sections register as
+   * unsaved — powering autosave and the project-close guard (`handleCloseProject`).
+   * (Window-close during the wizard is guarded separately, by `isImportInProgress`
+   * in App.tsx.) (#110)
    */
   markDirty: () => void;
   /**

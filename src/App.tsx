@@ -79,6 +79,11 @@ function App() {
     if (activeDialog === 'dmp-selection' && dialogData.dmpFile) {
       return true;
     }
+    // Block during the DMP placing wizard — it holds un-finalized, in-memory
+    // imported/placed sections that an OS window-close would otherwise drop (#110).
+    if (activeDialog === 'dmp-import-new' && dialogData.dmpFile) {
+      return true;
+    }
     // Block during GPX selection/placement dialog
     if ((activeDialog === 'gpx-selection' || activeDialog === 'gpx-placement') && dialogData.gpxFile) {
       return true;

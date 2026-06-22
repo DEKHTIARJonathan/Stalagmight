@@ -2191,9 +2191,9 @@ export default function DmpNewImportDialog({
           }
 
           await refreshProjectState();
-          // Imports bypass executeCommand, so mark dirty ourselves — the
-          // close-guard then protects these in-memory sections until the
-          // terminal save (#110).
+          // Imports bypass executeCommand, so mark dirty ourselves — the sections
+          // then register as unsaved (autosave + the project-close guard);
+          // window-close is guarded separately by isImportInProgress (App.tsx) (#110).
           markDirty();
 
           // Build DMP index -> section_id mapping for late import.
@@ -2430,7 +2430,7 @@ export default function DmpNewImportDialog({
             }
 
             await refreshProjectState();
-            markDirty(); // #110: close-guard the un-finalized sections
+            markDirty(); // #110: mark unsaved (autosave + project-close guard)
 
             for (let i = 0; i < segmentDmpIndices.length; i++) {
               const sectionId = result.section_ids[i];
@@ -2520,7 +2520,7 @@ export default function DmpNewImportDialog({
           }
 
           await refreshProjectState();
-          markDirty(); // #110: close-guard the un-finalized sections
+          markDirty(); // #110: mark unsaved (autosave + project-close guard)
           existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
             existingShotUpdatesRef.current,
             emittedSet,
@@ -3340,7 +3340,7 @@ export default function DmpNewImportDialog({
       }
 
       await refreshProjectState();
-      markDirty(); // #110: close-guard the un-finalized sections
+      markDirty(); // #110: mark unsaved (autosave + project-close guard)
 
       for (let i = 0; i < segmentDmpIndices.length; i++) {
         const sectionId = result.section_ids[i];
