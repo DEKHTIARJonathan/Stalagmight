@@ -16,6 +16,9 @@ interface PanelOpenerTabProps {
   /** Panel id used for test ids (`panel-tab-${id}` etc.). */
   testId: string;
   labels: { open: string; pin: string; unpin: string; close: string };
+  /** While the panel is being resized, tint the tab border with the accent so
+   *  the resize highlight visually wraps around the tab instead of under it. */
+  resizing?: boolean;
 }
 
 /**
@@ -34,6 +37,7 @@ export function PanelOpenerTab({
   closeArrow,
   testId,
   labels,
+  resizing = false,
 }: PanelOpenerTabProps) {
   const vertical = edge === 'left' || edge === 'right';
   // Omit the border on the panel-facing edge and overlap it by 1px (negative
@@ -46,7 +50,7 @@ export function PanelOpenerTab({
         : 'border-x border-t rounded-t -mb-px';
 
   const box = [
-    'flex items-center justify-center border-border bg-panel text-text-secondary select-none',
+    `flex items-center justify-center ${resizing ? 'border-accent' : 'border-border'} bg-panel text-text-secondary select-none`,
     vertical ? 'flex-col gap-1 w-7 py-2' : 'flex-row gap-1 h-7 px-2',
     edgeCls,
   ].join(' ');

@@ -67,6 +67,11 @@ export function Dock({
     measureRef: clipRef,
     onResize,
     onResizeEnd,
+    // After a hover-mode resize that ended off the panel, resume the close —
+    // onMouseLeave was suppressed during the drag.
+    onResizeSettled: (pointerOverPanel) => {
+      if (reveal.isFloatingOpen && !pointerOverPanel) reveal.onRegionLeave();
+    },
   });
 
   // Keep content mounted through the slide-out so closing animates (single
@@ -133,7 +138,10 @@ export function Dock({
       className={`absolute pointer-events-auto ${fullscreen ? 'z-40' : reveal.isFloatingOpen ? 'z-30' : 'z-20'}`}
       style={{ ...outerStyle, transition: sizeTransition }}
       onMouseEnter={reveal.onRegionEnter}
-      onMouseLeave={reveal.onRegionLeave}
+      // Don't let a hover panel close mid-drag when the pointer leaves the region.
+      onMouseLeave={() => {
+        if (!isResizing) reveal.onRegionLeave();
+      }}
     >
       {/* Clip box = the visible panel body; collapses to the opener bar when closed.
           The accessible opener is the real <button> in PanelOpenerTab; this bar is
@@ -157,7 +165,9 @@ export function Dock({
           ))}
       </div>
 
-      {reveal.isPinnedOpen && !fullscreen && (
+      {/* Resize handle on the inner edge whenever the panel is open (pinned or
+          hover-floating), so hover panels can be resized too. */}
+      {reveal.isOpen && !fullscreen && (
         <div
           className={`absolute bg-transparent hover:bg-accent-50 transition-colors ${handleClass} ${isResizing ? 'bg-accent-50' : ''}`}
           style={{ touchAction: 'none', zIndex: 1 }}
@@ -175,6 +185,7 @@ export function Dock({
             closeArrow={closeArrow}
             testId={testId}
             labels={tabLabels}
+            resizing={isResizing}
           />
         </div>
       )}
