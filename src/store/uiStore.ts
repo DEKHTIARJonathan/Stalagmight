@@ -842,7 +842,12 @@ export const useUIStore = create<UIStore>((set) => ({
     set({
       focusedSectionId,
       sectionsPanelOpen: false,
+      // Force pin mode while collapsed so a hover-mode side panel can't pop open
+      // over the focused workspace. Prior modes are captured in the snapshot above
+      // and restored on exit.
+      sectionsPanelMode: 'pin',
       detailPanelOpen: false,
+      detailPanelMode: 'pin',
       dataTableOpen: true,
       dataTableMode: 'pin',
       ...(s.dataTableOpen ? {} : { dataTableHeight }),

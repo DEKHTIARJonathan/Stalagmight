@@ -85,7 +85,7 @@ test.describe('Panel reveal (hover/pin)', () => {
     expect(s.dataTableOpen).toBe(false);
     // Pinned side panels are present; the data opener bar is shown (closed).
     await expect(page.locator('[data-testid="sections-panel"]')).toBeVisible();
-    await expect(page.locator('[data-testid="data-table-bar"]')).toBeVisible();
+    await expect(page.locator('[data-testid="data-panel-bar"]')).toBeVisible();
   });
 
   test('pin mode: close-arrow closes, bar reopens', async ({ page }) => {

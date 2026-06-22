@@ -6,7 +6,6 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { SectionId } from '../../types/project';
 import { useShallow } from 'zustand/react/shallow';
-import { ResizablePanel } from '../common/Panel';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 import { OfflineIndicator } from '../common/OfflineIndicator';
 import Toolbar from './Toolbar';
@@ -17,8 +16,7 @@ import MapCanvas from '../Map/MapCanvas';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { usePanelReveal } from './usePanelReveal';
-import { PanelOpenerTab } from './PanelOpenerTab';
-import { PanelFloat } from './PanelFloat';
+import { Dock } from './Dock';
 import { open } from '@tauri-apps/plugin-dialog';
 import { dmpGpxOpenFilters } from '../../utils/fileDialogs';
 import { useProjectMenuItems } from './useProjectMenuItems';
@@ -335,8 +333,9 @@ export default function SingleSystemView() {
     );
   }
 
-  // Shared panel content (rendered in the reflow ResizablePanel when pinned, or
-  // inside a PanelFloat overlay when hover-revealed). Dimmed during placement.
+  // Shared panel content — each rendered in exactly ONE place (its Dock), so the
+  // heavy instance is never duplicated/remounted across pin/unpin/hover. Dimmed
+  // during placement (dim wraps content only, never the tab/handle).
   const dimCls = placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : '';
   const sectionsContent = (
     <div className={`h-full ${dimCls}`}>
@@ -357,17 +356,6 @@ export default function SingleSystemView() {
       <ErrorBoundary panelName="Data Table">
         <DataTable sections={project.sections} />
       </ErrorBoundary>
-    </div>
-  );
-  // Pinned data table supports fullscreen: the wrapper swaps to a fixed overlay
-  // below the toolbar. The parent chain stays identical so the DataTable instance
-  // (grid selection, scroll, view state) survives entering/exiting fullscreen.
-  const dataPinnedContent = (
-    <div
-      className={dataTableFullScreen ? 'fixed inset-x-0 bottom-0 z-40 bg-panel' : 'relative h-full'}
-      style={dataTableFullScreen ? { top: 'var(--toolbar-h, 48px)' } : undefined}
-    >
-      {dataInner}
     </div>
   );
 
@@ -404,153 +392,81 @@ export default function SingleSystemView() {
         dataTableFullScreen={dataTableFullScreen}
       />
 
-      {/* Main content */}
+      {/* Main content — the `relative` here is the positioning context for the
+          side Docks' overlays + tabs. Each Dock renders a flow spacer (the only
+          thing that reflows the map) plus a single absolute panel instance. */}
       <div className="relative flex-1 flex overflow-hidden">
-        {/* Sections panel: reflow when pinned, else a thin full-edge opener bar */}
-        {sectionsReveal.isPinnedOpen ? (
-          <ResizablePanel
-            direction="horizontal"
-            defaultSize={sectionsPanelWidth}
-            minSize={150}
-            maxSize={400}
-            onResize={setSectionsPanelWidth}
-            onResizeEnd={(size) => savePanelSizes(size, undefined, undefined)}
-            className="border-r border-border"
-          >
-            {sectionsContent}
-          </ResizablePanel>
-        ) : (
-          <div
-            className="w-3 flex-shrink-0 cursor-pointer border-r border-border bg-panel transition-colors hover:bg-background-80"
-            onMouseEnter={sectionsReveal.onRegionEnter}
-            onMouseLeave={sectionsReveal.onRegionLeave}
-            onClick={sectionsReveal.openClick}
-            role="button"
-            tabIndex={0}
-            aria-label={t('singleView.panels.open', { name: panelName.sections })}
-            data-testid="sections-panel-bar"
-          />
-        )}
+        {/* Sections (left) */}
+        <Dock
+          reveal={sectionsReveal}
+          edge="left"
+          size={sectionsPanelWidth}
+          minSize={150}
+          maxSize={400}
+          onResize={setSectionsPanelWidth}
+          onResizeEnd={(size) => savePanelSizes(size, undefined, undefined)}
+          label={panelName.sections}
+          openArrow={<ChevronRightIcon size={14} />}
+          closeArrow={<ChevronLeftIcon size={14} />}
+          testId="sections"
+          tabLabels={tabLabels(panelName.sections)}
+        >
+          {sectionsContent}
+        </Dock>
 
-        {/* Map and data table */}
-        <div className="relative flex-1 flex flex-col overflow-hidden">
-          {/* Map */}
+        {/* Map + data table. `min-w-0` lets this column shrink when both side
+            panels dock (otherwise flex refuses and push behavior breaks). */}
+        <div className="relative flex-1 flex flex-col min-w-0 overflow-hidden">
           <div className="flex-1 relative">
             <ErrorBoundary panelName="Map">
               <MapCanvas />
             </ErrorBoundary>
             {/* Offline indicator - positioned in top-right of map area */}
-            <OfflineIndicator className="absolute top-2 right-14" />
+            <OfflineIndicator className="absolute top-2 right-14 z-10" />
           </div>
 
-          {/* Data table: reflow when pinned, else a thin full-edge opener bar */}
-          {dataReveal.isPinnedOpen ? (
-            <ResizablePanel
-              direction="vertical"
-              defaultSize={dataTableHeight}
-              minSize={DATA_TABLE_MIN_HEIGHT}
-              maxSize={DATA_TABLE_MAX_HEIGHT}
-              onResize={setDataTableHeight}
-              // Don't persist the temporary focus-mode height (#50): in focus
-              // mode the data table opens at ~30% and exit restores the prior
-              // height only in memory, so persisting a focus-time drag would
-              // leak that size into the next session.
-              onResizeEnd={(size) => {
-                if (focusedSectionId === null) savePanelSizes(undefined, undefined, size);
-              }}
-              className="border-t border-border"
-            >
-              {dataPinnedContent}
-            </ResizablePanel>
-          ) : (
-            <div
-              className="h-3 shrink-0 cursor-pointer border-t border-border bg-panel transition-colors hover:bg-background-80"
-              onMouseEnter={dataReveal.onRegionEnter}
-              onMouseLeave={dataReveal.onRegionLeave}
-              onClick={dataReveal.openClick}
-              role="button"
-              tabIndex={0}
-              aria-label={t('singleView.panels.open', { name: panelName.data })}
-              data-testid="data-table-bar"
-            />
-          )}
-
-          {/* Data hover-overlay + opener tab (suppressed in fullscreen) */}
-          {!dataTableFullScreen && (
-            <>
-              <PanelFloat edge="bottom" size={dataTableHeight} reveal={dataReveal}>
-                {dataInner}
-              </PanelFloat>
-              <PanelOpenerTab
-                reveal={dataReveal}
-                edge="bottom"
-                label={panelName.data}
-                openArrow={<ChevronUpIcon size={14} />}
-                closeArrow={<ChevronDownIcon size={14} />}
-                style={{ right: 8, bottom: dataReveal.isOpen ? dataTableHeight : 0 }}
-                testId="data"
-                labels={tabLabels(panelName.data)}
-              />
-            </>
-          )}
+          {/* Data (bottom) — inside the center column so docked side panels push
+              it (and its tab) for free. Fullscreen renders without reparenting. */}
+          <Dock
+            reveal={dataReveal}
+            edge="bottom"
+            size={dataTableHeight}
+            minSize={DATA_TABLE_MIN_HEIGHT}
+            maxSize={DATA_TABLE_MAX_HEIGHT}
+            onResize={setDataTableHeight}
+            // Don't persist the temporary focus-mode height (#50): exit restores
+            // the prior height only in memory, so a focus-time drag must not leak.
+            onResizeEnd={(size) => {
+              if (focusedSectionId === null) savePanelSizes(undefined, undefined, size);
+            }}
+            label={panelName.data}
+            openArrow={<ChevronUpIcon size={14} />}
+            closeArrow={<ChevronDownIcon size={14} />}
+            testId="data"
+            tabLabels={tabLabels(panelName.data)}
+            fullscreen={dataTableFullScreen}
+          >
+            {dataInner}
+          </Dock>
         </div>
 
-        {/* Detail panel: reflow when pinned, else a thin full-edge opener bar */}
-        {detailReveal.isPinnedOpen ? (
-          <ResizablePanel
-            direction="horizontal"
-            defaultSize={detailPanelWidth}
-            minSize={200}
-            maxSize={500}
-            onResize={setDetailPanelWidth}
-            onResizeEnd={(size) => savePanelSizes(undefined, size, undefined)}
-            handlePosition="start"
-            className="border-l border-border"
-          >
-            {detailContent}
-          </ResizablePanel>
-        ) : (
-          <div
-            className="w-3 flex-shrink-0 cursor-pointer border-l border-border bg-panel transition-colors hover:bg-background-80"
-            onMouseEnter={detailReveal.onRegionEnter}
-            onMouseLeave={detailReveal.onRegionLeave}
-            onClick={detailReveal.openClick}
-            role="button"
-            tabIndex={0}
-            aria-label={t('singleView.panels.open', { name: panelName.detail })}
-            data-testid="detail-panel-bar"
-          />
-        )}
-
-        {/* Side hover-overlays (float over the map in hover mode) */}
-        <PanelFloat edge="left" size={sectionsPanelWidth} reveal={sectionsReveal}>
-          {sectionsContent}
-        </PanelFloat>
-        <PanelFloat edge="right" size={detailPanelWidth} reveal={detailReveal}>
-          {detailContent}
-        </PanelFloat>
-
-        {/* Side opener tabs (near top; the detail tab clears the +/- zoom stack) */}
-        <PanelOpenerTab
-          reveal={sectionsReveal}
-          edge="left"
-          label={panelName.sections}
-          openArrow={<ChevronRightIcon size={14} />}
-          closeArrow={<ChevronLeftIcon size={14} />}
-          style={{ left: 0, top: 72 }}
-          testId="sections"
-          labels={tabLabels(panelName.sections)}
-        />
-        <PanelOpenerTab
+        {/* Details (right) */}
+        <Dock
           reveal={detailReveal}
           edge="right"
+          size={detailPanelWidth}
+          minSize={200}
+          maxSize={500}
+          onResize={setDetailPanelWidth}
+          onResizeEnd={(size) => savePanelSizes(undefined, size, undefined)}
           label={panelName.detail}
           openArrow={<ChevronLeftIcon size={14} />}
           closeArrow={<ChevronRightIcon size={14} />}
-          style={{ right: 0, top: 72 }}
           testId="detail"
-          labels={tabLabels(panelName.detail)}
-        />
+          tabLabels={tabLabels(panelName.detail)}
+        >
+          {detailContent}
+        </Dock>
       </div>
 
       {/* Status bar */}
