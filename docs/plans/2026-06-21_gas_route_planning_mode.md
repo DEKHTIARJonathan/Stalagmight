@@ -120,7 +120,9 @@ boundary (mirrors how the codebase stores meters and converts in `formatStats.ts
 Diver { rmv_l_per_min: f64, label: Option<String> }
   // RMV is canonical. SAC is a CONSTRUCTOR concern, never stored:
   // Diver::from_sac(sac_bar_per_min, ref_cyl) => rmv = sac * ref_cyl.water_volume_l.
-Cylinder { water_volume_l, working_pressure_bar, fill_bar }
+Cylinder { water_volume_l, rated_pressure_bar, fill_bar, material: TankMaterial }
+  // fill_bar is an INPUT and may EXCEED rated — overfilling is routine (LP85s @ 210–230 bar,
+  // §5.3); rated is reference only, NEVER a clamp. material (Alu|Steel) hints stage-vs-backgas.
 GasConfig {
   reserve: ReservePreset,        // AllThirds | OneStage | TwoStage — see §5.1; pushy presets gated to "advanced"
   stressed_rmv_multiplier: f64,  // bailout/contingency bump, e.g. 1.5–2.0
@@ -131,6 +133,8 @@ GasConfig {
 }
 enum PlanMode { OpenCircuit, CcrBailout }
 Team { divers: Vec<Diver>, cylinders_per_diver: Vec<Vec<Cylinder>>, mode: PlanMode }
+  // Dissimilar-tank team matching (common in Florida) = the LOWEST usable-volume diver gates
+  // the team's turn; weakest-link = min over divers of usable gas. §5.3.
 ```
 
 - **RMV canonical, SAC never persisted** — enforce in the type system (no `sac` field; only
@@ -217,6 +221,40 @@ further a given total-thirds budget actually reaches vs the strict-thirds turn p
 surveyors otherwise fudge in their heads. High value, but it is the single most
 **over-trust-prone** number in the app; its presentation is governed by the automation-bias
 rule in §6.
+
+### 5.3 Tanks: presets, overfilling, and dissimilar-tank matching (Nico)
+
+**Tank diversity is regional.** In **Mexico** it's mostly standardized AL80 / LP85 (below), so
+dissimilar-tank matching rarely bites. In **Florida, all bets are off** — LP120, HP130, HP100,
+LP106, … — and there **real dissimilar-tank team matching is needed.** The rule is simple, not
+an optimization: **the lowest usable-volume diver gates the team** (everyone turns on the
+smallest member). So this lives in the **Team feature (Phase 5)**, computed from each diver's
+*actual* tank volumes — see §5 `Team` / §8.
+
+Two common tanks — ship as presets:
+
+| Tank | Water vol | Rated | Typical fill | Role |
+|------|-----------|-------|--------------|------|
+| **AL80** (aluminium) | 11.2 L | — | ~210 bar (≈ 80 cuft → the name) | stages **and** back gas |
+| **LP85** (steel) | 12 L | ~2600 psi (~179 bar) | **210–230 bar, overfilled** | **back gas only** (negative buoyancy → poor stage) |
+
+**Fill pressure is an INPUT, not the rating.** LP85s are routinely **overfilled to ~210–230
+bar absolute** — i.e. filled *to* ~230 bar, **not** 230 over the ~179 bar rating. Not strictly
+US-legal, but standard; safe data for newish steel passing hydro. The model takes `fill_bar`
+as given and **never clamps it to rated** — rated is reference only. A 12 L LP85 @ 230 bar
+holds well over an AL80's 80 cuft.
+
+**"Call it an 80" — conservative convention, and an automation-bias trap.** Because they're
+overfilled, divers often skip the dissimilar math and just call LP85s "80s" — *understating*
+gas for a **more conservative** plan that won't break thirds. ⚠ So the *accurate* thing
+(computing real gas from a 230-bar fill) is **less** conservative than the community norm.
+Therefore: accept actual fill for honesty, but make the **derate / use-rated** treatment a
+first-class, easy option, and don't let the tool's precision quietly erode the convention
+(ties to §6 automation-bias).
+
+**Buoyancy / role (minor):** steel ≈ negative → back gas; aluminium ≈ neutral → fine as
+stages. Material can *hint* role suitability when assigning cylinders — guidance, not a hard
+rule.
 
 ---
 
@@ -355,7 +393,8 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
 - **Phase 3 — CCR bailout:** `PlanMode::CcrBailout`, bailout volume (exit-from-lead, stressed
   RMV, swim speed), bailout staging + drops. Reuses 100% of the engine.
 - **Phase 4 — DPV range/burn-time + dead-scooter contingency; imperial units flip.**
-- **Phase 5 — Team:** matched gas, weakest-link reserve, CCR team bailout sharing (a `fold`
+- **Phase 5 — Team:** matched gas (dissimilar-tank matching = **lowest usable-volume diver
+  gates**; common in Florida — §5.3), weakest-link reserve, CCR team bailout sharing (a `fold`
   over per-diver fields — no new graph math).
 - **Dependency to schedule early:** the **#77** gas-graph edge filter (safety, §6) — needed
   before Phase 1 ships numbers anyone trusts.
