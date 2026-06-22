@@ -68,7 +68,13 @@ interface Rect {
 interface Pos {
   top: number;
   left: number;
+  /** Cap so a tall menu fits the viewport and scrolls instead of overflowing. */
+  maxHeight: number;
 }
+
+/** Gap (px) kept between the menu and the viewport edges / the trigger. */
+const VIEWPORT_MARGIN = 8;
+const TRIGGER_GAP = 2;
 
 function focusableIds(items: AppMenuItem[]): string[] {
   return items.filter((i) => !i.separator && !i.disabled).map((i) => i.id);
@@ -175,7 +181,11 @@ export function AppMenu({
     [closeMenu],
   );
 
-  // Position the top-level menu under the trigger (flip up / clamp into viewport).
+  // Position the top-level menu under the trigger, flipping up when there's more
+  // room above. Always cap the height to the chosen side's available space so a
+  // menu taller than the viewport scrolls (maxHeight + overflow) instead of
+  // overflowing off-screen. Measured before maxHeight is applied (the hidden
+  // fallback style has none), so `height` is the natural content height.
   useLayoutEffect(() => {
     if (!isOpen || !triggerRect) {
       setMenuPos(null);
@@ -184,14 +194,24 @@ export function AppMenu({
     const el = menuRef.current;
     if (!el) return;
     const height = el.getBoundingClientRect().height;
-    let top = triggerRect.bottom + 2;
-    if (top + height > window.innerHeight) {
-      top = Math.max(0, triggerRect.top - height - 2);
+    const spaceBelow = window.innerHeight - triggerRect.bottom - TRIGGER_GAP - VIEWPORT_MARGIN;
+    const spaceAbove = triggerRect.top - TRIGGER_GAP - VIEWPORT_MARGIN;
+    // Open downward if it fits there, or if below has at least as much room.
+    const openDown = height <= spaceBelow || spaceBelow >= spaceAbove;
+    let top: number;
+    let maxHeight: number;
+    if (openDown) {
+      top = triggerRect.bottom + TRIGGER_GAP;
+      maxHeight = spaceBelow;
+    } else {
+      maxHeight = spaceAbove;
+      top = triggerRect.top - TRIGGER_GAP - Math.min(height, maxHeight);
     }
-    setMenuPos({ top, left: triggerRect.left });
+    setMenuPos({ top: Math.max(VIEWPORT_MARGIN, top), left: triggerRect.left, maxHeight });
   }, [isOpen, triggerRect]);
 
-  // Position the submenu flyout to the right of its parent row (flip left / clamp).
+  // Position the submenu flyout to the right of its parent row (flip left / clamp),
+  // also capping its height to the viewport so a long submenu scrolls.
   useLayoutEffect(() => {
     if (!openSubmenuId || !submenuParentRect) {
       setSubmenuPos(null);
@@ -204,11 +224,13 @@ export function AppMenu({
     if (left + rect.width > window.innerWidth) {
       left = Math.max(0, submenuParentRect.left - rect.width + 2);
     }
+    const maxHeight = window.innerHeight - VIEWPORT_MARGIN * 2;
+    const shownHeight = Math.min(rect.height, maxHeight);
     let top = submenuParentRect.top;
-    if (top + rect.height > window.innerHeight) {
-      top = Math.max(0, window.innerHeight - rect.height);
+    if (top + shownHeight > window.innerHeight - VIEWPORT_MARGIN) {
+      top = Math.max(VIEWPORT_MARGIN, window.innerHeight - VIEWPORT_MARGIN - shownHeight);
     }
-    setSubmenuPos({ top, left });
+    setSubmenuPos({ top, left, maxHeight });
   }, [openSubmenuId, submenuParentRect]);
 
   // Focus the active row (submenu takes precedence when open).
@@ -445,8 +467,18 @@ export function AppMenu({
   };
 
   const menuStyle: CSSProperties = menuPos
-    ? { position: 'fixed', top: menuPos.top, left: menuPos.left, zIndex: 9999, visibility: 'visible' }
+    ? {
+        position: 'fixed',
+        top: menuPos.top,
+        left: menuPos.left,
+        zIndex: 9999,
+        visibility: 'visible',
+        maxHeight: menuPos.maxHeight,
+        overflowY: 'auto',
+      }
     : {
+        // Hidden first-pass: NO maxHeight, so the layout effect measures the
+        // menu's natural height before deciding side + cap.
         position: 'fixed',
         top: 0,
         left: triggerRect?.left ?? 0,
@@ -457,7 +489,15 @@ export function AppMenu({
 
   const activeSubmenu = items.find((i) => i.id === openSubmenuId)?.submenu;
   const submenuStyle: CSSProperties = submenuPos
-    ? { position: 'fixed', top: submenuPos.top, left: submenuPos.left, zIndex: 9999, visibility: 'visible' }
+    ? {
+        position: 'fixed',
+        top: submenuPos.top,
+        left: submenuPos.left,
+        zIndex: 9999,
+        visibility: 'visible',
+        maxHeight: submenuPos.maxHeight,
+        overflowY: 'auto',
+      }
     : {
         position: 'fixed',
         top: submenuParentRect?.top ?? 0,

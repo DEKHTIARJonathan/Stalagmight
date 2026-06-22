@@ -1,37 +1,33 @@
 /**
  * Builds the in-project hamburger (AppMenu) items for SingleSystemView.
  *
- * Mirrors the GlobalView menu (New/Open/Import/Settings/Debug/Quit) and adds the
- * project-specific actions (Save, Save As, Save and Close, Close Project, Export,
- * Project Settings, Project Details). Item ids reuse the GlobalView/legacy
- * test-ids for matching actions so existing e2e selectors/helpers keep working.
+ * Reuses the shared GlobalView rows (New/Open/Settings/Debug/Quit) from
+ * appMenuItems and adds the project-specific actions (Save, Save As, Save and
+ * Close, Close Project, Export, Project Settings, Project Details). Item ids
+ * reuse the GlobalView/legacy test-ids for matching actions so existing e2e
+ * selectors/helpers keep working.
  */
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
 import { setProjectActionSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
+import { leadingMenuItems, serviceMenuItems, quitMenuItem } from '../common/appMenuItems';
 import type { AppMenuItem } from '../common/AppMenu';
 import {
-  FilePlusIcon,
-  FolderOpenIcon,
   SaveIcon,
   CloseIcon,
   DownloadIcon,
   ExportIcon,
   SlidersIcon,
   InfoIcon,
-  SettingsIcon,
-  BugIcon,
   DatabaseIcon,
-  QuitIcon,
 } from '../common/icons';
 
 interface UseProjectMenuItemsArgs {
   /** The SingleSystemView-wrapped save (cancels autosave, then saves). */
-  onSave: () => Promise<{ success: boolean } | null | undefined>;
+  onSave: (opts?: { closeAfterSave?: boolean }) => Promise<{ success: boolean } | null | undefined>;
   /** A save (auto or manual) failed — flag the Save row with a dark-red bg. */
   saveFailed?: boolean;
 }
@@ -54,7 +50,11 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
     const sz = 18;
 
     const saveAndClose = async () => {
-      const result = await onSave();
+      // Pass the close intent so a deferred Save-As (the overwrite-confirm dialog)
+      // still closes the project after it saves. A direct save returns the result
+      // and we close here; a save routed to the overwrite dialog returns null and
+      // that dialog finishes the close once the user confirms.
+      const result = await onSave({ closeAfterSave: true });
       // Only leave the project if the save actually succeeded (a cancelled
       // Save As returns null; an integrity/permission block returns success:false).
       if (result && result.success) {
@@ -71,22 +71,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
     };
 
     return [
-      {
-        id: 'app-menu-new-project',
-        label: t('globalView.actions.newProject'),
-        icon: <FilePlusIcon size={sz} />,
-        iconColor: MENU_ICON_COLORS.new,
-        action: 'new_file',
-        onClick: () => { setProjectActionSource('hamburger'); handleNewProject(); },
-      },
-      {
-        id: 'global-open-project-button',
-        label: t('globalView.actions.openProject'),
-        icon: <FolderOpenIcon size={sz} />,
-        iconColor: MENU_ICON_COLORS.open,
-        action: 'open_file',
-        onClick: () => { setProjectActionSource('hamburger'); handleOpenProject(); },
-      },
+      ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
       { id: 'project-menu-sep-1', label: '', separator: true },
       {
         id: 'toolbar-save-button',
@@ -156,20 +141,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         onClick: showProjectDetails,
       },
       { id: 'project-menu-sep-4', label: '', separator: true },
-      {
-        id: 'settings-button',
-        label: t('globalView.actions.settings'),
-        icon: <SettingsIcon size={sz} />,
-        iconColor: MENU_ICON_COLORS.settings,
-        onClick: () => openDialog('settings'),
-      },
-      {
-        id: 'global-debug-button',
-        label: t('globalView.actions.debugLogs'),
-        icon: <BugIcon size={sz} />,
-        iconColor: MENU_ICON_COLORS.debug,
-        onClick: () => openDialog('debug'),
-      },
+      ...serviceMenuItems(t, { onSettings: () => openDialog('settings'), onDebug: () => openDialog('debug') }),
       {
         id: 'display-toggle-showDevStats',
         label: t('singleView.menu.devStats'),
@@ -186,18 +158,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         iconColor: MENU_ICON_COLORS.close,
         onClick: () => { void handleCloseProject(); },
       },
-      {
-        id: 'global-quit-button',
-        label: t('globalView.actions.quit'),
-        icon: <QuitIcon size={sz} />,
-        iconColor: MENU_ICON_COLORS.quit,
-        action: 'quit',
-        onClick: () => {
-          getCurrentWindow().close().catch((err) => {
-            console.error('[quit] window.close() failed:', err);
-          });
-        },
-      },
+      quitMenuItem(t),
     ];
   }, [t, openDialog, showDevStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, handleImportDmp, handleImportGpx]);
 }

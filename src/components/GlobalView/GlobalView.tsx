@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, typ
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useProject } from '../../hooks/useProject';
 import { useGlobalViewShortcuts } from '../../hooks/useGlobalViewShortcuts';
 import { useProjectStore } from '../../store/projectStore';
@@ -10,7 +9,8 @@ import { useUIStore } from '../../store/uiStore';
 import { useGlobalViewStore } from '../../store/globalViewStore';
 import { Button } from '../common/Button';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
-import { BugIcon, CloseIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIcon, QuitIcon, SettingsIcon } from '../common/icons';
+import { leadingMenuItems, serviceMenuItems, quitMenuItem } from '../common/appMenuItems';
+import { CloseIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIcon } from '../common/icons';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { setProjectActionSource } from '../../utils/telemetry';
@@ -70,6 +70,14 @@ function formatPhaseLabel(
 }
 
 type ViewTab = 'map' | 'list';
+
+/**
+ * Conservative upper bound on the OS double-click interval (Windows' max is
+ * 500ms). In the list view we wait this long after a single click before showing
+ * the details panel, so a double-click-to-open doesn't flash it — by the time it
+ * elapses, the click was clearly a select (not the first half of an open).
+ */
+const DOUBLE_CLICK_MS = 500;
 
 interface ContextMenuState {
   visible: boolean;
@@ -358,12 +366,6 @@ export default function GlobalView() {
     }
   }, []);
 
-  // Quit the app: requests a window close; the App-level useBeforeUnload listener
-  // handles tauri://close-requested (confirms on unsaved work, else closes).
-  const handleQuit = useCallback(() => {
-    void getCurrentWindow().close();
-  }, []);
-
   // Handle zoom to system (context menu action)
   const handleZoomToSystem = useCallback(() => {
     if (contextMenu.projectPath) {
@@ -418,6 +420,25 @@ export default function GlobalView() {
     if (!selectedProjectId) return null;
     return recentProjects.find(p => p.file_path === selectedProjectId) || null;
   }, [selectedProjectId, recentProjects]);
+
+  // One-way latch gating the list-view details panel. It starts hidden and opens
+  // only once a selection is confirmed; once open it STAYS open — switching
+  // between projects just updates its content (never re-hide/flicker it). The
+  // first reveal is gated so a double-click-to-open doesn't flash it: immediate
+  // in the map view (no open-vs-select ambiguity), and debounced by the
+  // double-click window in the list view. (Resets when GlobalView remounts, e.g.
+  // after returning from an opened project.)
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  useEffect(() => {
+    if (detailsOpen) return; // already open — leave it; content follows selection
+    if (!selectedProjectId) return; // nothing selected yet
+    if (activeTab === 'map') {
+      setDetailsOpen(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setDetailsOpen(true), DOUBLE_CLICK_MS);
+    return () => window.clearTimeout(timer);
+  }, [selectedProjectId, activeTab, detailsOpen]);
 
   // Get selected projects array for multi-selection support
   const selectedProjects = useMemo(() => {
@@ -476,62 +497,32 @@ export default function GlobalView() {
   // panel stays gated on loaded projects, since missing rows aren't selectable.)
   const hasRecentItems = listItems.length > 0;
 
-  // Hamburger menu contents. testids reuse the legacy button ids on equivalent
-  // actions so most existing selectors keep working (now via the menu).
-  const menuItems: AppMenuItem[] = [
-    {
-      id: 'app-menu-new-project',
-      label: t('globalView.actions.newProject'),
-      icon: <FilePlusIcon size={18} />,
-      iconColor: MENU_ICON_COLORS.new,
-      action: 'new_file',
-      onClick: () => { setProjectActionSource('hamburger'); handleNewProject(); },
-    },
-    {
-      id: 'global-open-project-button',
-      label: t('globalView.actions.openProject'),
-      icon: <FolderOpenIcon size={18} />,
-      iconColor: MENU_ICON_COLORS.open,
-      action: 'open_file',
-      onClick: () => { setProjectActionSource('hamburger'); handleOpenProject(); },
-    },
-    {
-      id: 'global-import-menu-button',
-      label: t('globalView.actions.import'),
-      icon: <DownloadIcon size={18} />,
-      iconColor: MENU_ICON_COLORS.import,
-      submenu: [
-        { id: 'global-import-dmp-button', label: t('globalView.actions.importDmp'), action: 'import_dmp', onClick: () => { setProjectActionSource('hamburger'); handleImportDmp(); } },
-        { id: 'global-import-tml-button', label: t('globalView.actions.importTml'), onClick: () => { setProjectActionSource('hamburger'); handleImportTml(); } },
-        { id: 'global-import-compass-button', label: t('globalView.actions.importCompass'), onClick: () => { setProjectActionSource('hamburger'); handleImportCompass(); } },
-        { id: 'global-import-gpx-button', label: t('globalView.actions.importGpx'), onClick: () => { setProjectActionSource('hamburger'); handleImportGpx(); } },
-      ],
-    },
-    { id: 'app-menu-sep-1', label: '', separator: true },
-    {
-      id: 'settings-button',
-      label: t('globalView.actions.settings'),
-      icon: <SettingsIcon size={18} />,
-      iconColor: MENU_ICON_COLORS.settings,
-      onClick: () => openDialog('settings'),
-    },
-    {
-      id: 'global-debug-button',
-      label: t('globalView.actions.debugLogs'),
-      icon: <BugIcon size={18} />,
-      iconColor: MENU_ICON_COLORS.debug,
-      onClick: () => openDialog('debug'),
-    },
-    { id: 'app-menu-sep-2', label: '', separator: true },
-    {
-      id: 'global-quit-button',
-      label: t('globalView.actions.quit'),
-      icon: <QuitIcon size={18} />,
-      iconColor: MENU_ICON_COLORS.quit,
-      action: 'quit',
-      onClick: handleQuit,
-    },
-  ];
+  // Hamburger menu contents. The New/Open/Settings/Debug/Quit rows are shared
+  // with the in-project menu (appMenuItems); only the Import submenu differs
+  // (the start screen offers every new-project format). Memoized so AppMenu's
+  // items-dependent callbacks don't churn on every keystroke-driven re-render.
+  const menuItems: AppMenuItem[] = useMemo(
+    () => [
+      ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
+      {
+        id: 'global-import-menu-button',
+        label: t('globalView.actions.import'),
+        icon: <DownloadIcon size={18} />,
+        iconColor: MENU_ICON_COLORS.import,
+        submenu: [
+          { id: 'global-import-dmp-button', label: t('globalView.actions.importDmp'), action: 'import_dmp', onClick: () => { setProjectActionSource('hamburger'); handleImportDmp(); } },
+          { id: 'global-import-tml-button', label: t('globalView.actions.importTml'), onClick: () => { setProjectActionSource('hamburger'); handleImportTml(); } },
+          { id: 'global-import-compass-button', label: t('globalView.actions.importCompass'), onClick: () => { setProjectActionSource('hamburger'); handleImportCompass(); } },
+          { id: 'global-import-gpx-button', label: t('globalView.actions.importGpx'), onClick: () => { setProjectActionSource('hamburger'); handleImportGpx(); } },
+        ],
+      },
+      { id: 'app-menu-sep-1', label: '', separator: true },
+      ...serviceMenuItems(t, { onSettings: () => openDialog('settings'), onDebug: () => openDialog('debug') }),
+      { id: 'app-menu-sep-2', label: '', separator: true },
+      quitMenuItem(t),
+    ],
+    [t, handleNewProject, handleOpenProject, handleImportDmp, handleImportTml, handleImportCompass, handleImportGpx, openDialog],
+  );
 
   return (
     <div data-testid="global-view" className="h-full flex flex-col">
@@ -794,8 +785,11 @@ export default function GlobalView() {
           )}
         </div>
 
-        {/* Metadata Panel - only show when projects exist */}
-        {recentProjects.length > 0 && (
+        {/* Metadata Panel. Map view: always shown (lives alongside the map).
+            List view: hidden until the first selection is confirmed past the
+            double-click window (so it doesn't flash on a double-click-to-open),
+            then it stays open and just follows the selection. */}
+        {recentProjects.length > 0 && (activeTab === 'map' || detailsOpen) && (
           <MetadataPanel
             project={selectedProject}
             selectedProjects={selectedProjects}
