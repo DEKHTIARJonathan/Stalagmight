@@ -195,6 +195,37 @@ async function projectLngLat(page: Page, lngLat: { lng: number; lat: number }) {
   }, lngLat);
 }
 
+/**
+ * After a click-to-drop, assert the COMMITTED move offset lands the grabbed feature at
+ * the cursor (#20): offset ≈ (cursorWorld − snappedFeatureWorld). Uses the mock-recorded
+ * offset (the move handlers don't mutate state, so there's nothing to read back) and the
+ * no-GPS metersToMapCoords fallback (degrees × METERS_PER_DEGREE = 111320). An un-snapped
+ * grab would be off by the grab imprecision (several metres) — well outside the 1 m bound.
+ */
+async function expectCommitLandsAtCursor(
+  page: Page,
+  startLngLat: { lng: number; lat: number },
+  cursorCanvas: { x: number; y: number },
+  label: string,
+) {
+  const M_PER_DEG = 111320; // src/utils/coordinates.ts METERS_PER_DEGREE
+  const endLngLat = await page.evaluate((c) => {
+    const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
+    const p = map!.unproject([c.x, c.y]);
+    return { lng: p.lng, lat: p.lat };
+  }, cursorCanvas);
+  const calls = await page.evaluate(
+    () =>
+      (window as unknown as { __MOCK_MOVE_CALLS__?: Array<{ args: { offset?: { x: number; y: number } } }> })
+        .__MOCK_MOVE_CALLS__ ?? [],
+  );
+  expect(calls.length, `${label}: a move was committed on drop`).toBeGreaterThan(0);
+  const offset = calls[calls.length - 1].args.offset;
+  expect(offset, `${label}: committed offset present`).toBeTruthy();
+  expect(Math.abs(offset!.x - (endLngLat.lng - startLngLat.lng) * M_PER_DEG), `${label}: offset.x lands at cursor`).toBeLessThan(1.0);
+  expect(Math.abs(offset!.y - (endLngLat.lat - startLngLat.lat) * M_PER_DEG), `${label}: offset.y lands at cursor`).toBeLessThan(1.0);
+}
+
 async function activateTool(page: Page, key: string, tool: string) {
   await page.getByTestId('map-canvas').click({ position: { x: 4, y: 4 } });
   await page.keyboard.press(key);
@@ -229,6 +260,7 @@ test('move_segment grabbed on a STATION snaps + tracks across a mid-drag zoom (#
   // there's no mouse.down() to pair an up() with — a click is the real drop).
   await page.mouse.click(box.x + cursor.x, box.y + cursor.y);
   await waitForMapIdle(page);
+  await expectCommitLandsAtCursor(page, lngLat, cursor, '#20 station-grab commit');
 });
 
 test('move_segment grabbed on a SHOT line snaps + tracks across a mid-drag zoom (#79, #20)', async ({ page }) => {
@@ -288,6 +320,7 @@ test('move_station grabbed off-center snaps + tracks across a mid-drag zoom (#79
 
   await page.mouse.click(box.x + cursor.x, box.y + cursor.y);
   await waitForMapIdle(page);
+  await expectCommitLandsAtCursor(page, lngLat, cursor, '#20 move_station commit');
 });
 
 test('move_station snap-to-target holds across a mid-drag zoom (snap + #79)', async ({ page }) => {
