@@ -410,7 +410,7 @@ export default function SingleSystemView() {
           closeArrow={<ChevronLeftIcon size={14} />}
           testId="sections"
           tabLabels={tabLabels(panelName.sections)}
-          tabTop={41}
+          tabTop={79}
         >
           {sectionsContent}
         </Dock>
@@ -445,6 +445,10 @@ export default function SingleSystemView() {
             closeArrow={<ChevronDownIcon size={14} />}
             testId="data"
             tabLabels={tabLabels(panelName.data)}
+            // Push the Data tab clear of a floating (hover-open) Details panel so
+            // it stays visible. When Details is pinned the center column already
+            // shrinks, moving the tab left for free.
+            tabInset={8 + (detailReveal.isFloatingOpen ? detailPanelWidth : 0)}
             fullscreen={dataTableFullScreen}
           >
             {dataInner}
@@ -471,8 +475,16 @@ export default function SingleSystemView() {
         </Dock>
       </div>
 
-      {/* Status bar */}
-      <footer className="px-4 py-2 border-t border-border text-sm text-text-secondary flex justify-between">
+      {/* Status bar. It sits just below the Data panel, so treat it as part of
+          the Data hover region: keep an already-open (hover) Data panel open
+          while the pointer rests here, but don't open it from closed. */}
+      <footer
+        onMouseEnter={() => {
+          if (dataReveal.isFloatingOpen) dataReveal.onRegionEnter();
+        }}
+        onMouseLeave={dataReveal.onRegionLeave}
+        className="px-4 py-2 border-t border-border text-sm text-text-secondary flex justify-between"
+      >
         <span>
           {t('singleView.status.summary', {
             sections: formatNumber(stats?.section_count ?? 0),
