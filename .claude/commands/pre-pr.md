@@ -18,15 +18,34 @@ review the riskiest files first and report what it didn't reach.
 
 ## How to run it — fan out, then synthesize
 
-Launch the **9 subagents below in parallel** with the Task tool (issue them in a
-single message so they run concurrently). Give every subagent the diff/scope above
-plus this shared contract:
+Launch the **subagents below in parallel** with the Task tool (issue them in a
+single message so they run concurrently).
+
+**Brief finders blind to author intent — this is load-bearing.** Give each subagent
+ONLY the diff/scope above + the files to read. Do NOT tell them what the change "is
+trying to do," why it's correct, or that any part is safe — author framing biases
+finders into confirming the author's mental model, and is exactly how a P1 has
+slipped through here (the orchestrator handed finders its own conclusion and they
+confirmed it). The PR description and in-code "why" comments are **claims to verify,
+not facts.** If a finder needs orientation, give neutral file pointers ("the
+close-guard lives in `useBeforeUnload.ts`") — never a verdict ("the close-guard
+protects this").
+
+Give every subagent this shared contract:
 
 > Review ONLY through your assigned lens — do not defer to or suppress another lens.
 > Return findings as `file:line · why · fix-or-test`. Separate what you VERIFIED
 > (traced in the code) from what you ASSUMED; never assert a bug you didn't trace.
-> If you find nothing, name the riskiest part of the change in your area and exactly
-> what would break it. Highest-signal findings first.
+> **Apply that same burden of proof to SAFETY:** a "this is correct/safe because X"
+> conclusion needs the line that proves X quoted. An unverified load-bearing
+> assumption — a membership/enumeration/config/consumer you did not actually read —
+> is itself a finding: report it as `ASSUMPTION (unverified): … · what to check`.
+> Naming a risk and then dismissing it without tracing is NOT allowed.
+> **Verify consumers, not just producers:** for any state/flag/field the change
+> writes, grep its consumers and confirm at least one delivers the change's intended
+> effect for the specific route/state in question — quote the consumer's gating line.
+> If you find nothing, name the riskiest part of the change in your area, exactly what
+> would break it, then verify-or-flag it per above. Highest-signal findings first.
 
 Subagents 1–8 each own exactly one numbered lens:
 
@@ -111,14 +130,27 @@ Subagents 1–8 each own exactly one numbered lens:
 **Subagent 8 — Security** (going open-source — assume hostile input)
 - Input validation, path traversal, `unsafe` Rust, secret handling, no PII in telemetry.
 
-**Subagent 9 — Bundled `/code-review`**
+**Subagent 9 — Goal & guarantee trace** (end-to-end; cross-cutting, not lens-bound)
+- From the DIFF ALONE infer what user-facing guarantee the change must deliver
+  (data-safety, close/unsaved guard, persistence, undo, UI↔backend parity), then
+  trace each guarantee end-to-end: **trigger → state written → consumer that reads
+  it → effect.** Do not assume any link in that chain; read each one.
+- Confirm the SPECIFIC route/dialog/state this change touches is actually in the set
+  the consumer checks — read the enumerated list/condition, never assume membership.
+  (The canonical miss: a flag was set correctly but no consumer read it for that
+  dialog state, so the guard never fired.) Quote the consumer's gating line.
+- A broken or unverifiable guarantee chain is a high-signal finding even when every
+  individual hunk is correct. If the change's own claims can't be traced to the code
+  that delivers them, say so explicitly.
+
+**Subagent 10 — Bundled `/code-review`**
 - Task this subagent to run the bundled reviewer and report its findings verbatim:
   invoke the `code-review` skill at high effort (Skill tool → skill `code-review`,
   args `high`) against the same diff, and return its 🔴/🟡 list as
   `file:line · why · fix-or-test`.
 - Fallback: if your harness disallows invoking a skill inside a subagent, skip this
   subagent and instead run `/code-review high` yourself in the main thread, in
-  parallel with collecting subagents 1–8, and treat its output as the 9th input.
+  parallel with collecting subagents 1–9, and treat its output as the 10th input.
 
 ## Synthesize (you, in the main thread)
 Wait for all subagents, then merge:
