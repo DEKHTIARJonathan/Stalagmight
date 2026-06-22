@@ -17,11 +17,10 @@ import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants'
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { usePanelReveal } from './usePanelReveal';
 import { Dock, BAR } from './Dock';
-import { open } from '@tauri-apps/plugin-dialog';
 import { dmpGpxOpenFilters } from '../../utils/fileDialogs';
-import { routeOpenedFile } from '../../utils/openOrImport';
+import { pickAndRoute } from '../../utils/openOrImport';
 import { useProjectMenuItems } from './useProjectMenuItems';
-import { setSource, withTrackingSuppressed, setProjectActionSource, clearProjectActionSource } from '../../utils/telemetry';
+import { setSource, withTrackingSuppressed, setProjectActionSource } from '../../utils/telemetry';
 import { useTranslation } from 'react-i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -67,12 +66,7 @@ export default function SingleSystemView() {
   // chosen), routed by extension through the shared open/import router.
   const handleImportDmpOrGpx = useCallback(async () => {
     setProjectActionSource('toolbar');
-    const selected = await open({ multiple: false, filters: dmpGpxOpenFilters() });
-    if (!selected || typeof selected !== 'string') {
-      clearProjectActionSource();
-      return;
-    }
-    await routeOpenedFile(selected, 'Import Failed');
+    await pickAndRoute(dmpGpxOpenFilters(), 'Import Failed');
   }, []);
 
   // Hamburger menu items (file/project actions). Built here so it can use the

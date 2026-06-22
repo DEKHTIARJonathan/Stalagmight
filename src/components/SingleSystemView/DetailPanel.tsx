@@ -21,6 +21,24 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 
+/** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
+ *  under the page-zoom UI scale. Shared by the per-entity "center on map"
+ *  buttons (station/shot/section) below. */
+function CenterLocateIcon() {
+  return (
+    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fillRule="evenodd"
+        d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0ZM11.2 12a0.8 0.8 0 1 0 1.6 0a0.8 0.8 0 1 0 -1.6 0Z"
+      />
+      <rect x="10.9" y="2" width="2.2" height="4" rx="1.1" />
+      <rect x="10.9" y="18" width="2.2" height="4" rx="1.1" />
+      <rect x="2" y="10.9" width="4" height="2.2" rx="1.1" />
+      <rect x="18" y="10.9" width="4" height="2.2" rx="1.1" />
+    </svg>
+  );
+}
+
 export default function DetailPanel() {
   const { t } = useTranslation();
   const { selection, detailPanelTab, setDetailPanelTab, setSelection } = useUIStore(
@@ -743,22 +761,7 @@ function StationDetail({ station }: { station: Station }) {
       })}
       data-testid="center-station-button"
     >
-      <svg
-        className="w-4 h-4"
-        fill="currentColor"
-        viewBox="0 0 24 24"
-        aria-hidden="true"
-      >
-        {/* Center/locate: ring + spokes, filled (robust under page-zoom UI scale) */}
-        <path
-          fillRule="evenodd"
-          d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0ZM11.2 12a0.8 0.8 0 1 0 1.6 0a0.8 0.8 0 1 0 -1.6 0Z"
-        />
-        <rect x="10.9" y="2" width="2.2" height="4" rx="1.1" />
-        <rect x="10.9" y="18" width="2.2" height="4" rx="1.1" />
-        <rect x="2" y="10.9" width="4" height="2.2" rx="1.1" />
-        <rect x="18" y="10.9" width="4" height="2.2" rx="1.1" />
-      </svg>
+      <CenterLocateIcon />
     </button>
   );
 
@@ -1029,22 +1032,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
       })}
       data-testid="center-shot-button"
     >
-      <svg
-        className="w-4 h-4"
-        fill="currentColor"
-        viewBox="0 0 24 24"
-        aria-hidden="true"
-      >
-        {/* Center/locate: ring + spokes, filled (robust under page-zoom UI scale) */}
-        <path
-          fillRule="evenodd"
-          d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0ZM11.2 12a0.8 0.8 0 1 0 1.6 0a0.8 0.8 0 1 0 -1.6 0Z"
-        />
-        <rect x="10.9" y="2" width="2.2" height="4" rx="1.1" />
-        <rect x="10.9" y="18" width="2.2" height="4" rx="1.1" />
-        <rect x="2" y="10.9" width="4" height="2.2" rx="1.1" />
-        <rect x="18" y="10.9" width="4" height="2.2" rx="1.1" />
-      </svg>
+      <CenterLocateIcon />
     </button>
   );
 
@@ -1249,22 +1237,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
       aria-label={t('detailPanel.section.center', { id: section.id, name: sectionDisplayName })}
       data-testid="center-section-button"
     >
-      <svg
-        className="w-4 h-4"
-        fill="currentColor"
-        viewBox="0 0 24 24"
-        aria-hidden="true"
-      >
-        {/* Center/locate: ring + spokes, filled (robust under page-zoom UI scale) */}
-        <path
-          fillRule="evenodd"
-          d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0ZM11.2 12a0.8 0.8 0 1 0 1.6 0a0.8 0.8 0 1 0 -1.6 0Z"
-        />
-        <rect x="10.9" y="2" width="2.2" height="4" rx="1.1" />
-        <rect x="10.9" y="18" width="2.2" height="4" rx="1.1" />
-        <rect x="2" y="10.9" width="4" height="2.2" rx="1.1" />
-        <rect x="18" y="10.9" width="4" height="2.2" rx="1.1" />
-      </svg>
+      <CenterLocateIcon />
     </button>
   );
 

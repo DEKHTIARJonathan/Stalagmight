@@ -22,7 +22,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { parseKeyEvent, normalizeShortcut } from '../utils/shortcuts';
 import { importFiltersForContext, projectOpenFilters } from '../utils/fileDialogs';
-import { routeOpenedFile } from '../utils/openOrImport';
+import { pickAndRoute } from '../utils/openOrImport';
 import { quitApp } from '../utils/quit';
 import { setProjectActionSource, clearProjectActionSource } from '../utils/telemetry';
 import { getErrorMessage } from '../utils/ipc';
@@ -380,25 +380,14 @@ export function useGlobalViewShortcuts({
         case 'import_dmp': {
           e.preventDefault();
           setProjectActionSource('keyboard');
-          (async () => {
-            // GlobalView has no project open, so the picker offers every
-            // importable format plus "All Files"; routeOpenedFile dispatches by
-            // extension and, with nothing to replace, may also open a `.stalx`
-            // project chosen through it.
-            const hasProject = !!useProjectStore.getState().project;
-            const selected = await open({
-              multiple: false,
-              filters: importFiltersForContext(hasProject),
-            });
-
-            if (!selected || typeof selected !== 'string') {
-              clearProjectActionSource();
-              return;
-            }
-
-            // Shared routing with the toolbar "Open / Import" button.
-            await routeOpenedFile(selected, 'Import Failed');
-          })();
+          // GlobalView has no project open, so the picker offers every importable
+          // format plus "All Files"; pickAndRoute dispatches by extension and,
+          // with nothing to replace, may also open a `.stalx` project chosen
+          // through it. Shared routing with the toolbar "Open / Import" button.
+          void pickAndRoute(
+            importFiltersForContext(!!useProjectStore.getState().project),
+            'Import Failed',
+          );
           break;
         }
 

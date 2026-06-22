@@ -15,7 +15,7 @@ import {
   saveDialog,
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
-import { routeOpenedFile } from '../utils/openOrImport';
+import { pickAndRoute } from '../utils/openOrImport';
 import { quitApp } from '../utils/quit';
 import type { ToolType, Selection, DisplayToggleKey } from '../store/uiStore';
 import { setSource, trackNav, setProjectActionSource, clearProjectActionSource } from '../utils/telemetry';
@@ -762,19 +762,11 @@ export function useKeyboardShortcuts() {
           setProjectActionSource('keyboard');
           // Shared open/import routing (same as the toolbar Import + drag-drop).
           // A project is open here, so the picker is scoped to DMP + GPX (the only
-          // formats importable into it); routeOpenedFile dispatches by extension.
-          (async () => {
-            const hasProject = !!useProjectStore.getState().project;
-            const selected = await open({
-              multiple: false,
-              filters: importFiltersForContext(hasProject),
-            });
-            if (!selected || typeof selected !== 'string') {
-              clearProjectActionSource();
-              return;
-            }
-            await routeOpenedFile(selected, 'Import Failed');
-          })();
+          // formats importable into it); pickAndRoute dispatches by extension.
+          void pickAndRoute(
+            importFiltersForContext(!!useProjectStore.getState().project),
+            'Import Failed',
+          );
           break;
         }
 

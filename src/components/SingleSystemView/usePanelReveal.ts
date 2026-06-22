@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useUIStore, type PanelId, type PanelMode } from '../../store/uiStore';
+import { useUIStore, type PanelId } from '../../store/uiStore';
 
 /** Grace period bridging mouse moves between the bar, tab, and floating panel
  *  (separate DOM elements) so the panel doesn't flicker closed in transit. */
 const CLOSE_GRACE_MS = 120;
 
 export interface PanelReveal {
-  mode: PanelMode;
-  /** Persisted open flag (meaningful in pin mode). */
-  open: boolean;
   /** Pinned and open → rendered in the flex layout (reflows the map). */
   isPinnedOpen: boolean;
   /** Hover mode and currently hovered → rendered as a floating overlay. */
@@ -138,8 +135,6 @@ export function usePanelReveal(panel: PanelId): PanelReveal {
   }, [panel, setPanelOpen, clearGrace]);
 
   return {
-    mode,
-    open,
     isPinnedOpen,
     isFloatingOpen,
     isOpen,

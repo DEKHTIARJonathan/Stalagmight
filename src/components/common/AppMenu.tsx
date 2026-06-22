@@ -48,7 +48,6 @@ export interface AppMenuItem {
 
 interface AppMenuProps {
   items: AppMenuItem[];
-  triggerIcon?: ReactNode;
   /** Tint the hamburger trigger icon red (e.g. when a save has failed). */
   triggerDanger?: boolean;
   'aria-label'?: string;
@@ -92,7 +91,6 @@ function stepId(ids: string[], current: string | null, dir: 1 | -1): string | nu
 
 export function AppMenu({
   items,
-  triggerIcon,
   triggerDanger = false,
   'aria-label': ariaLabel = 'Menu',
   'data-testid': triggerTestId = 'app-menu-trigger',
@@ -511,7 +509,7 @@ export function AppMenu({
     <>
       <IconButton
         ref={triggerRef}
-        icon={triggerIcon ?? <MenuIcon className={triggerDanger ? 'text-red-500' : undefined} />}
+        icon={<MenuIcon className={triggerDanger ? 'text-red-500' : undefined} />}
         size="sm"
         onClick={() => (isOpen ? closeMenu() : openMenu())}
         onKeyDown={onTriggerKeyDown}

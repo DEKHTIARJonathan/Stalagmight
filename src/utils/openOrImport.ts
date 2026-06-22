@@ -135,11 +135,20 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
 }
 
 /**
- * Open the unified picker (native projects + all importable formats), then
- * route the chosen file to the matching flow.
+ * Open a single-file picker with the given filters, then route the chosen file
+ * to the matching open/import flow. On cancel, drop the entry-point source so it
+ * can't attribute a later, unrelated open/create/import. Callers set the source
+ * before calling.
+ *
+ * Shared by the toolbar "Open / Import" button, the in-project import button,
+ * and the Ctrl+I keyboard shortcut (GlobalView + in-project), which differ only
+ * in the picker filters and the error-dialog title.
  */
-export async function openOrImport(): Promise<void> {
-  const selected = await open({ multiple: false, filters: openOrImportFilters() });
+export async function pickAndRoute(
+  filters: Array<{ name: string; extensions: string[] }>,
+  errorTitle = 'Open Failed',
+): Promise<void> {
+  const selected = await open({ multiple: false, filters });
 
   let path: string | null = null;
   if (typeof selected === 'string') {
@@ -149,10 +158,16 @@ export async function openOrImport(): Promise<void> {
   }
 
   if (path) {
-    await routeOpenedFile(path);
+    await routeOpenedFile(path, errorTitle);
   } else {
-    // Picker cancelled — drop the entry-point source so it can't attribute a
-    // later, unrelated open/create/import.
     clearProjectActionSource();
   }
+}
+
+/**
+ * Open the unified picker (native projects + all importable formats), then
+ * route the chosen file to the matching flow.
+ */
+export async function openOrImport(): Promise<void> {
+  await pickAndRoute(openOrImportFilters());
 }
