@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { PinIcon } from '../common/icons';
 import type { PanelReveal } from './usePanelReveal';
 
@@ -54,6 +54,27 @@ export function PanelOpenerTab({
   // Closed opener highlights with the bar (driven by the shared hover state).
   const openerHi = hovered && !open;
   const vertical = edge === 'left' || edge === 'right';
+
+  // WebKit (the Tauri webview) computes the intrinsic block-size of a vertical
+  // `writing-mode` text run once and does NOT recompute it when the page is
+  // zoomed (Ctrl+), so the rotated label overflowed the tab on zoom. Measure the
+  // label in NORMAL (horizontal) flow — which is zoom-correct — and pin that as
+  // the vertical label's length, recomputing on resize (zoom fires `resize`).
+  const measureRef = useRef<HTMLSpanElement>(null);
+  const [labelLen, setLabelLen] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!vertical || open) {
+      setLabelLen(null);
+      return undefined;
+    }
+    const update = () => {
+      const el = measureRef.current;
+      if (el) setLabelLen(Math.ceil(el.getBoundingClientRect().width) + 2);
+    };
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [vertical, open, label]);
   // Omit the border on the panel-facing edge and overlap it by 1px (negative
   // margin) so the tab reads as part of the panel — no seam between them.
   const edgeCls =
@@ -86,9 +107,24 @@ export function PanelOpenerTab({
           <span aria-hidden className="flex items-center justify-center">
             {openArrow}
           </span>
+          {vertical && (
+            // Hidden horizontal twin, measured to drive the vertical label's
+            // length (see labelLen). Absolute so it never affects layout.
+            <span
+              ref={measureRef}
+              aria-hidden
+              className="text-[11px] font-medium tracking-wide whitespace-nowrap pointer-events-none invisible absolute"
+            >
+              {label}
+            </span>
+          )}
           <span
-            className="text-[11px] font-medium tracking-wide"
-            style={vertical ? { writingMode: 'vertical-rl' } : undefined}
+            className="text-[11px] font-medium tracking-wide whitespace-nowrap"
+            style={
+              vertical
+                ? { writingMode: 'vertical-rl', height: labelLen ?? undefined }
+                : undefined
+            }
           >
             {label}
           </span>
