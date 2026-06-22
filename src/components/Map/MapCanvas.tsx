@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, startTransition } from 'react';
+import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, memo, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
@@ -180,7 +180,7 @@ function MapHoverSync({
   return null;
 }
 
-export default function MapCanvas() {
+function MapCanvas() {
   const precision = useDecimalPrecision();
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
@@ -3559,3 +3559,9 @@ export default function MapCanvas() {
     </div>
   );
 }
+
+// Memoized: MapCanvas takes no props and drives itself from the stores, so it
+// must NOT re-render just because a parent (SingleSystemView) re-renders — e.g.
+// on every tick of a panel resize. Without this the whole (large) map component
+// re-rendered ~60×/s during a drag, which is what made resizing feel heavy.
+export default memo(MapCanvas);

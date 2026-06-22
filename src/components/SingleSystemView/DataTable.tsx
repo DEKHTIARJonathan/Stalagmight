@@ -1386,6 +1386,14 @@ export default function DataTable({ sections, panelOpen = true }: DataTableProps
     setGridBodyHeight(el.clientHeight);
     return () => ro.disconnect();
   }, [dataTableOpen]);
+  // Re-measure synchronously when the panel height changes (resize drag, open/
+  // close, fullscreen). The ResizeObserver alone delivers the new size a frame
+  // late, so the grid visibly trailed the dragged panel edge; reading clientHeight
+  // in a layout effect commits the matching grid height in the same paint.
+  useLayoutEffect(() => {
+    const el = gridBodyRef.current;
+    if (el) setGridBodyHeight(el.clientHeight);
+  }, [dataTableHeight, dataTableFullScreen, dataTableOpen]);
   const gridHeight = gridBodyHeight ?? Math.max(120, dataTableHeight - 28);
 
   // Unconditional hide (header right-click) — unlike the menu checkbox toggle.
