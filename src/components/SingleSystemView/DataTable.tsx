@@ -1528,13 +1528,10 @@ export default function DataTable({ sections, panelOpen = true }: DataTableProps
 
   return (
     <div
-      className="flex flex-col bg-panel border-t border-border transition-all duration-300 ease-in-out"
-      style={{
-        // Fullscreen mode fills the fixed overlay wrapper; the existing
-        // gridBody ResizeObserver handles the resulting grid height.
-        height: dataTableFullScreen ? '100%' : dataTableOpen ? `${dataTableHeight}px` : '40px',
-        minHeight: '40px',
-      }}
+      // Fill the Dock's panel body (it owns the size + the open/close slide). A
+      // self height + `transition-all` here animated the height over 300ms on
+      // every resize tick, so the table visibly lagged the dragged panel edge.
+      className="flex flex-col h-full bg-panel border-t border-border"
       data-testid="data-table"
       data-open={dataTableOpen ? 'true' : 'false'}
       data-fullscreen={dataTableFullScreen ? 'true' : 'false'}
