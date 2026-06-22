@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useProject } from '../../hooks/useProject';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -10,10 +11,14 @@ import { isPermissionError } from '../../utils/saveErrors';
 export default function OverwriteConfirmDialog() {
   const { closeDialog, dialogData, openDialog: showDialog } = useUIStore();
   const { saveProject } = useProjectStore();
+  const { handleCloseProject } = useProject();
   const [isLoading, setIsLoading] = useState(false);
 
   const path = dialogData.path as string | undefined;
   const fileName = dialogData.fileName as string | undefined;
+  // "Save and Close" defers here when the chosen file exists; once the overwrite
+  // saves, finish the close it started (otherwise the close half is dropped).
+  const closeAfterSave = dialogData.closeAfterSave === true;
 
   const handleConfirm = async () => {
     if (!path) {
@@ -36,8 +41,13 @@ export default function OverwriteConfirmDialog() {
         closeDialog();
         surfaceSaveFailure(result.error, showDialog);
       } else {
+        // Save succeeded.
         trackDialogComplete('confirm-overwrite');
         closeDialog();
+        if (closeAfterSave) {
+          // Project is now saved (not dirty), so this closes straight to GlobalView.
+          void handleCloseProject();
+        }
       }
     } finally {
       setIsLoading(false);

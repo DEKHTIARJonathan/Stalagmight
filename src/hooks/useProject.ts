@@ -59,7 +59,7 @@ export function useProject() {
     return null;
   }, [store]);
 
-  const handleSaveProjectAs = useCallback(async () => {
+  const handleSaveProjectAs = useCallback(async (opts?: { closeAfterSave?: boolean }) => {
     const selected = await saveDialog({
       filters: projectSaveFilters(),
     });
@@ -71,10 +71,14 @@ export function useProject() {
       try {
         const fileExists = await exists(finalPath);
         if (fileExists) {
-          // Show confirmation dialog - store the path for later use
+          // Show confirmation dialog - store the path for later use. Carry the
+          // caller's "close after a successful save" intent (Save and Close) so
+          // the deferred overwrite-confirm flow still closes the project once it
+          // saves — otherwise the close half is silently dropped.
           openDialog('confirm-overwrite', {
             path: finalPath,
             fileName: finalPath.split('/').pop() ?? finalPath,
+            closeAfterSave: opts?.closeAfterSave ?? false,
           });
           return null; // Dialog will handle the actual save
         }
@@ -94,10 +98,10 @@ export function useProject() {
     return null;
   }, [store, openDialog]);
 
-  const handleSaveProject = useCallback(async () => {
+  const handleSaveProject = useCallback(async (opts?: { closeAfterSave?: boolean }) => {
     const result = store.project?.file_path
       ? await store.saveProject()
-      : await handleSaveProjectAs();
+      : await handleSaveProjectAs(opts);
 
     if (result && !result.success) {
       surfaceSaveFailure(result.error, openDialog);
