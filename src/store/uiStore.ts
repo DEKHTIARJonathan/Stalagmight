@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
-import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackSelect, trackSelectAdd, clearProjectActionSource } from '../utils/telemetry';
+import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackPanelMode, trackSelect, trackSelectAdd, clearProjectActionSource } from '../utils/telemetry';
 import type { Coordinates, DistanceField, PathShot, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 
 export interface CommentTarget {
@@ -38,6 +38,14 @@ export const GEOMETRY_MODE_DEFAULT: GeometryMode = 'measured';
 export type DmpImportWizardPhase = 'init' | 'suggesting' | 'manual_placing' | 'placing' | 'done';
 
 export type DetailPanelTab = 'details' | 'warnings';
+
+/** Reveal behavior for a side/data panel.
+ *  - `pin`: click to open; stays open (reflows the map) until closed.
+ *  - `hover`: pops open on hover (floats over the map); hides on mouse-leave. */
+export type PanelMode = 'hover' | 'pin';
+
+/** Identifies one of the three in-project panels (matches telemetry PanelName). */
+export type PanelId = 'sections' | 'detail' | 'data-table';
 
 /**
  * A transient "ghost" geometry overlay shown on the map (in survey meters),
@@ -223,25 +231,34 @@ interface UIStore {
 
   // Panel state
   sectionsPanelOpen: boolean;
+  sectionsPanelMode: PanelMode;
   sectionsPanelWidth: number;
   detailPanelOpen: boolean;
+  detailPanelMode: PanelMode;
   detailPanelWidth: number;
   detailPanelTab: DetailPanelTab;
   dataTableOpen: boolean;
+  dataTableMode: PanelMode;
   dataTableHeight: number;
   toggleSectionsPanel: () => void;
   toggleDetailPanel: () => void;
   toggleDataTable: () => void;
+  /** Set a panel's open state (pinned). Tracks open/close + persists. */
+  setPanelOpen: (panel: PanelId, open: boolean) => void;
+  /** Set a panel's reveal mode. Pin → open; un-pin (hover) → closed at rest. */
+  setPanelMode: (panel: PanelId, mode: PanelMode) => void;
   setDetailPanelTab: (tab: DetailPanelTab) => void;
   setSectionsPanelWidth: (width: number) => void;
   setDetailPanelWidth: (width: number) => void;
   setDataTableHeight: (height: number) => void;
-  initPanelSizes: (panels: PanelsConfig) => void;
+  initPanels: (panels: PanelsConfig) => void;
   savePanelSizes: (
     sectionsPanelWidth?: number,
     detailPanelWidth?: number,
     dataTableHeight?: number
   ) => Promise<void>;
+  /** Persist the full per-panel reveal layout (open + mode) globally. */
+  savePanelLayout: () => Promise<void>;
 
   // Data-table fullscreen mode: the table overlays the whole window below the
   // toolbar. Session-only — never persisted, so the app always starts windowed.
@@ -473,8 +490,11 @@ export type DisplayToggleKey =
 let focusLayoutSnapshot:
   | {
       sectionsPanelOpen: boolean;
+      sectionsPanelMode: PanelMode;
       detailPanelOpen: boolean;
+      detailPanelMode: PanelMode;
       dataTableOpen: boolean;
+      dataTableMode: PanelMode;
       dataTableHeight: number;
     }
   | null = null;
@@ -663,43 +683,82 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Panel state
   sectionsPanelOpen: true,
+  sectionsPanelMode: 'pin',
   sectionsPanelWidth: 250,
   detailPanelOpen: true,
+  detailPanelMode: 'pin',
   detailPanelWidth: 300,
   detailPanelTab: 'details',
   dataTableOpen: false,
+  dataTableMode: 'pin',
   dataTableHeight: 200,
+  // Keyboard shortcuts / menu items are deliberate commands → pin open/close
+  // (mode forced to 'pin' so the panel reflows and stays). Manually changing the
+  // layout drops section-focus mode (#50) so the toolbar can't keep showing a
+  // focused-section name with panels reopened; the new layout is persisted.
   toggleSectionsPanel: () => {
-    const opening = !useUIStore.getState().sectionsPanelOpen;
+    const s = useUIStore.getState();
+    const opening = !s.sectionsPanelOpen;
     trackPanelToggle('sections', opening);
-    // Manually changing the layout drops section-focus mode (#50) so the toolbar
-    // can't keep showing a focused-section name with the panels reopened. Keep
-    // the user's new layout (no snapshot restore); discard the snapshot.
     focusLayoutSnapshot = null;
-    set({ sectionsPanelOpen: opening, focusedSectionId: null });
+    set({ sectionsPanelOpen: opening, sectionsPanelMode: 'pin', focusedSectionId: null });
+    void s.savePanelLayout();
   },
   toggleDetailPanel: () => {
-    const opening = !useUIStore.getState().detailPanelOpen;
+    const s = useUIStore.getState();
+    const opening = !s.detailPanelOpen;
     trackPanelToggle('detail', opening);
     focusLayoutSnapshot = null;
-    set({ detailPanelOpen: opening, focusedSectionId: null });
+    set({ detailPanelOpen: opening, detailPanelMode: 'pin', focusedSectionId: null });
+    void s.savePanelLayout();
   },
   toggleDataTable: () => {
-    const opening = !useUIStore.getState().dataTableOpen;
+    const s = useUIStore.getState();
+    const opening = !s.dataTableOpen;
     trackPanelToggle('data-table', opening);
     focusLayoutSnapshot = null;
-    set({ dataTableOpen: opening, focusedSectionId: null });
+    set({ dataTableOpen: opening, dataTableMode: 'pin', focusedSectionId: null });
+    void s.savePanelLayout();
+  },
+  setPanelOpen: (panel, open) => {
+    const s = useUIStore.getState();
+    trackPanelToggle(panel, open);
+    focusLayoutSnapshot = null;
+    if (panel === 'sections') set({ sectionsPanelOpen: open, focusedSectionId: null });
+    else if (panel === 'detail') set({ detailPanelOpen: open, focusedSectionId: null });
+    else set({ dataTableOpen: open, focusedSectionId: null });
+    void s.savePanelLayout();
+  },
+  setPanelMode: (panel, mode) => {
+    const s = useUIStore.getState();
+    trackPanelMode(panel, mode);
+    focusLayoutSnapshot = null;
+    // Pinning makes the panel a persistent open panel; un-pinning (hover) leaves
+    // it closed at rest (visible only while hovered, tracked in local React state).
+    const open = mode === 'pin';
+    if (panel === 'sections') set({ sectionsPanelMode: mode, sectionsPanelOpen: open, focusedSectionId: null });
+    else if (panel === 'detail') set({ detailPanelMode: mode, detailPanelOpen: open, focusedSectionId: null });
+    else set({ dataTableMode: mode, dataTableOpen: open, focusedSectionId: null });
+    void s.savePanelLayout();
   },
   setDetailPanelTab: (detailPanelTab) => set({ detailPanelTab }),
   setSectionsPanelWidth: (sectionsPanelWidth) => set({ sectionsPanelWidth }),
   setDetailPanelWidth: (detailPanelWidth) => set({ detailPanelWidth }),
   setDataTableHeight: (dataTableHeight) => set({ dataTableHeight }),
-  initPanelSizes: (panels: PanelsConfig) =>
+  initPanels: (panels: PanelsConfig) => {
+    const asMode = (m: string): PanelMode => (m === 'hover' ? 'hover' : 'pin');
     set({
       sectionsPanelWidth: panels.sections_panel_width,
       detailPanelWidth: panels.detail_panel_width,
       dataTableHeight: panels.data_table_height,
-    }),
+      sectionsPanelOpen: panels.sections_panel_open,
+      sectionsPanelMode: asMode(panels.sections_panel_mode),
+      detailPanelOpen: panels.detail_panel_open,
+      detailPanelMode: asMode(panels.detail_panel_mode),
+      dataTableOpen: panels.data_table_open,
+      dataTableMode: asMode(panels.data_table_mode),
+    });
+  },
   savePanelSizes: async (sectionsPanelWidth, detailPanelWidth, dataTableHeight) => {
     try {
       await invokeIpc(
@@ -715,13 +774,33 @@ export const useUIStore = create<UIStore>((set) => ({
       console.error('Failed to save panel sizes:', e);
     }
   },
+  savePanelLayout: async () => {
+    const s = useUIStore.getState();
+    const fields = {
+      sectionsPanelOpen: s.sectionsPanelOpen,
+      sectionsPanelMode: s.sectionsPanelMode,
+      detailPanelOpen: s.detailPanelOpen,
+      detailPanelMode: s.detailPanelMode,
+      dataTableOpen: s.dataTableOpen,
+      dataTableMode: s.dataTableMode,
+    };
+    try {
+      await invokeIpc('update_panel_layout', fields, {
+        purpose: 'persist panel reveal layout',
+        fields,
+      });
+    } catch (e) {
+      console.error('Failed to save panel layout:', e);
+    }
+  },
 
   // Data-table fullscreen mode (session-only, never persisted)
   dataTableFullScreen: false,
   rawTableSelection: null,
   enterDataTableFullScreen: () => {
-    // The overlay grows out of the docked table, so the table must be open.
-    set({ dataTableFullScreen: true, dataTableOpen: true });
+    // The overlay grows out of the docked table, so the table must be open and
+    // pinned (fullscreen is a deliberate, persistent state, not a hover peek).
+    set({ dataTableFullScreen: true, dataTableOpen: true, dataTableMode: 'pin' });
   },
   exitDataTableFullScreen: () => {
     if (!useUIStore.getState().dataTableFullScreen) return;
@@ -746,22 +825,26 @@ export const useUIStore = create<UIStore>((set) => ({
     if (s.focusedSectionId === null) {
       focusLayoutSnapshot = {
         sectionsPanelOpen: s.sectionsPanelOpen,
+        sectionsPanelMode: s.sectionsPanelMode,
         detailPanelOpen: s.detailPanelOpen,
+        detailPanelMode: s.detailPanelMode,
         dataTableOpen: s.dataTableOpen,
+        dataTableMode: s.dataTableMode,
         dataTableHeight: s.dataTableHeight,
       };
     }
-    // Set the focus height directly (not via savePanelSizes) so the temporary
-    // focus layout is never persisted to the user's panel config. Only apply it
-    // when the table opens from closed: a fresh ResizablePanel mount seeds its
-    // (uncontrolled) size from this height. If the table is already open we leave
-    // its height alone rather than force a remount that would reset DataTable
-    // state (selection, scroll).
+    // Set the focus layout directly (not via save*) so the temporary focus state
+    // is never persisted to the user's panel config. Side panels collapse and the
+    // data table pins open (reflow). Only apply the focus height when the table
+    // opens from closed: a fresh ResizablePanel mount seeds its (uncontrolled)
+    // size from this height. If the table is already open we leave its height
+    // alone rather than force a remount that would reset DataTable state.
     set({
       focusedSectionId,
       sectionsPanelOpen: false,
       detailPanelOpen: false,
       dataTableOpen: true,
+      dataTableMode: 'pin',
       ...(s.dataTableOpen ? {} : { dataTableHeight }),
     });
   },

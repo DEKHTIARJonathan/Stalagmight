@@ -43,7 +43,7 @@ function App() {
     placementMode,
     closeDialog,
     openDialog,
-    initPanelSizes,
+    initPanels,
     setImportContext,
     triggerFitToBounds,
     toast,
@@ -169,9 +169,9 @@ function App() {
   useEffect(() => {
     if (config?.panels && !panelSizesInitialized.current) {
       panelSizesInitialized.current = true;
-      initPanelSizes(config.panels);
+      initPanels(config.panels);
     }
-  }, [config, initPanelSizes]);
+  }, [config, initPanels]);
 
   // Update window title based on project state
   useEffect(() => {

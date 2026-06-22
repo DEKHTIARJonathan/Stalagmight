@@ -333,6 +333,11 @@ export function trackPanelToggle(panel: PanelName, opening: boolean): void {
   trackAction(opening ? `panel-open.${panel}` : `panel-close.${panel}`);
 }
 
+/** Track a panel reveal-mode change (pin = stays open; hover = transient). */
+export function trackPanelMode(panel: PanelName, mode: 'pin' | 'hover'): void {
+  trackAction(mode === 'pin' ? `panel-pin.${panel}` : `panel-unpin.${panel}`);
+}
+
 /** Track a selection event. */
 export function trackSelect(type: SelectionType): void {
   trackAction(`select.${type}`);

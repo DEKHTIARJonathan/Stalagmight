@@ -126,6 +126,71 @@ pub(crate) fn update_panel_sizes_impl(
     state.update_config(config).map_err(|e| e.to_string())
 }
 
+/// Update per-panel reveal layout (open state + hover/pin mode) in configuration
+/// (efficient partial update). Only provided fields are written.
+#[tauri::command]
+pub fn update_panel_layout(
+    state: State<AppState>,
+    sections_panel_open: Option<bool>,
+    sections_panel_mode: Option<String>,
+    detail_panel_open: Option<bool>,
+    detail_panel_mode: Option<String>,
+    data_table_open: Option<bool>,
+    data_table_mode: Option<String>,
+) -> Result<(), String> {
+    update_panel_layout_impl(
+        state.inner(),
+        sections_panel_open,
+        sections_panel_mode,
+        detail_panel_open,
+        detail_panel_mode,
+        data_table_open,
+        data_table_mode,
+    )
+}
+
+pub(crate) fn update_panel_layout_impl(
+    state: &AppState,
+    sections_panel_open: Option<bool>,
+    sections_panel_mode: Option<String>,
+    detail_panel_open: Option<bool>,
+    detail_panel_mode: Option<String>,
+    data_table_open: Option<bool>,
+    data_table_mode: Option<String>,
+) -> Result<(), String> {
+    const MODES: [&str; 2] = ["pin", "hover"];
+    let validate = |m: &str| -> Result<(), String> {
+        if MODES.contains(&m) {
+            Ok(())
+        } else {
+            Err(format!("Invalid panel mode '{m}'"))
+        }
+    };
+    let mut config = state.get_config();
+    if let Some(open) = sections_panel_open {
+        config.panels.sections_panel_open = open;
+    }
+    if let Some(mode) = sections_panel_mode {
+        validate(&mode)?;
+        config.panels.sections_panel_mode = mode;
+    }
+    if let Some(open) = detail_panel_open {
+        config.panels.detail_panel_open = open;
+    }
+    if let Some(mode) = detail_panel_mode {
+        validate(&mode)?;
+        config.panels.detail_panel_mode = mode;
+    }
+    if let Some(open) = data_table_open {
+        config.panels.data_table_open = open;
+    }
+    if let Some(mode) = data_table_mode {
+        validate(&mode)?;
+        config.panels.data_table_mode = mode;
+    }
+    state.update_config(config).map_err(|e| e.to_string())
+}
+
 /// Load all display settings from the current project database
 #[tauri::command]
 pub fn load_display_settings(

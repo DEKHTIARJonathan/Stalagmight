@@ -308,6 +308,29 @@ pub struct PanelsConfig {
     /// Stations-table hidden column keys (both coordinate pairs start hidden)
     #[serde(default = "default_station_hidden_columns")]
     pub data_table_station_hidden_columns: Vec<String>,
+    /// Sections panel open (pinned) at startup
+    #[serde(default = "default_true")]
+    pub sections_panel_open: bool,
+    /// Sections panel reveal mode: "pin" | "hover"
+    #[serde(default = "default_panel_mode")]
+    pub sections_panel_mode: String,
+    /// Detail panel open (pinned) at startup
+    #[serde(default = "default_true")]
+    pub detail_panel_open: bool,
+    /// Detail panel reveal mode: "pin" | "hover"
+    #[serde(default = "default_panel_mode")]
+    pub detail_panel_mode: String,
+    /// Data table open (pinned) at startup
+    #[serde(default)]
+    pub data_table_open: bool,
+    /// Data table reveal mode: "pin" | "hover"
+    #[serde(default = "default_panel_mode")]
+    pub data_table_mode: String,
+}
+
+/// Default panel reveal mode (pin: click to open, stays open).
+fn default_panel_mode() -> String {
+    "pin".to_string()
 }
 
 fn default_station_hidden_columns() -> Vec<String> {

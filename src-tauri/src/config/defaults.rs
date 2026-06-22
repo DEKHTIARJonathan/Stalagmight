@@ -268,6 +268,12 @@ impl Default for PanelsConfig {
                 "_lat".to_string(),
                 "_long".to_string(),
             ],
+            sections_panel_open: true,
+            sections_panel_mode: "pin".to_string(),
+            detail_panel_open: true,
+            detail_panel_mode: "pin".to_string(),
+            data_table_open: false,
+            data_table_mode: "pin".to_string(),
         }
     }
 }

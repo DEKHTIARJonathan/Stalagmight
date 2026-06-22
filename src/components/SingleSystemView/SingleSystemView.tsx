@@ -16,6 +16,9 @@ import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
+import { usePanelReveal } from './usePanelReveal';
+import { PanelOpenerTab } from './PanelOpenerTab';
+import { PanelFloat } from './PanelFloat';
 import { open } from '@tauri-apps/plugin-dialog';
 import { dmpGpxOpenFilters } from '../../utils/fileDialogs';
 import { useProjectMenuItems } from './useProjectMenuItems';
@@ -119,6 +122,12 @@ export default function SingleSystemView() {
     setDataTableHeight: s.setDataTableHeight,
     savePanelSizes: s.savePanelSizes,
   })));
+
+  // Two-mode (hover/pin) reveal state for each panel. The store holds the
+  // persisted mode/open; these hooks add transient hover visibility + handlers.
+  const sectionsReveal = usePanelReveal('sections');
+  const detailReveal = usePanelReveal('detail');
+  const dataReveal = usePanelReveal('data-table');
 
   // #50: name shown in place of the project name while focused on one section.
   // A single lookup drives both existence (the auto-exit effect) and the name.
@@ -326,6 +335,54 @@ export default function SingleSystemView() {
     );
   }
 
+  // Shared panel content (rendered in the reflow ResizablePanel when pinned, or
+  // inside a PanelFloat overlay when hover-revealed). Dimmed during placement.
+  const dimCls = placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : '';
+  const sectionsContent = (
+    <div className={`h-full ${dimCls}`}>
+      <ErrorBoundary panelName="Sections">
+        <SectionsPanel sections={project.sections} />
+      </ErrorBoundary>
+    </div>
+  );
+  const detailContent = (
+    <div className={`h-full ${dimCls}`}>
+      <ErrorBoundary panelName="Details">
+        <DetailPanel />
+      </ErrorBoundary>
+    </div>
+  );
+  const dataInner = (
+    <div className={`h-full ${dimCls}`}>
+      <ErrorBoundary panelName="Data Table">
+        <DataTable sections={project.sections} />
+      </ErrorBoundary>
+    </div>
+  );
+  // Pinned data table supports fullscreen: the wrapper swaps to a fixed overlay
+  // below the toolbar. The parent chain stays identical so the DataTable instance
+  // (grid selection, scroll, view state) survives entering/exiting fullscreen.
+  const dataPinnedContent = (
+    <div
+      className={dataTableFullScreen ? 'fixed inset-x-0 bottom-0 z-40 bg-panel' : 'relative h-full'}
+      style={dataTableFullScreen ? { top: 'var(--toolbar-h, 48px)' } : undefined}
+    >
+      {dataInner}
+    </div>
+  );
+
+  const panelName = {
+    sections: t('singleView.panels.sectionsName'),
+    detail: t('singleView.panels.detailName'),
+    data: t('singleView.panels.dataName'),
+  };
+  const tabLabels = (name: string) => ({
+    open: t('singleView.panels.open', { name }),
+    pin: t('singleView.panels.pin'),
+    unpin: t('singleView.panels.unpin'),
+    close: t('singleView.panels.close', { name }),
+  });
+
   return (
     <div ref={rootRef} className="h-full flex flex-col" data-testid="single-system-view">
       {/* Page heading for screen readers. The toolbar center now shows the
@@ -348,9 +405,9 @@ export default function SingleSystemView() {
       />
 
       {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Sections panel */}
-        {sectionsPanelOpen ? (
+      <div className="relative flex-1 flex overflow-hidden">
+        {/* Sections panel: reflow when pinned, else a thin full-edge opener bar */}
+        {sectionsReveal.isPinnedOpen ? (
           <ResizablePanel
             direction="horizontal"
             defaultSize={sectionsPanelWidth}
@@ -360,43 +417,23 @@ export default function SingleSystemView() {
             onResizeEnd={(size) => savePanelSizes(size, undefined, undefined)}
             className="border-r border-border"
           >
-            <div className="relative h-full">
-              <button
-                type="button"
-                className="absolute right-0 top-1/2 z-10 -mr-1 h-10 w-3 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
-                onClick={toggleSectionsPanel}
-                title={t('dataTable.toggle.collapse')}
-                aria-label={t('dataTable.toggle.collapse')}
-                data-testid="sections-panel-collapse-toggle"
-              >
-                <span className="flex h-full items-center justify-center">
-                  <ChevronLeftIcon size={10} />
-                </span>
-              </button>
-              <div className={`h-full ${placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : ''}`}>
-                <ErrorBoundary panelName="Sections">
-                  <SectionsPanel sections={project.sections} />
-                </ErrorBoundary>
-              </div>
-            </div>
+            {sectionsContent}
           </ResizablePanel>
         ) : (
-          <button
-            type="button"
-            className="w-3 flex-shrink-0 border-r border-border bg-panel transition-colors hover:bg-background-80"
-            onClick={toggleSectionsPanel}
-            title={t('sections.title')}
-            aria-label={t('sections.title')}
-            data-testid="sections-panel-collapsed-toggle"
-          >
-            <span className="flex h-full items-center justify-center text-text-secondary">
-              <ChevronRightIcon size={10} />
-            </span>
-          </button>
+          <div
+            className="w-3 flex-shrink-0 cursor-pointer border-r border-border bg-panel transition-colors hover:bg-background-80"
+            onMouseEnter={sectionsReveal.onRegionEnter}
+            onMouseLeave={sectionsReveal.onRegionLeave}
+            onClick={sectionsReveal.openClick}
+            role="button"
+            tabIndex={0}
+            aria-label={t('singleView.panels.open', { name: panelName.sections })}
+            data-testid="sections-panel-bar"
+          />
         )}
 
         {/* Map and data table */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="relative flex-1 flex flex-col overflow-hidden">
           {/* Map */}
           <div className="flex-1 relative">
             <ErrorBoundary panelName="Map">
@@ -406,8 +443,8 @@ export default function SingleSystemView() {
             <OfflineIndicator className="absolute top-2 right-14" />
           </div>
 
-          {/* Data table */}
-          {dataTableOpen ? (
+          {/* Data table: reflow when pinned, else a thin full-edge opener bar */}
+          {dataReveal.isPinnedOpen ? (
             <ResizablePanel
               direction="vertical"
               defaultSize={dataTableHeight}
@@ -423,58 +460,43 @@ export default function SingleSystemView() {
               }}
               className="border-t border-border"
             >
-              {/* Fullscreen mode swaps this wrapper to a fixed overlay covering
-                  the whole window below the toolbar (incl. the status bar). Only
-                  the className/style change — the parent chain stays identical,
-                  so the DataTable instance (grid selection, scroll, view state)
-                  survives entering/exiting the mode. */}
-              <div
-                className={
-                  dataTableFullScreen
-                    ? 'fixed inset-x-0 bottom-0 z-40 bg-panel'
-                    : 'relative h-full'
-                }
-                style={dataTableFullScreen ? { top: 'var(--toolbar-h, 48px)' } : undefined}
-              >
-                {!dataTableFullScreen && (
-                  <button
-                    type="button"
-                    className="absolute left-1/2 top-0 z-10 h-3 w-12 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
-                    onClick={toggleDataTable}
-                    title={t('dataTable.toggle.collapse')}
-                    aria-label={t('dataTable.toggle.collapse')}
-                    data-testid="data-table-open-collapse-toggle"
-                  >
-                    <span className="flex h-full items-center justify-center">
-                      <ChevronDownIcon size={10} />
-                    </span>
-                  </button>
-                )}
-                <div className={`h-full ${placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : ''}`}>
-                  <ErrorBoundary panelName="Data Table">
-                    <DataTable sections={project.sections} />
-                  </ErrorBoundary>
-                </div>
-              </div>
+              {dataPinnedContent}
             </ResizablePanel>
           ) : (
-            <button
-              type="button"
-              className="h-3 shrink-0 border-t border-border bg-panel transition-colors hover:bg-background-80"
-              onClick={toggleDataTable}
-              title={t('dataTable.toggle.expand')}
-              aria-label={t('dataTable.toggle.expand')}
-              data-testid="data-table-collapsed-toggle"
-            >
-              <span className="flex h-full items-center justify-center text-text-secondary">
-                <ChevronUpIcon size={12} />
-              </span>
-            </button>
+            <div
+              className="h-3 shrink-0 cursor-pointer border-t border-border bg-panel transition-colors hover:bg-background-80"
+              onMouseEnter={dataReveal.onRegionEnter}
+              onMouseLeave={dataReveal.onRegionLeave}
+              onClick={dataReveal.openClick}
+              role="button"
+              tabIndex={0}
+              aria-label={t('singleView.panels.open', { name: panelName.data })}
+              data-testid="data-table-bar"
+            />
+          )}
+
+          {/* Data hover-overlay + opener tab (suppressed in fullscreen) */}
+          {!dataTableFullScreen && (
+            <>
+              <PanelFloat edge="bottom" size={dataTableHeight} reveal={dataReveal}>
+                {dataInner}
+              </PanelFloat>
+              <PanelOpenerTab
+                reveal={dataReveal}
+                edge="bottom"
+                label={panelName.data}
+                openArrow={<ChevronUpIcon size={14} />}
+                closeArrow={<ChevronDownIcon size={14} />}
+                style={{ right: 8, bottom: dataReveal.isOpen ? dataTableHeight : 0 }}
+                testId="data"
+                labels={tabLabels(panelName.data)}
+              />
+            </>
           )}
         </div>
 
-        {/* Detail panel */}
-        {detailPanelOpen ? (
+        {/* Detail panel: reflow when pinned, else a thin full-edge opener bar */}
+        {detailReveal.isPinnedOpen ? (
           <ResizablePanel
             direction="horizontal"
             defaultSize={detailPanelWidth}
@@ -485,40 +507,50 @@ export default function SingleSystemView() {
             handlePosition="start"
             className="border-l border-border"
           >
-            <div className="relative h-full">
-              <button
-                type="button"
-                className="absolute left-0 top-1/2 z-10 -ml-1 h-10 w-3 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
-                onClick={toggleDetailPanel}
-                title={t('dataTable.toggle.collapse')}
-                aria-label={t('dataTable.toggle.collapse')}
-                data-testid="detail-panel-collapse-toggle"
-              >
-                <span className="flex h-full items-center justify-center">
-                  <ChevronRightIcon size={10} />
-                </span>
-              </button>
-              <div className={`h-full ${placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : ''}`}>
-                <ErrorBoundary panelName="Details">
-                  <DetailPanel />
-                </ErrorBoundary>
-              </div>
-            </div>
+            {detailContent}
           </ResizablePanel>
         ) : (
-          <button
-            type="button"
-            className="w-3 flex-shrink-0 border-l border-border bg-panel transition-colors hover:bg-background-80"
-            onClick={toggleDetailPanel}
-            title={t('onboarding.flows.singleView.steps.detailPanel.title')}
-            aria-label={t('onboarding.flows.singleView.steps.detailPanel.title')}
-            data-testid="detail-panel-collapsed-toggle"
-          >
-            <span className="flex h-full items-center justify-center text-text-secondary">
-              <ChevronLeftIcon size={10} />
-            </span>
-          </button>
+          <div
+            className="w-3 flex-shrink-0 cursor-pointer border-l border-border bg-panel transition-colors hover:bg-background-80"
+            onMouseEnter={detailReveal.onRegionEnter}
+            onMouseLeave={detailReveal.onRegionLeave}
+            onClick={detailReveal.openClick}
+            role="button"
+            tabIndex={0}
+            aria-label={t('singleView.panels.open', { name: panelName.detail })}
+            data-testid="detail-panel-bar"
+          />
         )}
+
+        {/* Side hover-overlays (float over the map in hover mode) */}
+        <PanelFloat edge="left" size={sectionsPanelWidth} reveal={sectionsReveal}>
+          {sectionsContent}
+        </PanelFloat>
+        <PanelFloat edge="right" size={detailPanelWidth} reveal={detailReveal}>
+          {detailContent}
+        </PanelFloat>
+
+        {/* Side opener tabs (near top; the detail tab clears the +/- zoom stack) */}
+        <PanelOpenerTab
+          reveal={sectionsReveal}
+          edge="left"
+          label={panelName.sections}
+          openArrow={<ChevronRightIcon size={14} />}
+          closeArrow={<ChevronLeftIcon size={14} />}
+          style={{ left: 0, top: 72 }}
+          testId="sections"
+          labels={tabLabels(panelName.sections)}
+        />
+        <PanelOpenerTab
+          reveal={detailReveal}
+          edge="right"
+          label={panelName.detail}
+          openArrow={<ChevronLeftIcon size={14} />}
+          closeArrow={<ChevronRightIcon size={14} />}
+          style={{ right: 0, top: 72 }}
+          testId="detail"
+          labels={tabLabels(panelName.detail)}
+        />
       </div>
 
       {/* Status bar */}

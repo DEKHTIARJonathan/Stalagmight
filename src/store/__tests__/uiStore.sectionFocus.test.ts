@@ -18,8 +18,11 @@ describe('uiStore section focus (#50)', () => {
     useUIStore.setState({
       focusedSectionId: null,
       sectionsPanelOpen: true,
+      sectionsPanelMode: 'pin',
       detailPanelOpen: true,
+      detailPanelMode: 'pin',
       dataTableOpen: false,
+      dataTableMode: 'pin',
       dataTableHeight: 200,
       geometryMode: 'measured',
       selection: null,
@@ -81,6 +84,20 @@ describe('uiStore section focus (#50)', () => {
     expect(s.sectionsPanelOpen).toBe(true);
     expect(s.dataTableOpen).toBe(false);
     expect(s.dataTableHeight).toBe(200);
+  });
+
+  it('focus pins the data table open and restores prior panel modes on exit', () => {
+    // Pre-focus: data table in hover mode (closed at rest).
+    useUIStore.setState({ dataTableMode: 'hover', sectionsPanelMode: 'hover' });
+    useUIStore.getState().enterSectionFocus(7, FOCUS_HEIGHT);
+    // Focus forces the data table pinned-open; side modes are untouched on enter.
+    expect(useUIStore.getState().dataTableMode).toBe('pin');
+    expect(useUIStore.getState().dataTableOpen).toBe(true);
+    useUIStore.getState().exitSectionFocus();
+    const s = useUIStore.getState();
+    expect(s.dataTableMode).toBe('hover');
+    expect(s.sectionsPanelMode).toBe('hover');
+    expect(s.dataTableOpen).toBe(false);
   });
 
   it('a manual panel toggle drops focus mode', () => {

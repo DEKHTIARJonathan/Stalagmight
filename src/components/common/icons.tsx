@@ -840,3 +840,15 @@ export function SlidersIcon(props: IconProps) {
     </BaseIcon>
   );
 }
+
+// Pushpin ("pin this panel open"). Filled cap + body + pleated collar + needle.
+export function PinIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <rect x="6" y="3" width="8" height="2.2" rx="1.1" fill="currentColor" stroke="none" />
+      <rect x="8.6" y="5" width="2.8" height="3" fill="currentColor" stroke="none" />
+      <path d="M6.4 8 H13.6 L11.8 11 H8.2 Z" fill="currentColor" stroke="none" />
+      <path d="M9.15 11 H10.85 L10 16.8 Z" fill="currentColor" stroke="none" />
+    </BaseIcon>
+  );
+}

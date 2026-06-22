@@ -2016,6 +2016,15 @@
       "projectDetails": "Project Details",
       "devStats": "Dev Stats"
     },
+    "panels": {
+      "sectionsName": "Sections",
+      "detailName": "Details",
+      "dataName": "Data",
+      "open": "Open {{name}}",
+      "close": "Close {{name}}",
+      "pin": "Pin open",
+      "unpin": "Unpin (hover mode)"
+    },
     "status": {
       "depthRange": "Depth range: {{min}} - {{max}}",
       "summary": "Sections: {{sections}} | Shots: {{shots}} | Length: {{length}}",
