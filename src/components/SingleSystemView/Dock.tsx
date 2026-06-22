@@ -100,6 +100,9 @@ export function Dock({
   // "active" while hovering the handle or dragging it; both the panel's
   // inner-edge border and the opener tab border tint accent then, identically.
   const [resizeHover, setResizeHover] = useState(false);
+  // Hovering anywhere over the closed opener (the edge bar OR its tab, which
+  // share the outer wrapper) highlights both as one unit.
+  const [openerHover, setOpenerHover] = useState(false);
 
   const { isResizing, handleProps } = useResizeHandle({
     direction: vertical ? 'horizontal' : 'vertical',
@@ -209,9 +212,13 @@ export function Dock({
       ref={outerRef}
       className={`absolute pointer-events-auto ${fullscreen ? 'z-40' : reveal.isFloatingOpen ? 'z-30' : 'z-20'}`}
       style={{ ...outerStyle, transition: sizeTransition }}
-      onMouseEnter={reveal.onRegionEnter}
+      onMouseEnter={() => {
+        reveal.onRegionEnter();
+        setOpenerHover(true);
+      }}
       // Don't let a hover panel close mid-drag when the pointer leaves the region.
       onMouseLeave={() => {
+        setOpenerHover(false);
         if (!isResizing) reveal.onRegionLeave();
       }}
     >
@@ -220,7 +227,7 @@ export function Dock({
           only a pointer convenience, so it is not a focusable/announced control. */}
       <div
         ref={clipRef}
-        className={`absolute inset-0 overflow-hidden bg-panel ${borderCls} ${resizeActive ? 'border-accent' : 'border-border'} transition-colors ${reveal.isFloatingOpen ? 'shadow-xl' : ''} ${!open ? 'cursor-pointer hover:bg-background-80' : ''}`}
+        className={`absolute inset-0 overflow-hidden bg-panel ${borderCls} ${resizeActive ? 'border-accent' : 'border-border'} transition-colors ${reveal.isFloatingOpen ? 'shadow-xl' : ''} ${!open ? `cursor-pointer ${openerHover ? 'bg-background-80' : ''}` : ''}`}
         onClick={!open ? reveal.openClick : undefined}
         data-testid={`${testId}-panel-bar`}
       >
@@ -264,6 +271,7 @@ export function Dock({
             labels={tabLabels}
             resizing={resizeActive}
             visuallyOpen={mounted}
+            hovered={openerHover}
           />
         </div>
       )}

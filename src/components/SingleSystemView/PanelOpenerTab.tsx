@@ -24,6 +24,10 @@ interface PanelOpenerTabProps {
    *  minified — avoids the tab flickering its contents mid-transition. Defaults
    *  to `reveal.isOpen` when omitted. */
   visuallyOpen?: boolean;
+  /** The opener (edge bar + this tab) is hovered as a unit — highlight the
+   *  closed tab (lighter bg + brighter text) together with the bar, regardless
+   *  of whether the pointer is over the bar or the tab. */
+  hovered?: boolean;
 }
 
 /**
@@ -44,8 +48,11 @@ export function PanelOpenerTab({
   labels,
   resizing = false,
   visuallyOpen,
+  hovered = false,
 }: PanelOpenerTabProps) {
   const open = visuallyOpen ?? reveal.isOpen;
+  // Closed opener highlights with the bar (driven by the shared hover state).
+  const openerHi = hovered && !open;
   const vertical = edge === 'left' || edge === 'right';
   // Omit the border on the panel-facing edge and overlap it by 1px (negative
   // margin) so the tab reads as part of the panel — no seam between them.
@@ -57,7 +64,7 @@ export function PanelOpenerTab({
         : 'border-x border-t rounded-t -mb-px';
 
   const box = [
-    `flex items-center justify-center transition-colors ${resizing ? 'border-accent' : 'border-border'} bg-panel text-text-secondary select-none`,
+    `flex items-center justify-center transition-colors ${resizing ? 'border-accent' : 'border-border'} ${openerHi ? 'bg-background-80 text-text-primary' : 'bg-panel text-text-secondary'} select-none`,
     vertical ? 'flex-col gap-1 w-7 py-2' : 'flex-row gap-1 h-7 px-2',
     edgeCls,
   ].join(' ');
@@ -67,7 +74,7 @@ export function PanelOpenerTab({
       <div className={box}>
         <button
           type="button"
-          className={`flex items-center justify-center gap-1.5 ${vertical ? 'flex-col' : 'flex-row'} transition-colors hover:text-text-primary`}
+          className={`flex items-center justify-center gap-1.5 ${vertical ? 'flex-col' : 'flex-row'} transition-colors`}
           onClick={reveal.openClick}
           title={labels.open}
           aria-label={labels.open}
