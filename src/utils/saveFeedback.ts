@@ -1,5 +1,6 @@
 import { useProjectStore } from '../store/projectStore';
 import { isPermissionError } from './saveErrors';
+import type { ValidationWarning } from '../types/ipc/ValidationWarning';
 
 /**
  * Surface a failed (non-throwing) save to the user.
@@ -27,4 +28,23 @@ export function surfaceSaveFailure(
   if (error && !isPermissionError(error)) {
     openDialog('error', { message: error, title: 'Save Failed' });
   }
+}
+
+/**
+ * Surface non-fatal warnings the backend attaches to an otherwise *successful*
+ * import (`CommandResult.warnings`) — most importantly the partial-success
+ * deferred-save failure ("Imported, but could not save the new project to disk
+ * … please save manually."). The import dialogs branch only on `success` /
+ * `error`, so without this they close as if fully successful and the user never
+ * learns the import is only in memory (#110). No-op when there are no warnings.
+ */
+export function surfaceImportWarnings(
+  warnings: ValidationWarning[] | undefined,
+  openDialog: (dialog: string, data?: Record<string, unknown>) => void,
+): void {
+  if (!warnings || warnings.length === 0) return;
+  openDialog('error', {
+    title: 'Import Warning',
+    message: warnings.map((w) => w.message).join('\n\n'),
+  });
 }

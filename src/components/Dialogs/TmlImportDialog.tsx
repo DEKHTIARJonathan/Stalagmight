@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { surfaceImportWarnings } from '../../utils/saveFeedback';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -94,6 +95,18 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           title: 'Import Errors',
           message: result.error ?? 'Unknown error during import',
         });
+        return;
+      }
+
+      // A partial-success import (e.g. a new-project deferred save failed)
+      // returns success WITH a warning. Surface it before the optional orphan
+      // step so the "unsaved — save manually" message isn't buried (#110).
+      if (result.warnings.length > 0) {
+        trackDialogComplete('tml-import');
+        closeDialog();
+        setView('single');
+        triggerFitToBounds();
+        surfaceImportWarnings(result.warnings, openDialog);
         return;
       }
 
