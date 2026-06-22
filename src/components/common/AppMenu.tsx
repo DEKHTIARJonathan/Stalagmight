@@ -33,6 +33,8 @@ export interface AppMenuItem {
   icon?: ReactNode;
   /** Fixed icon tint (CSS color). Applied via inline color on the icon wrapper. */
   iconColor?: string;
+  /** Give the row a dark-red background (e.g. the Save row after a save failed). */
+  dangerBg?: boolean;
   /** Shortcut action key (e.g. 'new_file'); its first binding is shown right-aligned. */
   action?: string;
   onClick?: () => void;
@@ -47,6 +49,8 @@ export interface AppMenuItem {
 interface AppMenuProps {
   items: AppMenuItem[];
   triggerIcon?: ReactNode;
+  /** Tint the hamburger trigger icon red (e.g. when a save has failed). */
+  triggerDanger?: boolean;
   'aria-label'?: string;
   'data-testid'?: string;
   /** Root for item testids: `${menuTestId}-item-${id}` is also exposed via item.id. */
@@ -83,6 +87,7 @@ function stepId(ids: string[], current: string | null, dir: 1 | -1): string | nu
 export function AppMenu({
   items,
   triggerIcon,
+  triggerDanger = false,
   'aria-label': ariaLabel = 'Menu',
   'data-testid': triggerTestId = 'app-menu-trigger',
   menuTestId = 'app-menu',
@@ -405,8 +410,14 @@ export function AppMenu({
           else if (openSubmenuId) closeSubmenu();
         }}
         className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 ${
-          item.disabled ? 'text-text-secondary cursor-not-allowed' : 'hover:bg-accent-10'
-        } ${isActive && !item.disabled ? 'bg-accent-10' : ''}`}
+          item.disabled ? 'text-text-secondary cursor-not-allowed' : ''
+        } ${
+          item.dangerBg
+            ? 'bg-red-900/60 hover:bg-red-900/80'
+            : item.disabled
+              ? ''
+              : `hover:bg-accent-10 ${isActive ? 'bg-accent-10' : ''}`
+        }`}
       >
         {showIcons && (
           <span
@@ -460,7 +471,7 @@ export function AppMenu({
     <>
       <IconButton
         ref={triggerRef}
-        icon={triggerIcon ?? <MenuIcon />}
+        icon={triggerIcon ?? <MenuIcon className={triggerDanger ? 'text-red-500' : undefined} />}
         size="sm"
         onClick={() => (isOpen ? closeMenu() : openMenu())}
         onKeyDown={onTriggerKeyDown}

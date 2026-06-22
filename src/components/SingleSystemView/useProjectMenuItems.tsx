@@ -32,9 +32,11 @@ import {
 interface UseProjectMenuItemsArgs {
   /** The SingleSystemView-wrapped save (cancels autosave, then saves). */
   onSave: () => Promise<{ success: boolean } | null | undefined>;
+  /** A save (auto or manual) failed — flag the Save row with a dark-red bg. */
+  saveFailed?: boolean;
 }
 
-export function useProjectMenuItems({ onSave }: UseProjectMenuItemsArgs): AppMenuItem[] {
+export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMenuItemsArgs): AppMenuItem[] {
   const { t } = useTranslation();
   const {
     handleNewProject,
@@ -91,6 +93,7 @@ export function useProjectMenuItems({ onSave }: UseProjectMenuItemsArgs): AppMen
         label: t('common.actions.save'),
         icon: <SaveIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.save,
+        dangerBg: saveFailed,
         action: 'save',
         onClick: () => { void onSave(); },
       },
@@ -196,5 +199,5 @@ export function useProjectMenuItems({ onSave }: UseProjectMenuItemsArgs): AppMen
         },
       },
     ];
-  }, [t, openDialog, showDevStats, toggleDisplay, onSave, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, handleImportDmp, handleImportGpx]);
+  }, [t, openDialog, showDevStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, handleImportDmp, handleImportGpx]);
 }

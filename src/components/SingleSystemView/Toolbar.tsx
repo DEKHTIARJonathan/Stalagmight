@@ -23,6 +23,8 @@ import { defaultConfig } from '../../types/config';
 interface ToolbarProps {
   /** Items for the left-side hamburger (AppMenu): file/project actions. */
   menuItems: AppMenuItem[];
+  /** A save failed — tint the hamburger icon red. */
+  saveFailed?: boolean;
   onImport: () => void;
   onUndo: () => void;
   onRedo: () => void;
@@ -119,6 +121,7 @@ const TOOLBAR_ITEMS: ToolbarItem[] = [
 
 export default function Toolbar({
   menuItems,
+  saveFailed = false,
   onImport,
   onUndo,
   onRedo,
@@ -146,7 +149,7 @@ export default function Toolbar({
         className={`flex items-center gap-2 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
         data-testid="toolbar-file-controls"
       >
-        <AppMenu items={menuItems} aria-label={t('singleView.menu.aria')} />
+        <AppMenu items={menuItems} triggerDanger={saveFailed} aria-label={t('singleView.menu.aria')} />
         {/* In fullscreen table mode the left slot shows the "Back to Map" button
             (the relabeled shrink button) instead of Import; both Save/Export/Close
             live in the hamburger now. */}

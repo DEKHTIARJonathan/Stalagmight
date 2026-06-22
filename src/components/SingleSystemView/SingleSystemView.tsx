@@ -50,12 +50,12 @@ export default function SingleSystemView() {
 
   const isDirty = useProjectStore((s) => s.isDirty);
   const autoSave = useAutoSave();
+  const saveFailed = autoSave.status === 'error';
   // Red wash in the status bar's bottom-right corner only when a save failed —
   // spans the full bar height and fades right→left across ~18% of its width.
-  const statusBarGradient =
-    autoSave.status === 'error'
-      ? 'linear-gradient(to left, rgba(248, 113, 113, 0.30), transparent 18%)'
-      : undefined;
+  const statusBarGradient = saveFailed
+    ? 'linear-gradient(to left, rgba(248, 113, 113, 0.30), transparent 18%)'
+    : undefined;
   const placementModeActive = useUIStore((s) => s.placementMode !== null);
 
   const handleSaveProject = useCallback(async () => {
@@ -81,7 +81,7 @@ export default function SingleSystemView() {
 
   // Hamburger menu items (file/project actions). Built here so it can use the
   // autosave-aware wrapped save.
-  const menuItems = useProjectMenuItems({ onSave: handleSaveProject });
+  const menuItems = useProjectMenuItems({ onSave: handleSaveProject, saveFailed });
 
   const {
     sectionsPanelOpen,
@@ -418,6 +418,7 @@ export default function SingleSystemView() {
       {/* Toolbar */}
       <Toolbar
         menuItems={menuItems}
+        saveFailed={saveFailed}
         onImport={handleImportDmpOrGpx}
         onUndo={undo}
         onRedo={redo}
