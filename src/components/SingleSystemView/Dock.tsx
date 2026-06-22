@@ -51,6 +51,13 @@ interface DockProps {
    *  the gap left by minimized ones. Default 0 (full width). */
   overlayLeft?: number;
   overlayRight?: number;
+  /** Notified when this Dock's resize-drag starts/ends, so a sibling can react
+   *  (e.g. side bars tracking the Data panel's edge live during its resize). */
+  onResizingChange?: (resizing: boolean) => void;
+  /** Drop the `bottom` transition so a closedBottomInset change tracks instantly
+   *  — set while the Data panel is being resized so the bar's bottom doesn't lag
+   *  the dragged edge (the transition is kept for open/close animations). */
+  suspendBottomTransition?: boolean;
 }
 
 /**
@@ -82,6 +89,8 @@ export function Dock({
   overlayContainer,
   overlayLeft = 0,
   overlayRight = 0,
+  onResizingChange,
+  suspendBottomTransition = false,
 }: DockProps) {
   const vertical = edge === 'left' || edge === 'right';
   const clipRef = useRef<HTMLDivElement>(null);
@@ -117,6 +126,11 @@ export function Dock({
 
   const resizeActive = isResizing || resizeHover;
 
+  // Let a sibling (the side bars) track this panel's edge live during its drag.
+  useEffect(() => {
+    onResizingChange?.(isResizing);
+  }, [isResizing, onResizingChange]);
+
   // Keep content mounted through the slide-out so closing animates (single
   // instance — never remounts on pin/unpin/hover).
   const open = reveal.isOpen;
@@ -136,7 +150,15 @@ export function Dock({
   // dragging so the panel edge + spacer track the pointer 1:1.
   const sizeTransition = isResizing
     ? 'none'
-    : 'width 150ms ease-out, height 150ms ease-out, bottom 150ms ease-out, left 150ms ease-out, right 150ms ease-out';
+    : [
+        'width 150ms ease-out',
+        'height 150ms ease-out',
+        'left 150ms ease-out',
+        'right 150ms ease-out',
+        // While the Data panel is dragged, the bar's bottom must follow its edge
+        // 1:1 (no easing lag); keep the eased transition otherwise.
+        ...(suspendBottomTransition ? [] : ['bottom 150ms ease-out']),
+      ].join(', ');
 
   // ── Reflow spacer (flow): only this pushes the map. ──
   const spacer = (

@@ -133,6 +133,9 @@ export default function SingleSystemView() {
   // is open (covering the gap left by a compressed side bar), or sits between the
   // closed bars (BAR inset) when the Data panel is itself closed.
   const [mainEl, setMainEl] = useState<HTMLDivElement | null>(null);
+  // While the Data panel is being resized, the side bars track its edge with no
+  // transition lag (their bottom inset follows dataTableHeight live).
+  const [dataResizing, setDataResizing] = useState(false);
   const dataOverlayLeft = sectionsReveal.isPinnedOpen
     ? sectionsPanelWidth
     : dataReveal.isOpen
@@ -433,6 +436,7 @@ export default function SingleSystemView() {
           // bar (if minimized) so it stops at the Data panel's top instead of
           // running alongside it.
           closedBottomInset={dataReveal.isOpen ? dataTableHeight : 0}
+          suspendBottomTransition={dataResizing}
         >
           {sectionsContent}
         </Dock>
@@ -476,6 +480,7 @@ export default function SingleSystemView() {
             overlayContainer={mainEl}
             overlayLeft={dataOverlayLeft}
             overlayRight={dataOverlayRight}
+            onResizingChange={setDataResizing}
           >
             {dataInner}
           </Dock>
@@ -497,6 +502,7 @@ export default function SingleSystemView() {
           tabLabels={tabLabels(panelName.detail)}
           tabTop={79}
           closedBottomInset={dataReveal.isOpen ? dataTableHeight : 0}
+          suspendBottomTransition={dataResizing}
         >
           {detailContent}
         </Dock>
