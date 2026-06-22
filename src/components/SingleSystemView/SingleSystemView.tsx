@@ -551,7 +551,12 @@ export default function SingleSystemView() {
             </span>
           )}
         </span>
-        <SaveStatus status={autoSave.status} countdown={autoSave.countdown} isDirty={isDirty} />
+        <SaveStatus
+          status={autoSave.status}
+          countdown={autoSave.countdown}
+          isDirty={isDirty}
+          onSave={handleSaveProject}
+        />
       </footer>
     </div>
   );
@@ -561,10 +566,12 @@ function SaveStatus({
   status,
   countdown,
   isDirty,
+  onSave,
 }: {
   status: AutoSaveStatus;
   countdown: number;
   isDirty: boolean;
+  onSave: () => void;
 }) {
   const { t } = useTranslation();
 
@@ -592,6 +599,22 @@ function SaveStatus({
         : t('singleView.status.saved');
       if (isDirty) className = 'text-yellow-400';
       break;
+  }
+
+  // On a failed save, the status doubles as a retry — clicking it runs the same
+  // save as the burger-menu Save button.
+  if (status === 'error') {
+    return (
+      <button
+        type="button"
+        data-testid="save-status"
+        onClick={() => onSave()}
+        title={t('common.actions.save')}
+        className={`${className} cursor-pointer hover:underline`}
+      >
+        {text}
+      </button>
+    );
   }
 
   return (
