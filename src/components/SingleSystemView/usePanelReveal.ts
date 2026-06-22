@@ -19,6 +19,9 @@ export interface PanelReveal {
    *  hover region, so moving between them keeps a hover-revealed panel open. */
   onRegionEnter: () => void;
   onRegionLeave: () => void;
+  /** Schedule a close after `ms` (cancelled by onRegionEnter). Used to give a
+   *  longer grace after a resize so the user can move back over the panel. */
+  scheduleClose: (ms?: number) => void;
   /** Click the closed bar/tab: pin mode opens pinned; hover mode reveals it. */
   openClick: () => void;
   /** Pin the panel open (hover → pin). */
@@ -54,12 +57,14 @@ export function usePanelReveal(panel: PanelId): PanelReveal {
 
   const [hovering, setHovering] = useState(false);
   const graceRef = useRef<number | null>(null);
+  const graceDeadlineRef = useRef(0);
 
   const clearGrace = useCallback(() => {
     if (graceRef.current !== null) {
       clearTimeout(graceRef.current);
       graceRef.current = null;
     }
+    graceDeadlineRef.current = 0;
   }, []);
 
   useEffect(() => clearGrace, [clearGrace]);
@@ -69,13 +74,25 @@ export function usePanelReveal(panel: PanelId): PanelReveal {
     setHovering(true);
   }, [clearGrace]);
 
-  const onRegionLeave = useCallback(() => {
-    clearGrace();
-    graceRef.current = window.setTimeout(() => {
-      graceRef.current = null;
-      setHovering(false);
-    }, CLOSE_GRACE_MS);
-  }, [clearGrace]);
+  const scheduleClose = useCallback(
+    (ms: number = CLOSE_GRACE_MS) => {
+      // Don't let a shorter grace shorten a longer one already pending — e.g. the
+      // reconciling mouseleave fired on resize pointer-capture release must not
+      // clobber the generous post-resize grace down to the default.
+      const deadline = Date.now() + ms;
+      if (graceRef.current !== null && graceDeadlineRef.current > deadline) return;
+      clearGrace();
+      graceDeadlineRef.current = deadline;
+      graceRef.current = window.setTimeout(() => {
+        graceRef.current = null;
+        graceDeadlineRef.current = 0;
+        setHovering(false);
+      }, ms);
+    },
+    [clearGrace],
+  );
+
+  const onRegionLeave = useCallback(() => scheduleClose(), [scheduleClose]);
 
   const isPinnedOpen = mode === 'pin' && open;
   const isFloatingOpen = mode === 'hover' && hovering;
@@ -116,6 +133,7 @@ export function usePanelReveal(panel: PanelId): PanelReveal {
     isOpen,
     onRegionEnter,
     onRegionLeave,
+    scheduleClose,
     openClick,
     pin,
     unpin,

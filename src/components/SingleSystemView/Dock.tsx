@@ -7,6 +7,9 @@ import type { PanelReveal } from './usePanelReveal';
 const BAR = 12;
 /** Slide/reflow duration; keep in sync with the Tailwind duration class. */
 const SLIDE_MS = 150;
+/** Generous grace after a hover-mode resize so the user can move the cursor
+ *  back over the panel before it closes. */
+const RESIZE_GRACE_MS = 700;
 
 interface DockProps {
   reveal: PanelReveal;
@@ -58,6 +61,11 @@ export function Dock({
 }: DockProps) {
   const vertical = edge === 'left' || edge === 'right';
   const clipRef = useRef<HTMLDivElement>(null);
+  const outerRef = useRef<HTMLDivElement>(null);
+  const handleRef = useRef<HTMLDivElement>(null);
+  // "active" while hovering the handle or dragging it; both the panel's
+  // inner-edge border and the opener tab border tint accent then, identically.
+  const [resizeHover, setResizeHover] = useState(false);
 
   const { isResizing, handleProps } = useResizeHandle({
     direction: vertical ? 'horizontal' : 'vertical',
@@ -67,17 +75,22 @@ export function Dock({
     measureRef: clipRef,
     onResize,
     onResizeEnd,
-    // After a hover-mode resize that ended off the panel, resume the close —
-    // onMouseLeave was suppressed during the drag.
-    onResizeSettled: (pointerOverPanel) => {
-      if (reveal.isFloatingOpen && !pointerOverPanel) reveal.onRegionLeave();
+    // After a hover-mode resize, onMouseLeave was suppressed during the drag, so
+    // re-evaluate the close here. The release pointer often lands on the handle's
+    // overhang (just outside the panel body) — still part of the Dock region — so
+    // hit-test the whole outer wrapper (panel + handle + tab). If the pointer
+    // ended off it, close on a *generous* grace so the user can move back over.
+    onResizeSettled: ({ clientX, clientY }) => {
+      const el = document.elementFromPoint(clientX, clientY);
+      // Keep the accent only if the release landed back on the handle (no
+      // mouseenter re-fires on an in-place release); otherwise clear it.
+      setResizeHover(!!el && !!handleRef.current && handleRef.current.contains(el));
+      if (!reveal.isFloatingOpen) return;
+      const overRegion = !!el && !!outerRef.current && outerRef.current.contains(el);
+      if (!overRegion) reveal.scheduleClose(RESIZE_GRACE_MS);
     },
   });
 
-  // Resize affordance is "active" while hovering the handle or dragging it; both
-  // the panel's inner-edge border and the opener tab border tint accent then, so
-  // the highlight is identical on both and wraps around the tab.
-  const [resizeHover, setResizeHover] = useState(false);
   const resizeActive = isResizing || resizeHover;
 
   // Keep content mounted through the slide-out so closing animates (single
@@ -141,6 +154,7 @@ export function Dock({
 
   const overlay = (
     <div
+      ref={outerRef}
       className={`absolute pointer-events-auto ${fullscreen ? 'z-40' : reveal.isFloatingOpen ? 'z-30' : 'z-20'}`}
       style={{ ...outerStyle, transition: sizeTransition }}
       onMouseEnter={reveal.onRegionEnter}
@@ -177,6 +191,7 @@ export function Dock({
           (driven by resizeActive), so nothing draws under the tab. */}
       {reveal.isOpen && !fullscreen && (
         <div
+          ref={handleRef}
           className={`absolute bg-transparent ${handleClass}`}
           style={{ touchAction: 'none', zIndex: 1 }}
           onMouseEnter={() => setResizeHover(true)}

@@ -12,9 +12,10 @@ interface UseResizeHandleOpts {
   onResize: (size: number) => void;
   /** Called once on pointer-up with the final size. */
   onResizeEnd?: (size: number) => void;
-  /** Called once on pointer-up with whether the pointer ended over the panel
-   *  (lets a hover panel re-evaluate close after a drag that ended outside). */
-  onResizeSettled?: (pointerOverPanel: boolean) => void;
+  /** Called once on pointer-up with the release pointer position, so a hover
+   *  panel can hit-test its own region (panel + handle overhang + tab) and
+   *  decide whether/when to close. */
+  onResizeSettled?: (pointer: { clientX: number; clientY: number }) => void;
 }
 
 /**
@@ -71,19 +72,12 @@ export function useResizeHandle({
         onResizeEnd?.(Math.max(minSize, Math.min(maxSize, sizeRef.current)));
       }
       if (isResizing) {
-        const r = measureRef.current?.getBoundingClientRect();
-        const over =
-          !!r &&
-          e.clientX >= r.left &&
-          e.clientX <= r.right &&
-          e.clientY >= r.top &&
-          e.clientY <= r.bottom;
-        onResizeSettled?.(over);
+        onResizeSettled?.({ clientX: e.clientX, clientY: e.clientY });
       }
       movedRef.current = false;
       setIsResizing(false);
     },
-    [isResizing, onResizeEnd, onResizeSettled, minSize, maxSize, measureRef],
+    [isResizing, onResizeEnd, onResizeSettled, minSize, maxSize],
   );
 
   return {
