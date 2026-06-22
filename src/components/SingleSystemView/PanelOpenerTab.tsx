@@ -65,7 +65,10 @@ export function PanelOpenerTab({
 
   const box = [
     `flex items-center justify-center transition-colors ${resizing ? 'border-accent' : 'border-border'} ${openerHi ? 'bg-background-80 text-text-primary' : 'bg-panel text-text-secondary'} select-none`,
-    vertical ? 'flex-col gap-1 w-7 py-2' : 'flex-row gap-1 h-7 px-2',
+    // min- (not fixed w/h) so the box grows to fit the label when the webview
+    // text-zooms (Ctrl+): the text scales but a fixed px/rem box would not, so
+    // the label overflowed. At rest it's still the ~28px zoom-button size.
+    vertical ? 'flex-col gap-1 min-w-7 py-2' : 'flex-row gap-1 min-h-7 px-2',
     edgeCls,
   ].join(' ');
 
