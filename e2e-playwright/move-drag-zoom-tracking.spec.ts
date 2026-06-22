@@ -164,7 +164,11 @@ test('move-segment grabbed on a STATION snaps + tracks across a mid-drag zoom (#
   expect(Math.abs(after.gx), 'x gap after mid-drag zoom (station grab)').toBeLessThanOrEqual(3);
   expect(Math.abs(after.gy), 'y gap after mid-drag zoom (station grab)').toBeLessThanOrEqual(3);
 
-  await page.mouse.up();
+  // Drop with a click at the current cursor — the UX is click-to-grab -> move ->
+  // click-to-drop, so there's no mouse.down() to pair an up() with; a click is the
+  // real drop and exercises the commit path.
+  await page.mouse.click(box.x + cursor.x, box.y + cursor.y);
+  await waitForMapIdle(page);
 });
 
 test('move-segment grabbed on a SHOT line snaps + tracks across a mid-drag zoom (#79, #20)', async ({ page }) => {
@@ -212,5 +216,9 @@ test('move-segment grabbed on a SHOT line snaps + tracks across a mid-drag zoom 
   expect(Math.abs(after.gx), 'x gap after mid-drag zoom (shot grab)').toBeLessThanOrEqual(3);
   expect(Math.abs(after.gy), 'y gap after mid-drag zoom (shot grab)').toBeLessThanOrEqual(3);
 
-  await page.mouse.up();
+  // Drop with a click at the current cursor — the UX is click-to-grab -> move ->
+  // click-to-drop, so there's no mouse.down() to pair an up() with; a click is the
+  // real drop and exercises the commit path.
+  await page.mouse.click(box.x + cursor.x, box.y + cursor.y);
+  await waitForMapIdle(page);
 });
