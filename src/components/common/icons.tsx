@@ -425,10 +425,10 @@ export function DownloadIcon(props: IconProps) {
 export function FilePlusIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
-      <path fillRule="evenodd" fill="currentColor" stroke="none" d="M6 2 H12 L16 6 V18 H6 Z M7.9 3.9 H12 L14.1 6 V16.1 H7.9 Z" />
+      <path fillRule="evenodd" fill="currentColor" stroke="none" d="M4 2 H12 L16 6 V18 H4 Z M5.9 3.9 H12 L14.1 6 V16.1 H5.9 Z" />
       <path fillRule="evenodd" fill="currentColor" stroke="none" d="M12 2 L12 6 L16 6 L16 4.4 L14 2.4 Z M14.1 4.4 L14.1 4.9 L12.9 4.9 L12.9 4.4 Z" />
       <rect x="9.05" y="9" width="1.9" height="6" rx="0.95" fill="currentColor" stroke="none" />
-      <rect x="7" y="11.05" width="6" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
+      <rect x="6.9" y="11.05" width="6.2" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
     </BaseIcon>
   );
 }
