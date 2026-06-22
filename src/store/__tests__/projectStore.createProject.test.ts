@@ -43,7 +43,6 @@ describe('projectStore.createProject', () => {
             showReferenceShots: true,
             showZeroDatum: true,
             showGrid: false,
-            showScaleBar: true,
             showSatellite: false,
             showDepthGradient: false,
             gridSpacing: 10,

@@ -198,7 +198,6 @@ pub struct DisplaySettings {
     pub show_reference_shots: bool,
     pub show_zero_datum: bool,
     pub show_grid: bool,
-    pub show_scale_bar: bool,
     pub show_satellite: bool,
     pub show_depth_gradient: bool,
     pub show_station_comments: bool,
@@ -220,7 +219,6 @@ impl Default for DisplaySettings {
             show_reference_shots: true,
             show_zero_datum: true,
             show_grid: false,
-            show_scale_bar: true,
             show_satellite: false,
             show_depth_gradient: false,
             show_station_comments: false,
@@ -246,7 +244,6 @@ impl DisplaySettings {
                 .is_none_or(|s| s == "true"),
             show_zero_datum: map.get("showZeroDatum").is_none_or(|s| s == "true"),
             show_grid: map.get("showGrid").is_some_and(|s| s == "true"),
-            show_scale_bar: map.get("showScaleBar").is_none_or(|s| s == "true"),
             show_satellite: map.get("showSatellite").is_some_and(|s| s == "true"),
             show_depth_gradient: map.get("showDepthGradient").is_some_and(|s| s == "true"),
             show_station_comments: map.get("showStationComments").is_some_and(|s| s == "true"),
@@ -774,7 +771,6 @@ mod tests {
         assert!(defaults.show_reference_shots); // true
         assert!(defaults.show_zero_datum); // true
         assert!(!defaults.show_grid); // false
-        assert!(defaults.show_scale_bar); // true
         assert!(!defaults.show_satellite); // false
         assert!(!defaults.show_depth_gradient); // false
         assert!((defaults.grid_spacing - 10.0).abs() < 0.001); // 10.0
@@ -793,7 +789,6 @@ mod tests {
         assert!(settings.show_reference_shots); // true
         assert!(settings.show_zero_datum); // true
         assert!(!settings.show_grid); // false
-        assert!(settings.show_scale_bar); // true
         assert!(!settings.show_satellite); // false
         assert!(!settings.show_depth_gradient); // false
         assert!((settings.grid_spacing - 10.0).abs() < 0.001); // 10.0
@@ -814,8 +809,8 @@ mod tests {
     }
 
     #[test]
-    fn test_display_settings_from_stored_all_11_fields() {
-        // Verify ALL 11 fields are mapped correctly from stored HashMap
+    fn test_display_settings_from_stored_all_fields() {
+        // Verify ALL fields are mapped correctly from stored HashMap
         let mut stored = HashMap::new();
         stored.insert("showStations".to_string(), "false".to_string());
         stored.insert("showSectionNames".to_string(), "false".to_string());
@@ -824,14 +819,13 @@ mod tests {
         stored.insert("showReferenceShots".to_string(), "false".to_string());
         stored.insert("showZeroDatum".to_string(), "false".to_string());
         stored.insert("showGrid".to_string(), "true".to_string());
-        stored.insert("showScaleBar".to_string(), "false".to_string());
         stored.insert("showSatellite".to_string(), "true".to_string());
         stored.insert("showDepthGradient".to_string(), "true".to_string());
         stored.insert("gridSpacing".to_string(), "25.5".to_string());
 
         let settings = DisplaySettings::from_stored(&stored);
 
-        // Verify all 11 fields - each should be the opposite of the default
+        // Verify all fields - each should be the opposite of the default
         assert!(!settings.show_stations, "showStations should be false");
         assert!(
             !settings.show_section_names,
@@ -848,7 +842,6 @@ mod tests {
         );
         assert!(!settings.show_zero_datum, "showZeroDatum should be false");
         assert!(settings.show_grid, "showGrid should be true");
-        assert!(!settings.show_scale_bar, "showScaleBar should be false");
         assert!(settings.show_satellite, "showSatellite should be true");
         assert!(
             settings.show_depth_gradient,
