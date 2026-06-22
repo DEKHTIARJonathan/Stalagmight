@@ -410,7 +410,8 @@ export default function SingleSystemView() {
           closeArrow={<ChevronLeftIcon size={14} />}
           testId="sections"
           tabLabels={tabLabels(panelName.sections)}
-          tabTop={79}
+          // Just below the top-left "Fit to view" button (bottom ≈ 32px).
+          tabTop={40}
         >
           {sectionsContent}
         </Dock>
