@@ -150,14 +150,19 @@ gas is consumed):
 *Terminology (Nico): **"cave side"** = further in (toward the lead); **"exit side"** = toward
 the entrance.*
 
-**Return-leg recalc** — gas spendable on a "side mission" (a lead poked into on the way out),
-by current position. **Three distinct regions** of the exit path:
-- **Cave side of the stage-2 drop point** (deepest; back gas only, stage 2 not yet re-reached):
-  usable = `(current_backgas − 100) / 2`
-- **Cave side of the stage-1 drop, exit side of the stage-2 drop** (between the two drops):
-  usable = `(current_backgas − 70) / 2`
-- **Cave side of stage 2** *(distinct third region — boundary to confirm)*: additionally
-  **never more than ⅙ × starting pressure** (hard cap).
+**Return-leg recalc** — gas spendable on a "side mission" (a lead poked into on the way out).
+**Recalc requires a stage in hand** — you need spare gas to justify the detour — so it's
+unavailable at max penetration and only opens up once you've retrieved a stage. Three regions
+of the exit path (lead → exit):
+- **Cave side of the stage-2 drop** (lead ↔ stage-2 drop): **no recalc** — no stage retrieved
+  yet; governed by the initial **⅙ back-gas** reserve.
+- **Between the stage-2 and stage-1 drops** (stage 2 retrieved): usable =
+  `((current_backgas − 100) / 2) − 15`
+- **Between the stage-1 drop and the entrance** (stage 1 also retrieved): usable =
+  `((current_backgas − 70) / 2) − 15`
+
+*(Reserve shrinks toward the exit — 100 → 70 bar of back gas held — because there's less cave
+left to swim out; the `−15` is a fixed buffer on each. Corrected 2026-06-22.)*
 
 **Pressure vs volume (Nico):** the engine computes in **volume** (liters — that's what
 RMV×ATA consumes), but **turn points, reserves, and recalc outputs read as PRESSURE per
@@ -170,15 +175,12 @@ explicit **advanced-diver acknowledgment**; **All-thirds is the default**. The r
 distinct compute path (it re-budgets from *current* pressure mid-dive), so model `reserve` as
 a preset enum *plus* a `recalc(position, current_backgas)` function, not a single fraction.
 
-**Resolved (Nico):** "past" = **cave side** (further in); the recalc clauses are **three
-distinct regions**; `(½ × start) − 15` is a **pressure** (the turn pressure you breathe the
-stage down to before dropping).
+**Resolved (Nico):** "past" = **cave side**; `(½ × start) − 15` is a **pressure** (turn
+pressure); the recalc regions/formulas are as above (corrected 2026-06-22 — recalc needs a
+stage in hand, so the deepest region has none).
 
-**⚠ Still to confirm:**
-1. *Region 3 boundary:* "cave side of stage 2" (the ⅙ cap) vs "cave side of the stage-2 drop
-   point" (the −100 region) read as nearly the same place — what separates them, and does the
-   ⅙ cap **stack on top of** a formula or stand alone?
-2. *"turn at 1/N":* confirm thirds/quarters/sixths = "turn when 1/N of usable consumed."
+**⚠ Minor open:** confirm "turn at 1/N" = turn when 1/N of usable is *consumed* (the deepest
+region's "⅙ back gas" reads as the sixths reserve, consistent with that reading).
 
 ---
 
@@ -342,9 +344,8 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
 **Still open:**
 4. **Memoization:** confirm "debounce-only" holds on the largest real survey, or add the
    single-slot `AppState` memo (§7.1).
-5. **Recalc region 3 + turn gloss (§5.1):** the two remaining inline confirms — the region-3
-   boundary / whether the ⅙ cap stacks, and the "turn at 1/N" reading. *(Direction = cave
-   side, value = pressure, three distinct regions — now resolved.)*
+5. **Turn-gloss (§5.1):** confirm "turn at 1/N" = consumed (minor). *(Recalc regions/formulas,
+   direction, and pressure-semantics now resolved.)*
 
 ---
 
