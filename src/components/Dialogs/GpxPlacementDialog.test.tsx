@@ -1,21 +1,16 @@
 /**
- * Component test (#110) — non-DMP import dialogs must surface a partial-success
- * deferred-save warning instead of closing as if fully successful.
+ * Component test (#110) — GPX import warning surfacing.
  *
- * The backend returns `success: true` WITH a warning ("Imported, but could not
- * save … please save manually.") when a new project's deferred save fails. The
- * GPX placement dialog previously branched only on `success`/`error`, so that
- * warning was dropped and the user never learned the import was only in memory.
- * This renders the real dialog and asserts the warning is surfaced.
- *
- * The helper's own logic is covered by utils/__tests__/saveFeedback.test.ts;
- * this is the wiring layer (the bug was the dialog ignoring `result.warnings`).
+ * Must surface the deferred-save partial-success warning ("imported but
+ * unsaved"), but must NOT modal the routine per-shot validation warnings that
+ * ride along on a fully-saved import. The helper's filtering logic is unit-tested
+ * in utils/__tests__/saveFeedback.test.ts; this guards the dialog wiring.
+ * (GPX has no orphan-placement step, so there's no ordering concern here.)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-// Telemetry is fire-and-forget; keep it from reaching Tauri IPC under jsdom.
 vi.mock('../../utils/telemetry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils/telemetry')>()),
   trackDialogComplete: vi.fn(),
@@ -27,15 +22,23 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { CommandResult, GpxFile, ValidationWarning } from '../../types/commands';
 
-const SYSTEM_WARNING: ValidationWarning = {
+const SAVE_WARNING: ValidationWarning = {
   code: 'SYSTEM',
   message:
     'Imported, but could not save the new project to disk: disk full. ' +
     'Your changes are unsaved — please save manually.',
   severity: 'warning',
 };
+const VALIDATION_WARNING: ValidationWarning = {
+  code: 'LONG_SHOT',
+  message: 'Shot 3:5 length 142.0m above maximum threshold 120.0m',
+  severity: 'warning',
+};
 
 const emptyGpx: GpxFile = { name: 'cave.gpx', waypoints: [], tracks: [], routes: [] };
+
+const ok = (warnings: ValidationWarning[]): CommandResult =>
+  ({ success: true, error: null, warnings, section_ids: [] } as CommandResult);
 
 let executeGpxImport: ReturnType<typeof vi.fn>;
 let openDialog: ReturnType<typeof vi.fn>;
@@ -63,32 +66,29 @@ beforeEach(() => {
 });
 
 describe('GpxPlacementDialog warning surfacing (#110)', () => {
-  it('surfaces a deferred-save warning on an otherwise-successful import', async () => {
-    executeGpxImport.mockResolvedValue({
-      success: true,
-      error: null,
-      warnings: [SYSTEM_WARNING],
-      section_ids: [],
-    } as CommandResult);
+  it('surfaces the deferred-save warning on an otherwise-successful import', async () => {
+    executeGpxImport.mockResolvedValue(ok([SAVE_WARNING]));
 
     render(<GpxPlacementDialog />);
     await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
 
     await waitFor(() =>
-      expect(openDialog).toHaveBeenCalledWith('error', {
-        title: 'Import Warning',
-        message: SYSTEM_WARNING.message,
-      }),
+      expect(openDialog).toHaveBeenCalledWith('error', expect.objectContaining({ title: 'Import Warning' })),
     );
   });
 
-  it('opens no dialog when the import fully succeeds (no warnings)', async () => {
-    executeGpxImport.mockResolvedValue({
-      success: true,
-      error: null,
-      warnings: [],
-      section_ids: [],
-    } as CommandResult);
+  it('does NOT modal a routine validation warning on a saved import', async () => {
+    executeGpxImport.mockResolvedValue(ok([VALIDATION_WARNING]));
+
+    render(<GpxPlacementDialog />);
+    await userEvent.click(await screen.findByTestId('gpx-import-confirm'));
+
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    expect(openDialog).not.toHaveBeenCalled();
+  });
+
+  it('opens no dialog when the import fully succeeds with no warnings', async () => {
+    executeGpxImport.mockResolvedValue(ok([]));
 
     render(<GpxPlacementDialog />);
     await userEvent.click(await screen.findByTestId('gpx-import-confirm'));

@@ -31,20 +31,43 @@ export function surfaceSaveFailure(
 }
 
 /**
- * Surface non-fatal warnings the backend attaches to an otherwise *successful*
- * import (`CommandResult.warnings`) — most importantly the partial-success
- * deferred-save failure ("Imported, but could not save the new project to disk
- * … please save manually."). The import dialogs branch only on `success` /
- * `error`, so without this they close as if fully successful and the user never
- * learns the import is only in memory (#110). No-op when there are no warnings.
+ * The backend stamps the deferred-save partial-success warning
+ * (`finalize_deferred_import` → `CommandResult::with_warning`, src-tauri) with the
+ * generic "SYSTEM" code, and `with_warning` is the ONLY caller of that code in the
+ * crate. So this reliably distinguishes "imported but couldn't save to disk" from
+ * ordinary per-shot validation warnings (LONG_SHOT, AZIMUTH_DEVIATION, …): those
+ * carry their own codes, ride along on a *successful, fully-saved* import, and are
+ * already surfaced through the data-table warning UI — they must NOT pop a modal
+ * here (nor suppress the orphan-placement step). (#110)
+ */
+const DEFERRED_SAVE_WARNING_CODE = 'SYSTEM';
+
+/**
+ * The subset of an import's `CommandResult.warnings` that mean "the import is only
+ * in memory — the save failed". Empty for a fully-persisted import, even one that
+ * carries routine validation warnings. (#110)
+ */
+export function deferredSaveWarnings(
+  warnings: ValidationWarning[] | undefined,
+): ValidationWarning[] {
+  return (warnings ?? []).filter((w) => w.code === DEFERRED_SAVE_WARNING_CODE);
+}
+
+/**
+ * Surface deferred-save warning(s) so the user learns their import is only in
+ * memory and must be saved manually (#110). Pass the result of
+ * `deferredSaveWarnings()`; no-op when empty. Reuses the generic error dialog but
+ * suppresses its "report this as a bug" footer — a failed save is an actionable
+ * disk/permission condition, not a bug to report.
  */
 export function surfaceImportWarnings(
-  warnings: ValidationWarning[] | undefined,
+  warnings: ValidationWarning[],
   openDialog: (dialog: string, data?: Record<string, unknown>) => void,
 ): void {
-  if (!warnings || warnings.length === 0) return;
+  if (warnings.length === 0) return;
   openDialog('error', {
     title: 'Import Warning',
     message: warnings.map((w) => w.message).join('\n\n'),
+    hideReportHint: true,
   });
 }

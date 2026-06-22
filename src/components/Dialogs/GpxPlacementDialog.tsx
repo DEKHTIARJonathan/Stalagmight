@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { getErrorMessage } from '../../utils/ipc';
-import { surfaceImportWarnings } from '../../utils/saveFeedback';
+import { deferredSaveWarnings, surfaceImportWarnings } from '../../utils/saveFeedback';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
@@ -149,9 +149,10 @@ export default function GpxPlacementDialog() {
           message: result.error ?? 'Unknown error during import',
         });
       } else {
-        // Partial-success import (deferred save failed) — surface the warning
-        // so the user knows their import is unsaved (#110).
-        surfaceImportWarnings(result.warnings, openDialog);
+        // Partial-success import (deferred save failed) — surface ONLY the
+        // "SYSTEM" save-failure warning so the user knows their import is unsaved;
+        // routine validation warnings are surfaced elsewhere (#110).
+        surfaceImportWarnings(deferredSaveWarnings(result.warnings), openDialog);
       }
     } catch (e) {
       setIsImporting(false);

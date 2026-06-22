@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
-import { surfaceImportWarnings } from '../../utils/saveFeedback';
+import { deferredSaveWarnings, surfaceImportWarnings } from '../../utils/saveFeedback';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -98,15 +98,19 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         return;
       }
 
-      // A partial-success import (e.g. a new-project deferred save failed)
-      // returns success WITH a warning. Surface it before the optional orphan
-      // step so the "unsaved — save manually" message isn't buried (#110).
-      if (result.warnings.length > 0) {
+      // A partial-success import (new-project deferred save failed) returns
+      // success WITH a "SYSTEM" save-failure warning. Surface ONLY that, before
+      // the optional orphan step, so "unsaved — save manually" isn't buried.
+      // Routine per-shot validation warnings (LONG_SHOT, …) also ride along on a
+      // successful import but are surfaced via the data-table UI — they must not
+      // modal here or skip orphan placement (#110).
+      const saveWarnings = deferredSaveWarnings(result.warnings);
+      if (saveWarnings.length > 0) {
         trackDialogComplete('tml-import');
         closeDialog();
         setView('single');
         triggerFitToBounds();
-        surfaceImportWarnings(result.warnings, openDialog);
+        surfaceImportWarnings(saveWarnings, openDialog);
         return;
       }
 

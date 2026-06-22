@@ -19,6 +19,10 @@ export default function ErrorDialog() {
   const title = (typeof rawTitle === 'string' ? rawTitle : rawTitle ? String(rawTitle) : undefined) ?? 'Error';
   const rawStack = dialogData.stackTrace;
   const stackTrace = typeof rawStack === 'string' ? rawStack : rawStack ? String(rawStack) : undefined;
+  // Callers surfacing an actionable, non-bug condition (e.g. an import's
+  // deferred-save failure — see surfaceImportWarnings) set this to drop the
+  // "report this as a bug" hint, which would otherwise contradict the message.
+  const hideReportHint = Boolean(dialogData.hideReportHint);
 
   const [copyFeedback, setCopyFeedback] = useState<'idle' | 'copied' | 'failed'>('idle');
   const feedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -69,11 +73,13 @@ export default function ErrorDialog() {
           </pre>
         )}
 
-        <p className="text-xs text-text-tertiary">
-          {stackTrace
-            ? 'If this error persists, please report it as a bug and include the error message and stack trace above.'
-            : 'If this error persists, please report it as a bug and include this error message.'}
-        </p>
+        {!hideReportHint && (
+          <p className="text-xs text-text-tertiary">
+            {stackTrace
+              ? 'If this error persists, please report it as a bug and include the error message and stack trace above.'
+              : 'If this error persists, please report it as a bug and include this error message.'}
+          </p>
+        )}
 
         <div className="flex justify-between items-center pt-4 border-t border-border">
           <button
