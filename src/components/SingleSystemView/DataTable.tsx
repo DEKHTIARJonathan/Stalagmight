@@ -37,6 +37,11 @@ import type { CellEdit } from '../common/SpreadsheetGrid/types';
 
 interface DataTableProps {
   sections: Section[];
+  /** Whether the panel is revealed. The Dock only mounts this component while
+   *  the Data panel is visible (pinned-open, hover-floating, or sliding shut),
+   *  so it defaults to true. The persisted store `dataTableOpen` flag is false
+   *  in hover mode and must NOT gate the grid here (it left the panel empty). */
+  panelOpen?: boolean;
 }
 
 /** Column keys per angle family and mode (the Avg column and the In+Out pair
@@ -215,7 +220,7 @@ function RawTablePill({ name, trailing }: { name: string; trailing?: ReactNode }
   );
 }
 
-export default function DataTable({ sections }: DataTableProps) {
+export default function DataTable({ sections, panelOpen = true }: DataTableProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(
@@ -242,7 +247,6 @@ export default function DataTable({ sections }: DataTableProps) {
     setHoveredShot,
     hoveredShot,
     triggerPanToShot,
-    dataTableOpen,
     dataTableHeight,
     dataTableFullScreen,
     rawTableSelection,
@@ -263,7 +267,6 @@ export default function DataTable({ sections }: DataTableProps) {
     hoveredShot: s.hoveredShot,
     triggerPanToShot: s.triggerPanToShot,
     triggerResolveWarning: s.triggerResolveWarning,
-    dataTableOpen: s.dataTableOpen,
     dataTableHeight: s.dataTableHeight,
     dataTableFullScreen: s.dataTableFullScreen,
     rawTableSelection: s.rawTableSelection,
@@ -277,6 +280,11 @@ export default function DataTable({ sections }: DataTableProps) {
     hoveredStation: s.hoveredStation,
     showToast: s.showToast,
   })));
+
+  // The Dock owns visibility (mounts this only when the panel is revealed), so
+  // the grid renders whenever this component is mounted — never gated by the
+  // persisted store flag, which is false in hover mode. See `panelOpen`.
+  const dataTableOpen = panelOpen;
 
   // Create a map of shot warnings for quick lookup
   const shotWarningsMap = useMemo(() => {
