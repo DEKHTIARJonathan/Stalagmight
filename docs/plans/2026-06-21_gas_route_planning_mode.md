@@ -66,6 +66,7 @@ multi-diver fan-out optimization (north star, §9).
 | Gas units | **Both, user-selectable** |
 | DPV | **Speed + range/burn-time + dead-scooter contingency**; **same RMV as swimming** (no reduced-RMV credit — §10) |
 | Drop points | **Suggested *and* draggable-validated** |
+| Survey reserve | **Total-thirds** invariant (movable across cylinders); **asymmetric** slow-in/fast-out gas; **not opinionated on survey** — show the thirds line, allow knowing over-penetration (§5.2) |
 
 ---
 
@@ -97,8 +98,10 @@ coords (`compute_station_coordinates()`, `project.rs:6758`) and **never** trigge
 
 **Everything derives from the field:**
 - *Reachable within budget* = stations whose **round-trip** gas ≤ usable gas after the §5.1
-  reserve rule. The turn frontier is a threshold on the field (reachable stations with an
-  unreachable neighbor — one pass over `adj`).
+  reserve rule. **Round-trip is asymmetric** when surveying: `gas_in(X | survey speed) +
+  gas_out(X | swim speed)`, i.e. two Dijkstra fields (the OUT field is the same exit-leg field
+  CCR bailout needs), **not** one field doubled — see §5.2. The turn frontier is a threshold on
+  the field (reachable stations with an unreachable neighbor — one pass over `adj`).
 - *Turn point toward a lead* = furthest point on the path where one-way gas = turn pressure.
   (Store a predecessor array in the Dijkstra loop at `project.rs:7460` to back-trace paths.)
 - *CCR bailout / dead-scooter exit* = a **second** Dijkstra seeded **from the lead** toward
@@ -121,7 +124,8 @@ Cylinder { water_volume_l, working_pressure_bar, fill_bar }
 GasConfig {
   reserve: ReservePreset,        // AllThirds | OneStage | TwoStage — see §5.1; pushy presets gated to "advanced"
   stressed_rmv_multiplier: f64,  // bailout/contingency bump, e.g. 1.5–2.0
-  swim_speed_m_per_min: f64,     // default ~10
+  swim_speed_m_per_min: f64,     // EXIT-leg speed (fast). DEFAULT 10 m/min (no DPV — Nico)
+  survey_speed_m_per_min: Option<f64>, // IN-leg speed while surveying — often 2–3× slower; None = symmetric. §5.2
   dpv: Option<DpvProfile>,       // speed + burn-time/range (Phase 4); SAME rmv as swimming, no reduction
   units: GasUnits,               // metric | imperial (display only)
 }
@@ -170,10 +174,12 @@ cylinder** (`bar = liters / water_volume_l`), because divers watch pressure gaug
 Volume is the *planning* currency and the only sane way to gas-match dissimilar tanks. So:
 canonical-volume internally, per-cylinder-pressure on every in-dive readout.
 
-**Product gate:** the 1-/2-stage presets are *very pushy* — expose them only behind an
-explicit **advanced-diver acknowledgment**; **All-thirds is the default**. The recalc is a
-distinct compute path (it re-budgets from *current* pressure mid-dive), so model `reserve` as
-a preset enum *plus* a `recalc(position, current_backgas)` function, not a single fraction.
+**Product gate:** the 1-/2-stage presets are *pushy* — expose them only behind an explicit
+**advanced-diver acknowledgment**. They are **thirds-preserving** (§5.2): "advanced" means the
+multi-cylinder gas-management skill to balance gas across tanks, **not** breaking the reserve.
+**All-thirds is the default.** The recalc is a distinct compute path (it re-budgets from
+*current* pressure mid-dive), so model `reserve` as a preset enum *plus* a
+`recalc(position, current_backgas)` function, not a single fraction.
 
 **Resolved (Nico):** "past" = **cave side**; `(½ × start) − 15` is a **pressure** (turn
 pressure); the recalc regions/formulas are as above (corrected 2026-06-22 — recalc needs a
@@ -181,6 +187,29 @@ stage in hand, so the deepest region has none).
 
 **⚠ Minor open:** confirm "turn at 1/N" = turn when 1/N of usable is *consumed* (the deepest
 region's "⅙ back gas" reads as the sixths reserve, consistent with that reading).
+
+### 5.2 Surveying changes the gas math — asymmetric speed + a less-opinionated reserve (Nico)
+
+**Total-thirds is the invariant, not per-tank thirds.** The safety floor is **⅓ of *total*
+gas reserved across all cylinders**. Gas can be **moved between cylinders** (Nico dives 2
+back-gas + 2 stages) — you may run plain ⅓-per-tank, or balance gas across tanks; the balanced
+scheme still preserves total thirds. The §5.1 presets are these thirds-preserving
+distributions; the engine's hard floor is **total-thirds**, presets only change *where* gas is
+spent.
+
+**Survey-in is 2–3× slower than the swim-out.** Surveying is slow work; the exit is a fast
+swim (default **10 m/min**, no DPV). So per-meter gas IN ≫ OUT, and **round-trip gas is NOT
+2× one-way**: `round_trip(X) = gas_in(X | survey speed) + gas_out(X | swim speed)` — two
+Dijkstra fields (in + out), the OUT field being the same exit-leg field CCR bailout needs.
+
+**Consequence: strict thirds *under*-penetrates on survey.** Turning at "⅓ consumed" on the
+slow way in leaves you surfacing with lots of unused gas and a shorter push than was safe — so
+many surveyors knowingly push past nominal thirds on survey.
+
+**⇒ The tool must NOT be opinionated here.** Show the strict-thirds turn point as a *reference
+line*, **also** show the asymmetric gas-balanced reach (further in), and let the diver choose —
+**this is a risk she calls herself.** Never hard-block penetration past thirds; label it, don't
+forbid it. (Reinforces §6: planning aid, not authority.)
 
 ---
 
@@ -201,6 +230,10 @@ first-class constraint, not a footnote.
   references-resolve-then-shortest-path is correct for the real datasets.)*
 - **Framing:** the UI is a planning aid, not an authority — show assumptions; never a single
   unlabelled "you're fine" number.
+- **Survey ≠ enforced thirds (§5.2):** the slow-in/fast-out asymmetry makes strict thirds
+  *under*-penetrate, so show the thirds line as a reference and let the diver knowingly push
+  past it — never hard-block. Reserve invariant = **total thirds across all cylinders**, not
+  per-tank.
 
 ---
 
