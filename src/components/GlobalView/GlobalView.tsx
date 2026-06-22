@@ -10,7 +10,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useGlobalViewStore } from '../../store/globalViewStore';
 import { Button } from '../common/Button';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
-import { BugIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIcon, QuitIcon, SettingsIcon } from '../common/icons';
+import { BugIcon, CloseIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIcon, QuitIcon, SettingsIcon } from '../common/icons';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { setProjectActionSource } from '../../utils/telemetry';
@@ -727,20 +727,7 @@ export default function GlobalView() {
                       aria-label={t('globalView.search.clearAria')}
                       data-testid="globalview-search-clear"
                     >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <line x1="18" y1="6" x2="6" y2="18" />
-                        <line x1="6" y1="6" x2="18" y2="18" />
-                      </svg>
+                      <CloseIcon size={14} />
                     </button>
                   )}
                 </div>

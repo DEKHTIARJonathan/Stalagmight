@@ -574,11 +574,13 @@ export function Select({
         </span>
         <svg
           className={`w-4 h-4 text-text-secondary transition-transform ${isOpen ? 'rotate-180' : ''}`}
-          fill="none"
-          stroke="currentColor"
+          fill="currentColor"
           viewBox="0 0 24 24"
+          aria-hidden="true"
         >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          {/* Filled chevron (down) — robust under the page-zoom UI scale */}
+          <rect x="10.55" y="11.4" width="9.899" height="2.2" rx="1.1" transform="rotate(135 15.5 12.5)" />
+          <rect x="3.55" y="11.4" width="9.899" height="2.2" rx="1.1" transform="rotate(-135 8.5 12.5)" />
         </svg>
       </button>
 

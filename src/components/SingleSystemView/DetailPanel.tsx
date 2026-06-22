@@ -745,12 +745,19 @@ function StationDetail({ station }: { station: Station }) {
     >
       <svg
         className="w-4 h-4"
-        fill="none"
-        stroke="currentColor"
+        fill="currentColor"
         viewBox="0 0 24 24"
+        aria-hidden="true"
       >
-        <circle cx="12" cy="12" r="3" strokeWidth={2} />
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+        {/* Center/locate: ring + spokes, filled (robust under page-zoom UI scale) */}
+        <path
+          fillRule="evenodd"
+          d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0ZM11.2 12a0.8 0.8 0 1 0 1.6 0a0.8 0.8 0 1 0 -1.6 0Z"
+        />
+        <rect x="10.9" y="2" width="2.2" height="4" rx="1.1" />
+        <rect x="10.9" y="18" width="2.2" height="4" rx="1.1" />
+        <rect x="2" y="10.9" width="4" height="2.2" rx="1.1" />
+        <rect x="18" y="10.9" width="4" height="2.2" rx="1.1" />
       </svg>
     </button>
   );
@@ -1024,12 +1031,19 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
     >
       <svg
         className="w-4 h-4"
-        fill="none"
-        stroke="currentColor"
+        fill="currentColor"
         viewBox="0 0 24 24"
+        aria-hidden="true"
       >
-        <circle cx="12" cy="12" r="3" strokeWidth={2} />
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+        {/* Center/locate: ring + spokes, filled (robust under page-zoom UI scale) */}
+        <path
+          fillRule="evenodd"
+          d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0ZM11.2 12a0.8 0.8 0 1 0 1.6 0a0.8 0.8 0 1 0 -1.6 0Z"
+        />
+        <rect x="10.9" y="2" width="2.2" height="4" rx="1.1" />
+        <rect x="10.9" y="18" width="2.2" height="4" rx="1.1" />
+        <rect x="2" y="10.9" width="4" height="2.2" rx="1.1" />
+        <rect x="18" y="10.9" width="4" height="2.2" rx="1.1" />
       </svg>
     </button>
   );
@@ -1237,12 +1251,19 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
     >
       <svg
         className="w-4 h-4"
-        fill="none"
-        stroke="currentColor"
+        fill="currentColor"
         viewBox="0 0 24 24"
+        aria-hidden="true"
       >
-        <circle cx="12" cy="12" r="3" strokeWidth={2} />
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+        {/* Center/locate: ring + spokes, filled (robust under page-zoom UI scale) */}
+        <path
+          fillRule="evenodd"
+          d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0ZM11.2 12a0.8 0.8 0 1 0 1.6 0a0.8 0.8 0 1 0 -1.6 0Z"
+        />
+        <rect x="10.9" y="2" width="2.2" height="4" rx="1.1" />
+        <rect x="10.9" y="18" width="2.2" height="4" rx="1.1" />
+        <rect x="2" y="10.9" width="4" height="2.2" rx="1.1" />
+        <rect x="18" y="10.9" width="4" height="2.2" rx="1.1" />
       </svg>
     </button>
   );

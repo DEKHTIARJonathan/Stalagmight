@@ -45,7 +45,9 @@ export function useViewMode(): [ViewMode, (mode: ViewMode) => void] {
 }
 
 /**
- * Survey icon - shows a connected network of shots/stations.
+ * Survey icon - shows a connected network of shots/stations. Drawn with filled
+ * shapes (not thin strokes) so it keeps a consistent weight under the
+ * WebKit/WKWebView page-zoom UI scale (see webkit-icon-stroke-zoom note).
  */
 function SurveyIcon() {
   return (
@@ -54,25 +56,24 @@ function SurveyIcon() {
       width="18"
       height="18"
       viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      fill="currentColor"
+      aria-hidden="true"
     >
-      {/* Survey network: connected points */}
-      <circle cx="6" cy="6" r="2" fill="currentColor" />
-      <circle cx="18" cy="6" r="2" fill="currentColor" />
-      <circle cx="12" cy="18" r="2" fill="currentColor" />
-      <line x1="7.5" y1="7.5" x2="10.5" y2="16.5" />
-      <line x1="16.5" y1="7.5" x2="13.5" y2="16.5" />
-      <line x1="8" y1="6" x2="16" y2="6" />
+      {/* Connecting shots (filled bars) */}
+      <rect x="8" y="4.9" width="8" height="2.2" rx="1.1" />
+      <rect x="4.257" y="10.9" width="9.487" height="2.2" rx="1.1" transform="rotate(71.57 9 12)" />
+      <rect x="10.257" y="10.9" width="9.487" height="2.2" rx="1.1" transform="rotate(108.43 15 12)" />
+      {/* Stations (nodes) */}
+      <circle cx="6" cy="6" r="2.5" />
+      <circle cx="18" cy="6" r="2.5" />
+      <circle cx="12" cy="18" r="2.5" />
     </svg>
   );
 }
 
 /**
- * Markers icon - shows simple location pins.
+ * Markers icon - a solid location pin (with a knocked-out hole). Filled so it
+ * keeps a consistent weight under the page-zoom UI scale.
  */
 function MarkersIcon() {
   return (
@@ -81,15 +82,13 @@ function MarkersIcon() {
       width="18"
       height="18"
       viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      fill="currentColor"
+      aria-hidden="true"
     >
-      {/* Location marker pin */}
-      <path d="M12 21c-4-4-8-7.5-8-12a8 8 0 1 1 16 0c0 4.5-4 8-8 12z" />
-      <circle cx="12" cy="9" r="2.5" fill="currentColor" />
+      <path
+        fillRule="evenodd"
+        d="M12 21c-4-4-8-7.5-8-12a8 8 0 1 1 16 0c0 4.5-4 8-8 12z M12 6.5 a2.5 2.5 0 1 0 0 5 a2.5 2.5 0 1 0 0 -5 z"
+      />
     </svg>
   );
 }
