@@ -410,6 +410,7 @@ export default function SingleSystemView() {
           closeArrow={<ChevronLeftIcon size={14} />}
           testId="sections"
           tabLabels={tabLabels(panelName.sections)}
+          tabTop={41}
         >
           {sectionsContent}
         </Dock>
@@ -464,6 +465,7 @@ export default function SingleSystemView() {
           closeArrow={<ChevronRightIcon size={14} />}
           testId="detail"
           tabLabels={tabLabels(panelName.detail)}
+          tabTop={38}
         >
           {detailContent}
         </Dock>

@@ -24,6 +24,9 @@ interface DockProps {
   closeArrow: ReactNode;
   testId: string;
   tabLabels: { open: string; pin: string; unpin: string; close: string };
+  /** Top offset (px) for the side tab so it aligns with the panel's header /
+   *  content divider. Ignored for the bottom edge (the tab is bottom-anchored). */
+  tabTop?: number;
   /** Data table only: render content as a fixed fullscreen overlay (no reparent). */
   fullscreen?: boolean;
 }
@@ -50,6 +53,7 @@ export function Dock({
   closeArrow,
   testId,
   tabLabels,
+  tabTop = 72,
   fullscreen = false,
 }: DockProps) {
   const vertical = edge === 'left' || edge === 'right';
@@ -108,11 +112,12 @@ export function Dock({
     : { position: 'absolute', left: 0, right: 0, bottom: 0, height: size };
 
   // Tab anchored flush to the inner edge (rides the wrapper's edge for free).
+  // Side tabs sit at `tabTop` so their top aligns with the panel's header divider.
   const tabAnchor: CSSProperties =
     edge === 'left'
-      ? { left: '100%', top: 72 }
+      ? { left: '100%', top: tabTop }
       : edge === 'right'
-        ? { right: '100%', top: 72 }
+        ? { right: '100%', top: tabTop }
         : { bottom: '100%', right: 8 };
 
   // Resize handle on the inner edge (only while docked).

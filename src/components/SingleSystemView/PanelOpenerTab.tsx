@@ -36,13 +36,19 @@ export function PanelOpenerTab({
   labels,
 }: PanelOpenerTabProps) {
   const vertical = edge === 'left' || edge === 'right';
-  const rounded =
-    edge === 'left' ? 'rounded-r' : edge === 'right' ? 'rounded-l' : 'rounded-t';
+  // Omit the border on the panel-facing edge and overlap it by 1px (negative
+  // margin) so the tab reads as part of the panel — no seam between them.
+  const edgeCls =
+    edge === 'left'
+      ? 'border-y border-r rounded-r -ml-px'
+      : edge === 'right'
+        ? 'border-y border-l rounded-l -mr-px'
+        : 'border-x border-t rounded-t -mb-px';
 
   const box = [
-    'flex items-center justify-center border border-border bg-panel text-text-secondary shadow-sm select-none',
+    'flex items-center justify-center border-border bg-panel text-text-secondary select-none',
     vertical ? 'flex-col gap-1 w-7 py-2' : 'flex-row gap-1 h-7 px-2',
-    rounded,
+    edgeCls,
   ].join(' ');
 
   if (!reveal.isOpen) {
