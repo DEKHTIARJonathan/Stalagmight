@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
+import { useUIStore } from '../uiStore';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 
@@ -100,5 +101,16 @@ describe('projectStore.createProject', () => {
       }),
       expect.any(Object)
     );
+  });
+
+  // #54: opening a project must reset the Details panel to the project-level view,
+  // i.e. drop any selection carried over from a previous project/session.
+  it('clears a stale selection on open', async () => {
+    useUIStore.setState({ selection: { type: 'section', sectionId: 1 } });
+    expect(useUIStore.getState().selection).not.toBeNull();
+
+    await useProjectStore.getState().createProject('Fresh Cave');
+
+    expect(useUIStore.getState().selection).toBeNull();
   });
 });

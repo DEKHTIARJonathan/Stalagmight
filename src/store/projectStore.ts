@@ -674,6 +674,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Apply display settings to UI store (merge, don't overwrite)
         useUIStore.getState().applyDisplaySettings(result.displaySettings);
         useUIStore.getState().triggerFitToBounds();
+        // Reset the Details panel to the project-level view on open (#54): a
+        // stale shot/station/section selection from a previous project/session
+        // must not carry over.
+        useUIStore.getState().clearSelection();
         const tViewStart = performance.now();
         useUIStore.getState().setView('single');
         const tViewDone = performance.now();
@@ -849,6 +853,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
       // Apply display settings from backend (defaults for new project)
       useUIStore.getState().applyDisplaySettings(result.displaySettings);
+      // Reset the Details panel to the project-level view on open (#54).
+      useUIStore.getState().clearSelection();
       useUIStore.getState().setView('single');
       await get().loadRecentProjects();
       get().resetLoading();
