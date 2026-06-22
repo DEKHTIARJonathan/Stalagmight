@@ -211,6 +211,13 @@ line*, **also** show the asymmetric gas-balanced reach (further in), and let the
 **this is a risk she calls herself.** Never hard-block penetration past thirds; label it, don't
 forbid it. (Reinforces §6: planning aid, not authority.)
 
+**Feature — "push headroom" (Nico wants this; handle with care per §6).** Because the tool
+knows the real depth/distance profile *and* the slow-in/fast-out speeds, it can show how much
+further a given total-thirds budget actually reaches vs the strict-thirds turn point — the calc
+surveyors otherwise fudge in their heads. High value, but it is the single most
+**over-trust-prone** number in the app; its presentation is governed by the automation-bias
+rule in §6.
+
 ---
 
 ## 6. ⚠ Safety posture (this tool informs life-support decisions)
@@ -234,6 +241,18 @@ first-class constraint, not a footnote.
   *under*-penetrate, so show the thirds line as a reference and let the diver knowingly push
   past it — never hard-block. Reserve invariant = **total thirds across all cylinders**, not
   per-tank.
+- **⚠ Automation bias — the headline UX-safety risk (Nico).** People put outsized trust in
+  computer numbers, so the §5.2 "push headroom" is the most dangerous output we can show: a
+  diver may read a *calculation* as *permission* and push past their training. Therefore:
+  **(1)** strict thirds is the **default and visual primary**; extended reach is secondary and
+  explicitly opted-into, never the headline. **(2)** Frame it as "what the gas math permits
+  under these assumptions," **never** a recommended/target turn — no "you-could-go-further"
+  copy, no green "safe" coloring of the aggressive zone, no gamifying max penetration.
+  **(3)** Surface the **fragile assumption**: the extra reach exists only if the fast exit
+  actually happens — an entanglement, lost line, buddy problem, or failed scooter on the way
+  out erases it and the gas you already spent penetrating is gone. **(4)** Keep the
+  conservative choice the path of least resistance; we don't normalize deviation from
+  commonly-accepted practice.
 
 ---
 
