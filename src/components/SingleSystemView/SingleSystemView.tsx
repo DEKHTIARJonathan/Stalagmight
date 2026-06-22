@@ -50,16 +50,12 @@ export default function SingleSystemView() {
 
   const isDirty = useProjectStore((s) => s.isDirty);
   const autoSave = useAutoSave();
-  // Pastel wash in the status bar's bottom-right corner — green when saved, yellow
-  // while there are pending/unsaved changes. Spans the full bar height and fades
-  // right→left across ~18% of its width (none while saving or on error).
-  const statusBarGradient = (() => {
-    const saved = autoSave.status === 'saved' || (autoSave.status === 'idle' && !isDirty);
-    const pending = autoSave.status === 'pending' || (autoSave.status === 'idle' && isDirty);
-    if (saved) return 'linear-gradient(to left, rgba(134, 239, 172, 0.30), transparent 18%)';
-    if (pending) return 'linear-gradient(to left, rgba(253, 224, 71, 0.30), transparent 18%)';
-    return undefined;
-  })();
+  // Red wash in the status bar's bottom-right corner only when a save failed —
+  // spans the full bar height and fades right→left across ~18% of its width.
+  const statusBarGradient =
+    autoSave.status === 'error'
+      ? 'linear-gradient(to left, rgba(248, 113, 113, 0.30), transparent 18%)'
+      : undefined;
   const placementModeActive = useUIStore((s) => s.placementMode !== null);
 
   const handleSaveProject = useCallback(async () => {
