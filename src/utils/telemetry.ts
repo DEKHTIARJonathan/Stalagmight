@@ -215,6 +215,17 @@ export function withTrackingSuppressed(fn: () => void): void {
   try { fn(); } finally { _silent = false; }
 }
 
+/**
+ * Whether tracking is currently suppressed (inside a `withTrackingSuppressed`
+ * callback). Used by side effects that must be skipped for programmatic UI
+ * changes — e.g. onboarding toggles panels transiently and must NOT persist that
+ * temporary layout to the user's config (savePanelLayout reads this). The
+ * synchronous prefix of any side effect started inside the callback observes it.
+ */
+export function isTrackingSuppressed(): boolean {
+  return _silent;
+}
+
 /** Increment project sequence and force-flush pending events from previous project. */
 export async function advanceProjectSeq(): Promise<void> {
   flushDwell();

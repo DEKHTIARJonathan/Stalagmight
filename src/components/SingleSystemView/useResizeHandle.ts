@@ -35,7 +35,13 @@ export function useResizeHandle({
   onResizeEnd,
   onResizeSettled,
 }: UseResizeHandleOpts) {
+  // `isResizing` state drives rendering (suspend transitions / resize highlight),
+  // but the pointer handlers gate on a REF: setState is async, so the first
+  // pointermove after pointerdown would otherwise read the stale `false` and be
+  // dropped — losing the first frame and, for a one-move flick-drag, never
+  // persisting the size (onResizeEnd is skipped when movedRef stayed false).
   const [isResizing, setIsResizing] = useState(false);
+  const isResizingRef = useRef(false);
   const sizeRef = useRef(0);
   // Guard against a press-release with no movement persisting a bogus size 0.
   const movedRef = useRef(false);
@@ -44,12 +50,13 @@ export function useResizeHandle({
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     movedRef.current = false;
+    isResizingRef.current = true;
     setIsResizing(true);
   }, []);
 
   const onPointerMove = useCallback(
     (e: PointerEvent) => {
-      if (!isResizing || !measureRef.current) return;
+      if (!isResizingRef.current || !measureRef.current) return;
       const rect = measureRef.current.getBoundingClientRect();
       let next: number;
       if (direction === 'horizontal') {
@@ -62,22 +69,22 @@ export function useResizeHandle({
       sizeRef.current = next;
       onResize(next);
     },
-    [isResizing, direction, handlePosition, minSize, maxSize, measureRef, onResize],
+    [direction, handlePosition, minSize, maxSize, measureRef, onResize],
   );
 
   const onPointerUp = useCallback(
     (e: PointerEvent) => {
+      if (!isResizingRef.current) return;
+      isResizingRef.current = false;
       // Only persist when an actual drag occurred; clamp defensively.
-      if (isResizing && movedRef.current) {
+      if (movedRef.current) {
         onResizeEnd?.(Math.max(minSize, Math.min(maxSize, sizeRef.current)));
       }
-      if (isResizing) {
-        onResizeSettled?.({ clientX: e.clientX, clientY: e.clientY });
-      }
+      onResizeSettled?.({ clientX: e.clientX, clientY: e.clientY });
       movedRef.current = false;
       setIsResizing(false);
     },
-    [isResizing, onResizeEnd, onResizeSettled, minSize, maxSize],
+    [onResizeEnd, onResizeSettled, minSize, maxSize],
   );
 
   return {

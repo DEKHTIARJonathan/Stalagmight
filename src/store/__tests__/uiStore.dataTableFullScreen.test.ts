@@ -18,6 +18,7 @@ describe('uiStore data-table fullscreen', () => {
       dataTableFullScreen: false,
       rawTableSelection: null,
       dataTableOpen: false,
+      dataTableMode: 'pin',
       focusedSectionId: null,
     });
   });
@@ -35,14 +36,37 @@ describe('uiStore data-table fullscreen', () => {
     expect(useUIStore.getState().dataTableOpen).toBe(true);
   });
 
-  it('exitDataTableFullScreen leaves the table open and clears the raw selection', () => {
+  it('exitDataTableFullScreen restores the prior (closed) state and clears the raw selection', () => {
+    // Entered from closed (beforeEach default): exit restores it to closed
+    // rather than stranding the table open.
     useUIStore.getState().enterDataTableFullScreen();
     useUIStore.getState().setRawTableSelection('shots');
     useUIStore.getState().exitDataTableFullScreen();
     const s = useUIStore.getState();
     expect(s.dataTableFullScreen).toBe(false);
     expect(s.rawTableSelection).toBeNull();
+    expect(s.dataTableOpen).toBe(false);
+  });
+
+  it('exitDataTableFullScreen restores a hover-mode table instead of leaving it pinned open', () => {
+    useUIStore.setState({ dataTableOpen: false, dataTableMode: 'hover' });
+    useUIStore.getState().enterDataTableFullScreen();
+    // Fullscreen forces the table open + pinned while active.
+    expect(useUIStore.getState().dataTableOpen).toBe(true);
+    expect(useUIStore.getState().dataTableMode).toBe('pin');
+    useUIStore.getState().exitDataTableFullScreen();
+    const s = useUIStore.getState();
+    expect(s.dataTableOpen).toBe(false);
+    expect(s.dataTableMode).toBe('hover');
+  });
+
+  it('exitDataTableFullScreen keeps a table that was pinned-open before', () => {
+    useUIStore.setState({ dataTableOpen: true, dataTableMode: 'pin' });
+    useUIStore.getState().enterDataTableFullScreen();
+    useUIStore.getState().exitDataTableFullScreen();
+    const s = useUIStore.getState();
     expect(s.dataTableOpen).toBe(true);
+    expect(s.dataTableMode).toBe('pin');
   });
 
   it('exitDataTableFullScreen is a no-op when not fullscreen', () => {

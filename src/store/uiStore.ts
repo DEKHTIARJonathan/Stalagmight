@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
-import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackPanelMode, trackSelect, trackSelectAdd, clearProjectActionSource } from '../utils/telemetry';
+import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackPanelMode, trackSelect, trackSelectAdd, clearProjectActionSource, isTrackingSuppressed } from '../utils/telemetry';
 import type { Coordinates, DistanceField, PathShot, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 
 export interface CommentTarget {
@@ -499,6 +499,16 @@ let focusLayoutSnapshot:
     }
   | null = null;
 
+/**
+ * The data table's open/mode captured when entering fullscreen, restored on exit.
+ * Module-level bookkeeping (the UI never reads it). Fullscreen forces the table
+ * open+pinned; without this, exiting would strand a hover-mode or closed table
+ * as pinned-open.
+ */
+let fullScreenTableSnapshot:
+  | { dataTableOpen: boolean; dataTableMode: PanelMode }
+  | null = null;
+
 export const useUIStore = create<UIStore>((set) => ({
   // View state
   view: 'global',
@@ -775,6 +785,11 @@ export const useUIStore = create<UIStore>((set) => ({
     }
   },
   savePanelLayout: async () => {
+    // Skip persistence for programmatic panel changes (e.g. onboarding toggles
+    // panels transiently via withTrackingSuppressed): the user's saved layout
+    // must not be overwritten by a temporary onboarding-driven open/close. The
+    // toggles call this synchronously, so the suppression flag is still set here.
+    if (isTrackingSuppressed()) return;
     const s = useUIStore.getState();
     const fields = {
       sectionsPanelOpen: s.sectionsPanelOpen,
@@ -798,15 +813,27 @@ export const useUIStore = create<UIStore>((set) => ({
   dataTableFullScreen: false,
   rawTableSelection: null,
   enterDataTableFullScreen: () => {
+    const s = useUIStore.getState();
     // The overlay grows out of the docked table, so the table must be open and
     // pinned (fullscreen is a deliberate, persistent state, not a hover peek).
+    // Snapshot the table's prior open/mode on FIRST entry so exit can restore it
+    // — otherwise entering fullscreen from a hover-revealed (or closed) table
+    // would leave it stuck pinned-open afterward, silently losing the user's
+    // hover/closed preference.
+    if (!s.dataTableFullScreen) {
+      fullScreenTableSnapshot = { dataTableOpen: s.dataTableOpen, dataTableMode: s.dataTableMode };
+    }
     set({ dataTableFullScreen: true, dataTableOpen: true, dataTableMode: 'pin' });
   },
   exitDataTableFullScreen: () => {
     if (!useUIStore.getState().dataTableFullScreen) return;
+    // Restore the pre-fullscreen open/mode captured on entry. These are transient
+    // (fullscreen forces them) and never persisted, so no savePanelLayout call.
+    const snap = fullScreenTableSnapshot;
+    fullScreenTableSnapshot = null;
     // Leaving fullscreen also leaves the raw-data view: the picker that could
     // switch back to Sections only exists in the fullscreen toolbar.
-    set({ dataTableFullScreen: false, rawTableSelection: null });
+    set({ dataTableFullScreen: false, rawTableSelection: null, ...(snap ?? {}) });
   },
   setRawTableSelection: (rawTableSelection) => set({ rawTableSelection }),
 

@@ -221,13 +221,35 @@ export function Dock({
         setOpenerHover(false);
         if (!isResizing) reveal.onRegionLeave();
       }}
+      // Focus returning to an already-open floating panel (e.g. tabbing back in
+      // within the close grace) cancels the pending close — mirrors the pointer
+      // onRegionEnter. Guarded by isFloatingOpen so merely tab-focusing a CLOSED
+      // panel's opener tab never auto-reveals it (only an explicit click does).
+      onFocus={() => {
+        if (reveal.isFloatingOpen) reveal.onRegionEnter();
+      }}
+      // Keyboard close: a hover panel opened via the keyboard (the opener tab is a
+      // real button, so Enter/Space reveals it) gets no mouseleave to trigger the
+      // grace close. When focus leaves the whole region — and the pointer isn't
+      // over it — schedule the close so it can't stay floating open forever.
+      onBlur={(e) => {
+        const next = e.relatedTarget;
+        const stayingInRegion = next instanceof Node && outerRef.current?.contains(next);
+        if (reveal.isFloatingOpen && !openerHover && !stayingInRegion) {
+          reveal.onRegionLeave();
+        }
+      }}
     >
       {/* Clip box = the visible panel body; collapses to the opener bar when closed.
           The accessible opener is the real <button> in PanelOpenerTab; this bar is
           only a pointer convenience, so it is not a focusable/announced control. */}
+      {/* Background must be a SINGLE utility: applying `bg-panel` plus a hover
+          `bg-background-80` lets bg-panel win (same-layer conflict), so the bar
+          never highlighted. Pick one (mirrors the tab's exclusive ternary) so the
+          closed opener bar + tab highlight together. */}
       <div
         ref={clipRef}
-        className={`absolute inset-0 overflow-hidden bg-panel ${borderCls} ${resizeActive ? 'border-accent' : 'border-border'} transition-colors ${reveal.isFloatingOpen ? 'shadow-xl' : ''} ${!open ? `cursor-pointer ${openerHover ? 'bg-background-80' : ''}` : ''}`}
+        className={`absolute inset-0 overflow-hidden ${!open && openerHover ? 'bg-background-80' : 'bg-panel'} ${borderCls} ${resizeActive ? 'border-accent' : 'border-border'} transition-colors ${reveal.isFloatingOpen ? 'shadow-xl' : ''} ${!open ? 'cursor-pointer' : ''}`}
         onClick={!open ? reveal.openClick : undefined}
         data-testid={`${testId}-panel-bar`}
       >
@@ -281,7 +303,11 @@ export function Dock({
   // Portal mode (overlayContainer prop passed, even if momentarily null): render
   // into the container once the ref resolves, never inline — an inline first
   // paint would position against the wrong ancestor and then remount the whole
-  // overlay (incl. the DataTable) when it reparents. Inline mode (prop omitted)
+  // overlay (incl. the DataTable) when it reparents. The parent captures the
+  // container via a callback ref in the commit phase; React flushes that setState
+  // synchronously before the browser paints, so the container is non-null on the
+  // first paint: the overlay attaches with no missing-content frame and the
+  // DataTable mounts exactly once (into the portal). Inline mode (prop omitted)
   // renders the overlay in place, as the side Docks do.
   const portalMode = overlayContainer !== undefined;
   const overlayNode = portalMode
