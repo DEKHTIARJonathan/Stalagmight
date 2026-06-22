@@ -1212,6 +1212,7 @@ export default function DmpNewImportDialog({
   // Store selectors
   const importSections = useProjectStore((s) => s.importSections);
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
+  const markDirty = useProjectStore((s) => s.markDirty);
   const config = useProjectStore((s) => s.config);
   const updateConfig = useProjectStore((s) => s.updateConfig);
 
@@ -2190,6 +2191,10 @@ export default function DmpNewImportDialog({
           }
 
           await refreshProjectState();
+          // Imports bypass executeCommand, so mark dirty ourselves — the
+          // close-guard then protects these in-memory sections until the
+          // terminal save (#110).
+          markDirty();
 
           // Build DMP index -> section_id mapping for late import.
           // Use backend response ordering directly; it matches submitted configs.
@@ -2237,7 +2242,7 @@ export default function DmpNewImportDialog({
       transitionToPlacingInFlightRef.current = false;
       suggestionActionInFlightRef.current = false;
     }
-  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState]);
+  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState, markDirty]);
 
   // On mount: import zero datum section and fire suggest_all_import_placements
   useEffect(() => {
@@ -2425,6 +2430,7 @@ export default function DmpNewImportDialog({
             }
 
             await refreshProjectState();
+            markDirty(); // #110: close-guard the un-finalized sections
 
             for (let i = 0; i < segmentDmpIndices.length; i++) {
               const sectionId = result.section_ids[i];
@@ -2514,6 +2520,7 @@ export default function DmpNewImportDialog({
           }
 
           await refreshProjectState();
+          markDirty(); // #110: close-guard the un-finalized sections
           existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
             existingShotUpdatesRef.current,
             emittedSet,
@@ -3333,6 +3340,7 @@ export default function DmpNewImportDialog({
       }
 
       await refreshProjectState();
+      markDirty(); // #110: close-guard the un-finalized sections
 
       for (let i = 0; i < segmentDmpIndices.length; i++) {
         const sectionId = result.section_ids[i];
@@ -3347,7 +3355,7 @@ export default function DmpNewImportDialog({
 
       return true;
     },
-    [buildBatchImport, dmpFile, refreshProjectState, selectionConfig, zeroDatumConfig?.sectionIndex],
+    [buildBatchImport, dmpFile, markDirty, refreshProjectState, selectionConfig, zeroDatumConfig?.sectionIndex],
   );
 
   // Manual map placement for a segment
