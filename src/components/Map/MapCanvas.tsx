@@ -780,7 +780,7 @@ export default function MapCanvas() {
             s.station_ref.station_index === data.stationRef!.station_index,
         );
         if (st) {
-          const mc = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin) as [number, number];
+          const mc = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin);
           startLng = mc[0];
           startLat = mc[1];
         }
@@ -1128,7 +1128,6 @@ export default function MapCanvas() {
 
       // Station drag preview — translate station circles/labels + rebuild shot geometries
       if (moveDrag.type === 'station' && surveyLayerRef.current) {
-
         // Snap-to-station detection during station drag
         const snapThreshold = config?.map.snap.threshold ?? 10;
         if (dragOriginStationRef.current && snapThreshold > 0) {
@@ -1363,6 +1362,7 @@ export default function MapCanvas() {
       setMoveDrag(null);
       dragConnectedSectionIdsRef.current = new Set();
       moveDragLngLatRef.current = null;
+      lastCursorClientRef.current = null;
       if (snapTarget) setSnappedStation(null);
       return;
     }
@@ -1408,6 +1408,7 @@ export default function MapCanvas() {
             });
             dragConnectedSectionIdsRef.current = new Set();
             moveDragLngLatRef.current = null;
+            lastCursorClientRef.current = null;
             setMoveDrag(null);
           },
           onCancel: () => {
@@ -1467,6 +1468,7 @@ export default function MapCanvas() {
             });
             surveyLayerRef.current?.commitDragPreview();
             moveDragLngLatRef.current = null;
+            lastCursorClientRef.current = null;
             setMoveDrag(null);
           },
           onCancel: () => {
@@ -1491,6 +1493,7 @@ export default function MapCanvas() {
     // Read final position from ref (updated imperatively during drag)
     const endLngLat = moveDragLngLatRef.current ?? moveDrag.currentLngLat;
     moveDragLngLatRef.current = null;
+    lastCursorClientRef.current = null;
 
     // Convert drag start/end from map lng/lat to meters, then compute delta
     const startMeters = mapCoordsToMeters(moveDrag.startLngLat.lng, moveDrag.startLngLat.lat, gpsOrigin);
@@ -2306,6 +2309,7 @@ export default function MapCanvas() {
         stationDragColocatedRefsRef.current = [];
         dragConnectedSectionIdsRef.current = new Set();
         moveDragLngLatRef.current = null;
+        lastCursorClientRef.current = null;
         dragSnapRef.current = null;
         segmentDragTokenRef.current++;
         setSnappedStation(null);
