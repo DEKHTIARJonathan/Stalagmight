@@ -1436,8 +1436,19 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
     return (
       <div className="h-full bg-panel overflow-auto">
       {/* `bare`: no surrounding card border — the panel itself is the container.
-          The title's border-b is the "Project stats / PROJECT" divider line. */}
-      <Panel bare title={t('detailPanel.projectStats.title')}>
+          The title's border-b is the "Project stats / PROJECT" divider line.
+          The invisible button-sized placeholder matches the entity-detail headers
+          (which carry the center-on-map button), so the title divider sits at the
+          same y in every Details state and the opener tab always aligns to it. */}
+      <Panel
+        bare
+        title={t('detailPanel.projectStats.title')}
+        headerActions={
+          <button type="button" tabIndex={-1} aria-hidden="true" className="p-1 invisible">
+            <svg className="w-4 h-4" viewBox="0 0 24 24" />
+          </button>
+        }
+      >
         <div className="space-y-4">
           {/* Project name + file path (#51: relocated from the toolbar center). */}
           <div className="space-y-1">
