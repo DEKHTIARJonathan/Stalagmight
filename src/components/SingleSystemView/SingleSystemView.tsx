@@ -445,6 +445,9 @@ export default function SingleSystemView() {
             closeArrow={<ChevronDownIcon size={14} />}
             testId="data"
             tabLabels={tabLabels(panelName.data)}
+            // Keep the Data tab clear of the Details tab on the right (it can
+            // ride up to the same height when the Data panel is tall).
+            tabInset={40}
             fullscreen={dataTableFullScreen}
           >
             {dataInner}

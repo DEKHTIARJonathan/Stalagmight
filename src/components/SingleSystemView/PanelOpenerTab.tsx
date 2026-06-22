@@ -19,6 +19,11 @@ interface PanelOpenerTabProps {
   /** While the panel is being resized, tint the tab border with the accent so
    *  the resize highlight visually wraps around the tab instead of under it. */
   resizing?: boolean;
+  /** Show the open-state controls while the panel is visually present (open OR
+   *  sliding out), and only fall back to the opener label/arrow once fully
+   *  minified — avoids the tab flickering its contents mid-transition. Defaults
+   *  to `reveal.isOpen` when omitted. */
+  visuallyOpen?: boolean;
 }
 
 /**
@@ -38,7 +43,9 @@ export function PanelOpenerTab({
   testId,
   labels,
   resizing = false,
+  visuallyOpen,
 }: PanelOpenerTabProps) {
+  const open = visuallyOpen ?? reveal.isOpen;
   const vertical = edge === 'left' || edge === 'right';
   // Omit the border on the panel-facing edge and overlap it by 1px (negative
   // margin) so the tab reads as part of the panel — no seam between them.
@@ -55,7 +62,7 @@ export function PanelOpenerTab({
     edgeCls,
   ].join(' ');
 
-  if (!reveal.isOpen) {
+  if (!open) {
     return (
       <div className={box}>
         <button
@@ -82,32 +89,48 @@ export function PanelOpenerTab({
 
   const pinned = reveal.isPinnedOpen;
 
+  const pinButton = (
+    <button
+      type="button"
+      className={`flex items-center justify-center transition-colors ${pinned ? 'text-accent' : 'hover:text-text-primary'}`}
+      onClick={pinned ? reveal.unpin : reveal.pin}
+      title={pinned ? labels.unpin : labels.pin}
+      aria-label={pinned ? labels.unpin : labels.pin}
+      aria-pressed={pinned}
+      data-testid={`panel-pin-${testId}`}
+    >
+      <PinIcon size={16} />
+    </button>
+  );
+
+  const closeButton = pinned ? (
+    <button
+      type="button"
+      className="flex items-center justify-center transition-colors hover:text-text-primary"
+      onClick={reveal.close}
+      title={labels.close}
+      aria-label={labels.close}
+      data-testid={`panel-close-${testId}`}
+    >
+      <span aria-hidden className="flex items-center justify-center">
+        {closeArrow}
+      </span>
+    </button>
+  ) : null;
+
+  // The bottom (Data) tab puts the arrow before the pin; side tabs keep pin first.
   return (
     <div className={box}>
-      <button
-        type="button"
-        className={`flex items-center justify-center transition-colors ${pinned ? 'text-accent' : 'hover:text-text-primary'}`}
-        onClick={pinned ? reveal.unpin : reveal.pin}
-        title={pinned ? labels.unpin : labels.pin}
-        aria-label={pinned ? labels.unpin : labels.pin}
-        aria-pressed={pinned}
-        data-testid={`panel-pin-${testId}`}
-      >
-        <PinIcon size={16} />
-      </button>
-      {pinned && (
-        <button
-          type="button"
-          className="flex items-center justify-center transition-colors hover:text-text-primary"
-          onClick={reveal.close}
-          title={labels.close}
-          aria-label={labels.close}
-          data-testid={`panel-close-${testId}`}
-        >
-          <span aria-hidden className="flex items-center justify-center">
-            {closeArrow}
-          </span>
-        </button>
+      {edge === 'bottom' ? (
+        <>
+          {closeButton}
+          {pinButton}
+        </>
+      ) : (
+        <>
+          {pinButton}
+          {closeButton}
+        </>
       )}
     </div>
   );

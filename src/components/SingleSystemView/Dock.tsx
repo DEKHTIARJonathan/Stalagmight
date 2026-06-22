@@ -30,6 +30,9 @@ interface DockProps {
   /** Top offset (px) for the side tab so it aligns with the panel's header /
    *  content divider. Ignored for the bottom edge (the tab is bottom-anchored). */
   tabTop?: number;
+  /** Right inset (px) for the bottom-edge tab, so it can be moved clear of the
+   *  Details tab on the right. Ignored for left/right edges. */
+  tabInset?: number;
   /** Data table only: render content as a fixed fullscreen overlay (no reparent). */
   fullscreen?: boolean;
 }
@@ -57,6 +60,7 @@ export function Dock({
   testId,
   tabLabels,
   tabTop = 72,
+  tabInset = 8,
   fullscreen = false,
 }: DockProps) {
   const vertical = edge === 'left' || edge === 'right';
@@ -142,7 +146,7 @@ export function Dock({
       ? { left: '100%', top: tabTop }
       : edge === 'right'
         ? { right: '100%', top: tabTop }
-        : { bottom: '100%', right: 8 };
+        : { bottom: '100%', right: tabInset };
 
   // Resize handle on the inner edge (only while docked).
   const handleClass =
@@ -211,6 +215,7 @@ export function Dock({
             testId={testId}
             labels={tabLabels}
             resizing={resizeActive}
+            visuallyOpen={mounted}
           />
         </div>
       )}
