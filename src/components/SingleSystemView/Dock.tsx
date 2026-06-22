@@ -33,6 +33,11 @@ interface DockProps {
   /** Right inset (px) for the bottom-edge tab, so it can be moved clear of the
    *  Details tab on the right. Ignored for left/right edges. */
   tabInset?: number;
+  /** Side panels (left/right) only: while this panel is MINIMIZED (showing the
+   *  opener bar), raise the bar's bottom by this many px so it doesn't run
+   *  full-height alongside an open Data panel. The reflow spacer is unaffected,
+   *  so the Data panel still sits between the two side panels. */
+  closedBottomInset?: number;
   /** Data table only: render content as a fixed fullscreen overlay (no reparent). */
   fullscreen?: boolean;
 }
@@ -61,6 +66,7 @@ export function Dock({
   tabLabels,
   tabTop = 72,
   tabInset = 8,
+  closedBottomInset = 0,
   fullscreen = false,
 }: DockProps) {
   const vertical = edge === 'left' || edge === 'right';
@@ -114,7 +120,9 @@ export function Dock({
   const spacerSize = reveal.isPinnedOpen ? size : BAR;
   // Inline transition (robust vs a Tailwind arbitrary value) — suspended while
   // dragging so the panel edge + spacer track the pointer 1:1.
-  const sizeTransition = isResizing ? 'none' : 'width 150ms ease-out, height 150ms ease-out';
+  const sizeTransition = isResizing
+    ? 'none'
+    : 'width 150ms ease-out, height 150ms ease-out, bottom 150ms ease-out';
 
   // ── Reflow spacer (flow): only this pushes the map. ──
   const spacer = (
@@ -129,9 +137,12 @@ export function Dock({
   );
 
   // ── Overlay wrapper (absolute, overflow-visible so the tab can escape). ──
+  // While a side panel is minimized, raise the bar's bottom clear of an open
+  // Data panel (the reflow spacer is untouched, so layout is otherwise the same).
+  const barBottom = !open ? closedBottomInset : 0;
   const outerStyle: CSSProperties = {
-    ...(edge === 'left' ? { top: 0, bottom: 0, left: 0, width: sizeNow } : {}),
-    ...(edge === 'right' ? { top: 0, bottom: 0, right: 0, width: sizeNow } : {}),
+    ...(edge === 'left' ? { top: 0, bottom: barBottom, left: 0, width: sizeNow } : {}),
+    ...(edge === 'right' ? { top: 0, bottom: barBottom, right: 0, width: sizeNow } : {}),
     ...(edge === 'bottom' ? { left: 0, right: 0, bottom: 0, height: sizeNow } : {}),
   };
   const borderCls = edge === 'left' ? 'border-r' : edge === 'right' ? 'border-l' : 'border-t';

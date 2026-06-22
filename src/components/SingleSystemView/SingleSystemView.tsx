@@ -412,6 +412,9 @@ export default function SingleSystemView() {
           tabLabels={tabLabels(panelName.sections)}
           // Just below the top-left "Fit to view" button (bottom ≈ 32px).
           tabTop={40}
+          // When the Data panel is open, compress this bar (if minimized) so it
+          // stops at the Data panel's top instead of running alongside it.
+          closedBottomInset={dataReveal.isPinnedOpen ? dataTableHeight : 0}
         >
           {sectionsContent}
         </Dock>
@@ -470,6 +473,7 @@ export default function SingleSystemView() {
           testId="detail"
           tabLabels={tabLabels(panelName.detail)}
           tabTop={79}
+          closedBottomInset={dataReveal.isPinnedOpen ? dataTableHeight : 0}
         >
           {detailContent}
         </Dock>
