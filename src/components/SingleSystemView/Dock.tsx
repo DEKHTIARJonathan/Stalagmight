@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { PanelOpenerTab, type PanelEdge } from './PanelOpenerTab';
 import { useResizeHandle } from './useResizeHandle';
 import type { PanelReveal } from './usePanelReveal';
 
 /** Width/height of the always-present closed-state opener bar (px). */
-const BAR = 12;
+export const BAR = 12;
 /** Slide/reflow duration; keep in sync with the Tailwind duration class. */
 const SLIDE_MS = 150;
 /** Generous grace after a hover-mode resize so the user can move the cursor
@@ -40,6 +41,16 @@ interface DockProps {
   closedBottomInset?: number;
   /** Data table only: render content as a fixed fullscreen overlay (no reparent). */
   fullscreen?: boolean;
+  /** Bottom edge only: portal the absolute overlay into this element instead of
+   *  rendering it inline, so it positions relative to that ancestor (lets the
+   *  Data panel span the full Main width past the center column's side insets).
+   *  The reflow spacer still renders in place. */
+  overlayContainer?: HTMLElement | null;
+  /** Bottom edge only: left/right offsets (px) for the overlay in the portal
+   *  container's frame — so the Data panel stops at open side panels but fills
+   *  the gap left by minimized ones. Default 0 (full width). */
+  overlayLeft?: number;
+  overlayRight?: number;
 }
 
 /**
@@ -68,6 +79,9 @@ export function Dock({
   tabInset = 8,
   closedBottomInset = 0,
   fullscreen = false,
+  overlayContainer,
+  overlayLeft = 0,
+  overlayRight = 0,
 }: DockProps) {
   const vertical = edge === 'left' || edge === 'right';
   const clipRef = useRef<HTMLDivElement>(null);
@@ -122,7 +136,7 @@ export function Dock({
   // dragging so the panel edge + spacer track the pointer 1:1.
   const sizeTransition = isResizing
     ? 'none'
-    : 'width 150ms ease-out, height 150ms ease-out, bottom 150ms ease-out';
+    : 'width 150ms ease-out, height 150ms ease-out, bottom 150ms ease-out, left 150ms ease-out, right 150ms ease-out';
 
   // ── Reflow spacer (flow): only this pushes the map. ──
   const spacer = (
@@ -143,7 +157,7 @@ export function Dock({
   const outerStyle: CSSProperties = {
     ...(edge === 'left' ? { top: 0, bottom: barBottom, left: 0, width: sizeNow } : {}),
     ...(edge === 'right' ? { top: 0, bottom: barBottom, right: 0, width: sizeNow } : {}),
-    ...(edge === 'bottom' ? { left: 0, right: 0, bottom: 0, height: sizeNow } : {}),
+    ...(edge === 'bottom' ? { left: overlayLeft, right: overlayRight, bottom: 0, height: sizeNow } : {}),
   };
   const borderCls = edge === 'left' ? 'border-r' : edge === 'right' ? 'border-l' : 'border-t';
   const innerStyle: CSSProperties = vertical
@@ -236,7 +250,7 @@ export function Dock({
   return (
     <>
       {spacer}
-      {overlay}
+      {overlayContainer ? createPortal(overlay, overlayContainer) : overlay}
     </>
   );
 }

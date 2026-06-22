@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
@@ -16,7 +16,7 @@ import MapCanvas from '../Map/MapCanvas';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { usePanelReveal } from './usePanelReveal';
-import { Dock } from './Dock';
+import { Dock, BAR } from './Dock';
 import { open } from '@tauri-apps/plugin-dialog';
 import { dmpGpxOpenFilters } from '../../utils/fileDialogs';
 import { useProjectMenuItems } from './useProjectMenuItems';
@@ -126,6 +126,23 @@ export default function SingleSystemView() {
   const sectionsReveal = usePanelReveal('sections');
   const detailReveal = usePanelReveal('detail');
   const dataReveal = usePanelReveal('data-table');
+
+  // The Data panel's overlay is portaled to this Main element so it can span the
+  // full width (past the center column's side insets). It stops at a pinned-open
+  // side panel's edge; otherwise it fills to the window edge when the Data panel
+  // is open (covering the gap left by a compressed side bar), or sits between the
+  // closed bars (BAR inset) when the Data panel is itself closed.
+  const [mainEl, setMainEl] = useState<HTMLDivElement | null>(null);
+  const dataOverlayLeft = sectionsReveal.isPinnedOpen
+    ? sectionsPanelWidth
+    : dataReveal.isOpen
+      ? 0
+      : BAR;
+  const dataOverlayRight = detailReveal.isPinnedOpen
+    ? detailPanelWidth
+    : dataReveal.isOpen
+      ? 0
+      : BAR;
 
   // #50: name shown in place of the project name while focused on one section.
   // A single lookup drives both existence (the auto-exit effect) and the name.
@@ -395,7 +412,7 @@ export default function SingleSystemView() {
       {/* Main content — the `relative` here is the positioning context for the
           side Docks' overlays + tabs. Each Dock renders a flow spacer (the only
           thing that reflows the map) plus a single absolute panel instance. */}
-      <div className="relative flex-1 flex overflow-hidden">
+      <div ref={setMainEl} className="relative flex-1 flex overflow-hidden">
         {/* Sections (left) */}
         <Dock
           reveal={sectionsReveal}
@@ -454,6 +471,11 @@ export default function SingleSystemView() {
             // ride up to the same height when the Data panel is tall).
             tabInset={40}
             fullscreen={dataTableFullScreen}
+            // Portal the overlay to Main so it can span the full width (the
+            // reflow spacer stays in the center column to push the map up).
+            overlayContainer={mainEl}
+            overlayLeft={dataOverlayLeft}
+            overlayRight={dataOverlayRight}
           >
             {dataInner}
           </Dock>
