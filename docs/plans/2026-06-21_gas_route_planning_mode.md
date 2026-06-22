@@ -138,8 +138,8 @@ Team { divers: Vec<Diver>, cylinders_per_diver: Vec<Vec<Cylinder>>, mode: PlanMo
 
 ### 5.1 Reserve presets & return-leg recalc (Nico's spec — captured verbatim)
 
-Three selectable presets (pressures in **bar**; "turn at 1/N" = turn when 1/N of usable is
-consumed, i.e. reserve the rest):
+Three selectable presets (pressures in **bar**; "turn at 1/N" = turn when 1/N of usable
+gas is consumed):
 
 | Preset | Back gas | Stage(s) |
 |--------|----------|----------|
@@ -147,24 +147,38 @@ consumed, i.e. reserve the rest):
 | **1-stage** *(pushy — advanced only)* | **quarters** | stage 1 → `(½ × start_pressure) − 15` |
 | **2-stage** *(pushy — advanced only)* | **sixths** | **both** stages → `(½ × start_pressure) − 15` |
 
+*Terminology (Nico): **"cave side"** = further in (toward the lead); **"exit side"** = toward
+the entrance.*
+
 **Return-leg recalc** — gas spendable on a "side mission" (a lead poked into on the way out),
-by current position on the exit:
-- **Past the drop point of stage 2:** usable = `(current_backgas − 100) / 2`
-- **Past stage 1, before the stage 2 drop point:** usable = `(current_backgas − 70) / 2`
-- **Past stage 2:** additionally **never more than ⅙ × starting pressure** (hard cap).
+by current position. **Three distinct regions** of the exit path:
+- **Cave side of the stage-2 drop point** (deepest; back gas only, stage 2 not yet re-reached):
+  usable = `(current_backgas − 100) / 2`
+- **Cave side of the stage-1 drop, exit side of the stage-2 drop** (between the two drops):
+  usable = `(current_backgas − 70) / 2`
+- **Cave side of stage 2** *(distinct third region — boundary to confirm)*: additionally
+  **never more than ⅙ × starting pressure** (hard cap).
+
+**Pressure vs volume (Nico):** the engine computes in **volume** (liters — that's what
+RMV×ATA consumes), but **turn points, reserves, and recalc outputs read as PRESSURE per
+cylinder** (`bar = liters / water_volume_l`), because divers watch pressure gauges underwater.
+Volume is the *planning* currency and the only sane way to gas-match dissimilar tanks. So:
+canonical-volume internally, per-cylinder-pressure on every in-dive readout.
 
 **Product gate:** the 1-/2-stage presets are *very pushy* — expose them only behind an
 explicit **advanced-diver acknowledgment**; **All-thirds is the default**. The recalc is a
 distinct compute path (it re-budgets from *current* pressure mid-dive), so model `reserve` as
 a preset enum *plus* a `recalc(position, current_backgas)` function, not a single fraction.
 
-**⚠ Two confirms (I kept your wording exactly — didn't normalize):**
-1. *Direction of "past":* how the three recalc regions partition the exit path — is "past the
-   drop point of stage 2" the **deep side** (stage 2 not yet retrieved, most back gas left) or
-   the **exit side** (stage 2 already picked up)? And do the two stage-2 clauses
-   (`−100`-formula and the `⅙` cap) describe the **same** region, or two?
-2. *Stage value semantics:* is `(½ × start) − 15` the **pressure you breathe the stage down to
-   before dropping it** (turn pressure — my reading), or the **volume you may use**?
+**Resolved (Nico):** "past" = **cave side** (further in); the recalc clauses are **three
+distinct regions**; `(½ × start) − 15` is a **pressure** (the turn pressure you breathe the
+stage down to before dropping).
+
+**⚠ Still to confirm:**
+1. *Region 3 boundary:* "cave side of stage 2" (the ⅙ cap) vs "cave side of the stage-2 drop
+   point" (the −100 region) read as nearly the same place — what separates them, and does the
+   ⅙ cap **stack on top of** a formula or stand alone?
+2. *"turn at 1/N":* confirm thirds/quarters/sixths = "turn when 1/N of usable consumed."
 
 ---
 
@@ -328,8 +342,9 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
 **Still open:**
 4. **Memoization:** confirm "debounce-only" holds on the largest real survey, or add the
    single-slot `AppState` memo (§7.1).
-5. **Recalc semantics (§5.1):** direction of "past" + the stage-value (turn-pressure vs
-   usable-volume) reading — the two confirms flagged inline in §5.1.
+5. **Recalc region 3 + turn gloss (§5.1):** the two remaining inline confirms — the region-3
+   boundary / whether the ⅙ cap stacks, and the "turn at 1/N" reading. *(Direction = cave
+   side, value = pressure, three distinct regions — now resolved.)*
 
 ---
 
