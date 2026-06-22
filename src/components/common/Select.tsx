@@ -578,9 +578,10 @@ export function Select({
           viewBox="0 0 24 24"
           aria-hidden="true"
         >
-          {/* Filled chevron (down) — robust under the page-zoom UI scale */}
-          <rect x="10.55" y="11.4" width="9.899" height="2.2" rx="1.1" transform="rotate(135 15.5 12.5)" />
-          <rect x="3.55" y="11.4" width="9.899" height="2.2" rx="1.1" transform="rotate(-135 8.5 12.5)" />
+          {/* Filled chevron (down) — robust under the page-zoom UI scale. Width
+              includes the round-cap extension (len + weight). */}
+          <rect x="9.45" y="11.4" width="12.1" height="2.2" rx="1.1" transform="rotate(135 15.5 12.5)" />
+          <rect x="2.45" y="11.4" width="12.1" height="2.2" rx="1.1" transform="rotate(-135 8.5 12.5)" />
         </svg>
       </button>
 

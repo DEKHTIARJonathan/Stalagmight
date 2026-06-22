@@ -83,7 +83,10 @@ function Bar({
 }) {
   const cx = (x1 + x2) / 2;
   const cy = (y1 + y2) / 2;
-  const len = Math.hypot(x2 - x1, y2 - y1);
+  // Extend the rect by w (w/2 at each end) so the rounded ends sit *beyond* the
+  // endpoints — matching strokeLinecap="round", which caps half a stroke-width
+  // past each end. Without this the glyph reads noticeably short (arrows/chevrons).
+  const len = Math.hypot(x2 - x1, y2 - y1) + w;
   const angle = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
   return (
     <rect
