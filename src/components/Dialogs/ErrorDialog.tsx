@@ -62,7 +62,7 @@ export default function ErrorDialog() {
   return (
     <DialogWrapper title={title} onClose={handleClose} size="md" data-testid="error-dialog">
       <div className="space-y-4">
-        <p className="text-text-secondary">{message ?? 'An error occurred.'}</p>
+        <p className="text-text-secondary whitespace-pre-wrap">{message ?? 'An error occurred.'}</p>
 
         {stackTrace && (
           <pre
