@@ -8,7 +8,11 @@
  * - `.gpx`              -> GPX import (add to current project, or new project)
  * - `.tml` / `.tmlu`    -> Ariane import (always a new project)
  * - `.mak` / `.dat`     -> Compass import (always a new project)
- * - anything else       -> DMP import (add to current project, or new project)
+ * - `.dmp`              -> DMP import (add to current project, or new project)
+ * - anything else       -> unsupported-file error (NOT silently treated as DMP)
+ *
+ * Importing into an open project while the read-only closure-adjusted view is
+ * active is rejected here, so every import entry point shares that guard.
  *
  * The routing is intentionally shared between the toolbar "Open / Import"
  * button, the "open it from file" hint link, and the Ctrl+I keyboard shortcut
@@ -33,6 +37,20 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
   const lowerPath = path.toLowerCase();
   const store = useProjectStore.getState();
   const ui = useUIStore.getState();
+  const hasProject = !!store.project;
+  const isProjectFile = lowerPath.endsWith('.stalx');
+
+  // Importing into an open project adds sections (a mutation). The closure-
+  // adjusted view (#70) is read-only, so reject an import while it's active.
+  // Centralized here so every caller (toolbar, Ctrl+I, drag-drop) shares it.
+  // Opening a native project (.stalx) is not an import, so it's exempt.
+  if (!isProjectFile && hasProject && ui.geometryMode === 'closureAdjusted') {
+    ui.openDialog('error', {
+      title: 'Import',
+      message: 'Switch to the Measured view to import — the closure-adjusted view is read-only.',
+    });
+    return;
+  }
 
   try {
     if (lowerPath.endsWith('.stalx')) {
@@ -85,8 +103,8 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
         defaultName: extractFilename(path, /\.(mak|dat)$/i) || 'Imported',
         importType: 'compass',
       });
-    } else {
-      // Default: treat as a DMP file.
+    } else if (lowerPath.endsWith('.dmp')) {
+      // mNemo DMP: import into the current project, or seed a new one.
       const dmpFile = await store.importDmp(path);
       if (!dmpFile) return;
       if (store.project) {
@@ -100,6 +118,13 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
           defaultName: extractFilename(path, /\.dmp$/i) || 'Imported',
         });
       }
+    } else {
+      // Unknown/unsupported extension — don't blindly assume DMP (that fed
+      // arbitrary files chosen via an "All Files" filter to the DMP parser).
+      ui.openDialog('error', {
+        title: errorTitle,
+        message: `Unsupported file type: ${extractFilename(path) || path}`,
+      });
     }
   } catch (err) {
     useUIStore.getState().openDialog('error', {

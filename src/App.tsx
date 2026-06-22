@@ -4,8 +4,9 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
-import { invokeIpc, getErrorMessage } from './utils/ipc';
+import { invokeIpc } from './utils/ipc';
 import { extractFilename } from './utils/path';
+import { routeOpenedFile } from './utils/openOrImport';
 import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
 import i18n from './i18n';
@@ -23,7 +24,7 @@ import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfig
 import type { OrphanPlacementSuggestion } from './types/commands';
 
 function App() {
-  const { project, stations, recentProjects, loading, loadConfig, config, isDirty, importDmp, parseTml, parseCompass, parseGpx, setConfig } = useProjectStore();
+  const { project, stations, recentProjects, loading, loadConfig, config, isDirty, setConfig } = useProjectStore();
   const integrityIssues = useProjectStore((s) => s.integrityIssues);
   const integrityDismissed = useProjectStore((s) => s.integrityDismissed);
   const integritySaveBlocked = useProjectStore((s) => s.integritySaveBlocked);
@@ -44,7 +45,6 @@ function App() {
     closeDialog,
     openDialog,
     initPanels,
-    setImportContext,
     triggerFitToBounds,
     toast,
     selectionAnnouncement,
@@ -200,133 +200,16 @@ function App() {
   }, [project, project?.file_path, project?.name, isDirty]);
 
   /**
-   * Handle file drop events for DMP/TML/TMLU file import.
-   * - From home screen (no project): Creates new project, then opens import dialog
-   * - From existing project: Opens import dialog directly
+   * Handle file drop events for importable files (DMP/TML/TMLU/Compass/GPX).
+   * Delegates to the shared open/import router (same as the toolbar Import button
+   * and the Ctrl+I shortcut), which dispatches by extension and applies the
+   * read-only/closure-adjusted and "close the current project first" guards.
+   * The drag listener only forwards importable extensions (never `.stalx`), so
+   * a drop never opens/replaces a project.
    */
   const handleImportFileDrop = useCallback(async (filePath: string) => {
-    const lowerPath = filePath.toLowerCase();
-    const isTml = lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu');
-    const isCompass = lowerPath.endsWith('.mak') || lowerPath.endsWith('.dat');
-    const isGpx = lowerPath.endsWith('.gpx');
-    const currentProject = useProjectStore.getState().project;
-
-    // The closure-adjusted view is read-only: importing into an open project adds
-    // sections (a mutation), so reject a drop onto an open project while it's active.
-    if (currentProject && useUIStore.getState().geometryMode === 'closureAdjusted') {
-      openDialog('error', {
-        title: 'Import',
-        message: 'Switch to the Measured view to import — the closure-adjusted view is read-only.',
-      });
-      return;
-    }
-
-    // TML and Compass are full-survey imports that always create a new project,
-    // so they are only accepted from the home screen.
-    if ((isTml || isCompass) && currentProject) {
-      openDialog('error', {
-        title: 'Import survey',
-        message: 'Close the current project before importing a new survey.',
-      });
-      return;
-    }
-
-    if (isCompass) {
-      try {
-        const compassFile = await parseCompass(filePath);
-        if (!compassFile) return;
-
-        const fileName = extractFilename(filePath, /\.(mak|dat)$/i) || 'Imported';
-        openDialog('new-project-for-import', {
-          compassFile,
-          filePath,
-          defaultName: fileName,
-          importType: 'compass',
-        });
-      } catch (e) {
-        openDialog('error', {
-          title: 'Import Failed',
-          message: getErrorMessage(e, 'Failed to parse Compass file'),
-        });
-      }
-    } else if (isGpx) {
-      try {
-        const gpxFile = await parseGpx(filePath);
-        if (!gpxFile) return;
-
-        if (currentProject) {
-          openDialog('gpx-selection', { gpxFile, filePath });
-        } else {
-          const fileName = extractFilename(filePath, /\.gpx$/i) || 'Imported';
-          openDialog('new-project-for-import', {
-            gpxFile,
-            filePath,
-            defaultName: fileName,
-            importType: 'gpx',
-          });
-        }
-      } catch (e) {
-        openDialog('error', {
-          title: 'Import Failed',
-          message: getErrorMessage(e, 'Failed to parse GPX file'),
-        });
-      }
-    } else if (isTml) {
-      try {
-        const tmlFile = await parseTml(filePath);
-        if (!tmlFile) return;
-
-        const fileName = extractFilename(filePath, /\.tmlu?$/i) || 'Imported';
-        openDialog('new-project-for-import', {
-          tmlFile,
-          filePath,
-          defaultName: fileName,
-          importType: 'tml',
-        });
-      } catch (e) {
-        openDialog('error', {
-          title: 'Import Failed',
-          message: getErrorMessage(e, 'Failed to parse TML file'),
-        });
-      }
-    } else {
-      // DMP file
-      if (currentProject) {
-        setImportContext('existing-project');
-
-        try {
-          const dmpFile = await importDmp(filePath);
-          if (dmpFile) {
-            openDialog('dmp-selection', { dmpFile, filePath });
-          }
-        } catch (e) {
-          openDialog('error', {
-            title: 'Import Failed',
-            message: getErrorMessage(e, 'Failed to parse DMP file'),
-          });
-        }
-      } else {
-        setImportContext('new-project');
-
-        try {
-          const dmpFile = await importDmp(filePath);
-          if (dmpFile) {
-            const fileName = extractFilename(filePath, /\.dmp$/i) || 'Imported';
-            openDialog('new-project-for-import', {
-              dmpFile,
-              filePath,
-              defaultName: fileName,
-            });
-          }
-        } catch (e) {
-          openDialog('error', {
-            title: 'Import Failed',
-            message: getErrorMessage(e, 'Failed to parse DMP file'),
-          });
-        }
-      }
-    }
-  }, [importDmp, parseTml, parseCompass, parseGpx, openDialog, setImportContext]);
+    await routeOpenedFile(filePath, 'Import Failed');
+  }, []);
 
   // Set up drag-drop event listener for importable files (DMP/TML/TMLU/Compass/GPX)
   useEffect(() => {

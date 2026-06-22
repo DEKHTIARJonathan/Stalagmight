@@ -65,16 +65,28 @@ export function gpxOpenFilters() {
 }
 
 /**
- * Filters for the in-project "Import" button: the only formats importable into
- * an already-open project (Ariane/Compass create new projects, so are excluded).
+ * Filters for importing into an already-open project: the only formats that can
+ * be added to one (Ariane/Compass create new projects, so are excluded). No
+ * "All Files" entry — with a project open the import must be DMP or GPX, so an
+ * unrelated file (or a `.stalx` project) can't be picked and mis-routed.
  */
 export function dmpGpxOpenFilters() {
   return [
     { name: 'Survey Files', extensions: [DMP_EXTENSION, GPX_EXTENSION] },
     { name: 'mNemo DMP', extensions: [DMP_EXTENSION] },
     { name: 'GPX Files', extensions: [GPX_EXTENSION] },
-    { name: 'All Files', extensions: ['*'] },
   ];
+}
+
+/**
+ * Import picker filters scoped to context. With a project open, only DMP + GPX
+ * import into it (restricted, no "All Files"). With no project open, any
+ * importable survey format is offered plus "All Files" (so the unified router can
+ * also open a native `.stalx` project picked through it — there is nothing to
+ * replace).
+ */
+export function importFiltersForContext(hasProject: boolean) {
+  return hasProject ? dmpGpxOpenFilters() : importOpenFilters();
 }
 
 export function importOpenFilters() {

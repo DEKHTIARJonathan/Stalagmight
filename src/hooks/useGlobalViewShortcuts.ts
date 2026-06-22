@@ -17,13 +17,13 @@
 
 import { useEffect, useRef, useCallback, type Dispatch, type SetStateAction } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useGlobalViewStore } from '../store/globalViewStore';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { parseKeyEvent, normalizeShortcut } from '../utils/shortcuts';
-import { importOpenFilters, projectOpenFilters } from '../utils/fileDialogs';
+import { importFiltersForContext, projectOpenFilters } from '../utils/fileDialogs';
 import { routeOpenedFile } from '../utils/openOrImport';
+import { quitApp } from '../utils/quit';
 import { setProjectActionSource, clearProjectActionSource } from '../utils/telemetry';
 import { getErrorMessage } from '../utils/ipc';
 import { setSource } from '../utils/telemetry';
@@ -381,9 +381,14 @@ export function useGlobalViewShortcuts({
           e.preventDefault();
           setProjectActionSource('keyboard');
           (async () => {
+            // GlobalView has no project open, so the picker offers every
+            // importable format plus "All Files"; routeOpenedFile dispatches by
+            // extension and, with nothing to replace, may also open a `.stalx`
+            // project chosen through it.
+            const hasProject = !!useProjectStore.getState().project;
             const selected = await open({
               multiple: false,
-              filters: importOpenFilters(),
+              filters: importFiltersForContext(hasProject),
             });
 
             if (!selected || typeof selected !== 'string') {
@@ -391,9 +396,7 @@ export function useGlobalViewShortcuts({
               return;
             }
 
-            // Shared routing with the toolbar "Open / Import" button. The picker
-            // here is import-only (no `.stalx`), so the project branch of
-            // routeOpenedFile never triggers for this shortcut.
+            // Shared routing with the toolbar "Open / Import" button.
             await routeOpenedFile(selected, 'Import Failed');
           })();
           break;
@@ -401,12 +404,7 @@ export function useGlobalViewShortcuts({
 
         case 'quit':
           e.preventDefault();
-          // Requests close; the Rust on_window_event re-emits tauri://close-requested,
-          // which useBeforeUnload handles (confirms on unsaved work, else destroys).
-          // Needs core:window:allow-close in capabilities; log if it's ever denied.
-          getCurrentWindow().close().catch((err) => {
-            console.error('[quit] window.close() failed:', err);
-          });
+          quitApp();
           break;
       }
     },

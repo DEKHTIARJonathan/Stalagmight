@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
@@ -19,6 +19,7 @@ import { usePanelReveal } from './usePanelReveal';
 import { Dock, BAR } from './Dock';
 import { open } from '@tauri-apps/plugin-dialog';
 import { dmpGpxOpenFilters } from '../../utils/fileDialogs';
+import { routeOpenedFile } from '../../utils/openOrImport';
 import { useProjectMenuItems } from './useProjectMenuItems';
 import { setSource, withTrackingSuppressed, setProjectActionSource, clearProjectActionSource } from '../../utils/telemetry';
 import { useTranslation } from 'react-i18next';
@@ -40,8 +41,6 @@ export default function SingleSystemView() {
     project,
     stats,
     handleSaveProject: rawSave,
-    handleImportDmp,
-    handleImportGpx,
     canUndo,
     canRedo,
     undo,
@@ -58,13 +57,14 @@ export default function SingleSystemView() {
     : undefined;
   const placementModeActive = useUIStore((s) => s.placementMode !== null);
 
-  const handleSaveProject = useCallback(async () => {
+  const handleSaveProject = useCallback(async (opts?: { closeAfterSave?: boolean }) => {
     autoSave.cancelPending();
-    return rawSave();
+    return rawSave(opts);
   }, [autoSave, rawSave]);
 
   // Toolbar "Import" button: a single picker for the two formats importable into
-  // an open project (DMP + GPX), routed by extension.
+  // an open project (DMP + GPX, no "All Files" so non-importable types can't be
+  // chosen), routed by extension through the shared open/import router.
   const handleImportDmpOrGpx = useCallback(async () => {
     setProjectActionSource('toolbar');
     const selected = await open({ multiple: false, filters: dmpGpxOpenFilters() });
@@ -72,12 +72,8 @@ export default function SingleSystemView() {
       clearProjectActionSource();
       return;
     }
-    if (selected.toLowerCase().endsWith('.gpx')) {
-      await handleImportGpx(true, selected);
-    } else {
-      await handleImportDmp(true, selected);
-    }
-  }, [handleImportDmp, handleImportGpx]);
+    await routeOpenedFile(selected, 'Import Failed');
+  }, []);
 
   // Hamburger menu items (file/project actions). Built here so it can use the
   // autosave-aware wrapped save.
@@ -360,6 +356,66 @@ export default function SingleSystemView() {
     toggleSectionsPanel,
   ]);
 
+  // Shared panel content — each rendered in exactly ONE place (its Dock), so the
+  // heavy instance is never duplicated/remounted across pin/unpin/hover. Memoized
+  // so a panel-resize re-render (which fires ~60×/s as the store width/height
+  // updates during a drag) doesn't reconcile the heavy DataTable / Sections /
+  // Details subtrees: the Docks receive the SAME element reference and React bails
+  // out of the child render. Dimmed during placement (dim wraps content only,
+  // never the tab/handle).
+  const dimCls = placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : '';
+  const sections = project?.sections;
+  const sectionsContent = useMemo(
+    () =>
+      sections ? (
+        <div className={`h-full ${dimCls}`}>
+          <ErrorBoundary panelName="Sections">
+            <SectionsPanel sections={sections} />
+          </ErrorBoundary>
+        </div>
+      ) : null,
+    [sections, dimCls],
+  );
+  const detailContent = useMemo(
+    () => (
+      <div className={`h-full ${dimCls}`}>
+        <ErrorBoundary panelName="Details">
+          <DetailPanel />
+        </ErrorBoundary>
+      </div>
+    ),
+    [dimCls],
+  );
+  const dataInner = useMemo(
+    () =>
+      sections ? (
+        <div className={`h-full ${dimCls}`}>
+          <ErrorBoundary panelName="Data Table">
+            <DataTable sections={sections} />
+          </ErrorBoundary>
+        </div>
+      ) : null,
+    [sections, dimCls],
+  );
+
+  const panelName = useMemo(
+    () => ({
+      sections: t('singleView.panels.sectionsName'),
+      detail: t('singleView.panels.detailName'),
+      data: t('singleView.panels.dataName'),
+    }),
+    [t],
+  );
+  const tabLabels = useCallback(
+    (name: string) => ({
+      open: t('singleView.panels.open', { name }),
+      pin: t('singleView.panels.pin'),
+      unpin: t('singleView.panels.unpin'),
+      close: t('singleView.panels.close', { name }),
+    }),
+    [t],
+  );
+
   if (!project) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -367,44 +423,6 @@ export default function SingleSystemView() {
       </div>
     );
   }
-
-  // Shared panel content — each rendered in exactly ONE place (its Dock), so the
-  // heavy instance is never duplicated/remounted across pin/unpin/hover. Dimmed
-  // during placement (dim wraps content only, never the tab/handle).
-  const dimCls = placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : '';
-  const sectionsContent = (
-    <div className={`h-full ${dimCls}`}>
-      <ErrorBoundary panelName="Sections">
-        <SectionsPanel sections={project.sections} />
-      </ErrorBoundary>
-    </div>
-  );
-  const detailContent = (
-    <div className={`h-full ${dimCls}`}>
-      <ErrorBoundary panelName="Details">
-        <DetailPanel />
-      </ErrorBoundary>
-    </div>
-  );
-  const dataInner = (
-    <div className={`h-full ${dimCls}`}>
-      <ErrorBoundary panelName="Data Table">
-        <DataTable sections={project.sections} />
-      </ErrorBoundary>
-    </div>
-  );
-
-  const panelName = {
-    sections: t('singleView.panels.sectionsName'),
-    detail: t('singleView.panels.detailName'),
-    data: t('singleView.panels.dataName'),
-  };
-  const tabLabels = (name: string) => ({
-    open: t('singleView.panels.open', { name }),
-    pin: t('singleView.panels.pin'),
-    unpin: t('singleView.panels.unpin'),
-    close: t('singleView.panels.close', { name }),
-  });
 
   return (
     <div ref={rootRef} className="h-full flex flex-col" data-testid="single-system-view">
