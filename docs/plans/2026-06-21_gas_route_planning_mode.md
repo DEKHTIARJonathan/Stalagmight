@@ -60,11 +60,11 @@ multi-diver fan-out optimization (north star, §9).
 |------|----------|
 | MVP math | **Both** OC + CCR on a shared engine (destination; phased — see §8) |
 | Survey coupling | **Survey-driven** (real depth-vs-distance profile; overlays on the line) |
-| Config | **Opinionated default + key knobs** (thirds fraction, stressed-RMV ×, swim/DPV speed) |
+| Config | **Opinionated default + key knobs**; reserve = **3 presets** (All-thirds default; pushy 1-/2-stage gated to advanced — see §5.1) + stressed-RMV ×, swim/DPV speed |
 | Plan unit | **Team-aware** (matched / weakest-link / CCR sharing) |
 | Primary affordance v1 | **Reachable frontier** (lead→plan is the same field, other direction) |
 | Gas units | **Both, user-selectable** |
-| DPV | **Speed + range/burn-time + dead-scooter contingency** |
+| DPV | **Speed + range/burn-time + dead-scooter contingency**; **same RMV as swimming** (no reduced-RMV credit — §10) |
 | Drop points | **Suggested *and* draggable-validated** |
 
 ---
@@ -96,9 +96,9 @@ coords (`compute_station_coordinates()`, `project.rs:6758`) and **never** trigge
 (`app_state.rs:364`), which already rejects the adjusted solve for the same reason.
 
 **Everything derives from the field:**
-- *Reachable within thirds* = stations whose **round-trip** gas ≤ usable·reserve_fraction.
-  The turn frontier is a threshold on the field (reachable stations with an unreachable
-  neighbor — one pass over `adj`).
+- *Reachable within budget* = stations whose **round-trip** gas ≤ usable gas after the §5.1
+  reserve rule. The turn frontier is a threshold on the field (reachable stations with an
+  unreachable neighbor — one pass over `adj`).
 - *Turn point toward a lead* = furthest point on the path where one-way gas = turn pressure.
   (Store a predecessor array in the Dijkstra loop at `project.rs:7460` to back-trace paths.)
 - *CCR bailout / dead-scooter exit* = a **second** Dijkstra seeded **from the lead** toward
@@ -119,10 +119,10 @@ Diver { rmv_l_per_min: f64, label: Option<String> }
   // Diver::from_sac(sac_bar_per_min, ref_cyl) => rmv = sac * ref_cyl.water_volume_l.
 Cylinder { water_volume_l, working_pressure_bar, fill_bar }
 GasConfig {
-  reserve: ReserveRule,          // Thirds(1/3) | Sixths(1/6) | Custom(f in 0..1)
+  reserve: ReservePreset,        // AllThirds | OneStage | TwoStage — see §5.1; pushy presets gated to "advanced"
   stressed_rmv_multiplier: f64,  // bailout/contingency bump, e.g. 1.5–2.0
   swim_speed_m_per_min: f64,     // default ~10
-  dpv: Option<DpvProfile>,       // speed + burn-time/range (Phase 4)
+  dpv: Option<DpvProfile>,       // speed + burn-time/range (Phase 4); SAME rmv as swimming, no reduction
   units: GasUnits,               // metric | imperial (display only)
 }
 enum PlanMode { OpenCircuit, CcrBailout }
@@ -136,6 +136,36 @@ Team { divers: Vec<Diver>, cylinders_per_diver: Vec<Vec<Cylinder>>, mode: PlanMo
 - **Team/Vec shape exists from day one** so CCR (Phase 3) and team (Phase 5) add **no
   migrations** — Phase 1 just collapses to one diver, one cylinder.
 
+### 5.1 Reserve presets & return-leg recalc (Nico's spec — captured verbatim)
+
+Three selectable presets (pressures in **bar**; "turn at 1/N" = turn when 1/N of usable is
+consumed, i.e. reserve the rest):
+
+| Preset | Back gas | Stage(s) |
+|--------|----------|----------|
+| **All-thirds** *(safe default)* | thirds | thirds on every stage |
+| **1-stage** *(pushy — advanced only)* | **quarters** | stage 1 → `(½ × start_pressure) − 15` |
+| **2-stage** *(pushy — advanced only)* | **sixths** | **both** stages → `(½ × start_pressure) − 15` |
+
+**Return-leg recalc** — gas spendable on a "side mission" (a lead poked into on the way out),
+by current position on the exit:
+- **Past the drop point of stage 2:** usable = `(current_backgas − 100) / 2`
+- **Past stage 1, before the stage 2 drop point:** usable = `(current_backgas − 70) / 2`
+- **Past stage 2:** additionally **never more than ⅙ × starting pressure** (hard cap).
+
+**Product gate:** the 1-/2-stage presets are *very pushy* — expose them only behind an
+explicit **advanced-diver acknowledgment**; **All-thirds is the default**. The recalc is a
+distinct compute path (it re-budgets from *current* pressure mid-dive), so model `reserve` as
+a preset enum *plus* a `recalc(position, current_backgas)` function, not a single fraction.
+
+**⚠ Two confirms (I kept your wording exactly — didn't normalize):**
+1. *Direction of "past":* how the three recalc regions partition the exit path — is "past the
+   drop point of stage 2" the **deep side** (stage 2 not yet retrieved, most back gas left) or
+   the **exit side** (stage 2 already picked up)? And do the two stage-2 clauses
+   (`−100`-formula and the `⅙` cap) describe the **same** region, or two?
+2. *Stage value semantics:* is `(½ × start) − 15` the **pressure you breathe the stage down to
+   before dropping it** (turn pressure — my reading), or the **volume you may use**?
+
 ---
 
 ## 6. ⚠ Safety posture (this tool informs life-support decisions)
@@ -144,16 +174,15 @@ A dive planner outputs numbers people stake their lives on. The PRD treats this 
 first-class constraint, not a footnote.
 
 - **Conservative rounding:** gas *requirements* round **up**, reachable extent rounds **down**.
-- **The #77 jump-vs-reference problem becomes safety-critical here.** `build_survey_graph`
-  deliberately favors *completeness* and includes non-swimmable reference ties, with a
-  documented residual risk (`project.rs:7358`) that a *non-swimmable* reference shortcut
-  **understates distance**. In the distance gradient that just mis-colors a station. **In a
-  gas/bailout planner it under-plans the dive** — the dangerous direction. So for gas routing
-  we likely want to **exclude non-swimmable references** (jumps DO count — they're swimmable).
-  This pulls the first-class jump/reference model (**#77**) in as a real dependency, or at
-  minimum a gas-graph-specific edge filter. **Open question for Daniel** (owns the geometry
-  layer) — see §10. *I diverge from the architecture draft here, which treated this as
-  "inherited for free"; topologically yes, but the safety implication says otherwise.*
+- **Jumps & references — #77 (Nico's call):** **jumps are swimmable → calculate their
+  distances** and count them as real legs (they already carry a shot length). **Reference
+  shots should resolve, and the shortest path is chosen** — keep the completeness-favoring
+  graph and trust shortest-path (excluding edges only *over*-routes; shortest-path never
+  double-counts). So **#77 is NOT a blocking dependency** and we do **not** filter reference
+  edges out of the gas graph. The safety margin comes from **conservative rounding** (above) +
+  the unreduced-RMV-on-scooter buffer (§10), not edge exclusion. *(Supersedes my earlier
+  draft, which proposed excluding non-swimmable references — overcautious; Nico confirms
+  references-resolve-then-shortest-path is correct for the real datasets.)*
 - **Framing:** the UI is a planning aid, not an authority — show assumptions; never a single
   unlabelled "you're fine" number.
 
@@ -285,14 +314,22 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
 
 ---
 
-## 10. Open questions
-1. **#77 / safety (for Daniel):** first-class jump-vs-reference model, or a gas-graph-only
-   edge filter excluding non-swimmable references? Blocks trustworthy Phase 1 numbers (§6).
-2. **Staging-philosophy default:** thirds-on-stage vs all-stages-first for the single shipped
-   default (knob/presets later).
-3. **Memoization:** confirm "debounce-only" holds on the largest real survey, or add the
-   single-slot memo (§7.1).
-4. **DPV gas effect:** model a *lower* RMV on the scooter (reduced workload), or speed-only?
+## 10. Decisions & open questions
+
+**Resolved (Nico, 2026-06-21):**
+1. **#77 / jumps & references:** calculate jump distances; reference shots resolve and the
+   **shortest path is chosen** — no edge exclusion, not a blocker (§6).
+2. **Reserve / staging:** three presets + return-leg recalc, specified in **§5.1**; All-thirds
+   is the default, the pushy 1-/2-stage presets are advanced-gated.
+3. **DPV gas effect:** **no reduced RMV** on the scooter — same RMV as swimming. Hard
+   scootering can demand as much gas as swimming; the unreduced RMV is a deliberate soft
+   safety margin. DPV affects **speed + range/burn-time** only.
+
+**Still open:**
+4. **Memoization:** confirm "debounce-only" holds on the largest real survey, or add the
+   single-slot `AppState` memo (§7.1).
+5. **Recalc semantics (§5.1):** direction of "past" + the stage-value (turn-pressure vs
+   usable-volume) reading — the two confirms flagged inline in §5.1.
 
 ---
 
@@ -302,8 +339,8 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
   thirds round-trip budget is hand-computed, asserting `reachable[]`, `turn_frontier`,
   `gas_to_reach[lead]` to tolerance. **Adversarial:** empty/no-zero-datum project (→ all
   unreachable, like `compute_penetration_distances`, `project.rs:7514`), disconnected lead,
-  merge/closure on the path (0-cost), a jump shortcut (counts), a non-swimmable reference
-  (must NOT shortcut gas — §6), near-zero/above-surface depth (`ata` clamps).
+  merge/closure on the path (0-cost), a **jump shortcut (its distance counts)**, a **reference
+  shot that resolves to the shortest path** (§6), near-zero/above-surface depth (`ata` clamps).
 - **Frontend:** vitest for store + unit conversions; Playwright `@smoke` for enter/exit +
   reachable-overlay render-and-reset against mocked IPC (mirror the distance-gradient e2e).
 - **Manual/e2e:** load a real `e2e/fixtures/*.dmp`, enter the mode, check the reachable
