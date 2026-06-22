@@ -50,6 +50,16 @@ export default function SingleSystemView() {
 
   const isDirty = useProjectStore((s) => s.isDirty);
   const autoSave = useAutoSave();
+  // Pastel wash in the status bar's bottom-right corner — green when saved, yellow
+  // while there are pending/unsaved changes. Spans the full bar height and fades
+  // right→left across ~18% of its width (none while saving or on error).
+  const statusBarGradient = (() => {
+    const saved = autoSave.status === 'saved' || (autoSave.status === 'idle' && !isDirty);
+    const pending = autoSave.status === 'pending' || (autoSave.status === 'idle' && isDirty);
+    if (saved) return 'linear-gradient(to left, rgba(134, 239, 172, 0.30), transparent 18%)';
+    if (pending) return 'linear-gradient(to left, rgba(253, 224, 71, 0.30), transparent 18%)';
+    return undefined;
+  })();
   const placementModeActive = useUIStore((s) => s.placementMode !== null);
 
   const handleSaveProject = useCallback(async () => {
@@ -529,6 +539,7 @@ export default function SingleSystemView() {
         }}
         onMouseLeave={dataReveal.onRegionLeave}
         className="px-4 py-2 border-t border-border text-sm text-text-secondary flex justify-between"
+        style={{ backgroundImage: statusBarGradient }}
       >
         <span>
           {t('singleView.status.summary', {
@@ -586,18 +597,8 @@ function SaveStatus({
       break;
   }
 
-  // Faint bottom-weighted glow behind the status: green when saved, yellow while
-  // there are pending/unsaved changes (none while saving or on error).
-  const saved = status === 'saved' || (status === 'idle' && !isDirty);
-  const pending = status === 'pending' || (status === 'idle' && isDirty);
-  const tone = saved
-    ? 'bg-gradient-to-t from-green-500/20 via-green-500/5 to-transparent'
-    : pending
-      ? 'bg-gradient-to-t from-yellow-500/20 via-yellow-500/5 to-transparent'
-      : '';
-
   return (
-    <span data-testid="save-status" className={`rounded px-2 py-0.5 ${tone} ${className}`}>
+    <span data-testid="save-status" className={className}>
       {text}
     </span>
   );
