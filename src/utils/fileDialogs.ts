@@ -43,6 +43,36 @@ export const TML_EXTENSIONS = ['tml', 'tmlu'];
 export const GPX_EXTENSION = 'gpx';
 export const COMPASS_EXTENSIONS = ['mak', 'dat'];
 
+/**
+ * Single source of truth for the importable survey formats, grouped by the
+ * open/import flow each routes to (see `routeOpenedFile`). Both the file-dialog
+ * filter helpers below and the router's `isImportable` guard derive from this,
+ * so the recognized extension set can't drift between the picker and the
+ * dispatch. Extensions are lowercase and WITHOUT a leading dot (matching the
+ * Tauri dialog filter shape); the router lowercases the path and adds the dot.
+ *
+ * `.stalx` (native project) is intentionally NOT here — opening a project is not
+ * an import. It lives in `PROJECT_EXTENSION`.
+ */
+export const IMPORT_EXTENSIONS = {
+  gpx: [GPX_EXTENSION],
+  tml: TML_EXTENSIONS,
+  compass: COMPASS_EXTENSIONS,
+  dmp: [DMP_EXTENSION],
+} as const;
+
+/**
+ * Flat list of every importable extension (no leading dot), derived from
+ * `IMPORT_EXTENSIONS`. Order matches the legacy hardcoded set
+ * (gpx, tml, tmlu, mak, dat, dmp) so the router guard is unchanged.
+ */
+export const IMPORTABLE_EXTENSIONS: readonly string[] = [
+  ...IMPORT_EXTENSIONS.gpx,
+  ...IMPORT_EXTENSIONS.tml,
+  ...IMPORT_EXTENSIONS.compass,
+  ...IMPORT_EXTENSIONS.dmp,
+];
+
 export function tmlOpenFilters() {
   return [
     { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
@@ -90,11 +120,14 @@ export function importFiltersForContext(hasProject: boolean) {
 
 export function importOpenFilters() {
   return [
-    { name: 'Survey Files', extensions: [DMP_EXTENSION, ...TML_EXTENSIONS, GPX_EXTENSION, ...COMPASS_EXTENSIONS] },
-    { name: 'mNemo DMP', extensions: [DMP_EXTENSION] },
-    { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
-    { name: 'Compass Survey', extensions: COMPASS_EXTENSIONS },
-    { name: 'GPX Files', extensions: [GPX_EXTENSION] },
+    // Combined "everything importable" entry — derived from IMPORTABLE_EXTENSIONS
+    // (the single source of truth) so it can't drift from the per-format rows
+    // below or the router's isImportable guard when a new format is added.
+    { name: 'Survey Files', extensions: [...IMPORTABLE_EXTENSIONS] },
+    { name: 'mNemo DMP', extensions: [...IMPORT_EXTENSIONS.dmp] },
+    { name: 'Ariane Survey', extensions: [...IMPORT_EXTENSIONS.tml] },
+    { name: 'Compass Survey', extensions: [...IMPORT_EXTENSIONS.compass] },
+    { name: 'GPX Files', extensions: [...IMPORT_EXTENSIONS.gpx] },
     { name: 'All Files', extensions: ['*'] },
   ];
 }
@@ -108,8 +141,10 @@ export function importOpenFilters() {
 export function openOrImportFilters() {
   return [
     {
+      // Combined entry: native project + everything importable. Derived from
+      // IMPORTABLE_EXTENSIONS so it tracks the router/dispatch automatically.
       name: 'Stalagmight & Survey Files',
-      extensions: [PROJECT_EXTENSION, DMP_EXTENSION, ...TML_EXTENSIONS, GPX_EXTENSION, ...COMPASS_EXTENSIONS],
+      extensions: [PROJECT_EXTENSION, ...IMPORTABLE_EXTENSIONS],
     },
     { name: 'Stalagmight Project', extensions: [PROJECT_EXTENSION] },
     { name: 'mNemo DMP', extensions: [DMP_EXTENSION] },

@@ -30,11 +30,16 @@ export default function OverwriteConfirmDialog() {
     setIsLoading(true);
     try {
       const result = await saveProject(path);
-      if (result && !result.success && result.error) {
+      // Guard on `!success`, NOT on a present error: the save did NOT happen, so
+      // it must never fall through to the success branch (which closes the
+      // project on closeAfterSave and would silently discard unsaved edits). A
+      // blocked save can carry a null error — the block is signaled via
+      // integritySaveBlocked and surfaced by surfaceSaveFailure below.
+      if (result && !result.success) {
         // On a permission error, saveProject has already opened the folder-access
         // guidance dialog; don't close it, stack a generic error, or record the
         // overwrite as completed (it was superseded by the guidance dialog).
-        if (isPermissionError(result.error)) {
+        if (result.error && isPermissionError(result.error)) {
           return;
         }
         trackDialogComplete('confirm-overwrite');

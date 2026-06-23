@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, type ReactNode, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useUIStore, type DisplayToggleKey } from '../../store/uiStore';
+import { useUIStore, colorModeOf, type DisplayToggleKey, type ColorMode } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useShallow } from 'zustand/react/shallow';
 import { GRID_SPACING_OPTIONS } from '../Map/GridOverlay';
 import { formatNumber } from '../../i18n/format';
@@ -32,6 +33,7 @@ import { getThemeColor } from '../../utils/themeColors';
 import { getContrastColor } from '../../utils/colors';
 import { setSource } from '../../utils/telemetry';
 import { hasEligibleClosures } from '../../utils/closures';
+import { useOnboardingStep } from '../../hooks/useOnboardingStep';
 
 /** A multi-toggle display key shown as a pill, optionally gated on another toggle. */
 interface ToggleItem {
@@ -82,8 +84,6 @@ const COMMENTS_LABELS: ToggleItem[] = [
   { key: 'showShotComments', labelKey: 'displayMenu.items.shotComments', descriptionKey: 'displayMenu.descriptions.shotComments', disabledWhen: 'showShots', entity: 'shot', symbol: 'comment' },
   { key: 'showShotData', labelKey: 'displayMenu.items.shotData', descriptionKey: 'displayMenu.descriptions.shotData', disabledWhen: 'showShots', entity: 'shot', symbol: 'data' },
 ];
-
-type ColorMode = 'section' | 'depth' | 'distance' | 'issues';
 
 /**
  * A pill toggle. When `entityColored` is set, the pill carries its element's
@@ -166,32 +166,31 @@ export default function DisplayMenu() {
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const openedByOnboardingRef = useRef(false);
+  const onboardingStep = useOnboardingStep();
   const { t } = useTranslation();
 
+  // Single-select coloring mode, derived from the three mutually-exclusive overlay
+  // flags. Reading + setting both go through the store (colorModeOf / setColorMode)
+  // so the select-one logic isn't duplicated here. colorMode is folded into this
+  // shallow selector (via colorModeOf) rather than carried by its own subscription.
   const {
-    showDepthGradient,
-    showDistanceGradient,
-    showIssueSeverity,
     gridSpacing,
     geometryMode,
     syntacticLevel,
     toggleDisplay,
-    toggleDistanceGradient,
-    setIssueSeverity,
+    setColorMode,
     setGridSpacing,
     setGeometryMode,
+    colorMode,
   } = useUIStore(useShallow((s) => ({
-    showDepthGradient: s.showDepthGradient,
-    showDistanceGradient: s.showDistanceGradient,
-    showIssueSeverity: s.showIssueSeverity,
     gridSpacing: s.gridSpacing,
     geometryMode: s.geometryMode,
     syntacticLevel: s.syntacticLevel,
     toggleDisplay: s.toggleDisplay,
-    toggleDistanceGradient: s.toggleDistanceGradient,
-    setIssueSeverity: s.setIssueSeverity,
+    setColorMode: s.setColorMode,
     setGridSpacing: s.setGridSpacing,
     setGeometryMode: s.setGeometryMode,
+    colorMode: colorModeOf(s),
   })));
 
   // The element-toggle booleans, read as a keyed map so a pill can look itself
@@ -220,31 +219,10 @@ export default function DisplayMenu() {
   // otherwise the option is disabled (it would render identical geometry).
   const hasClosures = useProjectStore((s) => hasEligibleClosures(s.project?.loop_closures ?? []));
 
-  // Coloring is single-select: exactly one of the (already mutually-exclusive)
-  // overlays, or 'section' = none of them (the default per-section coloring).
-  const colorMode: ColorMode = showIssueSeverity
-    ? 'issues'
-    : showDistanceGradient
-      ? 'distance'
-      : showDepthGradient
-        ? 'depth'
-        : 'section';
-
   const selectColorMode = (mode: ColorMode) => {
     if (mode === colorMode) return;
     setSource('display-menu');
-    if (mode === 'depth') {
-      if (!showDepthGradient) toggleDisplay('showDepthGradient'); // turns off the others
-    } else if (mode === 'distance') {
-      if (!showDistanceGradient) toggleDistanceGradient(); // turns off the others
-    } else if (mode === 'issues') {
-      setIssueSeverity(true); // turns off the others
-    } else {
-      // 'section' — turn off whichever single mode is currently on.
-      if (showDepthGradient) toggleDisplay('showDepthGradient');
-      else if (showDistanceGradient) toggleDistanceGradient();
-      else if (showIssueSeverity) setIssueSeverity(false);
-    }
+    setColorMode(mode);
   };
 
   // Element icons appear at the 'icons' level; the element-color outline/fill
@@ -294,27 +272,13 @@ export default function DisplayMenu() {
     );
   };
 
-  // Close menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        menuRef.current &&
-        !menuRef.current.contains(event.target as Node) &&
-        buttonRef.current &&
-        !buttonRef.current.contains(event.target as Node)
-      ) {
-        setIsOpen(false);
-      }
-    };
-
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [isOpen]);
+  // Close on outside mousedown / external scroll / resize (shared hook, same as
+  // Select/AppMenu). Escape is handled separately below — the hook doesn't own it.
+  useDismissableLayer({
+    open: isOpen,
+    onDismiss: () => setIsOpen(false),
+    contains: [menuRef, buttonRef],
+  });
 
   // Close on escape
   useEffect(() => {
@@ -333,57 +297,28 @@ export default function DisplayMenu() {
     };
   }, [isOpen]);
 
-  // Auto-open display menu during onboarding "display options" steps.
+  // Auto-open the display menu during onboarding "display options" steps. The
+  // active step is observed once (shared hook); this effect just reacts to it
+  // changing, instead of running a full DOM re-check on every app-wide mutation.
+  const isDisplayOptionsStep =
+    onboardingStep.stepId === 'display-options' &&
+    (onboardingStep.flowId === 'placement-mode-map' || onboardingStep.flowId === 'single-view-basics');
   useEffect(() => {
-    const isDisplayOptionsStepActive = (): boolean => {
-      const overlay = document.querySelector('[data-testid="onboarding-overlay"]');
-      if (!overlay) {
-        return false;
-      }
-      const flowId = overlay.getAttribute('data-onboarding-flow-id');
-      const stepId = overlay.getAttribute('data-onboarding-step-id');
-      return (
-        stepId === 'display-options' &&
-        (flowId === 'placement-mode-map' || flowId === 'single-view-basics')
-      );
-    };
-
-    const syncOpenState = () => {
-      if (isDisplayOptionsStepActive()) {
-        setIsOpen((current) => {
-          if (!current) {
-            openedByOnboardingRef.current = true;
-            return true;
-          }
-          return current;
-        });
-        return;
-      }
-
-      if (openedByOnboardingRef.current) {
-        openedByOnboardingRef.current = false;
-        setIsOpen(false);
-      }
-    };
-
-    syncOpenState();
-
-    if (typeof MutationObserver === 'undefined') {
+    if (isDisplayOptionsStep) {
+      setIsOpen((current) => {
+        if (!current) {
+          openedByOnboardingRef.current = true;
+          return true;
+        }
+        return current;
+      });
       return;
     }
-
-    const observer = new MutationObserver(syncOpenState);
-    observer.observe(document.body, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: ['data-onboarding-flow-id', 'data-onboarding-step-id'],
-    });
-
-    return () => {
-      observer.disconnect();
-    };
-  }, []);
+    if (openedByOnboardingRef.current) {
+      openedByOnboardingRef.current = false;
+      setIsOpen(false);
+    }
+  }, [isDisplayOptionsStep]);
 
   return (
     <div className="relative">

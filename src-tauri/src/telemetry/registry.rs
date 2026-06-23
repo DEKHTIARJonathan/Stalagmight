@@ -25,6 +25,7 @@ pub(super) const SOURCE_NAMES: &[&str] = &[
     "recent-map",  // recent-projects map marker
     "hamburger",   // global-view hamburger application menu
     "empty-state", // empty-state cards (first run)
+    "drag-drop",   // file dropped onto the window (import)
 ];
 
 /// Known event base names (the `:source` suffix is appended at runtime). The
@@ -566,7 +567,7 @@ mod tests {
 
     #[test]
     fn source_count() {
-        assert_eq!(SOURCE_NAMES.len(), 18);
+        assert_eq!(SOURCE_NAMES.len(), 19);
     }
 
     /// Commands registered in `generate_handler![]` that are excluded from

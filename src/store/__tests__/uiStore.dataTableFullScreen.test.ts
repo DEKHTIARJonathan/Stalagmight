@@ -91,4 +91,51 @@ describe('uiStore data-table fullscreen', () => {
     expect(s.dataTableFullScreen).toBe(false);
     expect(s.rawTableSelection).toBeNull();
   });
+
+  // Regression (#3): fullscreen entered WHILE section-focused must snapshot the
+  // user's real pre-focus table state, not the focus-forced open+pin — otherwise a
+  // hover/closed table is stranded pinned-open once both focus and fullscreen exit.
+  describe('fullscreen entered while section-focused', () => {
+    beforeEach(() => {
+      // A full pre-focus layout so enterSectionFocus has something to snapshot.
+      useUIStore.setState({
+        focusedSectionId: null,
+        sectionsPanelOpen: true,
+        sectionsPanelMode: 'pin',
+        detailPanelOpen: true,
+        detailPanelMode: 'pin',
+        dataTableOpen: false,
+        dataTableMode: 'hover',
+        dataTableHeight: 200,
+        dataTableFullScreen: false,
+        geometryMode: 'measured',
+      });
+    });
+
+    it('exit-focus then exit-fullscreen restores the real hover/closed table (not pinned-open)', () => {
+      useUIStore.getState().enterSectionFocus(7, 300);
+      expect(useUIStore.getState().dataTableMode).toBe('pin'); // focus forces pin
+      useUIStore.getState().enterDataTableFullScreen();
+      useUIStore.getState().exitSectionFocus();
+      useUIStore.getState().exitDataTableFullScreen();
+      const s = useUIStore.getState();
+      expect(s.dataTableOpen).toBe(false);
+      expect(s.dataTableMode).toBe('hover');
+    });
+
+    it('exiting fullscreen while still focused keeps the table open+pinned (focus needs it)', () => {
+      useUIStore.getState().enterSectionFocus(7, 300);
+      useUIStore.getState().enterDataTableFullScreen();
+      useUIStore.getState().exitDataTableFullScreen();
+      const mid = useUIStore.getState();
+      expect(mid.dataTableFullScreen).toBe(false);
+      expect(mid.dataTableOpen).toBe(true);
+      expect(mid.dataTableMode).toBe('pin');
+      // Then leaving focus restores the user's real hover/closed preference.
+      useUIStore.getState().exitSectionFocus();
+      const s = useUIStore.getState();
+      expect(s.dataTableOpen).toBe(false);
+      expect(s.dataTableMode).toBe('hover');
+    });
+  });
 });

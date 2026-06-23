@@ -24,7 +24,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
-import { openOrImportFilters } from './fileDialogs';
+import { openOrImportFilters, IMPORTABLE_EXTENSIONS } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
 
 /**
@@ -48,24 +48,51 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
   const store = useProjectStore.getState();
   const ui = useUIStore.getState();
   const hasProject = !!store.project;
-  const isProjectFile = lowerPath.endsWith('.stalx');
+  // Recognized importable survey formats (everything routed below except .stalx).
+  // Derived from the single source of truth in fileDialogs so this guard and the
+  // file-dialog filters can't drift. Used to scope the read-only guard so an
+  // UNSUPPORTED file still gets the "Unsupported file type" error rather than the
+  // misleading "switch view" one. IMPORTABLE_EXTENSIONS has no leading dots, so
+  // prefix one to keep the original `.gpx`/`.dmp` endsWith semantics.
+  const isImportable = IMPORTABLE_EXTENSIONS.some((ext) => lowerPath.endsWith(`.${ext}`));
 
-  // Importing into an open project adds sections (a mutation). The closure-
-  // adjusted view (#70) is read-only, so reject an import while it's active.
-  // Centralized here so every caller (toolbar, Ctrl+I, drag-drop) shares it.
-  // Opening a native project (.stalx) is not an import, so it's exempt.
-  if (!isProjectFile && hasProject && ui.geometryMode === 'closureAdjusted') {
-    ui.openDialog('error', {
-      title: 'Import',
-      message: 'Switch to the Measured view to import — the closure-adjusted view is read-only.',
-    });
-    return;
-  }
+  // A dialog (or the terminal command it triggers) now owns the pending entry-
+  // point source's lifetime — leave it set so that flow can apply it on
+  // completion (or drop it on cancel via checkDialogCancel). EVERY other path
+  // (abandon, guard-rejected, parse-null, unsupported, error) drops the source
+  // in the finally below, so it can't mis-attribute a later, unrelated project
+  // command. `setView('single')` clears it on a successful open/create.
+  let handedOff = false;
 
   try {
+    // Importing into an open project adds sections (a mutation). The closure-
+    // adjusted view (#70) is read-only, so reject an import while it's active.
+    // Centralized here so every caller (toolbar, Ctrl+I, drag-drop) shares it.
+    // Scoped to recognized importable files so an unsupported/unknown extension
+    // still falls through to the accurate "Unsupported file type" error below
+    // (opening a native .stalx project is not an import, so it's exempt too).
+    if (isImportable && hasProject && ui.geometryMode === 'closureAdjusted') {
+      ui.openDialog('error', {
+        title: 'Import',
+        message: 'Switch to the Measured view to import — the closure-adjusted view is read-only.',
+      });
+      return;
+    }
+
     if (lowerPath.endsWith('.stalx')) {
-      // Native project: loadProject handles view switching and error display.
-      await store.loadProject(path);
+      // Native project: guard against silently discarding unsaved edits. Opening
+      // a .stalx replaces the current project, so if one is open and dirty, defer
+      // to the unsaved-changes dialog (it loads on discard) instead of clobbering
+      // it. Centralized here so EVERY .stalx-open path (Ctrl+O, drag-drop, the
+      // unified Open/Import button) shares the guard, not just the menu item.
+      if (store.project && store.isDirty) {
+        ui.openDialog('unsaved-changes', { pendingOpenPath: path });
+        handedOff = true;
+      } else {
+        // loadProject handles view switching and error display, and consumes the
+        // source itself (setView on success / its error paths on failure).
+        await store.loadProject(path);
+      }
     } else if (lowerPath.endsWith('.gpx')) {
       // GPX import creates a new project; importing into an open one isn't
       // supported (DMP is the additive in-project import). Mirror the TML/Compass
@@ -83,6 +110,7 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
         defaultName: extractFilename(path, /\.gpx$/i) || 'Imported',
         importType: 'gpx',
       });
+      handedOff = true;
     } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
       // TML/TMLU import always creates a new project.
       if (store.project) {
@@ -97,6 +125,7 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
         defaultName: extractFilename(path, /\.tmlu?$/i) || 'Imported',
         importType: 'tml',
       });
+      handedOff = true;
     } else if (lowerPath.endsWith('.mak') || lowerPath.endsWith('.dat')) {
       // Compass import always creates a new project.
       if (store.project) {
@@ -111,11 +140,15 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
         defaultName: extractFilename(path, /\.(mak|dat)$/i) || 'Imported',
         importType: 'compass',
       });
+      handedOff = true;
     } else if (lowerPath.endsWith('.dmp')) {
       // mNemo DMP: import into the current project, or seed a new one.
       const dmpFile = await store.importDmp(path);
       if (!dmpFile) return;
-      if (store.project) {
+      // Re-read project state fresh after the parse — the existing/new-project
+      // decision must reflect the project as it is NOW, not the snapshot taken
+      // before the await (a switch could have landed during the parse).
+      if (useProjectStore.getState().project) {
         ui.setImportContext('existing-project');
         ui.openDialog('dmp-selection', { dmpFile, filePath: path });
       } else {
@@ -126,6 +159,7 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
           defaultName: extractFilename(path, /\.dmp$/i) || 'Imported',
         });
       }
+      handedOff = true;
     } else {
       // Unknown/unsupported extension — don't blindly assume DMP (that fed
       // arbitrary files chosen via an "All Files" filter to the DMP parser).
@@ -139,6 +173,8 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
       title: errorTitle,
       message: getErrorMessage(err, 'Failed to open file'),
     });
+  } finally {
+    if (!handedOff) clearProjectActionSource();
   }
 }
 
@@ -156,7 +192,21 @@ export async function pickAndRoute(
   filters: Array<{ name: string; extensions: string[] }>,
   errorTitle = 'Open Failed',
 ): Promise<void> {
-  const selected = await open({ multiple: false, filters });
+  let selected: string | string[] | null;
+  try {
+    selected = await open({ multiple: false, filters });
+  } catch (err) {
+    // The native picker itself failed (plugin/permission error) — `open()`
+    // rejects rather than resolving null. Surface it and drop the entry-point
+    // source so it can't attribute a later, unrelated open/create/import (the
+    // source has no auto-reset; only a completed flow or this clear drops it).
+    clearProjectActionSource();
+    useUIStore.getState().openDialog('error', {
+      title: errorTitle,
+      message: getErrorMessage(err, 'Failed to open the file picker'),
+    });
+    return;
+  }
 
   let path: string | null = null;
   if (typeof selected === 'string') {

@@ -1473,12 +1473,11 @@ tr[data-selected="true"]:hover {
   fill: var(--sh-comment, #eab946);
   stroke: none;
 }
-/* shot-data badge: slate "data rows" (hamburger) */
+/* shot-data badge: slate "data rows" (hamburger). Filled stadium rows, NOT
+   stroked: WebKit fattens thin strokes under the setZoom UI scale. */
 .duotone .data-lines {
-  fill: none;
-  stroke: #b8c6d6;
-  stroke-width: 1.6;
-  stroke-linecap: round;
+  fill: #b8c6d6;
+  stroke: none;
 }
 /* label/name badge: slate capital A */
 .duotone .label-a {

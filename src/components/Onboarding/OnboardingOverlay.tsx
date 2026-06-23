@@ -10,6 +10,8 @@ import {
   PlusIcon,
 } from '../common/icons';
 import { ToolGlyph } from '../common/toolIcons';
+import { clamp } from '../../utils/clamp';
+import { publishOnboardingStep } from '../../hooks/useOnboardingStep';
 
 interface OnboardingOverlayProps {
   step: ActiveOnboardingStep;
@@ -46,9 +48,6 @@ const STEP_SCROLL_TOP_PADDING = 10;
 const STEP_SCROLL_MAX_ATTEMPTS = 12;
 const STEP_SCROLL_RETRY_MS = 80;
 const TOOLTIP_SETTLE_DELAY_MS = 220;
-
-const clamp = (value: number, min: number, max: number): number =>
-  Math.min(Math.max(value, min), max);
 
 function boundsFromDomRect(rect: DOMRect): RectBounds {
   return {
@@ -794,6 +793,19 @@ export default function OnboardingOverlay({
       document.body.style.overflow = previousOverflow;
     };
   }, []);
+
+  // Publish the active step to the onboarding-step store for consumers outside
+  // this overlay's tree (DisplayMenu, SingleSystemView). The DOM attributes on
+  // the overlay element below are kept for DmpNewImportDialog's own observer.
+  useEffect(() => {
+    publishOnboardingStep(step.flowId, step.id);
+  }, [step.flowId, step.id]);
+  useEffect(
+    () => () => {
+      publishOnboardingStep(null, null);
+    },
+    [],
+  );
 
   useEffect(() => {
     const updateRect = () => {

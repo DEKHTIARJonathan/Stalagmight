@@ -9,6 +9,7 @@ import {
   ShrinkIcon,
 } from '../common/icons';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
+import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
 import type { CSSProperties } from 'react';
@@ -149,7 +150,15 @@ export default function Toolbar({
         className={`flex items-center gap-2 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
         data-testid="toolbar-file-controls"
       >
-        <AppMenu items={menuItems} triggerDanger={saveFailed} aria-label={t('singleView.menu.aria')} />
+        {/* Disabled during placement mode so the file/project actions that moved
+            into this menu (Save/Save As/Close/New/Open/Export) stay blocked, as
+            they were when they lived in the now-disabled toolbar buttons. */}
+        <AppMenu
+          items={menuItems}
+          triggerDanger={saveFailed}
+          disabled={placementModeActive}
+          aria-label={t('singleView.menu.aria')}
+        />
         {/* In fullscreen table mode the left slot shows the "Back to Map" button
             (the relabeled shrink button) instead of Import; both Save/Export/Close
             live in the hamburger now. */}
@@ -499,29 +508,16 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
     }, 150);
   }, [disabled]);
 
-  // Close flyout when clicking outside
-  useEffect(() => {
-    if (!flyoutOpen) return;
-
-    const handleClickOutside = (e: PointerEvent) => {
-      const target = e.target;
-      if (!(target instanceof Node)) return;
-      if (buttonRef.current?.contains(target)) return;
-      if (flyoutRef.current?.contains(target)) return;
-      closeFlyout();
-    };
-
-    // Use a microtask delay to avoid the click that opened the flyout from
-    // immediately closing it
-    const timeoutId = setTimeout(() => {
-      document.addEventListener('pointerdown', handleClickOutside);
-    }, 0);
-
-    return () => {
-      clearTimeout(timeoutId);
-      document.removeEventListener('pointerdown', handleClickOutside);
-    };
-  }, [flyoutOpen, closeFlyout]);
+  // Close the flyout on outside mousedown / external scroll / resize via the
+  // shared hook (the trigger button and the flyout surface are the "inside"
+  // elements). The hook binds once when the flyout opens; since it listens on
+  // mousedown, the interaction that opened the flyout has already completed, so
+  // there's no need for the old microtask-deferred listener attach.
+  useDismissableLayer({
+    open: flyoutOpen,
+    onDismiss: closeFlyout,
+    contains: [buttonRef, flyoutRef],
+  });
 
   useEffect(() => {
     if (disabled && flyoutOpen) {

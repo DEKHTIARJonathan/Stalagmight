@@ -11,11 +11,10 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
-import { pickAndRoute } from '../../utils/openOrImport';
 import { dmpImportFilters } from '../../utils/fileDialogs';
-import { setProjectActionSource } from '../../utils/telemetry';
+import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
-import { leadingMenuItems, serviceMenuItems, quitMenuItem } from '../common/appMenuItems';
+import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem } from '../common/appMenuItems';
 import type { AppMenuItem } from '../common/AppMenu';
 import {
   SaveIcon,
@@ -45,6 +44,10 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   const openDialog = useUIStore((s) => s.openDialog);
   const showDevStats = useUIStore((s) => s.showDevStats);
   const toggleDisplay = useUIStore((s) => s.toggleDisplay);
+  // The closure-adjusted view is read-only — imports add sections. Disable the
+  // Import item up front (the toolbar Import button and Ctrl+I already do), so the
+  // user isn't sent through a file picker only to be rejected after choosing.
+  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
 
   return useMemo(() => {
     const sz = 18;
@@ -63,11 +66,13 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
     };
 
     // "Project Details" = clear the selection so the Details panel shows
-    // <ProjectStats>, and make sure the panel is open.
+    // <ProjectStats>, then reveal the panel. revealDetailPanel (not
+    // toggleDetailPanel) so a hover-mode user's reveal preference isn't silently
+    // overwritten with 'pin' just to view stats.
     const showProjectDetails = () => {
       const ui = useUIStore.getState();
       ui.clearSelection();
-      if (!ui.detailPanelOpen) ui.toggleDetailPanel();
+      ui.revealDetailPanel();
     };
 
     return [
@@ -80,7 +85,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         iconColor: MENU_ICON_COLORS.save,
         dangerBg: saveFailed,
         action: 'save',
-        onClick: () => { void onSave(); },
+        // Tag the save with the toolbar/menu entry point (the old toolbar Save
+        // button did this; the menu must too, or save_project loses its source).
+        onClick: () => { setSource('toolbar'); void onSave(); },
       },
       {
         id: 'project-menu-save-as',
@@ -103,20 +110,15 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         label: t('globalView.actions.import'),
         icon: <DownloadIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.import,
+        disabled: geometryReadOnly,
         submenu: [
-          {
-            id: 'global-import-dmp-button',
-            label: t('globalView.actions.importDmp'),
-            action: 'import_dmp',
-            // Route through the shared open/import router so it shares the
-            // closure-adjusted read-only guard with the toolbar/Ctrl+I/drag paths.
-            // DMP-only filter (no "All Files"): with a project open, an unrelated
-            // file — notably a `.stalx` — must not be pickable here, or the router
-            // would open it and replace the current project. DMP is the only
-            // additive in-project import; GPX/Ariane/Compass start new projects
-            // (the router rejects a GPX dropped/opened while a project is open).
-            onClick: () => { setProjectActionSource('hamburger'); void pickAndRoute(dmpImportFilters(), 'Import Failed'); },
-          },
+          // DMP-only filter (dmpImportFilters, no "All Files"): with a project
+          // open, an unrelated file — notably a `.stalx` — must NOT be pickable
+          // here, or the shared router would open it and replace the current
+          // project. DMP is the only additive in-project import; GPX/Ariane/
+          // Compass start new projects (the router rejects those if dropped/
+          // opened while a project is open).
+          importMenuItem('global-import-dmp-button', t('globalView.actions.importDmp'), dmpImportFilters, 'hamburger', 'import_dmp'),
         ],
       },
       {
@@ -125,7 +127,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         icon: <ExportIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.export,
         action: 'export',
-        onClick: () => openDialog('export'),
+        onClick: () => { setSource('toolbar'); openDialog('export'); },
       },
       { id: 'project-menu-sep-3', label: '', separator: true },
       {
@@ -162,5 +164,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showDevStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject]);
+  }, [t, openDialog, showDevStats, toggleDisplay, geometryReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject]);
 }

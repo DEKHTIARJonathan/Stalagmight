@@ -4,16 +4,18 @@ import type { TFunction } from 'i18next';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { useProject } from '../../hooks/useProject';
 import { useGlobalViewShortcuts } from '../../hooks/useGlobalViewShortcuts';
+import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useGlobalViewStore } from '../../store/globalViewStore';
 import { Button } from '../common/Button';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
-import { leadingMenuItems, serviceMenuItems, quitMenuItem } from '../common/appMenuItems';
+import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, runImport } from '../common/appMenuItems';
 import { CloseIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIcon } from '../common/icons';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { setProjectActionSource } from '../../utils/telemetry';
+import { dmpOpenFilters, tmlOpenFilters, compassOpenFilters, gpxOpenFilters } from '../../utils/fileDialogs';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
@@ -103,10 +105,6 @@ export default function GlobalView() {
     handleNewProject,
     handleOpenProject,
     handleOpenOrImport,
-    handleImportDmp,
-    handleImportTml,
-    handleImportCompass,
-    handleImportGpx,
   } = useProject();
 
   const { loading, loadRecentProjects, loadProject, resetLoading, cancelLoading, removeFromRecentProjects, config } = useProjectStore();
@@ -141,19 +139,13 @@ export default function GlobalView() {
     loadRecentProjects();
   }, [loadRecentProjects]);
 
-  // Close context menu on click outside
-  useEffect(() => {
-    if (!contextMenu.visible) {
-      return;
-    }
-    const handleClickOutside = (e: globalThis.MouseEvent) => {
-      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
-        setContextMenu((prev) => ({ ...prev, visible: false }));
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [contextMenu.visible]);
+  // Close on outside mousedown / external scroll / resize (shared hook, same as
+  // Select/AppMenu). Escape is handled in the global-view keyboard handler.
+  useDismissableLayer({
+    open: contextMenu.visible,
+    onDismiss: () => setContextMenu((prev) => ({ ...prev, visible: false })),
+    contains: [contextMenuRef],
+  });
 
   // Note: Context menu escape is handled in the main keyboard handler below
 
@@ -197,7 +189,10 @@ export default function GlobalView() {
   // Handle project selection (single click)
   const handleProjectSelect = useCallback((filePath: string, ctrlKey?: boolean) => {
     if (ctrlKey) {
-      // Ctrl+click: toggle selection in multi-select mode
+      // Ctrl+click: toggle selection in multi-select mode. The SET is committed
+      // through a pure functional updater so two clicks in one React batch can't
+      // each read a stale `multiSelectedIds` and drop the other's change.
+      const wasSelected = multiSelectedIds.has(filePath);
       setMultiSelectedIds((prev) => {
         const newSet = new Set(prev);
         if (newSet.has(filePath)) {
@@ -207,14 +202,24 @@ export default function GlobalView() {
         }
         return newSet;
       });
-      // Also set as primary selection for metadata panel
-      setSelectedProjectId(filePath);
+      // Primary selection for the metadata panel — kept OUT of the updater above
+      // so that updater stays pure (no setState side-effect; clean under
+      // StrictMode's double-invoke). On an ADD, the clicked project becomes
+      // primary; on a DESELECT, promote the last surviving member (or clear).
+      // Derived from the pre-click set; a same-batch double-click would only skew
+      // the primary pointer, which self-heals on the next selection sync.
+      if (wasSelected) {
+        const survivors = [...multiSelectedIds].filter((id) => id !== filePath);
+        setSelectedProjectId(survivors.length > 0 ? survivors[survivors.length - 1]! : null);
+      } else {
+        setSelectedProjectId(filePath);
+      }
     } else {
       // Regular click: single select, clear multi-select
       setSelectedProjectId(filePath);
       setMultiSelectedIds(new Set([filePath]));
     }
-  }, []);
+  }, [multiSelectedIds]);
 
   // Handle right-click context menu (from list view)
   const handleContextMenu = useCallback((e: MouseEvent, filePath: string) => {
@@ -446,7 +451,10 @@ export default function GlobalView() {
       return;
     }
     if (detailsOpen) return; // already open — leave it; content follows the selection
-    if (!selectedProjectId) return; // a multi-selection survives but no primary — wait for one
+    // Past here, something is selected (primary OR a surviving multi-selection),
+    // so reveal the panel. A multi-selection with no primary (e.g. the prune
+    // effect nulled the primary while other selections remain) still reveals —
+    // the panel renders the aggregate from selectedProjects.
     if (activeTab === 'map') {
       setDetailsOpen(true);
       return;
@@ -519,11 +527,15 @@ export default function GlobalView() {
         label: t('globalView.actions.import'),
         icon: <DownloadIcon size={18} />,
         iconColor: MENU_ICON_COLORS.import,
+        // Route every format through the shared open/import router (like the
+        // in-project Import submenu) so all import entry points behave identically.
+        // No project is open here, so the broader format set is offered, each with
+        // its own per-format picker filter (matching the legacy per-format handlers).
         submenu: [
-          { id: 'global-import-dmp-button', label: t('globalView.actions.importDmp'), action: 'import_dmp', onClick: () => { setProjectActionSource('hamburger'); handleImportDmp(); } },
-          { id: 'global-import-tml-button', label: t('globalView.actions.importTml'), onClick: () => { setProjectActionSource('hamburger'); handleImportTml(); } },
-          { id: 'global-import-compass-button', label: t('globalView.actions.importCompass'), onClick: () => { setProjectActionSource('hamburger'); handleImportCompass(); } },
-          { id: 'global-import-gpx-button', label: t('globalView.actions.importGpx'), onClick: () => { setProjectActionSource('hamburger'); handleImportGpx(); } },
+          importMenuItem('global-import-dmp-button', t('globalView.actions.importDmp'), dmpOpenFilters, 'hamburger', 'import_dmp'),
+          importMenuItem('global-import-tml-button', t('globalView.actions.importTml'), tmlOpenFilters, 'hamburger'),
+          importMenuItem('global-import-compass-button', t('globalView.actions.importCompass'), compassOpenFilters, 'hamburger'),
+          importMenuItem('global-import-gpx-button', t('globalView.actions.importGpx'), gpxOpenFilters, 'hamburger'),
         ],
       },
       { id: 'app-menu-sep-1', label: '', separator: true },
@@ -531,7 +543,7 @@ export default function GlobalView() {
       { id: 'app-menu-sep-2', label: '', separator: true },
       quitMenuItem(t),
     ],
-    [t, handleNewProject, handleOpenProject, handleImportDmp, handleImportTml, handleImportCompass, handleImportGpx, openDialog],
+    [t, handleNewProject, handleOpenProject, openDialog],
   );
 
   return (
@@ -631,7 +643,7 @@ export default function GlobalView() {
           {!hasRecentItems ? (
             <div className="h-full overflow-auto p-6">
               <EmptyState
-                onImport={() => { setProjectActionSource('empty-state'); handleImportDmp(); }}
+                onImport={() => { runImport(dmpOpenFilters(), 'empty-state'); }}
                 onNew={() => { setProjectActionSource('empty-state'); handleNewProject(); }}
                 onOpen={() => { setProjectActionSource('empty-state'); handleOpenProject(); }}
               />

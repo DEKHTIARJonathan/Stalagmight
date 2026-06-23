@@ -2283,3 +2283,72 @@ fn test_syntactic_highlighting_normalize_removes_empty_preset_maps() {
     // The preset entry becomes empty after dropping the bad color, so it is removed.
     assert!(config.overrides.is_empty());
 }
+
+#[test]
+fn test_panels_config_normalize_clamps_sizes() {
+    // Out-of-range sizes (e.g. hand-edited or written by an older build) must be
+    // clamped to the same bounds the UI enforces while dragging — a degenerate 0
+    // would otherwise reload the panel collapsed/invisible.
+    let mut p = PanelsConfig {
+        sections_panel_width: 0,
+        detail_panel_width: 99999,
+        data_table_height: 1,
+        ..PanelsConfig::default()
+    };
+    p.normalize();
+    assert_eq!(p.sections_panel_width, 150); // clamped up to min
+    assert_eq!(p.detail_panel_width, 500); // clamped down to max
+    assert_eq!(p.data_table_height, 100); // clamped up to min
+}
+
+#[test]
+fn test_panels_config_normalize_repairs_invalid_mode() {
+    let mut p = PanelsConfig {
+        sections_panel_mode: "Hover".to_string(), // wrong case
+        detail_panel_mode: "nonsense".to_string(),
+        data_table_mode: "hover".to_string(), // valid, preserved
+        ..PanelsConfig::default()
+    };
+    p.normalize();
+    assert_eq!(p.sections_panel_mode, "pin");
+    assert_eq!(p.detail_panel_mode, "pin");
+    assert_eq!(p.data_table_mode, "hover");
+}
+
+#[test]
+fn test_panels_config_normalize_preserves_in_range_values() {
+    let mut p = PanelsConfig {
+        sections_panel_width: 300,
+        detail_panel_width: 250,
+        data_table_height: 400,
+        sections_panel_mode: "hover".to_string(),
+        detail_panel_mode: "pin".to_string(),
+        data_table_mode: "hover".to_string(),
+        ..PanelsConfig::default()
+    };
+    p.normalize();
+    assert_eq!(p.sections_panel_width, 300);
+    assert_eq!(p.detail_panel_width, 250);
+    assert_eq!(p.data_table_height, 400);
+    assert_eq!(p.sections_panel_mode, "hover");
+    assert_eq!(p.detail_panel_mode, "pin");
+    assert_eq!(p.data_table_mode, "hover");
+}
+
+#[test]
+fn test_panels_config_deserializes_legacy_table_without_reveal_fields() {
+    // An older [panels] table that predates the *_open/*_mode fields must still
+    // deserialize, filling the new fields from their serde defaults.
+    let toml = r"
+        sections_panel_width = 250
+        detail_panel_width = 300
+        data_table_height = 200
+    ";
+    let p: PanelsConfig = toml::from_str(toml).expect("legacy panels table should deserialize");
+    assert!(p.sections_panel_open);
+    assert!(p.detail_panel_open);
+    assert!(!p.data_table_open);
+    assert_eq!(p.sections_panel_mode, "pin");
+    assert_eq!(p.detail_panel_mode, "pin");
+    assert_eq!(p.data_table_mode, "pin");
+}

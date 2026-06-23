@@ -1,24 +1,13 @@
 import { useEffect, useCallback, useRef } from 'react';
-import { open } from '@tauri-apps/plugin-dialog';
-import { exists } from '@tauri-apps/plugin-fs';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
-import { getErrorMessage } from '../utils/ipc';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
-import {
-  ensureExtension,
-  projectOpenFilters,
-  projectSaveFilters,
-  importFiltersForContext,
-  saveDialog,
-  PROJECT_EXTENSION,
-} from '../utils/fileDialogs';
-import { pickAndRoute } from '../utils/openOrImport';
-import { quitApp } from '../utils/quit';
+import { runFileShortcutAction } from '../utils/fileShortcutActions';
+import { saveProjectAs } from '../utils/projectActions';
 import type { ToolType, Selection, DisplayToggleKey } from '../store/uiStore';
-import { setSource, trackNav, setProjectActionSource, clearProjectActionSource } from '../utils/telemetry';
+import { setSource, trackNav } from '../utils/telemetry';
 import type { ShortcutsConfig, ShortcutFeedback } from '../types/config';
 import { defaultConfig } from '../types/config';
 
@@ -654,48 +643,21 @@ export function useKeyboardShortcuts() {
         // File actions
         case 'new_file':
           event.preventDefault();
-          setProjectActionSource('keyboard');
-          openDialog('new-project');
+          // Routes through the shared helper so the unsaved-changes guard (a dirty
+          // open project) is applied here too, not just on the menu "New" path.
+          runFileShortcutAction('new_file');
           maybeShowToast(action);
           break;
 
         case 'quit':
           event.preventDefault();
-          quitApp();
+          runFileShortcutAction('quit');
           break;
 
-        case 'open_file': {
+        case 'open_file':
           event.preventDefault();
-          setProjectActionSource('keyboard');
-          (async () => {
-            try {
-              const selected = await open({
-                multiple: false,
-                filters: projectOpenFilters(),
-              });
-
-              let path: string | null = null;
-              if (typeof selected === 'string') {
-                path = selected;
-              } else if (Array.isArray(selected) && (selected as string[]).length > 0) {
-                path = (selected as string[])[0] ?? null;
-              }
-
-              if (path) {
-                const store = useProjectStore.getState();
-                await store.loadProject(path);
-              } else {
-                clearProjectActionSource();
-              }
-            } catch (e) {
-              openDialog('error', {
-                title: 'Open Failed',
-                message: getErrorMessage(e, 'Failed to open project'),
-              });
-            }
-          })();
+          runFileShortcutAction('open_file');
           break;
-        }
 
         case 'save':
           event.preventDefault();
@@ -711,69 +673,24 @@ export function useKeyboardShortcuts() {
           }
           break;
 
-        case 'save_as': {
+        case 'save_as':
           event.preventDefault();
-          const currentProjectSA = useProjectStore.getState().project;
-          if (currentProjectSA) {
-            (async () => {
-              try {
-                const selected = await saveDialog({
-                  filters: projectSaveFilters(),
-                });
-
-                if (selected) {
-                  const finalPath = ensureExtension(selected, PROJECT_EXTENSION);
-
-                  try {
-                    const fileExists = await exists(finalPath);
-                    if (fileExists) {
-                      openDialog('confirm-overwrite', {
-                        path: finalPath,
-                        fileName: finalPath.split('/').pop() ?? finalPath,
-                      });
-                      return;
-                    }
-                  } catch {
-                    // If exists check fails, proceed with save
-                  }
-
-                  const store = useProjectStore.getState();
-                  const result = await store.saveProject(finalPath);
-                  // surfaceSaveFailure routes integrity blocks to Review & Repair
-                  // and skips the generic error window for permission denials
-                  // (saveProject already opened the folder-access guidance dialog).
-                  if (result && !result.success) {
-                    surfaceSaveFailure(result.error, openDialog);
-                  }
-                }
-              } catch (e) {
-                openDialog('error', {
-                  title: 'Save Failed',
-                  message: getErrorMessage(e, 'Failed to save project'),
-                });
-              }
-            })();
+          if (useProjectStore.getState().project) {
+            // Shared with the menu "Save As" path: the Save-As + overwrite-confirm
+            // flow (and its failure handling) lives in saveProjectAs so the two
+            // can't drift.
+            void saveProjectAs();
             maybeShowToast(action);
           }
           break;
-        }
 
-        case 'import_dmp': {
+        case 'import_dmp':
           event.preventDefault();
-          // GUARD: the closure-adjusted view is read-only — imports add sections.
-          // (routeOpenedFile also guards, but skip even opening the picker here.)
-          if (useUIStore.getState().geometryMode === 'closureAdjusted') return;
-          setProjectActionSource('keyboard');
-          // Shared open/import routing (same as the toolbar Import + drag-drop).
-          // A project is open here, so the picker is scoped to DMP only (the only
-          // format importable into an open project); pickAndRoute dispatches by
-          // extension and the router rejects a GPX dropped/typed while open.
-          void pickAndRoute(
-            importFiltersForContext(!!useProjectStore.getState().project),
-            'Import Failed',
-          );
+          // Shared routing (toolbar Import + drag-drop + GlobalView Ctrl+I): the
+          // helper applies the closure-adjusted read-only guard and scopes the
+          // picker to DMP-only while a project is open.
+          runFileShortcutAction('import_dmp');
           break;
-        }
 
         case 'export': {
           event.preventDefault();

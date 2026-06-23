@@ -20,9 +20,11 @@ import {
 import { createPortal } from 'react-dom';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { formatShortcut, isMac } from '../../utils/shortcuts';
 import { IconButton } from './Button';
+import { MenuRow, MenuSeparator } from './MenuRow';
 import { MenuIcon, ChevronRightIcon, CheckIcon } from './icons';
 
 export interface AppMenuItem {
@@ -50,6 +52,11 @@ interface AppMenuProps {
   items: AppMenuItem[];
   /** Tint the hamburger trigger icon red (e.g. when a save has failed). */
   triggerDanger?: boolean;
+  /** Disable the trigger so the menu can't be opened (e.g. during placement mode):
+   *  the file/project actions that moved into this menu were each disabled on the
+   *  old toolbar, so the menu must be unavailable too — otherwise Close Project /
+   *  New / Open / Save As stay clickable mid-placement. */
+  disabled?: boolean;
   'aria-label'?: string;
   'data-testid'?: string;
   /** Root for item testids: `${menuTestId}-item-${id}` is also exposed via item.id. */
@@ -92,6 +99,7 @@ function stepId(ids: string[], current: string | null, dir: 1 | -1): string | nu
 export function AppMenu({
   items,
   triggerDanger = false,
+  disabled = false,
   'aria-label': ariaLabel = 'Menu',
   'data-testid': triggerTestId = 'app-menu-trigger',
   menuTestId = 'app-menu',
@@ -153,7 +161,7 @@ export function AppMenu({
   }, []);
 
   const openSubmenu = useCallback((item: AppMenuItem) => {
-    if (!item.submenu) return;
+    if (item.disabled || !item.submenu) return;
     const el = itemRefs.current[item.id];
     if (el) {
       const r = el.getBoundingClientRect();
@@ -174,8 +182,11 @@ export function AppMenu({
     (item: AppMenuItem) => {
       if (item.disabled) return;
       // Checkable rows (a toggle, e.g. "Dev Stats") stay open so the user can see
-      // the check flip and toggle repeatedly; plain action rows close the menu.
-      if (item.checked === undefined) closeMenu();
+      // the check flip and toggle repeatedly; plain action rows close the menu and
+      // return focus to the trigger (WAI-ARIA menu-button pattern), so keyboard
+      // activation doesn't drop focus to <body>. An onClick that opens a dialog
+      // runs after and moves focus into the dialog on mount.
+      if (item.checked === undefined) closeMenu(true);
       item.onClick?.();
     },
     [closeMenu],
@@ -208,7 +219,11 @@ export function AppMenu({
       top = triggerRect.top - TRIGGER_GAP - Math.min(height, maxHeight);
     }
     setMenuPos({ top: Math.max(VIEWPORT_MARGIN, top), left: triggerRect.left, maxHeight });
-  }, [isOpen, triggerRect]);
+    // `items` is a dependency so that if the menu's content height changes while
+    // it stays open (a future variable-height row), the side/maxHeight cap is
+    // recomputed against the new height instead of staying stale. Both callers
+    // memoize their items array, so this doesn't re-run on unrelated renders.
+  }, [isOpen, triggerRect, items]);
 
   // Position the submenu flyout to the right of its parent row (flip left / clamp),
   // also capping its height to the viewport so a long submenu scrolls.
@@ -243,59 +258,40 @@ export function AppMenu({
     }
   }, [isOpen, openSubmenuId, activeId, submenuActiveId]);
 
-  // Close on click outside (checks trigger, menu, and submenu).
-  useEffect(() => {
-    if (!isOpen) return;
-    const onMouseDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (
-        triggerRef.current?.contains(t) ||
-        menuRef.current?.contains(t) ||
-        submenuRef.current?.contains(t)
-      ) {
-        return;
-      }
-      closeMenu();
-    };
-    document.addEventListener('mousedown', onMouseDown);
-    return () => document.removeEventListener('mousedown', onMouseDown);
-  }, [isOpen, closeMenu]);
-
-  // Close on external scroll / resize so the portaled position never goes stale.
-  useEffect(() => {
-    if (!isOpen) return;
-    const onScroll = (e: Event) => {
-      if (
-        e.target instanceof Node &&
-        (menuRef.current?.contains(e.target) || submenuRef.current?.contains(e.target))
-      ) {
-        return;
-      }
-      closeMenu();
-    };
-    const onResize = () => closeMenu();
-    window.addEventListener('scroll', onScroll, { passive: true, capture: true });
-    window.addEventListener('resize', onResize);
-    return () => {
-      window.removeEventListener('scroll', onScroll, { capture: true });
-      window.removeEventListener('resize', onResize);
-    };
-  }, [isOpen, closeMenu]);
+  // Close on outside mousedown / external scroll / resize (shared with Select), so
+  // the portaled position never goes stale. The menu + submenu are scroll-safe.
+  useDismissableLayer({
+    open: isOpen,
+    onDismiss: closeMenu,
+    contains: [triggerRef, menuRef, submenuRef],
+    scrollSafe: [menuRef, submenuRef],
+  });
 
   const onTriggerKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+      if (disabled) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        // Toggle, mirroring the trigger's click handler — so a keyboard user who
+        // tabs back to the trigger while the menu is open can close it too, not
+        // only open it.
         e.preventDefault();
-        if (!isOpen) openMenu();
+        if (isOpen) closeMenu(true);
+        else openMenu();
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (isOpen) setActiveId(focusableIds(items)[0] ?? null);
+        else openMenu();
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        if (!isOpen) {
+        if (isOpen) {
+          setActiveId(focusableIds(items).slice(-1)[0] ?? null);
+        } else {
           openMenu();
           setActiveId(focusableIds(items).slice(-1)[0] ?? null);
         }
       }
     },
-    [isOpen, openMenu, items],
+    [disabled, isOpen, openMenu, closeMenu, items],
   );
 
   const onMenuKeyDown = useCallback(
@@ -340,7 +336,8 @@ export function AppMenu({
           closeMenu(true);
           break;
         case 'Tab':
-          closeMenu();
+          e.preventDefault();
+          closeMenu(true);
           break;
       }
     },
@@ -380,7 +377,8 @@ export function AppMenu({
           break;
         }
         case 'Tab':
-          closeMenu();
+          e.preventDefault();
+          closeMenu(true);
           break;
       }
     },
@@ -392,15 +390,22 @@ export function AppMenu({
     opts: { isSubmenu: boolean },
   ): ReactNode => {
     if (item.separator) {
-      return <div key={item.id} role="separator" className="border-t border-border my-1" />;
+      return <MenuSeparator key={item.id} role="separator" />;
     }
     const binding = bindingFor(item.action);
     const hasSubmenu = !!item.submenu;
     const refMap = opts.isSubmenu ? submenuItemRefs : itemRefs;
     const isActive = opts.isSubmenu ? submenuActiveId === item.id : activeId === item.id;
+    const variantClass = `${item.disabled ? 'text-text-secondary cursor-not-allowed' : ''} ${
+      item.dangerBg
+        ? 'bg-red-900/60 hover:bg-red-900/80'
+        : item.disabled
+          ? ''
+          : `hover:bg-accent-10 ${isActive ? 'bg-accent-10' : ''}`
+    }`;
 
     return (
-      <button
+      <MenuRow
         key={item.id}
         ref={(el) => {
           refMap.current[item.id] = el;
@@ -423,34 +428,25 @@ export function AppMenu({
           }
         }}
         onMouseEnter={() => {
+          if (item.disabled) return;
           if (opts.isSubmenu) {
             setSubmenuActiveId(item.id);
             return;
           }
           setActiveId(item.id);
-          if (hasSubmenu) openSubmenu(item);
-          else if (openSubmenuId) closeSubmenu();
+          // Only (re)open when a *different* submenu is the target; re-opening an
+          // already-open submenu would reset submenuActiveId to its first row and
+          // discard the user's keyboard-highlighted position.
+          if (hasSubmenu) {
+            if (openSubmenuId !== item.id) openSubmenu(item);
+          } else if (openSubmenuId) closeSubmenu();
         }}
-        className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 ${
-          item.disabled ? 'text-text-secondary cursor-not-allowed' : ''
-        } ${
-          item.dangerBg
-            ? 'bg-red-900/60 hover:bg-red-900/80'
-            : item.disabled
-              ? ''
-              : `hover:bg-accent-10 ${isActive ? 'bg-accent-10' : ''}`
-        }`}
+        label={item.label}
+        icon={item.icon}
+        showIcons={showIcons}
+        iconStyle={item.iconColor ? { color: item.iconColor } : undefined}
+        className={variantClass}
       >
-        {showIcons && (
-          <span
-            className="w-[18px] h-[18px] flex-shrink-0 inline-flex items-center justify-center"
-            style={item.iconColor ? { color: item.iconColor } : undefined}
-            aria-hidden="true"
-          >
-            {item.icon}
-          </span>
-        )}
-        <span className="flex-1 truncate">{item.label}</span>
         {hasSubmenu ? (
           <ChevronRightIcon size={14} className="text-text-secondary flex-shrink-0" />
         ) : item.checked !== undefined ? (
@@ -462,7 +458,7 @@ export function AppMenu({
             </kbd>
           )
         )}
-      </button>
+      </MenuRow>
     );
   };
 
@@ -513,7 +509,11 @@ export function AppMenu({
         ref={triggerRef}
         icon={<MenuIcon className={triggerDanger ? 'text-red-500' : undefined} />}
         size="sm"
-        onClick={() => (isOpen ? closeMenu() : openMenu())}
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) return;
+          isOpen ? closeMenu() : openMenu();
+        }}
         onKeyDown={onTriggerKeyDown}
         aria-label={ariaLabel}
         aria-haspopup="menu"

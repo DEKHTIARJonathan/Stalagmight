@@ -54,6 +54,11 @@ let _dialogCompleted: string | null = null;
 /** When true, trackAction/trackCommand calls are suppressed (for programmatic UI changes). */
 let _silent = false;
 
+/** When true, persistence side effects are suppressed (for programmatic UI changes
+ *  that must not write to the user's config — e.g. onboarding's transient panel toggles).
+ *  Separate from `_silent` so a caller can skip telemetry WITHOUT also dropping a persist. */
+let _persistSuppressed = false;
+
 /** Whether telemetry collection is enabled. Starts false; set by initTelemetry / setTelemetryEnabled. */
 let _enabled = false;
 
@@ -115,6 +120,7 @@ export type SourceName =
   | 'detail-panel'
   | 'dialog'
   | 'display-menu'
+  | 'drag-drop'
   | 'empty-state'
   | 'hamburger'
   | 'keyboard'
@@ -216,14 +222,36 @@ export function withTrackingSuppressed(fn: () => void): void {
 }
 
 /**
- * Whether tracking is currently suppressed (inside a `withTrackingSuppressed`
- * callback). Used by side effects that must be skipped for programmatic UI
- * changes — e.g. onboarding toggles panels transiently and must NOT persist that
- * temporary layout to the user's config (savePanelLayout reads this). The
+ * Whether telemetry is currently suppressed (inside a `withTrackingSuppressed`
+ * callback). Gates only telemetry emission (`trackAction` reads this) — NOT
+ * persistence, which has its own `isPersistSuppressed` flag. Onboarding wraps its
+ * transient panel toggles in BOTH so they neither emit events nor persist. The
  * synchronous prefix of any side effect started inside the callback observes it.
  */
 export function isTrackingSuppressed(): boolean {
   return _silent;
+}
+
+/**
+ * Run a callback with persistence suppressed. Mirrors `withTrackingSuppressed`
+ * but for the separate persistence-suppression concern: a side effect that
+ * writes to the user's config (e.g. `savePanelLayout`) should early-return while
+ * inside this callback, even though telemetry may still be wanted. Onboarding's
+ * transient panel toggles want BOTH suppressed, so they nest the two wrappers.
+ */
+export function withPersistSuppressed(fn: () => void): void {
+  _persistSuppressed = true;
+  try { fn(); } finally { _persistSuppressed = false; }
+}
+
+/**
+ * Whether persistence is currently suppressed (inside a `withPersistSuppressed`
+ * callback). The synchronous prefix of any side effect started inside the
+ * callback observes it — e.g. `savePanelLayout` skips the config write so a
+ * temporary onboarding-driven layout isn't persisted.
+ */
+export function isPersistSuppressed(): boolean {
+  return _persistSuppressed;
 }
 
 /** Increment project sequence and force-flush pending events from previous project. */
@@ -393,8 +421,19 @@ export function trackDialogComplete(dialogName: string): void {
 
 /** Called from closeDialog(). Emits cancel event if no completion was registered. */
 export function checkDialogCancel(dialogName: string): void {
+  const completed = _dialogCompleted === dialogName;
+  // A dialog that closes WITHOUT completing abandons whatever flow it was part
+  // of, so drop any pending entry-point source — otherwise a project open/create/
+  // import flow cancelled at a dialog (including a chained wizard step) would leak
+  // its source into the next, unrelated project command (the source has no auto-
+  // reset). Every case where the source must SURVIVE marks completion first:
+  // dialog chaining calls trackDialogComplete(prev) before closeDialog (openDialog
+  // in uiStore), and the unsaved-changes "Discard" marks complete then loads. So a
+  // non-completed close always means "abandoned" → safe to clear. Runs even when
+  // telemetry is off (it's a no-op on a null source) so the source can't linger.
+  if (!completed) clearProjectActionSource();
   if (!_enabled) { _dialogCompleted = null; return; }
-  if (_dialogCompleted === dialogName) {
+  if (completed) {
     _dialogCompleted = null;
     return;
   }

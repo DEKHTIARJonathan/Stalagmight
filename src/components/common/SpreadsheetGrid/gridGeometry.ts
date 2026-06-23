@@ -8,9 +8,10 @@
  */
 import type { GridSelection } from './types';
 
-export function clamp(n: number, lo: number, hi: number): number {
-  return n < lo ? lo : n > hi ? hi : n;
-}
+// Imported from the shared util (also used internally below) and re-exported so
+// existing importers (SpreadsheetGrid, tests) keep importing `clamp` from here.
+import { clamp } from '../../../utils/clamp';
+export { clamp };
 
 /** Inclusive, normalized rectangle in (row, visibleColumnIndex) space. */
 export interface Rect {

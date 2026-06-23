@@ -133,13 +133,15 @@ test.describe('Data table fullscreen mode', () => {
     // (expand button, collapse chevron) is hidden while fullscreen.
     await expect(page.getByTestId('grid-row-0')).toBeVisible();
     await expect(page.getByTestId('data-table-expand-button')).toHaveCount(0);
-    await expect(page.getByTestId('data-table-open-collapse-toggle')).toHaveCount(0);
+    // Fullscreen renders no opener tab, so the windowed close/collapse control is gone.
+    await expect(page.getByTestId('panel-close-data')).toHaveCount(0);
 
     // Shrink back via the toolbar's "Map view" button.
     await page.getByTestId('toolbar-map-view-button').click();
     await expectWindowed(page);
     await expect(page.getByTestId('data-table-expand-button')).toBeVisible();
-    await expect(page.getByTestId('data-table-open-collapse-toggle')).toBeVisible();
+    // Back in the windowed (pinned-open) table, the collapse control returns.
+    await expect(page.getByTestId('panel-close-data')).toBeVisible();
 
     // Re-enter, exit via Escape.
     await enterFullScreen(page);
@@ -174,9 +176,9 @@ test.describe('Data table fullscreen mode', () => {
     await expectWindowed(page);
 
     // Outside fullscreen the same shortcut toggles the table again — closing
-    // unmounts the DataTable in favor of the collapsed-toggle strip.
+    // unmounts the DataTable in favor of the closed-state opener tab.
     await page.keyboard.press('Control+3');
-    await expect(page.getByTestId('data-table-collapsed-toggle')).toBeVisible();
+    await expect(page.getByTestId('panel-tab-data')).toBeVisible();
     await expect(page.getByTestId('data-table')).toHaveCount(0);
   });
 

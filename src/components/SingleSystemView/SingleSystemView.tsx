@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
+import { useOnboardingStep } from '../../hooks/useOnboardingStep';
 import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
 import { useProjectStore } from '../../store/projectStore';
-import { useUIStore, type PanelId, type PanelMode } from '../../store/uiStore';
+import { PANEL_FIELDS, useUIStore, type PanelId, type PanelMode } from '../../store/uiStore';
 import type { SectionId } from '../../types/project';
 import { useShallow } from 'zustand/react/shallow';
 import { ErrorBoundary } from '../common/ErrorBoundary';
@@ -13,14 +14,14 @@ import SectionsPanel from './SectionsPanel';
 import DetailPanel from './DetailPanel';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
-import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
+import { PANEL_SIZE_BOUNDS, DETAIL_REVEAL_AUTOCLOSE_MS } from './layoutConstants';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { usePanelReveal } from './usePanelReveal';
 import { Dock, BAR } from './Dock';
 import { dmpImportFilters } from '../../utils/fileDialogs';
 import { pickAndRoute } from '../../utils/openOrImport';
 import { useProjectMenuItems } from './useProjectMenuItems';
-import { setSource, withTrackingSuppressed, setProjectActionSource } from '../../utils/telemetry';
+import { setSource, withTrackingSuppressed, withPersistSuppressed, setProjectActionSource } from '../../utils/telemetry';
 import { useTranslation } from 'react-i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -38,12 +39,14 @@ const SECTION_FOCUS_REFIT_DELAY_MS = 180;
 const SECTIONS_TAB_TOP = 40; // just below the top-left "Fit to view" button (bottom ≈ 32px)
 const DETAILS_TAB_TOP = 79; // aligned to the Details panel's header/content divider
 
-// Auto-close grace for a PROGRAMMATIC hover-mode Details reveal (jump-to-warning
-// from the data table). Unlike a real hover, the reveal isn't triggered by the
-// pointer being over the panel, so no mouseleave would ever fire to close it.
-// Generous so the user has time to read/engage (moving onto the panel cancels
-// it), but bounded so it can't float open forever if ignored.
-const DETAIL_REVEAL_AUTOCLOSE_MS = 6000;
+// Opener-tab arrow glyphs. Module-level constant elements (immutable, depend on
+// nothing) so their identity is stable across renders — required for the memoized
+// <Dock> to skip reconciliation during a sibling's resize drag (a fresh element
+// each render would otherwise bust the memo every ~16ms).
+const CHEVRON_RIGHT = <ChevronRightIcon size={14} />;
+const CHEVRON_LEFT = <ChevronLeftIcon size={14} />;
+const CHEVRON_UP = <ChevronUpIcon size={14} />;
+const CHEVRON_DOWN = <ChevronDownIcon size={14} />;
 
 export default function SingleSystemView() {
   const { t } = useTranslation();
@@ -70,10 +73,15 @@ export default function SingleSystemView() {
     : undefined;
   const placementModeActive = useUIStore((s) => s.placementMode !== null);
 
+  // Depend on the stable cancelPending useCallback (not the whole autoSave object,
+  // which is a fresh object each render) so handleSaveProject keeps a stable
+  // identity — otherwise useProjectMenuItems' useMemo rebuilds the menu array on
+  // every render (incl. ~60×/s during a resize drag).
+  const cancelPending = autoSave.cancelPending;
   const handleSaveProject = useCallback(async (opts?: { closeAfterSave?: boolean }) => {
-    autoSave.cancelPending();
+    cancelPending();
     return rawSave(opts);
-  }, [autoSave, rawSave]);
+  }, [cancelPending, rawSave]);
 
   // Toolbar "Import" button: DMP-only picker (the only format importable into an
   // open project; no "All Files" so non-importable types — notably a `.stalx`
@@ -127,6 +135,27 @@ export default function SingleSystemView() {
   const detailReveal = usePanelReveal('detail');
   const dataReveal = usePanelReveal('data-table');
 
+  // Stable onResizeEnd handlers per Dock so handleProps identity stays stable
+  // through a drag (these props feed useResizeHandle, which re-binds listeners
+  // when they change). Inline arrows would be re-created every render — including
+  // the ~60×/s store-width updates during the drag itself.
+  const handleSectionsResizeEnd = useCallback(
+    (size: number) => savePanelSizes('sections', size),
+    [savePanelSizes],
+  );
+  const handleDetailResizeEnd = useCallback(
+    (size: number) => savePanelSizes('detail', size),
+    [savePanelSizes],
+  );
+  // Don't persist the temporary focus-mode height (#50): exit restores the prior
+  // height only in memory, so a focus-time drag must not leak to config.
+  const handleDataResizeEnd = useCallback(
+    (size: number) => {
+      if (focusedSectionId === null) savePanelSizes('data-table', size);
+    },
+    [savePanelSizes, focusedSectionId],
+  );
+
   // Programmatic Details reveal (jump-to-warning from the data table). The store
   // bumps detailRevealNonce ONLY in hover mode (pin mode is revealed by opening
   // the panel in the store directly), so float it open like a hover and arm an
@@ -149,13 +178,25 @@ export default function SingleSystemView() {
   // is open (covering the gap left by a compressed side bar), or sits between the
   // closed bars (BAR inset) when the Data panel is itself closed.
   const [mainEl, setMainEl] = useState<HTMLDivElement | null>(null);
-  // Resize-drag flags so each panel's edge that follows a sibling can track it
-  // live (no transition lag): the side bars follow the Data panel's height, and
-  // the Data overlay's left/right follow the side panels' widths.
-  const [dataResizing, setDataResizing] = useState(false);
-  const [sectionsResizing, setSectionsResizing] = useState(false);
-  const [detailResizing, setDetailResizing] = useState(false);
-  const sidePanelResizing = sectionsResizing || detailResizing;
+  // Which panel (if any) is being resized — at most one at a time, so a single
+  // enum replaces three parallel booleans. Drives each panel's edge that follows a
+  // sibling so it can track live (no transition lag): the side bars follow the Data
+  // panel's height, and the Data overlay's left/right follow the side panels' widths.
+  const [resizingPanel, setResizingPanel] = useState<PanelId | null>(null);
+  // Stable per-panel callback for a Dock's onResizingChange. Clears only when the
+  // panel that set the flag reports it ended, so a stray end-notification from a
+  // different Dock can't wipe the active one. Stable identity (the Docks are
+  // memoized) so it isn't re-created on the ~60×/s resize-tick re-renders.
+  const setPanelResizing = useCallback(
+    (panel: PanelId, resizing: boolean) =>
+      setResizingPanel((prev) => (resizing ? panel : prev === panel ? null : prev)),
+    [],
+  );
+  const onSectionsResizing = useCallback((r: boolean) => setPanelResizing('sections', r), [setPanelResizing]);
+  const onDataResizing = useCallback((r: boolean) => setPanelResizing('data-table', r), [setPanelResizing]);
+  const onDetailResizing = useCallback((r: boolean) => setPanelResizing('detail', r), [setPanelResizing]);
+  const dataResizing = resizingPanel === 'data-table';
+  const sidePanelResizing = resizingPanel === 'sections' || resizingPanel === 'detail';
   // Stop the Data overlay at ANY open side panel's edge — pinned OR hover-floating
   // (both render the full panel at its persisted width); only fill to the window
   // edge when the side is minimized and the Data panel is open, else sit between
@@ -174,10 +215,16 @@ export default function SingleSystemView() {
 
   // #50: name shown in place of the project name while focused on one section.
   // A single lookup drives both existence (the auto-exit effect) and the name.
-  const focusedSection =
-    focusedSectionId !== null
-      ? project?.sections.find((s) => s.id === focusedSectionId) ?? null
-      : null;
+  // Memoized: SingleSystemView re-renders ~60×/s during a panel-resize drag (it
+  // subscribes to the panel width/height being mutated each tick), so the O(n)
+  // .find() must not re-scan project.sections every frame when focus is active.
+  const focusedSection = useMemo(
+    () =>
+      focusedSectionId !== null
+        ? project?.sections.find((s) => s.id === focusedSectionId) ?? null
+        : null,
+    [focusedSectionId, project?.sections],
+  );
   const focusedSectionExists = focusedSection !== null;
   const focusedSectionName =
     focusedSectionId !== null
@@ -286,19 +333,23 @@ export default function SingleSystemView() {
   const detailOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
   const dataTableOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
 
+  // The active onboarding step (DOM-published by OnboardingOverlay), observed once
+  // via the shared hook. Only this view's flow drives the panel reveals here.
+  const onboarding = useOnboardingStep();
+  const singleViewOnboardingStepId =
+    onboarding.flowId === 'single-view-basics' ? onboarding.stepId : null;
+
   // Reveal the right panel during late SURVEY WORKSPACE steps (avoids a visible
   // tooltip jump when entering a panel step), without clobbering the user's
-  // persisted panel mode: pin-open on entry, restore the snapshot on exit.
+  // persisted panel mode: pin-open on entry, restore the snapshot on exit. Driven
+  // by the observed step id, so it runs only when the step actually changes.
   useEffect(() => {
-    const getSingleViewOnboardingStepId = (): string | null => {
-      const overlay = document.querySelector('[data-testid="onboarding-overlay"]');
-      if (!overlay) {
-        return null;
-      }
-      const flowId = overlay.getAttribute('data-onboarding-flow-id');
-      const stepId = overlay.getAttribute('data-onboarding-step-id');
-      return flowId === 'single-view-basics' ? stepId : null;
-    };
+    // Onboarding's transient panel toggles must produce NO telemetry AND NO
+    // config write (the user's saved layout must survive the temporary reveal),
+    // so suppress both concerns together — withTrackingSuppressed gates telemetry
+    // and withPersistSuppressed gates savePanelLayout's persist.
+    const withOnboardingSuppressed = (fn: () => void) =>
+      withTrackingSuppressed(() => withPersistSuppressed(fn));
 
     const syncOnboardingPanel = (
       panel: PanelId,
@@ -306,10 +357,8 @@ export default function SingleSystemView() {
       snapRef: { current: PanelSnapshot | null },
     ) => {
       const ui = useUIStore.getState();
-      const mode =
-        panel === 'sections' ? ui.sectionsPanelMode : panel === 'detail' ? ui.detailPanelMode : ui.dataTableMode;
-      const open =
-        panel === 'sections' ? ui.sectionsPanelOpen : panel === 'detail' ? ui.detailPanelOpen : ui.dataTableOpen;
+      const mode = ui[PANEL_FIELDS[panel].mode];
+      const open = ui[PANEL_FIELDS[panel].open];
       const pinnedOpen = mode === 'pin' && open;
 
       if (shouldShow) {
@@ -317,7 +366,7 @@ export default function SingleSystemView() {
         // pinned-open, in which case there's nothing to reveal or restore.
         if (snapRef.current === null && !pinnedOpen) {
           snapRef.current = { mode, open };
-          withTrackingSuppressed(() => ui.setPanelMode(panel, 'pin'));
+          withOnboardingSuppressed(() => ui.setPanelMode(panel, 'pin'));
         }
       } else if (snapRef.current !== null) {
         const snap = snapRef.current;
@@ -327,7 +376,7 @@ export default function SingleSystemView() {
         // closed it), that's a deliberate choice — honor it instead of reverting to
         // the pre-step snapshot.
         if (pinnedOpen) {
-          withTrackingSuppressed(() => {
+          withOnboardingSuppressed(() => {
             // setPanelMode forces open = (mode === 'pin'); fix up open if it differed
             // (e.g. the user had pinned-but-closed).
             ui.setPanelMode(panel, snap.mode);
@@ -337,31 +386,10 @@ export default function SingleSystemView() {
       }
     };
 
-    const syncOnboardingPanels = () => {
-      const stepId = getSingleViewOnboardingStepId();
-      syncOnboardingPanel('sections', stepId === 'sections', sectionsOnboardingSnapRef);
-      syncOnboardingPanel('detail', stepId === 'detail-panel', detailOnboardingSnapRef);
-      syncOnboardingPanel('data-table', stepId === 'data-table', dataTableOnboardingSnapRef);
-    };
-
-    syncOnboardingPanels();
-
-    if (typeof MutationObserver === 'undefined') {
-      return;
-    }
-
-    const observer = new MutationObserver(syncOnboardingPanels);
-    observer.observe(document.body, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: ['data-onboarding-flow-id', 'data-onboarding-step-id'],
-    });
-
-    return () => {
-      observer.disconnect();
-    };
-  }, []);
+    syncOnboardingPanel('sections', singleViewOnboardingStepId === 'sections', sectionsOnboardingSnapRef);
+    syncOnboardingPanel('detail', singleViewOnboardingStepId === 'detail-panel', detailOnboardingSnapRef);
+    syncOnboardingPanel('data-table', singleViewOnboardingStepId === 'data-table', dataTableOnboardingSnapRef);
+  }, [singleViewOnboardingStepId]);
 
   // Shared panel content — each rendered in exactly ONE place (its Dock), so the
   // heavy instance is never duplicated/remounted across pin/unpin/hover. Memoized
@@ -385,13 +413,21 @@ export default function SingleSystemView() {
   );
   const detailContent = useMemo(
     () => (
-      <div className={`h-full ${dimCls}`}>
+      <div
+        className={`h-full ${dimCls}`}
+        // A programmatic hover-mode reveal (jump-to-warning) arms a timed auto-close
+        // that otherwise only cancels on pointer-enter. Treat keyboard focus / typing
+        // inside the panel as engagement too (onRegionEnter clears the grace), so a
+        // keyboard-only user resolving a warning doesn't have it close mid-task.
+        onFocusCapture={revealDetail}
+        onKeyDownCapture={revealDetail}
+      >
         <ErrorBoundary panelName="Details">
           <DetailPanel />
         </ErrorBoundary>
       </div>
     ),
-    [dimCls],
+    [dimCls, revealDetail],
   );
   const dataInner = useMemo(
     () =>
@@ -405,20 +441,29 @@ export default function SingleSystemView() {
     [sections, dimCls],
   );
 
-  // Plain values, not memoized: panelName is only read field-by-field as strings
-  // and tabLabels is called inline in JSX — neither reference is a dependency or
-  // passed for stability, so re-allocating these small objects per render is free.
-  const panelName = {
-    sections: t('singleView.panels.sectionsName'),
-    detail: t('singleView.panels.detailName'),
-    data: t('singleView.panels.dataName'),
-  };
-  const tabLabels = (name: string) => ({
-    open: t('singleView.panels.open', { name }),
-    pin: t('singleView.panels.pin'),
-    unpin: t('singleView.panels.unpin'),
-    close: t('singleView.panels.close', { name }),
-  });
+  // Memoized on `t` (changes only on locale switch): each Dock's `label` and
+  // `tabLabels` props must keep a stable identity so the memoized <Dock> can skip
+  // reconciliation during a sibling's resize drag — a fresh object per render
+  // would bust the memo every tick.
+  const panelLabels = useMemo(() => {
+    const name = {
+      sections: t('singleView.panels.sectionsName'),
+      detail: t('singleView.panels.detailName'),
+      data: t('singleView.panels.dataName'),
+    };
+    const labels = (n: string) => ({
+      open: t('singleView.panels.open', { name: n }),
+      pin: t('singleView.panels.pin'),
+      unpin: t('singleView.panels.unpin'),
+      close: t('singleView.panels.close', { name: n }),
+    });
+    return {
+      name,
+      sections: labels(name.sections),
+      detail: labels(name.detail),
+      data: labels(name.data),
+    };
+  }, [t]);
 
   if (!project) {
     return (
@@ -459,22 +504,22 @@ export default function SingleSystemView() {
           reveal={sectionsReveal}
           edge="left"
           size={sectionsPanelWidth}
-          minSize={150}
-          maxSize={400}
+          minSize={PANEL_SIZE_BOUNDS.sections.min}
+          maxSize={PANEL_SIZE_BOUNDS.sections.max}
           onResize={setSectionsPanelWidth}
-          onResizeEnd={(size) => savePanelSizes(size, undefined, undefined)}
-          label={panelName.sections}
-          openArrow={<ChevronRightIcon size={14} />}
-          closeArrow={<ChevronLeftIcon size={14} />}
+          onResizeEnd={handleSectionsResizeEnd}
+          label={panelLabels.name.sections}
+          openArrow={CHEVRON_RIGHT}
+          closeArrow={CHEVRON_LEFT}
           testId="sections"
-          tabLabels={tabLabels(panelName.sections)}
+          tabLabels={panelLabels.sections}
           tabTop={SECTIONS_TAB_TOP}
           // When the Data panel is open (pinned OR hover-floating), compress this
           // bar (if minimized) so it stops at the Data panel's top instead of
           // running alongside it.
           closedBottomInset={dataReveal.isOpen ? dataTableHeight : 0}
           suspendSiblingTransition={dataResizing}
-          onResizingChange={setSectionsResizing}
+          onResizingChange={onSectionsResizing}
         >
           {sectionsContent}
         </Dock>
@@ -496,19 +541,15 @@ export default function SingleSystemView() {
             reveal={dataReveal}
             edge="bottom"
             size={dataTableHeight}
-            minSize={DATA_TABLE_MIN_HEIGHT}
-            maxSize={DATA_TABLE_MAX_HEIGHT}
+            minSize={PANEL_SIZE_BOUNDS['data-table'].min}
+            maxSize={PANEL_SIZE_BOUNDS['data-table'].max}
             onResize={setDataTableHeight}
-            // Don't persist the temporary focus-mode height (#50): exit restores
-            // the prior height only in memory, so a focus-time drag must not leak.
-            onResizeEnd={(size) => {
-              if (focusedSectionId === null) savePanelSizes(undefined, undefined, size);
-            }}
-            label={panelName.data}
-            openArrow={<ChevronUpIcon size={14} />}
-            closeArrow={<ChevronDownIcon size={14} />}
+            onResizeEnd={handleDataResizeEnd}
+            label={panelLabels.name.data}
+            openArrow={CHEVRON_UP}
+            closeArrow={CHEVRON_DOWN}
             testId="data"
-            tabLabels={tabLabels(panelName.data)}
+            tabLabels={panelLabels.data}
             // Keep the Data tab clear of the Details tab on the right (it can
             // ride up to the same height when the Data panel is tall).
             tabInset={40}
@@ -518,7 +559,7 @@ export default function SingleSystemView() {
             overlayContainer={mainEl}
             overlayLeft={dataOverlayLeft}
             overlayRight={dataOverlayRight}
-            onResizingChange={setDataResizing}
+            onResizingChange={onDataResizing}
             suspendSiblingTransition={sidePanelResizing}
           >
             {dataInner}
@@ -530,19 +571,19 @@ export default function SingleSystemView() {
           reveal={detailReveal}
           edge="right"
           size={detailPanelWidth}
-          minSize={200}
-          maxSize={500}
+          minSize={PANEL_SIZE_BOUNDS.detail.min}
+          maxSize={PANEL_SIZE_BOUNDS.detail.max}
           onResize={setDetailPanelWidth}
-          onResizeEnd={(size) => savePanelSizes(undefined, size, undefined)}
-          label={panelName.detail}
-          openArrow={<ChevronLeftIcon size={14} />}
-          closeArrow={<ChevronRightIcon size={14} />}
+          onResizeEnd={handleDetailResizeEnd}
+          label={panelLabels.name.detail}
+          openArrow={CHEVRON_LEFT}
+          closeArrow={CHEVRON_RIGHT}
           testId="detail"
-          tabLabels={tabLabels(panelName.detail)}
+          tabLabels={panelLabels.detail}
           tabTop={DETAILS_TAB_TOP}
           closedBottomInset={dataReveal.isOpen ? dataTableHeight : 0}
           suspendSiblingTransition={dataResizing}
-          onResizingChange={setDetailResizing}
+          onResizingChange={onDetailResizing}
         >
           {detailContent}
         </Dock>

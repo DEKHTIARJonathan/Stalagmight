@@ -1,16 +1,13 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { PanelOpenerTab, type PanelEdge } from './PanelOpenerTab';
 import { useResizeHandle } from './useResizeHandle';
 import type { PanelReveal } from './usePanelReveal';
+import { PANEL_RESIZE_GRACE_MS, PANEL_SLIDE_MS } from './layoutConstants';
+import { clamp } from '../../utils/clamp';
 
 /** Width/height of the always-present closed-state opener bar (px). */
 export const BAR = 12;
-/** Slide/reflow duration; keep in sync with the Tailwind duration class. */
-const SLIDE_MS = 150;
-/** Generous grace after a hover-mode resize so the user can move the cursor
- *  back over the panel before it closes. */
-const RESIZE_GRACE_MS = 700;
 
 interface DockProps {
   reveal: PanelReveal;
@@ -69,7 +66,7 @@ interface DockProps {
  * The opener tab is a child anchored to the panel's inner edge (`*:100%`) so it
  * rides the edge with zero gap. See the panel-reveal redesign blueprint.
  */
-export function Dock({
+function DockComponent({
   reveal,
   edge,
   size,
@@ -118,35 +115,70 @@ export function Dock({
     // hit-test the whole outer wrapper (panel + handle + tab). If the pointer
     // ended off it, close on a *generous* grace so the user can move back over.
     onResizeSettled: ({ clientX, clientY }) => {
-      const el = document.elementFromPoint(clientX, clientY);
+      // A fast resize released past the window edge (with pointer capture) yields
+      // coords outside the viewport, where elementFromPoint returns null — which
+      // would read as "not over region" and wrongly schedule a close of the panel
+      // being resized. Clamp into the viewport so it hit-tests the nearest
+      // in-viewport point (the panel/handle at the edge) instead.
+      const x = clamp(clientX, 0, window.innerWidth - 1);
+      const y = clamp(clientY, 0, window.innerHeight - 1);
+      const el = document.elementFromPoint(x, y);
       // Keep the accent only if the release landed back on the handle (no
       // mouseenter re-fires on an in-place release); otherwise clear it.
       setResizeHover(!!el && !!handleRef.current && handleRef.current.contains(el));
       if (!reveal.isFloatingOpen) return;
       const overRegion = !!el && !!outerRef.current && outerRef.current.contains(el);
-      if (!overRegion) reveal.scheduleClose(RESIZE_GRACE_MS);
+      if (!overRegion) reveal.scheduleClose(PANEL_RESIZE_GRACE_MS);
     },
   });
 
   const resizeActive = isResizing || resizeHover;
 
   // Let a sibling (the side bars) track this panel's edge live during its drag.
+  // The cleanup clears the flag if this Dock unmounts mid-drag (project/view
+  // switch, fullscreen toggle, section-focus collapse): otherwise the parent's
+  // sibling-resizing flag would stick true and permanently suspend the sibling
+  // panels' open/close easing for the rest of the session.
   useEffect(() => {
     onResizingChange?.(isResizing);
+    return () => {
+      if (isResizing) onResizingChange?.(false);
+    };
   }, [isResizing, onResizingChange]);
 
   // Keep content mounted through the slide-out so closing animates (single
-  // instance — never remounts on pin/unpin/hover).
+  // instance — never remounts on pin/unpin/hover). Visibility is single-sourced
+  // from reveal.isOpen: while closing, `isClosing` keeps children painted until
+  // the outer wrapper's width/height transition ends (onTransitionEnd below),
+  // with a SLIDE_MS timer as a fallback so content always unmounts even when no
+  // `transitionend` fires (disabled-transition theme / 0-duration). No lagging
+  // mounted-state mirror. `mounted = open || isClosing`.
   const open = reveal.isOpen;
-  const [mounted, setMounted] = useState(open);
+  const [isClosing, setIsClosing] = useState(false);
+  const wasOpenRef = useRef(open);
   useEffect(() => {
     if (open) {
-      setMounted(true);
-      return;
+      // Re-opening (or opening) cancels any in-flight close.
+      if (isClosing) setIsClosing(false);
+    } else if (wasOpenRef.current) {
+      // open → closed: start the slide-out; keep children mounted until the
+      // clip box's width/height transition ends.
+      setIsClosing(true);
     }
-    const id = window.setTimeout(() => setMounted(false), SLIDE_MS);
-    return () => window.clearTimeout(id);
-  }, [open]);
+    wasOpenRef.current = open;
+  }, [open, isClosing]);
+  // Fallback unmount: if the wrapper has no width/height transition to emit
+  // `transitionend` (e.g. the e-ink theme forces `transition: none !important`,
+  // or reduced motion / 0-duration), clear `isClosing` after the slide window so
+  // a closed panel's content can never stay mounted forever. The precise
+  // onTransitionEnd path clears it earlier in the normal animated case, which
+  // cancels this timer via cleanup.
+  useEffect(() => {
+    if (!isClosing) return;
+    const t = window.setTimeout(() => setIsClosing(false), PANEL_SLIDE_MS + 50);
+    return () => window.clearTimeout(t);
+  }, [isClosing]);
+  const mounted = open || isClosing;
 
   const sizeNow = open ? size : BAR;
   const spacerSize = reveal.isPinnedOpen ? size : BAR;
@@ -156,12 +188,13 @@ export function Dock({
   // side panels; a side bar's bottom follows the Data panel. Drop their easing
   // while that sibling is dragged so they track 1:1 (no lag).
   const trackingEdges = edge === 'bottom' ? ['left', 'right'] : ['bottom'];
+  const ease = `${PANEL_SLIDE_MS}ms ease-out`;
   const sizeTransition = isResizing
     ? 'none'
     : [
-        'width 150ms ease-out',
-        'height 150ms ease-out',
-        ...(suspendSiblingTransition ? [] : trackingEdges.map((p) => `${p} 150ms ease-out`)),
+        `width ${ease}`,
+        `height ${ease}`,
+        ...(suspendSiblingTransition ? [] : trackingEdges.map((p) => `${p} ${ease}`)),
       ].join(', ');
 
   // ── Reflow spacer (flow): only this pushes the map. ──
@@ -212,6 +245,20 @@ export function Dock({
       ref={outerRef}
       className={`absolute pointer-events-auto ${fullscreen ? 'z-40' : reveal.isFloatingOpen ? 'z-30' : 'z-20'}`}
       style={{ ...outerStyle, transition: sizeTransition }}
+      // The slide-out ends when THIS wrapper's own width/height transition
+      // finishes — unmount the children then (single-sourced from reveal.isOpen;
+      // the SLIDE_MS timer above is only a fallback). Guard on target + property
+      // so a child's color/other transition bubbling up doesn't end it early.
+      onTransitionEnd={(e) => {
+        if (
+          isClosing &&
+          !open &&
+          e.target === outerRef.current &&
+          (e.propertyName === (vertical ? 'width' : 'height'))
+        ) {
+          setIsClosing(false);
+        }
+      }}
       onMouseEnter={() => {
         reveal.onRegionEnter();
         setOpenerHover(true);
@@ -323,5 +370,12 @@ export function Dock({
     </>
   );
 }
+
+// Memoized: during a panel resize the parent re-renders ~60×/s (the store width
+// updates each tick), but only the dragged Dock's `size` (or a sibling-tracking
+// inset/overlay) actually changes. With a stable `reveal` (memoized in
+// usePanelReveal), hoisted arrow elements, and memoized tabLabels, the other Docks
+// and their PanelOpenerTab subtrees skip reconciliation on unrelated ticks.
+export const Dock = memo(DockComponent);
 
 export default Dock;

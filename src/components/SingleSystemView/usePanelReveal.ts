@@ -1,9 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useUIStore, type PanelId } from '../../store/uiStore';
-
-/** Grace period bridging mouse moves between the bar, tab, and floating panel
- *  (separate DOM elements) so the panel doesn't flicker closed in transit. */
-const CLOSE_GRACE_MS = 120;
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PANEL_FIELDS, useUIStore, type PanelId } from '../../store/uiStore';
+import { PANEL_CLOSE_GRACE_MS } from './layoutConstants';
 
 export interface PanelReveal {
   /** Pinned and open → rendered in the flex layout (reflows the map). */
@@ -35,20 +32,8 @@ export interface PanelReveal {
  * local React state with a short close-grace timer. See the panel-reveal plan.
  */
 export function usePanelReveal(panel: PanelId): PanelReveal {
-  const mode = useUIStore((s) =>
-    panel === 'sections'
-      ? s.sectionsPanelMode
-      : panel === 'detail'
-        ? s.detailPanelMode
-        : s.dataTableMode,
-  );
-  const open = useUIStore((s) =>
-    panel === 'sections'
-      ? s.sectionsPanelOpen
-      : panel === 'detail'
-        ? s.detailPanelOpen
-        : s.dataTableOpen,
-  );
+  const mode = useUIStore((s) => s[PANEL_FIELDS[panel].mode]);
+  const open = useUIStore((s) => s[PANEL_FIELDS[panel].open]);
   const setPanelMode = useUIStore((s) => s.setPanelMode);
   const setPanelOpen = useUIStore((s) => s.setPanelOpen);
 
@@ -89,7 +74,7 @@ export function usePanelReveal(panel: PanelId): PanelReveal {
   }, [clearGrace]);
 
   const scheduleClose = useCallback(
-    (ms: number = CLOSE_GRACE_MS) => {
+    (ms: number = PANEL_CLOSE_GRACE_MS) => {
       // Don't let a shorter grace shorten a longer one already pending — e.g. the
       // reconciling mouseleave fired on resize pointer-capture release must not
       // clobber the generous post-resize grace down to the default.
@@ -139,16 +124,24 @@ export function usePanelReveal(panel: PanelId): PanelReveal {
     setHovering(false);
   }, [panel, setPanelOpen, clearGrace]);
 
-  return {
-    isPinnedOpen,
-    isFloatingOpen,
-    isOpen,
-    onRegionEnter,
-    onRegionLeave,
-    scheduleClose,
-    openClick,
-    pin,
-    unpin,
-    close,
-  };
+  // Memoize so the returned object keeps a stable identity across renders where no
+  // field changed (e.g. the ~60×/s store-width updates during a sibling's resize
+  // drag don't touch mode/open/hovering). The callbacks are all stable, so this
+  // object's identity flips only when a reveal boolean does — letting React.memo'd
+  // <Dock>s that take `reveal` skip re-rendering during unrelated resize ticks.
+  return useMemo(
+    () => ({
+      isPinnedOpen,
+      isFloatingOpen,
+      isOpen,
+      onRegionEnter,
+      onRegionLeave,
+      scheduleClose,
+      openClick,
+      pin,
+      unpin,
+      close,
+    }),
+    [isPinnedOpen, isFloatingOpen, isOpen, onRegionEnter, onRegionLeave, scheduleClose, openClick, pin, unpin, close],
+  );
 }

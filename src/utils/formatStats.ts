@@ -4,6 +4,7 @@
 
 import type { LengthUnit } from '../types/config';
 import { formatFixed } from '../i18n/format';
+import { clamp } from './clamp';
 
 /** Conversion factor: meters to feet */
 const FEET_PER_METER = 3.28084;
@@ -39,7 +40,7 @@ function convertLength(meters: number, unit: LengthUnit): number {
  * Clamp precision to valid range for toFixed().
  */
 function clampPrecision(precision: number): number {
-  return Math.max(0, Math.min(MAX_DECIMAL_PRECISION, Math.floor(precision) || 0));
+  return clamp(Math.floor(precision) || 0, 0, MAX_DECIMAL_PRECISION);
 }
 
 /**

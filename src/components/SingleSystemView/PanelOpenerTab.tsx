@@ -16,14 +16,14 @@ interface PanelOpenerTabProps {
   /** Panel id used for test ids (`panel-tab-${id}` etc.). */
   testId: string;
   labels: { open: string; pin: string; unpin: string; close: string };
-  /** While the panel is being resized, tint the tab border with the accent so
-   *  the resize highlight visually wraps around the tab instead of under it. */
-  resizing?: boolean;
   /** Show the open-state controls while the panel is visually present (open OR
    *  sliding out), and only fall back to the opener label/arrow once fully
    *  minified — avoids the tab flickering its contents mid-transition. Defaults
    *  to `reveal.isOpen` when omitted. */
   visuallyOpen?: boolean;
+  /** While the panel is being resized, tint the tab border with the accent so
+   *  the resize highlight visually wraps around the tab instead of under it. */
+  resizing?: boolean;
   /** The opener (edge bar + this tab) is hovered as a unit — highlight the
    *  closed tab (lighter bg + brighter text) together with the bar, regardless
    *  of whether the pointer is over the bar or the tab. */

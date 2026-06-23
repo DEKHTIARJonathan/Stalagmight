@@ -333,6 +333,32 @@ fn default_panel_mode() -> String {
     "pin".to_string()
 }
 
+impl PanelsConfig {
+    /// Clamp persisted panel sizes to the same bounds the UI enforces while
+    /// dragging, and repair any out-of-range reveal-mode string. The frontend
+    /// clamps panel sizes before persisting them (savePanelSizes), but the load
+    /// path did not — so a hand-edited, older, or otherwise degenerate config
+    /// could load e.g. a 0-pixel width that the frontend then renders as a
+    /// collapsed, invisible panel. Bounds mirror PANEL_SIZE_BOUNDS in
+    /// src/components/SingleSystemView/layoutConstants.ts.
+    pub fn normalize(&mut self) {
+        self.sections_panel_width = self.sections_panel_width.clamp(150, 400);
+        self.detail_panel_width = self.detail_panel_width.clamp(200, 500);
+        self.data_table_height = self.data_table_height.clamp(100, 500);
+        normalize_panel_mode(&mut self.sections_panel_mode);
+        normalize_panel_mode(&mut self.detail_panel_mode);
+        normalize_panel_mode(&mut self.data_table_mode);
+    }
+}
+
+/// Coerce a persisted reveal-mode string to a known value, mirroring the
+/// frontend's `asMode` (anything that isn't "hover" becomes the default "pin").
+fn normalize_panel_mode(mode: &mut String) {
+    if mode != "pin" && mode != "hover" {
+        *mode = default_panel_mode();
+    }
+}
+
 fn default_station_hidden_columns() -> Vec<String> {
     vec![
         "_x".to_string(),
@@ -1766,6 +1792,7 @@ impl Config {
     pub fn normalize(&mut self) {
         self.map.normalize();
         self.shortcuts.normalize();
+        self.panels.normalize();
         self.global_view.normalize();
         self.appearance.normalize();
         self.closure_adjustment.normalize();

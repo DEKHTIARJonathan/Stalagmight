@@ -369,12 +369,27 @@ const chatBubble: BadgeContent = (cx, cy, r) => {
 /** "Data rows" / hamburger (shot data) — three stacked lines. */
 const dataLines: BadgeContent = (cx, cy, r) => {
   const hw = r * 0.6, gap = r * 0.44;
-  const line = (dy: number) => `M${(cx - hw).toFixed(2)} ${(cy + dy).toFixed(2)} H${(cx + hw).toFixed(2)}`;
+  // Draw each row as a FILLED stadium (rounded rect) instead of a stroked line:
+  // WebKit fattens thin strokes under the setZoom UI scale (the project rule —
+  // draw UI icons filled, not stroked). Height + rx reproduce the prior
+  // stroke-width 1.6 with round caps, so the glyph is pixel-identical at 1x.
+  const t = 1.6;
+  const row = (dy: number) => (
+    <rect
+      className="data-lines"
+      x={(cx - hw - t / 2).toFixed(2)}
+      y={(cy + dy - t / 2).toFixed(2)}
+      width={(hw * 2 + t).toFixed(2)}
+      height={t.toFixed(2)}
+      rx={(t / 2).toFixed(2)}
+      ry={(t / 2).toFixed(2)}
+    />
+  );
   return (
     <g>
-      <path className="data-lines" d={line(-gap)} />
-      <path className="data-lines" d={line(0)} />
-      <path className="data-lines" d={line(gap)} />
+      {row(-gap)}
+      {row(0)}
+      {row(gap)}
     </g>
   );
 };

@@ -4,6 +4,8 @@
  * (getErrorColor) and the map's Issue-severity Display mode
  * (src/utils/themeColors.ts). Keep as literals here; consumers import.
  */
+import { clamp } from './clamp';
+
 export const SEVERITY_GREEN = '#22c55e';
 export const SEVERITY_YELLOW = '#eab308';
 export const SEVERITY_ORANGE = '#f97316';
@@ -194,7 +196,7 @@ export function getDepthColor(
   }
 
   // Clamp depth to range
-  const clampedDepth = Math.max(minDepth, Math.min(maxDepth, depth));
+  const clampedDepth = clamp(depth, minDepth, maxDepth);
   const t = (clampedDepth - minDepth) / (maxDepth - minDepth);
 
   // Convert hex to HSL

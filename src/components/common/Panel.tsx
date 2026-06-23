@@ -1,6 +1,6 @@
 import { type ReactNode, useState, useRef, useCallback } from 'react';
 import { ChevronDownIcon, ChevronRightIcon } from './icons';
-import { useResizingFlag } from '../../hooks/useResizingFlag';
+import { useResizeHandle } from '../SingleSystemView/useResizeHandle';
 
 interface PanelProps {
   title?: string;
@@ -80,51 +80,29 @@ export function ResizablePanel({
   className = '',
   handlePosition = 'end',
 }: ResizablePanelProps) {
+  // Locally-owned size, seeded from defaultSize and driven by the shared
+  // useResizeHandle drag loop (rect math, clamp+round, no-op-drag guard, and the
+  // ref/state isResizing dance all live there — one resize implementation).
   const [size, setSize] = useState(defaultSize);
-  // `isResizing` drives the handle highlight; the pointer handlers gate on the
-  // ref so the first pointermove after pointerdown isn't dropped (see
-  // useResizingFlag).
-  const { isResizing, isResizingRef, beginResizing, endResizing } = useResizingFlag();
   const panelRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef(size);
 
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
-    e.preventDefault();
-    // Capture pointer so all subsequent events arrive on this element
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    beginResizing();
-  }, [beginResizing]);
-
-  const handlePointerMove = useCallback(
-    (e: React.PointerEvent) => {
-      if (!isResizingRef.current || !panelRef.current) return;
-
-      const rect = panelRef.current.getBoundingClientRect();
-      let newSize: number;
-
-      if (direction === 'horizontal') {
-        if (handlePosition === 'end') {
-          newSize = e.clientX - rect.left;
-        } else {
-          newSize = rect.right - e.clientX;
-        }
-      } else {
-        newSize = rect.bottom - e.clientY;
-      }
-
-      newSize = Math.max(minSize, Math.min(maxSize, newSize));
-      setSize(newSize);
-      sizeRef.current = newSize;
-      onResize?.(newSize);
+  const handleResize = useCallback(
+    (next: number) => {
+      setSize(next);
+      onResize?.(next);
     },
-    [isResizingRef, direction, handlePosition, minSize, maxSize, onResize]
+    [onResize],
   );
 
-  const handlePointerUp = useCallback(() => {
-    if (!isResizingRef.current) return;
-    onResizeEnd?.(sizeRef.current);
-    endResizing();
-  }, [isResizingRef, onResizeEnd, endResizing]);
+  const { isResizing, handleProps } = useResizeHandle({
+    direction,
+    handlePosition,
+    minSize,
+    maxSize,
+    measureRef: panelRef,
+    onResize: handleResize,
+    onResizeEnd,
+  });
 
   const style = direction === 'horizontal' ? { width: size } : { height: size };
 
@@ -154,10 +132,7 @@ export function ResizablePanel({
       <div
         className={`absolute bg-transparent hover:bg-accent-50 transition-colors ${handleClass} ${handleStyle} ${isResizing ? 'bg-accent-50' : ''}`}
         style={{ touchAction: 'none' }}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
+        {...handleProps}
       >
         <div className={direction === 'horizontal' ? 'w-full h-full' : 'w-full h-full'} />
       </div>

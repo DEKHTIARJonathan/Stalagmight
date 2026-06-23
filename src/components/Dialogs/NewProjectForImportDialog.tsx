@@ -6,7 +6,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { ensureExtension, projectSaveFilters, saveDialog, PROJECT_EXTENSION } from '../../utils/fileDialogs';
 import type { DmpFile, TmlFile, GpxFile, CompassFile } from '../../types/commands';
-import { setSource, trackDialogComplete } from '../../utils/telemetry';
+import { setSource, trackDialogComplete, peekProjectActionSource, setProjectActionSource } from '../../utils/telemetry';
 
 /**
  * New Project dialog variant used during the DMP/TML import flow.
@@ -129,6 +129,12 @@ export default function NewProjectForImportDialog() {
     setError(null);
 
     try {
+      // Capture the entry-point source before createProject: its setView('single')
+      // clears the pending project-action source, but the follow-up import command
+      // in THIS same flow (import_sections / execute*Import) peeks the SAME source.
+      // Re-arm it after the project is created so the import is attributed to the
+      // same entry point as create_project_full (the import command clears it).
+      const importSource = peekProjectActionSource();
       const result = await createProject(
         name.trim(),
         projectLocation.trim() || undefined,
@@ -136,6 +142,7 @@ export default function NewProjectForImportDialog() {
       );
 
       if (result.success) {
+        if (importSource) setProjectActionSource(importSource);
         trackDialogComplete('new-project-for-import');
         closeDialog();
         if (isGpx && gpxFile) {

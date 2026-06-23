@@ -16,9 +16,50 @@ import {
 import { MENU_ICON_COLORS } from './menuColors';
 import { setProjectActionSource, type SourceName } from '../../utils/telemetry';
 import { quitApp } from '../../utils/quit';
+import { pickAndRoute } from '../../utils/openOrImport';
 import type { AppMenuItem } from './AppMenu';
 
 const ICON_SIZE = 18;
+
+/** Filters passed to the file picker — `[{ name, extensions }]`. */
+type FileFilters = Array<{ name: string; extensions: string[] }>;
+
+/**
+ * Tag the entry-point `source` then route the picked file through the shared
+ * open/import router (so it shares the closure-adjusted read-only guard and
+ * per-extension dispatch with the toolbar / Ctrl+I / drag-drop paths). Shared by
+ * the import menu rows and the GlobalView EmptyState card so the set-source-then-
+ * route body lives in exactly one place.
+ */
+export function runImport(filters: FileFilters, source: SourceName): void {
+  setProjectActionSource(source);
+  void pickAndRoute(filters, 'Import Failed');
+}
+
+/**
+ * A single "import <format>" row: tags the entry-point `source` then routes the
+ * picked file through the shared open/import router (so it shares the closure-
+ * adjusted read-only guard and per-extension dispatch with the toolbar / Ctrl+I
+ * / drag-drop paths). The `filters` thunk is the only thing that varies between
+ * formats and contexts (e.g. DMP-only in-project vs. with "All Files" on the
+ * start screen), so callers pass the appropriate filter helper.
+ */
+export function importMenuItem(
+  id: string,
+  label: string,
+  filters: () => FileFilters,
+  source: SourceName,
+  action?: string,
+): AppMenuItem {
+  return {
+    id,
+    label,
+    ...(action ? { action } : {}),
+    onClick: () => {
+      runImport(filters(), source);
+    },
+  };
+}
 
 /** New + Open rows. `source` is the telemetry entry-point tag (e.g. 'hamburger'). */
 export function leadingMenuItems(

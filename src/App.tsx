@@ -7,6 +7,7 @@ import { useUIStore } from './store/uiStore';
 import { invokeIpc } from './utils/ipc';
 import { extractFilename } from './utils/path';
 import { routeOpenedFile } from './utils/openOrImport';
+import { IMPORTABLE_EXTENSIONS } from './utils/fileDialogs';
 import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
 import i18n from './i18n';
@@ -16,7 +17,7 @@ import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
 import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog } from './components/Dialogs';
-import { initTelemetry, flushTelemetry } from './utils/telemetry';
+import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu } from './components/common';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
@@ -208,13 +209,21 @@ function App() {
    * a drop never opens/replaces a project.
    */
   const handleImportFileDrop = useCallback(async (filePath: string) => {
+    // Tag the entry point so the routed import command (import_sections /
+    // create_project_full / execute*Import) is attributed to drag-drop, like the
+    // toolbar / menu / keyboard paths all set their source. routeOpenedFile clears
+    // it on every terminal/abandon path.
+    setProjectActionSource('drag-drop');
     await routeOpenedFile(filePath, 'Import Failed');
   }, []);
 
   // Set up drag-drop event listener for importable files (DMP/TML/TMLU/Compass/GPX)
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    const importExts = ['.dmp', '.tml', '.tmlu', '.gpx', '.mak', '.dat'];
+    // Derived from the single source of truth so the drag-drop file detection
+    // can't drift from the router's `isImportable` guard / the picker filters.
+    // IMPORTABLE_EXTENSIONS has no leading dot; the path match expects one.
+    const importExts = IMPORTABLE_EXTENSIONS.map((ext) => `.${ext}`);
 
     const setupDragDrop = async () => {
       try {
