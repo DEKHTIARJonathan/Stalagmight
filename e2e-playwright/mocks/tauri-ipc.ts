@@ -1171,16 +1171,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }, 0) ?? 0;
 
             return {
-              // Return a FRESH project object each call (shallow clone + new sections
-              // array), mirroring the real Tauri IPC which deserializes a new object
-              // every call. The in-place section seeding (.push onto
-              // currentProject.sections) otherwise keeps the SAME array reference, which
-              // freezes #160's `useMemo([sections])` SectionsPanel content at its initial
-              // (empty) render even though `stats` — rebuilt fresh below — shows the
-              // populated count. (Caused ~50 full-suite failures; smoke never hit it.)
-              project: currentProject
-                ? { ...currentProject, sections: [...currentProject.sections] }
-                : currentProject,
+              // Return a FRESH (deep-cloned) project each call, mirroring the real Tauri
+              // IPC: the backend returns `project.clone()` serialized over IPC, so the
+              // project AND every nested array (sections, zero_datums, loop_closures, …)
+              // gets a new identity per call. The mock mutates those arrays in place
+              // (e.g. sections.push in create_section, datums.push in set_zero_datum),
+              // so returning the same reference froze #160's reference-keyed memos —
+              // `useMemo([sections])` left the SectionsPanel empty even as fresh `stats`
+              // showed the populated count. A deep clone keeps every consumer's
+              // ref-identity check honest, not just the sections one. (Caused ~50
+              // full-suite failures; smoke seeds once, so it never hit this.)
+              project: currentProject ? structuredClone(currentProject) : currentProject,
               stations: mockStations,
               stats: {
                 section_count: currentProject?.sections.length ?? 0,
