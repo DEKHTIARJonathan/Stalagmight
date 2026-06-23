@@ -397,6 +397,58 @@ fn test_update_panel_sizes_none_keeps_values() {
 }
 
 #[test]
+fn test_update_panel_layout_partial() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            let before = config::get_config(state(&app));
+            // Update only the sections panel: close it + switch to hover.
+            config::update_panel_layout(
+                state(&app),
+                Some(false),
+                Some("hover".to_string()),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let after = config::get_config(state(&app));
+            assert!(!after.panels.sections_panel_open);
+            assert_eq!(after.panels.sections_panel_mode, "hover");
+            // Other panels untouched.
+            assert_eq!(
+                after.panels.detail_panel_open,
+                before.panels.detail_panel_open
+            );
+            assert_eq!(after.panels.data_table_mode, before.panels.data_table_mode);
+        });
+    });
+}
+
+#[test]
+fn test_update_panel_layout_rejects_invalid_mode() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            let result = config::update_panel_layout(
+                state(&app),
+                None,
+                Some("nope".to_string()),
+                None,
+                None,
+                None,
+                None,
+            );
+            assert!(result.is_err());
+            // A rejected mode must not have mutated config.
+            let after = config::get_config(state(&app));
+            assert_eq!(after.panels.sections_panel_mode, "pin");
+        });
+    });
+}
+
+#[test]
 fn test_save_display_setting_then_get() {
     let app = app_with_state();
     config::save_display_setting(state(&app), "k1".to_string(), "v1".to_string()).unwrap();

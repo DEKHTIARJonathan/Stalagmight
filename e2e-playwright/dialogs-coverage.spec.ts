@@ -5,6 +5,7 @@ import {
   seedProjectWithSections,
   waitForMapReady,
   waitForNoDialogs,
+  openSettingsFromMenu,
 } from './helpers/app';
 
 type StationRef = { section_id: number; station_index: number };
@@ -85,13 +86,6 @@ async function openDialog(page: Page, name: string, data: Record<string, unknown
     },
     { dialogName: name, dialogData: data }
   );
-}
-
-async function openSettingsDialog(page: Page) {
-  const settingsButton = page.getByTestId('settings-button');
-  await expect(settingsButton).toBeVisible({ timeout: 5000 });
-  await settingsButton.click();
-  await expect(page.getByTestId('settings-dialog')).toBeVisible({ timeout: 5000 });
 }
 
 test.describe('Dialog Coverage - Edit Shot', () => {
@@ -371,7 +365,7 @@ test.describe('Dialog Coverage - Confirm Delete', () => {
 test.describe('Dialog Coverage - Settings Advanced', () => {
   test('marks dirty state and validates advanced settings', async ({ page }) => {
     await setupMockedPage(page);
-    await openSettingsDialog(page);
+    await openSettingsFromMenu(page);
 
     const advancedTab = page.getByTestId('settings-tab-advanced');
     await advancedTab.click();
@@ -400,7 +394,7 @@ test.describe('Dialog Coverage - Settings Advanced', () => {
 test.describe('Dialog Coverage - Settings Map', () => {
   test('validates map settings and enables save after fixes', async ({ page }) => {
     await setupMockedPage(page);
-    await openSettingsDialog(page);
+    await openSettingsFromMenu(page);
 
     const mapTab = page.getByTestId('settings-tab-map');
     await mapTab.click();

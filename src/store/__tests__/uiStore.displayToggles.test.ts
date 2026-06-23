@@ -29,7 +29,6 @@ const getCleanTestState = () => ({
   showReferenceShots: true,
   showZeroDatum: true,
   showGrid: false,
-  showScaleBar: true,
   showSatellite: false,
   showDepthGradient: false,
   // The mutually-exclusive coloring overlays must be reset too, or a test that
@@ -89,10 +88,6 @@ describe('Display Toggle State', () => {
       expect(useUIStore.getState().showGrid).toBe(DISPLAY_DEFAULTS.showGrid);
     });
 
-    it('store showScaleBar uses DISPLAY_DEFAULTS value', () => {
-      expect(useUIStore.getState().showScaleBar).toBe(DISPLAY_DEFAULTS.showScaleBar);
-    });
-
     it('store showSatellite uses DISPLAY_DEFAULTS value', () => {
       expect(useUIStore.getState().showSatellite).toBe(DISPLAY_DEFAULTS.showSatellite);
     });
@@ -117,7 +112,6 @@ describe('Display Toggle State', () => {
         'showReferenceShots',
         'showZeroDatum',
         'showGrid',
-        'showScaleBar',
         'showSatellite',
         'showDepthGradient',
         'gridSpacing',
@@ -140,7 +134,6 @@ describe('Display Toggle State', () => {
         showReferenceShots: !DISPLAY_DEFAULTS.showReferenceShots,
         showZeroDatum: !DISPLAY_DEFAULTS.showZeroDatum,
         showGrid: !DISPLAY_DEFAULTS.showGrid,
-        showScaleBar: !DISPLAY_DEFAULTS.showScaleBar,
         showSatellite: !DISPLAY_DEFAULTS.showSatellite,
         showDepthGradient: !DISPLAY_DEFAULTS.showDepthGradient,
         gridSpacing: 99,
@@ -159,7 +152,6 @@ describe('Display Toggle State', () => {
       expect(state.showReferenceShots).toBe(DISPLAY_DEFAULTS.showReferenceShots);
       expect(state.showZeroDatum).toBe(DISPLAY_DEFAULTS.showZeroDatum);
       expect(state.showGrid).toBe(DISPLAY_DEFAULTS.showGrid);
-      expect(state.showScaleBar).toBe(DISPLAY_DEFAULTS.showScaleBar);
       expect(state.showSatellite).toBe(DISPLAY_DEFAULTS.showSatellite);
       expect(state.showDepthGradient).toBe(DISPLAY_DEFAULTS.showDepthGradient);
       expect(state.gridSpacing).toBe(DISPLAY_DEFAULTS.gridSpacing);
@@ -206,7 +198,6 @@ describe('Display Toggle State', () => {
         'showReferenceShots',
         'showZeroDatum',
         'showGrid',
-        'showScaleBar',
         'showSatellite',
         'showDepthGradient',
       ];

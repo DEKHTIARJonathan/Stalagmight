@@ -6,6 +6,7 @@
  */
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useId, useMemo, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 
 export interface SelectOption {
   value: string;
@@ -169,60 +170,17 @@ export function Select({
     return flatOptions.findIndex(opt => opt.value === value);
   }, [flatOptions, value]);
 
-  // Close dropdown when clicking outside — checks both triggerRef and dropdownRef
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (
-        triggerRef.current?.contains(target) ||
-        dropdownRef.current?.contains(target)
-      ) {
-        return;
-      }
+  // Close on outside mousedown / external scroll (not internal dropdown scroll) /
+  // resize — shared with AppMenu. The portaled dropdown is the scroll-safe surface.
+  useDismissableLayer({
+    open: isOpen,
+    onDismiss: () => {
       onOptionHover?.(null);
       setIsOpen(false);
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isOpen, onOptionHover]);
-
-  // Close on external scroll (not internal dropdown scroll)
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleScroll = (event: Event) => {
-      // Ignore scroll events inside the portaled dropdown (user scrolling options,
-      // or scrollIntoView from keyboard navigation).
-      // Guard: event.target may not be a Node (e.g. window/document in some environments).
-      if (
-        event.target instanceof Node &&
-        dropdownRef.current?.contains(event.target)
-      ) {
-        return;
-      }
-      onOptionHoverRef.current?.(null);
-      setIsOpen(false);
-    };
-
-    window.addEventListener('scroll', handleScroll, { passive: true, capture: true });
-    return () => window.removeEventListener('scroll', handleScroll, { capture: true });
-  }, [isOpen]);
-
-  // Close on window resize
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleResize = () => {
-      onOptionHoverRef.current?.(null);
-      setIsOpen(false);
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [isOpen]);
+    },
+    contains: [triggerRef, dropdownRef],
+    scrollSafe: [dropdownRef],
+  });
 
   // Position calculation with flicker prevention via useLayoutEffect.
   // The hidden render pass already has correct width/left from triggerRect state,
@@ -574,11 +532,14 @@ export function Select({
         </span>
         <svg
           className={`w-4 h-4 text-text-secondary transition-transform ${isOpen ? 'rotate-180' : ''}`}
-          fill="none"
-          stroke="currentColor"
+          fill="currentColor"
           viewBox="0 0 24 24"
+          aria-hidden="true"
         >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          {/* Filled chevron (down) — robust under the page-zoom UI scale. Width
+              includes the round-cap extension (len + weight). */}
+          <rect x="9.45" y="11.4" width="12.1" height="2.2" rx="1.1" transform="rotate(135 15.5 12.5)" />
+          <rect x="2.45" y="11.4" width="12.1" height="2.2" rx="1.1" transform="rotate(-135 8.5 12.5)" />
         </svg>
       </button>
 

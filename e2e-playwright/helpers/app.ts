@@ -118,6 +118,59 @@ export async function clickFirstVisible(locators: Locator[]): Promise<void> {
   throw new Error('No matching locator was visible');
 }
 
+/** Open the hamburger application menu (same trigger in global and in-project views). */
+export async function openAppMenu(page: Page): Promise<void> {
+  const trigger = page.getByTestId('app-menu-trigger');
+  await expect(trigger).toBeVisible({ timeout: 5000 });
+  if ((await trigger.getAttribute('data-dropdown-open')) === null) {
+    await trigger.click();
+  }
+  await expect(page.getByTestId('app-menu')).toBeVisible({ timeout: 5000 });
+}
+
+/** Open the Settings dialog via the hamburger menu (global view). */
+export async function openSettingsFromMenu(page: Page): Promise<void> {
+  await openAppMenu(page);
+  await page.getByTestId('settings-button').click();
+  await expect(page.getByTestId('settings-dialog')).toBeVisible({ timeout: 5000 });
+}
+
+/** Open the Debug Logs dialog via the hamburger menu (global view). */
+export async function openDebugFromMenu(page: Page): Promise<void> {
+  await openAppMenu(page);
+  await page.getByTestId('global-debug-button').click();
+}
+
+/** Open the hamburger Import submenu and click a specific import item. */
+export async function openImportFromMenu(page: Page, itemTestId: string): Promise<void> {
+  await openAppMenu(page);
+  await page.getByTestId('global-import-menu-button').click();
+  await page.getByTestId(itemTestId).click();
+}
+
+/** Switch the recent-projects view (global view) between list and map. */
+export async function switchRecentView(page: Page, view: 'list' | 'map'): Promise<void> {
+  await page.getByTestId(`globalview-view-toggle-${view}`).click();
+}
+
+/**
+ * Close the open project via the in-project hamburger ("Close Project"), and wait
+ * for the start screen. Use when no unsaved-changes prompt is expected; for the
+ * dirty path, open the menu and click `back-button` directly so you can assert
+ * the unsaved-changes dialog.
+ */
+export async function closeProjectViaMenu(page: Page): Promise<void> {
+  await openAppMenu(page);
+  await page.getByTestId('back-button').click();
+  // A dirty project blocks the close on an unsaved-changes dialog — discard to
+  // proceed so the helper works whether or not there are unsaved edits.
+  const discard = page.locator('button:has-text("Discard")');
+  if (await discard.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await discard.click();
+  }
+  await expect(page.getByTestId('global-view')).toBeVisible({ timeout: 8000 });
+}
+
 export async function openNewProjectDialog(page: Page): Promise<void> {
   const newProjectButton = page
     .locator('[data-testid="new-project-button"], [data-testid="empty-state-new-project"]')

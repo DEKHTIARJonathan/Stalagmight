@@ -6,7 +6,7 @@ import { ResizablePanel } from '../common/Panel';
 import { ElidedPath } from '../common/ElidedPath';
 import { MarqueeText } from '../common/MarqueeText';
 import { Button } from '../common/Button';
-import { PencilIcon, CheckIcon, CloseIcon } from '../common/icons';
+import { PencilIcon, CheckIcon, CloseIcon, ChevronLeftIcon, ChevronRightIcon } from '../common/icons';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { formatDate, formatFixed, formatNumber } from '../../i18n/format';
@@ -202,19 +202,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
           aria-expanded="false"
           data-testid="metadata-panel-expand-button"
         >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <polyline points="15 18 9 12 15 6" />
-          </svg>
+          <ChevronLeftIcon size={16} />
         </button>
       </aside>
     );
@@ -246,19 +234,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
             aria-expanded="true"
             data-testid="metadata-panel-collapse-button"
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <polyline points="9 18 15 12 9 6" />
-            </svg>
+            <ChevronRightIcon size={16} />
           </button>
         </div>
 

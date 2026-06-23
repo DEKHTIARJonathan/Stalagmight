@@ -85,7 +85,13 @@
         "recentProjects": "Recent Projects",
         "undoHistory": "Undo History",
         "feedback": "Feedback",
-        "startup": "Startup"
+        "startup": "Startup",
+        "privacy": "Privacy"
+      },
+      "telemetry": {
+        "label": "Share anonymous usage statistics",
+        "help": "Help improve Stalagmight by sharing which features you use. No personal data or survey content is collected.",
+        "aria": "Toggle anonymous usage statistics"
       },
       "language": {
         "label": "Language / Locale",
@@ -860,7 +866,8 @@
         "zoomOut": "Zoom Out",
         "toggleSectionsPanel": "Toggle Sections Panel",
         "toggleDetailPanel": "Toggle Detail Panel",
-        "toggleDataTable": "Toggle Data Table"
+        "toggleDataTable": "Toggle Data Table",
+        "quit": "Quit"
       }
     },
     "map": {
@@ -1566,26 +1573,28 @@
       "label": "Grid spacing"
     },
     "groups": {
+      "color": "Color",
       "mapElements": "Map elements",
       "overlays": "Overlays",
+      "commentsLabels": "Comments & Labels",
       "developer": "Developer"
     },
     "items": {
+      "section": "Section",
       "stations": "Stations",
       "sectionNames": "Section names",
       "stationLabels": "Station labels",
       "shots": "Shots",
-      "referenceShots": "Jump/Reference shots",
+      "referenceShots": "Jump/Reference",
       "stationComments": "Station comments",
       "shotData": "Shot data",
       "shotComments": "Shot comments",
       "zeroDatum": "Zero datum",
       "grid": "Grid",
-      "scaleBar": "Scale bar",
       "satellite": "Satellite",
-      "depthGradient": "Depth Gradient",
-      "distanceGradient": "Distance Gradient",
-      "issueSeverity": "Issue severity",
+      "depthGradient": "Depth",
+      "distanceGradient": "Distance",
+      "issueSeverity": "Survey Issues",
       "devStats": "Dev stats"
     },
     "descriptions": {
@@ -1599,7 +1608,6 @@
       "shotComments": "Show shot comments on map",
       "zeroDatum": "Show zero datum stations",
       "grid": "Show grid overlay",
-      "scaleBar": "Show scale bar",
       "satellite": "Show satellite imagery",
       "depthGradient": "Color by depth",
       "distanceGradient": "Color by along-cave distance from the entrance (click a station to re-root)",
@@ -1609,14 +1617,25 @@
   },
   "globalView": {
     "actions": {
+      "import": "Import",
       "importDmp": "Import DMP",
       "importTml": "Import Ariane",
       "importCompass": "Import Compass",
+      "importGpx": "Import GPX",
       "mergeProjects": "Merge {{countFormatted}} projects",
       "mergeProjectsAria": "Merge {{countFormatted}} selected projects",
       "newProject": "New project",
       "openProject": "Open project",
-      "settings": "Settings"
+      "openOrImport": "Open / Import",
+      "settings": "Settings",
+      "debugLogs": "Debug Logs",
+      "quit": "Quit"
+    },
+    "menu": {
+      "aria": "Application menu"
+    },
+    "viewToggle": {
+      "aria": "Switch between map and list view"
     },
     "tabs": {
       "map": "Map",
@@ -1630,7 +1649,10 @@
     },
     "recent": {
       "title": "Recent projects",
-      "hint": "Click to select, double-click to open, right-click for options.",
+      "hintPrefix": "Click to select, double-click to open, right-click for options.",
+      "hintFindPrefix": "Don't see your project?",
+      "hintFindLink": "Click here",
+      "hintFindSuffix": " to open it from file.",
       "countFiltered": "Showing {{shown}} of {{total}}",
       "noResults": "No projects match \"{{term}}\".",
       "density": {
@@ -1982,6 +2004,24 @@
   },
   "singleView": {
     "empty": "No project open.",
+    "menu": {
+      "aria": "Project menu",
+      "saveAs": "Save As",
+      "saveAndClose": "Save and Close",
+      "closeProject": "Close Project",
+      "projectSettings": "Project Settings",
+      "projectDetails": "Project Details",
+      "devStats": "Dev Stats"
+    },
+    "panels": {
+      "sectionsName": "Sections",
+      "detailName": "Details",
+      "dataName": "Data",
+      "open": "Open {{name}}",
+      "close": "Close {{name}}",
+      "pin": "Pin open",
+      "unpin": "Unpin (hover mode)"
+    },
     "status": {
       "depthRange": "Depth range: {{min}} - {{max}}",
       "summary": "Sections: {{sections}} | Shots: {{shots}} | Length: {{length}}",
@@ -2043,13 +2083,9 @@
             "title": "Open an Existing Project",
             "description": "Use Open Project to continue where you left off in any .stalx file on disk."
           },
-          "settings": {
-            "title": "Tune Your Workspace",
-            "description": "Open Settings to configure units, shortcuts, display defaults, and performance options."
-          },
-          "debugLogs": {
-            "title": "Debug Logs",
-            "description": "Use the bug icon to open Debug Logs. Include relevant logs when reporting issues or bugs."
+          "menu": {
+            "title": "Everything Else Is in the Menu",
+            "description": "Open the menu (top-left) for New Project, Open / Import, Settings, Debug Logs, and Quit. Each entry shows its keyboard shortcut where one is assigned."
           }
         }
       },

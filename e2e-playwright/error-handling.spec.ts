@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { setupMockedPage, createProject as createProjectViaApp } from './helpers/app';
+import { setupMockedPage, createProject as createProjectViaApp, openAppMenu } from './helpers/app';
 
 /**
  * Error Handling E2E Tests
@@ -663,12 +663,14 @@ test.describe('Error Handling', () => {
     test('should display error on file open failure', async ({ page }) => {
       await setupMockedPage(page);
 
-      const openBtn = page.locator('[data-testid="global-open-project-button"], button:has-text("Open"), h3:has-text("Open")').first();
       const loadingError = page.getByTestId('loading-progress');
       const title = page.locator('h1:has-text("Stalagmight")');
 
       // Opening a file whose load fails must surface the loading-error overlay
       // with the message, keep the app on the start page, and be dismissable.
+      // Use the hamburger "Open Project" item (native .stalx open) — the mocked
+      // file dialog returns a path that the unified Open/Import button would
+      // route to import, whereas Open Project always goes through loadProject.
       // Asserted deterministically (wait for the actual states, no racing
       // best-effort timeouts) so it can't flake under parallel load — and it now
       // verifies the error message is shown, which the previous version never did.
@@ -678,7 +680,8 @@ test.describe('Error Handling', () => {
           load_project: { __throw: message },
         });
 
-        await openBtn.click();
+        await openAppMenu(page);
+        await page.getByTestId('global-open-project-button').click();
 
         await expect(loadingError).toBeVisible({ timeout: 10000 });
         await expect(loadingError).toContainText(message);

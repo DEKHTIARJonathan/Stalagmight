@@ -1468,6 +1468,24 @@ tr[data-selected="true"]:hover {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+/* comment badge: amber speech bubble */
+.duotone .chat-bubble {
+  fill: var(--sh-comment, #eab946);
+  stroke: none;
+}
+/* shot-data badge: slate "data rows" (hamburger). Filled stadium rows, NOT
+   stroked: WebKit fattens thin strokes under the setZoom UI scale. */
+.duotone .data-lines {
+  fill: #b8c6d6;
+  stroke: none;
+}
+/* label/name badge: slate capital A */
+.duotone .label-a {
+  fill: #b8c6d6;
+  stroke: none;
+  font-weight: 800;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
 /* move compass */
 .duotone .mvf {
   fill: var(--sh-move);
@@ -1524,6 +1542,47 @@ button.sh-tool.sh-tool--active {
 .sh-pill:hover:not(:disabled) {
   background: color-mix(in oklab, var(--o) 22%, var(--cc-panel));
   border-color: color-mix(in oklab, var(--o) 48%, var(--cc-border));
+}
+
+/* Display-menu entity TOGGLE pill: off = no fill, just a faint entity-colored
+   outline; on = a full entity-color fill. `--o` is the element's --sh-<entity>;
+   `--pill-oncolor` is the JS-computed contrast color used for the label + glyph
+   on the filled state (the descendant rule below recolors the duotone glyph,
+   whose own inline `--o` is beaten by `!important`). */
+button.sh-epill {
+  background: transparent;
+  border: 1px solid color-mix(in oklab, var(--o) 45%, var(--cc-border));
+  color: var(--cc-text-primary);
+  transition-property: background-color, border-color, color;
+}
+/* Hover only the OFF (outline) state — the filled (on) pill gets no hover effect.
+   Mix the wash over --cc-panel (opaque), not transparent: the WebKit webview
+   renders color-mix toward `transparent` as a near-black wash. */
+button.sh-epill:not(.sh-epill--on):hover:not(:disabled) {
+  background: color-mix(in oklab, var(--o) 12%, var(--cc-panel));
+  border-color: color-mix(in oklab, var(--o) 65%, var(--cc-border));
+}
+button.sh-epill.sh-epill--on {
+  background: var(--o);
+  border-color: var(--o);
+  color: var(--pill-oncolor);
+}
+button.sh-epill.sh-epill--on .duotone {
+  --o: var(--pill-oncolor) !important;
+}
+
+/* Non-element ("accent") Display pill: a clear outline in the theme accent (gold
+   in the default dark theme) when not selected, mirroring the element pills'
+   colored outline. Uses the opaque accent directly — color-mix toward
+   `transparent` rendered invisibly in the app's WebKit webview, and mixing
+   toward the dark border muted the gold to gray; a thin 1px edge keeps full
+   accent from being heavy. Selected accent pills fill via Tailwind's
+   bg-accent/border-accent and get no hover effect. */
+button.sh-apill {
+  /* Full shorthand: the global `button { border: none }` reset zeroes
+     border-style, so a color-only rule renders nothing (Tailwind's `.border`
+     only sets width). The element pills work for the same reason. */
+  border: 1px solid var(--cc-accent);
 }
 /* The fully-qualified id after a divider, at the SAME font/size as the pill text
    (just dimmer). The divider is a SHORT centered vertical bar (pseudo-element),

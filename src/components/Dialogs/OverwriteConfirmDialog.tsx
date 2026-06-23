@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useProject } from '../../hooks/useProject';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -10,10 +11,14 @@ import { isPermissionError } from '../../utils/saveErrors';
 export default function OverwriteConfirmDialog() {
   const { closeDialog, dialogData, openDialog: showDialog } = useUIStore();
   const { saveProject } = useProjectStore();
+  const { handleCloseProject } = useProject();
   const [isLoading, setIsLoading] = useState(false);
 
   const path = dialogData.path as string | undefined;
   const fileName = dialogData.fileName as string | undefined;
+  // "Save and Close" defers here when the chosen file exists; once the overwrite
+  // saves, finish the close it started (otherwise the close half is dropped).
+  const closeAfterSave = dialogData.closeAfterSave === true;
 
   const handleConfirm = async () => {
     if (!path) {
@@ -25,19 +30,29 @@ export default function OverwriteConfirmDialog() {
     setIsLoading(true);
     try {
       const result = await saveProject(path);
-      if (result && !result.success && result.error) {
+      // Guard on `!success`, NOT on a present error: the save did NOT happen, so
+      // it must never fall through to the success branch (which closes the
+      // project on closeAfterSave and would silently discard unsaved edits). A
+      // blocked save can carry a null error — the block is signaled via
+      // integritySaveBlocked and surfaced by surfaceSaveFailure below.
+      if (result && !result.success) {
         // On a permission error, saveProject has already opened the folder-access
         // guidance dialog; don't close it, stack a generic error, or record the
         // overwrite as completed (it was superseded by the guidance dialog).
-        if (isPermissionError(result.error)) {
+        if (result.error && isPermissionError(result.error)) {
           return;
         }
         trackDialogComplete('confirm-overwrite');
         closeDialog();
         surfaceSaveFailure(result.error, showDialog);
       } else {
+        // Save succeeded.
         trackDialogComplete('confirm-overwrite');
         closeDialog();
+        if (closeAfterSave) {
+          // Project is now saved (not dirty), so this closes straight to GlobalView.
+          void handleCloseProject();
+        }
       }
     } finally {
       setIsLoading(false);

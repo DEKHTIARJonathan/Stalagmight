@@ -21,6 +21,24 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 
+/** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
+ *  under the page-zoom UI scale. Shared by the per-entity "center on map"
+ *  buttons (station/shot/section) below. */
+function CenterLocateIcon() {
+  return (
+    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fillRule="evenodd"
+        d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0ZM11.2 12a0.8 0.8 0 1 0 1.6 0a0.8 0.8 0 1 0 -1.6 0Z"
+      />
+      <rect x="10.9" y="2" width="2.2" height="4" rx="1.1" />
+      <rect x="10.9" y="18" width="2.2" height="4" rx="1.1" />
+      <rect x="2" y="10.9" width="4" height="2.2" rx="1.1" />
+      <rect x="18" y="10.9" width="4" height="2.2" rx="1.1" />
+    </svg>
+  );
+}
+
 export default function DetailPanel() {
   const { t } = useTranslation();
   const { selection, detailPanelTab, setDetailPanelTab, setSelection } = useUIStore(
@@ -743,21 +761,13 @@ function StationDetail({ station }: { station: Station }) {
       })}
       data-testid="center-station-button"
     >
-      <svg
-        className="w-4 h-4"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <circle cx="12" cy="12" r="3" strokeWidth={2} />
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v4M12 18v4M2 12h4M18 12h4" />
-      </svg>
+      <CenterLocateIcon />
     </button>
   );
 
   return (
     <div className="h-full bg-panel overflow-auto" data-testid="station-detail">
-      <Panel title={t('detailPanel.station.title')} headerActions={centerButton}>
+      <Panel bare title={t('detailPanel.station.title')} headerActions={centerButton}>
         <div className="space-y-3">
           <DetailRow
             label={t('detailPanel.labels.id')}
@@ -1022,21 +1032,13 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
       })}
       data-testid="center-shot-button"
     >
-      <svg
-        className="w-4 h-4"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <circle cx="12" cy="12" r="3" strokeWidth={2} />
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v4M12 18v4M2 12h4M18 12h4" />
-      </svg>
+      <CenterLocateIcon />
     </button>
   );
 
   return (
     <div className="h-full bg-panel overflow-auto">
-      <Panel title={t('detailPanel.shot.title')} headerActions={centerButton}>
+      <Panel bare title={t('detailPanel.shot.title')} headerActions={centerButton}>
         <div className="space-y-3">
           <DetailRow label={t('detailPanel.labels.id')} value={formatShotId(section.id, shotPosition)} />
           <DetailRow label={t('detailPanel.labels.section')} value={section.name ?? t('sections.defaultName', { id: section.id })} />
@@ -1235,21 +1237,13 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
       aria-label={t('detailPanel.section.center', { id: section.id, name: sectionDisplayName })}
       data-testid="center-section-button"
     >
-      <svg
-        className="w-4 h-4"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <circle cx="12" cy="12" r="3" strokeWidth={2} />
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v4M12 18v4M2 12h4M18 12h4" />
-      </svg>
+      <CenterLocateIcon />
     </button>
   );
 
   return (
     <div className="h-full bg-panel overflow-auto" data-testid="section-detail">
-      <Panel title={t('detailPanel.section.title')} headerActions={centerButton}>
+      <Panel bare title={t('detailPanel.section.title')} headerActions={centerButton}>
         <div className="space-y-4">
           {/* Section info */}
           <div className="space-y-2">
@@ -1414,7 +1408,20 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
 
     return (
       <div className="h-full bg-panel overflow-auto">
-      <Panel title={t('detailPanel.projectStats.title')}>
+      {/* `bare`: no surrounding card border — the panel itself is the container.
+          The title's border-b is the "Project stats / PROJECT" divider line.
+          The invisible button-sized placeholder matches the entity-detail headers
+          (which carry the center-on-map button), so the title divider sits at the
+          same y in every Details state and the opener tab always aligns to it. */}
+      <Panel
+        bare
+        title={t('detailPanel.projectStats.title')}
+        headerActions={
+          <button type="button" tabIndex={-1} aria-hidden="true" className="p-1 invisible">
+            <svg className="w-4 h-4" viewBox="0 0 24 24" />
+          </button>
+        }
+      >
         <div className="space-y-4">
           {/* Project name + file path (#51: relocated from the toolbar center). */}
           <div className="space-y-1">

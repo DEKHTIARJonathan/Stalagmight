@@ -2,12 +2,12 @@ import { useState, useMemo, useCallback } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { getErrorMessage } from '../../utils/ipc';
-import { deferredSaveWarnings, surfaceImportWarnings } from '../../utils/saveFeedback';
+import { completeImportToSingleView, deferredSaveWarnings, surfaceImportWarnings } from '../../utils/saveFeedback';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
 import { SECTION_COLORS } from '../../utils/colors';
-import { setSource, trackDialogComplete } from '../../utils/telemetry';
+import { setSource } from '../../utils/telemetry';
 
 /**
  * Step 2 dialog for GPX import.
@@ -138,10 +138,7 @@ export default function GpxPlacementDialog() {
         depthInverted
       );
 
-      trackDialogComplete('gpx-placement');
-      closeDialog();
-      setView('single');
-      triggerFitToBounds();
+      completeImportToSingleView('gpx-placement', { closeDialog, setView, triggerFitToBounds, openDialog });
 
       if (!result.success) {
         openDialog('error', {

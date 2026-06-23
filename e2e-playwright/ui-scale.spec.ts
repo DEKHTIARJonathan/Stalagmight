@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures/coverage';
-import { setupMockedPage } from './helpers/app';
+import { setupMockedPage, openSettingsFromMenu } from './helpers/app';
 
 /**
  * UI scale (whole-interface zoom) via the Settings → Display slider and the
@@ -12,8 +12,7 @@ test.describe('UI Scale', () => {
   });
 
   async function openDisplaySettings(page: Page): Promise<void> {
-    await page.getByTestId('settings-button').click();
-    await expect(page.getByTestId('settings-dialog')).toBeVisible({ timeout: 5000 });
+    await openSettingsFromMenu(page);
     await page.getByTestId('settings-tab-display').click();
     await expect(page.getByTestId('settings-panel-display')).toBeVisible({ timeout: 5000 });
   }

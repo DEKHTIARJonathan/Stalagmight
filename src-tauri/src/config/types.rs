@@ -308,6 +308,55 @@ pub struct PanelsConfig {
     /// Stations-table hidden column keys (both coordinate pairs start hidden)
     #[serde(default = "default_station_hidden_columns")]
     pub data_table_station_hidden_columns: Vec<String>,
+    /// Sections panel open (pinned) at startup
+    #[serde(default = "default_true")]
+    pub sections_panel_open: bool,
+    /// Sections panel reveal mode: "pin" | "hover"
+    #[serde(default = "default_panel_mode")]
+    pub sections_panel_mode: String,
+    /// Detail panel open (pinned) at startup
+    #[serde(default = "default_true")]
+    pub detail_panel_open: bool,
+    /// Detail panel reveal mode: "pin" | "hover"
+    #[serde(default = "default_panel_mode")]
+    pub detail_panel_mode: String,
+    /// Data table open (pinned) at startup
+    #[serde(default)]
+    pub data_table_open: bool,
+    /// Data table reveal mode: "pin" | "hover"
+    #[serde(default = "default_panel_mode")]
+    pub data_table_mode: String,
+}
+
+/// Default panel reveal mode (pin: click to open, stays open).
+fn default_panel_mode() -> String {
+    "pin".to_string()
+}
+
+impl PanelsConfig {
+    /// Clamp persisted panel sizes to the same bounds the UI enforces while
+    /// dragging, and repair any out-of-range reveal-mode string. The frontend
+    /// clamps panel sizes before persisting them (savePanelSizes), but the load
+    /// path did not — so a hand-edited, older, or otherwise degenerate config
+    /// could load e.g. a 0-pixel width that the frontend then renders as a
+    /// collapsed, invisible panel. Bounds mirror PANEL_SIZE_BOUNDS in
+    /// src/components/SingleSystemView/layoutConstants.ts.
+    pub fn normalize(&mut self) {
+        self.sections_panel_width = self.sections_panel_width.clamp(150, 400);
+        self.detail_panel_width = self.detail_panel_width.clamp(200, 500);
+        self.data_table_height = self.data_table_height.clamp(100, 500);
+        normalize_panel_mode(&mut self.sections_panel_mode);
+        normalize_panel_mode(&mut self.detail_panel_mode);
+        normalize_panel_mode(&mut self.data_table_mode);
+    }
+}
+
+/// Coerce a persisted reveal-mode string to a known value, mirroring the
+/// frontend's `asMode` (anything that isn't "hover" becomes the default "pin").
+fn normalize_panel_mode(mode: &mut String) {
+    if mode != "pin" && mode != "hover" {
+        *mode = default_panel_mode();
+    }
 }
 
 fn default_station_hidden_columns() -> Vec<String> {
@@ -1340,6 +1389,8 @@ pub struct ShortcutsConfig {
     pub import_dmp: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub export: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub quit: Vec<String>,
 }
 
 impl ShortcutsConfig {
@@ -1445,6 +1496,7 @@ impl ShortcutsConfig {
         normalize_shortcut_field(&mut self.save_as, &defaults.save_as, "save_as");
         normalize_shortcut_field(&mut self.import_dmp, &defaults.import_dmp, "import_dmp");
         normalize_shortcut_field(&mut self.export, &defaults.export, "export");
+        normalize_shortcut_field(&mut self.quit, &defaults.quit, "quit");
     }
 }
 
@@ -1740,6 +1792,7 @@ impl Config {
     pub fn normalize(&mut self) {
         self.map.normalize();
         self.shortcuts.normalize();
+        self.panels.normalize();
         self.global_view.normalize();
         self.appearance.normalize();
         self.closure_adjustment.normalize();

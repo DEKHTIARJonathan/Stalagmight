@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedProjectWithSections, waitForMapReady, type SectionSeed } from './helpers/app';
+import { seedProjectWithSections, waitForMapReady, openAppMenu, type SectionSeed } from './helpers/app';
 
 /**
  * E2E tests for visibility toggle behavior in the Display menu.
@@ -59,9 +59,7 @@ async function openDisplayMenu(page: Page): Promise<void> {
  */
 async function isToggleOn(page: Page, toggleKey: string): Promise<boolean> {
   const toggle = page.locator(`[data-testid="display-toggle-${toggleKey}"]`);
-  const checkbox = toggle.locator('div.rounded').last();
-  const classes = await checkbox.getAttribute('class');
-  return classes?.includes('bg-accent') ?? false;
+  return (await toggle.getAttribute('aria-pressed')) === 'true';
 }
 
 /**
@@ -827,7 +825,6 @@ test.describe('Display Menu State Persistence', () => {
     expect(await isToggleOn(page, 'showReferenceShots')).toBe(true);
     expect(await isToggleOn(page, 'showZeroDatum')).toBe(true);
     expect(await isToggleOn(page, 'showGrid')).toBe(false);
-    expect(await isToggleOn(page, 'showScaleBar')).toBe(true);
     expect(await isToggleOn(page, 'showSatellite')).toBe(false);
     expect(await isToggleOn(page, 'showDepthGradient')).toBe(false);
   });
@@ -844,22 +841,22 @@ test.describe('Developer Stats Overlay (memory probe)', () => {
   });
 
   // The memory probe used to be a hidden Ctrl+Shift+M toggle, which collided
-  // with rebound global shortcuts. It is now revealed by the Display ▸ "Dev
-  // stats" toggle instead (showDevStats), with no keyboard side effects.
+  // with rebound global shortcuts. It is now revealed by the hamburger menu's
+  // "Dev Stats" toggle instead (showDevStats), with no keyboard side effects.
   test('Dev stats toggle reveals and hides the memory probe panel', async ({ page }) => {
     const probe = page.locator('[data-testid="memory-probe-panel"]');
 
     // Hidden by default.
     await expect(probe).toHaveCount(0);
 
-    // Enabling "Dev stats" from the Display menu reveals the probe.
-    await openDisplayMenu(page);
-    expect(await isToggleOn(page, 'showDevStats')).toBe(false);
-    await toggleDisplayOption(page, 'showDevStats');
+    // Enabling "Dev Stats" from the hamburger menu reveals the probe.
+    await openAppMenu(page);
+    await page.getByTestId('display-toggle-showDevStats').click();
     await expect(probe).toBeVisible({ timeout: 2000 });
 
     // Disabling it removes the probe again.
-    await toggleDisplayOption(page, 'showDevStats');
+    await openAppMenu(page);
+    await page.getByTestId('display-toggle-showDevStats').click();
     await expect(probe).toHaveCount(0);
   });
 

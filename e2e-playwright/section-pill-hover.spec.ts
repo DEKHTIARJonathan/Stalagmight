@@ -16,6 +16,7 @@ import {
   seedProjectWithSections,
   waitForMapIdle,
   waitForNoDialogs,
+  openAppMenu,
   type SectionSeed,
 } from './helpers/app';
 
@@ -61,7 +62,9 @@ async function createProjectWithSections(page: Page): Promise<void> {
  */
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
-  await expect(page.getByTestId('data-table')).toHaveAttribute('data-open', 'true', { timeout: 3000 });
+  // The Dock mounts the table only when the panel is revealed, so visibility
+  // confirms it opened (the redundant data-open attribute was removed).
+  await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
 }
 
 /**
@@ -237,6 +240,7 @@ test.describe('section pill hover highlighting', () => {
     // Navigate back to the GlobalView, which unmounts the DataTable. Its
     // cleanup effect must clear the highlight it set. The seeded project has
     // unsaved changes, so discard them when prompted.
+    await openAppMenu(page);
     await page.getByTestId('back-button').click();
     const unsavedDialog = page.getByTestId('unsaved-changes-dialog');
     await expect(unsavedDialog).toBeVisible({ timeout: 3000 });

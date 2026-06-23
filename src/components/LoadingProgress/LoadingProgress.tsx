@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatNumber } from '../../i18n/format';
+import { clamp } from '../../utils/clamp';
 
 export interface LoadingProgressProps {
   title: string;                    // "Loading ProjectName..."
@@ -20,7 +21,7 @@ export interface LoadingProgressProps {
 /** Clamp a number to [0, 100], treating NaN/Infinity as 0 */
 function clampProgress(value: number): number {
   if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(100, value));
+  return clamp(value, 0, 100);
 }
 
 export function LoadingProgress({

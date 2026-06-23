@@ -16,14 +16,11 @@
  */
 
 import { useEffect, useRef, useCallback, type Dispatch, type SetStateAction } from 'react';
-import { open } from '@tauri-apps/plugin-dialog';
 import { useGlobalViewStore } from '../store/globalViewStore';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { parseKeyEvent, normalizeShortcut } from '../utils/shortcuts';
-import { importOpenFilters, projectOpenFilters } from '../utils/fileDialogs';
-import { getErrorMessage } from '../utils/ipc';
-import { extractFilename } from '../utils/path';
+import { runFileShortcutAction, type FileShortcutAction } from '../utils/fileShortcutActions';
 import { setSource } from '../utils/telemetry';
 import { defaultConfig } from '../types/config';
 import type { ShortcutsConfig } from '../types/config';
@@ -31,16 +28,16 @@ import type { ProjectMetadata } from '../types/project';
 import type { GlobalViewMapHandle } from '../components/GlobalView/GlobalViewMap';
 
 /**
- * File actions available in the global view.
+ * File actions available in the global view. Shared with SingleSystemView via
+ * runFileShortcutAction so the two dispatchers can't drift.
  */
-type FileAction = 'new_file' | 'open_file' | 'import_dmp';
-const FILE_ACTIONS: FileAction[] = ['new_file', 'open_file', 'import_dmp'];
+const FILE_ACTIONS: FileShortcutAction[] = ['new_file', 'open_file', 'import_dmp', 'quit'];
 
 /**
  * Build a shortcut map for file actions only.
  */
-function buildFileShortcutMap(shortcuts: ShortcutsConfig): Map<string, FileAction> {
-  const map = new Map<string, FileAction>();
+function buildFileShortcutMap(shortcuts: ShortcutsConfig): Map<string, FileShortcutAction> {
+  const map = new Map<string, FileShortcutAction>();
   for (const action of FILE_ACTIONS) {
     const bindings = shortcuts[action];
     if (!Array.isArray(bindings)) continue;
@@ -99,8 +96,7 @@ export function useGlobalViewShortcuts({
   handleRemoveFromRecent,
 }: UseGlobalViewShortcutsOptions): void {
   const { clearSelection, selectSystem, setSelectedSystems } = useGlobalViewStore();
-  const { openDialog, setImportContext } = useUIStore();
-  const { importDmp, parseTml, parseCompass, parseGpx, config } = useProjectStore();
+  const { config } = useProjectStore();
 
   // File shortcut map - config-aware, updated when config changes
   const fileShortcutMapRef = useRef(buildFileShortcutMap(defaultConfig.shortcuts));
@@ -335,142 +331,13 @@ export function useGlobalViewShortcuts({
       const fileAction = fileShortcutMapRef.current.get(normalizedKey);
       if (!fileAction) return;
 
-      switch (fileAction) {
-        case 'new_file':
-          e.preventDefault();
-          openDialog('new-project');
-          break;
-
-        case 'open_file': {
-          e.preventDefault();
-          (async () => {
-            try {
-              const selected = await open({
-                multiple: false,
-                filters: projectOpenFilters(),
-              });
-
-              let path: string | null = null;
-              if (typeof selected === 'string') {
-                path = selected;
-              } else if (Array.isArray(selected) && (selected as string[]).length > 0) {
-                path = (selected as string[])[0] ?? null;
-              }
-
-              if (path) {
-                const store = useProjectStore.getState();
-                await store.loadProject(path);
-              }
-            } catch (err) {
-              useUIStore.getState().openDialog('error', {
-                title: 'Open Failed',
-                message: getErrorMessage(err, 'Failed to open project'),
-              });
-            }
-          })();
-          break;
-        }
-
-        case 'import_dmp': {
-          e.preventDefault();
-          (async () => {
-            try {
-              const selected = await open({
-                multiple: false,
-                filters: importOpenFilters(),
-              });
-
-              if (!selected || typeof selected !== 'string') {
-                return;
-              }
-
-              const lowerPath = selected.toLowerCase();
-              if (lowerPath.endsWith('.gpx')) {
-                const gpxFile = await parseGpx(selected);
-                if (!gpxFile) return;
-
-                const currentProject = useProjectStore.getState().project;
-                if (currentProject) {
-                  openDialog('gpx-selection', { gpxFile, filePath: selected });
-                } else {
-                  const fileName = extractFilename(selected, /\.gpx$/i) || 'Imported';
-                  openDialog('new-project-for-import', {
-                    gpxFile,
-                    filePath: selected,
-                    defaultName: fileName,
-                    importType: 'gpx',
-                  });
-                }
-              } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
-                // TML/TMLU import (always creates a new project)
-                if (useProjectStore.getState().project) {
-                  openDialog('error', {
-                    title: 'Import survey',
-                    message: 'Close the current project before importing a new survey.',
-                  });
-                  return;
-                }
-                const tmlFile = await parseTml(selected);
-                if (!tmlFile) return;
-                const fileName = extractFilename(selected, /\.tmlu?$/i) || 'Imported';
-                openDialog('new-project-for-import', {
-                  tmlFile,
-                  filePath: selected,
-                  defaultName: fileName,
-                  importType: 'tml',
-                });
-              } else if (lowerPath.endsWith('.mak') || lowerPath.endsWith('.dat')) {
-                // Compass import (always creates a new project)
-                if (useProjectStore.getState().project) {
-                  openDialog('error', {
-                    title: 'Import survey',
-                    message: 'Close the current project before importing a new survey.',
-                  });
-                  return;
-                }
-                const compassFile = await parseCompass(selected);
-                if (!compassFile) return;
-                const fileName = extractFilename(selected, /\.(mak|dat)$/i) || 'Imported';
-                openDialog('new-project-for-import', {
-                  compassFile,
-                  filePath: selected,
-                  defaultName: fileName,
-                  importType: 'compass',
-                });
-              } else {
-                const dmpFile = await importDmp(selected);
-                if (!dmpFile) return;
-
-                const currentProject = useProjectStore.getState().project;
-                if (currentProject) {
-                  setImportContext('existing-project');
-                  openDialog('dmp-selection', {
-                    dmpFile,
-                    filePath: selected,
-                  });
-                } else {
-                  setImportContext('new-project');
-                  const fileName = extractFilename(selected, /\.dmp$/i) || 'Imported';
-                  openDialog('new-project-for-import', {
-                    dmpFile,
-                    filePath: selected,
-                    defaultName: fileName,
-                  });
-                }
-              }
-            } catch (err) {
-              useUIStore.getState().openDialog('error', {
-                title: 'Import Failed',
-                message: getErrorMessage(err, 'Failed to import file'),
-              });
-            }
-          })();
-          break;
-        }
-      }
+      e.preventDefault();
+      // Shared with SingleSystemView: new/open/import/quit run through one helper
+      // so the unsaved-changes guard, the entry-point source tag, and the picker
+      // filters live in one place (no per-view drift).
+      runFileShortcutAction(fileAction);
     },
-    [clearSelection, selectSystem, setContextMenu, setMultiSelectedIds, setSelectedProjectId, mapRef,
-     openDialog, setImportContext, importDmp, parseTml, parseCompass, parseGpx]
+    [clearSelection, selectSystem, setContextMenu, setMultiSelectedIds, setSelectedProjectId, mapRef]
   );
 
   // Register single keyboard event listener

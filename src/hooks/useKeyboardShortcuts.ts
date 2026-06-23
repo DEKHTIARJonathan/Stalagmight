@@ -1,21 +1,11 @@
 import { useEffect, useCallback, useRef } from 'react';
-import { open } from '@tauri-apps/plugin-dialog';
-import { exists } from '@tauri-apps/plugin-fs';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
-import { getErrorMessage } from '../utils/ipc';
-import { extractFilename } from '../utils/path';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
-import {
-  ensureExtension,
-  projectOpenFilters,
-  projectSaveFilters,
-  importOpenFilters,
-  saveDialog,
-  PROJECT_EXTENSION,
-} from '../utils/fileDialogs';
+import { runFileShortcutAction } from '../utils/fileShortcutActions';
+import { saveProjectAs } from '../utils/projectActions';
 import type { ToolType, Selection, DisplayToggleKey } from '../store/uiStore';
 import { setSource, trackNav } from '../utils/telemetry';
 import type { ShortcutsConfig, ShortcutFeedback } from '../types/config';
@@ -59,7 +49,8 @@ type ShortcutAction =
   | 'save'
   | 'save_as'
   | 'import_dmp'
-  | 'export';
+  | 'export'
+  | 'quit';
 
 /**
  * Map of action names to the corresponding tool types.
@@ -141,6 +132,7 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   save_as: 'Save As',
   import_dmp: 'Import DMP',
   export: 'Export',
+  quit: 'Quit',
 };
 
 /**
@@ -156,6 +148,8 @@ const PLACEMENT_MODE_ALLOWED_SHORTCUTS: Set<ShortcutAction> = new Set([
   'fit_to_bounds',
   'zoom_in',
   'zoom_out',
+  // Quitting the app is global and must work in every mode (matches the menu Quit).
+  'quit',
 ]);
 
 /**
@@ -168,6 +162,8 @@ const FULLSCREEN_TABLE_ALLOWED_SHORTCUTS: Set<ShortcutAction> = new Set([
   'save',
   'undo',
   'redo',
+  // Quitting the app is global and must work in every mode (matches the menu Quit).
+  'quit',
 ]);
 
 /**
@@ -184,7 +180,7 @@ function shouldShowToast(action: ShortcutAction, feedback: ShortcutFeedback): bo
  * Build a map from normalized shortcut strings to their action names.
  * This allows O(1) lookup during keydown handling.
  */
-function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutAction> {
+export function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutAction> {
   const map = new Map<string, ShortcutAction>();
 
   const actions: (keyof ShortcutsConfig)[] = [
@@ -223,6 +219,7 @@ function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutActio
     'save_as',
     'import_dmp',
     'export',
+    'quit',
   ];
 
   for (const action of actions) {
@@ -310,8 +307,7 @@ export function useKeyboardShortcuts() {
     showStations,
     showToast,
   } = useUIStore();
-  const { undo, redo, saveProject, project, stations, importDmp, parseTml, parseCompass, parseGpx, executeTmlImport, config } = useProjectStore();
-  const { setImportContext } = useUIStore();
+  const { undo, redo, saveProject, project, stations, executeTmlImport, config } = useProjectStore();
 
   // Ref for shortcut map - uses ref to avoid stale closures in event handlers
   // Initialize with defaults to handle first render before useEffect runs
@@ -647,39 +643,21 @@ export function useKeyboardShortcuts() {
         // File actions
         case 'new_file':
           event.preventDefault();
-          openDialog('new-project');
+          // Routes through the shared helper so the unsaved-changes guard (a dirty
+          // open project) is applied here too, not just on the menu "New" path.
+          runFileShortcutAction('new_file');
           maybeShowToast(action);
           break;
 
-        case 'open_file': {
+        case 'quit':
           event.preventDefault();
-          (async () => {
-            try {
-              const selected = await open({
-                multiple: false,
-                filters: projectOpenFilters(),
-              });
-
-              let path: string | null = null;
-              if (typeof selected === 'string') {
-                path = selected;
-              } else if (Array.isArray(selected) && (selected as string[]).length > 0) {
-                path = (selected as string[])[0] ?? null;
-              }
-
-              if (path) {
-                const store = useProjectStore.getState();
-                await store.loadProject(path);
-              }
-            } catch (e) {
-              openDialog('error', {
-                title: 'Open Failed',
-                message: getErrorMessage(e, 'Failed to open project'),
-              });
-            }
-          })();
+          runFileShortcutAction('quit');
           break;
-        }
+
+        case 'open_file':
+          event.preventDefault();
+          runFileShortcutAction('open_file');
+          break;
 
         case 'save':
           event.preventDefault();
@@ -695,156 +673,24 @@ export function useKeyboardShortcuts() {
           }
           break;
 
-        case 'save_as': {
+        case 'save_as':
           event.preventDefault();
-          const currentProjectSA = useProjectStore.getState().project;
-          if (currentProjectSA) {
-            (async () => {
-              try {
-                const selected = await saveDialog({
-                  filters: projectSaveFilters(),
-                });
-
-                if (selected) {
-                  const finalPath = ensureExtension(selected, PROJECT_EXTENSION);
-
-                  try {
-                    const fileExists = await exists(finalPath);
-                    if (fileExists) {
-                      openDialog('confirm-overwrite', {
-                        path: finalPath,
-                        fileName: finalPath.split('/').pop() ?? finalPath,
-                      });
-                      return;
-                    }
-                  } catch {
-                    // If exists check fails, proceed with save
-                  }
-
-                  const store = useProjectStore.getState();
-                  const result = await store.saveProject(finalPath);
-                  // surfaceSaveFailure routes integrity blocks to Review & Repair
-                  // and skips the generic error window for permission denials
-                  // (saveProject already opened the folder-access guidance dialog).
-                  if (result && !result.success) {
-                    surfaceSaveFailure(result.error, openDialog);
-                  }
-                }
-              } catch (e) {
-                openDialog('error', {
-                  title: 'Save Failed',
-                  message: getErrorMessage(e, 'Failed to save project'),
-                });
-              }
-            })();
+          if (useProjectStore.getState().project) {
+            // Shared with the menu "Save As" path: the Save-As + overwrite-confirm
+            // flow (and its failure handling) lives in saveProjectAs so the two
+            // can't drift.
+            void saveProjectAs();
             maybeShowToast(action);
           }
           break;
-        }
 
-        case 'import_dmp': {
+        case 'import_dmp':
           event.preventDefault();
-          // GUARD: the closure-adjusted view is read-only — imports add sections.
-          if (useUIStore.getState().geometryMode === 'closureAdjusted') return;
-          // Context-aware import (DMP + TML/TMLU)
-          (async () => {
-            try {
-              const selected = await open({
-                multiple: false,
-                filters: importOpenFilters(),
-              });
-
-              if (!selected || typeof selected !== 'string') {
-                return;
-              }
-
-              const lowerPath = selected.toLowerCase();
-              if (lowerPath.endsWith('.gpx')) {
-                // GPX import
-                const gpxFile = await parseGpx(selected);
-                if (!gpxFile) return;
-
-                const currentProject = useProjectStore.getState().project;
-                if (currentProject) {
-                  openDialog('gpx-selection', { gpxFile, filePath: selected });
-                } else {
-                  const fileName = extractFilename(selected, /\.gpx$/i) || 'Imported';
-                  openDialog('new-project-for-import', {
-                    gpxFile,
-                    filePath: selected,
-                    defaultName: fileName,
-                    importType: 'gpx',
-                  });
-                }
-              } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
-                // TML/TMLU import (always creates a new project)
-                if (useProjectStore.getState().project) {
-                  openDialog('error', {
-                    title: 'Import survey',
-                    message: 'Close the current project before importing a new survey.',
-                  });
-                  return;
-                }
-                const tmlFile = await parseTml(selected);
-                if (tmlFile) {
-                  const fileName = extractFilename(selected, /\.tmlu?$/i) || 'Imported';
-                  openDialog('new-project-for-import', {
-                    tmlFile,
-                    filePath: selected,
-                    defaultName: fileName,
-                    importType: 'tml',
-                  });
-                }
-              } else if (lowerPath.endsWith('.mak') || lowerPath.endsWith('.dat')) {
-                // Compass import (always creates a new project)
-                if (useProjectStore.getState().project) {
-                  openDialog('error', {
-                    title: 'Import survey',
-                    message: 'Close the current project before importing a new survey.',
-                  });
-                  return;
-                }
-                const compassFile = await parseCompass(selected);
-                if (compassFile) {
-                  const fileName = extractFilename(selected, /\.(mak|dat)$/i) || 'Imported';
-                  openDialog('new-project-for-import', {
-                    compassFile,
-                    filePath: selected,
-                    defaultName: fileName,
-                    importType: 'compass',
-                  });
-                }
-              } else {
-                // DMP import
-                const dmpFile = await importDmp(selected);
-                if (!dmpFile) return;
-
-                const currentProject = useProjectStore.getState().project;
-                if (currentProject) {
-                  setImportContext('existing-project');
-                  openDialog('dmp-selection', {
-                    dmpFile,
-                    filePath: selected,
-                  });
-                } else {
-                  setImportContext('new-project');
-                  const fileName = extractFilename(selected, /\.dmp$/i) || 'Imported';
-                  openDialog('new-project-for-import', {
-                    dmpFile,
-                    filePath: selected,
-                    defaultName: fileName,
-                  });
-                }
-              }
-            } catch (e) {
-              openDialog('error', {
-                title: 'Import Failed',
-                message: getErrorMessage(e, 'Failed to import file'),
-              });
-            }
-          })();
+          // Shared routing (toolbar Import + drag-drop + GlobalView Ctrl+I): the
+          // helper applies the closure-adjusted read-only guard and scopes the
+          // picker to DMP-only while a project is open.
+          runFileShortcutAction('import_dmp');
           break;
-        }
 
         case 'export': {
           event.preventDefault();
@@ -863,11 +709,7 @@ export function useKeyboardShortcuts() {
       selection,
       openDialog,
       project,
-      importDmp,
-      parseTml,
-      parseGpx,
       executeTmlImport,
-      setImportContext,
       showStations,
       showToast,
       stations,

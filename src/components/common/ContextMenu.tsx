@@ -1,11 +1,13 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { useUIStore } from '../../store/uiStore';
+import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import type { StationRef, SectionId, ShotId } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
+import { MenuRow, MenuSeparator } from './MenuRow';
 import { ArrowUpRightIcon } from './icons';
 import {
   EntityDeleteSymbol,
@@ -51,25 +53,18 @@ export default function ContextMenu() {
     | null;
   const position = dialogData.position as { x: number; y: number } | undefined;
 
-  // Close on click outside
+  // Close on outside mousedown / external scroll / resize (shared hook). This
+  // component only mounts while the context-menu dialog is active, so `open` is
+  // always true here. Escape is kept separate — the hook doesn't own it.
+  useDismissableLayer({ open: true, onDismiss: closeDialog, contains: [menuRef] });
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        closeDialog();
-      }
-    };
-
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         closeDialog();
       }
     };
-
-    document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleEscape);
-
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleEscape);
     };
   }, [closeDialog]);
@@ -563,27 +558,21 @@ export default function ContextMenu() {
       >
         {items.map((item, index) => {
           if (item.separator) {
-            return <div key={index} className="border-t border-border my-1" />;
+            return <MenuSeparator key={index} />;
           }
 
           return (
-            <button
+            <MenuRow
               key={index}
               onClick={() => { setSource('context-menu'); item.action(); }}
               disabled={item.disabled}
-              className={`
-                w-full px-3 py-2 text-left text-sm flex items-center gap-2
-                ${item.disabled ? 'text-text-secondary cursor-not-allowed' : 'hover:bg-accent-10'}
-                ${item.danger && !item.disabled ? 'text-error hover:bg-error-10' : ''}
-              `}
-            >
-              {showIcons && (
-                <span className="w-[18px] h-[18px] flex-shrink-0 inline-flex items-center justify-center" aria-hidden="true">
-                  {item.icon}
-                </span>
-              )}
-              <span className="flex-1 truncate">{item.label}</span>
-            </button>
+              label={item.label}
+              icon={item.icon}
+              showIcons={showIcons}
+              className={`${item.disabled ? 'text-text-secondary cursor-not-allowed' : 'hover:bg-accent-10'} ${
+                item.danger && !item.disabled ? 'text-error hover:bg-error-10' : ''
+              }`}
+            />
           );
         })}
       </div>

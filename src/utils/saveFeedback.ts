@@ -1,5 +1,6 @@
 import { useProjectStore } from '../store/projectStore';
 import { isPermissionError } from './saveErrors';
+import { trackDialogComplete } from './telemetry';
 import type { ValidationWarning } from '../types/ipc/ValidationWarning';
 
 /**
@@ -70,4 +71,45 @@ export function surfaceImportWarnings(
     message: warnings.map((w) => w.message).join('\n\n'),
     hideReportHint: true,
   });
+}
+
+/** The UI store actions a new-project import dialog uses to finish: close the
+ *  dialog, return to the fitted single-system view, and surface follow-ups. */
+export interface ImportDialogUi {
+  closeDialog: () => void;
+  setView: (view: 'single') => void;
+  triggerFitToBounds: () => void;
+  openDialog: (dialog: string, data?: Record<string, unknown>) => void;
+}
+
+/**
+ * Close the import dialog and return to the fitted single-system view, stamping
+ * the dialog-complete telemetry event first. Shared exit sequence for the TML and
+ * Compass new-project import dialogs.
+ */
+export function completeImportToSingleView(dialogName: string, ui: ImportDialogUi): void {
+  trackDialogComplete(dialogName);
+  ui.closeDialog();
+  ui.setView('single');
+  ui.triggerFitToBounds();
+}
+
+/**
+ * Handle the deferred-save partial-success case shared by the TML and Compass
+ * import dialogs: when a new-project import couldn't be saved to disk, it lives
+ * only in memory. Close the dialog, return to the fitted view, and surface the
+ * "save manually" warning — returning true so the caller bails before the
+ * orphan-placement step. Returns false (and does nothing) for a fully-saved
+ * import, even one carrying routine per-shot validation warnings. (#110)
+ */
+export function finalizeDeferredSaveWarnings(
+  warnings: ValidationWarning[] | undefined,
+  dialogName: string,
+  ui: ImportDialogUi,
+): boolean {
+  const saveWarnings = deferredSaveWarnings(warnings);
+  if (saveWarnings.length === 0) return false;
+  completeImportToSingleView(dialogName, ui);
+  surfaceImportWarnings(saveWarnings, ui.openDialog);
+  return true;
 }

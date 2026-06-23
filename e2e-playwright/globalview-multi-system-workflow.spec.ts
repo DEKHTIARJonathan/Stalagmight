@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures/coverage';
-import { setupMockedPage } from './helpers/app';
+import { setupMockedPage, closeProjectViaMenu } from './helpers/app';
 
 const ALPHA = '/projects/cave-alpha.stalx';
 const BETA = '/projects/cave-beta.stalx';
@@ -11,7 +11,7 @@ test.describe('GlobalView Multi-System Workflow', () => {
   });
 
   test('handles multi-select merge flow then opens a project and returns to global view', async ({ page }) => {
-    await page.getByTestId('globalview-list-tab').click();
+    await page.getByTestId('globalview-view-toggle-list').click();
 
     const alphaCard = page.getByTestId(`system-card-${ALPHA}`);
     const betaCard = page.getByTestId(`system-card-${BETA}`);
@@ -37,7 +37,6 @@ test.describe('GlobalView Multi-System Workflow', () => {
     await page.keyboard.press('Enter');
 
     await expect(page.getByTestId('single-system-view')).toBeVisible({ timeout: 10000 });
-    await page.getByTestId('back-button').click();
-    await expect(page.getByTestId('global-view')).toBeVisible({ timeout: 10000 });
+    await closeProjectViaMenu(page);
   });
 });

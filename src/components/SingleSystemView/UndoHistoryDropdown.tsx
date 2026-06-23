@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { getErrorMessage } from '../../utils/ipc';
 import { setSource } from '../../utils/telemetry';
 import { formatDate, formatRelativeTime, formatNumber } from '../../i18n/format';
@@ -783,24 +784,17 @@ export default function UndoHistoryDropdown({
     };
   }, [isOpen, undo, redo, enqueueAction, items, t]);
 
-  // Close on click outside - use hardClose
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(event.target as Node)
-      ) {
-        hardClose();
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [isOpen, hardClose]);
+  // Close on outside mousedown / external scroll / resize via the shared hook.
+  // The whole layer (trigger + absolutely-positioned dropdown) lives inside
+  // containerRef, so that's the single "inside" element; the inner undo-history
+  // list (scrollContainerRef) is the scroll-safe surface so paging through
+  // history doesn't dismiss.
+  useDismissableLayer({
+    open: isOpen,
+    onDismiss: hardClose,
+    contains: [containerRef],
+    scrollSafe: [scrollContainerRef],
+  });
 
   // Cleanup timeouts on unmount
   useEffect(() => {

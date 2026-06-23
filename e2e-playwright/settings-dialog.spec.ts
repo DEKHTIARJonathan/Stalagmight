@@ -1,5 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import { openSettingsFromMenu, closeProjectViaMenu } from './helpers/app';
 
 /**
  * E2E tests for Settings dialog sidebar layout and interactions.
@@ -25,11 +26,8 @@ async function createProject(page: Page, name: string): Promise<void> {
  * Helper to go back to GlobalView from a project view
  */
 async function goBackToGlobalView(page: Page): Promise<void> {
-  const backButton = page.locator('[data-testid="back-button"]');
-  if (await backButton.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await backButton.click();
-    await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 5000 });
-  }
+  if (await page.getByTestId('global-view').isVisible().catch(() => false)) return;
+  await closeProjectViaMenu(page);
 }
 
 /**
@@ -37,11 +35,7 @@ async function goBackToGlobalView(page: Page): Promise<void> {
  */
 async function openSettingsDialog(page: Page): Promise<void> {
   await goBackToGlobalView(page);
-
-  const settingsButton = page.locator('[data-testid="settings-button"]');
-  await expect(settingsButton).toBeVisible({ timeout: 5000 });
-  await settingsButton.click();
-  await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
+  await openSettingsFromMenu(page);
 }
 
 async function getSidebarCategories(page: Page): Promise<string[]> {
@@ -121,10 +115,7 @@ test.describe('Settings Dialog - Sidebar Navigation', () => {
 
   test('clicking sidebar category switches content panel @smoke', async ({ page }) => {
     // Open settings directly from GlobalView without creating a project
-    const settingsButton = page.locator('[data-testid="settings-button"]');
-    await expect(settingsButton).toBeVisible({ timeout: 5000 });
-    await settingsButton.click();
-    await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
+    await openSettingsFromMenu(page);
 
     // Wait for dialog to fully render
     await page.waitForTimeout(100);
@@ -683,12 +674,9 @@ test.describe('Settings Dialog - Fixed Dimensions', () => {
   });
 
   test('dialog dimensions remain constant across category switches', async ({ page }) => {
-    const settingsButton = page.locator('[data-testid="settings-button"]');
-    await expect(settingsButton).toBeVisible({ timeout: 5000 });
-    await settingsButton.click();
+    await openSettingsFromMenu(page);
 
     const dialog = page.locator('[data-testid="settings-dialog"]');
-    await expect(dialog).toBeVisible({ timeout: 5000 });
 
     // Capture initial bounding box on the General tab
     const initialBox = await dialog.boundingBox();
@@ -711,10 +699,7 @@ test.describe('Settings Dialog - Fixed Dimensions', () => {
   });
 
   test('scroll position resets to top on category change', async ({ page }) => {
-    const settingsButton = page.locator('[data-testid="settings-button"]');
-    await expect(settingsButton).toBeVisible({ timeout: 5000 });
-    await settingsButton.click();
-    await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
+    await openSettingsFromMenu(page);
 
     // Navigate to shortcuts which has many rows of content
     await page.locator('[data-testid="settings-tab-shortcuts"]').click();
@@ -780,10 +765,7 @@ test.describe('Settings Dialog - Fixed Dimensions', () => {
   });
 
   test('content area has overflow-auto for scrolling tall content', async ({ page }) => {
-    const settingsButton = page.locator('[data-testid="settings-button"]');
-    await expect(settingsButton).toBeVisible({ timeout: 5000 });
-    await settingsButton.click();
-    await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
+    await openSettingsFromMenu(page);
 
     // Navigate to shortcuts (content-heavy category)
     await page.locator('[data-testid="settings-tab-shortcuts"]').click();

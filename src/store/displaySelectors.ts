@@ -21,7 +21,6 @@ export const DISPLAY_DEFAULTS = {
   showReferenceShots: true,
   showZeroDatum: true,
   showGrid: false,
-  showScaleBar: true,
   showSatellite: false,
   showDepthGradient: false,
   showStationComments: false,

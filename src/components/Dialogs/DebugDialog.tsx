@@ -91,6 +91,7 @@ function LogLine({ line }: { line: string }) {
 
 export default function DebugDialog() {
   const closeDialog = useUIStore((s) => s.closeDialog);
+  const showToast = useUIStore((s) => s.showToast);
 
   const handleClose = useCallback(() => {
     trackDialogComplete('debug');
@@ -101,15 +102,25 @@ export default function DebugDialog() {
   const [filter, setFilter] = useState<LevelFilter>('all');
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const fetchLogs = useCallback(async () => {
+  const fetchLogs = useCallback(async (): Promise<boolean> => {
     try {
       const result = await invokeIpc<string[]>('get_recent_logs', undefined, { purpose: 'fetch recent debug logs' });
       setLogs(result);
       setError(null);
+      return true;
     } catch (e) {
       setError(getErrorMessage(e));
+      return false;
     }
   }, []);
+
+  // Explicit Refresh button: re-fetch, then confirm with a transient toast (#49).
+  // The on-mount fetch in the effect below stays silent — only a user-initiated
+  // refresh surfaces feedback. On failure the inline error already reports it, so
+  // the success toast is skipped.
+  const handleRefresh = useCallback(async () => {
+    if (await fetchLogs()) showToast('Logs refreshed', 'debug-refresh');
+  }, [fetchLogs, showToast]);
 
   useEffect(() => {
     fetchLogs();
@@ -135,10 +146,14 @@ export default function DebugDialog() {
   const handleCopy = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(filteredLogs.join('\n'));
+      showToast('Logs copied', 'debug-copy');
     } catch {
-      // clipboard unavailable
+      // Surface the failure rather than swallowing it (e.g. clipboard blocked /
+      // unavailable on WebKitGTK). Distinct key so it isn't throttled by a prior
+      // successful copy.
+      showToast('Copy failed — clipboard unavailable', 'debug-copy-failed');
     }
-  }, [filteredLogs]);
+  }, [filteredLogs, showToast]);
 
   // Count by level
   const counts = useMemo(() => {
@@ -162,7 +177,7 @@ export default function DebugDialog() {
       <div className="flex flex-col h-[70vh]">
         {/* Toolbar */}
         <div className="flex items-center gap-2 mb-2 flex-wrap">
-          <Button size="sm" onClick={fetchLogs} data-testid="debug-refresh-button">
+          <Button size="sm" onClick={handleRefresh} data-testid="debug-refresh-button">
             Refresh
           </Button>
           <Button size="sm" onClick={handleCopy} data-testid="debug-copy-button">

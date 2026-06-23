@@ -7,6 +7,7 @@ import {
   formatRelativeTime,
 } from '../../i18n/format';
 import { ElidedPath, Tooltip } from '../common';
+import { setProjectActionSource } from '../../utils/telemetry';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
 
 interface SystemCardProps {
@@ -49,6 +50,7 @@ export default function SystemCard({
   const handleDoubleClick = async () => {
     // Double click opens the project via store.loadProject
     // loadProject handles view switching internally
+    setProjectActionSource('recent-list');
     await loadProject(filePath);
   };
 

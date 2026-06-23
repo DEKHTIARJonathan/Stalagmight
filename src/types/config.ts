@@ -196,6 +196,7 @@ export const defaultConfig: Config = {
     save_as: ['Ctrl+Shift+S'],
     import_dmp: ['Ctrl+I'],
     export: ['Ctrl+E'],
+    quit: ['Ctrl+Q'],
   },
   panels: {
     sections_panel_width: 250,
@@ -207,6 +208,12 @@ export const defaultConfig: Config = {
     data_table_inclination_mode: 'off',
     data_table_station_column_order: [],
     data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
+    sections_panel_open: true,
+    sections_panel_mode: 'pin',
+    detail_panel_open: true,
+    detail_panel_mode: 'pin',
+    data_table_open: false,
+    data_table_mode: 'pin',
   },
   cache: {
     tile_cache_enabled: true,

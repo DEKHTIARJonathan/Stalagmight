@@ -2041,7 +2041,6 @@ impl AppState {
                 display_settings.show_zero_datum.to_string(),
             ),
             ("showGrid", display_settings.show_grid.to_string()),
-            ("showScaleBar", display_settings.show_scale_bar.to_string()),
             ("showSatellite", display_settings.show_satellite.to_string()),
             (
                 "showDepthGradient",

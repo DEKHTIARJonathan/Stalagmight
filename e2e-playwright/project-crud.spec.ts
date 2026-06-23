@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures/coverage';
-import { setupMockedPage, openNewProjectDialog, createProject } from './helpers/app';
+import { setupMockedPage, openNewProjectDialog, createProject, closeProjectViaMenu } from './helpers/app';
 
 test.describe('Project CRUD Operations', () => {
   test.beforeEach(async ({ page }) => {
@@ -19,7 +19,7 @@ test.describe('Project CRUD Operations', () => {
     });
 
     test('should have Open Project option', async ({ page }) => {
-      const openBtn = page.locator('[data-testid="global-open-project-button"], [data-testid="empty-state-open-project"]').first();
+      const openBtn = page.locator('[data-testid="global-open-import-button"], [data-testid="empty-state-open-project"]').first();
       await expect(openBtn).toBeVisible({ timeout: 10000 });
     });
   });
@@ -65,7 +65,7 @@ test.describe('Project CRUD Operations', () => {
       });
 
       await createProject(page, 'Untouched Project');
-      await page.getByTestId('back-button').click();
+      await closeProjectViaMenu(page);
 
       await expect(page.getByTestId('single-system-view')).not.toBeVisible({ timeout: 10000 });
       await expect(

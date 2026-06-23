@@ -20,7 +20,7 @@ const GAMMA = 'system-card-/projects/cave-gamma.stalx';
 const LOCAL = 'system-card-/projects/local-survey.stalx';
 
 async function switchToListTab(page: Page): Promise<void> {
-  const listTab = page.getByTestId('globalview-list-tab');
+  const listTab = page.getByTestId('globalview-view-toggle-list');
   await expect(listTab).toBeVisible();
   await listTab.click();
   await expect(page.getByTestId(ALPHA)).toBeVisible();

@@ -5,20 +5,13 @@ import type { ActiveOnboardingStep } from '../../hooks/useOnboarding';
 import type { OnboardingIllustration, OnboardingPlacement } from '../../onboarding/flows';
 import {
   CenterMapIcon,
-  CommentToolIcon,
   FitToViewIcon,
-  MeasureToolIcon,
-  MergeToolIcon,
   MinusIcon,
-  MoveCommentToolIcon,
-  MoveSegmentToolIcon,
-  MoveShotToolIcon,
-  MoveStationToolIcon,
-  PanToolIcon,
   PlusIcon,
-  SelectToolIcon,
-  ZoomToolIcon,
 } from '../common/icons';
+import { ToolGlyph } from '../common/toolIcons';
+import { clamp } from '../../utils/clamp';
+import { publishOnboardingStep } from '../../hooks/useOnboardingStep';
 
 interface OnboardingOverlayProps {
   step: ActiveOnboardingStep;
@@ -55,9 +48,6 @@ const STEP_SCROLL_TOP_PADDING = 10;
 const STEP_SCROLL_MAX_ATTEMPTS = 12;
 const STEP_SCROLL_RETRY_MS = 80;
 const TOOLTIP_SETTLE_DELAY_MS = 220;
-
-const clamp = (value: number, min: number, max: number): number =>
-  Math.min(Math.max(value, min), max);
 
 function boundsFromDomRect(rect: DOMRect): RectBounds {
   return {
@@ -297,52 +287,52 @@ function renderStepIllustration(
       select: {
         label: t('toolbar.tools.select'),
         description: t('onboarding.illustrations.tools.items.select'),
-        icon: <SelectToolIcon size={16} />,
+        icon: <ToolGlyph tool="select" size={16} />,
       },
       pan: {
         label: t('toolbar.tools.pan'),
         description: t('onboarding.illustrations.tools.items.pan'),
-        icon: <PanToolIcon size={16} />,
+        icon: <ToolGlyph tool="pan" size={16} />,
       },
       zoom: {
         label: t('toolbar.tools.zoom'),
         description: t('onboarding.illustrations.tools.items.zoom'),
-        icon: <ZoomToolIcon size={16} />,
+        icon: <ToolGlyph tool="zoom" size={16} />,
       },
       merge: {
         label: t('toolbar.tools.merge'),
         description: t('onboarding.illustrations.tools.items.merge'),
-        icon: <MergeToolIcon size={16} />,
+        icon: <ToolGlyph tool="merge" size={16} />,
       },
       measure: {
         label: t('toolbar.tools.measure'),
         description: t('onboarding.illustrations.tools.items.measure'),
-        icon: <MeasureToolIcon size={16} />,
+        icon: <ToolGlyph tool="measure" size={16} />,
       },
       comment: {
         label: t('toolbar.tools.comment'),
         description: t('onboarding.illustrations.tools.items.comment'),
-        icon: <CommentToolIcon size={16} />,
+        icon: <ToolGlyph tool="comment" size={16} />,
       },
       moveComment: {
         label: t('toolbar.tools.moveComment'),
         description: t('onboarding.illustrations.tools.items.moveComment'),
-        icon: <MoveCommentToolIcon size={16} />,
+        icon: <ToolGlyph tool="move_comment" size={16} />,
       },
       moveStation: {
         label: t('toolbar.tools.moveStation'),
         description: t('onboarding.illustrations.tools.items.moveStation'),
-        icon: <MoveStationToolIcon size={16} />,
+        icon: <ToolGlyph tool="move_station" size={16} />,
       },
       moveShot: {
         label: t('toolbar.tools.moveShot'),
         description: t('onboarding.illustrations.tools.items.moveShot'),
-        icon: <MoveShotToolIcon size={16} />,
+        icon: <ToolGlyph tool="move_shot" size={16} />,
       },
       moveSegment: {
         label: t('toolbar.tools.moveSegment'),
         description: t('onboarding.illustrations.tools.items.moveSegment'),
-        icon: <MoveSegmentToolIcon size={16} />,
+        icon: <ToolGlyph tool="move_segment" size={16} />,
       },
     };
 
@@ -376,10 +366,10 @@ function renderStepIllustration(
 
     const groupById = Object.fromEntries(groups.map((group) => [group.id, group]));
     const groupIcons: Record<string, JSX.Element | null> = {
-      select: <SelectToolIcon size={14} />,
-      navigate: <PanToolIcon size={14} />,
-      comment: <CommentToolIcon size={14} />,
-      move: <MoveSegmentToolIcon size={14} />,
+      select: <ToolGlyph tool="select" size={14} />,
+      navigate: <ToolGlyph tool="pan" size={14} />,
+      comment: <ToolGlyph tool="comment" size={14} />,
+      move: <ToolGlyph tool="move_segment" size={14} />,
       edit: null,
     };
     const groupColumns = [
@@ -803,6 +793,19 @@ export default function OnboardingOverlay({
       document.body.style.overflow = previousOverflow;
     };
   }, []);
+
+  // Publish the active step to the onboarding-step store for consumers outside
+  // this overlay's tree (DisplayMenu, SingleSystemView). The DOM attributes on
+  // the overlay element below are kept for DmpNewImportDialog's own observer.
+  useEffect(() => {
+    publishOnboardingStep(step.flowId, step.id);
+  }, [step.flowId, step.id]);
+  useEffect(
+    () => () => {
+      publishOnboardingStep(null, null);
+    },
+    [],
+  );
 
   useEffect(() => {
     const updateRect = () => {

@@ -539,6 +539,7 @@ const ACTION_NAME_KEYS: Record<string, string> = {
   toggle_data_table: 'settings.shortcuts.actions.toggleDataTable',
   comment_tool: 'settings.shortcuts.actions.commentTool',
   move_comment_tool: 'settings.shortcuts.actions.moveCommentTool',
+  quit: 'settings.shortcuts.actions.quit',
 };
 
 export function formatActionName(action: string): string {

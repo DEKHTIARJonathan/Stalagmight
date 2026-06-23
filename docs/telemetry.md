@@ -210,6 +210,11 @@ Auto-resets after 50ms to prevent bleed to unrelated actions.
 | `display-menu` | Display toggle menu |
 | `context-menu` | Right-click context menu action |
 | `dialog` | Dialog-initiated (dialog chaining) |
+| `dblclick` | Double-click open |
+| `recent-list` | Recent-projects list (card/table) double-click, or the "open from file" hint link |
+| `recent-map` | Recent-projects map marker |
+| `hamburger` | Global-view hamburger application menu |
+| `empty-state` | Empty-state cards (first run) |
 | `unknown` | No source set (default) |
 
 ### Caveat: single consumption
@@ -218,6 +223,21 @@ Source is consumed by whichever `trackAction` or `trackCommand` fires first. If
 a single handler triggers both (e.g., selection + IPC), only the first gets the
 source. In practice, current code paths don't mix these in the same synchronous
 call, but be aware of this when adding new handlers.
+
+### Project open/create/import attribution
+
+The 50 ms `setSource` reset is too short for project open/create/import, whose
+terminal IPC (`load_project_full`, `create_project_full`, `execute_*_import`,
+`import_sections`) fires only after a file picker and/or dialog — long after the
+originating click. A separate **pending project-action source** bridges that gap:
+`setProjectActionSource(name)` is called synchronously at the entry point (recent
+list/map, toolbar, hamburger, keyboard, empty-state) and `peekProjectActionSource()`
+is applied at each terminal command. It is `peek` (not consumed) so multi-command
+flows (e.g. DMP import = `create_project_full` + `import_sections`) all attribute
+to the same entry point, and it is cleared on `setView('single')` (flow complete)
+and on file-picker cancel. Project opens — which bypass the tracked `invokeIpc` via
+the raw binary `load_project_full_binary` invoke — are explicitly counted as
+`command.load_project_full[:source]` inside `loadProject`.
 
 ## Suppression
 

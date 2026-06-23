@@ -79,10 +79,12 @@ test.describe('Section focus mode', () => {
   test('focus button enters focus mode and the fit-to-view button exits', async ({ page }) => {
     const sectionId = await getSectionIdByName(page, SECTION_NAME);
 
-    // Baseline: project name shown, sections panel open, data table closed.
+    // Baseline: project name shown, sections panel open, data table closed
+    // (its closed-state opener tab is shown, the table body is unmounted).
     await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
     await expect(page.getByTestId('sections-panel')).toBeVisible();
-    await expect(page.getByTestId('data-table-collapsed-toggle')).toBeVisible();
+    await expect(page.getByTestId('panel-tab-data')).toBeVisible();
+    await expect(page.getByTestId('data-table')).toHaveCount(0);
 
     // Enter focus mode via the dedicated per-row focus button.
     await enterFocus(page, sectionId);
@@ -92,10 +94,14 @@ test.describe('Section focus mode', () => {
     await expect(focusName).toContainText(SECTION_NAME);
     await expect(page.getByTestId('toolbar-active-tool')).toBeVisible();
 
-    // Both side panels collapse; the data table opens.
-    await expect(page.getByTestId('sections-panel-collapsed-toggle')).toBeVisible();
-    await expect(page.getByTestId('detail-panel-collapsed-toggle')).toBeVisible();
-    await expect(page.getByTestId('data-table-open-collapse-toggle')).toBeVisible();
+    // Both side panels collapse (their closed-state opener tabs appear and the
+    // panel bodies unmount); the data table opens (its body mounts, no opener tab).
+    await expect(page.getByTestId('panel-tab-sections')).toBeVisible();
+    await expect(page.getByTestId('sections-panel')).toHaveCount(0);
+    await expect(page.getByTestId('panel-tab-detail')).toBeVisible();
+    await expect(page.getByTestId('detail-panel')).toHaveCount(0);
+    await expect(page.getByTestId('data-table')).toBeVisible();
+    await expect(page.getByTestId('panel-tab-data')).toHaveCount(0);
 
     // The fit-to-view button gains an "Exit focus" label while focused.
     const fitToView = page.getByTestId('fit-to-view-button');
@@ -108,7 +114,8 @@ test.describe('Section focus mode', () => {
     await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
     await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
     await expect(page.getByTestId('sections-panel')).toBeVisible();
-    await expect(page.getByTestId('data-table-collapsed-toggle')).toBeVisible();
+    await expect(page.getByTestId('panel-tab-data')).toBeVisible();
+    await expect(page.getByTestId('data-table')).toHaveCount(0);
     // Label is gone once out of focus mode.
     await expect(fitToView).not.toContainText('Exit focus');
   });
@@ -121,11 +128,13 @@ test.describe('Section focus mode', () => {
     await sectionRow.dblclick();
 
     // The section is selected, but focus mode is NOT entered: project name stays,
-    // the sections panel remains open, and the data table stays collapsed.
+    // the sections panel remains open, and the data table stays collapsed (its
+    // closed-state opener tab is shown, the table body stays unmounted).
     await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
     await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
     await expect(page.getByTestId('sections-panel')).toBeVisible();
-    await expect(page.getByTestId('data-table-collapsed-toggle')).toBeVisible();
+    await expect(page.getByTestId('panel-tab-data')).toBeVisible();
+    await expect(page.getByTestId('data-table')).toHaveCount(0);
     await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
   });
 
@@ -147,9 +156,13 @@ test.describe('Section focus mode', () => {
     await expect(focusName).toBeVisible();
     await expect(focusName).toContainText(SECTION_NAME);
     await expect(page.getByTestId('toolbar-active-tool')).toBeVisible();
-    await expect(page.getByTestId('sections-panel-collapsed-toggle')).toBeVisible();
-    await expect(page.getByTestId('detail-panel-collapsed-toggle')).toBeVisible();
-    await expect(page.getByTestId('data-table-open-collapse-toggle')).toBeVisible();
+    // Side panels collapse to their opener tabs (bodies unmount); the table opens.
+    await expect(page.getByTestId('panel-tab-sections')).toBeVisible();
+    await expect(page.getByTestId('sections-panel')).toHaveCount(0);
+    await expect(page.getByTestId('panel-tab-detail')).toBeVisible();
+    await expect(page.getByTestId('detail-panel')).toHaveCount(0);
+    await expect(page.getByTestId('data-table')).toBeVisible();
+    await expect(page.getByTestId('panel-tab-data')).toHaveCount(0);
   });
 
   test('focus mode shows the focused section in the status bar; fit-to-view exits', async ({ page }) => {

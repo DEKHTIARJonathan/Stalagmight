@@ -4,6 +4,7 @@ import {
   projectOpenFilters,
   projectSaveFilters,
   dmpOpenFilters,
+  dmpImportFilters,
   compassOpenFilters,
   importOpenFilters,
   exportSaveFilters,
@@ -82,6 +83,16 @@ describe('filter functions', () => {
     expect(filters).toHaveLength(2);
     expect(filters[0]!.extensions).toContain(DMP_EXTENSION);
     expect(filters[1]!.extensions).toContain('*');
+  });
+
+  it('dmpImportFilters is DMP-only with NO "All Files" entry', () => {
+    // With a project open, the in-project import picker must not offer "All
+    // Files": a `.stalx` (or other file) picked there would be routed to
+    // loadProject and replace the open project. Guard that property here.
+    const filters = dmpImportFilters();
+    expect(filters).toHaveLength(1);
+    expect(filters[0]!.extensions).toEqual([DMP_EXTENSION]);
+    expect(filters.some((f) => f.extensions.includes('*'))).toBe(false);
   });
 
   it('compassOpenFilters includes mak/dat and all files', () => {

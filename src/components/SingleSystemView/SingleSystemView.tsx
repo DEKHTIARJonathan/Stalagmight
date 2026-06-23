@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
+import { useOnboardingStep } from '../../hooks/useOnboardingStep';
 import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
 import { useProjectStore } from '../../store/projectStore';
-import { useUIStore } from '../../store/uiStore';
+import { PANEL_FIELDS, useUIStore, type PanelId, type PanelMode } from '../../store/uiStore';
 import type { SectionId } from '../../types/project';
 import { useShallow } from 'zustand/react/shallow';
-import { ResizablePanel } from '../common/Panel';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 import { OfflineIndicator } from '../common/OfflineIndicator';
 import Toolbar from './Toolbar';
@@ -14,9 +14,14 @@ import SectionsPanel from './SectionsPanel';
 import DetailPanel from './DetailPanel';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
-import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
+import { PANEL_SIZE_BOUNDS, DETAIL_REVEAL_AUTOCLOSE_MS } from './layoutConstants';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
-import { setSource, withTrackingSuppressed } from '../../utils/telemetry';
+import { usePanelReveal } from './usePanelReveal';
+import { Dock, BAR } from './Dock';
+import { dmpImportFilters } from '../../utils/fileDialogs';
+import { pickAndRoute } from '../../utils/openOrImport';
+import { useProjectMenuItems } from './useProjectMenuItems';
+import { setSource, withTrackingSuppressed, withPersistSuppressed, setProjectActionSource } from '../../utils/telemetry';
 import { useTranslation } from 'react-i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -27,6 +32,22 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 // lives here rather than in SectionsPanel, which unmounts when it collapses.
 const SECTION_FOCUS_REFIT_DELAY_MS = 180;
 
+// Top offsets (px) for the side opener tabs, aligning each tab with its panel's
+// header/content divider. These track the panel header layout — revisit if the
+// header height or the top-left map controls change. (The webview UI zoom scales
+// these uniformly with the header, so they stay aligned under zoom.)
+const SECTIONS_TAB_TOP = 40; // just below the top-left "Fit to view" button (bottom ≈ 32px)
+const DETAILS_TAB_TOP = 79; // aligned to the Details panel's header/content divider
+
+// Opener-tab arrow glyphs. Module-level constant elements (immutable, depend on
+// nothing) so their identity is stable across renders — required for the memoized
+// <Dock> to skip reconciliation during a sibling's resize drag (a fresh element
+// each render would otherwise bust the memo every ~16ms).
+const CHEVRON_RIGHT = <ChevronRightIcon size={14} />;
+const CHEVRON_LEFT = <ChevronLeftIcon size={14} />;
+const CHEVRON_UP = <ChevronUpIcon size={14} />;
+const CHEVRON_DOWN = <ChevronDownIcon size={14} />;
+
 export default function SingleSystemView() {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
@@ -36,8 +57,6 @@ export default function SingleSystemView() {
     project,
     stats,
     handleSaveProject: rawSave,
-    handleCloseProject,
-    handleImportDmp,
     canUndo,
     canRedo,
     undo,
@@ -46,19 +65,41 @@ export default function SingleSystemView() {
 
   const isDirty = useProjectStore((s) => s.isDirty);
   const autoSave = useAutoSave();
+  const saveFailed = autoSave.status === 'error';
+  // Red wash in the status bar's bottom-right corner only when a save failed —
+  // spans the full bar height and fades right→left across ~18% of its width.
+  const statusBarGradient = saveFailed
+    ? 'linear-gradient(to left, rgba(248, 113, 113, 0.30), transparent 18%)'
+    : undefined;
   const placementModeActive = useUIStore((s) => s.placementMode !== null);
 
-  const handleSaveProject = useCallback(async () => {
-    autoSave.cancelPending();
-    return rawSave();
-  }, [autoSave, rawSave]);
+  // Depend on the stable cancelPending useCallback (not the whole autoSave object,
+  // which is a fresh object each render) so handleSaveProject keeps a stable
+  // identity — otherwise useProjectMenuItems' useMemo rebuilds the menu array on
+  // every render (incl. ~60×/s during a resize drag).
+  const cancelPending = autoSave.cancelPending;
+  const handleSaveProject = useCallback(async (opts?: { closeAfterSave?: boolean }) => {
+    cancelPending();
+    return rawSave(opts);
+  }, [cancelPending, rawSave]);
+
+  // Toolbar "Import" button: DMP-only picker (the only format importable into an
+  // open project; no "All Files" so non-importable types — notably a `.stalx`
+  // project — can't be chosen and mis-routed), routed through the shared
+  // open/import router. GPX/Ariane/Compass start new projects, so they aren't
+  // offered here.
+  const handleImportDmp = useCallback(async () => {
+    setProjectActionSource('toolbar');
+    await pickAndRoute(dmpImportFilters(), 'Import Failed');
+  }, []);
+
+  // Hamburger menu items (file/project actions). Built here so it can use the
+  // autosave-aware wrapped save.
+  const menuItems = useProjectMenuItems({ onSave: handleSaveProject, saveFailed });
 
   const {
-    sectionsPanelOpen,
     sectionsPanelWidth,
-    detailPanelOpen,
     detailPanelWidth,
-    dataTableOpen,
     dataTableHeight,
     dataTableFullScreen,
     focusedSectionId,
@@ -67,19 +108,13 @@ export default function SingleSystemView() {
     selection,
     triggerZoomToSection,
     triggerFitToBounds,
-    toggleSectionsPanel,
-    toggleDetailPanel,
-    toggleDataTable,
     setSectionsPanelWidth,
     setDetailPanelWidth,
     setDataTableHeight,
     savePanelSizes,
   } = useUIStore(useShallow((s) => ({
-    sectionsPanelOpen: s.sectionsPanelOpen,
     sectionsPanelWidth: s.sectionsPanelWidth,
-    detailPanelOpen: s.detailPanelOpen,
     detailPanelWidth: s.detailPanelWidth,
-    dataTableOpen: s.dataTableOpen,
     dataTableHeight: s.dataTableHeight,
     dataTableFullScreen: s.dataTableFullScreen,
     focusedSectionId: s.focusedSectionId,
@@ -88,21 +123,108 @@ export default function SingleSystemView() {
     selection: s.selection,
     triggerZoomToSection: s.triggerZoomToSection,
     triggerFitToBounds: s.triggerFitToBounds,
-    toggleSectionsPanel: s.toggleSectionsPanel,
-    toggleDetailPanel: s.toggleDetailPanel,
-    toggleDataTable: s.toggleDataTable,
     setSectionsPanelWidth: s.setSectionsPanelWidth,
     setDetailPanelWidth: s.setDetailPanelWidth,
     setDataTableHeight: s.setDataTableHeight,
     savePanelSizes: s.savePanelSizes,
   })));
 
+  // Two-mode (hover/pin) reveal state for each panel. The store holds the
+  // persisted mode/open; these hooks add transient hover visibility + handlers.
+  const sectionsReveal = usePanelReveal('sections');
+  const detailReveal = usePanelReveal('detail');
+  const dataReveal = usePanelReveal('data-table');
+
+  // Stable onResizeEnd handlers per Dock so handleProps identity stays stable
+  // through a drag (these props feed useResizeHandle, which re-binds listeners
+  // when they change). Inline arrows would be re-created every render — including
+  // the ~60×/s store-width updates during the drag itself.
+  const handleSectionsResizeEnd = useCallback(
+    (size: number) => savePanelSizes('sections', size),
+    [savePanelSizes],
+  );
+  const handleDetailResizeEnd = useCallback(
+    (size: number) => savePanelSizes('detail', size),
+    [savePanelSizes],
+  );
+  // Don't persist the temporary focus-mode height (#50): exit restores the prior
+  // height only in memory, so a focus-time drag must not leak to config.
+  const handleDataResizeEnd = useCallback(
+    (size: number) => {
+      if (focusedSectionId === null) savePanelSizes('data-table', size);
+    },
+    [savePanelSizes, focusedSectionId],
+  );
+
+  // Programmatic Details reveal (jump-to-warning from the data table). The store
+  // bumps detailRevealNonce ONLY in hover mode (pin mode is revealed by opening
+  // the panel in the store directly), so float it open like a hover and arm an
+  // auto-close — the reveal isn't driven by a pointer over the panel, so without
+  // this it could float open indefinitely. Lives here, not in usePanelReveal, so
+  // only the Details panel carries the subscription (the others never need it).
+  const detailRevealNonce = useUIStore((s) => s.detailRevealNonce);
+  const detailRevealSeen = useRef(detailRevealNonce);
+  const { onRegionEnter: revealDetail, scheduleClose: scheduleDetailClose } = detailReveal;
+  useEffect(() => {
+    if (detailRevealNonce === detailRevealSeen.current) return;
+    detailRevealSeen.current = detailRevealNonce;
+    revealDetail();
+    scheduleDetailClose(DETAIL_REVEAL_AUTOCLOSE_MS);
+  }, [detailRevealNonce, revealDetail, scheduleDetailClose]);
+
+  // The Data panel's overlay is portaled to this Main element so it can span the
+  // full width (past the center column's side insets). It stops at a pinned-open
+  // side panel's edge; otherwise it fills to the window edge when the Data panel
+  // is open (covering the gap left by a compressed side bar), or sits between the
+  // closed bars (BAR inset) when the Data panel is itself closed.
+  const [mainEl, setMainEl] = useState<HTMLDivElement | null>(null);
+  // Which panel (if any) is being resized — at most one at a time, so a single
+  // enum replaces three parallel booleans. Drives each panel's edge that follows a
+  // sibling so it can track live (no transition lag): the side bars follow the Data
+  // panel's height, and the Data overlay's left/right follow the side panels' widths.
+  const [resizingPanel, setResizingPanel] = useState<PanelId | null>(null);
+  // Stable per-panel callback for a Dock's onResizingChange. Clears only when the
+  // panel that set the flag reports it ended, so a stray end-notification from a
+  // different Dock can't wipe the active one. Stable identity (the Docks are
+  // memoized) so it isn't re-created on the ~60×/s resize-tick re-renders.
+  const setPanelResizing = useCallback(
+    (panel: PanelId, resizing: boolean) =>
+      setResizingPanel((prev) => (resizing ? panel : prev === panel ? null : prev)),
+    [],
+  );
+  const onSectionsResizing = useCallback((r: boolean) => setPanelResizing('sections', r), [setPanelResizing]);
+  const onDataResizing = useCallback((r: boolean) => setPanelResizing('data-table', r), [setPanelResizing]);
+  const onDetailResizing = useCallback((r: boolean) => setPanelResizing('detail', r), [setPanelResizing]);
+  const dataResizing = resizingPanel === 'data-table';
+  const sidePanelResizing = resizingPanel === 'sections' || resizingPanel === 'detail';
+  // Stop the Data overlay at ANY open side panel's edge — pinned OR hover-floating
+  // (both render the full panel at its persisted width); only fill to the window
+  // edge when the side is minimized and the Data panel is open, else sit between
+  // the closed bars. (isOpen, not isPinnedOpen, or a floating side panel overlaps
+  // the Data panel and hides its tab.)
+  const dataOverlayLeft = sectionsReveal.isOpen
+    ? sectionsPanelWidth
+    : dataReveal.isOpen
+      ? 0
+      : BAR;
+  const dataOverlayRight = detailReveal.isOpen
+    ? detailPanelWidth
+    : dataReveal.isOpen
+      ? 0
+      : BAR;
+
   // #50: name shown in place of the project name while focused on one section.
   // A single lookup drives both existence (the auto-exit effect) and the name.
-  const focusedSection =
-    focusedSectionId !== null
-      ? project?.sections.find((s) => s.id === focusedSectionId) ?? null
-      : null;
+  // Memoized: SingleSystemView re-renders ~60×/s during a panel-resize drag (it
+  // subscribes to the panel width/height being mutated each tick), so the O(n)
+  // .find() must not re-scan project.sections every frame when focus is active.
+  const focusedSection = useMemo(
+    () =>
+      focusedSectionId !== null
+        ? project?.sections.find((s) => s.id === focusedSectionId) ?? null
+        : null,
+    [focusedSectionId, project?.sections],
+  );
   const focusedSectionExists = focusedSection !== null;
   const focusedSectionName =
     focusedSectionId !== null
@@ -203,97 +325,145 @@ export default function SingleSystemView() {
     return () => ro.disconnect();
   }, [projectLoaded]);
 
-  const sectionsPanelOpenedByOnboardingRef = useRef(false);
-  const detailPanelOpenedByOnboardingRef = useRef(false);
-  const dataTableOpenedByOnboardingRef = useRef(false);
+  // Snapshot of a panel's persisted {mode, open} captured when onboarding forced
+  // it open, so exiting the step restores the user's exact preference (including
+  // hover mode) instead of leaving it pinned. Null when onboarding isn't holding it.
+  type PanelSnapshot = { mode: PanelMode; open: boolean };
+  const sectionsOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
+  const detailOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
+  const dataTableOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
 
-  // Auto-open Data Table during late SURVEY WORKSPACE steps to avoid
-  // a visible tooltip jump when entering the data-table step.
+  // The active onboarding step (DOM-published by OnboardingOverlay), observed once
+  // via the shared hook. Only this view's flow drives the panel reveals here.
+  const onboarding = useOnboardingStep();
+  const singleViewOnboardingStepId =
+    onboarding.flowId === 'single-view-basics' ? onboarding.stepId : null;
+
+  // Reveal the right panel during late SURVEY WORKSPACE steps (avoids a visible
+  // tooltip jump when entering a panel step), without clobbering the user's
+  // persisted panel mode: pin-open on entry, restore the snapshot on exit. Driven
+  // by the observed step id, so it runs only when the step actually changes.
   useEffect(() => {
-    const getSingleViewOnboardingStepId = (): string | null => {
-      const overlay = document.querySelector('[data-testid="onboarding-overlay"]');
-      if (!overlay) {
-        return null;
-      }
-      const flowId = overlay.getAttribute('data-onboarding-flow-id');
-      const stepId = overlay.getAttribute('data-onboarding-step-id');
-      return flowId === 'single-view-basics' ? stepId : null;
-    };
+    // Onboarding's transient panel toggles must produce NO telemetry AND NO
+    // config write (the user's saved layout must survive the temporary reveal),
+    // so suppress both concerns together — withTrackingSuppressed gates telemetry
+    // and withPersistSuppressed gates savePanelLayout's persist.
+    const withOnboardingSuppressed = (fn: () => void) =>
+      withTrackingSuppressed(() => withPersistSuppressed(fn));
 
-    const syncDataTableState = () => {
-      const stepId = getSingleViewOnboardingStepId();
-      const shouldShowSectionsPanel = stepId === 'sections';
-      const shouldShowDetailPanel = stepId === 'detail-panel';
-      const shouldShowDataTable = stepId === 'data-table';
+    const syncOnboardingPanel = (
+      panel: PanelId,
+      shouldShow: boolean,
+      snapRef: { current: PanelSnapshot | null },
+    ) => {
+      const ui = useUIStore.getState();
+      const mode = ui[PANEL_FIELDS[panel].mode];
+      const open = ui[PANEL_FIELDS[panel].open];
+      const pinnedOpen = mode === 'pin' && open;
 
-      if (shouldShowSectionsPanel) {
-        if (!sectionsPanelOpen) {
-          sectionsPanelOpenedByOnboardingRef.current = true;
-          withTrackingSuppressed(() => toggleSectionsPanel());
+      if (shouldShow) {
+        // Reveal it (pin-open) and remember the prior state — unless it's already
+        // pinned-open, in which case there's nothing to reveal or restore.
+        if (snapRef.current === null && !pinnedOpen) {
+          snapRef.current = { mode, open };
+          withOnboardingSuppressed(() => ui.setPanelMode(panel, 'pin'));
         }
-      } else if (sectionsPanelOpenedByOnboardingRef.current && sectionsPanelOpen) {
-        sectionsPanelOpenedByOnboardingRef.current = false;
-        withTrackingSuppressed(() => toggleSectionsPanel());
-      } else if (!shouldShowSectionsPanel) {
-        sectionsPanelOpenedByOnboardingRef.current = false;
-      }
-
-      if (shouldShowDetailPanel) {
-        if (!detailPanelOpen) {
-          detailPanelOpenedByOnboardingRef.current = true;
-          withTrackingSuppressed(() => toggleDetailPanel());
+      } else if (snapRef.current !== null) {
+        const snap = snapRef.current;
+        snapRef.current = null;
+        // Only restore if the panel is still in the pinned-open state onboarding
+        // forced it into. If the user changed it during the step (e.g. un-pinned or
+        // closed it), that's a deliberate choice — honor it instead of reverting to
+        // the pre-step snapshot.
+        if (pinnedOpen) {
+          withOnboardingSuppressed(() => {
+            // setPanelMode forces open = (mode === 'pin'); fix up open if it differed
+            // (e.g. the user had pinned-but-closed).
+            ui.setPanelMode(panel, snap.mode);
+            if (snap.open !== (snap.mode === 'pin')) ui.setPanelOpen(panel, snap.open);
+          });
         }
-      } else if (detailPanelOpenedByOnboardingRef.current && detailPanelOpen) {
-        detailPanelOpenedByOnboardingRef.current = false;
-        withTrackingSuppressed(() => toggleDetailPanel());
-      } else if (!shouldShowDetailPanel) {
-        detailPanelOpenedByOnboardingRef.current = false;
-      }
-
-      if (shouldShowDataTable) {
-        if (!dataTableOpen) {
-          dataTableOpenedByOnboardingRef.current = true;
-          withTrackingSuppressed(() => toggleDataTable());
-        }
-        return;
-      }
-
-      if (dataTableOpenedByOnboardingRef.current && dataTableOpen) {
-        dataTableOpenedByOnboardingRef.current = false;
-        withTrackingSuppressed(() => toggleDataTable());
-        return;
-      }
-
-      if (!shouldShowDataTable) {
-        dataTableOpenedByOnboardingRef.current = false;
       }
     };
 
-    syncDataTableState();
+    syncOnboardingPanel('sections', singleViewOnboardingStepId === 'sections', sectionsOnboardingSnapRef);
+    syncOnboardingPanel('detail', singleViewOnboardingStepId === 'detail-panel', detailOnboardingSnapRef);
+    syncOnboardingPanel('data-table', singleViewOnboardingStepId === 'data-table', dataTableOnboardingSnapRef);
+  }, [singleViewOnboardingStepId]);
 
-    if (typeof MutationObserver === 'undefined') {
-      return;
-    }
+  // Shared panel content — each rendered in exactly ONE place (its Dock), so the
+  // heavy instance is never duplicated/remounted across pin/unpin/hover. Memoized
+  // so a panel-resize re-render (which fires ~60×/s as the store width/height
+  // updates during a drag) doesn't reconcile the heavy DataTable / Sections /
+  // Details subtrees: the Docks receive the SAME element reference and React bails
+  // out of the child render. Dimmed during placement (dim wraps content only,
+  // never the tab/handle).
+  const dimCls = placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : '';
+  const sections = project?.sections;
+  const sectionsContent = useMemo(
+    () =>
+      sections ? (
+        <div className={`h-full ${dimCls}`}>
+          <ErrorBoundary panelName="Sections">
+            <SectionsPanel sections={sections} />
+          </ErrorBoundary>
+        </div>
+      ) : null,
+    [sections, dimCls],
+  );
+  const detailContent = useMemo(
+    () => (
+      <div
+        className={`h-full ${dimCls}`}
+        // A programmatic hover-mode reveal (jump-to-warning) arms a timed auto-close
+        // that otherwise only cancels on pointer-enter. Treat keyboard focus / typing
+        // inside the panel as engagement too (onRegionEnter clears the grace), so a
+        // keyboard-only user resolving a warning doesn't have it close mid-task.
+        onFocusCapture={revealDetail}
+        onKeyDownCapture={revealDetail}
+      >
+        <ErrorBoundary panelName="Details">
+          <DetailPanel />
+        </ErrorBoundary>
+      </div>
+    ),
+    [dimCls, revealDetail],
+  );
+  const dataInner = useMemo(
+    () =>
+      sections ? (
+        <div className={`h-full ${dimCls}`}>
+          <ErrorBoundary panelName="Data Table">
+            <DataTable sections={sections} />
+          </ErrorBoundary>
+        </div>
+      ) : null,
+    [sections, dimCls],
+  );
 
-    const observer = new MutationObserver(syncDataTableState);
-    observer.observe(document.body, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: ['data-onboarding-flow-id', 'data-onboarding-step-id'],
+  // Memoized on `t` (changes only on locale switch): each Dock's `label` and
+  // `tabLabels` props must keep a stable identity so the memoized <Dock> can skip
+  // reconciliation during a sibling's resize drag — a fresh object per render
+  // would bust the memo every tick.
+  const panelLabels = useMemo(() => {
+    const name = {
+      sections: t('singleView.panels.sectionsName'),
+      detail: t('singleView.panels.detailName'),
+      data: t('singleView.panels.dataName'),
+    };
+    const labels = (n: string) => ({
+      open: t('singleView.panels.open', { name: n }),
+      pin: t('singleView.panels.pin'),
+      unpin: t('singleView.panels.unpin'),
+      close: t('singleView.panels.close', { name: n }),
     });
-
-    return () => {
-      observer.disconnect();
+    return {
+      name,
+      sections: labels(name.sections),
+      detail: labels(name.detail),
+      data: labels(name.data),
     };
-  }, [
-    dataTableOpen,
-    detailPanelOpen,
-    sectionsPanelOpen,
-    toggleDataTable,
-    toggleDetailPanel,
-    toggleSectionsPanel,
-  ]);
+  }, [t]);
 
   if (!project) {
     return (
@@ -314,8 +484,8 @@ export default function SingleSystemView() {
       </h1>
       {/* Toolbar */}
       <Toolbar
-        onBack={handleCloseProject}
-        onSave={handleSaveProject}
+        menuItems={menuItems}
+        saveFailed={saveFailed}
         onImport={handleImportDmp}
         onUndo={undo}
         onRedo={redo}
@@ -325,182 +495,111 @@ export default function SingleSystemView() {
         dataTableFullScreen={dataTableFullScreen}
       />
 
-      {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Sections panel */}
-        {sectionsPanelOpen ? (
-          <ResizablePanel
-            direction="horizontal"
-            defaultSize={sectionsPanelWidth}
-            minSize={150}
-            maxSize={400}
-            onResize={setSectionsPanelWidth}
-            onResizeEnd={(size) => savePanelSizes(size, undefined, undefined)}
-            className="border-r border-border"
-          >
-            <div className="relative h-full">
-              <button
-                type="button"
-                className="absolute right-0 top-1/2 z-10 -mr-1 h-10 w-3 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
-                onClick={toggleSectionsPanel}
-                title={t('dataTable.toggle.collapse')}
-                aria-label={t('dataTable.toggle.collapse')}
-                data-testid="sections-panel-collapse-toggle"
-              >
-                <span className="flex h-full items-center justify-center">
-                  <ChevronLeftIcon size={10} />
-                </span>
-              </button>
-              <div className={`h-full ${placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : ''}`}>
-                <ErrorBoundary panelName="Sections">
-                  <SectionsPanel sections={project.sections} />
-                </ErrorBoundary>
-              </div>
-            </div>
-          </ResizablePanel>
-        ) : (
-          <button
-            type="button"
-            className="w-3 flex-shrink-0 border-r border-border bg-panel transition-colors hover:bg-background-80"
-            onClick={toggleSectionsPanel}
-            title={t('sections.title')}
-            aria-label={t('sections.title')}
-            data-testid="sections-panel-collapsed-toggle"
-          >
-            <span className="flex h-full items-center justify-center text-text-secondary">
-              <ChevronRightIcon size={10} />
-            </span>
-          </button>
-        )}
+      {/* Main content — the `relative` here is the positioning context for the
+          side Docks' overlays + tabs. Each Dock renders a flow spacer (the only
+          thing that reflows the map) plus a single absolute panel instance. */}
+      <div ref={setMainEl} className="relative flex-1 flex overflow-hidden">
+        {/* Sections (left) */}
+        <Dock
+          reveal={sectionsReveal}
+          edge="left"
+          size={sectionsPanelWidth}
+          minSize={PANEL_SIZE_BOUNDS.sections.min}
+          maxSize={PANEL_SIZE_BOUNDS.sections.max}
+          onResize={setSectionsPanelWidth}
+          onResizeEnd={handleSectionsResizeEnd}
+          label={panelLabels.name.sections}
+          openArrow={CHEVRON_RIGHT}
+          closeArrow={CHEVRON_LEFT}
+          testId="sections"
+          tabLabels={panelLabels.sections}
+          tabTop={SECTIONS_TAB_TOP}
+          // When the Data panel is open (pinned OR hover-floating), compress this
+          // bar (if minimized) so it stops at the Data panel's top instead of
+          // running alongside it.
+          closedBottomInset={dataReveal.isOpen ? dataTableHeight : 0}
+          suspendSiblingTransition={dataResizing}
+          onResizingChange={onSectionsResizing}
+        >
+          {sectionsContent}
+        </Dock>
 
-        {/* Map and data table */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Map */}
+        {/* Map + data table. `min-w-0` lets this column shrink when both side
+            panels dock (otherwise flex refuses and push behavior breaks). */}
+        <div className="relative flex-1 flex flex-col min-w-0 overflow-hidden">
           <div className="flex-1 relative">
             <ErrorBoundary panelName="Map">
               <MapCanvas />
             </ErrorBoundary>
             {/* Offline indicator - positioned in top-right of map area */}
-            <OfflineIndicator className="absolute top-2 right-14" />
+            <OfflineIndicator className="absolute top-2 right-14 z-10" />
           </div>
 
-          {/* Data table */}
-          {dataTableOpen ? (
-            <ResizablePanel
-              direction="vertical"
-              defaultSize={dataTableHeight}
-              minSize={DATA_TABLE_MIN_HEIGHT}
-              maxSize={DATA_TABLE_MAX_HEIGHT}
-              onResize={setDataTableHeight}
-              // Don't persist the temporary focus-mode height (#50): in focus
-              // mode the data table opens at ~30% and exit restores the prior
-              // height only in memory, so persisting a focus-time drag would
-              // leak that size into the next session.
-              onResizeEnd={(size) => {
-                if (focusedSectionId === null) savePanelSizes(undefined, undefined, size);
-              }}
-              className="border-t border-border"
-            >
-              {/* Fullscreen mode swaps this wrapper to a fixed overlay covering
-                  the whole window below the toolbar (incl. the status bar). Only
-                  the className/style change — the parent chain stays identical,
-                  so the DataTable instance (grid selection, scroll, view state)
-                  survives entering/exiting the mode. */}
-              <div
-                className={
-                  dataTableFullScreen
-                    ? 'fixed inset-x-0 bottom-0 z-40 bg-panel'
-                    : 'relative h-full'
-                }
-                style={dataTableFullScreen ? { top: 'var(--toolbar-h, 48px)' } : undefined}
-              >
-                {!dataTableFullScreen && (
-                  <button
-                    type="button"
-                    className="absolute left-1/2 top-0 z-10 h-3 w-12 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
-                    onClick={toggleDataTable}
-                    title={t('dataTable.toggle.collapse')}
-                    aria-label={t('dataTable.toggle.collapse')}
-                    data-testid="data-table-open-collapse-toggle"
-                  >
-                    <span className="flex h-full items-center justify-center">
-                      <ChevronDownIcon size={10} />
-                    </span>
-                  </button>
-                )}
-                <div className={`h-full ${placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : ''}`}>
-                  <ErrorBoundary panelName="Data Table">
-                    <DataTable sections={project.sections} />
-                  </ErrorBoundary>
-                </div>
-              </div>
-            </ResizablePanel>
-          ) : (
-            <button
-              type="button"
-              className="h-3 shrink-0 border-t border-border bg-panel transition-colors hover:bg-background-80"
-              onClick={toggleDataTable}
-              title={t('dataTable.toggle.expand')}
-              aria-label={t('dataTable.toggle.expand')}
-              data-testid="data-table-collapsed-toggle"
-            >
-              <span className="flex h-full items-center justify-center text-text-secondary">
-                <ChevronUpIcon size={12} />
-              </span>
-            </button>
-          )}
+          {/* Data (bottom) — inside the center column so docked side panels push
+              it (and its tab) for free. Fullscreen renders without reparenting. */}
+          <Dock
+            reveal={dataReveal}
+            edge="bottom"
+            size={dataTableHeight}
+            minSize={PANEL_SIZE_BOUNDS['data-table'].min}
+            maxSize={PANEL_SIZE_BOUNDS['data-table'].max}
+            onResize={setDataTableHeight}
+            onResizeEnd={handleDataResizeEnd}
+            label={panelLabels.name.data}
+            openArrow={CHEVRON_UP}
+            closeArrow={CHEVRON_DOWN}
+            testId="data"
+            tabLabels={panelLabels.data}
+            // Keep the Data tab clear of the Details tab on the right (it can
+            // ride up to the same height when the Data panel is tall).
+            tabInset={40}
+            fullscreen={dataTableFullScreen}
+            // Portal the overlay to Main so it can span the full width (the
+            // reflow spacer stays in the center column to push the map up).
+            overlayContainer={mainEl}
+            overlayLeft={dataOverlayLeft}
+            overlayRight={dataOverlayRight}
+            onResizingChange={onDataResizing}
+            suspendSiblingTransition={sidePanelResizing}
+          >
+            {dataInner}
+          </Dock>
         </div>
 
-        {/* Detail panel */}
-        {detailPanelOpen ? (
-          <ResizablePanel
-            direction="horizontal"
-            defaultSize={detailPanelWidth}
-            minSize={200}
-            maxSize={500}
-            onResize={setDetailPanelWidth}
-            onResizeEnd={(size) => savePanelSizes(undefined, size, undefined)}
-            handlePosition="start"
-            className="border-l border-border"
-          >
-            <div className="relative h-full">
-              <button
-                type="button"
-                className="absolute left-0 top-1/2 z-10 -ml-1 h-10 w-3 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
-                onClick={toggleDetailPanel}
-                title={t('dataTable.toggle.collapse')}
-                aria-label={t('dataTable.toggle.collapse')}
-                data-testid="detail-panel-collapse-toggle"
-              >
-                <span className="flex h-full items-center justify-center">
-                  <ChevronRightIcon size={10} />
-                </span>
-              </button>
-              <div className={`h-full ${placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : ''}`}>
-                <ErrorBoundary panelName="Details">
-                  <DetailPanel />
-                </ErrorBoundary>
-              </div>
-            </div>
-          </ResizablePanel>
-        ) : (
-          <button
-            type="button"
-            className="w-3 flex-shrink-0 border-l border-border bg-panel transition-colors hover:bg-background-80"
-            onClick={toggleDetailPanel}
-            title={t('onboarding.flows.singleView.steps.detailPanel.title')}
-            aria-label={t('onboarding.flows.singleView.steps.detailPanel.title')}
-            data-testid="detail-panel-collapsed-toggle"
-          >
-            <span className="flex h-full items-center justify-center text-text-secondary">
-              <ChevronLeftIcon size={10} />
-            </span>
-          </button>
-        )}
+        {/* Details (right) */}
+        <Dock
+          reveal={detailReveal}
+          edge="right"
+          size={detailPanelWidth}
+          minSize={PANEL_SIZE_BOUNDS.detail.min}
+          maxSize={PANEL_SIZE_BOUNDS.detail.max}
+          onResize={setDetailPanelWidth}
+          onResizeEnd={handleDetailResizeEnd}
+          label={panelLabels.name.detail}
+          openArrow={CHEVRON_LEFT}
+          closeArrow={CHEVRON_RIGHT}
+          testId="detail"
+          tabLabels={panelLabels.detail}
+          tabTop={DETAILS_TAB_TOP}
+          closedBottomInset={dataReveal.isOpen ? dataTableHeight : 0}
+          suspendSiblingTransition={dataResizing}
+          onResizingChange={onDetailResizing}
+        >
+          {detailContent}
+        </Dock>
       </div>
 
-      {/* Status bar */}
-      <footer className="px-4 py-2 border-t border-border text-sm text-text-secondary flex justify-between">
+      {/* Status bar. It sits just below the Data panel, so treat it as part of
+          the Data hover region: keep an already-open (hover) Data panel open
+          while the pointer rests here, but don't open it from closed. */}
+      <footer
+        onMouseEnter={() => {
+          if (dataReveal.isFloatingOpen) dataReveal.onRegionEnter();
+        }}
+        onMouseLeave={dataReveal.onRegionLeave}
+        className="px-4 py-2 border-t border-border text-sm text-text-secondary flex justify-between"
+        style={{ backgroundImage: statusBarGradient }}
+      >
         <span>
           {t('singleView.status.summary', {
             sections: formatNumber(stats?.section_count ?? 0),
@@ -514,7 +613,12 @@ export default function SingleSystemView() {
             </span>
           )}
         </span>
-        <SaveStatus status={autoSave.status} countdown={autoSave.countdown} isDirty={isDirty} />
+        <SaveStatus
+          status={autoSave.status}
+          countdown={autoSave.countdown}
+          isDirty={isDirty}
+          onSave={handleSaveProject}
+        />
       </footer>
     </div>
   );
@@ -524,10 +628,12 @@ function SaveStatus({
   status,
   countdown,
   isDirty,
+  onSave,
 }: {
   status: AutoSaveStatus;
   countdown: number;
   isDirty: boolean;
+  onSave: () => void;
 }) {
   const { t } = useTranslation();
 
@@ -555,6 +661,22 @@ function SaveStatus({
         : t('singleView.status.saved');
       if (isDirty) className = 'text-yellow-400';
       break;
+  }
+
+  // On a failed save, the status doubles as a retry — clicking it runs the same
+  // save as the burger-menu Save button.
+  if (status === 'error') {
+    return (
+      <button
+        type="button"
+        data-testid="save-status"
+        onClick={() => onSave()}
+        title={t('common.actions.save')}
+        className={`${className} cursor-pointer hover:underline`}
+      >
+        {text}
+      </button>
+    );
   }
 
   return (

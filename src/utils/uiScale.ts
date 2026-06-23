@@ -1,4 +1,5 @@
 import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { clamp } from './clamp';
 
 export const UI_SCALE_MIN = 0.5;
 export const UI_SCALE_MAX = 3.0;
@@ -12,7 +13,7 @@ export const UI_SCALE_EVENT = 'ui-scale-change';
 
 export function clampUiScale(value: number): number {
   const rounded = Math.round(value * 10) / 10;
-  return Math.min(UI_SCALE_MAX, Math.max(UI_SCALE_MIN, rounded));
+  return clamp(rounded, UI_SCALE_MIN, UI_SCALE_MAX);
 }
 
 /** Current UI scale from storage, or the default if unset/invalid. */

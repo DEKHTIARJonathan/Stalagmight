@@ -2450,6 +2450,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_inclination_mode: 'off',
                 data_table_station_column_order: [],
                 data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
+                // Mirror the Rust serde defaults for the reveal state so initPanels
+                // reads concrete values (side panels pinned open, data closed),
+                // matching the real config shape get_config returns.
+                sections_panel_open: true,
+                sections_panel_mode: 'pin',
+                detail_panel_open: true,
+                detail_panel_mode: 'pin',
+                data_table_open: false,
+                data_table_mode: 'pin',
                 ...mockDataTableView,
               },
               cache: {
@@ -2670,6 +2679,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_inclination_mode: 'off',
                 data_table_station_column_order: [],
                 data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
+                // Mirror the Rust serde defaults for the reveal state so initPanels
+                // reads concrete values (side panels pinned open, data closed),
+                // matching the real config shape get_config returns.
+                sections_panel_open: true,
+                sections_panel_mode: 'pin',
+                detail_panel_open: true,
+                detail_panel_mode: 'pin',
+                data_table_open: false,
+                data_table_mode: 'pin',
                 ...mockDataTableView,
               },
               cache: {

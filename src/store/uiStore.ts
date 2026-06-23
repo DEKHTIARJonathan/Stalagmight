@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
-import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackSelect, trackSelectAdd } from '../utils/telemetry';
+import { clampRound } from '../utils/clamp';
+import { PANEL_SIZE_BOUNDS } from '../components/SingleSystemView/layoutConstants';
+import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackPanelMode, trackSelect, trackSelectAdd, clearProjectActionSource, isPersistSuppressed } from '../utils/telemetry';
 import type { Coordinates, DistanceField, PathShot, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 
 export interface CommentTarget {
@@ -38,6 +40,38 @@ export const GEOMETRY_MODE_DEFAULT: GeometryMode = 'measured';
 export type DmpImportWizardPhase = 'init' | 'suggesting' | 'manual_placing' | 'placing' | 'done';
 
 export type DetailPanelTab = 'details' | 'warnings';
+
+/**
+ * Shot/station coloring mode. The three overlay flags (showDepthGradient /
+ * showDistanceGradient / showIssueSeverity) are mutually exclusive — all paint the
+ * shots/stations layer — so this enum is the single-select view of them. `section`
+ * = none of the overlays (the default per-section coloring). Read via
+ * {@link colorModeOf}; set via the store's `setColorMode` (the one place that owns
+ * the select-one mapping).
+ */
+export type ColorMode = 'section' | 'depth' | 'distance' | 'issues';
+
+/** Derive the single-select coloring mode from the three mutually-exclusive
+ *  overlay flags. Use as a zustand selector: `useUIStore(colorModeOf)`. */
+export function colorModeOf(
+  s: Pick<UIStore, 'showIssueSeverity' | 'showDistanceGradient' | 'showDepthGradient'>,
+): ColorMode {
+  return s.showIssueSeverity
+    ? 'issues'
+    : s.showDistanceGradient
+      ? 'distance'
+      : s.showDepthGradient
+        ? 'depth'
+        : 'section';
+}
+
+/** Reveal behavior for a side/data panel.
+ *  - `pin`: click to open; stays open (reflows the map) until closed.
+ *  - `hover`: pops open on hover (floats over the map); hides on mouse-leave. */
+export type PanelMode = 'hover' | 'pin';
+
+/** Identifies one of the three in-project panels (matches telemetry PanelName). */
+export type PanelId = 'sections' | 'detail' | 'data-table';
 
 /**
  * A transient "ghost" geometry overlay shown on the map (in survey meters),
@@ -223,25 +257,40 @@ interface UIStore {
 
   // Panel state
   sectionsPanelOpen: boolean;
+  sectionsPanelMode: PanelMode;
   sectionsPanelWidth: number;
   detailPanelOpen: boolean;
+  detailPanelMode: PanelMode;
   detailPanelWidth: number;
   detailPanelTab: DetailPanelTab;
   dataTableOpen: boolean;
+  dataTableMode: PanelMode;
   dataTableHeight: number;
+  /** Bumped to transiently reveal the Details panel: in hover mode SingleSystemView
+   *  floats it open (like a hover, with an auto-close) instead of pinning, so a
+   *  programmatic reveal (e.g. jump-to-warning) never clobbers the user's persisted
+   *  panel mode. Session-only, never persisted. */
+  detailRevealNonce: number;
+  /** Reveal the Details panel (e.g. the "Project Details" menu item) WITHOUT
+   *  clobbering the user's persisted reveal mode: pinned → open it; hover → float
+   *  it open transiently via detailRevealNonce. Unlike toggleDetailPanel this never
+   *  forces 'pin' or persists a mode change just to view content. */
+  revealDetailPanel: () => void;
   toggleSectionsPanel: () => void;
   toggleDetailPanel: () => void;
   toggleDataTable: () => void;
+  /** Set a panel's open state (pinned). Tracks open/close + persists. */
+  setPanelOpen: (panel: PanelId, open: boolean) => void;
+  /** Set a panel's reveal mode. Pin → open; un-pin (hover) → closed at rest. */
+  setPanelMode: (panel: PanelId, mode: PanelMode) => void;
   setDetailPanelTab: (tab: DetailPanelTab) => void;
   setSectionsPanelWidth: (width: number) => void;
   setDetailPanelWidth: (width: number) => void;
   setDataTableHeight: (height: number) => void;
-  initPanelSizes: (panels: PanelsConfig) => void;
-  savePanelSizes: (
-    sectionsPanelWidth?: number,
-    detailPanelWidth?: number,
-    dataTableHeight?: number
-  ) => Promise<void>;
+  initPanels: (panels: PanelsConfig) => void;
+  savePanelSizes: (panel: PanelId, size: number) => Promise<void>;
+  /** Persist the full per-panel reveal layout (open + mode) globally. */
+  savePanelLayout: () => Promise<void>;
 
   // Data-table fullscreen mode: the table overlays the whole window below the
   // toolbar. Session-only — never persisted, so the app always starts windowed.
@@ -309,7 +358,6 @@ interface UIStore {
   showReferenceShots: boolean;
   showZeroDatum: boolean;
   showGrid: boolean;
-  showScaleBar: boolean;
   showSatellite: boolean;
   showDepthGradient: boolean;
   showStationComments: boolean;
@@ -346,6 +394,11 @@ interface UIStore {
   /** Set issue-severity coloring explicitly (used by the Warnings-tab
    *  auto-switch). Enabling turns off both gradients. */
   setIssueSeverity: (on: boolean) => void;
+  /** Select the active coloring mode (single-select over the three mutually-
+   *  exclusive overlays). The one place that owns the "which overlay for which
+   *  mode" mapping — delegates to the per-overlay actions so persistence/telemetry/
+   *  cleanup stay identical. Read the current mode via {@link colorModeOf}. */
+  setColorMode: (mode: ColorMode) => void;
 
   // Geometry display mode (measured vs non-destructive closure-adjusted)
   geometryMode: GeometryMode;
@@ -459,7 +512,6 @@ export type DisplayToggleKey =
   | 'showReferenceShots'
   | 'showZeroDatum'
   | 'showGrid'
-  | 'showScaleBar'
   | 'showSatellite'
   | 'showDepthGradient'
   | 'showStationComments'
@@ -475,11 +527,53 @@ export type DisplayToggleKey =
 let focusLayoutSnapshot:
   | {
       sectionsPanelOpen: boolean;
+      sectionsPanelMode: PanelMode;
       detailPanelOpen: boolean;
+      detailPanelMode: PanelMode;
       dataTableOpen: boolean;
+      dataTableMode: PanelMode;
       dataTableHeight: number;
     }
   | null = null;
+
+/**
+ * The data table's open/mode captured when entering fullscreen, restored on exit.
+ * Module-level bookkeeping (the UI never reads it). Fullscreen forces the table
+ * open+pinned; without this, exiting would strand a hover-mode or closed table
+ * as pinned-open.
+ */
+let fullScreenTableSnapshot:
+  | { dataTableOpen: boolean; dataTableMode: PanelMode }
+  | null = null;
+
+/**
+ * Apply a panel mutation that also exits section-focus (#50). Restores the
+ * pre-focus layout snapshot (a no-op when not focused, since the snapshot is
+ * null), then layers the caller's panel-specific overrides on top and clears
+ * focusedSectionId. The spread order is load-bearing: snapshot first (the OTHER
+ * panels' real pre-focus values), the caller's overrides second (this panel's
+ * intended new state wins), focusedSectionId:null last. Shared by the five
+ * focus-dropping mutators so the snapshot ritual lives in exactly one place.
+ */
+function exitFocusMerge(
+  set: (partial: Partial<UIStore>) => void,
+  overrides: Partial<UIStore>,
+): void {
+  const snap = focusLayoutSnapshot;
+  focusLayoutSnapshot = null;
+  set({ ...(snap ?? {}), ...overrides, focusedSectionId: null });
+}
+
+/**
+ * Maps each {@link PanelId} to its three per-panel store fields, so the panel
+ * actions (setPanelOpen/setPanelMode) and the reveal selectors read one entry
+ * instead of repeating a 3-way ternary. Exported for usePanelReveal.
+ */
+export const PANEL_FIELDS = {
+  sections: { open: 'sectionsPanelOpen', mode: 'sectionsPanelMode', width: 'sectionsPanelWidth' },
+  detail: { open: 'detailPanelOpen', mode: 'detailPanelMode', width: 'detailPanelWidth' },
+  'data-table': { open: 'dataTableOpen', mode: 'dataTableMode', width: 'dataTableHeight' },
+} as const satisfies Record<PanelId, { open: string; mode: string; width: string }>;
 
 export const useUIStore = create<UIStore>((set) => ({
   // View state
@@ -494,6 +588,9 @@ export const useUIStore = create<UIStore>((set) => ({
     setDwellState(view === 'global' ? 'global-view' : `tool.${useUIStore.getState().activeTool}`);
     if (view === 'single') {
       void advanceProjectSeq();
+      // A project open/create/import flow has landed — the entry-point source
+      // has been consumed, so clear it to prevent bleed into a later open.
+      clearProjectActionSource();
     }
     // Dev stats is a single-view developer overlay — the Display toggle that
     // controls it lives only in SingleSystemView, but <MemoryProbe/> is mounted
@@ -662,56 +759,149 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Panel state
   sectionsPanelOpen: true,
+  sectionsPanelMode: 'pin',
   sectionsPanelWidth: 250,
   detailPanelOpen: true,
+  detailPanelMode: 'pin',
   detailPanelWidth: 300,
   detailPanelTab: 'details',
   dataTableOpen: false,
+  dataTableMode: 'pin',
   dataTableHeight: 200,
+  detailRevealNonce: 0,
+  // Keyboard shortcuts / menu items are deliberate commands → pin open/close
+  // (mode forced to 'pin' so the panel reflows and stays). Manually changing the
+  // layout drops section-focus mode (#50) so the toolbar can't keep showing a
+  // focused-section name with panels reopened; the new layout is persisted.
   toggleSectionsPanel: () => {
-    const opening = !useUIStore.getState().sectionsPanelOpen;
+    const s = useUIStore.getState();
+    const opening = !s.sectionsPanelOpen;
     trackPanelToggle('sections', opening);
-    // Manually changing the layout drops section-focus mode (#50) so the toolbar
-    // can't keep showing a focused-section name with the panels reopened. Keep
-    // the user's new layout (no snapshot restore); discard the snapshot.
-    focusLayoutSnapshot = null;
-    set({ sectionsPanelOpen: opening, focusedSectionId: null });
+    // Exiting section-focus via a toggle must restore the OTHER panels' pre-focus
+    // open/mode (kept in the snapshot) before savePanelLayout persists live state.
+    // Otherwise the focus-forced collapse/pin of the untouched panels would be
+    // saved as the user's layout, silently overwriting their preferences. `snap`
+    // is null when not focused → the spread is a no-op. `opening` is relative to
+    // the currently-visible (focus-forced) state so the toggle flips what the user
+    // sees; this panel's own values are then overridden on top of the snapshot.
+    exitFocusMerge(set, { sectionsPanelOpen: opening, sectionsPanelMode: 'pin' });
+    void s.savePanelLayout();
   },
   toggleDetailPanel: () => {
-    const opening = !useUIStore.getState().detailPanelOpen;
+    const s = useUIStore.getState();
+    const opening = !s.detailPanelOpen;
     trackPanelToggle('detail', opening);
-    focusLayoutSnapshot = null;
-    set({ detailPanelOpen: opening, focusedSectionId: null });
+    // See toggleSectionsPanel: restore the snapshot first so toggling out of focus
+    // doesn't persist the other panels' focus-forced state.
+    exitFocusMerge(set, { detailPanelOpen: opening, detailPanelMode: 'pin' });
+    void s.savePanelLayout();
+  },
+  revealDetailPanel: () => {
+    const s = useUIStore.getState();
+    // Hover mode (and NOT section-focused, where the mode is force-pinned): float it
+    // open transiently via the nonce — the same non-persisting idiom as
+    // triggerResolveWarning — so viewing details never overwrites the user's hover
+    // preference with a persisted 'pin'. Every other case keeps the prior behavior
+    // (the deliberate open-and-pin command), so only the buggy path changes.
+    if (s.detailPanelMode === 'hover' && s.focusedSectionId === null) {
+      set({ detailRevealNonce: s.detailRevealNonce + 1 });
+    } else if (!s.detailPanelOpen) {
+      s.toggleDetailPanel();
+    }
   },
   toggleDataTable: () => {
-    const opening = !useUIStore.getState().dataTableOpen;
+    const s = useUIStore.getState();
+    const opening = !s.dataTableOpen;
     trackPanelToggle('data-table', opening);
-    focusLayoutSnapshot = null;
-    set({ dataTableOpen: opening, focusedSectionId: null });
+    // See toggleSectionsPanel: restore the snapshot first so toggling out of focus
+    // doesn't persist the other panels' focus-forced state.
+    exitFocusMerge(set, { dataTableOpen: opening, dataTableMode: 'pin' });
+    void s.savePanelLayout();
+  },
+  setPanelOpen: (panel, open) => {
+    const s = useUIStore.getState();
+    trackPanelToggle(panel, open);
+    // See toggleSectionsPanel: restore the snapshot first so changing one panel out
+    // of focus doesn't persist the other panels' focus-forced state.
+    exitFocusMerge(set, { [PANEL_FIELDS[panel].open]: open } as Partial<UIStore>);
+    void s.savePanelLayout();
+  },
+  setPanelMode: (panel, mode) => {
+    const s = useUIStore.getState();
+    trackPanelMode(panel, mode);
+    // See toggleSectionsPanel: restore the snapshot first so changing one panel out
+    // of focus doesn't persist the other panels' focus-forced state.
+    // Pinning makes the panel a persistent open panel; un-pinning (hover) leaves
+    // it closed at rest (visible only while hovered, tracked in local React state).
+    const open = mode === 'pin';
+    exitFocusMerge(set, {
+      [PANEL_FIELDS[panel].mode]: mode,
+      [PANEL_FIELDS[panel].open]: open,
+    } as Partial<UIStore>);
+    void s.savePanelLayout();
   },
   setDetailPanelTab: (detailPanelTab) => set({ detailPanelTab }),
   setSectionsPanelWidth: (sectionsPanelWidth) => set({ sectionsPanelWidth }),
   setDetailPanelWidth: (detailPanelWidth) => set({ detailPanelWidth }),
   setDataTableHeight: (dataTableHeight) => set({ dataTableHeight }),
-  initPanelSizes: (panels: PanelsConfig) =>
+  initPanels: (panels: PanelsConfig) => {
+    const asMode = (m: string): PanelMode => (m === 'hover' ? 'hover' : 'pin');
     set({
       sectionsPanelWidth: panels.sections_panel_width,
       detailPanelWidth: panels.detail_panel_width,
       dataTableHeight: panels.data_table_height,
-    }),
-  savePanelSizes: async (sectionsPanelWidth, detailPanelWidth, dataTableHeight) => {
+      // Default the open booleans defensively. The Rust config supplies them via
+      // serde defaults, but a partial config object that bypasses serde (the e2e
+      // mock, or an older persisted shape) would otherwise write `undefined`,
+      // leaving the side panels falsy-closed at rest. asMode() already defaults
+      // the mode strings, so only the booleans need this guard.
+      sectionsPanelOpen: panels.sections_panel_open ?? true,
+      sectionsPanelMode: asMode(panels.sections_panel_mode),
+      detailPanelOpen: panels.detail_panel_open ?? true,
+      detailPanelMode: asMode(panels.detail_panel_mode),
+      dataTableOpen: panels.data_table_open ?? false,
+      dataTableMode: asMode(panels.data_table_mode),
+    });
+  },
+  savePanelSizes: async (panel, size) => {
+    // This persists as a Rust `u32`. clampRound guarantees the contract regardless
+    // of caller: it rounds to a whole pixel (sub-pixel sizes under the webview UI
+    // zoom / HiDPI fail serde and throw), folds a non-finite size to the minimum,
+    // AND clamps to the panel's resize bounds so a degenerate 0 can never be
+    // persisted (which would reload the panel collapsed — there is no "unset"
+    // sentinel, the stored u32 is taken at face value).
+    const { min, max } = PANEL_SIZE_BOUNDS[panel];
+    const fields = { [PANEL_FIELDS[panel].width]: clampRound(size, min, max) };
     try {
-      await invokeIpc(
-        'update_panel_sizes',
-        {
-          sectionsPanelWidth,
-          detailPanelWidth,
-          dataTableHeight,
-        },
-        { purpose: 'persist panel layout', fields: { sectionsPanelWidth, detailPanelWidth, dataTableHeight } }
-      );
+      await invokeIpc('update_panel_sizes', fields, { purpose: 'persist panel layout', fields });
     } catch (e) {
       console.error('Failed to save panel sizes:', e);
+    }
+  },
+  savePanelLayout: async () => {
+    // Skip persistence for programmatic panel changes (e.g. onboarding toggles
+    // panels transiently via withPersistSuppressed): the user's saved layout
+    // must not be overwritten by a temporary onboarding-driven open/close. The
+    // toggles call this synchronously, so the suppression flag is still set here.
+    // Keyed on persist-suppression specifically (NOT telemetry-suppression) so a
+    // caller wrapping a real user action in withTrackingSuppressed still persists.
+    if (isPersistSuppressed()) return;
+    const s = useUIStore.getState();
+    const fields = {
+      sectionsPanelOpen: s.sectionsPanelOpen,
+      sectionsPanelMode: s.sectionsPanelMode,
+      detailPanelOpen: s.detailPanelOpen,
+      detailPanelMode: s.detailPanelMode,
+      dataTableOpen: s.dataTableOpen,
+      dataTableMode: s.dataTableMode,
+    };
+    try {
+      await invokeIpc('update_panel_layout', fields, {
+        purpose: 'persist panel reveal layout',
+        fields,
+      });
+    } catch (e) {
+      console.error('Failed to save panel layout:', e);
     }
   },
 
@@ -719,14 +909,44 @@ export const useUIStore = create<UIStore>((set) => ({
   dataTableFullScreen: false,
   rawTableSelection: null,
   enterDataTableFullScreen: () => {
-    // The overlay grows out of the docked table, so the table must be open.
-    set({ dataTableFullScreen: true, dataTableOpen: true });
+    const s = useUIStore.getState();
+    // The overlay grows out of the docked table, so the table must be open and
+    // pinned (fullscreen is a deliberate, persistent state, not a hover peek).
+    // Snapshot the table's prior open/mode on FIRST entry so exit can restore it
+    // — otherwise entering fullscreen from a hover-revealed (or closed) table
+    // would leave it stuck pinned-open afterward, silently losing the user's
+    // hover/closed preference.
+    if (!s.dataTableFullScreen) {
+      // Snapshot the table's prior open/mode so exit can restore it. While section-
+      // focused (#50), the live dataTableOpen/Mode are focus-forced (open+'pin'),
+      // NOT the user's real preference — that lives in focusLayoutSnapshot. Capture
+      // from there so a hover/closed table isn't stranded pinned-open after exiting
+      // fullscreen (exit-fullscreen and exit-focus are independent paths).
+      fullScreenTableSnapshot =
+        s.focusedSectionId !== null && focusLayoutSnapshot
+          ? { dataTableOpen: focusLayoutSnapshot.dataTableOpen, dataTableMode: focusLayoutSnapshot.dataTableMode }
+          : { dataTableOpen: s.dataTableOpen, dataTableMode: s.dataTableMode };
+    }
+    set({ dataTableFullScreen: true, dataTableOpen: true, dataTableMode: 'pin' });
   },
   exitDataTableFullScreen: () => {
     if (!useUIStore.getState().dataTableFullScreen) return;
+    // Restore the pre-fullscreen open/mode captured on entry. These are transient
+    // (fullscreen forces them) and never persisted, so no savePanelLayout call.
+    const snap = fullScreenTableSnapshot;
+    fullScreenTableSnapshot = null;
+    // If section focus is STILL active, its workspace requires the table open+pinned
+    // — re-apply that instead of restoring the pre-fullscreen snapshot (exit-focus
+    // will restore the user's real state later). Only restore the snapshot when no
+    // other override remains, so the table is never stranded pinned-open or wrongly
+    // closed while focused.
+    const stillFocused = useUIStore.getState().focusedSectionId !== null;
+    const restored: Partial<UIStore> = stillFocused
+      ? { dataTableOpen: true, dataTableMode: 'pin' }
+      : (snap ?? {});
     // Leaving fullscreen also leaves the raw-data view: the picker that could
     // switch back to Sections only exists in the fullscreen toolbar.
-    set({ dataTableFullScreen: false, rawTableSelection: null });
+    set({ dataTableFullScreen: false, rawTableSelection: null, ...restored });
   },
   setRawTableSelection: (rawTableSelection) => set({ rawTableSelection }),
 
@@ -745,22 +965,31 @@ export const useUIStore = create<UIStore>((set) => ({
     if (s.focusedSectionId === null) {
       focusLayoutSnapshot = {
         sectionsPanelOpen: s.sectionsPanelOpen,
+        sectionsPanelMode: s.sectionsPanelMode,
         detailPanelOpen: s.detailPanelOpen,
+        detailPanelMode: s.detailPanelMode,
         dataTableOpen: s.dataTableOpen,
+        dataTableMode: s.dataTableMode,
         dataTableHeight: s.dataTableHeight,
       };
     }
-    // Set the focus height directly (not via savePanelSizes) so the temporary
-    // focus layout is never persisted to the user's panel config. Only apply it
-    // when the table opens from closed: a fresh ResizablePanel mount seeds its
-    // (uncontrolled) size from this height. If the table is already open we leave
-    // its height alone rather than force a remount that would reset DataTable
-    // state (selection, scroll).
+    // Set the focus layout directly (not via save*) so the temporary focus state
+    // is never persisted to the user's panel config. Side panels collapse and the
+    // data table pins open (reflow). Only apply the focus height when the table
+    // opens from closed: a fresh ResizablePanel mount seeds its (uncontrolled)
+    // size from this height. If the table is already open we leave its height
+    // alone rather than force a remount that would reset DataTable state.
     set({
       focusedSectionId,
       sectionsPanelOpen: false,
+      // Force pin mode while collapsed so a hover-mode side panel can't pop open
+      // over the focused workspace. Prior modes are captured in the snapshot above
+      // and restored on exit.
+      sectionsPanelMode: 'pin',
       detailPanelOpen: false,
+      detailPanelMode: 'pin',
       dataTableOpen: true,
+      dataTableMode: 'pin',
       ...(s.dataTableOpen ? {} : { dataTableHeight }),
     });
   },
@@ -820,10 +1049,30 @@ export const useUIStore = create<UIStore>((set) => ({
     // consumes the request while mounted (detailPanelOpen && tab === 'warnings'),
     // so open the panel on the Warnings tab here. (Otherwise the click would be
     // a no-op and the request would sit stale and fire on a later tab switch.)
-    const s = useUIStore.getState();
+    let s = useUIStore.getState();
     if (s.focusedSectionId !== null) s.exitSectionFocus();
     if (s.dataTableFullScreen) s.exitDataTableFullScreen();
-    set({ requestResolveWarning: { sectionId, shotId }, detailPanelOpen: true, detailPanelTab: 'warnings' });
+    // Re-read: the exits above can change the panel's mode/open.
+    s = useUIStore.getState();
+    // Reveal the Details panel on the Warnings tab so WarningsContent mounts and
+    // consumes the request — without mutating the user's persisted panel mode.
+    // Pinned: just ensure it's open. Hover: bump the reveal nonce so SingleSystemView
+    // floats it open like a hover (with a timed auto-close, since no pointer-leave
+    // fires for a programmatic reveal), so resolving a warning never silently leaves
+    // a hover-mode user pinned.
+    // For a pinned-but-closed panel, opening it is a real (persistent) open just
+    // like toggleDetailPanel — persist it so the in-memory open flag doesn't
+    // diverge from the saved layout (which would re-close the panel next session
+    // and could be clobbered by any later savePanelLayout).
+    const pinOpening = s.detailPanelMode === 'pin' && !s.detailPanelOpen;
+    set({
+      requestResolveWarning: { sectionId, shotId },
+      detailPanelTab: 'warnings',
+      ...(s.detailPanelMode === 'pin'
+        ? { detailPanelOpen: true }
+        : { detailRevealNonce: s.detailRevealNonce + 1 }),
+    });
+    if (pinOpening) void useUIStore.getState().savePanelLayout();
   },
   clearResolveWarningRequest: () => set({ requestResolveWarning: null }),
   requestZoomToShot: null,
@@ -845,7 +1094,6 @@ export const useUIStore = create<UIStore>((set) => ({
   showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
   showZeroDatum: DISPLAY_DEFAULTS.showZeroDatum,
   showGrid: DISPLAY_DEFAULTS.showGrid,
-  showScaleBar: DISPLAY_DEFAULTS.showScaleBar,
   showSatellite: DISPLAY_DEFAULTS.showSatellite,
   showDepthGradient: DISPLAY_DEFAULTS.showDepthGradient,
   showStationComments: DISPLAY_DEFAULTS.showStationComments,
@@ -903,6 +1151,27 @@ export const useUIStore = create<UIStore>((set) => ({
           }
         : { showIssueSeverity: false }
     );
+  },
+  setColorMode: (mode) => {
+    const s = useUIStore.getState();
+    if (colorModeOf(s) === mode) return;
+    // Single entry point for the mutually-exclusive coloring overlays. Delegates to
+    // the per-overlay actions, which each turn the others off and handle their own
+    // persistence (depth is a saved DisplayToggleKey), telemetry, and cleanup (the
+    // distance overlay clears its origin/field) — so the "select one of N" mapping
+    // lives here in the store instead of being duplicated in the DisplayMenu pills.
+    if (mode === 'depth') {
+      if (!s.showDepthGradient) s.toggleDisplay('showDepthGradient');
+    } else if (mode === 'distance') {
+      if (!s.showDistanceGradient) s.toggleDistanceGradient();
+    } else if (mode === 'issues') {
+      s.setIssueSeverity(true);
+    } else {
+      // 'section' = none: turn off whichever single overlay is currently on.
+      if (s.showDepthGradient) s.toggleDisplay('showDepthGradient');
+      else if (s.showDistanceGradient) s.toggleDistanceGradient();
+      else if (s.showIssueSeverity) s.setIssueSeverity(false);
+    }
   },
   setDistanceGradientOrigin: (distanceGradientOrigin) =>
     // Clear the cached field so stale colors from the previous origin aren't shown
@@ -1008,7 +1277,6 @@ export const useUIStore = create<UIStore>((set) => ({
       showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
       showZeroDatum: DISPLAY_DEFAULTS.showZeroDatum,
       showGrid: DISPLAY_DEFAULTS.showGrid,
-      showScaleBar: DISPLAY_DEFAULTS.showScaleBar,
       showSatellite: DISPLAY_DEFAULTS.showSatellite,
       showDepthGradient: DISPLAY_DEFAULTS.showDepthGradient,
   showStationComments: DISPLAY_DEFAULTS.showStationComments,
@@ -1031,7 +1299,6 @@ export const useUIStore = create<UIStore>((set) => ({
       showReferenceShots: settings.showReferenceShots ?? state.showReferenceShots,
       showZeroDatum: settings.showZeroDatum ?? state.showZeroDatum,
       showGrid: settings.showGrid ?? state.showGrid,
-      showScaleBar: settings.showScaleBar ?? state.showScaleBar,
       showSatellite: settings.showSatellite ?? state.showSatellite,
       showDepthGradient: settings.showDepthGradient ?? state.showDepthGradient,
       showStationComments: settings.showStationComments ?? state.showStationComments,

@@ -20,6 +20,12 @@ pub(super) const SOURCE_NAMES: &[&str] = &[
     "mouse",          // 11
     "touch",          // 12
     "dblclick",       // 13
+    // Project open/create/import entry-point attribution.
+    "recent-list", // recent-projects list (card/table) double-click
+    "recent-map",  // recent-projects map marker
+    "hamburger",   // global-view hamburger application menu
+    "empty-state", // empty-state cards (first run)
+    "drag-drop",   // file dropped onto the window (import)
 ];
 
 /// Known event base names (the `:source` suffix is appended at runtime). The
@@ -121,6 +127,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.unmerge_stations",
     "command.unresolve_warning",
     "command.update_config",
+    "command.update_panel_layout",
     "command.update_panel_sizes",
     "command.update_section",
     "command.update_shot",
@@ -153,7 +160,6 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.toggle.showDevStats",
     "action.toggle.showGrid",
     "action.toggle.showReferenceShots",
-    "action.toggle.showScaleBar",
     "action.toggle.showSatellite",
     "action.toggle.showSectionNames",
     "action.toggle.showShotComments",
@@ -204,13 +210,19 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.unsaved-changes",
     "action.dialog.zero-datum-config",
     "action.dialog.zero-datum-selection",
-    // ── Action: panels (168-173) ──
+    // ── Action: panels ──
     "action.panel-close.data-table",
     "action.panel-close.detail",
     "action.panel-close.sections",
     "action.panel-open.data-table",
     "action.panel-open.detail",
     "action.panel-open.sections",
+    "action.panel-pin.data-table",
+    "action.panel-pin.detail",
+    "action.panel-pin.sections",
+    "action.panel-unpin.data-table",
+    "action.panel-unpin.detail",
+    "action.panel-unpin.sections",
     // ── Action: context menu (174-176) ──
     "action.remove-closure",
     "action.toggle-reference",
@@ -515,7 +527,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 395);
+        assert_eq!(EVENT_NAMES.len(), 401);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
@@ -555,7 +567,7 @@ mod tests {
 
     #[test]
     fn source_count() {
-        assert_eq!(SOURCE_NAMES.len(), 14);
+        assert_eq!(SOURCE_NAMES.len(), 19);
     }
 
     /// Commands registered in `generate_handler![]` that are excluded from
@@ -1010,41 +1022,27 @@ mod tests {
         let src = read_frontend_file("src/utils/telemetry.ts");
         let panels = extract_type_union(&src, "PanelName");
 
-        let code_open: HashSet<String> = panels
-            .iter()
-            .map(|p| format!("action.panel-open.{p}"))
-            .collect();
-        let code_close: HashSet<String> = panels
-            .iter()
-            .map(|p| format!("action.panel-close.{p}"))
-            .collect();
-
-        let reg_open: HashSet<String> = EVENT_NAMES
-            .iter()
-            .filter(|n| n.starts_with("action.panel-open."))
-            .map(|n| (*n).to_string())
-            .collect();
-        let reg_close: HashSet<String> = EVENT_NAMES
-            .iter()
-            .filter(|n| n.starts_with("action.panel-close."))
-            .map(|n| (*n).to_string())
-            .collect();
-
-        let missing_open: Vec<_> = code_open.difference(&reg_open).collect();
-        let stale_open: Vec<_> = reg_open.difference(&code_open).collect();
-        let missing_close: Vec<_> = code_close.difference(&reg_close).collect();
-        let stale_close: Vec<_> = reg_close.difference(&code_close).collect();
+        // Each panel emits open/close (visibility) and pin/unpin (mode) events.
+        let verbs = ["open", "close", "pin", "unpin"];
+        let mut missing: Vec<String> = Vec::new();
+        let mut stale: Vec<String> = Vec::new();
+        for verb in verbs {
+            let prefix = format!("action.panel-{verb}.");
+            let code: HashSet<String> = panels.iter().map(|p| format!("{prefix}{p}")).collect();
+            let reg: HashSet<String> = EVENT_NAMES
+                .iter()
+                .filter(|n| n.starts_with(&prefix))
+                .map(|n| (*n).to_string())
+                .collect();
+            missing.extend(code.difference(&reg).cloned());
+            stale.extend(reg.difference(&code).cloned());
+        }
 
         assert!(
-            missing_open.is_empty()
-                && stale_open.is_empty()
-                && missing_close.is_empty()
-                && stale_close.is_empty(),
+            missing.is_empty() && stale.is_empty(),
             "Panel registry out of sync with PanelName:\n  \
-             Missing panel-open.*: {missing_open:?}\n  \
-             Stale panel-open.*: {stale_open:?}\n  \
-             Missing panel-close.*: {missing_close:?}\n  \
-             Stale panel-close.*: {stale_close:?}"
+             Missing: {missing:?}\n  \
+             Stale: {stale:?}"
         );
     }
 

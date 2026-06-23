@@ -1,5 +1,5 @@
 import { test, expect, Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, waitForMapReady, CUSTOM_TILE_URL_RE } from './helpers/app';
+import { setupMockedPage, createProject, waitForMapReady, openAppMenu, CUSTOM_TILE_URL_RE } from './helpers/app';
 
 /**
  * Helper to open the Display menu
@@ -14,7 +14,7 @@ async function openDisplayMenu(page: Page): Promise<void> {
  */
 function getSatelliteToggle(page: Page) {
   const button = page.locator('[data-testid="display-toggle-showSatellite"]');
-  const checkbox = button.locator('div.rounded').last();
+  const checkbox = button;
   return { button, checkbox };
 }
 
@@ -272,7 +272,8 @@ test.describe('Satellite Display', () => {
      * Settings is only accessible from the GlobalView, not from within a project
      */
     async function openSettingsFromGlobalView(page: Page): Promise<void> {
-      // Go back to GlobalView (close project) using the toolbar Close button
+      // Open the hamburger menu, then click Close Project (now a menu item)
+      await openAppMenu(page);
       await page.getByTestId('back-button').click();
 
       // Handle unsaved changes dialog if it appears
@@ -285,7 +286,8 @@ test.describe('Satellite Display', () => {
       // Wait for GlobalView to load
       await page.waitForSelector('[data-testid="global-view"], h1:has-text("Stalagmight")', { timeout: 8000 });
 
-      // Click Settings button
+      // Open the hamburger menu, then click Settings
+      await openAppMenu(page);
       await page.click('[data-testid="settings-button"], button:has-text("Settings")');
       await page.waitForSelector('[data-testid="settings-dialog"]', { timeout: 5000 });
     }

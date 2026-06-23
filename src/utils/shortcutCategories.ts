@@ -13,7 +13,7 @@ export const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
   {
     id: 'file',
     labelKey: 'settings.shortcuts.categories.file',
-    actions: ['new_file', 'open_file', 'save', 'save_as', 'import_dmp', 'export'],
+    actions: ['new_file', 'open_file', 'save', 'save_as', 'import_dmp', 'export', 'quit'],
   },
   {
     id: 'tools',

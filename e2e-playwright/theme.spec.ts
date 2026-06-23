@@ -1,5 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import { openSettingsFromMenu, closeProjectViaMenu } from './helpers/app';
 
 /**
  * E2E tests for theme switching: data-theme attribute, CSS variable resolution,
@@ -39,13 +40,15 @@ async function createProject(page: Page, name: string): Promise<void> {
  * Helper to go back to GlobalView from a project view
  */
 async function goBackToGlobalView(page: Page): Promise<void> {
-  const backButton = page.locator('[data-testid="back-button"]');
-  if (await backButton.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await backButton.click();
-    await expect(
-      page.locator('[data-testid="global-view"]')
-    ).toBeVisible({ timeout: 5000 });
+  if (
+    await page
+      .getByTestId('global-view')
+      .isVisible()
+      .catch(() => false)
+  ) {
+    return;
   }
+  await closeProjectViaMenu(page);
 }
 
 /**
@@ -54,12 +57,9 @@ async function goBackToGlobalView(page: Page): Promise<void> {
 async function openSettingsDialog(page: Page): Promise<void> {
   await goBackToGlobalView(page);
 
-  const settingsButton = page.locator('[data-testid="settings-button"]');
-  await expect(settingsButton).toBeVisible({ timeout: 5000 });
-  await settingsButton.click();
-  await expect(
-    page.locator('[data-testid="settings-dialog"]')
-  ).toBeVisible({ timeout: 5000 });
+  // Settings now lives inside the hamburger menu: open the menu, click
+  // settings-button, and wait for the dialog (shared helper).
+  await openSettingsFromMenu(page);
 }
 
 /**

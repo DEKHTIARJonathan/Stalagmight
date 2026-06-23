@@ -1,5 +1,5 @@
 import { test, expect, Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, waitForMapReady, CUSTOM_TILE_URL_RE } from './helpers/app';
+import { setupMockedPage, createProject, waitForMapReady, openSettingsFromMenu, closeProjectViaMenu, CUSTOM_TILE_URL_RE } from './helpers/app';
 
 /**
  * Helper to open the Display menu
@@ -21,7 +21,7 @@ async function toggleSatellite(page: Page): Promise<void> {
  * Helper to check if satellite is enabled using polling
  */
 async function isSatelliteEnabled(page: Page): Promise<boolean> {
-  const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]').locator('div.rounded').last();
+  const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]');
   return checkbox.evaluate((el) => el.classList.contains('bg-accent'));
 }
 
@@ -73,7 +73,7 @@ test.describe('Satellite Edge Cases', () => {
       await toggleSatellite(page);
 
       // Verify toggle succeeded
-      const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]').locator('div.rounded').last();
+      const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]');
       await expect(checkbox).toHaveClass(/bg-accent/);
 
       // App should remain functional
@@ -92,7 +92,7 @@ test.describe('Satellite Edge Cases', () => {
       await toggleSatellite(page);
 
       // Verify toggle succeeded
-      const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]').locator('div.rounded').last();
+      const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]');
       await expect(checkbox).toHaveClass(/bg-accent/);
 
       // App should remain functional
@@ -188,7 +188,7 @@ test.describe('Satellite Edge Cases', () => {
 
     test('should handle multiple satellite toggles in quick succession', async ({ page }) => {
       await openDisplayMenu(page);
-      const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]').locator('div.rounded').last();
+      const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]');
 
       // Toggle multiple times very quickly, verifying state after each
       for (let i = 0; i < 20; i++) {
@@ -220,18 +220,8 @@ test.describe('Satellite Edge Cases', () => {
       // Close display menu
       await page.keyboard.press('Escape');
 
-      // Go back to home (close project) using the "← Back" button
-      await page.getByTestId('back-button').click();
-
-      // Handle unsaved changes dialog if it appears
-      const discardButton = page.locator('button:has-text("Discard Changes")');
-      const needsDiscard = await discardButton.waitFor({ state: 'visible', timeout: 1500 }).then(() => true).catch(() => false);
-      if (needsDiscard) {
-        await discardButton.click();
-      }
-
-      // Wait for GlobalView
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("Stalagmight")', { timeout: 8000 });
+      // Go back to home (close project) via the hamburger menu
+      await closeProjectViaMenu(page);
 
       // Create a new project
       await createProject(page, 'Satellite Test Project 2');
@@ -261,18 +251,8 @@ test.describe('Satellite Edge Cases', () => {
      * the unsaved-changes dialog with timing issues in the mock environment.
      */
     test('should toggle with empty project (no stations)', async ({ page }) => {
-      // Go back to home and create empty project using the "← Back" button
-      await page.getByTestId('back-button').click();
-
-      // Handle unsaved changes dialog if it appears
-      const discardButton = page.locator('button:has-text("Discard Changes")');
-      const needsDiscard = await discardButton.waitFor({ state: 'visible', timeout: 1500 }).then(() => true).catch(() => false);
-      if (needsDiscard) {
-        await discardButton.click();
-      }
-
-      // Wait for GlobalView
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("Stalagmight")', { timeout: 8000 });
+      // Go back to home and create empty project via the hamburger menu
+      await closeProjectViaMenu(page);
 
       // Create new project (mock has default sections, but test the flow)
       await createProject(page, 'Empty Satellite Test');
@@ -343,7 +323,7 @@ test.describe('Satellite Edge Cases', () => {
 
       // Both should be enabled
       await expect.poll(() => isSatelliteEnabled(page)).toBe(true);
-      const gridCheckbox = page.locator('[data-testid="display-toggle-showGrid"]').locator('div.rounded').last();
+      const gridCheckbox = page.locator('[data-testid="display-toggle-showGrid"]');
       await expect(gridCheckbox).toHaveClass(/bg-accent/);
 
       // App should remain functional
@@ -361,8 +341,8 @@ test.describe('Satellite Edge Cases', () => {
 
       // Both should be enabled
       await expect.poll(() => isSatelliteEnabled(page)).toBe(true);
-      const depthCheckbox = page.locator('[data-testid="display-toggle-showDepthGradient"]').locator('div.rounded').last();
-      await expect(depthCheckbox).toHaveClass(/bg-accent/);
+      const depthToggle = page.locator('[data-testid="display-toggle-showDepthGradient"]');
+      await expect(depthToggle).toHaveAttribute('aria-pressed', 'true');
 
       // App should remain functional
       await expect(page.getByTestId('map-canvas')).toBeVisible();
@@ -381,22 +361,11 @@ test.describe('Satellite Edge Cases', () => {
      * Settings is only accessible from the GlobalView, not from within a project
      */
     async function openSettingsFromGlobalView(page: Page): Promise<void> {
-      // Go back to GlobalView (close project) using the "← Back" button
-      await page.getByTestId('back-button').click();
+      // Go back to GlobalView (close project) via the hamburger menu
+      await closeProjectViaMenu(page);
 
-      // Handle unsaved changes dialog if it appears
-      const discardButton = page.locator('button:has-text("Discard Changes")');
-      const needsDiscard = await discardButton.waitFor({ state: 'visible', timeout: 1500 }).then(() => true).catch(() => false);
-      if (needsDiscard) {
-        await discardButton.click();
-      }
-
-      // Wait for GlobalView to load
-      await page.waitForSelector('[data-testid="global-view"], h1:has-text("Stalagmight")', { timeout: 8000 });
-
-      // Click Settings button
-      await page.click('[data-testid="settings-button"], button:has-text("Settings")');
-      await page.waitForSelector('[data-testid="settings-dialog"]', { timeout: 5000 });
+      // Open Settings via the hamburger menu (Settings moved into the app menu)
+      await openSettingsFromMenu(page);
     }
 
     test('should open and close settings dialog with cache tab', async ({ page }) => {

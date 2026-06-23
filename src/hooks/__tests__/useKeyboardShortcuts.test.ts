@@ -3,9 +3,16 @@
  * Tests verify shortcut matching with config, multiple bindings, and spring-loaded behavior.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { normalizeShortcut, parseKeyEvent } from '../../utils/shortcuts';
+import { buildShortcutMap } from '../useKeyboardShortcuts';
 import type { ShortcutsConfig } from '../../types/config';
+
+// useKeyboardShortcuts → stores/telemetry → @tauri-apps/api/core; stub the IPC so
+// importing the real buildShortcutMap here doesn't pull in live Tauri.
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn().mockResolvedValue({}),
+}));
 
 // Test the helper functions used by useKeyboardShortcuts
 
@@ -39,59 +46,10 @@ describe('isNonModifierShortcut (via normalizeShortcut)', () => {
 });
 
 describe('buildShortcutMap logic', () => {
-  // Replicate the buildShortcutMap function for testing
-  type ShortcutAction = keyof ShortcutsConfig;
-
-  function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutAction> {
-    const map = new Map<string, ShortcutAction>();
-
-    const actions: (keyof ShortcutsConfig)[] = [
-      'select',
-      'pan',
-      'zoom',
-      'merge',
-      'measure',
-      'move_station',
-      'move_segment',
-      'move_shot',
-      'comment_tool',
-      'move_comment_tool',
-      'undo',
-      'redo',
-      'toggle_depth_gradient',
-      'toggle_grid',
-      'toggle_satellite',
-      'toggle_station_labels',
-      'toggle_shot_labels',
-      'toggle_section_labels',
-      'fit_to_bounds',
-      'zoom_in',
-      'zoom_out',
-      'toggle_sections_panel',
-      'toggle_detail_panel',
-      'toggle_data_table',
-      'new_file',
-      'open_file',
-      'save',
-      'save_as',
-      'import_dmp',
-      'export',
-    ];
-
-    for (const action of actions) {
-      const bindings = shortcuts[action];
-      if (!Array.isArray(bindings)) continue;
-
-      for (const binding of bindings) {
-        const normalized = normalizeShortcut(binding);
-        if (normalized) {
-          map.set(normalized, action);
-        }
-      }
-    }
-
-    return map;
-  }
+  // Exercises the REAL buildShortcutMap (imported above) — a previous local
+  // replica had drifted (it was missing `quit`), so the test couldn't guard the
+  // real action list. Testing the real function means dropping an action from it
+  // now fails here.
 
   it('maps single binding per action', () => {
     const shortcuts: ShortcutsConfig = {
@@ -125,6 +83,7 @@ describe('buildShortcutMap logic', () => {
       save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
+      quit: ['Ctrl+Q'],
     };
 
     const map = buildShortcutMap(shortcuts);
@@ -134,6 +93,7 @@ describe('buildShortcutMap logic', () => {
     expect(map.get('Z')).toBe('zoom');
     expect(map.get('Ctrl+Z')).toBe('undo');
     expect(map.get('Ctrl+Y')).toBe('redo');
+    expect(map.get('Ctrl+Q')).toBe('quit');
   });
 
   it('maps multiple bindings per action', () => {
@@ -168,6 +128,7 @@ describe('buildShortcutMap logic', () => {
       save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
+      quit: ['Ctrl+Q'],
     };
 
     const map = buildShortcutMap(shortcuts);
@@ -217,6 +178,7 @@ describe('buildShortcutMap logic', () => {
       save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
+      quit: ['Ctrl+Q'],
     };
 
     const map = buildShortcutMap(shortcuts);
@@ -272,6 +234,7 @@ describe('buildShortcutMap logic', () => {
       save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
+      quit: ['Ctrl+Q'],
     };
 
     const map = buildShortcutMap(shortcuts);
@@ -316,6 +279,7 @@ describe('buildShortcutMap logic', () => {
       save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
+      quit: ['Ctrl+Q'],
     };
 
     const map = buildShortcutMap(shortcuts);

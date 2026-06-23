@@ -13,6 +13,7 @@ import { formatShotId, formatStationId } from '../../utils/formatters';
 import { getDeleteShotDialog, deriveRangeDeleteParams } from '../../utils/contextMenuHelpers';
 import { getNumberFormatLocale } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { setSource } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { invokeIpc } from '../../utils/ipc';
@@ -38,6 +39,12 @@ import type { CellEdit } from '../common/SpreadsheetGrid/types';
 interface DataTableProps {
   sections: Section[];
 }
+
+/** Chrome height above the docked grid body (the toolbar row), used as the
+ *  initial cached offset before the ResizeObserver measures the real value. */
+const CHROME_OFFSET_DEFAULT = 28;
+/** Floor for the computed grid height so it never collapses below a usable size. */
+const MIN_GRID_HEIGHT = 120;
 
 /** Column keys per angle family and mode (the Avg column and the In+Out pair
  *  swap into each other's slot when the mode changes). */
@@ -109,6 +116,7 @@ function SubHeaderPickerMenu({
   // downward list would otherwise be clipped.
   const [up, setUp] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const toggle = () => {
     const willOpen = !open;
     if (willOpen) {
@@ -117,16 +125,21 @@ function SubHeaderPickerMenu({
     }
     setOpen(willOpen);
   };
+  // Close on outside mousedown / external scroll / resize (shared hook). The
+  // list is anchored to the trigger (position:absolute), so it tracks the page
+  // and only its OWN scroll is exempt. Escape is handled separately below.
+  useDismissableLayer({
+    open,
+    onDismiss: () => setOpen(false),
+    contains: [triggerRef, listRef],
+  });
   useEffect(() => {
     if (!open) return undefined;
-    const close = () => setOpen(false);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false);
     };
-    window.addEventListener('mousedown', close);
     window.addEventListener('keydown', onKey);
     return () => {
-      window.removeEventListener('mousedown', close);
       window.removeEventListener('keydown', onKey);
     };
   }, [open]);
@@ -146,6 +159,7 @@ function SubHeaderPickerMenu({
       </button>
       {open && (
         <div
+          ref={listRef}
           data-dropdown-open
           className={`absolute left-1/2 z-50 max-h-64 w-52 -translate-x-1/2 overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg ${
             up ? 'bottom-full mb-1' : 'top-full mt-1'
@@ -242,7 +256,6 @@ export default function DataTable({ sections }: DataTableProps) {
     setHoveredShot,
     hoveredShot,
     triggerPanToShot,
-    dataTableOpen,
     dataTableHeight,
     dataTableFullScreen,
     rawTableSelection,
@@ -263,7 +276,6 @@ export default function DataTable({ sections }: DataTableProps) {
     hoveredShot: s.hoveredShot,
     triggerPanToShot: s.triggerPanToShot,
     triggerResolveWarning: s.triggerResolveWarning,
-    dataTableOpen: s.dataTableOpen,
     dataTableHeight: s.dataTableHeight,
     dataTableFullScreen: s.dataTableFullScreen,
     rawTableSelection: s.rawTableSelection,
@@ -357,9 +369,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
     if (!selection) {
       // No selection - clear scroll target but keep current dropdown
-      if (dataTableOpen) {
-        setScrollToKey(null);
-      }
+      setScrollToKey(null);
       return;
     }
 
@@ -369,10 +379,7 @@ export default function DataTable({ sections }: DataTableProps) {
         setSelectedSectionId(selection.sectionId);
       }
       if (tableView !== 'shots') setTableView('shots');
-      // Only scroll if DataTable is open
-      if (dataTableOpen) {
-        setScrollToKey(selection.shotId);
-      }
+      setScrollToKey(selection.shotId);
     } else if (selection.type === 'station' && selection.stationRef) {
       const { section_id, station_index } = selection.stationRef;
       const section = sections.find((s) => s.id === section_id);
@@ -383,20 +390,16 @@ export default function DataTable({ sections }: DataTableProps) {
         }
         // Switch to stations view and scroll to station
         if (tableView !== 'stations') setTableView('stations');
-        if (dataTableOpen) {
-          setStationScrollToKey(station_index);
-        }
+        setStationScrollToKey(station_index);
       }
     } else if (selection.type === 'section' && selection.sectionId !== undefined) {
       // Section selected externally - switch dropdown, clear row highlight
       if (selection.sectionId !== selectedSectionId) {
         setSelectedSectionId(selection.sectionId);
       }
-      if (dataTableOpen) {
-        setScrollToKey(null);
-      }
+      setScrollToKey(null);
     }
-  }, [selection, selectedSectionId, sections, dataTableOpen, tableView]);
+  }, [selection, selectedSectionId, sections, tableView]);
 
   // Clear scrollToKey after it's been consumed (to allow re-scrolling to same row)
   useEffect(() => {
@@ -551,6 +554,9 @@ export default function DataTable({ sections }: DataTableProps) {
     () => new Set(STATION_DEFAULT_HIDDEN)
   );
   const [colMenuOpen, setColMenuOpen] = useState(false);
+  // Wraps both the eye trigger and its anchored dropdown, so an outside-mousedown
+  // check can treat the whole control as "inside".
+  const colMenuWrapRef = useRef<HTMLDivElement | null>(null);
   // Right-click on a column header: hide it / switch the angle family's mode.
   const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; colKey: string } | null>(null);
   const headerMenuRef = useRef<HTMLDivElement | null>(null);
@@ -564,16 +570,21 @@ export default function DataTable({ sections }: DataTableProps) {
     if (x + r.width > window.innerWidth) x = Math.max(4, x - r.width);
     if (x !== headerMenu.x || y !== headerMenu.y) setHeaderMenu({ ...headerMenu, x, y });
   }, [headerMenu]);
+  // Close on outside mousedown / external scroll / resize (shared hook): the
+  // menu is position:fixed at captured cursor coords, so any scroll/resize would
+  // otherwise leave it floating at a stale spot. Escape stays separate below.
+  useDismissableLayer({
+    open: headerMenu !== null,
+    onDismiss: () => setHeaderMenu(null),
+    contains: [headerMenuRef],
+  });
   useEffect(() => {
     if (!headerMenu) return undefined;
-    const close = () => setHeaderMenu(null);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setHeaderMenu(null);
     };
-    window.addEventListener('mousedown', close);
     window.addEventListener('keydown', onKey);
     return () => {
-      window.removeEventListener('mousedown', close);
       window.removeEventListener('keydown', onKey);
     };
   }, [headerMenu]);
@@ -688,16 +699,21 @@ export default function DataTable({ sections }: DataTableProps) {
     return () => clearTimeout(timer);
   }, [shotColumnOrder, hiddenShotCols, azimuthMode, inclinationMode, stationColumnOrder, hiddenStationCols]);
 
+  // Close on outside mousedown / external scroll / resize (shared hook). The
+  // dropdown is anchored to its trigger (position:absolute), so it tracks the
+  // page; the wrapper covers both. Escape stays separate below.
+  useDismissableLayer({
+    open: colMenuOpen,
+    onDismiss: () => setColMenuOpen(false),
+    contains: [colMenuWrapRef],
+  });
   useEffect(() => {
     if (!colMenuOpen) return undefined;
-    const close = () => setColMenuOpen(false);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setColMenuOpen(false);
     };
-    window.addEventListener('mousedown', close);
     window.addEventListener('keydown', onKey);
     return () => {
-      window.removeEventListener('mousedown', close);
       window.removeEventListener('keydown', onKey);
     };
   }, [colMenuOpen]);
@@ -1132,11 +1148,11 @@ export default function DataTable({ sections }: DataTableProps) {
     activeColKey: string;
   } | null>(null);
   const selectionIndicator = useMemo(() => {
-    if (!gridSel || !dataTableOpen || tableView !== 'shots' || !selectedSection) return null;
+    if (!gridSel || tableView !== 'shots' || !selectedSection) return null;
     if (gridSel.rows > 1 || gridSel.cols > 1) return `${gridSel.rows}R × ${gridSel.cols}C`;
     const header = shotColumns.find((c) => c.key === gridSel.activeColKey)?.header ?? gridSel.activeColKey;
     return `${header} ${gridSel.activeRow + 1}`;
-  }, [gridSel, dataTableOpen, tableView, selectedSection, shotColumns]);
+  }, [gridSel, tableView, selectedSection, shotColumns]);
 
   // Gutter shows the shot's ID pill (replaces the old ID column); double-click
   // pans the map to the shot, as it did on the column's pill.
@@ -1248,16 +1264,21 @@ export default function DataTable({ sections }: DataTableProps) {
     if (x + r.width > window.innerWidth) x = Math.max(4, x - r.width);
     if (x !== connMenu.x || y !== connMenu.y) setConnMenu({ ...connMenu, x, y });
   }, [connMenu]);
+  // Close on outside mousedown / external scroll / resize (shared hook): the
+  // menu is position:fixed at captured cursor coords, so scroll/resize would
+  // otherwise leave it floating at a stale spot. Escape stays separate below.
+  useDismissableLayer({
+    open: connMenu !== null,
+    onDismiss: () => setConnMenu(null),
+    contains: [connMenuRef],
+  });
   useEffect(() => {
     if (!connMenu) return undefined;
-    const close = () => setConnMenu(null);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setConnMenu(null);
     };
-    window.addEventListener('mousedown', close);
     window.addEventListener('keydown', onKey);
     return () => {
-      window.removeEventListener('mousedown', close);
       window.removeEventListener('keydown', onKey);
     };
   }, [connMenu]);
@@ -1369,16 +1390,46 @@ export default function DataTable({ sections }: DataTableProps) {
   }, [rawTableSelection, rawTables, setRawTableSelection]);
 
   const gridBodyRef = useRef<HTMLDivElement | null>(null);
-  const [gridBodyHeight, setGridBodyHeight] = useState<number | null>(null);
+  // Fullscreen grid height: the body fills the window independently of
+  // dataTableHeight, so it must be measured.
+  const [fullScreenGridHeight, setFullScreenGridHeight] = useState<number | null>(null);
+  // Chrome height above the grid body (the toolbar row). Cached so the DOCKED grid
+  // height can be derived directly from the live dataTableHeight — one render per
+  // resize tick, with NO measure→setState→re-render round-trip — while staying exact
+  // (the chrome is constant during a vertical drag). The ResizeObserver refreshes it
+  // only when it actually changes (toolbar wrap), guarded against sub-pixel churn so
+  // a drag doesn't re-render the table via this state.
+  const [chromeOffset, setChromeOffset] = useState(CHROME_OFFSET_DEFAULT);
+  const dataTableHeightRef = useRef(dataTableHeight);
+  dataTableHeightRef.current = dataTableHeight;
+  const dataTableFullScreenRef = useRef(dataTableFullScreen);
+  dataTableFullScreenRef.current = dataTableFullScreen;
   useEffect(() => {
     const el = gridBodyRef.current;
     if (!el) return undefined;
-    const ro = new ResizeObserver(() => setGridBodyHeight(el.clientHeight));
+    const measure = () => {
+      const h = el.clientHeight;
+      if (dataTableFullScreenRef.current) {
+        setFullScreenGridHeight(h);
+      } else {
+        const offset = Math.max(0, dataTableHeightRef.current - h);
+        setChromeOffset((prev) => (Math.abs(prev - offset) > 1 ? offset : prev));
+      }
+    };
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    setGridBodyHeight(el.clientHeight);
+    measure();
     return () => ro.disconnect();
-  }, [dataTableOpen]);
-  const gridHeight = gridBodyHeight ?? Math.max(120, dataTableHeight - 28);
+  }, []);
+  // Entering/leaving fullscreen changes the body height drastically; measure it
+  // synchronously so the fullscreen grid is sized in the same paint (no trailing).
+  useLayoutEffect(() => {
+    const el = gridBodyRef.current;
+    if (el && dataTableFullScreen) setFullScreenGridHeight(el.clientHeight);
+  }, [dataTableFullScreen]);
+  const gridHeight = dataTableFullScreen
+    ? fullScreenGridHeight ?? Math.max(MIN_GRID_HEIGHT, dataTableHeight - CHROME_OFFSET_DEFAULT)
+    : Math.max(MIN_GRID_HEIGHT, dataTableHeight - chromeOffset);
 
   // Unconditional hide (header right-click) — unlike the menu checkbox toggle.
   const hideShotCols = useCallback((keys: string[]) => {
@@ -1512,15 +1563,11 @@ export default function DataTable({ sections }: DataTableProps) {
 
   return (
     <div
-      className="flex flex-col bg-panel border-t border-border transition-all duration-300 ease-in-out"
-      style={{
-        // Fullscreen mode fills the fixed overlay wrapper; the existing
-        // gridBody ResizeObserver handles the resulting grid height.
-        height: dataTableFullScreen ? '100%' : dataTableOpen ? `${dataTableHeight}px` : '40px',
-        minHeight: '40px',
-      }}
+      // Fill the Dock's panel body (it owns the size + the open/close slide). A
+      // self height + `transition-all` here animated the height over 300ms on
+      // every resize tick, so the table visibly lagged the dragged panel edge.
+      className="flex flex-col h-full bg-panel border-t border-border"
       data-testid="data-table"
-      data-open={dataTableOpen ? 'true' : 'false'}
       data-fullscreen={dataTableFullScreen ? 'true' : 'false'}
     >
       {rawTableSelection !== null ? (
@@ -1624,7 +1671,7 @@ export default function DataTable({ sections }: DataTableProps) {
         </div>
         {/* Column-visibility menu; inside clicks must not reach the window
             mousedown listener that closes it. */}
-        <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
+        <div ref={colMenuWrapRef} className="relative" onMouseDown={(e) => e.stopPropagation()}>
           <button
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect();
@@ -1688,11 +1735,9 @@ export default function DataTable({ sections }: DataTableProps) {
       </div>
       )}
 
-      {/* Table - only render when open for performance. Both grids scroll
-          internally and are sized to this body exactly, so the wrapper must
-          never scroll alongside them (double scrollbars). */}
-      {dataTableOpen && (
-        <div ref={gridBodyRef} className="flex-1 overflow-hidden">
+      {/* Table. Both grids scroll internally and are sized to this body exactly,
+          so the wrapper must never scroll alongside them (double scrollbars). */}
+      <div ref={gridBodyRef} className="flex-1 overflow-hidden">
           {rawTableSelection !== null ? (
             rawTableSelection === '' ? (
               <div className="flex items-center justify-center h-full text-text-secondary">
@@ -1767,8 +1812,7 @@ export default function DataTable({ sections }: DataTableProps) {
               {t('dataTable.selectSection')}
             </div>
           )}
-        </div>
-      )}
+      </div>
       {connMenu && (
         <div
           ref={connMenuRef}

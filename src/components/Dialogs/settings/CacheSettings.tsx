@@ -11,6 +11,7 @@ import { isFieldChanged, createNumericHandler, createToggleHandler, parseIntRadi
 import type { CacheStats } from '../../../types/cache';
 import { defaultConfig } from '../../../types/config';
 import { formatFixed, formatNumber } from '../../../i18n/format';
+import { clamp } from '../../../utils/clamp';
 
 const MIN_CACHE_SIZE_MB = 100;
 const MAX_CACHE_SIZE_MB = 10000;
@@ -26,13 +27,6 @@ function formatBytes(bytes: number | bigint): string {
   const i = Math.floor(Math.log(value) / Math.log(k));
   const scaled = value / Math.pow(k, i);
   return `${formatFixed(scaled, undefined, 1)} ${sizes[i]}`;
-}
-
-/**
- * Clamp a number to a range
- */
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
 }
 
 /**

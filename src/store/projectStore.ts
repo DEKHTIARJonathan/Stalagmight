@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import i18n from '../i18n';
 import { invokeIpc } from '../utils/ipc';
+import { trackCommand, setSource, peekProjectActionSource, clearProjectActionSource } from '../utils/telemetry';
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import { isPermissionError } from '../utils/saveErrors';
@@ -622,8 +623,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
         // Check clientOpId hasn't changed (cancelled/new load started)
         if (get().loading.clientOpId !== clientOpId) {
+          clearProjectActionSource();
           return { success: false };
         }
+
+        // Count the open with its entry-point source now that the load has
+        // actually committed (past the cancellation check). loadProject uses the
+        // raw binary IPC (untracked by invokeIpc), so the command event is emitted
+        // here; counting before this point over-reported superseded/cancelled
+        // loads. The source is still armed (setView clears it below). Deduped
+        // same-path calls returned before the async body ran, so this fires once
+        // per actual load.
+        trackCommand('load_project_full', peekProjectActionSource());
 
         // Set backend loadingId from result for event correlation
         get().setLoadingProgress({ loadingId: result.loadingId });
@@ -668,6 +679,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Apply display settings to UI store (merge, don't overwrite)
         useUIStore.getState().applyDisplaySettings(result.displaySettings);
         useUIStore.getState().triggerFitToBounds();
+        // Reset the Details panel to the project-level view on open (#54): a
+        // stale shot/station/section selection from a previous project/session
+        // must not carry over.
+        useUIStore.getState().clearSelection();
         const tViewStart = performance.now();
         useUIStore.getState().setView('single');
         const tViewDone = performance.now();
@@ -757,6 +772,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             detail: error.message,
             context: 'open',
           });
+          clearProjectActionSource();
           return { success: false };
         }
 
@@ -767,6 +783,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             corruptPath: error.details,
             errorMessage: error.message,
           });
+          clearProjectActionSource();
           return { success: false };
         }
 
@@ -774,6 +791,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (get().loading.clientOpId === clientOpId) {
           get().setLoadingError(error.message, error.details);
         }
+        clearProjectActionSource();
         return { success: false };
       }
     })();
@@ -796,6 +814,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const deferred = options?.deferInitialSave ?? !options?.savePath;
 
     try {
+      // Attribute the create to its entry point (peek: a DMP import-into-new
+      // flow also fires import_sections, which peeks the same source).
+      const actionSource = peekProjectActionSource();
+      if (actionSource) setSource(actionSource);
       const result = await invokeIpc<CreateProjectFullResult>(
         'create_project_full',
         {
@@ -810,6 +832,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
       // Check clientOpId hasn't changed
       if (get().loading.clientOpId !== clientOpId) {
+        // Superseded/cancelled — drop the entry-point source so it can't
+        // mis-attribute a later, unrelated project command (it has no auto-reset;
+        // only a completed flow (setView) or this clear drops it). Mirrors
+        // loadProject's clear on every early-return.
+        clearProjectActionSource();
         return emptyCommandResult(false, 'Cancelled');
       }
 
@@ -839,12 +866,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
       // Apply display settings from backend (defaults for new project)
       useUIStore.getState().applyDisplaySettings(result.displaySettings);
+      // Reset the Details panel to the project-level view on open (#54).
+      useUIStore.getState().clearSelection();
       useUIStore.getState().setView('single');
       await get().loadRecentProjects();
       get().resetLoading();
 
       return emptyCommandResult(true, null);
     } catch (e) {
+      // Create failed — drop the entry-point source (no auto-reset) so it can't
+      // mis-attribute a later, unrelated project command. Mirrors loadProject.
+      clearProjectActionSource();
       const error = parseLoadError(e);
       if (get().loading.clientOpId === clientOpId) {
         get().setLoadingError(error.message, error.details);
@@ -1701,16 +1733,24 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   executeTmlImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => {
-    return executeCommand(
-      'execute_tml_import',
-      {
-        path,
-        fileHash: fileHash ?? null,
-        includeExcluded: includeExcluded ?? false,
-        commentsOnStations: commentsOnStations ?? true,
-      },
-      { purpose: 'import Ariane TML/TMLU', fields: { path } }
-    );
+    const s = peekProjectActionSource();
+    if (s) setSource(s);
+    try {
+      return await executeCommand(
+        'execute_tml_import',
+        {
+          path,
+          fileHash: fileHash ?? null,
+          includeExcluded: includeExcluded ?? false,
+          commentsOnStations: commentsOnStations ?? true,
+        },
+        { purpose: 'import Ariane TML/TMLU', fields: { path } }
+      );
+    } finally {
+      // Terminal flow: clear the pending source so a failed/abandoned import
+      // can't leak the armed project-action source into the next command.
+      clearProjectActionSource();
+    }
   },
 
   parseCompass: async (path: string) => {
@@ -1721,17 +1761,25 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   executeCompassImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => {
-    return executeCommand(
-      'execute_compass_import',
-      {
-        path,
-        fileHash: fileHash ?? null,
-        includeExcluded: includeExcluded ?? false,
-        applyCorrections: applyCorrections ?? true,
-        commentsOnStations: commentsOnStations ?? true,
-      },
-      { purpose: 'import Compass', fields: { path } }
-    );
+    const s = peekProjectActionSource();
+    if (s) setSource(s);
+    try {
+      return await executeCommand(
+        'execute_compass_import',
+        {
+          path,
+          fileHash: fileHash ?? null,
+          includeExcluded: includeExcluded ?? false,
+          applyCorrections: applyCorrections ?? true,
+          commentsOnStations: commentsOnStations ?? true,
+        },
+        { purpose: 'import Compass', fields: { path } }
+      );
+    } finally {
+      // Terminal flow: clear the pending source so a failed/abandoned import
+      // can't leak the armed project-action source into the next command.
+      clearProjectActionSource();
+    }
   },
 
   // Collaboration mode
@@ -1800,19 +1848,27 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   executeGpxImport: async (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => {
-    return executeCommand(
-      'execute_gpx_import',
-      {
-        path,
-        fileHash,
-        importWaypoints,
-        importTracks,
-        importRoutes,
-        sectionPlacements,
-        depthInverted,
-      },
-      { purpose: 'import GPX file', fields: { path } }
-    );
+    const s = peekProjectActionSource();
+    if (s) setSource(s);
+    try {
+      return await executeCommand(
+        'execute_gpx_import',
+        {
+          path,
+          fileHash,
+          importWaypoints,
+          importTracks,
+          importRoutes,
+          sectionPlacements,
+          depthInverted,
+        },
+        { purpose: 'import GPX file', fields: { path } }
+      );
+    } finally {
+      // Terminal flow: clear the pending source so a failed/abandoned import
+      // can't leak the armed project-action source into the next command.
+      clearProjectActionSource();
+    }
   },
 
   calculateFileHash: async (path: string) => {
@@ -1844,15 +1900,24 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   importSections: async (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null) => {
-    return executeCommand(
-      'import_sections',
-      {
-        sections,
-        fileHash: fileHash ?? null,
-        sectionHashes: sectionHashes ?? null,
-      },
-      { purpose: 'apply imported sections', fields: { section_count: sections.length } }
-    );
+    const s = peekProjectActionSource();
+    if (s) setSource(s);
+    try {
+      return await executeCommand(
+        'import_sections',
+        {
+          sections,
+          fileHash: fileHash ?? null,
+          sectionHashes: sectionHashes ?? null,
+        },
+        { purpose: 'apply imported sections', fields: { section_count: sections.length } }
+      );
+    } finally {
+      // Terminal flow: the project is already open, so there's no
+      // setView('single') to clear the pending source. Clear it here so it
+      // can't leak into the next peeking command.
+      clearProjectActionSource();
+    }
   },
 
   suggestImportPlacement: async (shots: ShotData[]) => {

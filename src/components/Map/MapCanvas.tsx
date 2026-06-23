@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, startTransition } from 'react';
+import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, memo, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
@@ -180,7 +180,7 @@ function MapHoverSync({
   return null;
 }
 
-export default function MapCanvas() {
+function MapCanvas() {
   const precision = useDecimalPrecision();
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
@@ -358,7 +358,6 @@ export default function MapCanvas() {
     activeTool,
     showSatellite,
     showShotData,
-    showScaleBar,
     showSectionNames,
     showStationLabels,
     showStationComments,
@@ -1659,7 +1658,7 @@ export default function MapCanvas() {
       'top-right'
     );
 
-    // Create scale control instance (will be added/removed based on showScaleBar state)
+    // Create the scale control instance (always shown; added once on map load).
     scaleControlRef.current = new maplibregl.ScaleControl({ maxWidth: 100, unit: 'metric' });
 
     // Track map movement
@@ -2154,23 +2153,19 @@ export default function MapCanvas() {
     }
   }, [showReferenceShots, projectIdentity, filterSelection, setHoveredShot]);
 
-  // Handle scale bar toggle
+  // The scale bar is always shown. Add the control once the map is loaded.
   useEffect(() => {
     if (!map.current || !scaleControlRef.current || !mapLoaded) return;
+    if (scaleControlAddedRef.current) return;
 
     try {
-      if (showScaleBar && !scaleControlAddedRef.current) {
-        map.current.addControl(scaleControlRef.current, 'bottom-left');
-        scaleControlAddedRef.current = true;
-      } else if (!showScaleBar && scaleControlAddedRef.current) {
-        map.current.removeControl(scaleControlRef.current);
-        scaleControlAddedRef.current = false;
-      }
+      map.current.addControl(scaleControlRef.current, 'bottom-left');
+      scaleControlAddedRef.current = true;
     } catch (e) {
-      // Control may not be in a state to be added/removed - ignore errors
-      console.warn('[MapCanvas] Scale control toggle error:', e);
+      // Control may not be in a state to be added - ignore errors
+      console.warn('[MapCanvas] Scale control add error:', e);
     }
-  }, [showScaleBar, mapLoaded]);
+  }, [mapLoaded]);
 
   // Update cursor based on tool (and Ctrl state for select mode)
   useEffect(() => {
@@ -3564,3 +3559,9 @@ export default function MapCanvas() {
     </div>
   );
 }
+
+// Memoized: MapCanvas takes no props and drives itself from the stores, so it
+// must NOT re-render just because a parent (SingleSystemView) re-renders — e.g.
+// on every tick of a panel resize. Without this the whole (large) map component
+// re-rendered ~60×/s during a drag, which is what made resizing feel heavy.
+export default memo(MapCanvas);

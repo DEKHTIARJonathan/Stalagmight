@@ -8,13 +8,18 @@ test.describe('GlobalView Metadata Panel', () => {
   });
 
   test.describe('Panel Visibility', () => {
-    test('should display metadata panel when projects exist', async ({ page }) => {
-      // The metadata panel should be visible (may be showing "Select a project" message)
-      const panel = page.locator('[data-testid="metadata-panel"]');
-      await expect(panel).toBeVisible({ timeout: 5000 });
+    test('list view hides the details panel until a project is selected', async ({ page }) => {
+      // No selection on load → the details panel is hidden in the list view.
+      await expect(page.locator('[data-testid="metadata-panel"]')).toHaveCount(0);
+      // Selecting a project reveals it (after the double-click debounce window).
+      await page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]').click();
+      await expect(page.locator('[data-testid="metadata-panel"]')).toBeVisible({ timeout: 5000 });
     });
 
-    test('should show empty state when no project is selected', async ({ page }) => {
+    test('map view shows the empty state when no project is selected', async ({ page }) => {
+      // The empty "Select a project" state lives in the map view, where the panel
+      // is always present alongside the map.
+      await page.getByTestId('globalview-view-toggle-map').click();
       const emptyState = page.locator('[data-testid="metadata-panel-empty"]');
       await expect(emptyState).toBeVisible();
       await expect(emptyState).toContainText('Select a project to see details');
@@ -87,7 +92,7 @@ test.describe('GlobalView Metadata Panel', () => {
   test.describe('Project Selection from Map', () => {
     test.beforeEach(async ({ page }) => {
       // Switch to Map tab
-      const mapTab = page.locator('[data-testid="globalview-map-tab"]');
+      const mapTab = page.locator('[data-testid="globalview-view-toggle-map"]');
       await mapTab.click();
       await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
 
@@ -159,6 +164,13 @@ test.describe('GlobalView Metadata Panel', () => {
   });
 
   test.describe('Panel Collapse/Expand', () => {
+    test.beforeEach(async ({ page }) => {
+      // The list-view panel only appears once a project is selected (past the
+      // double-click debounce), so select one before exercising collapse/expand.
+      await page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]').click();
+      await page.waitForSelector('[data-testid="metadata-panel"]', { timeout: 5000 });
+    });
+
     test('should collapse panel when collapse button is clicked', async ({ page }) => {
       // Panel should start expanded
       const panel = page.locator('[data-testid="metadata-panel"]');
@@ -201,6 +213,12 @@ test.describe('GlobalView Metadata Panel', () => {
   });
 
   test.describe('Panel Accessibility', () => {
+    test.beforeEach(async ({ page }) => {
+      // List-view panel is selection-gated; select a project so it's present.
+      await page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]').click();
+      await page.waitForSelector('[data-testid="metadata-panel"]', { timeout: 5000 });
+    });
+
     test('should have complementary role', async ({ page }) => {
       const panel = page.locator('[data-testid="metadata-panel"]');
       await expect(panel).toHaveAttribute('role', 'complementary');

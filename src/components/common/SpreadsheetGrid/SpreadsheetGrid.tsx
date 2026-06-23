@@ -2064,9 +2064,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                 data-testid={`grid-header-${c.key}`}
               >
                 <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{c.header}</span>
-                {/* Drag this edge to resize the column. */}
+                {/* Drag this edge to resize the column. The handle normally
+                    straddles the boundary (right: -2px); on the last column that
+                    boundary is the content's right edge, so keep it inside the
+                    cell to avoid a few-px phantom horizontal scrollbar. */}
                 <div
-                  className="sg-col-resize"
+                  className={`sg-col-resize${i === visibleColumns.length - 1 ? ' sg-col-resize-end' : ''}`}
                   data-testid={`grid-col-resize-${c.key}`}
                   onMouseDown={(e) => startResize(e, c.key, widths[i] ?? DEFAULT_COL_WIDTH)}
                   onClick={(e) => e.stopPropagation()}

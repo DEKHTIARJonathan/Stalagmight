@@ -43,6 +43,36 @@ export const TML_EXTENSIONS = ['tml', 'tmlu'];
 export const GPX_EXTENSION = 'gpx';
 export const COMPASS_EXTENSIONS = ['mak', 'dat'];
 
+/**
+ * Single source of truth for the importable survey formats, grouped by the
+ * open/import flow each routes to (see `routeOpenedFile`). Both the file-dialog
+ * filter helpers below and the router's `isImportable` guard derive from this,
+ * so the recognized extension set can't drift between the picker and the
+ * dispatch. Extensions are lowercase and WITHOUT a leading dot (matching the
+ * Tauri dialog filter shape); the router lowercases the path and adds the dot.
+ *
+ * `.stalx` (native project) is intentionally NOT here — opening a project is not
+ * an import. It lives in `PROJECT_EXTENSION`.
+ */
+export const IMPORT_EXTENSIONS = {
+  gpx: [GPX_EXTENSION],
+  tml: TML_EXTENSIONS,
+  compass: COMPASS_EXTENSIONS,
+  dmp: [DMP_EXTENSION],
+} as const;
+
+/**
+ * Flat list of every importable extension (no leading dot), derived from
+ * `IMPORT_EXTENSIONS`. Order matches the legacy hardcoded set
+ * (gpx, tml, tmlu, mak, dat, dmp) so the router guard is unchanged.
+ */
+export const IMPORTABLE_EXTENSIONS: readonly string[] = [
+  ...IMPORT_EXTENSIONS.gpx,
+  ...IMPORT_EXTENSIONS.tml,
+  ...IMPORT_EXTENSIONS.compass,
+  ...IMPORT_EXTENSIONS.dmp,
+];
+
 export function tmlOpenFilters() {
   return [
     { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
@@ -64,9 +94,59 @@ export function gpxOpenFilters() {
   ];
 }
 
+/**
+ * Filters for importing into an already-open project: DMP only. No "All Files"
+ * entry — so a `.stalx` project (or any unrelated file) can't be picked through
+ * an in-project import entry point and mis-routed by the open/import router into
+ * loadProject, replacing the open project. GPX and Ariane/Compass create new
+ * projects, so they aren't importable into an open one (the router rejects a GPX
+ * opened/dropped while a project is open); DMP is the only additive in-project
+ * import. Shared by the hamburger menu, the toolbar Import button, and Ctrl+I.
+ */
+export function dmpImportFilters() {
+  return [{ name: 'mNemo DMP', extensions: [DMP_EXTENSION] }];
+}
+
+/**
+ * Import picker filters scoped to context. With a project open, only DMP imports
+ * into it (DMP-only, no "All Files" — so an unrelated file or a `.stalx` project
+ * can't be picked and mis-routed). With no project open, any importable survey
+ * format is offered plus "All Files" (so the unified router can also open a
+ * native `.stalx` project picked through it — there is nothing to replace).
+ */
+export function importFiltersForContext(hasProject: boolean) {
+  return hasProject ? dmpImportFilters() : importOpenFilters();
+}
+
 export function importOpenFilters() {
   return [
-    { name: 'Survey Files', extensions: [DMP_EXTENSION, ...TML_EXTENSIONS, GPX_EXTENSION, ...COMPASS_EXTENSIONS] },
+    // Combined "everything importable" entry — derived from IMPORTABLE_EXTENSIONS
+    // (the single source of truth) so it can't drift from the per-format rows
+    // below or the router's isImportable guard when a new format is added.
+    { name: 'Survey Files', extensions: [...IMPORTABLE_EXTENSIONS] },
+    { name: 'mNemo DMP', extensions: [...IMPORT_EXTENSIONS.dmp] },
+    { name: 'Ariane Survey', extensions: [...IMPORT_EXTENSIONS.tml] },
+    { name: 'Compass Survey', extensions: [...IMPORT_EXTENSIONS.compass] },
+    { name: 'GPX Files', extensions: [...IMPORT_EXTENSIONS.gpx] },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+}
+
+/**
+ * Filters for the unified "Open / Import" picker: every file the app can open
+ * (native `.stalx` projects) or import (DMP / Ariane / Compass / GPX). The first
+ * entry is the combined "everything" filter so a single selection accepts any
+ * supported file; the rest narrow to one format each.
+ */
+export function openOrImportFilters() {
+  return [
+    {
+      // Combined entry: native project + everything importable. Derived from
+      // IMPORTABLE_EXTENSIONS so it tracks the router/dispatch automatically.
+      name: 'Stalagmight & Survey Files',
+      extensions: [PROJECT_EXTENSION, ...IMPORTABLE_EXTENSIONS],
+    },
+    { name: 'Stalagmight Project', extensions: [PROJECT_EXTENSION] },
     { name: 'mNemo DMP', extensions: [DMP_EXTENSION] },
     { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
     { name: 'Compass Survey', extensions: COMPASS_EXTENSIONS },

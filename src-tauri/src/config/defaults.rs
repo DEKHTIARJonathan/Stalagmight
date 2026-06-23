@@ -246,6 +246,7 @@ impl Default for ShortcutsConfig {
             save_as: vec!["Ctrl+Shift+S".to_string()],
             import_dmp: vec!["Ctrl+I".to_string()],
             export: vec!["Ctrl+E".to_string()],
+            quit: vec!["Ctrl+Q".to_string()],
         }
     }
 }
@@ -267,6 +268,12 @@ impl Default for PanelsConfig {
                 "_lat".to_string(),
                 "_long".to_string(),
             ],
+            sections_panel_open: true,
+            sections_panel_mode: "pin".to_string(),
+            detail_panel_open: true,
+            detail_panel_mode: "pin".to_string(),
+            data_table_open: false,
+            data_table_mode: "pin".to_string(),
         }
     }
 }
