@@ -130,9 +130,11 @@ boundary (mirrors how the codebase stores meters and converts in `formatStats.ts
 Diver { rmv_l_per_min: f64, label: Option<String> }
   // RMV is canonical. SAC is a CONSTRUCTOR concern, never stored:
   // Diver::from_sac(sac_bar_per_min, ref_cyl) => rmv = sac * ref_cyl.water_volume_l.
-Cylinder { water_volume_l, rated_pressure_bar, fill_bar, material: TankMaterial }
+Cylinder { water_volume_l, rated_pressure_bar, fill_bar, material: TankMaterial, role: CylRole }
   // fill_bar is an INPUT and may EXCEED rated — overfilling is routine (LP85s @ 210–230 bar,
   // §5.3); rated is reference only, NEVER a clamp. material (Alu|Steel) hints stage-vs-backgas.
+  // role: BackGas | Stage | DilOut | Bailout. DilOut reserves a user-set dil_suit_reserve_bar
+  // (diluent + suit inflation), rest = bailout (§5.5).
 GasConfig {
   reserve: ReservePreset,        // AllThirds | OneStage | TwoStage — see §5.1; pushy presets gated to "advanced"
   stressed_rmv_multiplier: f64,  // bailout/contingency bump, e.g. 1.5–2.0
@@ -290,6 +292,28 @@ default; the **diver places within it** and the tool **re-validates**. Why a div
 (another §6 "aid, not authority"). The depth-first/breadth-first axis is the same one the
 fan-out optimizer reasons on later (§9).
 
+### 5.5 CCR bailout — the "dil-out" model (Nico)
+
+Rebreather-specific, but in these caves the units are **sidemount CCRs (Sidewinder / Gemini —
+identical for this purpose)**, which collapses to one pattern:
+- One sidemount cylinder is the **diluent**, run as **"dil-out"**: only a small amount is spent
+  on **diluent + drysuit inflation** over the dive (~15–20 bar typical), and **the rest is
+  bailout**. The diver **specifies that reserve** (`dil_suit_reserve_bar`, default ~20) → its
+  **bailout volume = (fill − dil_suit_reserve) × water_volume**.
+- That **dil + suit reserve is user-set** and not distance-dependent; O₂ is metabolic,
+  negligible for *bailout-gas* planning. So CCR penetration isn't gas-limited — **the constraint
+  is bailout volume to exit** (the §5.2 exit field at stressed RMV / swim speed).
+- **Extra bailout bottles extend range:** some carry additional cylinders purely as bailout to
+  push further.
+
+**Model:** give each `Cylinder` a **role** (back gas / stage / **dil-out** / bailout). Available
+bailout = Σ usable over bailout-capable cylinders (dil-out gives `fill − dil_suit_reserve`;
+dedicated bailout bottles give full usable). **Constraint:** available bailout ≥ the exit integral from the worst
+point (the lead) everywhere along the penetration; where short, **stage bailout** (drop bottles
+— §5.4 mechanics, bailout variant). Stressed-RMV multiplier applies (value still a knob — my
+1.5–2.0 placeholder, confirm). *(Sidemount dil-out is the common case; the role model also covers
+back-mount CCR — a non-bailout Diluent role + dedicated Bailout bottles.)*
+
 ---
 
 ## 6. ⚠ Safety posture (this tool informs life-support decisions)
@@ -431,8 +455,9 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
   Single diver, both unit systems. **First user-visible vertical slice.**
 - **Phase 2 — Lead→plan + OC stages + drops:** `compute_gas_plan_to_lead` (back-traced path),
   stage gas, turn pressures, suggested + draggable-validated drops, drop markers.
-- **Phase 3 — CCR bailout:** `PlanMode::CcrBailout`, bailout volume (exit-from-lead, stressed
-  RMV, swim speed), bailout staging + drops. Reuses 100% of the engine.
+- **Phase 3 — CCR bailout (dil-out model, §5.5):** `PlanMode::CcrBailout`, bailout volume
+  (exit-from-lead, stressed RMV, swim speed) ≤ available bailout (dil-out remainder + extra
+  bottles), bailout staging + drops. Reuses 100% of the engine.
 - **Phase 4 — DPV range/burn-time + dead-scooter contingency; imperial units flip.**
 - **Phase 5 — Team:** matched gas (dissimilar-tank matching = **lowest usable-volume diver
   gates**; common in Florida — §5.3), weakest-link reserve, CCR team bailout sharing (a `fold`
@@ -453,6 +478,10 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
   on top of the reachability fields (think: weighted set-cover / orienteering over the graph).
   The engine primitive (the field) and the team-shaped model make this additive, not a
   rewrite.
+- **First-class leads** — let the surveyor **mark leads** (at a station or mid-shot; line
+  already there, or virgin needing line run) as durable points for planning future exploration
+  / surveying. These become the natural **targets** for the planner *and* the fan-out optimizer
+  above. (MVP just targets a selected station/shot; lead-marking is future work.)
 - **Deco planning** (the other half of #38) — depth-time profile from the chosen route → stop
   schedule → gas-by-mix. Needs gas mixes / MOD / END, which arrive together.
 - **Agency staging presets** — canned `GasConfig`s (GUE-style, NSS-CDS, etc.) over the
@@ -482,10 +511,11 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
    single-slot `AppState` memo (§7.1).
 5. **Turn-gloss (§5.1):** confirm "turn at 1/N" = consumed (minor). *(Recalc regions/formulas,
    direction, and pressure-semantics now resolved.)*
-6. **In-flight planning Q&A (still to answer):** **CCR bailout** specifics (dedicated bottles
-   vs stages-as-bailout; stressed-multiplier value; diluent/O2 negligible?); is a **"lead"**
-   any selected station or a first-class marker? *(Survey-RMV task-loading resolved → opt-in
-   slider, §5.2.)*
+6. **Planning Q&A batch — resolved** (traverses out; ≤2 stages; drop envelope; ephemeral plan +
+   print-out; survey-RMV slider; CCR "dil-out" w/ user-set dil+suit reserve; a **lead** = a
+   first-class marked point, station or shot — **lead-marking is future work** §9, MVP targets a
+   selected station). **Residual knob:** confirm the **stressed-RMV multiplier value**
+   (placeholder 1.5–2.0).
 
 ---
 
