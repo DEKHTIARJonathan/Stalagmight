@@ -38,6 +38,13 @@ const SECTION_FOCUS_REFIT_DELAY_MS = 180;
 const SECTIONS_TAB_TOP = 40; // just below the top-left "Fit to view" button (bottom ≈ 32px)
 const DETAILS_TAB_TOP = 79; // aligned to the Details panel's header/content divider
 
+// Auto-close grace for a PROGRAMMATIC hover-mode Details reveal (jump-to-warning
+// from the data table). Unlike a real hover, the reveal isn't triggered by the
+// pointer being over the panel, so no mouseleave would ever fire to close it.
+// Generous so the user has time to read/engage (moving onto the panel cancels
+// it), but bounded so it can't float open forever if ignored.
+const DETAIL_REVEAL_AUTOCLOSE_MS = 6000;
+
 export default function SingleSystemView() {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
@@ -119,6 +126,22 @@ export default function SingleSystemView() {
   const sectionsReveal = usePanelReveal('sections');
   const detailReveal = usePanelReveal('detail');
   const dataReveal = usePanelReveal('data-table');
+
+  // Programmatic Details reveal (jump-to-warning from the data table). The store
+  // bumps detailRevealNonce ONLY in hover mode (pin mode is revealed by opening
+  // the panel in the store directly), so float it open like a hover and arm an
+  // auto-close — the reveal isn't driven by a pointer over the panel, so without
+  // this it could float open indefinitely. Lives here, not in usePanelReveal, so
+  // only the Details panel carries the subscription (the others never need it).
+  const detailRevealNonce = useUIStore((s) => s.detailRevealNonce);
+  const detailRevealSeen = useRef(detailRevealNonce);
+  const { onRegionEnter: revealDetail, scheduleClose: scheduleDetailClose } = detailReveal;
+  useEffect(() => {
+    if (detailRevealNonce === detailRevealSeen.current) return;
+    detailRevealSeen.current = detailRevealNonce;
+    revealDetail();
+    scheduleDetailClose(DETAIL_REVEAL_AUTOCLOSE_MS);
+  }, [detailRevealNonce, revealDetail, scheduleDetailClose]);
 
   // The Data panel's overlay is portaled to this Main element so it can span the
   // full width (past the center column's side insets). It stops at a pinned-open
@@ -382,23 +405,20 @@ export default function SingleSystemView() {
     [sections, dimCls],
   );
 
-  const panelName = useMemo(
-    () => ({
-      sections: t('singleView.panels.sectionsName'),
-      detail: t('singleView.panels.detailName'),
-      data: t('singleView.panels.dataName'),
-    }),
-    [t],
-  );
-  const tabLabels = useCallback(
-    (name: string) => ({
-      open: t('singleView.panels.open', { name }),
-      pin: t('singleView.panels.pin'),
-      unpin: t('singleView.panels.unpin'),
-      close: t('singleView.panels.close', { name }),
-    }),
-    [t],
-  );
+  // Plain values, not memoized: panelName is only read field-by-field as strings
+  // and tabLabels is called inline in JSX — neither reference is a dependency or
+  // passed for stability, so re-allocating these small objects per render is free.
+  const panelName = {
+    sections: t('singleView.panels.sectionsName'),
+    detail: t('singleView.panels.detailName'),
+    data: t('singleView.panels.dataName'),
+  };
+  const tabLabels = (name: string) => ({
+    open: t('singleView.panels.open', { name }),
+    pin: t('singleView.panels.pin'),
+    unpin: t('singleView.panels.unpin'),
+    close: t('singleView.panels.close', { name }),
+  });
 
   if (!project) {
     return (

@@ -18,7 +18,7 @@ import {
   saveDialog,
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
-import { openOrImport } from '../utils/openOrImport';
+import { openOrImport, IMPORT_SURVEY_CLOSE_FIRST } from '../utils/openOrImport';
 import { clearProjectActionSource } from '../utils/telemetry';
 import { debugLog } from '../utils/debugLog';
 
@@ -235,10 +235,7 @@ export function useProject() {
    */
   const handleImportTml = useCallback(async (skipFilePicker = false, filePath?: string) => {
     if (store.project) {
-      openDialog('error', {
-        title: 'Import survey',
-        message: 'Close the current project before importing a new survey.',
-      });
+      openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
       return;
     }
 
@@ -283,10 +280,7 @@ export function useProject() {
    */
   const handleImportCompass = useCallback(async (skipFilePicker = false, filePath?: string) => {
     if (store.project) {
-      openDialog('error', {
-        title: 'Import survey',
-        message: 'Close the current project before importing a new survey.',
-      });
+      openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
       return;
     }
 
@@ -333,10 +327,7 @@ export function useProject() {
    */
   const handleImportGpx = useCallback(async (skipFilePicker = false, filePath?: string) => {
     if (store.project) {
-      openDialog('error', {
-        title: 'Import survey',
-        message: 'Close the current project before importing a new survey.',
-      });
+      openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
       return;
     }
 

@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState, type PointerEvent, type RefObject } from 'react';
+import { useCallback, useRef, type PointerEvent, type RefObject } from 'react';
+import { useResizingFlag } from '../../hooks/useResizingFlag';
 
 interface UseResizeHandleOpts {
   direction: 'horizontal' | 'vertical';
@@ -35,13 +36,12 @@ export function useResizeHandle({
   onResizeEnd,
   onResizeSettled,
 }: UseResizeHandleOpts) {
-  // `isResizing` state drives rendering (suspend transitions / resize highlight),
-  // but the pointer handlers gate on a REF: setState is async, so the first
-  // pointermove after pointerdown would otherwise read the stale `false` and be
-  // dropped — losing the first frame and, for a one-move flick-drag, never
-  // persisting the size (onResizeEnd is skipped when movedRef stayed false).
-  const [isResizing, setIsResizing] = useState(false);
-  const isResizingRef = useRef(false);
+  // `isResizing` drives rendering (suspend transitions / resize highlight); the
+  // pointer handlers gate on the ref so the first pointermove after pointerdown
+  // isn't dropped to a stale `false` (see useResizingFlag). For a one-move
+  // flick-drag this also keeps onResizeEnd from being skipped (movedRef stays
+  // false otherwise).
+  const { isResizing, isResizingRef, beginResizing, endResizing } = useResizingFlag();
   const sizeRef = useRef(0);
   // Guard against a press-release with no movement persisting a bogus size 0.
   const movedRef = useRef(false);
@@ -50,9 +50,8 @@ export function useResizeHandle({
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     movedRef.current = false;
-    isResizingRef.current = true;
-    setIsResizing(true);
-  }, []);
+    beginResizing();
+  }, [beginResizing]);
 
   const onPointerMove = useCallback(
     (e: PointerEvent) => {
@@ -69,22 +68,21 @@ export function useResizeHandle({
       sizeRef.current = next;
       onResize(next);
     },
-    [direction, handlePosition, minSize, maxSize, measureRef, onResize],
+    [isResizingRef, direction, handlePosition, minSize, maxSize, measureRef, onResize],
   );
 
   const onPointerUp = useCallback(
     (e: PointerEvent) => {
       if (!isResizingRef.current) return;
-      isResizingRef.current = false;
       // Only persist when an actual drag occurred; clamp defensively.
       if (movedRef.current) {
         onResizeEnd?.(Math.max(minSize, Math.min(maxSize, sizeRef.current)));
       }
       onResizeSettled?.({ clientX: e.clientX, clientY: e.clientY });
       movedRef.current = false;
-      setIsResizing(false);
+      endResizing();
     },
-    [onResizeEnd, onResizeSettled, minSize, maxSize],
+    [isResizingRef, onResizeEnd, onResizeSettled, minSize, maxSize, endResizing],
   );
 
   return {

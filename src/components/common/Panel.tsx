@@ -1,5 +1,6 @@
 import { type ReactNode, useState, useRef, useCallback } from 'react';
 import { ChevronDownIcon, ChevronRightIcon } from './icons';
+import { useResizingFlag } from '../../hooks/useResizingFlag';
 
 interface PanelProps {
   title?: string;
@@ -80,11 +81,10 @@ export function ResizablePanel({
   handlePosition = 'end',
 }: ResizablePanelProps) {
   const [size, setSize] = useState(defaultSize);
-  // `isResizing` state drives the handle highlight; the pointer handlers gate on
-  // a ref so the first pointermove after pointerdown isn't dropped (setState is
-  // async — reading the state here would miss the first frame of the drag).
-  const [isResizing, setIsResizing] = useState(false);
-  const isResizingRef = useRef(false);
+  // `isResizing` drives the handle highlight; the pointer handlers gate on the
+  // ref so the first pointermove after pointerdown isn't dropped (see
+  // useResizingFlag).
+  const { isResizing, isResizingRef, beginResizing, endResizing } = useResizingFlag();
   const panelRef = useRef<HTMLDivElement>(null);
   const sizeRef = useRef(size);
 
@@ -92,9 +92,8 @@ export function ResizablePanel({
     e.preventDefault();
     // Capture pointer so all subsequent events arrive on this element
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    isResizingRef.current = true;
-    setIsResizing(true);
-  }, []);
+    beginResizing();
+  }, [beginResizing]);
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -118,15 +117,14 @@ export function ResizablePanel({
       sizeRef.current = newSize;
       onResize?.(newSize);
     },
-    [direction, handlePosition, minSize, maxSize, onResize]
+    [isResizingRef, direction, handlePosition, minSize, maxSize, onResize]
   );
 
   const handlePointerUp = useCallback(() => {
     if (!isResizingRef.current) return;
-    isResizingRef.current = false;
     onResizeEnd?.(sizeRef.current);
-    setIsResizing(false);
-  }, [onResizeEnd]);
+    endResizing();
+  }, [isResizingRef, onResizeEnd, endResizing]);
 
   const style = direction === 'horizontal' ? { width: size } : { height: size };
 

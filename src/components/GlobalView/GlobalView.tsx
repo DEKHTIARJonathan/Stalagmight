@@ -421,29 +421,39 @@ export default function GlobalView() {
     return recentProjects.find(p => p.file_path === selectedProjectId) || null;
   }, [selectedProjectId, recentProjects]);
 
-  // One-way latch gating the list-view details panel. It starts hidden and opens
-  // only once a selection is confirmed; once open it STAYS open — switching
-  // between projects just updates its content (never re-hide/flicker it). The
-  // first reveal is gated so a double-click-to-open doesn't flash it: immediate
-  // in the map view (no open-vs-select ambiguity), and debounced by the
-  // double-click window in the list view. (Resets when GlobalView remounts, e.g.
-  // after returning from an opened project.)
+  // Selected projects array for multi-selection support. Declared before the
+  // latch effect below so it can treat a surviving multi-selection as a live
+  // selection — the MetadataPanel renders the aggregate from this array even when
+  // there is no primary selectedProject.
+  const selectedProjects = useMemo(() => {
+    return recentProjects.filter(p => multiSelectedIds.has(p.file_path));
+  }, [recentProjects, multiSelectedIds]);
+
+  // Latch gating the list-view details panel. It starts hidden and opens only
+  // once a selection is confirmed; while a selection holds it STAYS open —
+  // switching between projects just updates its content (never re-hide/flicker
+  // it). The first reveal is gated so a double-click-to-open doesn't flash it:
+  // immediate in the map view (no open-vs-select ambiguity), and debounced by the
+  // double-click window in the list view. Clears only when NOTHING is selected
+  // (no primary AND no multi-selection survivors — e.g. the selected project was
+  // removed/pruned) so the list view never strands the empty "Select a project"
+  // panel and the next selection is debounced again. (Also resets when GlobalView
+  // remounts, e.g. after returning from a project.)
   const [detailsOpen, setDetailsOpen] = useState(false);
   useEffect(() => {
-    if (detailsOpen) return; // already open — leave it; content follows selection
-    if (!selectedProjectId) return; // nothing selected yet
+    if (!selectedProjectId && selectedProjects.length === 0) {
+      setDetailsOpen(false); // nothing selected — re-hide and re-arm the debounce
+      return;
+    }
+    if (detailsOpen) return; // already open — leave it; content follows the selection
+    if (!selectedProjectId) return; // a multi-selection survives but no primary — wait for one
     if (activeTab === 'map') {
       setDetailsOpen(true);
       return;
     }
     const timer = window.setTimeout(() => setDetailsOpen(true), DOUBLE_CLICK_MS);
     return () => window.clearTimeout(timer);
-  }, [selectedProjectId, activeTab, detailsOpen]);
-
-  // Get selected projects array for multi-selection support
-  const selectedProjects = useMemo(() => {
-    return recentProjects.filter(p => multiSelectedIds.has(p.file_path));
-  }, [recentProjects, multiSelectedIds]);
+  }, [selectedProjectId, selectedProjects.length, activeTab, detailsOpen]);
 
   // Get selected projects count
   const selectedCount = multiSelectedIds.size;
@@ -785,11 +795,13 @@ export default function GlobalView() {
           )}
         </div>
 
-        {/* Metadata Panel. Map view: always shown (lives alongside the map).
-            List view: hidden until the first selection is confirmed past the
-            double-click window (so it doesn't flash on a double-click-to-open),
-            then it stays open and just follows the selection. */}
-        {recentProjects.length > 0 && (activeTab === 'map' || detailsOpen) && (
+        {/* Metadata Panel. Map view: always shown (lives alongside the map), incl.
+            the empty "Select a project" state. List view: hidden until the first
+            selection is confirmed past the double-click window (so it doesn't flash
+            on a double-click-to-open), then it follows the selection — and requires
+            a live selection (primary OR a surviving multi-selection), so it never
+            shows the empty state in the list. */}
+        {recentProjects.length > 0 && (activeTab === 'map' || (detailsOpen && (selectedProject !== null || selectedProjects.length > 0))) && (
           <MetadataPanel
             project={selectedProject}
             selectedProjects={selectedProjects}

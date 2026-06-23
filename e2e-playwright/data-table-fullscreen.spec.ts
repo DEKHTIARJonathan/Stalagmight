@@ -72,7 +72,9 @@ async function enterFullScreen(page: Page): Promise<void> {
 /** Assert the table is back to its windowed (non-fullscreen) state and open. */
 async function expectWindowed(page: Page): Promise<void> {
   await expect(page.getByTestId('data-table')).toHaveAttribute('data-fullscreen', 'false');
-  await expect(page.getByTestId('data-table')).toHaveAttribute('data-open', 'true');
+  // The Dock only mounts the table when the panel is revealed, so its presence
+  // == open (the table no longer carries a redundant data-open attribute).
+  await expect(page.getByTestId('data-table')).toBeVisible();
   await expect(page.getByTestId('toolbar-data-table-title')).toHaveCount(0);
 }
 

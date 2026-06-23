@@ -28,6 +28,16 @@ import { openOrImportFilters } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
 
 /**
+ * Error shown when a new-project-only import (GPX / Ariane / Compass) is
+ * attempted while a project is already open. The single source of truth shared
+ * by the open/import router and the useProject import handlers.
+ */
+export const IMPORT_SURVEY_CLOSE_FIRST = {
+  title: 'Import survey',
+  message: 'Close the current project before importing a new survey.',
+} as const;
+
+/**
  * Dispatch an already-chosen path to the matching open/import flow.
  *
  * @param path       Absolute path to the selected file.
@@ -62,10 +72,7 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
       // guard so a GPX opened/dropped while a project is open is rejected, not
       // silently added to the current project.
       if (store.project) {
-        ui.openDialog('error', {
-          title: 'Import survey',
-          message: 'Close the current project before importing a new survey.',
-        });
+        ui.openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
         return;
       }
       const gpxFile = await store.parseGpx(path);
@@ -79,10 +86,7 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
     } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
       // TML/TMLU import always creates a new project.
       if (store.project) {
-        ui.openDialog('error', {
-          title: 'Import survey',
-          message: 'Close the current project before importing a new survey.',
-        });
+        ui.openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
         return;
       }
       const tmlFile = await store.parseTml(path);
@@ -96,10 +100,7 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
     } else if (lowerPath.endsWith('.mak') || lowerPath.endsWith('.dat')) {
       // Compass import always creates a new project.
       if (store.project) {
-        ui.openDialog('error', {
-          title: 'Import survey',
-          message: 'Close the current project before importing a new survey.',
-        });
+        ui.openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
         return;
       }
       const compassFile = await store.parseCompass(path);

@@ -6,7 +6,8 @@ import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile } from '../../types/commands';
-import { setSource, trackDialogComplete } from '../../utils/telemetry';
+import { setSource } from '../../utils/telemetry';
+import { completeImportToSingleView } from '../../utils/saveFeedback';
 
 interface GpxSelectionDialogProps {
   gpxFile: GpxFile;
@@ -94,10 +95,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
         depthInverted
       );
 
-      trackDialogComplete('gpx-selection');
-      closeDialog();
-      setView('single');
-      triggerFitToBounds();
+      completeImportToSingleView('gpx-selection', { closeDialog, setView, triggerFitToBounds, openDialog });
 
       if (!result.success) {
         openDialog('error', {

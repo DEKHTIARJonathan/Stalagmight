@@ -62,7 +62,9 @@ async function createProjectWithSections(page: Page): Promise<void> {
  */
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
-  await expect(page.getByTestId('data-table')).toHaveAttribute('data-open', 'true', { timeout: 3000 });
+  // The Dock mounts the table only when the panel is revealed, so visibility
+  // confirms it opened (the redundant data-open attribute was removed).
+  await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
 }
 
 /**

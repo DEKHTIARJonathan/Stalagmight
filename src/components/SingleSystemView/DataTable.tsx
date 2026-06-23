@@ -276,7 +276,6 @@ export default function DataTable({ sections }: DataTableProps) {
     showToast: s.showToast,
   })));
 
-
   // Create a map of shot warnings for quick lookup
   const shotWarningsMap = useMemo(() => {
     const map = new Map<string, ProjectWarning[]>();
@@ -1515,7 +1514,6 @@ export default function DataTable({ sections }: DataTableProps) {
       // every resize tick, so the table visibly lagged the dragged panel edge.
       className="flex flex-col h-full bg-panel border-t border-border"
       data-testid="data-table"
-      data-open="true"
       data-fullscreen={dataTableFullScreen ? 'true' : 'false'}
     >
       {rawTableSelection !== null ? (

@@ -240,10 +240,10 @@ interface UIStore {
   dataTableOpen: boolean;
   dataTableMode: PanelMode;
   dataTableHeight: number;
-  /** Bumped to transiently reveal the Details panel: in hover mode usePanelReveal
-   *  floats it open (like a hover) instead of pinning, so a programmatic reveal
-   *  (e.g. jump-to-warning) never clobbers the user's persisted panel mode.
-   *  Session-only, never persisted. */
+  /** Bumped to transiently reveal the Details panel: in hover mode SingleSystemView
+   *  floats it open (like a hover, with an auto-close) instead of pinning, so a
+   *  programmatic reveal (e.g. jump-to-warning) never clobbers the user's persisted
+   *  panel mode. Session-only, never persisted. */
   detailRevealNonce: number;
   toggleSectionsPanel: () => void;
   toggleDetailPanel: () => void;
@@ -949,9 +949,10 @@ export const useUIStore = create<UIStore>((set) => ({
     s = useUIStore.getState();
     // Reveal the Details panel on the Warnings tab so WarningsContent mounts and
     // consumes the request — without mutating the user's persisted panel mode.
-    // Pinned: just ensure it's open. Hover: bump the reveal nonce so usePanelReveal
-    // floats it open like a hover (auto-closing on pointer-leave), so resolving a
-    // warning never silently leaves a hover-mode user pinned.
+    // Pinned: just ensure it's open. Hover: bump the reveal nonce so SingleSystemView
+    // floats it open like a hover (with a timed auto-close, since no pointer-leave
+    // fires for a programmatic reveal), so resolving a warning never silently leaves
+    // a hover-mode user pinned.
     set({
       requestResolveWarning: { sectionId, shotId },
       detailPanelTab: 'warnings',
