@@ -101,6 +101,18 @@ Pressing `?` opens the `KeyboardShortcutsDialog`, a filterable grid showing all 
 
 ## Rust Backend Patterns
 
+### Module size (file-size ratchet)
+
+Non-test `.rs` files under `src-tauri/src` are kept under a size budget by a CI gate
+(`check` job → `pnpm lint:rust-file-size`, `scripts/check-rust-file-size.mjs`) that
+ratchets against `src-tauri/file-size-baseline.json`. It **fails** if a baselined file
+≥1500 production LOC grows past its recorded size, or any file crosses the 2000-prod-LOC
+budget. Keep modules focused; a file approaching ~1000 prod LOC should split at an API
+boundary — the worked plan + per-file proposals live in [refactor.md](refactor.md)
+(tracked on #157). A legitimate growth bumps the baseline in the same PR
+(`pnpm lint:rust-file-size --update`), so it's visible in review. Metric = code LOC minus
+comments/blanks and inline `#[cfg(test)]` modules.
+
 ### Mutex Lock Ordering
 
 **Critical**: Never hold a Mutex lock while calling methods that acquire other locks. Release the first lock before calling methods that may acquire others.
