@@ -469,6 +469,13 @@ Concretises the choices §7.2 left open:
 - **Push-headroom: explicit opt-in toggle, OFF by default.** A "Show push-headroom" control,
   default **off**, so the conservative thirds view is the resting state; when on, the faint
   labeled extension (above) appears. Strongest §6 automation-bias posture.
+- **OC/CCR: a mode toggle at the panel top.** One switch swaps the relevant fields — OC → stages
+  + back-gas thirds; CCR → dil-out reserve + bailout (§5.5). One rig, two lenses.
+- **Team: single-diver in v1; team is Phase 5** (§8). When it lands: a roster with the limiting
+  (lowest usable-volume, §5.3) diver **badged** so you see who gates the dive. v1 keeps the panel
+  simple.
+- **Readout leads with penetration distance / time** (the planning headline); per-cylinder turn
+  pressures + bailout margin are the supporting detail (the numbers you'd copy to a slate).
 
 ---
 
