@@ -668,9 +668,11 @@ test.describe('Error Handling', () => {
 
       // Opening a file whose load fails must surface the loading-error overlay
       // with the message, keep the app on the start page, and be dismissable.
-      // Use the hamburger "Open Project" item (native .stalx open) — the mocked
-      // file dialog returns a path that the unified Open/Import button would
-      // route to import, whereas Open Project always goes through loadProject.
+      // Use the hamburger "Open Project" item. Open/Import now routes by the
+      // chosen file's EXTENSION (unified Open/Import), so we override the mocked
+      // file dialog to return a .stalx path — that routes through loadProject,
+      // which we force to throw, surfacing the loading-error overlay. (The default
+      // mock dialog returns a .dmp, which would route to import instead.)
       // Asserted deterministically (wait for the actual states, no racing
       // best-effort timeouts) so it can't flake under parallel load — and it now
       // verifies the error message is shown, which the previous version never did.
@@ -678,6 +680,7 @@ test.describe('Error Handling', () => {
         await setIpcOverrides(page, {
           load_project_full: { __throw: message },
           load_project: { __throw: message },
+          'plugin:dialog|open': '/mock/broken-project.stalx',
         });
 
         await openAppMenu(page);

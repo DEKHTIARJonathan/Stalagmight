@@ -1171,7 +1171,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }, 0) ?? 0;
 
             return {
-              project: currentProject,
+              // Return a FRESH project object each call (shallow clone + new sections
+              // array), mirroring the real Tauri IPC which deserializes a new object
+              // every call. The in-place section seeding (.push onto
+              // currentProject.sections) otherwise keeps the SAME array reference, which
+              // freezes #160's `useMemo([sections])` SectionsPanel content at its initial
+              // (empty) render even though `stats` — rebuilt fresh below — shows the
+              // populated count. (Caused ~50 full-suite failures; smoke never hit it.)
+              project: currentProject
+                ? { ...currentProject, sections: [...currentProject.sections] }
+                : currentProject,
               stations: mockStations,
               stats: {
                 section_count: currentProject?.sections.length ?? 0,

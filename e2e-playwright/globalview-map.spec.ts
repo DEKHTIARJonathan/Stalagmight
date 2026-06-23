@@ -21,7 +21,7 @@ test.describe('GlobalView Map', () => {
       const listTab = page.locator('[data-testid="globalview-view-toggle-list"]');
 
       // List should be the active (selected) segment by default
-      await expect(listTab).toHaveAttribute('aria-selected', 'true');
+      await expect(listTab).toHaveAttribute('aria-pressed', 'true');
     });
 
     test('should switch to Map tab when clicked', async ({ page }) => {
@@ -32,9 +32,9 @@ test.describe('GlobalView Map', () => {
       await mapTab.click();
 
       // Map tab should be active
-      await expect(mapTab).toHaveAttribute('aria-selected', 'true');
+      await expect(mapTab).toHaveAttribute('aria-pressed', 'true');
       // List tab should be inactive
-      await expect(listTab).toHaveAttribute('aria-selected', 'false');
+      await expect(listTab).toHaveAttribute('aria-pressed', 'false');
 
       // Map container should be visible
       const mapContainer = page.locator('[data-testid="globalview-map"]');
@@ -47,12 +47,12 @@ test.describe('GlobalView Map', () => {
 
       // Switch to Map first
       await mapTab.click();
-      await expect(mapTab).toHaveAttribute('aria-selected', 'true');
+      await expect(mapTab).toHaveAttribute('aria-pressed', 'true');
 
       // Switch back to List
       await listTab.click();
-      await expect(listTab).toHaveAttribute('aria-selected', 'true');
-      await expect(mapTab).toHaveAttribute('aria-selected', 'false');
+      await expect(listTab).toHaveAttribute('aria-pressed', 'true');
+      await expect(mapTab).toHaveAttribute('aria-pressed', 'false');
 
       // List content should be visible (Recent Projects heading)
       await expect(page.locator('h2:has-text("Recent Projects")')).toBeVisible();
