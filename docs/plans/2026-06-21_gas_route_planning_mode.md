@@ -138,6 +138,7 @@ GasConfig {
   stressed_rmv_multiplier: f64,  // bailout/contingency bump, e.g. 1.5–2.0
   swim_speed_m_per_min: f64,     // EXIT-leg speed (fast). DEFAULT 10 m/min (no DPV — Nico)
   survey_speed_m_per_min: Option<f64>, // IN-leg speed while surveying — often 2–3× slower; None = symmetric. §5.2
+  survey_rmv_multiplier: f64,    // IN-leg task-loading bump; DEFAULT 1.0. New surveyors report a bit; minor. §5.2
   dpv: Option<DpvProfile>,       // speed + burn-time/range (Phase 4); SAME rmv as swimming, no reduction
   units: GasUnits,               // metric | imperial (display only)
 }
@@ -217,6 +218,10 @@ spent.
 swim (default **10 m/min**, no DPV). So per-meter gas IN ≫ OUT, and **round-trip gas is NOT
 2× one-way**: `round_trip(X) = gas_in(X | survey speed) + gas_out(X | swim speed)` — two
 Dijkstra fields (in + out), the OUT field being the same exit-leg field CCR bailout needs.
+**Optional in-leg RMV bump:** surveying *task-loads* the diver (reel, slate), which can raise
+RMV a little — minor and individual (new surveyors report it; veterans don't), so it's an
+**opt-in `survey_rmv_multiplier` slider** (default 1.0) on the IN leg only, never a baked-in
+assumption.
 
 **Consequence: strict thirds *under*-penetrates on survey.** Turning at "⅓ consumed" on the
 slow way in leaves you surfacing with lots of unused gas and a shorter push than was safe — so
@@ -477,10 +482,10 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
    single-slot `AppState` memo (§7.1).
 5. **Turn-gloss (§5.1):** confirm "turn at 1/N" = consumed (minor). *(Recalc regions/formulas,
    direction, and pressure-semantics now resolved.)*
-6. **In-flight planning Q&A (still to answer):** does **survey raise RMV** (task-loading)
-   beyond just being slower? **CCR bailout** specifics (dedicated bottles vs stages-as-bailout;
-   stressed-multiplier value; diluent/O2 negligible?); is a **"lead"** any selected station or a
-   first-class marker?
+6. **In-flight planning Q&A (still to answer):** **CCR bailout** specifics (dedicated bottles
+   vs stages-as-bailout; stressed-multiplier value; diluent/O2 negligible?); is a **"lead"**
+   any selected station or a first-class marker? *(Survey-RMV task-loading resolved → opt-in
+   slider, §5.2.)*
 
 ---
 
