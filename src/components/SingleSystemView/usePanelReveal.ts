@@ -78,6 +78,22 @@ export function usePanelReveal(panel: PanelId): PanelReveal {
     }
   }, [mode, clearGrace]);
 
+  // A programmatic reveal request (e.g. "jump to this warning" from the data
+  // table) floats a hover-mode panel open like a hover — without pinning, and it
+  // auto-closes via the normal grace once the pointer leaves. Pin-mode panels are
+  // revealed by opening them in the store instead, so setHovering is a harmless
+  // no-op there (isFloatingOpen needs hover mode, and the pin effect above clears
+  // it anyway). Only the Details panel has a reveal nonce today; the others read a
+  // constant 0 so this never fires for them.
+  const revealNonce = useUIStore((s) => (panel === 'detail' ? s.detailRevealNonce : 0));
+  const revealNonceSeen = useRef(revealNonce);
+  useEffect(() => {
+    if (revealNonce === revealNonceSeen.current) return;
+    revealNonceSeen.current = revealNonce;
+    clearGrace();
+    setHovering(true);
+  }, [revealNonce, clearGrace]);
+
   const onRegionEnter = useCallback(() => {
     clearGrace();
     setHovering(true);

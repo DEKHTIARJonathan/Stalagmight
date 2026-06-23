@@ -5,7 +5,7 @@
  * dispatches to the right flow based on the file extension:
  *
  * - `.stalx`            -> open the native project (loadProject)
- * - `.gpx`              -> GPX import (add to current project, or new project)
+ * - `.gpx`              -> GPX import (new project only; rejected if one is open)
  * - `.tml` / `.tmlu`    -> Ariane import (always a new project)
  * - `.mak` / `.dat`     -> Compass import (always a new project)
  * - `.dmp`              -> DMP import (add to current project, or new project)
@@ -57,18 +57,25 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
       // Native project: loadProject handles view switching and error display.
       await store.loadProject(path);
     } else if (lowerPath.endsWith('.gpx')) {
+      // GPX import creates a new project; importing into an open one isn't
+      // supported (DMP is the additive in-project import). Mirror the TML/Compass
+      // guard so a GPX opened/dropped while a project is open is rejected, not
+      // silently added to the current project.
+      if (store.project) {
+        ui.openDialog('error', {
+          title: 'Import survey',
+          message: 'Close the current project before importing a new survey.',
+        });
+        return;
+      }
       const gpxFile = await store.parseGpx(path);
       if (!gpxFile) return;
-      if (store.project) {
-        ui.openDialog('gpx-selection', { gpxFile, filePath: path });
-      } else {
-        ui.openDialog('new-project-for-import', {
-          gpxFile,
-          filePath: path,
-          defaultName: extractFilename(path, /\.gpx$/i) || 'Imported',
-          importType: 'gpx',
-        });
-      }
+      ui.openDialog('new-project-for-import', {
+        gpxFile,
+        filePath: path,
+        defaultName: extractFilename(path, /\.gpx$/i) || 'Imported',
+        importType: 'gpx',
+      });
     } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
       // TML/TMLU import always creates a new project.
       if (store.project) {

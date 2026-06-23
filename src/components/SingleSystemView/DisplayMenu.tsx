@@ -169,17 +169,6 @@ export default function DisplayMenu() {
   const { t } = useTranslation();
 
   const {
-    showStations,
-    showShots,
-    showSectionNames,
-    showStationLabels,
-    showShotData,
-    showReferenceShots,
-    showZeroDatum,
-    showGrid,
-    showSatellite,
-    showStationComments,
-    showShotComments,
     showDepthGradient,
     showDistanceGradient,
     showIssueSeverity,
@@ -192,17 +181,6 @@ export default function DisplayMenu() {
     setGridSpacing,
     setGeometryMode,
   } = useUIStore(useShallow((s) => ({
-    showStations: s.showStations,
-    showShots: s.showShots,
-    showSectionNames: s.showSectionNames,
-    showStationLabels: s.showStationLabels,
-    showShotData: s.showShotData,
-    showReferenceShots: s.showReferenceShots,
-    showZeroDatum: s.showZeroDatum,
-    showGrid: s.showGrid,
-    showSatellite: s.showSatellite,
-    showStationComments: s.showStationComments,
-    showShotComments: s.showShotComments,
     showDepthGradient: s.showDepthGradient,
     showDistanceGradient: s.showDistanceGradient,
     showIssueSeverity: s.showIssueSeverity,
@@ -216,24 +194,31 @@ export default function DisplayMenu() {
     setGeometryMode: s.setGeometryMode,
   })));
 
+  // The element-toggle booleans, read as a keyed map so a pill can look itself
+  // up by `item.key` (and its `disabledWhen` dependency) — this IS the source,
+  // not a hand-maintained copy of separately destructured values.
+  const toggleValues = useUIStore(
+    useShallow(
+      (s): Record<ToggleItem['key'], boolean> => ({
+        showStations: s.showStations,
+        showShots: s.showShots,
+        showReferenceShots: s.showReferenceShots,
+        showZeroDatum: s.showZeroDatum,
+        showSectionNames: s.showSectionNames,
+        showStationLabels: s.showStationLabels,
+        showStationComments: s.showStationComments,
+        showShotComments: s.showShotComments,
+        showShotData: s.showShotData,
+        showGrid: s.showGrid,
+        showSatellite: s.showSatellite,
+      }),
+    ),
+  );
+
   // The closure-adjusted view only differs from measured when the project has at
   // least one closure eligible for the solve (Batch / LeastSquaresWeighted);
   // otherwise the option is disabled (it would render identical geometry).
   const hasClosures = useProjectStore((s) => hasEligibleClosures(s.project?.loop_closures ?? []));
-
-  const toggleValues: Record<ToggleItem['key'], boolean> = {
-    showStations,
-    showShots,
-    showReferenceShots,
-    showZeroDatum,
-    showSectionNames,
-    showStationLabels,
-    showStationComments,
-    showShotComments,
-    showShotData,
-    showGrid,
-    showSatellite,
-  };
 
   // Coloring is single-select: exactly one of the (already mutually-exclusive)
   // overlays, or 'section' = none of them (the default per-section coloring).
@@ -285,6 +270,10 @@ export default function DisplayMenu() {
     const entityColored = !!item.entity && colorsOn;
     // Contrast color for the filled (on) state, derived from the resolved
     // (possibly user-overridden) element color so the label + glyph stay legible.
+    // Read live (not cached): the --sh-<entity> vars change on a preset / per-
+    // element color override without changing syntacticLevel, so a cache keyed on
+    // the level would serve a stale (possibly illegible) color. The cost is one
+    // getComputedStyle per on-pill on an already-open menu — negligible.
     const onColor = entityColored && active && item.entity
       ? getContrastColor(getThemeColor(syntacticVarName(item.entity)))
       : undefined;
@@ -439,7 +428,7 @@ export default function DisplayMenu() {
 
             <Category label={t('displayMenu.groups.overlays')} icon={showIcons ? <LayersIcon size={14} /> : undefined}>
               {OVERLAYS.map(renderTogglePill)}
-              {showGrid && (
+              {toggleValues.showGrid && (
                 <div className="basis-full flex items-center gap-2 pt-1">
                   <span className="text-xs text-text-secondary">{t('displayMenu.spacing.label')}:</span>
                   <select

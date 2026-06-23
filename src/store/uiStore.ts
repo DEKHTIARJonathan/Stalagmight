@@ -240,6 +240,11 @@ interface UIStore {
   dataTableOpen: boolean;
   dataTableMode: PanelMode;
   dataTableHeight: number;
+  /** Bumped to transiently reveal the Details panel: in hover mode usePanelReveal
+   *  floats it open (like a hover) instead of pinning, so a programmatic reveal
+   *  (e.g. jump-to-warning) never clobbers the user's persisted panel mode.
+   *  Session-only, never persisted. */
+  detailRevealNonce: number;
   toggleSectionsPanel: () => void;
   toggleDetailPanel: () => void;
   toggleDataTable: () => void;
@@ -702,6 +707,7 @@ export const useUIStore = create<UIStore>((set) => ({
   dataTableOpen: false,
   dataTableMode: 'pin',
   dataTableHeight: 200,
+  detailRevealNonce: 0,
   // Keyboard shortcuts / menu items are deliberate commands → pin open/close
   // (mode forced to 'pin' so the panel reflows and stays). Manually changing the
   // layout drops section-focus mode (#50) so the toolbar can't keep showing a
@@ -936,10 +942,23 @@ export const useUIStore = create<UIStore>((set) => ({
     // consumes the request while mounted (detailPanelOpen && tab === 'warnings'),
     // so open the panel on the Warnings tab here. (Otherwise the click would be
     // a no-op and the request would sit stale and fire on a later tab switch.)
-    const s = useUIStore.getState();
+    let s = useUIStore.getState();
     if (s.focusedSectionId !== null) s.exitSectionFocus();
     if (s.dataTableFullScreen) s.exitDataTableFullScreen();
-    set({ requestResolveWarning: { sectionId, shotId }, detailPanelOpen: true, detailPanelTab: 'warnings' });
+    // Re-read: the exits above can change the panel's mode/open.
+    s = useUIStore.getState();
+    // Reveal the Details panel on the Warnings tab so WarningsContent mounts and
+    // consumes the request — without mutating the user's persisted panel mode.
+    // Pinned: just ensure it's open. Hover: bump the reveal nonce so usePanelReveal
+    // floats it open like a hover (auto-closing on pointer-leave), so resolving a
+    // warning never silently leaves a hover-mode user pinned.
+    set({
+      requestResolveWarning: { sectionId, shotId },
+      detailPanelTab: 'warnings',
+      ...(s.detailPanelMode === 'pin'
+        ? { detailPanelOpen: true }
+        : { detailRevealNonce: s.detailRevealNonce + 1 }),
+    });
   },
   clearResolveWarningRequest: () => set({ requestResolveWarning: null }),
   requestZoomToShot: null,

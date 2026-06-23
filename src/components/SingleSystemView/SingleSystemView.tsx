@@ -3,7 +3,7 @@ import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
 import { useProjectStore } from '../../store/projectStore';
-import { useUIStore } from '../../store/uiStore';
+import { useUIStore, type PanelId, type PanelMode } from '../../store/uiStore';
 import type { SectionId } from '../../types/project';
 import { useShallow } from 'zustand/react/shallow';
 import { ErrorBoundary } from '../common/ErrorBoundary';
@@ -17,7 +17,7 @@ import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants'
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { usePanelReveal } from './usePanelReveal';
 import { Dock, BAR } from './Dock';
-import { dmpGpxOpenFilters } from '../../utils/fileDialogs';
+import { dmpImportFilters } from '../../utils/fileDialogs';
 import { pickAndRoute } from '../../utils/openOrImport';
 import { useProjectMenuItems } from './useProjectMenuItems';
 import { setSource, withTrackingSuppressed, setProjectActionSource } from '../../utils/telemetry';
@@ -30,6 +30,13 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 // and MapLibre's ResizeObserver has resized the map (a couple of frames). This
 // lives here rather than in SectionsPanel, which unmounts when it collapses.
 const SECTION_FOCUS_REFIT_DELAY_MS = 180;
+
+// Top offsets (px) for the side opener tabs, aligning each tab with its panel's
+// header/content divider. These track the panel header layout — revisit if the
+// header height or the top-left map controls change. (The webview UI zoom scales
+// these uniformly with the header, so they stay aligned under zoom.)
+const SECTIONS_TAB_TOP = 40; // just below the top-left "Fit to view" button (bottom ≈ 32px)
+const DETAILS_TAB_TOP = 79; // aligned to the Details panel's header/content divider
 
 export default function SingleSystemView() {
   const { t } = useTranslation();
@@ -61,12 +68,14 @@ export default function SingleSystemView() {
     return rawSave(opts);
   }, [autoSave, rawSave]);
 
-  // Toolbar "Import" button: a single picker for the two formats importable into
-  // an open project (DMP + GPX, no "All Files" so non-importable types can't be
-  // chosen), routed by extension through the shared open/import router.
-  const handleImportDmpOrGpx = useCallback(async () => {
+  // Toolbar "Import" button: DMP-only picker (the only format importable into an
+  // open project; no "All Files" so non-importable types — notably a `.stalx`
+  // project — can't be chosen and mis-routed), routed through the shared
+  // open/import router. GPX/Ariane/Compass start new projects, so they aren't
+  // offered here.
+  const handleImportDmp = useCallback(async () => {
     setProjectActionSource('toolbar');
-    await pickAndRoute(dmpGpxOpenFilters(), 'Import Failed');
+    await pickAndRoute(dmpImportFilters(), 'Import Failed');
   }, []);
 
   // Hamburger menu items (file/project actions). Built here so it can use the
@@ -74,11 +83,8 @@ export default function SingleSystemView() {
   const menuItems = useProjectMenuItems({ onSave: handleSaveProject, saveFailed });
 
   const {
-    sectionsPanelOpen,
     sectionsPanelWidth,
-    detailPanelOpen,
     detailPanelWidth,
-    dataTableOpen,
     dataTableHeight,
     dataTableFullScreen,
     focusedSectionId,
@@ -87,19 +93,13 @@ export default function SingleSystemView() {
     selection,
     triggerZoomToSection,
     triggerFitToBounds,
-    toggleSectionsPanel,
-    toggleDetailPanel,
-    toggleDataTable,
     setSectionsPanelWidth,
     setDetailPanelWidth,
     setDataTableHeight,
     savePanelSizes,
   } = useUIStore(useShallow((s) => ({
-    sectionsPanelOpen: s.sectionsPanelOpen,
     sectionsPanelWidth: s.sectionsPanelWidth,
-    detailPanelOpen: s.detailPanelOpen,
     detailPanelWidth: s.detailPanelWidth,
-    dataTableOpen: s.dataTableOpen,
     dataTableHeight: s.dataTableHeight,
     dataTableFullScreen: s.dataTableFullScreen,
     focusedSectionId: s.focusedSectionId,
@@ -108,9 +108,6 @@ export default function SingleSystemView() {
     selection: s.selection,
     triggerZoomToSection: s.triggerZoomToSection,
     triggerFitToBounds: s.triggerFitToBounds,
-    toggleSectionsPanel: s.toggleSectionsPanel,
-    toggleDetailPanel: s.toggleDetailPanel,
-    toggleDataTable: s.toggleDataTable,
     setSectionsPanelWidth: s.setSectionsPanelWidth,
     setDetailPanelWidth: s.setDetailPanelWidth,
     setDataTableHeight: s.setDataTableHeight,
@@ -258,12 +255,17 @@ export default function SingleSystemView() {
     return () => ro.disconnect();
   }, [projectLoaded]);
 
-  const sectionsPanelOpenedByOnboardingRef = useRef(false);
-  const detailPanelOpenedByOnboardingRef = useRef(false);
-  const dataTableOpenedByOnboardingRef = useRef(false);
+  // Snapshot of a panel's persisted {mode, open} captured when onboarding forced
+  // it open, so exiting the step restores the user's exact preference (including
+  // hover mode) instead of leaving it pinned. Null when onboarding isn't holding it.
+  type PanelSnapshot = { mode: PanelMode; open: boolean };
+  const sectionsOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
+  const detailOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
+  const dataTableOnboardingSnapRef = useRef<PanelSnapshot | null>(null);
 
-  // Auto-open Data Table during late SURVEY WORKSPACE steps to avoid
-  // a visible tooltip jump when entering the data-table step.
+  // Reveal the right panel during late SURVEY WORKSPACE steps (avoids a visible
+  // tooltip jump when entering a panel step), without clobbering the user's
+  // persisted panel mode: pin-open on entry, restore the snapshot on exit.
   useEffect(() => {
     const getSingleViewOnboardingStepId = (): string | null => {
       const overlay = document.querySelector('[data-testid="onboarding-overlay"]');
@@ -275,62 +277,57 @@ export default function SingleSystemView() {
       return flowId === 'single-view-basics' ? stepId : null;
     };
 
-    const syncDataTableState = () => {
-      const stepId = getSingleViewOnboardingStepId();
-      const shouldShowSectionsPanel = stepId === 'sections';
-      const shouldShowDetailPanel = stepId === 'detail-panel';
-      const shouldShowDataTable = stepId === 'data-table';
+    const syncOnboardingPanel = (
+      panel: PanelId,
+      shouldShow: boolean,
+      snapRef: { current: PanelSnapshot | null },
+    ) => {
+      const ui = useUIStore.getState();
+      const mode =
+        panel === 'sections' ? ui.sectionsPanelMode : panel === 'detail' ? ui.detailPanelMode : ui.dataTableMode;
+      const open =
+        panel === 'sections' ? ui.sectionsPanelOpen : panel === 'detail' ? ui.detailPanelOpen : ui.dataTableOpen;
+      const pinnedOpen = mode === 'pin' && open;
 
-      if (shouldShowSectionsPanel) {
-        if (!sectionsPanelOpen) {
-          sectionsPanelOpenedByOnboardingRef.current = true;
-          withTrackingSuppressed(() => toggleSectionsPanel());
+      if (shouldShow) {
+        // Reveal it (pin-open) and remember the prior state — unless it's already
+        // pinned-open, in which case there's nothing to reveal or restore.
+        if (snapRef.current === null && !pinnedOpen) {
+          snapRef.current = { mode, open };
+          withTrackingSuppressed(() => ui.setPanelMode(panel, 'pin'));
         }
-      } else if (sectionsPanelOpenedByOnboardingRef.current && sectionsPanelOpen) {
-        sectionsPanelOpenedByOnboardingRef.current = false;
-        withTrackingSuppressed(() => toggleSectionsPanel());
-      } else if (!shouldShowSectionsPanel) {
-        sectionsPanelOpenedByOnboardingRef.current = false;
-      }
-
-      if (shouldShowDetailPanel) {
-        if (!detailPanelOpen) {
-          detailPanelOpenedByOnboardingRef.current = true;
-          withTrackingSuppressed(() => toggleDetailPanel());
+      } else if (snapRef.current !== null) {
+        const snap = snapRef.current;
+        snapRef.current = null;
+        // Only restore if the panel is still in the pinned-open state onboarding
+        // forced it into. If the user changed it during the step (e.g. un-pinned or
+        // closed it), that's a deliberate choice — honor it instead of reverting to
+        // the pre-step snapshot.
+        if (pinnedOpen) {
+          withTrackingSuppressed(() => {
+            // setPanelMode forces open = (mode === 'pin'); fix up open if it differed
+            // (e.g. the user had pinned-but-closed).
+            ui.setPanelMode(panel, snap.mode);
+            if (snap.open !== (snap.mode === 'pin')) ui.setPanelOpen(panel, snap.open);
+          });
         }
-      } else if (detailPanelOpenedByOnboardingRef.current && detailPanelOpen) {
-        detailPanelOpenedByOnboardingRef.current = false;
-        withTrackingSuppressed(() => toggleDetailPanel());
-      } else if (!shouldShowDetailPanel) {
-        detailPanelOpenedByOnboardingRef.current = false;
-      }
-
-      if (shouldShowDataTable) {
-        if (!dataTableOpen) {
-          dataTableOpenedByOnboardingRef.current = true;
-          withTrackingSuppressed(() => toggleDataTable());
-        }
-        return;
-      }
-
-      if (dataTableOpenedByOnboardingRef.current && dataTableOpen) {
-        dataTableOpenedByOnboardingRef.current = false;
-        withTrackingSuppressed(() => toggleDataTable());
-        return;
-      }
-
-      if (!shouldShowDataTable) {
-        dataTableOpenedByOnboardingRef.current = false;
       }
     };
 
-    syncDataTableState();
+    const syncOnboardingPanels = () => {
+      const stepId = getSingleViewOnboardingStepId();
+      syncOnboardingPanel('sections', stepId === 'sections', sectionsOnboardingSnapRef);
+      syncOnboardingPanel('detail', stepId === 'detail-panel', detailOnboardingSnapRef);
+      syncOnboardingPanel('data-table', stepId === 'data-table', dataTableOnboardingSnapRef);
+    };
+
+    syncOnboardingPanels();
 
     if (typeof MutationObserver === 'undefined') {
       return;
     }
 
-    const observer = new MutationObserver(syncDataTableState);
+    const observer = new MutationObserver(syncOnboardingPanels);
     observer.observe(document.body, {
       subtree: true,
       childList: true,
@@ -341,14 +338,7 @@ export default function SingleSystemView() {
     return () => {
       observer.disconnect();
     };
-  }, [
-    dataTableOpen,
-    detailPanelOpen,
-    sectionsPanelOpen,
-    toggleDataTable,
-    toggleDetailPanel,
-    toggleSectionsPanel,
-  ]);
+  }, []);
 
   // Shared panel content — each rendered in exactly ONE place (its Dock), so the
   // heavy instance is never duplicated/remounted across pin/unpin/hover. Memoized
@@ -431,7 +421,7 @@ export default function SingleSystemView() {
       <Toolbar
         menuItems={menuItems}
         saveFailed={saveFailed}
-        onImport={handleImportDmpOrGpx}
+        onImport={handleImportDmp}
         onUndo={undo}
         onRedo={redo}
         canUndo={canUndo}
@@ -458,8 +448,7 @@ export default function SingleSystemView() {
           closeArrow={<ChevronLeftIcon size={14} />}
           testId="sections"
           tabLabels={tabLabels(panelName.sections)}
-          // Just below the top-left "Fit to view" button (bottom ≈ 32px).
-          tabTop={40}
+          tabTop={SECTIONS_TAB_TOP}
           // When the Data panel is open (pinned OR hover-floating), compress this
           // bar (if minimized) so it stops at the Data panel's top instead of
           // running alongside it.
@@ -530,7 +519,7 @@ export default function SingleSystemView() {
           closeArrow={<ChevronRightIcon size={14} />}
           testId="detail"
           tabLabels={tabLabels(panelName.detail)}
-          tabTop={79}
+          tabTop={DETAILS_TAB_TOP}
           closedBottomInset={dataReveal.isOpen ? dataTableHeight : 0}
           suspendSiblingTransition={dataResizing}
           onResizingChange={setDetailResizing}

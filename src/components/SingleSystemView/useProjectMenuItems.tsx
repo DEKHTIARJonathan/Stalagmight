@@ -11,6 +11,8 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
+import { pickAndRoute } from '../../utils/openOrImport';
+import { dmpImportFilters } from '../../utils/fileDialogs';
 import { setProjectActionSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { leadingMenuItems, serviceMenuItems, quitMenuItem } from '../common/appMenuItems';
@@ -39,8 +41,6 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
     handleOpenProject,
     handleSaveProjectAs,
     handleCloseProject,
-    handleImportDmp,
-    handleImportGpx,
   } = useProject();
   const openDialog = useUIStore((s) => s.openDialog);
   const showDevStats = useUIStore((s) => s.showDevStats);
@@ -108,12 +108,14 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
             id: 'global-import-dmp-button',
             label: t('globalView.actions.importDmp'),
             action: 'import_dmp',
-            onClick: () => { setProjectActionSource('hamburger'); handleImportDmp(); },
-          },
-          {
-            id: 'global-import-gpx-button',
-            label: t('globalView.actions.importGpx'),
-            onClick: () => { setProjectActionSource('hamburger'); handleImportGpx(); },
+            // Route through the shared open/import router so it shares the
+            // closure-adjusted read-only guard with the toolbar/Ctrl+I/drag paths.
+            // DMP-only filter (no "All Files"): with a project open, an unrelated
+            // file — notably a `.stalx` — must not be pickable here, or the router
+            // would open it and replace the current project. DMP is the only
+            // additive in-project import; GPX/Ariane/Compass start new projects
+            // (the router rejects a GPX dropped/opened while a project is open).
+            onClick: () => { setProjectActionSource('hamburger'); void pickAndRoute(dmpImportFilters(), 'Import Failed'); },
           },
         ],
       },
@@ -160,5 +162,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showDevStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, handleImportDmp, handleImportGpx]);
+  }, [t, openDialog, showDevStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject]);
 }

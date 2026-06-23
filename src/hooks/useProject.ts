@@ -326,12 +326,20 @@ export function useProject() {
   }, [store, openDialog]);
 
   /**
-   * Handle GPX file import with context-aware dialog flow.
-   * - From existing project: Opens file picker, parses GPX, then shows GpxSelectionDialog.
-   * - From home screen (no project): Opens file picker, parses GPX, then shows NewProjectDialog,
-   *   which on completion opens GpxSelectionDialog.
+   * Handle GPX file import. Like Ariane/Compass, a GPX import creates a new
+   * project, so it is only allowed when no project is open (DMP is the additive
+   * in-project import). From the home screen it parses the GPX and shows the
+   * new-project dialog, which on completion opens GpxSelectionDialog.
    */
   const handleImportGpx = useCallback(async (skipFilePicker = false, filePath?: string) => {
+    if (store.project) {
+      openDialog('error', {
+        title: 'Import survey',
+        message: 'Close the current project before importing a new survey.',
+      });
+      return;
+    }
+
     let selectedPath = filePath;
 
     if (!skipFilePicker) {
@@ -348,26 +356,17 @@ export function useProject() {
 
     if (!selectedPath) return;
 
-    const hasProject = !!store.project;
-
     try {
       const gpxFile = await store.parseGpx(selectedPath);
       if (!gpxFile) return;
 
-      if (hasProject) {
-        openDialog('gpx-selection', {
-          gpxFile,
-          filePath: selectedPath,
-        });
-      } else {
-        const fileName = extractFilename(selectedPath, /\.gpx$/i) || 'Imported';
-        openDialog('new-project-for-import', {
-          gpxFile,
-          filePath: selectedPath,
-          defaultName: fileName,
-          importType: 'gpx',
-        });
-      }
+      const fileName = extractFilename(selectedPath, /\.gpx$/i) || 'Imported';
+      openDialog('new-project-for-import', {
+        gpxFile,
+        filePath: selectedPath,
+        defaultName: fileName,
+        importType: 'gpx',
+      });
     } catch (e) {
       openDialog('error', {
         title: 'Import Failed',

@@ -62,35 +62,30 @@ test.describe('GPX Import Workflow', () => {
     expect(projectSummary.datumCount).toBeGreaterThan(0);
   });
 
-  test('imports waypoints-only GPX directly into an existing project', async ({ page }) => {
+  test('rejects importing GPX into an existing project (new-project only)', async ({ page }) => {
+    // GPX import is new-project-only: with a project open it's rejected (like
+    // Ariane/Compass), not added to the current project. DMP is the only additive
+    // in-project import.
     await createProject(page, 'Existing GPX Project');
     await setImportPath(page, '/mock/waypoints-only.gpx');
 
     await page.keyboard.press('Control+i');
-    await expect(page.getByTestId('gpx-selection-dialog')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByTestId('gpx-import-confirm')).toBeVisible();
 
-    await page.getByTestId('gpx-import-confirm').click();
-    await expect(page.getByTestId('gpx-selection-dialog')).toBeHidden({ timeout: 15000 });
+    const errorDialog = page.getByTestId('error-dialog');
+    await expect(errorDialog).toBeVisible({ timeout: 10000 });
+    await expect(errorDialog).toContainText('Close the current project before importing');
+    // The in-project GPX selection flow must NOT open.
+    await expect(page.getByTestId('gpx-selection-dialog')).toBeHidden();
 
-    const projectSummary = await page.evaluate(() => {
+    // The current project is unchanged (nothing was imported into it).
+    const sectionCount = await page.evaluate(() => {
       const state = (window as unknown as {
         __E2E_TEST__?: {
-          projectStore: {
-            getState: () => {
-              project: { sections: unknown[]; zero_datums: unknown[] } | null;
-            };
-          };
+          projectStore: { getState: () => { project: { sections: unknown[] } | null } };
         };
       }).__E2E_TEST__?.projectStore.getState();
-
-      return {
-        sectionCount: state?.project?.sections.length ?? 0,
-        datumCount: state?.project?.zero_datums.length ?? 0,
-      };
+      return state?.project?.sections.length ?? 0;
     });
-
-    expect(projectSummary.sectionCount).toBeGreaterThan(0);
-    expect(projectSummary.datumCount).toBeGreaterThan(0);
+    expect(sectionCount).toBe(0);
   });
 });

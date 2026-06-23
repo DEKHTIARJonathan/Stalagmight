@@ -37,11 +37,6 @@ import type { CellEdit } from '../common/SpreadsheetGrid/types';
 
 interface DataTableProps {
   sections: Section[];
-  /** Whether the panel is revealed. The Dock only mounts this component while
-   *  the Data panel is visible (pinned-open, hover-floating, or sliding shut),
-   *  so it defaults to true. The persisted store `dataTableOpen` flag is false
-   *  in hover mode and must NOT gate the grid here (it left the panel empty). */
-  panelOpen?: boolean;
 }
 
 /** Column keys per angle family and mode (the Avg column and the In+Out pair
@@ -220,7 +215,7 @@ function RawTablePill({ name, trailing }: { name: string; trailing?: ReactNode }
   );
 }
 
-export default function DataTable({ sections, panelOpen = true }: DataTableProps) {
+export default function DataTable({ sections }: DataTableProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(
@@ -281,10 +276,6 @@ export default function DataTable({ sections, panelOpen = true }: DataTableProps
     showToast: s.showToast,
   })));
 
-  // The Dock owns visibility (mounts this only when the panel is revealed), so
-  // the grid renders whenever this component is mounted — never gated by the
-  // persisted store flag, which is false in hover mode. See `panelOpen`.
-  const dataTableOpen = panelOpen;
 
   // Create a map of shot warnings for quick lookup
   const shotWarningsMap = useMemo(() => {
@@ -365,9 +356,7 @@ export default function DataTable({ sections, panelOpen = true }: DataTableProps
 
     if (!selection) {
       // No selection - clear scroll target but keep current dropdown
-      if (dataTableOpen) {
-        setScrollToKey(null);
-      }
+      setScrollToKey(null);
       return;
     }
 
@@ -377,10 +366,7 @@ export default function DataTable({ sections, panelOpen = true }: DataTableProps
         setSelectedSectionId(selection.sectionId);
       }
       if (tableView !== 'shots') setTableView('shots');
-      // Only scroll if DataTable is open
-      if (dataTableOpen) {
-        setScrollToKey(selection.shotId);
-      }
+      setScrollToKey(selection.shotId);
     } else if (selection.type === 'station' && selection.stationRef) {
       const { section_id, station_index } = selection.stationRef;
       const section = sections.find((s) => s.id === section_id);
@@ -391,20 +377,16 @@ export default function DataTable({ sections, panelOpen = true }: DataTableProps
         }
         // Switch to stations view and scroll to station
         if (tableView !== 'stations') setTableView('stations');
-        if (dataTableOpen) {
-          setStationScrollToKey(station_index);
-        }
+        setStationScrollToKey(station_index);
       }
     } else if (selection.type === 'section' && selection.sectionId !== undefined) {
       // Section selected externally - switch dropdown, clear row highlight
       if (selection.sectionId !== selectedSectionId) {
         setSelectedSectionId(selection.sectionId);
       }
-      if (dataTableOpen) {
-        setScrollToKey(null);
-      }
+      setScrollToKey(null);
     }
-  }, [selection, selectedSectionId, sections, dataTableOpen, tableView]);
+  }, [selection, selectedSectionId, sections, tableView]);
 
   // Clear scrollToKey after it's been consumed (to allow re-scrolling to same row)
   useEffect(() => {
@@ -1140,11 +1122,11 @@ export default function DataTable({ sections, panelOpen = true }: DataTableProps
     activeColKey: string;
   } | null>(null);
   const selectionIndicator = useMemo(() => {
-    if (!gridSel || !dataTableOpen || tableView !== 'shots' || !selectedSection) return null;
+    if (!gridSel || tableView !== 'shots' || !selectedSection) return null;
     if (gridSel.rows > 1 || gridSel.cols > 1) return `${gridSel.rows}R × ${gridSel.cols}C`;
     const header = shotColumns.find((c) => c.key === gridSel.activeColKey)?.header ?? gridSel.activeColKey;
     return `${header} ${gridSel.activeRow + 1}`;
-  }, [gridSel, dataTableOpen, tableView, selectedSection, shotColumns]);
+  }, [gridSel, tableView, selectedSection, shotColumns]);
 
   // Gutter shows the shot's ID pill (replaces the old ID column); double-click
   // pans the map to the shot, as it did on the column's pill.
@@ -1385,7 +1367,7 @@ export default function DataTable({ sections, panelOpen = true }: DataTableProps
     ro.observe(el);
     setGridBodyHeight(el.clientHeight);
     return () => ro.disconnect();
-  }, [dataTableOpen]);
+  }, []);
   // Re-measure synchronously when the panel height changes (resize drag, open/
   // close, fullscreen). The ResizeObserver alone delivers the new size a frame
   // late, so the grid visibly trailed the dragged panel edge; reading clientHeight
@@ -1393,7 +1375,7 @@ export default function DataTable({ sections, panelOpen = true }: DataTableProps
   useLayoutEffect(() => {
     const el = gridBodyRef.current;
     if (el) setGridBodyHeight(el.clientHeight);
-  }, [dataTableHeight, dataTableFullScreen, dataTableOpen]);
+  }, [dataTableHeight, dataTableFullScreen]);
   const gridHeight = gridBodyHeight ?? Math.max(120, dataTableHeight - 28);
 
   // Unconditional hide (header right-click) — unlike the menu checkbox toggle.
@@ -1533,7 +1515,7 @@ export default function DataTable({ sections, panelOpen = true }: DataTableProps
       // every resize tick, so the table visibly lagged the dragged panel edge.
       className="flex flex-col h-full bg-panel border-t border-border"
       data-testid="data-table"
-      data-open={dataTableOpen ? 'true' : 'false'}
+      data-open="true"
       data-fullscreen={dataTableFullScreen ? 'true' : 'false'}
     >
       {rawTableSelection !== null ? (
@@ -1701,11 +1683,9 @@ export default function DataTable({ sections, panelOpen = true }: DataTableProps
       </div>
       )}
 
-      {/* Table - only render when open for performance. Both grids scroll
-          internally and are sized to this body exactly, so the wrapper must
-          never scroll alongside them (double scrollbars). */}
-      {dataTableOpen && (
-        <div ref={gridBodyRef} className="flex-1 overflow-hidden">
+      {/* Table. Both grids scroll internally and are sized to this body exactly,
+          so the wrapper must never scroll alongside them (double scrollbars). */}
+      <div ref={gridBodyRef} className="flex-1 overflow-hidden">
           {rawTableSelection !== null ? (
             rawTableSelection === '' ? (
               <div className="flex items-center justify-center h-full text-text-secondary">
@@ -1780,8 +1760,7 @@ export default function DataTable({ sections, panelOpen = true }: DataTableProps
               {t('dataTable.selectSection')}
             </div>
           )}
-        </div>
-      )}
+      </div>
       {connMenu && (
         <div
           ref={connMenuRef}

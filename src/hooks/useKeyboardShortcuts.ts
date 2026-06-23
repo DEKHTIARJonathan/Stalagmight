@@ -159,6 +159,8 @@ const PLACEMENT_MODE_ALLOWED_SHORTCUTS: Set<ShortcutAction> = new Set([
   'fit_to_bounds',
   'zoom_in',
   'zoom_out',
+  // Quitting the app is global and must work in every mode (matches the menu Quit).
+  'quit',
 ]);
 
 /**
@@ -171,6 +173,8 @@ const FULLSCREEN_TABLE_ALLOWED_SHORTCUTS: Set<ShortcutAction> = new Set([
   'save',
   'undo',
   'redo',
+  // Quitting the app is global and must work in every mode (matches the menu Quit).
+  'quit',
 ]);
 
 /**
@@ -761,8 +765,9 @@ export function useKeyboardShortcuts() {
           if (useUIStore.getState().geometryMode === 'closureAdjusted') return;
           setProjectActionSource('keyboard');
           // Shared open/import routing (same as the toolbar Import + drag-drop).
-          // A project is open here, so the picker is scoped to DMP + GPX (the only
-          // formats importable into it); pickAndRoute dispatches by extension.
+          // A project is open here, so the picker is scoped to DMP only (the only
+          // format importable into an open project); pickAndRoute dispatches by
+          // extension and the router rejects a GPX dropped/typed while open.
           void pickAndRoute(
             importFiltersForContext(!!useProjectStore.getState().project),
             'Import Failed',

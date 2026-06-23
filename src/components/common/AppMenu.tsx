@@ -173,7 +173,9 @@ export function AppMenu({
   const activateLeaf = useCallback(
     (item: AppMenuItem) => {
       if (item.disabled) return;
-      closeMenu();
+      // Checkable rows (a toggle, e.g. "Dev Stats") stay open so the user can see
+      // the check flip and toggle repeatedly; plain action rows close the menu.
+      if (item.checked === undefined) closeMenu();
       item.onClick?.();
     },
     [closeMenu],

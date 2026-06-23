@@ -2,12 +2,12 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
-import { deferredSaveWarnings, surfaceImportWarnings } from '../../utils/saveFeedback';
+import { completeImportToSingleView, finalizeDeferredSaveWarnings } from '../../utils/saveFeedback';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { CompassFile, OrphanPlacementSuggestion } from '../../types/commands';
-import { setSource, trackDialogComplete } from '../../utils/telemetry';
+import { setSource } from '../../utils/telemetry';
 
 interface CompassImportDialogProps {
   compassFile: CompassFile;
@@ -50,15 +50,13 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
     // Applying -> Finalizing phase ticks from the backend ProgressEmitter.
     startLoading(compassFile.cave_name || fileName, filePath);
     setLoadingProgress({ phase: 'import_parsing' });
+    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
     try {
       const result = await executeCompassImport(filePath, fileHash, includeExcluded, applyCorrections, commentsOnStations);
       resetLoading();
 
       if (!result.success) {
-        trackDialogComplete('compass-import');
-        closeDialog();
-        setView('single');
-        triggerFitToBounds();
+        completeImportToSingleView('compass-import', importUi);
         openDialog('error', {
           title: 'Import Errors',
           message: result.error ?? 'Unknown error during import',
@@ -72,13 +70,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
       // Routine per-shot validation warnings (LONG_SHOT, …) also ride along on a
       // successful import but are surfaced via the data-table UI — they must not
       // modal here or skip orphan placement (#110).
-      const saveWarnings = deferredSaveWarnings(result.warnings);
-      if (saveWarnings.length > 0) {
-        trackDialogComplete('compass-import');
-        closeDialog();
-        setView('single');
-        triggerFitToBounds();
-        surfaceImportWarnings(saveWarnings, openDialog);
+      if (finalizeDeferredSaveWarnings(result.warnings, 'compass-import', importUi)) {
         return;
       }
 
@@ -100,10 +92,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
         }
       }
 
-      trackDialogComplete('compass-import');
-      closeDialog();
-      setView('single');
-      triggerFitToBounds();
+      completeImportToSingleView('compass-import', importUi);
     } catch (e) {
       resetLoading();
       setIsImporting(false);

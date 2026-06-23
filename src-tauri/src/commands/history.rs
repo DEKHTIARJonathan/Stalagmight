@@ -192,6 +192,24 @@ fn format_station_key_with_name(
     }
 }
 
+/// Truncate `s` to at most `max_chars` characters, appending an ellipsis only
+/// when characters were actually dropped. Counts by character (not byte) so the
+/// cut never lands inside a multi-byte UTF-8 codepoint — `&s[..n]` byte-slicing
+/// panics there — and so the gate and the cut use the same unit (a comment that
+/// is long in bytes but short in characters, e.g. emoji, is not falsely marked
+/// truncated).
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    let mut chars = s.chars();
+    let head: String = chars.by_ref().take(max_chars).collect();
+    // `chars` now sits just past the first `max_chars`; if anything remains, the
+    // string was longer than the limit and got cut, so flag it with an ellipsis.
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
 /// Derive a compact detail string from just the command data (for batch sub-commands).
 /// Returns None for commands where no useful details can be extracted from the command alone.
 fn derive_command_details(
@@ -260,11 +278,7 @@ fn derive_command_details(
         )),
         Command::SetStationComment { comment, .. } => match comment {
             Some(c) => {
-                let truncated = if c.len() > 50 {
-                    format!("{}…", &c[..47])
-                } else {
-                    c.clone()
-                };
+                let truncated = truncate_with_ellipsis(c, 50);
                 Some(format!("Comment: {truncated}"))
             }
             None => Some("(removed)".to_string()),
@@ -793,11 +807,7 @@ fn derive_preview_data(
         (Command::SetStationComment { comment, .. }, _) => {
             let (label, value) = match comment {
                 Some(c) => {
-                    let truncated = if c.len() > 80 {
-                        format!("{}…", &c[..77])
-                    } else {
-                        c.clone()
-                    };
+                    let truncated = truncate_with_ellipsis(c, 80);
                     ("Comment".to_string(), truncated)
                 }
                 None => ("Comment".to_string(), "(removed)".to_string()),
@@ -902,6 +912,45 @@ mod tests {
             }),
             "batch"
         );
+    }
+
+    #[test]
+    fn test_derive_command_details_multibyte_comment_no_panic() {
+        // Regression: a long station comment whose truncation boundary falls inside
+        // a multi-byte UTF-8 codepoint must not panic the undo/redo detail string
+        // (byte-slicing `&c[..n]` panicked mid-codepoint); char-based truncation
+        // keeps whole codepoints. 46 'a' + 5 'é' = 51 chars, genuinely over the
+        // 50-char cap, so it truncates and the ellipsis is real.
+        let comment = format!("{}ééééé", "a".repeat(46)); // 56 bytes, 51 chars
+        let details = derive_command_details(
+            &Command::SetStationComment {
+                station_ref: StationRef::new(0, 0),
+                comment: Some(comment),
+            },
+            &empty_names(),
+        )
+        .unwrap();
+        assert!(details.starts_with("Comment: "));
+        assert!(details.ends_with('…')); // 51 chars > 50 → genuinely truncated
+    }
+
+    #[test]
+    fn test_derive_command_details_short_multibyte_comment_not_truncated() {
+        // A comment that is long in BYTES but short in CHARACTERS (e.g. emoji) must
+        // not be flagged truncated: the gate and the cut both count characters, so a
+        // 13-char comment (52 bytes, over the old byte gate) keeps every char and
+        // gets no trailing ellipsis.
+        let comment = "🌀".repeat(13); // 52 bytes, 13 chars (<= 50)
+        let details = derive_command_details(
+            &Command::SetStationComment {
+                station_ref: StationRef::new(0, 0),
+                comment: Some(comment.clone()),
+            },
+            &empty_names(),
+        )
+        .unwrap();
+        assert_eq!(details, format!("Comment: {comment}"));
+        assert!(!details.ends_with('…')); // 13 chars → nothing dropped, no marker
     }
 
     #[test]

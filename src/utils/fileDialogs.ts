@@ -65,28 +65,27 @@ export function gpxOpenFilters() {
 }
 
 /**
- * Filters for importing into an already-open project: the only formats that can
- * be added to one (Ariane/Compass create new projects, so are excluded). No
- * "All Files" entry — with a project open the import must be DMP or GPX, so an
- * unrelated file (or a `.stalx` project) can't be picked and mis-routed.
+ * Filters for importing into an already-open project: DMP only. No "All Files"
+ * entry — so a `.stalx` project (or any unrelated file) can't be picked through
+ * an in-project import entry point and mis-routed by the open/import router into
+ * loadProject, replacing the open project. GPX and Ariane/Compass create new
+ * projects, so they aren't importable into an open one (the router rejects a GPX
+ * opened/dropped while a project is open); DMP is the only additive in-project
+ * import. Shared by the hamburger menu, the toolbar Import button, and Ctrl+I.
  */
-export function dmpGpxOpenFilters() {
-  return [
-    { name: 'Survey Files', extensions: [DMP_EXTENSION, GPX_EXTENSION] },
-    { name: 'mNemo DMP', extensions: [DMP_EXTENSION] },
-    { name: 'GPX Files', extensions: [GPX_EXTENSION] },
-  ];
+export function dmpImportFilters() {
+  return [{ name: 'mNemo DMP', extensions: [DMP_EXTENSION] }];
 }
 
 /**
- * Import picker filters scoped to context. With a project open, only DMP + GPX
- * import into it (restricted, no "All Files"). With no project open, any
- * importable survey format is offered plus "All Files" (so the unified router can
- * also open a native `.stalx` project picked through it — there is nothing to
- * replace).
+ * Import picker filters scoped to context. With a project open, only DMP imports
+ * into it (DMP-only, no "All Files" — so an unrelated file or a `.stalx` project
+ * can't be picked and mis-routed). With no project open, any importable survey
+ * format is offered plus "All Files" (so the unified router can also open a
+ * native `.stalx` project picked through it — there is nothing to replace).
  */
 export function importFiltersForContext(hasProject: boolean) {
-  return hasProject ? dmpGpxOpenFilters() : importOpenFilters();
+  return hasProject ? dmpImportFilters() : importOpenFilters();
 }
 
 export function importOpenFilters() {
