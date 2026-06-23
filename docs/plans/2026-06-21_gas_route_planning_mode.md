@@ -7,6 +7,12 @@
 > reality I've missed, re-rank the phases — and hand it back; I'll reconcile against the
 > code and keep the file:line seams honest. The phased plan at the bottom is the part that
 > becomes PRs.
+>
+> **⏸ Implementation hold (2026-06-23).** A Rust refactor is in flight on the other clone
+> (`~/src/Stalagmight`). **Planning continues; implementation waits** until it lands. The
+> file:line seams in §7/§12 are pinned pre-refactor — the design rides the *public* graph /
+> Dijkstra primitives so it should survive, but exact lines and the `build_survey_graph`
+> factoring may move, so every seam gets re-verified before any code is written.
 
 ---
 
@@ -454,6 +460,10 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
   frontier + turn point against a hand calc.
 
 ## 12. Critical seams (file:line)
+> ⚠ Lines pinned to `master` @ 2026-06-22 (**pre-refactor**). A Rust refactor is in flight on
+> the other clone — **re-verify every seam before implementing** (especially the graph/Dijkstra
+> code, which both the refactor and our weight-closure change touch).
+
 - `src-tauri/src/models/project.rs` — `build_survey_graph:7363`, `dijkstra:7426`,
   `compute_distances_from:7492`, `distance_field_from:7541` (factor the weight closure; add
   predecessors), `coords.z = compute_station_depth():3314`.
