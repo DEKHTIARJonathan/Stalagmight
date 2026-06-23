@@ -80,6 +80,7 @@ are later); multi-diver fan-out optimization (north star, §9).
 | Drop points | **Suggested *and* draggable-validated** — tool gives the gas-feasible envelope; diver places for landmark / environment / mission (§5.4) |
 | Survey reserve | **Total-thirds** invariant (movable across cylinders); **asymmetric** slow-in/fast-out gas; **not opinionated on survey** — show the thirds line, allow knowing over-penetration (§5.2) |
 | Plan persistence | **Ephemeral** — never written to the `.stalx` (.stalx = the *cave*; a plan is the *team/dive*). Personal *defaults* (RMV, tank presets, reserve preset) may live in **user config**, not the project. **Print-out** is a wishlist output (§9) |
+| UX | **Right panel** (inputs + readout) + central map (frontier / turn / drops); **frontier-first** flow; **gradient + hard turn-line**, push-headroom faint/opt-in (§7.3) |
 
 ---
 
@@ -441,6 +442,23 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
   (`formatPressure`/`formatVolume`/`formatRmv`, metric path first, conversion seam in place so
   imperial is a Phase-4 flip, never hardcoded suffixes at call sites); extend
   `settings/UnitsSettings.tsx` with a gas sub-section.
+
+### 7.3 UX — layout & interaction (Nico, 2026-06-23)
+
+Concretises the choices §7.2 left open:
+- **Layout: a dockable RIGHT panel** (mirrors `DetailPanel`) holding inputs (diver/RMV,
+  cylinders + roles, reserve preset, speeds, OC/CCR, team) **and** readout (turn pressure per
+  cylinder, penetration, bailout). The **map stays central** for the spatial layer — frontier
+  shading, turn-point ●, drop markers ▽. Enter/exit via a toolbar/`DisplayMenu` toggle + Esc;
+  reset through the `setView()` funnel.
+- **Flow: frontier-first.** On entry the diver's rig/RMV/reserve paint the **reachable frontier
+  immediately**; **clicking any station drills into** its turn / gas / bailout readout. No
+  target is required (§1 resurvey case) — selecting one just deepens the readout.
+- **Frontier viz: gradient + a hard turn-line.** Shade stations/shots by **gas-to-reach** (reuse
+  the distance-gradient feature-state infra → `utils/gasReach.ts`) **plus a distinct hard
+  turn-point boundary**. **Push-headroom** (§5.2) renders only as a **faint, opt-in extension**
+  beyond the thirds line — thirds is the visual primary (§6 automation-bias). `GasLegend`
+  mirrors `DistanceLegend`.
 
 ---
 
