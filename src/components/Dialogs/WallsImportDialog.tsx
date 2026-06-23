@@ -7,6 +7,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { WallsFile, OrphanPlacementSuggestion } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
+import { deferredSaveWarnings, surfaceImportWarnings } from '../../utils/saveFeedback';
 
 interface WallsImportDialogProps {
   wallsFile: WallsFile;
@@ -24,23 +25,40 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
   const [commentsOnStations, setCommentsOnStations] = useState(true);
   const [includeSplays, setIncludeSplays] = useState(false);
 
-  // Check for duplicate import on mount
+  // Re-check for a duplicate whenever the target file changes (the dialog may be
+  // reused for a different import); reset the gate so Import stays disabled until
+  // the new hash is verified, and ignore a stale in-flight result.
   useEffect(() => {
+    let cancelled = false;
+    setHashChecked(false);
     (async () => {
       try {
         const hash = await calculateFileHash(filePath);
+        if (cancelled) return;
         setFileHash(hash);
         const dup = await checkDuplicateImport(hash);
+        if (cancelled) return;
         setIsDuplicate(dup);
       } catch {
         // Non-fatal: proceed without duplicate detection
       }
-      setHashChecked(true);
+      if (!cancelled) setHashChecked(true);
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath, calculateFileHash, checkDuplicateImport]);
 
   const fileName = useMemo(() => extractFilename(filePath), [filePath]);
+
+  // Walls stores a negative .REF zone for the southern hemisphere; render it as
+  // "UTM 16 S" rather than the raw "UTM -16".
+  const projectionLabel = useMemo(() => {
+    if (!wallsFile.has_georeference) return '-';
+    const z = wallsFile.utm_zone;
+    const zoneLabel = z != null ? `${Math.abs(z)} ${z < 0 ? 'S' : 'N'}` : '';
+    return `UTM ${zoneLabel}${wallsFile.datum ? ` · ${wallsFile.datum}` : ''}`.trim();
+  }, [wallsFile.has_georeference, wallsFile.utm_zone, wallsFile.datum]);
 
   const handleImport = useCallback(async () => {
     setIsImporting(true);
@@ -59,6 +77,19 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
           title: 'Import Errors',
           message: result.error ?? 'Unknown error during import',
         });
+        return;
+      }
+
+      // A partial-success import (new-project deferred save failed) returns
+      // success WITH a "SYSTEM" save-failure warning. Surface ONLY that — before
+      // the optional orphan step — so "unsaved — save manually" isn't swallowed.
+      const saveWarnings = deferredSaveWarnings(result.warnings);
+      if (saveWarnings.length > 0) {
+        trackDialogComplete('walls-import');
+        closeDialog();
+        setView('single');
+        triggerFitToBounds();
+        surfaceImportWarnings(saveWarnings, openDialog);
         return;
       }
 
@@ -146,11 +177,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             <div className="text-xs text-text-tertiary" title="Projection reference from the .wpj .REF directive — the coordinate system, not a station anchor">
               Projection
             </div>
-            <div className="text-sm font-medium">
-              {wallsFile.has_georeference
-                ? `UTM ${wallsFile.utm_zone ?? ''}${wallsFile.datum ? ` · ${wallsFile.datum}` : ''}`.trim()
-                : '-'}
-            </div>
+            <div className="text-sm font-medium">{projectionLabel}</div>
           </div>
         </div>
         {wallsFile.has_georeference && wallsFile.fixed_station_count === 0 && (

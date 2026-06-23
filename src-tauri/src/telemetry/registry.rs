@@ -273,8 +273,10 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "undo-after.delete_shot",
     "undo-after.delete_shot_and_split",
     "undo-after.execute_batch",
+    "undo-after.execute_compass_import",
     "undo-after.execute_gpx_import",
     "undo-after.execute_tml_import",
+    "undo-after.execute_walls_import",
     "undo-after.import_sections",
     "undo-after.merge_stations",
     "undo-after.move_comment",
@@ -535,7 +537,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 401);
+        assert_eq!(EVENT_NAMES.len(), 403);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

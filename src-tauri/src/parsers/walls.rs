@@ -32,15 +32,14 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
 use crate::models::shot::ShotData;
 use crate::models::station::GpsCoordinates;
-
-const FEET_TO_METERS: f64 = 0.3048;
+use crate::parsers::geo::{non_empty, FEET_TO_METERS};
 
 /// Section colors cycled across imported sections (matches the app palette).
 const SECTION_COLORS: &[&str] = &[
@@ -203,8 +202,17 @@ struct WallsUnits {
     ab_unit: AngleUnit,
     v_unit: AngleUnit,
     vb_unit: AngleUnit,
-    decl: f64,
+    /// Explicit `Decl=` declination, degrees. `None` means unset — an explicit
+    /// `Decl=0` (`Some(0.0)`) suppresses auto-derivation, a bare `Decl=` clears
+    /// back to `None`.
+    decl: Option<f64>,
+    /// `#Units Grid=` grid convergence (degrees), subtracted from CT azimuths.
     grid: f64,
+    /// `#Units RECT=<azimuth>`: bearing of the rectangular frame's +N axis
+    /// (degrees), added to RECT vector bearings. Kept separate from `grid` so a
+    /// `RECT=<angle>` → `CT` switch can't leak the frame angle into CT
+    /// convergence (they are consumed with opposite signs).
+    rect: f64,
     incd: f64,
     inca: f64,
     incab: f64,
@@ -236,8 +244,9 @@ impl Default for WallsUnits {
             ab_unit: AngleUnit::Degrees,
             v_unit: AngleUnit::Degrees,
             vb_unit: AngleUnit::Degrees,
-            decl: 0.0,
+            decl: None,
             grid: 0.0,
+            rect: 0.0,
             incd: 0.0,
             inca: 0.0,
             incab: 0.0,
@@ -278,15 +287,13 @@ impl WallsUnits {
 // Georeference (.REF / #Fix)
 // ---------------------------------------------------------------------------
 
-/// A `.WPJ` `.REF` geographic reference (UTM origin + datum).
+/// A `.WPJ` `.REF` geographic reference (UTM zone/datum + lat-long origin).
+///
+/// The importer anchors on `#Fix` stations / the lat-long fields rather than the
+/// UTM origin offset, so the `.REF` northing/easting columns are validated but
+/// not retained.
 #[derive(Clone, Debug)]
 struct WallsRef {
-    /// UTM origin (meters) — retained for completeness; the importer anchors on
-    /// `#Fix` stations / the lat-long fields rather than the origin offset.
-    #[allow(dead_code)]
-    northing: f64,
-    #[allow(dead_code)]
-    easting: f64,
     zone: i32,
     convergence: f64,
     latitude: f64,
@@ -330,14 +337,28 @@ struct WallsVector {
     from_anon: bool,
     to_anon: bool,
     date: Option<NaiveDate>,
-    /// Declination (`Decl=`) in effect for this vector, degrees.
-    units_decl: f64,
+    /// Explicit declination (`Decl=`) in effect for this vector, degrees.
+    /// `None` when no explicit `Decl=` was set (auto-derive may apply).
+    units_decl: Option<f64>,
     /// `IncH=` vertical adjustment (meters) added to the vertical of non-plumb
     /// CT shots.
     inch: f64,
     grid_relative: bool,
+    /// `#Units Grid=` grid convergence (degrees) to subtract from a CT vector's
+    /// azimuth (true → grid north). `0.0` for RECT vectors, whose `RECT=<angle>`
+    /// frame rotation is baked into the computed bearing instead.
+    grid_convergence: f64,
     /// Auto-derive declination from `#Date` (`.STATUS` derive-declination flag).
     derive_decl: bool,
+    /// True for `#Units RECT` E/N/U vectors: the azimuth is already an absolute
+    /// grid bearing, so magnetic declination must NOT be applied at conversion
+    /// (only convergence, governed by `grid_relative`, may rotate it).
+    is_rect: bool,
+    /// `#Units LRUD=To`: the LRUD on this leg was measured at the TO station, not
+    /// the FROM station. In this shot-based model a station's passage rides on the
+    /// shot that leaves it, so a To-typed leg's LRUD is shifted onto the next shot
+    /// in the chain at conversion.
+    lrud_is_to: bool,
 }
 
 /// A fixed station with known coordinates (`#Fix`).
@@ -622,7 +643,16 @@ fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
             }
             ".STATUS" => {
                 if let Some(e) = pending.as_mut() {
-                    e.status = rest.trim().parse().unwrap_or(0);
+                    let raw = rest.trim();
+                    match raw.parse() {
+                        Ok(status) => e.status = status,
+                        // An unparseable .STATUS would otherwise default to 0,
+                        // which clears the DETACHED/TYPE_OTHER bits and imports an
+                        // entry the author excluded. Keep the default but surface it.
+                        Err(_) => warnings.push(format!(
+                            "Unparseable .STATUS '{raw}'; treating as 0 (entry may import unexpectedly)"
+                        )),
+                    }
                 }
             }
             ".OPTIONS" => {
@@ -780,13 +810,22 @@ fn parse_ref(line: &str) -> Result<WallsRef, String> {
     }
     // Fields: 0 N, 1 E, 2 zone, 3 convergence, 4 elev, 5 flags,
     // 6-8 lat d/m/s, 9-11 lon d/m/s, [12 datum index].
-    let flags = f[5] as u32;
+    // Validate the integer-coded fields BEFORE casting: an `f64 as i32/u32` cast
+    // saturates (negative → 0, huge → MAX), which would silently flip the
+    // hemisphere flags or pick the wrong UTM meridian. Reject out-of-range.
+    let zone_raw = f[2];
+    if zone_raw.fract() != 0.0 || !(1.0..=60.0).contains(&zone_raw.abs()) {
+        return Err(format!("invalid UTM zone '{zone_raw}'"));
+    }
+    let flags_raw = f[5];
+    if flags_raw.fract() != 0.0 || !(0.0..=65535.0).contains(&flags_raw) {
+        return Err(format!("invalid .REF flags field '{flags_raw}'"));
+    }
+    let flags = flags_raw as u32;
     let lat = dms(f[6], f[7], f[8]) * if flags & 0x08 != 0 { -1.0 } else { 1.0 };
     let lon = dms(f[9], f[10], f[11]) * if flags & 0x04 != 0 { -1.0 } else { 1.0 };
     Ok(WallsRef {
-        northing: f[0],
-        easting: f[1],
-        zone: f[2] as i32,
+        zone: zone_raw as i32,
         convergence: f[3],
         latitude: lat,
         longitude: lon,
@@ -815,7 +854,6 @@ fn build_initial_units(ctx: &WpjContext, warnings: &mut Vec<String>) -> WallsUni
 // ---------------------------------------------------------------------------
 
 /// Parse the contents of one `.SRV` file into normalized vectors.
-#[allow(clippy::too_many_arguments)]
 fn parse_srv_contents(
     contents: &str,
     title: &str,
@@ -838,8 +876,6 @@ fn parse_srv_contents(
 
     let mut vectors: Vec<WallsVector> = Vec::new();
     let mut fixes: Vec<WallsFix> = Vec::new();
-
-    let grid_rel = grid_relative;
 
     for (line_no, raw) in contents.lines().enumerate() {
         let line = raw.trim_end_matches(['\r', '\n']);
@@ -908,22 +944,11 @@ fn parse_srv_contents(
                 continue;
             }
         };
-        if let Some(vec) = parse_vector_line(
-            &expanded,
-            &units,
-            &segment,
-            date,
-            grid_rel,
-            derive_decl,
-            name,
-            line_no + 1,
-            warnings,
-        ) {
+        if let Some(vec) = parse_vector_line(&expanded, &units, date, grid_relative, derive_decl) {
             vectors.push(vec);
         }
     }
 
-    let resolved = true;
     let survey_date = vectors.iter().find_map(|v| v.date).or(date);
     ParsedSurvey {
         title: title.to_string(),
@@ -934,7 +959,9 @@ fn parse_srv_contents(
         vectors,
         fixes,
         georef,
-        resolved,
+        // A parsed survey is resolved by construction; the unresolved
+        // placeholder is built directly in `parse_wpj`.
+        resolved: true,
     }
 }
 
@@ -951,7 +978,6 @@ fn extract_team(comment: &str) -> Option<String> {
     None
 }
 
-#[allow(clippy::too_many_arguments)]
 fn handle_directive(
     line: &str,
     units: &mut WallsUnits,
@@ -987,7 +1013,7 @@ fn handle_directive(
         "prefix2" => set_prefix(units, 1, rest.trim()),
         "prefix3" => set_prefix(units, 2, rest.trim()),
         "fix" => {
-            if let Some(fix) = parse_fix(rest, units, georef) {
+            if let Some(fix) = parse_fix(rest, units, georef, warnings) {
                 fixes.push(fix);
             }
         }
@@ -1029,6 +1055,31 @@ fn apply_units_options(
     }
 }
 
+/// Parse a numeric `#Units` correction argument. A bare/empty value resets the
+/// correction to `0`; a non-empty value that fails to parse leaves the current
+/// correction UNCHANGED and records a warning, rather than silently zeroing a
+/// real instrument correction.
+fn parse_correction(
+    value: Option<&str>,
+    current: f64,
+    key: &str,
+    warnings: &mut Vec<String>,
+    parse: impl Fn(&str) -> Option<f64>,
+) -> f64 {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        None => 0.0,
+        Some(v) => match parse(v) {
+            Some(x) => x,
+            None => {
+                warnings.push(format!(
+                    "Unparseable #Units {key}='{v}'; correction left unchanged"
+                ));
+                current
+            }
+        },
+    }
+}
+
 fn apply_units_option(
     units: &mut WallsUnits,
     key: &str,
@@ -1062,17 +1113,23 @@ fn apply_units_option(
             units.s_unit = LengthUnit::Feet;
         }
         "ct" => units.vector_type = VectorType::Ct,
-        "rect" => match value {
-            None => {
-                units.vector_type = VectorType::Rect;
-                units.order = vec![OrderElem::East, OrderElem::North, OrderElem::Up];
+        "rect" => {
+            // `Rect` (or `Rect=<azimuth>`) switches to rectangular E/N/U vectors;
+            // the optional value is the bearing of the +N (Y) axis, i.e. the grid
+            // rotation applied to the computed bearing at conversion.
+            units.vector_type = VectorType::Rect;
+            units.order = vec![OrderElem::East, OrderElem::North, OrderElem::Up];
+            if let Some(v) = value {
+                units.rect = parse_signed_angle(v).unwrap_or(units.rect);
             }
-            Some(v) => units.grid = parse_signed_angle(v).unwrap_or(units.grid), // Rect=<angle>
-        },
+        }
         "order" | "o" => {
             if let Some(v) = value {
-                if let Some(order) = parse_order(v) {
-                    units.order = order;
+                match parse_order(v) {
+                    Some(order) => units.order = order,
+                    None => warnings.push(format!(
+                        "Ignoring unparseable #Units Order='{v}'; keeping the previous order"
+                    )),
                 }
             }
         }
@@ -1121,40 +1178,61 @@ fn apply_units_option(
                 units.vb_unit = u;
             }
         }
-        "decl" => units.decl = value.and_then(parse_signed_angle).unwrap_or(0.0),
-        "grid" => units.grid = value.and_then(parse_signed_angle).unwrap_or(0.0),
+        // `Decl=<angle>` sets an explicit declination — including an explicit
+        // `Decl=0`, which declares the azimuths already true/grid and suppresses
+        // auto-derivation. A bare `Decl=` / `Decl` clears it back to the default
+        // (derive when the .STATUS flag is on).
+        "decl" => match value.map(str::trim).filter(|v| !v.is_empty()) {
+            None => units.decl = None,
+            Some(v) => match parse_signed_angle(v) {
+                Some(d) => units.decl = Some(d),
+                // Do NOT fabricate an explicit `Decl=0` on a parse error: that
+                // would wrongly suppress IGRF auto-derivation. Warn and keep the
+                // current declination state instead.
+                None => warnings.push(format!(
+                    "Unparseable #Units Decl='{v}'; declination left unchanged"
+                )),
+            },
+        },
+        "grid" => {
+            units.grid = parse_correction(value, units.grid, "Grid", warnings, parse_signed_angle);
+        }
         "incd" => {
-            units.incd = value
-                .and_then(|v| parse_length(v, units.d_unit))
-                .unwrap_or(0.0)
+            let u = units.d_unit;
+            units.incd =
+                parse_correction(value, units.incd, "IncD", warnings, |v| parse_length(v, u));
         }
         // Azimuth/inclination corrections carry the current instrument's angle
         // unit (a bare `IncV=2` under `V=Grads` means 2 grads).
         "inca" => {
             let u = units.a_unit;
-            units.inca = value.and_then(|v| parse_angle(v, u)).unwrap_or(0.0);
+            units.inca =
+                parse_correction(value, units.inca, "IncA", warnings, |v| parse_angle(v, u));
         }
         "incab" => {
             let u = units.ab_unit;
-            units.incab = value.and_then(|v| parse_angle(v, u)).unwrap_or(0.0);
+            units.incab =
+                parse_correction(value, units.incab, "IncAB", warnings, |v| parse_angle(v, u));
         }
         "incv" => {
             let u = units.v_unit;
-            units.incv = value.and_then(|v| parse_angle(v, u)).unwrap_or(0.0);
+            units.incv =
+                parse_correction(value, units.incv, "IncV", warnings, |v| parse_angle(v, u));
         }
         "incvb" => {
             let u = units.vb_unit;
-            units.incvb = value.and_then(|v| parse_angle(v, u)).unwrap_or(0.0);
+            units.incvb =
+                parse_correction(value, units.incvb, "IncVB", warnings, |v| parse_angle(v, u));
         }
         "incs" => {
-            units.incs = value
-                .and_then(|v| parse_length(v, units.s_unit))
-                .unwrap_or(0.0)
+            let u = units.s_unit;
+            units.incs =
+                parse_correction(value, units.incs, "IncS", warnings, |v| parse_length(v, u));
         }
         "inch" => {
-            units.inch = value
-                .and_then(|v| parse_length(v, units.d_unit))
-                .unwrap_or(0.0)
+            let u = units.d_unit;
+            units.inch =
+                parse_correction(value, units.inch, "IncH", warnings, |v| parse_length(v, u));
         }
         "typeab" => apply_type_backsight(
             value,
@@ -1173,8 +1251,8 @@ fn apply_units_option(
                 _ => Case::Mixed,
             }
         }
-        "lrud" => apply_lrud_option(units, value),
-        "tape" => apply_tape_option(units, value),
+        "lrud" => apply_lrud_option(units, value, warnings),
+        "tape" => apply_tape_option(units, value, warnings),
         "prefix" | "prefix1" => set_prefix(units, 0, value.unwrap_or("")),
         "prefix2" => set_prefix(units, 1, value.unwrap_or("")),
         "prefix3" => set_prefix(units, 2, value.unwrap_or("")),
@@ -1215,7 +1293,7 @@ fn apply_type_backsight(value: Option<&str>, corrected: &mut bool, no_avg: &mut 
     }
 }
 
-fn apply_lrud_option(units: &mut WallsUnits, value: Option<&str>) {
+fn apply_lrud_option(units: &mut WallsUnits, value: Option<&str>, warnings: &mut Vec<String>) {
     let Some(v) = value else { return };
     let (kind, order) = match v.split_once(':') {
         Some((k, o)) => (k, Some(o)),
@@ -1229,22 +1307,34 @@ fn apply_lrud_option(units: &mut WallsUnits, value: Option<&str>) {
         let chars: Vec<char> = o.chars().map(|c| c.to_ascii_uppercase()).collect();
         if chars.len() == 4 && chars.iter().all(|c| "LRUD".contains(*c)) {
             units.lrud_order = [chars[0], chars[1], chars[2], chars[3]];
+        } else {
+            warnings.push(format!(
+                "Ignoring #Units LRUD order '{o}' (expected 4 of L, R, U, D); keeping LRUD"
+            ));
         }
     }
 }
 
-fn apply_tape_option(units: &mut WallsUnits, value: Option<&str>) {
+fn apply_tape_option(units: &mut WallsUnits, value: Option<&str>, warnings: &mut Vec<String>) {
     let Some(v) = value else { return };
     let chars: Vec<char> = v.chars().map(|c| c.to_ascii_uppercase()).collect();
     let end = |c: char| match c {
-        'I' => TapeEnd::Instrument,
-        'S' => TapeEnd::Station,
-        'T' => TapeEnd::Target,
-        _ => TapeEnd::Instrument,
+        'I' => Some(TapeEnd::Instrument),
+        'S' => Some(TapeEnd::Station),
+        'T' => Some(TapeEnd::Target),
+        _ => None,
     };
-    if chars.len() >= 2 {
-        units.tape_from = end(chars[0]);
-        units.tape_to = end(chars[1]);
+    match (
+        chars.first().copied().and_then(end),
+        chars.get(1).copied().and_then(end),
+    ) {
+        (Some(from), Some(to)) => {
+            units.tape_from = from;
+            units.tape_to = to;
+        }
+        _ => warnings.push(format!(
+            "Ignoring #Units Tape='{v}' (expected two of I/S/T, e.g. Tape=SS)"
+        )),
     }
 }
 
@@ -1293,19 +1383,13 @@ fn apply_segment(segment: &mut String, arg: &str) {
 // Vector line parsing
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
 fn parse_vector_line(
     line: &str,
     units: &WallsUnits,
-    segment: &str,
     date: Option<NaiveDate>,
     grid_relative: bool,
     derive_decl: bool,
-    name: &str,
-    line_no: usize,
-    warnings: &mut Vec<String>,
 ) -> Option<WallsVector> {
-    let _ = segment;
     // Split off the comment (everything after the first ';').
     let (body, comment) = match line.find(';') {
         Some(pos) => (&line[..pos], non_empty(&line[pos + 1..])),
@@ -1352,7 +1436,7 @@ fn parse_vector_line(
                 az = parse_fsbs(tok, units.a_unit, units.ab_unit);
             }
             OrderElem::Inc => {
-                inc = parse_fsbs_incl(tok, units.v_unit, units.vb_unit);
+                inc = parse_fsbs(tok, units.v_unit, units.vb_unit);
             }
             OrderElem::East => east = parse_length(tok, units.d_unit).unwrap_or(0.0),
             OrderElem::North => north = parse_length(tok, units.d_unit).unwrap_or(0.0),
@@ -1367,15 +1451,25 @@ fn parse_vector_line(
         if length <= 0.0 {
             return None;
         }
-        let azimuth_deg = east.atan2(north).to_degrees().rem_euclid(360.0);
+        // `#Units RECT=<angle>` rotates the rectangular E/N frame clockwise from
+        // true north; apply it to the computed bearing here (declination is then
+        // skipped at conversion, while `.REF`/`#Units Grid=` convergence still
+        // applies). A pure-vertical RECT shot (E=N=0) has no defined bearing, so
+        // leave the azimuth unset rather than recording a spurious 0° (due north).
+        let azimuth_deg = if horiz < 1e-9 {
+            None
+        } else {
+            Some((east.atan2(north).to_degrees() + units.rect).rem_euclid(360.0))
+        };
+        let inc_up = up_rect.atan2(horiz).to_degrees();
         return Some(WallsVector {
             from,
             to,
             length_m: length,
-            azimuth_in: Some(azimuth_deg),
-            azimuth_out: Some(azimuth_deg),
-            inc_deg: Some(up_rect.atan2(horiz).to_degrees()),
-            pitch_in: Some(-up_rect.atan2(horiz).to_degrees()),
+            azimuth_in: azimuth_deg,
+            azimuth_out: azimuth_deg,
+            inc_deg: Some(inc_up),
+            pitch_in: Some(-inc_up),
             pitch_out: None,
             from_depth: None,
             to_depth: None,
@@ -1392,7 +1486,13 @@ fn parse_vector_line(
             units_decl: units.decl,
             inch: 0.0,
             grid_relative,
+            // `#Units Grid=` convergence rotates true→grid north for ALL vectors,
+            // CT and RECT alike; the RECT frame angle (`units.rect`) is a separate
+            // rotation already baked into the bearing above.
+            grid_convergence: units.grid,
             derive_decl,
+            is_rect: true,
+            lrud_is_to: units.lrud_type == LrudType::To,
         });
     }
 
@@ -1407,12 +1507,11 @@ fn parse_vector_line(
         }
         if let Some(tok) = meas.get(cursor) {
             to_depth = parse_depth(tok, units.s_unit);
-            cursor += 1;
         }
     }
-    let _ = cursor;
 
-    let length_m = length_m.unwrap_or(0.0) + if length_m.is_some() { units.incd } else { 0.0 };
+    // Apply the `IncD=` distance correction only when a distance was given.
+    let length_m = length_m.map(|d| d + units.incd).unwrap_or(0.0);
 
     // Combine foresight/backsight azimuth into two forward readings.
     let (azimuth_in, azimuth_out) = combine_azimuth(&az, units);
@@ -1430,7 +1529,10 @@ fn parse_vector_line(
         .map(|l| parse_lrud(l, units))
         .unwrap_or((None, None, None, None));
 
-    let is_reference = from_anon || to_anon || extracted.floated;
+    // A floated/`(?)` variance is a network-adjustment hint on a REAL measured
+    // leg — it does not make the shot a splay, so it must not be dropped by the
+    // splay filter. Only anonymous (`-`) wall endpoints are splays.
+    let is_reference = from_anon || to_anon;
 
     // Pure station-equate (no distance, no depth) — skip.
     if length_m <= 0.0 && from_depth.is_none() && to_depth.is_none() && az.fs.is_none() {
@@ -1438,8 +1540,6 @@ fn parse_vector_line(
             return None;
         }
     }
-
-    let _ = (name, line_no, warnings);
 
     Some(WallsVector {
         from,
@@ -1467,7 +1567,12 @@ fn parse_vector_line(
         // their vertical from the depth gauges, so it never applies there.
         inch: if is_dive { 0.0 } else { units.inch },
         grid_relative,
+        // `#Units Grid=` convergence applies to CT azimuths (dive shots take it
+        // too); RECT vectors apply it the same way on top of their frame rotation.
+        grid_convergence: units.grid,
         derive_decl,
+        is_rect: false,
+        lrud_is_to: units.lrud_type == LrudType::To,
     })
 }
 
@@ -1480,7 +1585,6 @@ struct FsBs {
 struct ExtractedSpans {
     tokens: Vec<String>,
     lrud: Option<String>,
-    floated: bool,
 }
 
 /// Walk a vector line body, pulling out `<...>`/`*...*` (LRUD) and `(...)`
@@ -1489,7 +1593,6 @@ fn extract_spans(body: &str) -> ExtractedSpans {
     let mut tokens: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut lrud: Option<String> = None;
-    let mut floated = false;
     let mut chars = body.chars().peekable();
 
     let flush = |current: &mut String, tokens: &mut Vec<String>| {
@@ -1530,16 +1633,14 @@ fn extract_spans(body: &str) -> ExtractedSpans {
                 lrud = Some(span);
             }
             '(' => {
+                // Variance override `(...)` — consume and discard. We don't
+                // model per-shot variance, and a floated `(?)` variance does
+                // NOT turn a real measured leg into a splay.
                 flush(&mut current, &mut tokens);
-                let mut span = String::new();
                 for d in chars.by_ref() {
                     if d == ')' {
                         break;
                     }
-                    span.push(d);
-                }
-                if span.contains('?') || span.contains('*') {
-                    floated = true;
                 }
             }
             other => current.push(other),
@@ -1547,11 +1648,7 @@ fn extract_spans(body: &str) -> ExtractedSpans {
     }
     flush(&mut current, &mut tokens);
 
-    ExtractedSpans {
-        tokens,
-        lrud,
-        floated,
-    }
+    ExtractedSpans { tokens, lrud }
 }
 
 /// Combine an azimuth fs/bs pair into two forward-direction degree readings.
@@ -1634,37 +1731,70 @@ fn parse_lrud(
 // #Fix parsing
 // ---------------------------------------------------------------------------
 
-fn parse_fix(rest: &str, units: &WallsUnits, georef: &Option<WallsRef>) -> Option<WallsFix> {
+fn parse_fix(
+    rest: &str,
+    units: &WallsUnits,
+    georef: &Option<WallsRef>,
+    warnings: &mut Vec<String>,
+) -> Option<WallsFix> {
     // #Fix <name> <E> <N> <U> [(var)] [/note] [#seg]
-    let extracted = extract_spans(rest);
+    // Strip a trailing `;` comment before tokenizing (the vector path does the
+    // same); otherwise `467427 2258942;datum` swallows the northing token.
+    let body = match rest.find(';') {
+        Some(pos) => &rest[..pos],
+        None => rest,
+    };
+    let extracted = extract_spans(body);
     let tokens = extracted.tokens;
     if tokens.is_empty() {
         return None;
     }
     let name = normalize_station(&tokens[0], units);
     let coords = &tokens[1..];
-    // Read up to three coordinates in `order` (default ENU). Each is a length
-    // or an N/S/E/W-prefixed geographic angle.
+    // `#Fix` columns are E/N/U coordinates, independent of the vector
+    // measurement `Order=` (a dive survey's `Order=DA` must NOT truncate the
+    // elevation column). Honor an explicit rectangular order if one is set,
+    // otherwise default to E, N, U. Each column is a length or an N/S/E/W-
+    // prefixed geographic angle.
+    const ENU: [OrderElem; 3] = [OrderElem::East, OrderElem::North, OrderElem::Up];
+    let coord_order: &[OrderElem] = if units
+        .order
+        .iter()
+        .any(|e| matches!(e, OrderElem::East | OrderElem::North | OrderElem::Up))
+    {
+        &units.order
+    } else {
+        &ENU
+    };
     let mut east_val: Option<f64> = None;
     let mut north_val: Option<f64> = None;
     let mut up_val: Option<f64> = None;
     let mut lat: Option<f64> = None;
     let mut lon: Option<f64> = None;
     let mut idx = 0usize;
-    for elem in &units.order {
+    for elem in coord_order {
         let Some(tok) = coords.get(idx) else { break };
         idx += 1;
         match elem {
             OrderElem::East | OrderElem::Dist => {
-                if let Some(geo) = parse_geo_coord(tok) {
-                    lon = Some(geo);
+                // Place a geographic coordinate by the N/S/E/W prefix it carries,
+                // not by the column, so a fix written latitude-first still
+                // resolves correctly. A plain number is a UTM easting.
+                if let Some((axis, geo)) = parse_geo_coord(tok) {
+                    match axis {
+                        GeoAxis::Lat => lat = Some(geo),
+                        GeoAxis::Lon => lon = Some(geo),
+                    }
                 } else {
                     east_val = parse_length(tok, units.d_unit);
                 }
             }
             OrderElem::North | OrderElem::Azm => {
-                if let Some(geo) = parse_geo_coord(tok) {
-                    lat = Some(geo);
+                if let Some((axis, geo)) = parse_geo_coord(tok) {
+                    match axis {
+                        GeoAxis::Lat => lat = Some(geo),
+                        GeoAxis::Lon => lon = Some(geo),
+                    }
                 } else {
                     north_val = parse_length(tok, units.d_unit);
                 }
@@ -1678,7 +1808,16 @@ fn parse_fix(rest: &str, units: &WallsUnits, georef: &Option<WallsRef>) -> Optio
     let lat_long = match (lat, lon) {
         (Some(la), Some(lo)) => Some((la, lo)),
         _ => match (east_val, north_val, georef) {
-            (Some(e), Some(n), Some(r)) => utm_to_wgs84(e, n, r.zone, &r.datum),
+            (Some(e), Some(n), Some(r)) => {
+                if !r.datum.trim().is_empty() && !datum_recognized(&r.datum) {
+                    warnings.push(format!(
+                        "#Fix '{name}': datum '{}' is not recognized; UTM coordinates were \
+                         projected as WGS84 and may be off by tens of meters.",
+                        r.datum
+                    ));
+                }
+                utm_to_wgs84(e, n, r.zone, &r.datum)
+            }
             _ => None,
         },
     };
@@ -1690,16 +1829,29 @@ fn parse_fix(rest: &str, units: &WallsUnits, georef: &Option<WallsRef>) -> Optio
     })
 }
 
-/// Parse a geographic coordinate token like `W97:43:52.5` / `N31:16:45`.
-fn parse_geo_coord(tok: &str) -> Option<f64> {
+/// Which geographic axis an `N/S/E/W`-prefixed `#Fix` coordinate names.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GeoAxis {
+    Lat,
+    Lon,
+}
+
+/// Parse a geographic coordinate token like `W97:43:52.5` / `N31:16:45`,
+/// returning the axis (lat/long) named by the prefix so the caller can place it
+/// correctly regardless of column order.
+fn parse_geo_coord(tok: &str) -> Option<(GeoAxis, f64)> {
     let first = tok.chars().next()?;
-    let (sign, rest) = match first.to_ascii_uppercase() {
-        'N' | 'E' => (1.0, &tok[1..]),
-        'S' | 'W' => (-1.0, &tok[1..]),
+    let (axis, sign) = match first.to_ascii_uppercase() {
+        'N' => (GeoAxis::Lat, 1.0),
+        'S' => (GeoAxis::Lat, -1.0),
+        'E' => (GeoAxis::Lon, 1.0),
+        'W' => (GeoAxis::Lon, -1.0),
         _ => return None,
     };
-    let deg = parse_dms(rest)?;
-    Some(sign * deg.abs())
+    // The matched prefix is ASCII, so byte index 1 is a char boundary even for
+    // Latin-1-decoded (multibyte) text.
+    let deg = parse_dms(&tok[1..])?;
+    Some((axis, sign * deg.abs()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1712,15 +1864,6 @@ fn is_omitted(tok: &str) -> bool {
 
 fn is_anonymous(tok: &str) -> bool {
     tok == "-"
-}
-
-fn non_empty(s: &str) -> Option<String> {
-    let t = s.trim();
-    if t.is_empty() {
-        None
-    } else {
-        Some(t.to_string())
-    }
 }
 
 fn unquote(s: &str) -> &str {
@@ -1829,7 +1972,12 @@ fn parse_length(tok: &str, default: LengthUnit) -> Option<f64> {
         } else {
             inches_str.parse().ok()?
         };
-        let m = (feet + inches / 12.0) * FEET_TO_METERS;
+        // A leading '-' applies to the whole feet-and-inches measurement, so
+        // the inches must inherit the feet token's sign (`-2i6` = −2 ft 6 in,
+        // `-0i7` = −7 in). Adding `inches` with a fixed positive sign would
+        // flip `-0iN` and under-count `-FiI`.
+        let sign = if t.starts_with('-') { -1.0 } else { 1.0 };
+        let m = sign * (feet.abs() + inches / 12.0) * FEET_TO_METERS;
         return m.is_finite().then_some(m);
     }
     let (num_str, unit) = split_unit_suffix(t, &['m', 'M', 'f', 'F']);
@@ -1853,12 +2001,49 @@ fn parse_depth(tok: &str, default: LengthUnit) -> Option<f64> {
     parse_length(tok, default)
 }
 
-/// Parse an angle token (degrees) with optional `d`/`g`/`m`/`p` suffix or
-/// `D:M:S` form.
+/// Parse a Walls quadrant bearing (`N79E`, `S30W`, `N12:30E`) into an absolute
+/// azimuth in degrees. The magnitude is measured off the N/S meridian toward
+/// E/W and carries the azimuth `unit`. Returns `None` for non-quadrant tokens.
+fn parse_quadrant(t: &str, unit: AngleUnit) -> Option<f64> {
+    let first = t.chars().next()?.to_ascii_uppercase();
+    let last = t.chars().next_back()?.to_ascii_uppercase();
+    if !matches!(first, 'N' | 'S') || !matches!(last, 'E' | 'W') {
+        return None;
+    }
+    // N/S/E/W are single-byte ASCII, so trimming the ends by byte index is safe.
+    let mid = t[1..t.len() - 1].trim();
+    if mid.is_empty() {
+        return None;
+    }
+    let mag = if mid.contains(':') {
+        parse_dms(mid)?
+    } else {
+        unit.to_degrees(mid.parse::<f64>().ok()?)
+    };
+    if !mag.is_finite() {
+        return None;
+    }
+    let az = match (first, last) {
+        ('N', 'E') => mag,
+        ('N', 'W') => 360.0 - mag,
+        ('S', 'E') => 180.0 - mag,
+        ('S', 'W') => 180.0 + mag,
+        _ => return None,
+    };
+    Some(az.rem_euclid(360.0))
+}
+
+/// Parse an angle token (degrees) with optional `d`/`g`/`m`/`p` suffix, a
+/// quadrant bearing, or `D:M:S` form.
 fn parse_angle(tok: &str, default: AngleUnit) -> Option<f64> {
     let t = tok.trim();
     if t.is_empty() || is_omitted(t) {
         return None;
+    }
+    // Quadrant bearings (`N79E`) must be tried before the `:` / numeric paths
+    // so `N12:30E` isn't misread as a bare D:M:S value.
+    if let Some(az) = parse_quadrant(t, default) {
+        return Some(az);
     }
     if t.contains(':') {
         return parse_dms(t);
@@ -1896,7 +2081,9 @@ fn parse_dms(t: &str) -> Option<f64> {
     if !d.is_finite() || !m.is_finite() || !s.is_finite() {
         return None;
     }
-    let val = d.abs() + m / 60.0 + s / 3600.0;
+    // `body` is sign-stripped, so `dms` sees non-negative degrees and returns the
+    // magnitude; apply the leading-sign here. Shares the one D:M:S formula.
+    let val = dms(d, m, s);
     Some(if neg { -val } else { val })
 }
 
@@ -1925,18 +2112,29 @@ fn parse_fsbs(tok: &str, fs_unit: AngleUnit, bs_unit: AngleUnit) -> FsBs {
     }
 }
 
-fn parse_fsbs_incl(tok: &str, fs_unit: AngleUnit, bs_unit: AngleUnit) -> FsBs {
-    parse_fsbs(tok, fs_unit, bs_unit)
-}
-
 fn parse_walls_date(s: &str) -> Option<NaiveDate> {
     let s = s.trim();
     if s.is_empty() {
         return None;
     }
-    for fmt in [
-        "%Y-%m-%d", "%Y/%m/%d", "%m-%d-%Y", "%m/%d/%Y", "%m-%d-%y", "%m/%d/%y",
-    ] {
+    // Walls writes ISO `YYYY-MM-DD` (and `/`) plus US `MM-DD-YYYY` and 2-digit
+    // `MM-DD-YY`. chrono's `%Y` greedily matches a 2-digit leading field, so the
+    // ISO formats can NOT be tried first: `05/07/17` (May 7 2017) would wrongly
+    // parse as year 0005. Disambiguate by field widths: a 4-digit FIRST field is
+    // year-first (ISO); otherwise it is month-first, and a 4- vs 2-digit LAST
+    // field selects `%Y` vs `%y` (chrono maps `%y` 00–69 → 2000–2069, 70–99 →
+    // 1970–1999).
+    let parts: Vec<&str> = s.split(['-', '/']).map(str::trim).collect();
+    let first_len = parts.first().map_or(0, |f| f.len());
+    let last_len = parts.last().map_or(0, |f| f.len());
+    let formats: &[&str] = if first_len == 4 {
+        &["%Y-%m-%d", "%Y/%m/%d"]
+    } else if last_len == 4 {
+        &["%m-%d-%Y", "%m/%d/%Y"]
+    } else {
+        &["%m-%d-%y", "%m/%d/%y"]
+    };
+    for fmt in formats {
         if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
             return Some(d);
         }
@@ -2018,16 +2216,11 @@ fn expand_macros(line: &str, macros: &HashMap<String, String>) -> Result<String,
 
 fn utm_to_wgs84(easting: f64, northing: f64, zone: i32, datum: &str) -> Option<(f64, f64)> {
     let token = datum_proj_token(datum);
-    let south = if zone < 0 { " +south" } else { "" };
-    let zone = zone.unsigned_abs();
-    let to = proj4rs::Proj::from_proj_string("+proj=longlat +datum=WGS84 +no_defs").ok()?;
-    let from = proj4rs::Proj::from_proj_string(&format!(
-        "+proj=utm +zone={zone}{south} +{token} +units=m +no_defs"
-    ))
-    .ok()?;
-    let (lon, lat, _) =
-        proj4rs::adaptors::transform_xyz(&from, &to, easting, northing, 0.0).ok()?;
-    Some((lat.to_degrees(), lon.to_degrees()))
+    // Walls's `.REF` encodes a negative zone for the southern hemisphere.
+    // `project_utm` returns (lon, lat); this importer carries (lat, lon).
+    let (lon, lat) =
+        crate::parsers::geo::project_utm(easting, northing, zone.unsigned_abs(), zone < 0, &token)?;
+    Some((lat, lon))
 }
 
 fn datum_proj_token(datum: &str) -> String {
@@ -2036,31 +2229,65 @@ fn datum_proj_token(datum: &str) -> String {
         "datum=NAD83".to_string()
     } else if upper.contains("NAD27") || upper.contains("NAD 27") {
         "datum=NAD27".to_string()
-    } else if upper.contains("WGS72") {
+    } else if upper.contains("WGS72") || upper.contains("WGS 72") {
         "ellps=WGS72".to_string()
     } else {
         "datum=WGS84".to_string()
     }
 }
 
+/// Whether `datum_proj_token` maps this datum to a specific projection rather
+/// than the WGS84 fallback. Used to warn when an unusual datum is silently
+/// approximated as WGS84.
+fn datum_recognized(datum: &str) -> bool {
+    let upper = datum.to_ascii_uppercase();
+    [
+        "NAD83", "NAD 83", "NAD27", "NAD 27", "WGS72", "WGS 72", "WGS84", "WGS 84",
+    ]
+    .iter()
+    .any(|tag| upper.contains(tag))
+}
+
 // ---------------------------------------------------------------------------
 // Preview
 // ---------------------------------------------------------------------------
 
+/// Whether a parsed vector becomes an imported shot. This is the single source
+/// of truth for the keep/skip filter in `convert_walls_to_import_configs` and the
+/// shot counts in `build_preview`, so the preview can never overstate the import.
+/// `include_splays` controls whether anonymous wall-point (`-`) splay legs count.
+fn is_importable_shot(v: &WallsVector, include_splays: bool) -> bool {
+    if v.is_reference && !include_splays {
+        return false;
+    }
+    // Dive legs are valid with a real depth change even at zero tape; a
+    // zero-length non-dive leg that still carries a bearing is a coincident-
+    // station tie worth keeping; every other zero-length leg is a degenerate
+    // equate and is dropped.
+    let depth_delta = match (v.from_depth, v.to_depth) {
+        (Some(fd), Some(td)) => (td - fd).abs(),
+        _ => 0.0,
+    };
+    let bearing_tie = !v.is_depth_gauge && v.azimuth_in.is_some();
+    !(v.length_m <= 0.0 && !(v.is_depth_gauge && depth_delta > 0.0) && !bearing_tie)
+}
+
 /// Build the import-dialog preview from parsed data.
 pub fn build_preview(parsed: &ParsedWalls) -> WallsFile {
+    // Count shots the import would ACTUALLY produce under the default options
+    // (splays excluded), not the raw vector count — otherwise the preview
+    // overstates a file of splays/equates that converts to nothing.
     let shot_count = parsed
         .surveys
         .iter()
-        .map(|s| s.vectors.len())
-        .sum::<usize>() as u32;
-    let resolved_survey_count = parsed.surveys.iter().filter(|s| s.resolved).count() as u32;
-    let fixed_station_count = parsed
-        .surveys
-        .iter()
-        .flat_map(|s| s.fixes.iter())
-        .filter(|f| f.lat_long.is_some())
+        .flat_map(|s| s.vectors.iter())
+        .filter(|v| is_importable_shot(v, false))
         .count() as u32;
+    let resolved_survey_count = parsed.surveys.iter().filter(|s| s.resolved).count() as u32;
+    // DISTINCT geographic `#Fix` stations the import would actually anchor on.
+    // Reuse `resolve_anchors` (the importer's own logic) as the single source of
+    // truth so the preview count can never drift from the anchors created.
+    let fixed_station_count = resolve_anchors(parsed, &mut Vec::new()).len() as u32;
     let surveys = parsed
         .surveys
         .iter()
@@ -2069,7 +2296,11 @@ pub fn build_preview(parsed: &ParsedWalls) -> WallsFile {
             title: s.title.clone(),
             date: s.date.map(|d| d.to_string()).unwrap_or_default(),
             segment: s.segment.clone(),
-            shot_count: s.vectors.len() as u32,
+            shot_count: s
+                .vectors
+                .iter()
+                .filter(|v| is_importable_shot(v, false))
+                .count() as u32,
             resolved: s.resolved,
         })
         .collect();
@@ -2134,6 +2365,7 @@ pub fn convert_walls_to_import_configs(
         down: Option<f64>,
         comment: Option<String>,
         is_reference: bool,
+        lrud_is_to: bool,
     }
 
     let mut kept: Vec<KeptSurvey> = Vec::new();
@@ -2149,17 +2381,7 @@ pub fn convert_walls_to_import_configs(
         let survey_georef = &survey.georef;
         let mut kept_vectors = Vec::new();
         for (vi, v) in survey.vectors.iter().enumerate() {
-            if v.is_reference && !opts.include_splays {
-                continue;
-            }
-            // Dive shots carry their vertical in the depth gauges, so a leg with
-            // an omitted/zero tape distance is still valid if it has a real depth
-            // change; only drop a genuine zero-length, zero-depth equate.
-            let depth_delta = match (v.from_depth, v.to_depth) {
-                (Some(fd), Some(td)) => (td - fd).abs(),
-                _ => 0.0,
-            };
-            if v.length_m <= 0.0 && !(v.is_depth_gauge && depth_delta > 0.0) {
+            if !is_importable_shot(v, opts.include_splays) {
                 continue;
             }
             // Give anonymous wall endpoints globally-unique names so unrelated
@@ -2175,18 +2397,41 @@ pub fn convert_walls_to_import_configs(
                 v.to.clone()
             };
             // Finalize azimuth: + declination − convergence (grid-relative).
+            // Convergence is the `.REF` grid convergence (when grid-relative)
+            // plus any explicit `#Units Grid=` the survey set; both rotate true
+            // north to grid north and so are subtracted from the azimuth.
             let convergence = if v.grid_relative {
                 survey_georef.as_ref().map(|r| r.convergence).unwrap_or(0.0)
             } else {
                 0.0
+            } + v.grid_convergence;
+            // RECT vectors already carry an absolute grid azimuth; magnetic
+            // declination must NOT rotate Cartesian E/N/U deltas (only
+            // convergence, via grid_relative, may apply).
+            let declination = if v.is_rect {
+                0.0
+            } else {
+                resolve_declination(v, survey_georef, &mut warnings)
             };
-            let declination = resolve_declination(v, survey_georef);
             let finalize = |a: Option<f64>| {
                 a.map(|x| (x + declination - convergence).rem_euclid(360.0))
                     .unwrap_or(0.0)
             };
             let azimuth_in = finalize(v.azimuth_in);
             let azimuth_out = finalize(v.azimuth_out);
+
+            // The model stores azimuth as a plain f64, so an omitted/unreadable
+            // bearing collapses to 0° (due north). That is correct for a plumb
+            // shot but silently wrong for anything else — surface it.
+            if v.azimuth_in.is_none() && !v.is_depth_gauge {
+                let plumb = v.inc_deg.map(|i| i.abs() >= 89.5).unwrap_or(false);
+                if !plumb {
+                    warnings.push(format!(
+                        "Shot {}->{}: missing or unreadable azimuth; recorded as 0° (due north).",
+                        v.from, v.to
+                    ));
+                }
+            }
 
             // Edge elevation gain (+up).
             let gain = if v.is_depth_gauge {
@@ -2197,8 +2442,10 @@ pub fn convert_walls_to_import_configs(
             } else {
                 let inc = v.inc_deg.unwrap_or(0.0);
                 let mut g = v.length_m * inc.to_radians().sin();
-                // IncH adjusts the vertical of non-plumb CT shots.
-                if inc.abs() < 89.5 {
+                // IncH adjusts the vertical of non-plumb CT shots. Require a real
+                // measured distance: a zero-length coincident-station bearing tie
+                // must not pick up a spurious IncH vertical offset.
+                if inc.abs() < 89.5 && v.length_m > 0.0 {
                     g += v.inch;
                 }
                 g
@@ -2228,6 +2475,7 @@ pub fn convert_walls_to_import_configs(
                 down: v.down,
                 comment: v.comment.clone(),
                 is_reference: v.is_reference,
+                lrud_is_to: v.lrud_is_to,
             });
         }
         if kept_vectors.is_empty() {
@@ -2247,7 +2495,7 @@ pub fn convert_walls_to_import_configs(
         .iter()
         .map(|a| (a.station.as_str(), a.depth))
         .collect();
-    let depths = build_station_depths(&edges, &known_depth, &anchor_depths);
+    let depths = build_station_depths(&edges, &known_depth, &anchor_depths, &mut warnings);
     let depth_of = |s: &str| depths.get(s).copied().unwrap_or(0.0);
 
     // Pass 2a: split each survey into head-to-tail chains -> sections.
@@ -2275,7 +2523,7 @@ pub fn convert_walls_to_import_configs(
                 names.push(survey.vectors[idx].to.clone());
             }
             let mut shots = Vec::with_capacity(chain.len());
-            for &idx in chain {
+            for (pos, &idx) in chain.iter().enumerate() {
                 let v = &survey.vectors[idx];
                 let depth_in = depth_of(&v.from);
                 let depth_out = depth_of(&v.to);
@@ -2293,6 +2541,24 @@ pub fn convert_walls_to_import_configs(
                 } else {
                     v.length_m
                 };
+                // Resolve this shot's FROM-station LRUD honoring `#Units LRUD`. A
+                // From-typed leg contributes its own LRUD; a To-typed leg's LRUD
+                // belongs to its TO station — i.e. the FROM of the NEXT shot — so
+                // it is adopted from the previous leg in the chain. (A To survey
+                // thus shifts each cross-section one shot forward; the final To
+                // station's LRUD has no outgoing shot and is dropped.)
+                let own_lrud = if v.lrud_is_to {
+                    (None, None, None, None)
+                } else {
+                    (v.left, v.right, v.up, v.down)
+                };
+                let (left, right, up, down) = match pos
+                    .checked_sub(1)
+                    .map(|p| &survey.vectors[chain[p]])
+                {
+                    Some(prev) if prev.lrud_is_to => (prev.left, prev.right, prev.up, prev.down),
+                    _ => own_lrud,
+                };
                 shots.push(ShotData {
                     azimuth_in: v.azimuth_in,
                     azimuth_out: v.azimuth_out,
@@ -2301,10 +2567,10 @@ pub fn convert_walls_to_import_configs(
                     depth_out,
                     pitch_in: v.pitch_in,
                     pitch_out: v.pitch_out,
-                    left: v.left,
-                    right: v.right,
-                    up: v.up,
-                    down: v.down,
+                    left,
+                    right,
+                    up,
+                    down,
                     comment: v.comment.clone(),
                     is_reference: v.is_reference,
                     marker_index: None,
@@ -2378,31 +2644,52 @@ pub fn convert_walls_to_import_configs(
     }
     topological_sort_configs(&mut configs);
 
+    // Collapse identical warnings (e.g. the one-per-shot declination / missing-
+    // azimuth notes) to a single line each, preserving first-seen order.
+    {
+        let mut seen: HashSet<String> = HashSet::new();
+        warnings.retain(|w| seen.insert(w.clone()));
+    }
+
     Ok((configs, closures, warnings))
 }
 
-fn resolve_declination(v: &WallsVector, georef: &Option<WallsRef>) -> f64 {
-    // An explicit Decl= always wins.
-    if v.units_decl != 0.0 {
-        return v.units_decl;
+fn resolve_declination(
+    v: &WallsVector,
+    georef: &Option<WallsRef>,
+    warnings: &mut Vec<String>,
+) -> f64 {
+    // An explicit `Decl=` always wins — including an explicit `Decl=0`, which
+    // declares the azimuths already true/grid and suppresses auto-derivation.
+    if let Some(decl) = v.units_decl {
+        return decl;
     }
     // Otherwise auto-derive from the IGRF model ONLY when the entry's
     // derive-declination flag is on AND a georeference + date are available.
-    // Without the flag, Decl=0 means zero declination (azimuths already
-    // true/grid).
     if !v.derive_decl {
         return 0.0;
     }
     match (georef, v.date) {
-        (Some(r), Some(date)) => igrf_declination(r.latitude, r.longitude, date).unwrap_or(0.0),
+        (Some(r), Some(date)) => {
+            match crate::parsers::geo::igrf_declination(r.latitude, r.longitude, date) {
+                Ok(d) => d,
+                // The bundled IGRF model only spans 1900–2025; a survey dated
+                // outside that range (e.g. a current-year dive) would otherwise
+                // import with a silent 0° correction. Surface it instead.
+                // Identical per-shot lines collapse via the dedup at the end of
+                // conversion.
+                Err(_) => {
+                    warnings.push(format!(
+                        "Could not derive magnetic declination for {date} at {:.3}, {:.3} \
+                         (date/location outside the IGRF model range 1900–2025); using 0°.",
+                        r.latitude, r.longitude
+                    ));
+                    0.0
+                }
+            }
+        }
         _ => 0.0,
     }
-}
-
-fn igrf_declination(lat: f64, lng: f64, date: NaiveDate) -> Option<f64> {
-    let ordinal = u16::try_from(date.ordinal()).ok()?;
-    let d = time::Date::from_ordinal_date(date.year(), ordinal).ok()?;
-    igrf::declination(lat, lng, 0, d).map(|f| f.d).ok()
 }
 
 fn survey_label(survey: &ParsedSurvey) -> String {
@@ -2475,6 +2762,7 @@ fn build_station_depths(
     edges: &[(String, String, f64)],
     known: &HashMap<String, f64>,
     anchors: &HashMap<&str, f64>,
+    warnings: &mut Vec<String>,
 ) -> HashMap<String, f64> {
     // adjacency carries depth deltas (Δdepth = -Δup).
     let mut adjacency: HashMap<&str, Vec<(&str, f64)>> = HashMap::new();
@@ -2528,7 +2816,9 @@ fn build_station_depths(
         {
             (a, anchors[a])
         } else {
-            (*component.iter().min().unwrap(), 0.0)
+            // `component` always contains `start`, so the fallback never fires;
+            // expressed without `unwrap()` to satisfy the no-panic lint gate.
+            (component.iter().min().copied().unwrap_or(start), 0.0)
         };
 
         // BFS from the seed propagating depth.
@@ -2540,7 +2830,27 @@ fn build_station_depths(
             if let Some(nbrs) = adjacency.get(n) {
                 for (m, delta) in nbrs {
                     if !depth.contains_key(*m) {
-                        depth.insert((*m).to_string(), current + delta);
+                        // A station's own depth-gauge reading is authoritative
+                        // for dive data; only fall back to the integrated depth
+                        // (seed + accumulated deltas) when it has none. When both
+                        // exist and disagree materially, the gauge still wins but
+                        // the discontinuity is surfaced rather than absorbed.
+                        let integrated = current + delta;
+                        let d = match known.get(*m) {
+                            // Warn only on a gross discontinuity (well beyond
+                            // normal depth-gauge noise), not a sub-meter wobble.
+                            Some(&gauge) => {
+                                if (gauge - integrated).abs() > 2.0 {
+                                    warnings.push(format!(
+                                        "Station {m}: depth-gauge reading {gauge:.2} m disagrees \
+                                         with the integrated depth {integrated:.2} m; using the gauge."
+                                    ));
+                                }
+                                gauge
+                            }
+                            None => integrated,
+                        };
+                        depth.insert((*m).to_string(), d);
                         queue.push_back(*m);
                     }
                 }
@@ -2580,14 +2890,19 @@ fn place_chains(
             occurrences.entry(name.as_str()).or_default().push(ci);
         }
     }
+    // Connect each station's occurrences as a star (hub = first chain) rather
+    // than a full clique: O(k) edges instead of O(k²) for a station shared by k
+    // chains. Every adjacency edge still corresponds to a shared station (so each
+    // spanning-tree merge is valid) and the connected components are identical;
+    // loop closures for the other shared occurrences are emitted separately in
+    // `build_closures`.
     let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); n];
     for occ in occurrences.values() {
-        for a in 0..occ.len() {
-            for b in (a + 1)..occ.len() {
-                if occ[a] != occ[b] {
-                    adjacency[occ[a]].push(occ[b]);
-                    adjacency[occ[b]].push(occ[a]);
-                }
+        let hub = occ[0];
+        for &other in &occ[1..] {
+            if other != hub {
+                adjacency[hub].push(other);
+                adjacency[other].push(hub);
             }
         }
     }
@@ -2596,10 +2911,22 @@ fn place_chains(
         nbrs.dedup();
     }
 
+    // Per-chain station-name -> first index, so `shared_station` is O(child len)
+    // instead of re-scanning the whole parent chain for every name.
+    let chain_index: Vec<HashMap<&str, u32>> = chain_names
+        .iter()
+        .map(|names| {
+            let mut m: HashMap<&str, u32> = HashMap::new();
+            for (i, name) in names.iter().enumerate() {
+                m.entry(name.as_str()).or_insert(i as u32);
+            }
+            m
+        })
+        .collect();
     let shared_station = |child: usize, parent: usize| -> Option<(u32, u32)> {
         for (ci, cname) in chain_names[child].iter().enumerate() {
-            if let Some(pi) = chain_names[parent].iter().position(|pn| pn == cname) {
-                return Some((ci as u32, pi as u32));
+            if let Some(&pi) = chain_index[parent].get(cname.as_str()) {
+                return Some((ci as u32, pi));
             }
         }
         None
@@ -2831,6 +3158,12 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
+    clippy::print_stderr
+)]
 mod tests {
     use super::*;
 
@@ -3164,8 +3497,6 @@ mod tests {
 
     fn test_ref(convergence: f64, lat: f64, lon: f64) -> WallsRef {
         WallsRef {
-            northing: 0.0,
-            easting: 0.0,
             zone: 16,
             convergence,
             latitude: lat,
@@ -3274,6 +3605,72 @@ mod tests {
             &WallsImportOptions::default(),
         );
         assert!(approx(configs[0].shots[0].azimuth_in, 98.0));
+    }
+
+    #[test]
+    fn explicit_decl_zero_suppresses_auto_derivation() {
+        // Same large-declination georef as `auto_declination_gated_on_derive_flag`,
+        // derive flag ON, but the survey pins `Decl=0` — auto-IGRF must NOT fire.
+        let georef = Some(test_ref(0.0, 60.0, -150.0));
+        let srv = "#DATE 2020-01-01\n#UNITS meters order=DAV Decl=0\nA B 10 90 0\n";
+        let configs = convert_survey_with(
+            parse_srv_geo(srv, georef.clone(), true),
+            georef.clone(),
+            &WallsImportOptions::default(),
+        )
+        .0;
+        assert!(
+            approx(configs[0].shots[0].azimuth_in, 90.0),
+            "explicit Decl=0 must override the derive flag (no IGRF rotation)"
+        );
+    }
+
+    #[test]
+    fn fix_assigns_lat_long_by_prefix_not_column() {
+        // Coordinates written latitude-first (N before W) under the default
+        // East,North order must still resolve to the right hemisphere.
+        let srv = "#UNITS meters order=DAV\n\
+                   #FIX A0 N20:25:42 W87:18:44 0\n\
+                   A0 B 10 90 0\n";
+        let survey = parse_srv(srv);
+        let (lat, lon) = survey.fixes[0].lat_long.expect("geographic fix");
+        assert!(
+            (lat - 20.4283).abs() < 0.01,
+            "N20 must be latitude, got {lat}"
+        );
+        assert!(
+            (lon - (-87.3122)).abs() < 0.01,
+            "W87 must be longitude, got {lon}"
+        );
+    }
+
+    #[test]
+    fn unrecognized_datum_warns_on_utm_fix() {
+        // A UTM #Fix under an unusual datum projects as WGS84 — warn about it.
+        let georef = Some(WallsRef {
+            zone: 16,
+            convergence: 0.0,
+            latitude: 20.0,
+            longitude: -87.0,
+            datum: "European 1950".to_string(),
+        });
+        let srv = "#UNITS meters order=DAV\n#FIX A0 467427 2258942 0\nA0 B 10 90 0\n";
+        let mut warnings = Vec::new();
+        parse_srv_contents(
+            srv,
+            "t",
+            "t",
+            "",
+            &WallsUnits::default(),
+            georef,
+            true,
+            false,
+            &mut warnings,
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("not recognized")),
+            "an unrecognized datum on a UTM #Fix should warn, got {warnings:?}"
+        );
     }
 
     #[test]
@@ -3686,6 +4083,459 @@ mod tests {
             errored.is_empty(),
             "parser errored on {} file(s)",
             errored.len()
+        );
+    }
+
+    // ----- regression tests for review fixes -------------------------------
+
+    #[test]
+    fn quadrant_azimuth_parsed() {
+        // Walls quadrant bearings must resolve, not silently fall through to 0.
+        assert!(approx(
+            parse_angle("N79E", AngleUnit::Degrees).unwrap(),
+            79.0
+        ));
+        assert!(approx(
+            parse_angle("S79W", AngleUnit::Degrees).unwrap(),
+            259.0
+        ));
+        assert!(approx(
+            parse_angle("N30W", AngleUnit::Degrees).unwrap(),
+            330.0
+        ));
+        assert!(approx(
+            parse_angle("S45E", AngleUnit::Degrees).unwrap(),
+            135.0
+        ));
+        // DMS magnitude inside a quadrant bearing.
+        assert!(approx(
+            parse_angle("N12:30E", AngleUnit::Degrees).unwrap(),
+            12.5
+        ));
+        // Magnitude honors the azimuth unit.
+        assert!(approx(
+            parse_angle("N100W", AngleUnit::Grads).unwrap(),
+            270.0
+        ));
+        // Plain values and non-quadrant junk still behave.
+        assert!(approx(parse_angle("90", AngleUnit::Degrees).unwrap(), 90.0));
+        assert_eq!(parse_angle("NE", AngleUnit::Degrees), None);
+        assert_eq!(parse_angle("N", AngleUnit::Degrees), None);
+    }
+
+    #[test]
+    fn feet_inches_sign_preserved() {
+        // The whole feet-and-inches token shares the leading sign.
+        assert!(approx(
+            parse_length("-0i7", LengthUnit::Meters).unwrap(),
+            -(7.0 / 12.0) * FEET_TO_METERS
+        ));
+        assert!(approx(
+            parse_length("-2i6", LengthUnit::Meters).unwrap(),
+            -2.5 * FEET_TO_METERS
+        ));
+        assert!(approx(
+            parse_length("2i6", LengthUnit::Meters).unwrap(),
+            2.5 * FEET_TO_METERS
+        ));
+        assert!(approx(
+            parse_length("i7", LengthUnit::Meters).unwrap(),
+            (7.0 / 12.0) * FEET_TO_METERS
+        ));
+    }
+
+    #[test]
+    fn floated_variance_leg_is_kept() {
+        // A real measured leg with a floated `(?)` variance is NOT a splay and
+        // must survive the default import (include_splays = false).
+        let srv = "#UNITS meters order=DAV\n\
+                   A B 10 90 0 (?)\n";
+        let (configs, _c, _w) = convert_one(parse_srv(srv));
+        assert_eq!(configs.len(), 1);
+        assert_eq!(
+            configs[0].shots.len(),
+            1,
+            "floated-variance leg must not be dropped as a splay"
+        );
+        assert!(!configs[0].shots[0].is_reference);
+    }
+
+    #[test]
+    fn fix_elevation_read_under_dive_order() {
+        // `Order=DA` (no Up element) must NOT truncate the #Fix elevation column.
+        let srv = "#UNITS meters ORDER=DA Tape=SS\n\
+                   #FIX A0 5 10 100\n\
+                   A0 B 8 90 5 5\n";
+        let survey = parse_srv(srv);
+        assert_eq!(survey.fixes.len(), 1);
+        assert_eq!(
+            survey.fixes[0].up,
+            Some(100.0),
+            "elevation column must be read regardless of vector Order="
+        );
+    }
+
+    #[test]
+    fn rect_vector_skips_declination() {
+        // RECT E/N/U deltas already carry an absolute grid azimuth; an explicit
+        // Decl must NOT rotate them.
+        let srv = "#UNITS RECT order=ENU Decl=5\n\
+                   A B 0 10 0\n";
+        let (configs, _c, _w) = convert_one(parse_srv(srv));
+        let shot = &configs[0].shots[0];
+        assert!(
+            approx(shot.azimuth_in, 0.0),
+            "rect azimuth must stay grid-north, got {}",
+            shot.azimuth_in
+        );
+    }
+
+    #[test]
+    fn rect_angle_rotates_bearing() {
+        // `#Units RECT=90` rotates the E/N frame 90° clockwise from north, so a
+        // vector along +N (E=0, N=10) reads 0° in-frame -> 90° after rotation.
+        let srv = "#UNITS RECT=90 order=ENU\n\
+                   A B 0 10 0\n";
+        let (configs, _c, _w) = convert_one(parse_srv(srv));
+        let shot = &configs[0].shots[0];
+        assert!(
+            approx(shot.azimuth_in, 90.0),
+            "RECT=90 must rotate the bearing to 90°, got {}",
+            shot.azimuth_in
+        );
+    }
+
+    #[test]
+    fn rect_frame_angle_does_not_leak_into_later_ct() {
+        // `RECT=90` sets the rectangular frame bearing; switching to `CT` must NOT
+        // carry that 90° in as a (negative) grid convergence on later CT shots —
+        // `rect` and `grid` are distinct fields consumed with opposite signs.
+        let srv = "#UNITS RECT=90 order=ENU\n\
+                   A B 0 10 0\n\
+                   #UNITS CT order=DAV\n\
+                   B C 10 100 0\n";
+        let (configs, _c, _w) = convert_one(parse_srv(srv));
+        let azimuths: Vec<f64> = configs
+            .iter()
+            .flat_map(|c| c.shots.iter().map(|s| s.azimuth_in))
+            .collect();
+        assert!(
+            azimuths.iter().any(|&a| approx(a, 100.0)),
+            "CT azimuth must stay 100° (RECT frame angle must not leak as convergence), got {azimuths:?}"
+        );
+        assert!(
+            !azimuths.iter().any(|&a| approx(a, 10.0)),
+            "no shot should be rotated to 10° by a leaked RECT angle, got {azimuths:?}"
+        );
+    }
+
+    #[test]
+    fn units_grid_convergence_subtracted_from_ct() {
+        // `#Units Grid=2` is a manual grid convergence: azimuth = reading(100) +
+        // decl(0) - convergence(2) = 98, exactly like a `.REF` convergence.
+        let srv = "#UNITS meters order=DAV Grid=2\n\
+                   A B 10 100 0\n";
+        let (configs, _c, _w) = convert_one(parse_srv(srv));
+        assert!(
+            approx(configs[0].shots[0].azimuth_in, 98.0),
+            "#Units Grid=2 must subtract 2° of convergence, got {}",
+            configs[0].shots[0].azimuth_in
+        );
+    }
+
+    #[test]
+    fn out_of_range_date_warns_on_declination_derive() {
+        // The bundled IGRF model stops at 2025; a later survey date with the
+        // derive flag on must warn instead of silently using 0° declination.
+        let georef = Some(test_ref(0.0, 60.0, -150.0));
+        let srv = "#DATE 2030-01-01\n#UNITS meters order=DAV\nA B 10 90 0\n";
+        let (configs, _c, warnings) = convert_survey_with(
+            parse_srv_geo(srv, georef.clone(), true),
+            georef,
+            &WallsImportOptions::default(),
+        );
+        assert!(
+            approx(configs[0].shots[0].azimuth_in, 90.0),
+            "out-of-range derive must fall back to 0° declination"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("declination") && w.contains("IGRF")),
+            "an out-of-range derive date must warn, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn utm_to_wgs84_reference_lat_long_not_swapped() {
+        // Zone 16N easting/northing from the `.REF` fixture -> lat ~20.43°N,
+        // lon ~-87.31°. Confirms this importer returns (lat, lon) — a swap would
+        // put lat at ~-87 (out of the [-90, 90] band) and be obviously wrong.
+        let (lat, lon) = utm_to_wgs84(467427.0, 2258942.0, 16, "NAD83").unwrap();
+        assert!((lat - 20.43).abs() < 0.1, "latitude {lat}");
+        assert!((lon + 87.31).abs() < 0.1, "longitude {lon}");
+    }
+
+    #[test]
+    fn unparseable_decl_warns_and_keeps_state() {
+        // A garbage Decl must warn and leave the current declination state
+        // untouched, NOT pin an explicit 0 (which would suppress auto-derive).
+        let mut units = WallsUnits::default();
+        let mut stack = Vec::new();
+        let mut warns = Vec::new();
+        apply_units_option(&mut units, "decl", Some("3"), &mut stack, &mut warns);
+        assert_eq!(units.decl, Some(3.0));
+        apply_units_option(&mut units, "decl", Some("oops"), &mut stack, &mut warns);
+        assert_eq!(
+            units.decl,
+            Some(3.0),
+            "unparseable Decl must not overwrite a real value"
+        );
+        assert!(warns.iter().any(|w| w.contains("Decl")));
+        // A bare `Decl=` clears back to auto-derive (None).
+        apply_units_option(&mut units, "decl", Some(""), &mut stack, &mut warns);
+        assert_eq!(units.decl, None);
+    }
+
+    #[test]
+    fn malformed_units_order_tape_lrud_warn() {
+        // A rejected Order/Tape/LRUD value must warn (not silently keep defaults).
+        let mut units = WallsUnits::default();
+        let mut stack = Vec::new();
+        let mut w = Vec::new();
+        let default_order = units.order.clone();
+        apply_units_option(&mut units, "order", Some("DAX"), &mut stack, &mut w);
+        apply_units_option(&mut units, "tape", Some("ZZ"), &mut stack, &mut w);
+        apply_units_option(&mut units, "lrud", Some("F:XYZW"), &mut stack, &mut w);
+        assert!(
+            w.iter().any(|m| m.contains("Order")),
+            "bad Order must warn: {w:?}"
+        );
+        assert!(
+            w.iter().any(|m| m.contains("Tape")),
+            "bad Tape must warn: {w:?}"
+        );
+        assert!(
+            w.iter().any(|m| m.contains("LRUD")),
+            "bad LRUD must warn: {w:?}"
+        );
+        // Rejected values leave the prior state intact.
+        assert_eq!(units.order, default_order);
+        assert_eq!(units.lrud_order, ['L', 'R', 'U', 'D']);
+        assert_eq!(units.tape_from, TapeEnd::Instrument);
+        assert_eq!(units.tape_to, TapeEnd::Target);
+    }
+
+    #[test]
+    fn zero_length_bearing_leg_kept() {
+        // `A B 0 90 0`: zero tape but a real bearing — keep it as a tie so the
+        // endpoints stay connected instead of splitting into components.
+        let srv = "#UNITS meters order=DAV\n\
+                   A B 0 90 0\n\
+                   B C 10 90 0\n";
+        let (configs, _c, _w) = convert_one(parse_srv(srv));
+        assert_eq!(configs.len(), 1, "endpoints must stay in one component");
+        let total: usize = configs.iter().map(|c| c.shots.len()).sum();
+        assert_eq!(total, 2, "zero-length bearing leg must be kept");
+    }
+
+    #[test]
+    fn fix_coordinates_survive_inline_comment() {
+        // A `;` comment with no leading space must not swallow the northing.
+        let georef = test_ref(0.0, 20.0, -90.0);
+        let survey = parse_srv_geo(
+            "#UNITS meters order=DAV\n#FIX A0 467427 2258942;datum tie\nA0 B 10 90 0\n",
+            Some(georef),
+            false,
+        );
+        assert_eq!(survey.fixes.len(), 1);
+        assert!(
+            survey.fixes[0].lat_long.is_some(),
+            "both UTM coords must survive a `;`-comment with no leading space"
+        );
+    }
+
+    #[test]
+    fn preview_excludes_out_of_range_fix() {
+        // An out-of-range geographic #Fix is rejected by resolve_anchors, so the
+        // preview's fixed_station_count must not count it either.
+        let srv = "#UNITS meters order=DAV\n\
+                   #FIX GOOD N30:00:00 W90:00:00 0\n\
+                   #FIX BAD N95:00:00 W30:00:00 0\n\
+                   GOOD BAD 10 90 0\n";
+        let parsed = ParsedWalls {
+            project_name: "t".to_string(),
+            book_count: 0,
+            surveys: vec![parse_srv(srv)],
+            georef: None,
+            missing_files: Vec::new(),
+            skipped_attachments: 0,
+            warnings: Vec::new(),
+        };
+        let preview = build_preview(&parsed);
+        assert_eq!(
+            preview.fixed_station_count, 1,
+            "only the in-range #Fix should be counted"
+        );
+    }
+
+    #[test]
+    fn dive_station_keeps_own_gauge_depth() {
+        // S1 reads 5 on the first leg but 6 on the second (gauge noise). Each
+        // station's own authoritative gauge reading wins over an integrated one.
+        let srv = "#UNITS meters ORDER=DA Tape=SS\n\
+                   S0 S1 10 90 0 5\n\
+                   S1 S2 10 90 6 9\n";
+        let (configs, _c, _w) = convert_one(parse_srv(srv));
+        let sec = &configs[0];
+        assert_eq!(sec.shots.len(), 2);
+        assert!(approx(sec.shots[1].depth_in, 5.0));
+        assert!(
+            approx(sec.shots[1].depth_out, 9.0),
+            "S2 must keep its own gauge depth (9), not an integrated value, got {}",
+            sec.shots[1].depth_out
+        );
+    }
+
+    // ----- regression tests for the second review round -------------------
+
+    #[test]
+    fn two_digit_year_dates_parse_to_full_year() {
+        // chrono's `%Y` must NOT greedily eat a 2-digit leading field: `05/07/17`
+        // is May 7 2017, not year 0005.
+        assert_eq!(
+            parse_walls_date("05/07/17"),
+            NaiveDate::from_ymd_opt(2017, 5, 7)
+        );
+        assert_eq!(
+            parse_walls_date("5-7-99"),
+            NaiveDate::from_ymd_opt(1999, 5, 7)
+        );
+        // 4-digit ISO and US forms still parse.
+        assert_eq!(
+            parse_walls_date("2017-05-07"),
+            NaiveDate::from_ymd_opt(2017, 5, 7)
+        );
+        assert_eq!(
+            parse_walls_date("05/07/2017"),
+            NaiveDate::from_ymd_opt(2017, 5, 7)
+        );
+    }
+
+    #[test]
+    fn rect_vector_honors_units_grid() {
+        // `#Units RECT Grid=2`: the manual grid convergence applies to a RECT leg
+        // exactly like CT — a bearing along +N (0°) becomes 0 - 2 = 358°.
+        let srv = "#UNITS RECT order=ENU Grid=2\n\
+                   A B 0 10 0\n";
+        let (configs, _c, _w) = convert_one(parse_srv(srv));
+        assert!(
+            approx(configs[0].shots[0].azimuth_in, 358.0),
+            "RECT must honor #Units Grid=, got {}",
+            configs[0].shots[0].azimuth_in
+        );
+    }
+
+    #[test]
+    fn lrud_to_shifts_cross_section_forward() {
+        // `#Units LRUD=To`: the LRUD on leg A->B is measured at B, so it must ride
+        // on the next shot (B->C), not on A->B.
+        let srv = "#UNITS meters order=DAV LRUD=To\n\
+                   A B 10 90 0 <1,2,3,4>\n\
+                   B C 10 90 0 <5,6,7,8>\n";
+        let (configs, _c, _w) = convert_one(parse_srv(srv));
+        let shots = &configs[0].shots;
+        assert_eq!(shots.len(), 2);
+        assert_eq!(
+            shots[0].left, None,
+            "A->B must not carry B's LRUD as its own"
+        );
+        assert_eq!(
+            shots[1].left,
+            Some(1.0),
+            "B's measured LRUD must shift forward onto B->C"
+        );
+    }
+
+    #[test]
+    fn parse_ref_rejects_out_of_range_zone() {
+        // A garbage UTM zone must be rejected, not silently saturated by `as i32`.
+        let bad = "100 200 999 0 0 0 31 0 0 97 0 0 \"WGS84\"";
+        assert!(parse_ref(bad).is_err(), "zone 999 must be rejected");
+        let ok = "100 200 16 0 0 0 31 0 0 97 0 0 \"WGS84\"";
+        assert!(parse_ref(ok).is_ok(), "a valid .REF must still parse");
+    }
+
+    #[test]
+    fn inch_not_applied_to_zero_length_bearing_tie() {
+        // `#Units IncH=5` plus a zero-length bearing tie (A B 0 90) must NOT push
+        // a 5 m vertical offset onto the tied station.
+        let srv = "#UNITS meters order=DAV IncH=5\n\
+                   A B 0 90 0\n\
+                   B C 10 90 0\n";
+        let (configs, _c, _w) = convert_one(parse_srv(srv));
+        assert!(
+            approx(configs[0].shots[0].depth_out, 0.0),
+            "zero-length tie must not pick up an IncH offset, got {}",
+            configs[0].shots[0].depth_out
+        );
+    }
+
+    #[test]
+    fn rect_plumb_shot_has_no_spurious_bearing() {
+        // A pure-vertical RECT shot (E=N=0, U=10) has no defined bearing; it must
+        // be left unset, not recorded as 0° (due north).
+        let srv = "#UNITS RECT order=ENU\n\
+                   A B 0 0 10\n";
+        let survey = parse_srv(srv);
+        assert_eq!(survey.vectors.len(), 1);
+        assert!(
+            survey.vectors[0].azimuth_in.is_none(),
+            "plumb RECT shot must have no azimuth"
+        );
+        assert!(
+            survey.vectors[0]
+                .inc_deg
+                .map(|i| i.abs() > 89.0)
+                .unwrap_or(false),
+            "plumb RECT shot must be ~vertical"
+        );
+    }
+
+    #[test]
+    fn preview_shot_count_excludes_splays() {
+        // A survey of only anonymous-wall splays imports nothing by default, so
+        // the preview shot count must be 0 — not the raw vector count.
+        let srv = "#UNITS meters order=DAV\n\
+                   A - 3 90 0\n\
+                   A - 4 180 0\n";
+        let parsed = ParsedWalls {
+            project_name: "t".to_string(),
+            book_count: 0,
+            surveys: vec![parse_srv(srv)],
+            georef: None,
+            missing_files: Vec::new(),
+            skipped_attachments: 0,
+            warnings: Vec::new(),
+        };
+        let preview = build_preview(&parsed);
+        assert_eq!(
+            preview.shot_count, 0,
+            "a splay-only survey must preview 0 importable shots"
+        );
+    }
+
+    #[test]
+    fn gross_gauge_contradiction_warns() {
+        // S1's first gauge reading (5) and a later one (50) on the same station
+        // disagree grossly; the gauge still wins but the discontinuity must warn.
+        let srv = "#UNITS meters ORDER=DA Tape=SS\n\
+                   S0 S1 10 90 0 5\n\
+                   S1 S2 10 90 50 9\n";
+        let (_configs, _c, warnings) = convert_one(parse_srv(srv));
+        assert!(
+            warnings.iter().any(|w| w.contains("disagrees")),
+            "a gross gauge/integrated contradiction must warn, got {warnings:?}"
         );
     }
 }
