@@ -27,6 +27,11 @@ gas." It is **route-finding under a gas / bailout constraint** over the cave sur
 The headline interaction is the *inverse* problem — *"given my gas, how far can I get, and
 where do I turn?"* — drawn on the actual surveyed line.
 
+It serves **two missions on one engine**: **exploration** (push toward a *lead* — virgin cave
+beyond the line) and **resurvey** (re-cover *known* passage, where there are **no leads** —
+e.g. *Naharon*). The gas math is identical; only the objective differs (reach a lead vs cover
+an area), so the planner **never assumes a lead exists**.
+
 That reframe collapses the whole feature onto **one primitive**: a **gas-weighted
 shortest-path** over the graph Stalagmight already builds. Reachable frontier, turn point,
 "is this lead in budget," CCR bailout volume, and stage/bailout drop points are all
@@ -286,7 +291,8 @@ default; the **diver places within it** and the tool **re-validates**. Why a div
 - **Environment** — some places are bad to drop a stage (silt, delicate formations,
   restrictions); off-limits regardless of gas.
 - **Mission profile** — **depth-first** (max linear penetration down one line) vs
-  **breadth-first** (explore many leads in a branching cave) drive different placements.
+  **breadth-first** (cover many branches — exploring leads *or* resurveying known passage)
+  drive different placements.
 
 ⇒ The tool **shows the feasible range and validates the choice; it never prescribes the spot**
 (another §6 "aid, not authority"). The depth-first/breadth-first axis is the same one the
@@ -480,8 +486,11 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
   rewrite.
 - **First-class leads** — let the surveyor **mark leads** (at a station or mid-shot; line
   already there, or virgin needing line run) as durable points for planning future exploration
-  / surveying. These become the natural **targets** for the planner *and* the fan-out optimizer
-  above. (MVP just targets a selected station/shot; lead-marking is future work.)
+  / surveying. These become natural **targets** for the planner *and* the fan-out optimizer
+  above. **But leads are exploration-specific — not always present:** a **resurvey** of old,
+  well-explored cave (e.g. *Naharon*) has none. So the planner **never requires a lead** — the
+  target is any selected station/area (MVP); lead-marking is a future convenience for
+  exploration, not a precondition.
 - **Deco planning** (the other half of #38) — depth-time profile from the chosen route → stop
   schedule → gas-by-mix. Needs gas mixes / MOD / END, which arrive together.
 - **Agency staging presets** — canned `GasConfig`s (GUE-style, NSS-CDS, etc.) over the
