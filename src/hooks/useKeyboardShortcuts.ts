@@ -180,7 +180,7 @@ function shouldShowToast(action: ShortcutAction, feedback: ShortcutFeedback): bo
  * Build a map from normalized shortcut strings to their action names.
  * This allows O(1) lookup during keydown handling.
  */
-function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutAction> {
+export function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutAction> {
   const map = new Map<string, ShortcutAction>();
 
   const actions: (keyof ShortcutsConfig)[] = [

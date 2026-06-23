@@ -574,13 +574,12 @@ export default function GlobalView() {
           {hasRecentItems && (
             <div
               className="inline-flex rounded border border-border overflow-hidden"
-              role="tablist"
+              role="group"
               aria-label={t('globalView.viewToggle.aria')}
             >
               <button
                 type="button"
-                role="tab"
-                aria-selected={activeTab === 'map'}
+                aria-pressed={activeTab === 'map'}
                 data-testid="globalview-view-toggle-map"
                 onClick={() => handleSwitchTab('map')}
                 className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
@@ -595,8 +594,7 @@ export default function GlobalView() {
               </button>
               <button
                 type="button"
-                role="tab"
-                aria-selected={activeTab === 'list'}
+                aria-pressed={activeTab === 'list'}
                 data-testid="globalview-view-toggle-list"
                 onClick={() => handleSwitchTab('list')}
                 className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border-l border-border transition-colors ${

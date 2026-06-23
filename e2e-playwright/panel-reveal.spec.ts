@@ -117,12 +117,12 @@ test.describe('Panel reveal (hover/pin)', () => {
   });
 
   test('keyboard shortcut pins/closes the detail panel', async ({ page }) => {
-    // Detail starts pinned-open; the toggle shortcut (2) closes it.
-    await page.keyboard.press('2');
+    // Detail starts pinned-open; the toggle shortcut (Ctrl+2) closes it.
+    await page.keyboard.press('Control+2');
     await expect.poll(async () => (await panelState(page)).detailPanelOpen).toBe(false);
     expect((await panelState(page)).detailPanelMode).toBe('pin');
     // Pressing again pins it back open.
-    await page.keyboard.press('2');
+    await page.keyboard.press('Control+2');
     await expect.poll(async () => (await panelState(page)).detailPanelOpen).toBe(true);
   });
 });

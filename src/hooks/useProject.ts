@@ -57,11 +57,15 @@ export function useProject() {
   );
 
   const handleSaveProject = useCallback(async (opts?: { closeAfterSave?: boolean }) => {
+    // An untitled project goes through Save As, which surfaces its own failures
+    // (saveProjectAs guards on !success). Surfacing again here would double-report
+    // — the second openDialog('error') is treated as dialog-chaining. So only the
+    // direct save-to-existing-path branch surfaces.
+    if (!useProjectStore.getState().project?.file_path) {
+      return handleSaveProjectAs(opts);
+    }
     try {
-      const result = useProjectStore.getState().project?.file_path
-        ? await saveProject()
-        : await handleSaveProjectAs(opts);
-
+      const result = await saveProject();
       if (result && !result.success) {
         surfaceSaveFailure(result.error, openDialog);
       }

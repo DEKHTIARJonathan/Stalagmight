@@ -59,7 +59,8 @@ interface AppMenuProps {
   disabled?: boolean;
   'aria-label'?: string;
   'data-testid'?: string;
-  /** Root for item testids: `${menuTestId}-item-${id}` is also exposed via item.id. */
+  /** Test id for the menu container. Each row's own testid is its `item.id`
+   *  verbatim (set by renderRow), keeping the legacy/e2e selectors stable. */
   menuTestId?: string;
 }
 
@@ -266,6 +267,14 @@ export function AppMenu({
     contains: [triggerRef, menuRef, submenuRef],
     scrollSafe: [menuRef, submenuRef],
   });
+
+  // Close if the trigger becomes disabled while the menu is open. The trigger's
+  // own `disabled` guard can't cover an already-open portaled menu, and the
+  // disable can fire programmatically (e.g. placement mode starting on paste /
+  // merge / import-completion), which would otherwise defeat the guard.
+  useEffect(() => {
+    if (disabled && isOpen) closeMenu();
+  }, [disabled, isOpen, closeMenu]);
 
   const onTriggerKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

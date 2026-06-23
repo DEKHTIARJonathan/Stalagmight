@@ -1649,7 +1649,6 @@
     },
     "recent": {
       "title": "Recent projects",
-      "hint": "Click to select, double-click to open, right-click for options.",
       "hintPrefix": "Click to select, double-click to open, right-click for options.",
       "hintFindPrefix": "Don't see your project?",
       "hintFindLink": "Click here",

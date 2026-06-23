@@ -171,19 +171,6 @@ export async function closeProjectViaMenu(page: Page): Promise<void> {
   await expect(page.getByTestId('global-view')).toBeVisible({ timeout: 8000 });
 }
 
-/** Save the open project via the in-project hamburger ("Save"). */
-export async function saveViaMenu(page: Page): Promise<void> {
-  await openAppMenu(page);
-  await page.getByTestId('toolbar-save-button').click();
-}
-
-/** Open the Export dialog via the in-project hamburger ("Export"). */
-export async function exportFromMenu(page: Page): Promise<void> {
-  await openAppMenu(page);
-  await page.getByTestId('toolbar-export-button').click();
-  await expect(page.getByTestId('export-dialog')).toBeVisible({ timeout: 5000 });
-}
-
 export async function openNewProjectDialog(page: Page): Promise<void> {
   const newProjectButton = page
     .locator('[data-testid="new-project-button"], [data-testid="empty-state-new-project"]')
