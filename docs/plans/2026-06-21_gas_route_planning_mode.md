@@ -74,6 +74,7 @@ are later); multi-diver fan-out optimization (north star, §9).
 | DPV | **Speed + range/burn-time + dead-scooter contingency**; **same RMV as swimming** (no reduced-RMV credit — §10) |
 | Drop points | **Suggested *and* draggable-validated** — tool gives the gas-feasible envelope; diver places for landmark / environment / mission (§5.4) |
 | Survey reserve | **Total-thirds** invariant (movable across cylinders); **asymmetric** slow-in/fast-out gas; **not opinionated on survey** — show the thirds line, allow knowing over-penetration (§5.2) |
+| Plan persistence | **Ephemeral** — never written to the `.stalx` (.stalx = the *cave*; a plan is the *team/dive*). Personal *defaults* (RMV, tank presets, reserve preset) may live in **user config**, not the project. **Print-out** is a wishlist output (§9) |
 
 ---
 
@@ -453,6 +454,10 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
   parametric engine.
 - **What-if & logistics** — "if I add an AL80 stage, how much further?"; pre-place / retrieval
   ordering; multi-day push staging.
+- **Print-out / dive slate** — export the plan (turn pressures, gas, drops, distances) to a
+  compact, **label-printer-friendly** format you can stick to a wrist slate or wet notes (some
+  gas analyzers already print labels). The plan is ephemeral, so this is a one-shot artifact,
+  not saved state.
 
 ---
 
@@ -472,6 +477,10 @@ shape (a runtime-only flag + origin + fetched field, reset on view switch).
    single-slot `AppState` memo (§7.1).
 5. **Turn-gloss (§5.1):** confirm "turn at 1/N" = consumed (minor). *(Recalc regions/formulas,
    direction, and pressure-semantics now resolved.)*
+6. **In-flight planning Q&A (still to answer):** does **survey raise RMV** (task-loading)
+   beyond just being slower? **CCR bailout** specifics (dedicated bottles vs stages-as-bailout;
+   stressed-multiplier value; diluent/O2 negligible?); is a **"lead"** any selected station or a
+   first-class marker?
 
 ---
 
