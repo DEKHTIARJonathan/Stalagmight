@@ -55,8 +55,9 @@ rewrite.
 - **Both unit systems** (metric bar/L, imperial psi/cuft), user-selectable.
 
 **Non-goals (now):** decompression planning; gas-mix / MOD / END (arrive with deco);
-agency-specific staging *presets* (the engine is parametric; presets are later);
-multi-diver fan-out optimization (north star, §9).
+**traverses** (in one entrance, out another — they need 2+ setup dives and violate §6's
+"exit the way you came"); agency-specific staging *presets* (the engine is parametric; presets
+are later); multi-diver fan-out optimization (north star, §9).
 
 ---
 
@@ -71,7 +72,7 @@ multi-diver fan-out optimization (north star, §9).
 | Primary affordance v1 | **Reachable frontier** (lead→plan is the same field, other direction) |
 | Gas units | **Both, user-selectable** |
 | DPV | **Speed + range/burn-time + dead-scooter contingency**; **same RMV as swimming** (no reduced-RMV credit — §10) |
-| Drop points | **Suggested *and* draggable-validated** |
+| Drop points | **Suggested *and* draggable-validated** — tool gives the gas-feasible envelope; diver places for landmark / environment / mission (§5.4) |
 | Survey reserve | **Total-thirds** invariant (movable across cylinders); **asymmetric** slow-in/fast-out gas; **not opinionated on survey** — show the thirds line, allow knowing over-penetration (§5.2) |
 
 ---
@@ -106,8 +107,10 @@ coords (`compute_station_coordinates()`, `project.rs:6758`) and **never** trigge
 - *Reachable within budget* = stations whose **round-trip** gas ≤ usable gas after the §5.1
   reserve rule. **Round-trip is asymmetric** when surveying: `gas_in(X | survey speed) +
   gas_out(X | swim speed)`, i.e. two Dijkstra fields (the OUT field is the same exit-leg field
-  CCR bailout needs), **not** one field doubled — see §5.2. The turn frontier is a threshold on
-  the field (reachable stations with an unreachable neighbor — one pass over `adj`).
+  CCR bailout needs), **not** one field doubled — see §5.2. **The exit follows the entry path
+  reversed, never an alternate/shorter unswum route** (§6, "exit the way you came"). The turn
+  frontier is a threshold on the field (reachable stations with an unreachable neighbor — one
+  pass over `adj`).
 - *Turn point toward a lead* = furthest point on the path where one-way gas = turn pressure.
   (Store a predecessor array in the Dijkstra loop at `project.rs:7460` to back-trace paths.)
 - *CCR bailout / dead-scooter exit* = a **second** Dijkstra seeded **from the lead** toward
@@ -189,7 +192,9 @@ canonical-volume internally, per-cylinder-pressure on every in-dive readout.
 multi-cylinder gas-management skill to balance gas across tanks, **not** breaking the reserve.
 **All-thirds is the default.** The recalc is a distinct compute path (it re-budgets from
 *current* pressure mid-dive), so model `reserve` as a preset enum *plus* a
-`recalc(position, current_backgas)` function, not a single fraction.
+`recalc(position, current_backgas)` function, not a single fraction. **v1 caps at 2 stages** —
+**≥3-stage** support (big OC pushes; increasingly rare as divers move to CCR) is **deferred to
+a later phase**.
 
 **Resolved (Nico):** "past" = **cave side**; `(½ × start) − 15` is a **pressure** (turn
 pressure); the recalc regions/formulas are as above (corrected 2026-06-22 — recalc needs a
@@ -262,6 +267,23 @@ first-class, easy option, and don't let the tool's precision quietly erode the c
 stages. Material can *hint* role suitability when assigning cylinders — guidance, not a hard
 rule.
 
+### 5.4 Stage drop points: a gas-feasible envelope, the diver places within it (Nico)
+
+A drop point is **not** a single computed spot — it's **driven by both gas and location**, plus
+judgment the tool can't have. So the tool computes the **gas-feasible envelope** (earliest
+sensible drop ↔ the latest the gas allows for that stage's `(½·start) − 15` turn) and suggests a
+default; the **diver places within it** and the tool **re-validates**. Why a diver moves it:
+- **Landmarks** — drop at a findable feature (a T / junction), *especially when gas-marginal*,
+  where divers deliberately drop **early** at a recognizable spot so they can relocate it.
+- **Environment** — some places are bad to drop a stage (silt, delicate formations,
+  restrictions); off-limits regardless of gas.
+- **Mission profile** — **depth-first** (max linear penetration down one line) vs
+  **breadth-first** (explore many leads in a branching cave) drive different placements.
+
+⇒ The tool **shows the feasible range and validates the choice; it never prescribes the spot**
+(another §6 "aid, not authority"). The depth-first/breadth-first axis is the same one the
+fan-out optimizer reasons on later (§9).
+
 ---
 
 ## 6. ⚠ Safety posture (this tool informs life-support decisions)
@@ -279,6 +301,13 @@ first-class constraint, not a footnote.
   the unreduced-RMV-on-scooter buffer (§10), not edge exclusion. *(Supersedes my earlier
   draft, which proposed excluding non-swimmable references — overcautious; Nico confirms
   references-resolve-then-shortest-path is correct for the real datasets.)*
+- **Exit over the path you came in on (core cave rule — Nico).** Cave divers plan to exit via
+  the *exact* route they entered. A mapped connection is **not** a guaranteed exit — lines get
+  moved, repaired, or degrade; a 30-year-old survey link may be gone; a passage viable for one
+  team (sidemount) may be impassable for another (backmount + scooters + stages). So while
+  shortest-path is fine for *penetration* (#77 above), the **return leg = the entry path
+  reversed** — the engine must **never** route the exit through a shorter/alternate connection
+  the graph offers but the diver didn't swim. (Also why **traverses are out of scope**, §2.)
 - **Framing:** the UI is a planning aid, not an authority — show assumptions; never a single
   unlabelled "you're fine" number.
 - **Survey ≠ enforced thirds (§5.2):** the slow-in/fast-out asymmetry makes strict thirds
