@@ -235,8 +235,9 @@ export default function MapCanvas() {
   // --- Drag hot-path refs (bypass React state to avoid re-render per mousemove) ---
   // Current drag position (updated imperatively on every mousemove)
   const moveDragLngLatRef = useRef<{ lng: number; lat: number } | null>(null);
-  // Screen position at drag start (for pixel-offset drag preview via *-translate)
-  const dragStartScreenRef = useRef<{ x: number; y: number } | null>(null);
+  // Last cursor position (client coords) during a move-drag — lets us re-apply the
+  // preview on map zoom (when no pointer event fires) so it tracks across zoom (#79).
+  const lastCursorClientRef = useRef<{ clientX: number; clientY: number } | null>(null);
   // Connected section IDs being dragged (used by rAF callback for segment preview)
   const dragConnectedSectionIdsRef = useRef<Set<number>>(new Set());
   // Origin station that initiated the segment drag (for snap-to-merge)
@@ -765,6 +766,44 @@ export default function MapCanvas() {
         startLng = center.lng;
         startLat = center.lat;
       }
+
+      // Snap the grab baseline to the EXACT grabbed feature rather than the raw
+      // unproject(click). At low zoom one pixel spans many meters, so the click
+      // lands well off the feature and that offset only becomes visible once you
+      // zoom in — anchoring on the feature's world coord makes IT (not the
+      // imprecise click point) track the cursor through zoom (#79). A station grab
+      // snaps to the station; a shot grab snaps to the nearest point on the shot.
+      // NOTE: this baseline reads `activeStations` (geometry-mode-aware), while the
+      // per-frame handleMoveDragMove and the commit read raw `stations`. They diverge
+      // only in `closureAdjusted` mode — but move tools are mutating, so the tool is
+      // forced back to `select` there (isMutatingTool effect), making the move-drag
+      // path unreachable in that mode. If that disable is ever relaxed, switch this to
+      // `stations` so the baseline and per-frame origin share one coordinate set.
+      if (data.stationRef) {
+        const st = activeStations?.find(
+          (s) =>
+            s.station_ref.section_id === data.stationRef!.section_id &&
+            s.station_ref.station_index === data.stationRef!.station_index,
+        );
+        if (st) {
+          const mc = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin);
+          startLng = mc[0];
+          startLat = mc[1];
+        }
+      } else if (surveyLayerRef.current && data.screenX !== undefined && data.screenY !== undefined) {
+        // Shot-based grab (move_shot, or a segment grabbed by clicking a shot line).
+        const rect = map.current.getCanvas().getBoundingClientRect();
+        const snap = surveyLayerRef.current.queryNearestShotPoint(
+          data.screenX - rect.left,
+          data.screenY - rect.top,
+          config?.map?.shot?.hit_area ?? 8,
+        );
+        if (snap) {
+          startLng = snap.lng;
+          startLat = snap.lat;
+        }
+      }
+
       const baseDragState: MoveDragState = {
         type: data.type,
         startLngLat: { lng: startLng, lat: startLat },
@@ -773,9 +812,9 @@ export default function MapCanvas() {
 
       // Initialize hot-path refs for drag tracking
       moveDragLngLatRef.current = { lng: startLng, lat: startLat };
-      // Store screen position for pixel-offset drag preview
-      dragStartScreenRef.current = (data.screenX !== undefined && data.screenY !== undefined)
-        ? { x: data.screenX, y: data.screenY }
+      // Seed the last-cursor ref so a zoom before the first move re-applies correctly.
+      lastCursorClientRef.current = (data.screenX !== undefined && data.screenY !== undefined)
+        ? { clientX: data.screenX, clientY: data.screenY }
         : null;
 
       // Build the drag state conditionally to avoid undefined values
@@ -864,7 +903,7 @@ export default function MapCanvas() {
         stationDragColocatedRefsRef.current = colocated;
       }
     },
-    [anchoredSectionIds, anchoredIdsLoaded, clearSelectionAndVisuals, getConnectedSectionIds, immovableStationKeys]
+    [anchoredSectionIds, anchoredIdsLoaded, clearSelectionAndVisuals, getConnectedSectionIds, immovableStationKeys, activeStations, gpsOrigin, config?.map?.shot?.hit_area]
   );
 
   // Get map tool callbacks
@@ -1066,28 +1105,42 @@ export default function MapCanvas() {
   // Position is stored in a ref (no re-render), and segment preview is updated
   // synchronously since setPaintProperty is essentially free (shader uniform).
   const handleMoveDragMove = useCallback(
-    (e: React.PointerEvent) => {
+    // skipSnapScan: the per-frame map-'move' re-apply (zoom/pan) passes true to skip the
+    // O(all-stations) snap SCAN — the cursor's world position is unchanged so the snap
+    // target can't change. The cheap snap RE-ALIGN (for an already-held target) and the
+    // #79 re-projection still run, so the preview tracks and stays snapped across zoom.
+    (clientX: number, clientY: number, skipSnapScan = false) => {
+      // While the snap-merge dialog is up the drag is paused (moveDrag is held alive
+      // so Cancel can resume it) — don't let the map-'move' listener re-apply the
+      // preview and clobber the held position. Mirrors handleMoveDragStart/End, which
+      // both already guard on this; this is the only drag-move entry that didn't.
+      if (snapMergeDialogPendingRef.current) return;
       if (!moveDrag || !map.current || !mapContainer.current) return;
 
       const rect = mapContainer.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
 
       // Convert screen coords to map coords
       const lngLat = map.current.unproject([x, y]);
 
       // Store in ref (no React state update — avoids re-render per mousemove)
       moveDragLngLatRef.current = { lng: lngLat.lng, lat: lngLat.lat };
+      lastCursorClientRef.current = { clientX, clientY };
+
+      // Re-project the grab's WORLD point at the CURRENT zoom (NOT a fixed grab-screen
+      // baseline — that drifts when the map re-projects on zoom mid-drag, #79). dx/dy
+      // is then the cursor offset from where the grabbed point renders right now.
+      const grabScreen = map.current.project([moveDrag.startLngLat.lng, moveDrag.startLngLat.lat]);
+      const dx = x - grabScreen.x;
+      const dy = y - grabScreen.y;
+      lastRawDragOffsetRef.current = { dx, dy };
 
       // Station drag preview — translate station circles/labels + rebuild shot geometries
-      if (moveDrag.type === 'station' && surveyLayerRef.current && dragStartScreenRef.current) {
-        const dx = e.clientX - dragStartScreenRef.current.x;
-        const dy = e.clientY - dragStartScreenRef.current.y;
-        lastRawDragOffsetRef.current = { dx, dy };
-
-        // Snap-to-station detection during station drag
+      if (moveDrag.type === 'station' && surveyLayerRef.current) {
         const snapThreshold = config?.map.snap.threshold ?? 10;
-        if (dragOriginStationRef.current && snapThreshold > 0) {
+        // Enter for a live scan, OR (on the zoom path) only to re-align a held snap.
+        if ((!skipSnapScan || dragSnapRef.current) && dragOriginStationRef.current && snapThreshold > 0) {
           const originSt = stations.find(
             (s) =>
               s.station_ref.section_id === dragOriginStationRef.current!.section_id &&
@@ -1095,41 +1148,47 @@ export default function MapCanvas() {
           );
           if (originSt) {
             const originMapCoords = metersToMapCoords(originSt.coordinates.x, originSt.coordinates.y, gpsOrigin);
-            const originScreen = map.current.project(originMapCoords as [number, number]);
-            const projectedX = originScreen.x + dx;
-            const projectedY = originScreen.y + dy;
+            const originScreen = map.current.project(originMapCoords);
 
-            // Find nearest non-co-located station to the projected origin position
-            let nearestRef: StationRef | null = null;
-            let nearestDist = Infinity;
-            const colocatedKeys = new Set(
-              stationDragColocatedRefsRef.current.map(r => `${r.section_id}:${r.station_index}`)
-            );
-            for (const st of stations) {
-              const key = `${st.station_ref.section_id}:${st.station_ref.station_index}`;
-              if (colocatedKeys.has(key)) continue;
-              const mc = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin);
-              const sp = map.current!.project(mc as [number, number]);
-              const sdx = sp.x - projectedX;
-              const sdy = sp.y - projectedY;
-              const dist = Math.sqrt(sdx * sdx + sdy * sdy);
-              if (dist < snapThreshold && dist < nearestDist) {
-                nearestDist = dist;
-                nearestRef = st.station_ref;
+            let nearestRef: StationRef | null = dragSnapRef.current;
+            if (!skipSnapScan) {
+              const projectedX = originScreen.x + dx;
+              const projectedY = originScreen.y + dy;
+
+              // Find nearest non-co-located station to the projected origin position
+              nearestRef = null;
+              let nearestDist = Infinity;
+              const colocatedKeys = new Set(
+                stationDragColocatedRefsRef.current.map(r => `${r.section_id}:${r.station_index}`)
+              );
+              for (const st of stations) {
+                const key = `${st.station_ref.section_id}:${st.station_ref.station_index}`;
+                if (colocatedKeys.has(key)) continue;
+                const mc = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin);
+                const sp = map.current!.project(mc);
+                const sdx = sp.x - projectedX;
+                const sdy = sp.y - projectedY;
+                const dist = Math.sqrt(sdx * sdx + sdy * sdy);
+                if (dist < snapThreshold && dist < nearestDist) {
+                  nearestDist = dist;
+                  nearestRef = st.station_ref;
+                }
+              }
+
+              // Update snap state only when target changes (avoids React churn)
+              const prev = dragSnapRef.current;
+              if (
+                nearestRef?.section_id !== prev?.section_id ||
+                nearestRef?.station_index !== prev?.station_index
+              ) {
+                dragSnapRef.current = nearestRef;
+                setSnappedStation(nearestRef);
               }
             }
 
-            // Update snap state only when target changes (avoids React churn)
-            const prev = dragSnapRef.current;
-            if (
-              nearestRef?.section_id !== prev?.section_id ||
-              nearestRef?.station_index !== prev?.station_index
-            ) {
-              dragSnapRef.current = nearestRef;
-              setSnappedStation(nearestRef);
-            }
-
-            // If snapped, compute aligned offset so origin station lands on target
+            // If snapped, align the origin station onto the target. Recomputed at the
+            // CURRENT zoom (O(1)), so the snap holds through a mid-drag zoom even when
+            // the scan above was skipped.
             if (nearestRef) {
               const targetSt = stations.find(
                 (s) =>
@@ -1138,7 +1197,7 @@ export default function MapCanvas() {
               );
               if (targetSt) {
                 const targetMapCoords = metersToMapCoords(targetSt.coordinates.x, targetSt.coordinates.y, gpsOrigin);
-                const targetScreen = map.current.project(targetMapCoords as [number, number]);
+                const targetScreen = map.current.project(targetMapCoords);
                 const snapDx = targetScreen.x - originScreen.x;
                 const snapDy = targetScreen.y - originScreen.y;
                 surveyLayerRef.current.updateStationDragPreview(snapDx, snapDy);
@@ -1153,23 +1212,18 @@ export default function MapCanvas() {
       }
 
       // Shot drag preview — same pipeline as station drag (both endpoints + co-located stations move)
-      if (moveDrag.type === 'shot' && surveyLayerRef.current && dragStartScreenRef.current) {
-        const dx = e.clientX - dragStartScreenRef.current.x;
-        const dy = e.clientY - dragStartScreenRef.current.y;
+      if (moveDrag.type === 'shot' && surveyLayerRef.current) {
         surveyLayerRef.current.updateStationDragPreview(dx, dy);
       }
 
-      // For segment drags, update preview synchronously (no rAF needed).
-      // Uses pixel offsets (clientX/Y delta from drag start) because the temporary
-      // layers use *-translate with viewport anchor — just a shader uniform update.
-      if (moveDrag.type === 'segment' && surveyLayerRef.current && dragStartScreenRef.current) {
-        const dx = e.clientX - dragStartScreenRef.current.x;
-        const dy = e.clientY - dragStartScreenRef.current.y;
-        lastRawDragOffsetRef.current = { dx, dy };
-
+      // For segment drags, update preview synchronously (no rAF needed). dx/dy comes
+      // from the re-projected grab point above, so the *-translate (viewport anchor)
+      // tracks the cursor across zoom changes mid-drag (#79).
+      if (moveDrag.type === 'segment' && surveyLayerRef.current) {
         // Snap-to-station detection during segment drag (only if drag started from a station)
         const snapThreshold = config?.map.snap.threshold ?? 10;
-        if (dragOriginStationRef.current && snapThreshold > 0) {
+        // Enter for a live scan, OR (on the zoom path) only to re-align a held snap.
+        if ((!skipSnapScan || dragSnapRef.current) && dragOriginStationRef.current && snapThreshold > 0) {
           // Find origin station's screen position and apply drag offset
           const originSt = stations.find(
             (s) =>
@@ -1178,38 +1232,44 @@ export default function MapCanvas() {
           );
           if (originSt) {
             const originMapCoords = metersToMapCoords(originSt.coordinates.x, originSt.coordinates.y, gpsOrigin);
-            const originScreen = map.current.project(originMapCoords as [number, number]);
-            const projectedX = originScreen.x + dx;
-            const projectedY = originScreen.y + dy;
+            const originScreen = map.current.project(originMapCoords);
 
-            // Find nearest non-segment station to the projected origin position
-            let nearestRef: StationRef | null = null;
-            let nearestDist = Infinity;
-            const connectedIds = dragConnectedSectionIdsRef.current;
-            for (const st of stations) {
-              if (connectedIds.has(st.station_ref.section_id)) continue;
-              const mc = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin);
-              const sp = map.current!.project(mc as [number, number]);
-              const sdx = sp.x - projectedX;
-              const sdy = sp.y - projectedY;
-              const dist = Math.sqrt(sdx * sdx + sdy * sdy);
-              if (dist < snapThreshold && dist < nearestDist) {
-                nearestDist = dist;
-                nearestRef = st.station_ref;
+            let nearestRef: StationRef | null = dragSnapRef.current;
+            if (!skipSnapScan) {
+              const projectedX = originScreen.x + dx;
+              const projectedY = originScreen.y + dy;
+
+              // Find nearest non-segment station to the projected origin position
+              nearestRef = null;
+              let nearestDist = Infinity;
+              const connectedIds = dragConnectedSectionIdsRef.current;
+              for (const st of stations) {
+                if (connectedIds.has(st.station_ref.section_id)) continue;
+                const mc = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin);
+                const sp = map.current!.project(mc);
+                const sdx = sp.x - projectedX;
+                const sdy = sp.y - projectedY;
+                const dist = Math.sqrt(sdx * sdx + sdy * sdy);
+                if (dist < snapThreshold && dist < nearestDist) {
+                  nearestDist = dist;
+                  nearestRef = st.station_ref;
+                }
+              }
+
+              // Update snap state only when target changes (avoids React churn)
+              const prev = dragSnapRef.current;
+              if (
+                nearestRef?.section_id !== prev?.section_id ||
+                nearestRef?.station_index !== prev?.station_index
+              ) {
+                dragSnapRef.current = nearestRef;
+                setSnappedStation(nearestRef);
               }
             }
 
-            // Update snap state only when target changes (avoids React churn)
-            const prev = dragSnapRef.current;
-            if (
-              nearestRef?.section_id !== prev?.section_id ||
-              nearestRef?.station_index !== prev?.station_index
-            ) {
-              dragSnapRef.current = nearestRef;
-              setSnappedStation(nearestRef);
-            }
-
-            // If snapped, compute aligned offset so origin station lands on target
+            // If snapped, align the origin station onto the target. Recomputed at the
+            // CURRENT zoom (O(1)), so the snap holds through a mid-drag zoom even when
+            // the scan above was skipped.
             if (nearestRef) {
               const targetSt = stations.find(
                 (s) =>
@@ -1218,7 +1278,7 @@ export default function MapCanvas() {
               );
               if (targetSt) {
                 const targetMapCoords = metersToMapCoords(targetSt.coordinates.x, targetSt.coordinates.y, gpsOrigin);
-                const targetScreen = map.current.project(targetMapCoords as [number, number]);
+                const targetScreen = map.current.project(targetMapCoords);
                 const snapDx = targetScreen.x - originScreen.x;
                 const snapDy = targetScreen.y - originScreen.y;
                 surveyLayerRef.current.updateDragPreview(snapDx, snapDy);
@@ -1234,6 +1294,26 @@ export default function MapCanvas() {
     },
     [moveDrag, config, stations, gpsOrigin, setSnappedStation]
   );
+
+  // While a move-drag is active, re-apply the preview on every map move (zoom OR
+  // programmatic pan) so the grabbed feature stays glued to the cursor — a
+  // scroll-zoom / easeTo fires no pointer event, so synthesize from the last cursor
+  // position (#79). No-op when lastCursorClientRef is null: a center-grab with no
+  // screen coords forgoes zoom-tracking (every real caller passes coords).
+  useEffect(() => {
+    if (!moveDrag || !map.current) return;
+    const m = map.current;
+    const onMapMove = () => {
+      const c = lastCursorClientRef.current;
+      // skipSnapScan=true: this fires per-frame during zoom/pan; only re-project +
+      // re-align (cheap), never the O(all-stations) snap scan.
+      if (c) handleMoveDragMove(c.clientX, c.clientY, true);
+    };
+    m.on('move', onMapMove);
+    return () => {
+      m.off('move', onMapMove);
+    };
+  }, [moveDrag, handleMoveDragMove]);
 
   // After a snap-to-merge drag (station or segment), check connectivity and open merge/closure dialog.
   // Separate from checkAndOpenMergeDialog in useMapTools because the active tool is a
@@ -1307,7 +1387,7 @@ export default function MapCanvas() {
       setMoveDrag(null);
       dragConnectedSectionIdsRef.current = new Set();
       moveDragLngLatRef.current = null;
-      dragStartScreenRef.current = null;
+      lastCursorClientRef.current = null;
       if (snapTarget) setSnappedStation(null);
       return;
     }
@@ -1339,8 +1419,8 @@ export default function MapCanvas() {
         // Build move command for batching with merge/closure (single undo entry)
         const segmentMoveCmd: BatchCommand = { type: 'move_segment', section_id: sectionId, offset: snapOffset };
 
-        // Don't clear moveDrag, dragStartScreenRef, dragConnectedSectionIdsRef,
-        // or dragOriginStationRef — these keep the drag alive after Cancel.
+        // Don't clear moveDrag, dragConnectedSectionIdsRef, or dragOriginStationRef
+        // — these keep the drag alive after Cancel.
         promptSnapMerge(originStationRef, snapTarget, {
           preCommands: [segmentMoveCmd],
           onBeforeConfirm: async () => {
@@ -1353,7 +1433,7 @@ export default function MapCanvas() {
             });
             dragConnectedSectionIdsRef.current = new Set();
             moveDragLngLatRef.current = null;
-            dragStartScreenRef.current = null;
+            lastCursorClientRef.current = null;
             setMoveDrag(null);
           },
           onCancel: () => {
@@ -1398,7 +1478,7 @@ export default function MapCanvas() {
           type: 'move_station' as const, station_ref: ref, offset: snapOffset,
         }));
 
-        // Don't clear moveDrag, dragStartScreenRef, or dragOriginStationRef —
+        // Don't clear moveDrag or dragOriginStationRef —
         // these keep the drag alive after Cancel.
         promptSnapMerge(originStationRef, snapTarget, {
           preCommands: moveCommands,
@@ -1413,7 +1493,7 @@ export default function MapCanvas() {
             });
             surveyLayerRef.current?.commitDragPreview();
             moveDragLngLatRef.current = null;
-            dragStartScreenRef.current = null;
+            lastCursorClientRef.current = null;
             setMoveDrag(null);
           },
           onCancel: () => {
@@ -1438,7 +1518,7 @@ export default function MapCanvas() {
     // Read final position from ref (updated imperatively during drag)
     const endLngLat = moveDragLngLatRef.current ?? moveDrag.currentLngLat;
     moveDragLngLatRef.current = null;
-    dragStartScreenRef.current = null;
+    lastCursorClientRef.current = null;
 
     // Convert drag start/end from map lng/lat to meters, then compute delta
     const startMeters = mapCoordsToMeters(moveDrag.startLngLat.lng, moveDrag.startLngLat.lat, gpsOrigin);
@@ -1664,6 +1744,17 @@ export default function MapCanvas() {
       delete (window as unknown as { __stalagmight_map__?: maplibregl.Map }).__stalagmight_map__;
     };
   }, [mapLoaded]);
+
+  // Expose the active meters transform for E2E commit-offset assertions — lets a test
+  // predict a committed move offset with the SAME mapCoordsToMeters + gpsOrigin the
+  // component uses (the no-GPS linear fallback vs the ENU transform are not equivalent).
+  useEffect(() => {
+    (window as unknown as { __stalagmight_to_meters__?: (lng: number, lat: number) => { x: number; y: number } })
+      .__stalagmight_to_meters__ = (lng, lat) => mapCoordsToMeters(lng, lat, gpsOrigin);
+    return () => {
+      delete (window as unknown as { __stalagmight_to_meters__?: unknown }).__stalagmight_to_meters__;
+    };
+  }, [gpsOrigin]);
 
   // Update survey layer when data changes or map loads.
   // useLayoutEffect ensures setData() runs before the browser paints — critical
@@ -2254,7 +2345,7 @@ export default function MapCanvas() {
         stationDragColocatedRefsRef.current = [];
         dragConnectedSectionIdsRef.current = new Set();
         moveDragLngLatRef.current = null;
-        dragStartScreenRef.current = null;
+        lastCursorClientRef.current = null;
         dragSnapRef.current = null;
         segmentDragTokenRef.current++;
         setSnappedStation(null);
@@ -3138,7 +3229,7 @@ export default function MapCanvas() {
       }
 
       if (moveDrag) {
-        handleMoveDragMove(e);
+        handleMoveDragMove(e.clientX, e.clientY);
       } else if (zoomBox.start) {
         handleZoomBoxMove(e);
       } else if (boxSelect.start) {

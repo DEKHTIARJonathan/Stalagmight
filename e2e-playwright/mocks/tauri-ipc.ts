@@ -2147,20 +2147,31 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: false, error: 'Stations are not directly merged' };
           }
 
-          case 'move_segment':
-            // Mock move segment - just return success
+          case 'move_segment': {
+            // Record the dispatched offset for commit-assertion tests. These handlers
+            // don't mutate currentProject (refreshProjectState refetches generated
+            // coords), so tests assert on the committed offset, not a coord read-back.
             console.log('[Mock IPC] move_segment called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
+            calls.push({ command: 'move_segment', args: args ?? null });
+            win.__MOCK_MOVE_CALLS__ = calls;
             return { success: true };
+          }
 
           case 'move_section':
             // Mock move section - just return success
             console.log('[Mock IPC] move_section called with:', args);
             return { success: true };
 
-          case 'move_station':
-            // Mock move station - just return success
+          case 'move_station': {
             console.log('[Mock IPC] move_station called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
+            calls.push({ command: 'move_station', args: args ?? null });
+            win.__MOCK_MOVE_CALLS__ = calls;
             return { success: true };
+          }
 
           case 'move_shot':
             // Mock move shot - just return success

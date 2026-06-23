@@ -106,7 +106,7 @@ endDragPreview()      -- remove everything, restore original filters
 
 ### Why Refs Instead of React State
 
-Drag tracking uses refs (`moveDragLngLatRef`, `dragStartScreenRef`, etc.) instead of React state because mousemove fires 60+ times/sec and state updates would cause massive re-renders. SurveyLayer is updated via direct method calls.
+Drag tracking uses refs (`moveDragLngLatRef`, `lastCursorClientRef`, etc.) instead of React state because mousemove fires 60+ times/sec and state updates would cause massive re-renders. SurveyLayer is updated via direct method calls.
 
 ---
 
