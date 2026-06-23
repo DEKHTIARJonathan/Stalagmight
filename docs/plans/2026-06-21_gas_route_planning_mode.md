@@ -459,6 +459,16 @@ Concretises the choices §7.2 left open:
   turn-point boundary**. **Push-headroom** (§5.2) renders only as a **faint, opt-in extension**
   beyond the thirds line — thirds is the visual primary (§6 automation-bias). `GasLegend`
   mirrors `DistanceLegend`.
+- **Drop placement: suggest + drag-validate.** The tool drops a suggested marker inside the
+  gas-feasible envelope (§5.4); the diver **drags it along the line**, live-colored green
+  (works) / red (outside the envelope), **snapping to stations**. The judgment is the diver's,
+  the guardrail the tool's.
+- **Rig setup: saved rig profiles.** Pick a saved rig ("my standard rig" — e.g. 2× LP85 back
+  gas + 2× AL80 stages) from **user config**, then tweak fills per dive. Built on the §5.3 tank
+  presets; profiles are personal defaults (user config, never the `.stalx`).
+- **Push-headroom: explicit opt-in toggle, OFF by default.** A "Show push-headroom" control,
+  default **off**, so the conservative thirds view is the resting state; when on, the faint
+  labeled extension (above) appears. Strongest §6 automation-bias posture.
 
 ---
 
