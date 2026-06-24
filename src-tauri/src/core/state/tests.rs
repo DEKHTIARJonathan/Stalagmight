@@ -13803,6 +13803,54 @@ fn test_merge_projects_output_already_exists() {
 }
 
 #[test]
+fn test_merge_projects_extension_less_output_detects_existing_stalx() {
+    // An extension-less output path (e.g. `output`) must be normalized to
+    // `output.stalx` BEFORE the existence check, so a merge can't silently
+    // overwrite an existing `output.stalx` (#169). Without normalize-first,
+    // `output.exists()` is false and the merge clobbers `output.stalx`.
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut proj_a = Project::new("A".to_string(), None);
+    proj_a.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    let mut proj_b = Project::new("B".to_string(), None);
+    proj_b.add_section(SectionData {
+        shots: vec![test_shot_data(2.0)],
+        ..Default::default()
+    });
+    let source_a = temp_dir.path().join("a.stalx");
+    let source_b = temp_dir.path().join("b.stalx");
+    let mut db_a = Database::open(&source_a).unwrap();
+    db_a.save_project(&proj_a).unwrap();
+    let mut db_b = Database::open(&source_b).unwrap();
+    db_b.save_project(&proj_b).unwrap();
+    drop(db_a);
+    drop(db_b);
+
+    // An existing `output.stalx`, merged into via an EXTENSION-LESS output arg.
+    let existing = temp_dir.path().join("output.stalx");
+    std::fs::write(&existing, b"existing").unwrap();
+    let output_extless = temp_dir.path().join("output"); // no .stalx
+
+    let state = AppState::new().unwrap();
+    let result = state.merge_projects(
+        vec![source_a, source_b],
+        output_extless,
+        "Merged".to_string(),
+        false,
+    );
+    assert!(
+        !result.success,
+        "merge must detect the existing output.stalx behind an extension-less path"
+    );
+    assert!(result.error.unwrap_or_default().contains("already exists"));
+    // The existing file must be untouched (not clobbered).
+    assert_eq!(std::fs::read(&existing).unwrap(), b"existing");
+}
+
+#[test]
 fn test_merge_projects_source_missing() {
     let temp_dir = TempDir::new().unwrap();
 

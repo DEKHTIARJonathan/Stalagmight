@@ -27,6 +27,17 @@ impl AppState {
             );
         }
 
+        // Normalize the `.stalx` extension FIRST so the existence check below and
+        // the stored `file_path` both refer to the actual on-disk file. An
+        // extension-less `output_path` (e.g. `foo`) otherwise slips past an
+        // existing `foo.stalx` and leaves `file_path` pointing at a path that
+        // doesn't match what's written (#169).
+        let output_path = if output_path.extension().is_none_or(|ext| ext != "stalx") {
+            output_path.with_extension("stalx")
+        } else {
+            output_path
+        };
+
         // Check that output path doesn't already exist
         if output_path.exists() {
             return CommandResult::failure(format!(
@@ -315,15 +326,8 @@ impl AppState {
         // drift in a source isn't laundered into the new file.
         merged_project.redrive_offsets_after_load();
 
-        // Set the output file path
+        // Set the output file path (already normalized to `.stalx` at the top).
         merged_project.file_path = Some(output_path.clone());
-
-        // Ensure .stalx extension
-        let output_path = if output_path.extension().is_none_or(|ext| ext != "stalx") {
-            output_path.with_extension("stalx")
-        } else {
-            output_path
-        };
 
         // Save the merged project using safe save pattern (temp file + atomic rename)
         let temp_path = output_path.with_extension("stalx.tmp");
