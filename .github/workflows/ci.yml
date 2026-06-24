@@ -123,8 +123,11 @@ jobs:
       - run: pnpm tsc --noEmit
       # File-size ratchet (#157): keep non-test src-tauri/src/*.rs files from
       # re-bloating past their committed baseline. Pure-Node, no deps; sub-second.
+      # The fixture test pins the prod-LOC strip heuristic (the under-count class).
       - name: Rust file-size ratchet
-        run: pnpm lint:rust-file-size
+        run: |
+          node scripts/check-rust-file-size.test.mjs
+          pnpm lint:rust-file-size
       # vitest unit + component tests (issue #107). `vitest` auto-detects CI
       # (CI=true) and runs once instead of watching.
       - run: pnpm test
