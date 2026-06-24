@@ -317,11 +317,18 @@ export default function SingleSystemView() {
     if (!projectLoaded) return undefined;
     const root = rootRef.current;
     const toolbar = root?.querySelector<HTMLElement>('[data-testid="toolbar"]');
+    const statusBar = root?.querySelector<HTMLElement>('[data-testid="status-bar"]');
     if (!root || !toolbar) return undefined;
-    const apply = () => root.style.setProperty('--toolbar-h', `${toolbar.offsetHeight}px`);
+    // Expose the chrome heights so floating menus (e.g. data-table dropdowns) can
+    // stay clear of the top toolbar and the bottom status bar when they flip.
+    const apply = () => {
+      root.style.setProperty('--toolbar-h', `${toolbar.offsetHeight}px`);
+      if (statusBar) root.style.setProperty('--statusbar-h', `${statusBar.offsetHeight}px`);
+    };
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(toolbar);
+    if (statusBar) ro.observe(statusBar);
     return () => ro.disconnect();
   }, [projectLoaded]);
 
@@ -398,6 +405,13 @@ export default function SingleSystemView() {
   // Details subtrees: the Docks receive the SAME element reference and React bails
   // out of the child render. Dimmed during placement (dim wraps content only,
   // never the tab/handle).
+  // NOTE: the `grayscale` filter establishes a containing block for
+  // `position:fixed` descendants — which would re-trap the data-table sub-header
+  // dropdowns inside the Dock's clip box (the exact #162 bug). It is safe ONLY
+  // because the same wrapper is `pointer-events-none`, so those triggers can't be
+  // clicked to open a dropdown while the filter is live. Keep `grayscale` paired
+  // with `pointer-events-none` (or move the dim to an overlay) — don't dim the
+  // panel subtree with a filter while leaving it interactive.
   const dimCls = placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : '';
   const sections = project?.sections;
   const sectionsContent = useMemo(
@@ -599,6 +613,7 @@ export default function SingleSystemView() {
         onMouseLeave={dataReveal.onRegionLeave}
         className="px-4 py-2 border-t border-border text-sm text-text-secondary flex justify-between"
         style={{ backgroundImage: statusBarGradient }}
+        data-testid="status-bar"
       >
         <span>
           {t('singleView.status.summary', {

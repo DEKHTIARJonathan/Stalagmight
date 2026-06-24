@@ -14,6 +14,7 @@ import { getDeleteShotDialog, deriveRangeDeleteParams } from '../../utils/contex
 import { getNumberFormatLocale } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
+import { useAnchoredFixedMenu } from '../../hooks/useAnchoredFixedMenu';
 import { setSource } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { invokeIpc } from '../../utils/ipc';
@@ -111,23 +112,22 @@ function SubHeaderPickerMenu({
   renderTrigger: (state: { open: boolean }) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  // Flip the list above the pill when there is more room there than below — the
-  // data-table sub-header sits low in the window (above the status bar), so a
-  // downward list would otherwise be clipped.
-  const [up, setUp] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const toggle = () => {
-    const willOpen = !open;
-    if (willOpen) {
-      const r = triggerRef.current?.getBoundingClientRect();
-      if (r) setUp(r.top > window.innerHeight - r.bottom);
-    }
-    setOpen(willOpen);
-  };
+  const toggle = () => setOpen((v) => !v);
+  // Position the list with `position:fixed` so it escapes the Dock's
+  // overflow-hidden clip box when it flips up (the data-table sub-header sits
+  // low in the window); the hook flips/clamps within the viewport.
+  const listStyle = useAnchoredFixedMenu(open, triggerRef, listRef, {
+    align: 'center',
+    gap: 4,
+    width: 208, // px; the hook also sets this as the list width (single source of truth)
+    maxHeightCap: 256, // matches the old max-h-64 — stay compact + scroll on a tall window
+  });
   // Close on outside mousedown / external scroll / resize (shared hook). The
-  // list is anchored to the trigger (position:absolute), so it tracks the page
-  // and only its OWN scroll is exempt. Escape is handled separately below.
+  // list is position:fixed at a captured rect, so any scroll/resize would
+  // otherwise leave it floating at a stale spot. Escape is handled separately
+  // below.
   useDismissableLayer({
     open,
     onDismiss: () => setOpen(false),
@@ -161,9 +161,8 @@ function SubHeaderPickerMenu({
         <div
           ref={listRef}
           data-dropdown-open
-          className={`absolute left-1/2 z-50 max-h-64 w-52 -translate-x-1/2 overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg ${
-            up ? 'bottom-full mb-1' : 'top-full mt-1'
-          }`}
+          className="overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg"
+          style={listStyle}
           data-testid={listTestId}
           onMouseLeave={() => onHoverOption?.(null)}
         >
@@ -191,6 +190,22 @@ function SubHeaderPickerMenu({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Centers a sub-header pill across the full width WITHOUT a CSS `transform`. A
+ * transformed ancestor would make the picker's `position:fixed` list resolve
+ * against this box instead of the viewport, re-introducing the Dock-clip the fix
+ * escapes (#162) — so we center with flex, not `-translate-x-1/2`. The band is
+ * `pointer-events-none` so it can't eat clicks on the surrounding sub-header
+ * controls; the inner wrapper re-enables them for the pill itself.
+ */
+function CenteredPillBand({ children }: { children: ReactNode }) {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 z-40 flex justify-center">
+      <div className="pointer-events-auto">{children}</div>
     </div>
   );
 }
@@ -557,6 +572,8 @@ export default function DataTable({ sections }: DataTableProps) {
   // Wraps both the eye trigger and its anchored dropdown, so an outside-mousedown
   // check can treat the whole control as "inside".
   const colMenuWrapRef = useRef<HTMLDivElement | null>(null);
+  const colMenuBtnRef = useRef<HTMLButtonElement | null>(null);
+  const colMenuListRef = useRef<HTMLDivElement | null>(null);
   // Right-click on a column header: hide it / switch the angle family's mode.
   const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; colKey: string } | null>(null);
   const headerMenuRef = useRef<HTMLDivElement | null>(null);
@@ -588,9 +605,14 @@ export default function DataTable({ sections }: DataTableProps) {
       window.removeEventListener('keydown', onKey);
     };
   }, [headerMenu]);
-  // Open the dropdown toward the larger free space — the data table sits at
-  // the bottom of the window, so this usually means upward.
-  const [colMenuUp, setColMenuUp] = useState(false);
+  // Position the dropdown with `position:fixed` so it escapes the Dock's
+  // overflow-hidden clip box when it flips up (the data table sits at the bottom
+  // of the window, so this usually means upward).
+  const colMenuStyle = useAnchoredFixedMenu(colMenuOpen, colMenuBtnRef, colMenuListRef, {
+    align: 'right',
+    gap: 4,
+    width: 224, // px; the hook also sets this as the dropdown width (single source of truth)
+  });
 
   const shotHiddenColumns = useMemo(() => {
     const hidden = [...hiddenShotCols];
@@ -700,8 +722,10 @@ export default function DataTable({ sections }: DataTableProps) {
   }, [shotColumnOrder, hiddenShotCols, azimuthMode, inclinationMode, stationColumnOrder, hiddenStationCols]);
 
   // Close on outside mousedown / external scroll / resize (shared hook). The
-  // dropdown is anchored to its trigger (position:absolute), so it tracks the
-  // page; the wrapper covers both. Escape stays separate below.
+  // dropdown is position:fixed at a captured rect (useAnchoredFixedMenu), so any
+  // scroll/resize would otherwise leave it floating at a stale spot; the wrapper
+  // still contains it in the DOM, so inside clicks count as inside. Escape stays
+  // separate below.
   useDismissableLayer({
     open: colMenuOpen,
     onDismiss: () => setColMenuOpen(false),
@@ -1575,7 +1599,7 @@ export default function DataTable({ sections }: DataTableProps) {
            (the viewer shows last-saved state, so flag pending edits). */
         <div className="relative flex items-center gap-3 px-3 py-1 border-b border-border shrink-0 text-xs">
           <span className="font-medium">{t('dataTable.title')}</span>
-          <div className="absolute left-1/2 z-40 -translate-x-1/2">
+          <CenteredPillBand>
             <SubHeaderPickerMenu
               triggerTestId="data-table-raw-table-pill"
               listTestId="data-table-raw-table-menu-list"
@@ -1604,7 +1628,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 );
               }}
             />
-          </div>
+          </CenteredPillBand>
           {isDirty && (
             <span className="ml-auto text-text-secondary" data-testid="data-table-raw-dirty-hint">
               {t('dataTable.rawData.asOfLastSave')}
@@ -1621,7 +1645,7 @@ export default function DataTable({ sections }: DataTableProps) {
           </span>
         )}
         {selectedSection && (
-          <div className="absolute left-1/2 z-40 -translate-x-1/2">
+          <CenteredPillBand>
             <SubHeaderPickerMenu
               triggerTestId="data-table-section-pill"
               listTestId="data-table-section-menu-list"
@@ -1646,7 +1670,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 </EntityBlob>
               )}
             />
-          </div>
+          </CenteredPillBand>
         )}
         <div
           className="ml-auto flex items-center rounded border border-border overflow-hidden"
@@ -1673,11 +1697,8 @@ export default function DataTable({ sections }: DataTableProps) {
             mousedown listener that closes it. */}
         <div ref={colMenuWrapRef} className="relative" onMouseDown={(e) => e.stopPropagation()}>
           <button
-            onClick={(e) => {
-              const r = e.currentTarget.getBoundingClientRect();
-              setColMenuUp(r.top > window.innerHeight - r.bottom);
-              setColMenuOpen((v) => !v);
-            }}
+            ref={colMenuBtnRef}
+            onClick={() => setColMenuOpen((v) => !v)}
             className={
               tableView === 'shots' && draftHiddenProblems.size > 0
                 ? 'text-error'
@@ -1692,9 +1713,9 @@ export default function DataTable({ sections }: DataTableProps) {
           </button>
           {colMenuOpen && (
             <div
-              className={`absolute right-0 z-50 w-56 rounded border border-border bg-panel p-1 shadow-lg ${
-                colMenuUp ? 'bottom-full mb-1' : 'top-full mt-1'
-              }`}
+              ref={colMenuListRef}
+              className="overflow-auto rounded border border-border bg-panel p-1 shadow-lg"
+              style={colMenuStyle}
               data-dropdown-open
               data-testid="data-table-columns-dropdown"
             >

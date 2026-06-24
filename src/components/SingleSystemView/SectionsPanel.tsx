@@ -23,6 +23,12 @@ interface SectionsPanelProps {
 // this panel which collapses away in focus mode).
 const SECTION_FOCUS_TABLE_FRACTION = 0.3;
 
+// Delay before an external hover (e.g. skimming geometry on the map) scrolls the
+// hovered section's row into view. Debouncing avoids the list thrashing as the
+// pointer crosses many shots/stations in quick succession — it settles on the
+// section the pointer lands on. Un-hover restore stays immediate.
+const HOVER_SCROLL_DEBOUNCE_MS = 120;
+
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
@@ -52,6 +58,19 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const effectiveHoveredSectionId: SectionId | null =
     hoveredSectionId ?? hoveredShot?.sectionId ?? hoveredStation?.section_id ?? null;
 
+  // Identity of the hovered GEOMETRY, not just its section — moving between two
+  // shots/stations of the SAME section still changes this, so the debounced
+  // scroll re-arms and only fires once the pointer truly settles (mirrors the
+  // precedence in effectiveHoveredSectionId above).
+  const hoverKey: string | null =
+    hoveredSectionId != null
+      ? `section:${hoveredSectionId}`
+      : hoveredShot
+        ? `shot:${hoveredShot.sectionId}:${hoveredShot.shotId}`
+        : hoveredStation
+          ? `station:${hoveredStation.section_id}:${hoveredStation.station_index}`
+          : null;
+
   // The section that owns the current selection — a directly selected section, or
   // the section of a selected shot/station (selected from the map, data table, or
   // details panel). The matching row is highlighted and scrolled into view so the
@@ -74,6 +93,8 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // is no external-hover scroll to undo.
   const listContainerRef = useRef<HTMLDivElement | null>(null);
   const preHoverScrollTopRef = useRef<number | null>(null);
+  // Pending debounced hover-scroll timer (see HOVER_SCROLL_DEBOUNCE_MS).
+  const hoverScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keyboard accessibility: track focused index and refs for roving tabindex
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
@@ -103,7 +124,8 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   useEffect(() => {
     const container = listContainerRef.current;
     if (effectiveHoveredSectionId === null) {
-      // Nothing hovered anywhere — undo any external-hover auto-scroll.
+      // Nothing hovered anywhere — undo any external-hover auto-scroll. Immediate
+      // (the prior effect's cleanup already dropped any pending hover-scroll).
       if (preHoverScrollTopRef.current !== null && container) {
         container.scrollTop = preHoverScrollTopRef.current;
       }
@@ -115,11 +137,40 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     // Panel-internal row hovers (lastHoveredIdRef set) are the user already
     // interacting with the list — don't capture/restore for those.
     const isExternalHover = lastHoveredIdRef.current === null;
-    if (isExternalHover && preHoverScrollTopRef.current === null && container) {
-      preHoverScrollTopRef.current = container.scrollTop;
-    }
-    optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
-  }, [effectiveHoveredSectionId, sections]);
+    // Debounce the reveal: skimming geometry on the map changes the hovered
+    // section many times in quick succession; only scroll once it settles.
+    hoverScrollTimerRef.current = setTimeout(() => {
+      hoverScrollTimerRef.current = null;
+      // Skip while a DATA-TABLE dropdown is open (e.g. the section picker, whose
+      // own option hovers drive this scroll): the move is invisible behind the
+      // dropdown and the resulting scroll event would trip its outside-scroll
+      // guard and close it. Scoped to the data table — NOT a global
+      // `[data-dropdown-open]` — so an unrelated open menu/Select elsewhere in
+      // the app doesn't suppress a legitimate map-hover reveal. (position:fixed
+      // dropdowns stay DOM descendants of the data table, so this still matches
+      // them.) Checked at fire time — the hover can be set before the dropdown
+      // opens.
+      if (document.querySelector('[data-testid="data-table"] [data-dropdown-open]')) return;
+      // Capture the pre-hover scroll position right before we actually move it —
+      // NOT when the timer was armed. A skipped scroll (guard above, or a
+      // non-external hover) then leaves preHoverScrollTopRef null, so a later
+      // un-hover can't restore the list to a position this hover never moved it
+      // from (which would undo an unrelated manual scroll). Guarded on `=== null`
+      // so only the FIRST reveal in a skim sequence sets the baseline.
+      if (isExternalHover && preHoverScrollTopRef.current === null && container) {
+        preHoverScrollTopRef.current = container.scrollTop;
+      }
+      optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
+    }, HOVER_SCROLL_DEBOUNCE_MS);
+    return () => {
+      if (hoverScrollTimerRef.current !== null) {
+        clearTimeout(hoverScrollTimerRef.current);
+        hoverScrollTimerRef.current = null;
+      }
+    };
+    // Keyed on hoverKey (the geometry), not effectiveHoveredSectionId, so hovering
+    // a different shot/station within the same section also re-arms the debounce.
+  }, [hoverKey, effectiveHoveredSectionId, sections]);
 
   // Scroll the selected section's row into view when the selection changes (a
   // shot/station/section selected from the map, data table, or details panel).
@@ -138,6 +189,12 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     if (selectedSectionId === null) return;
     const idx = sections.findIndex((s) => s.id === selectedSectionId);
     if (idx < 0) return;
+    // A selection reveal wins over a pending (debounced) hover scroll — cancel it
+    // so it can't snap the list back to the hovered row 50ms later.
+    if (hoverScrollTimerRef.current !== null) {
+      clearTimeout(hoverScrollTimerRef.current);
+      hoverScrollTimerRef.current = null;
+    }
     optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
     // EVERY selection event re-anchors the panel here — including re-selecting
     // the already-selected section. If it happened during an active external
