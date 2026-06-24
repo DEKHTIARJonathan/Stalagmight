@@ -44,12 +44,12 @@ impl Project {
 
     /// Does the merge group containing `section_id` hold a zero datum?
     pub(crate) fn rigid_group_has_datum(&self, id: SectionId) -> bool {
-        let group = self.get_merged_section_ids(id);
-        group.iter().any(|sid| {
-            self.zero_datums
-                .iter()
-                .any(|zd| zd.station_ref.section_id == *sid)
-        })
+        // Delegate to the resolve-aware check so a DANGLING datum (anchor key no
+        // longer resolves) is not counted as an anchor — otherwise a move-drag is
+        // wrongly blocked on a phantom-anchored, actually-unanchored group (#174).
+        // Same merge-group scope as before: `component_datum_refs` (which backs
+        // `section_has_zero_datum`) uses the same `get_merged_section_ids`.
+        self.section_has_zero_datum(id)
     }
 
     /// Assert that all merge points are colocated (within 1cm tolerance).

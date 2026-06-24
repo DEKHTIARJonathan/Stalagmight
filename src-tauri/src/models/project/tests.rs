@@ -9648,6 +9648,148 @@ fn section_has_zero_datum_ignores_dangling_datum() {
 }
 
 #[test]
+fn has_datum_path_excluding_ignores_dangling_datum() {
+    // A dangling datum (anchor key unresolvable) must NOT count as a reachable
+    // anchor in has_datum_path_excluding — same resolve-aware invariant as
+    // section_has_zero_datum (#174). Without the resolve guard the BFS reports a
+    // datum path that doesn't actually anchor anything.
+    let mut project = Project::new("DanglingPath".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    // A second, datum-less section to use as `excluded` (≠ a, so `a` is visited).
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    assert!(
+        !project.has_datum_path_excluding(a, b),
+        "a dangling datum must not count as a reachable anchor"
+    );
+}
+
+#[test]
+fn realign_after_shot_edit_ignores_dangling_datum() {
+    // With only a dangling datum in the merge group, realign must treat the group
+    // as unanchored (early return) — NOT run the Step-2 merge BFS that would
+    // realign partner offsets around the phantom-anchor section (#174).
+    let mut project = Project::new("DanglingRealign".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // Merge A1 = B0 so A and B share a rigid group, then drift B off the merge.
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+    project.adjust_section_offset(b, 3.0, 4.0);
+    // Dangling datum on section A (anchor key unresolvable).
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
+        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+    let before = project.section_offset(b);
+    project.realign_after_shot_edit(b);
+    let after = project.section_offset(b);
+    assert_eq!(
+        before, after,
+        "realign must no-op when the only datum in the group is dangling \
+         (no realigning around a phantom anchor)"
+    );
+}
+
+#[test]
+fn rigid_group_has_datum_ignores_dangling_datum() {
+    // A dangling datum must not mark a merge group as anchored — otherwise a
+    // move-drag is wrongly blocked on an actually-unanchored group (#174; the
+    // guard sits at command_move's "merge group holds a zero datum" check).
+    let mut project = Project::new("DanglingRigid".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    assert!(
+        !project.rigid_group_has_datum(a),
+        "a dangling datum must not count as a merge-group anchor"
+    );
+}
+
+#[test]
+fn cascade_connection_offsets_ignores_dangling_datum() {
+    // B holds a real datum; A holds a DANGLING datum, is merged to B, and is
+    // drifted off the merge. Without the resolve guard A is wrongly frozen as
+    // authoritative, so the A=B merge (two "fixed" sections) can't be pulled back
+    // into alignment. With the guard only B anchors and A cascades onto it (#174).
+    let mut project = Project::new("DanglingCascade".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // Merge A1 = B0 (direct push avoids merge_stations' auto-alignment).
+    project.record_station_merge(StationMerge {
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
+        merged_at: Utc::now(),
+    });
+    // Real datum on B (the genuine anchor) + dangling datum on A.
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(b, 0).into(),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    // Drift A off the merge; precondition: misaligned.
+    project.adjust_section_offset(a, 7.0, -3.0);
+    assert!(
+        !project.check_merge_alignment().is_empty(),
+        "precondition: the A=B merge starts misaligned"
+    );
+    // Cascade anchored at B; A must follow (not stay frozen on a phantom datum).
+    project.cascade_connection_offsets(&[b]);
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "cascade must realign A onto B; a dangling datum on A must not freeze it"
+    );
+}
+
+#[test]
 fn check_merge_alignment_detects_and_realign_fixes_drift() {
     // Two sections, A0-A1 and B0-B1, with A1 merged to B0.
     let mut project = Project::new("Drift".to_string(), None);
