@@ -115,6 +115,12 @@ Subagents 1–8 each own exactly one numbered lens:
   `cargo clippy` (deny-level) on `src-tauri` must pass — run `cargo fmt` and clear
   clippy before pushing; flag any drift. Match the surrounding style. (`CLAUDE.md`,
   `docs/linting.md`)
+- **File-size ratchet is CI-gated** (`check` job, `pnpm lint:rust-file-size` vs
+  `src-tauri/file-size-baseline.json`): flag a PR that grows a non-test `src-tauri/src`
+  file already at/above 1500 prod LOC past its baseline, introduces a *new* file at/above
+  1500, pushes any new/grown file over the 2000-prod-LOC hard cap, or adds a new
+  god-`impl`/god-file — those belong in a module split (#157), not a bigger file. A
+  legitimate growth must bump the baseline (`--update`) in the same PR.
 - Heavy O(N) cross-checks must be `#[cfg(debug_assertions)]`; hot-path logs via
   `debugLog()`, not `console.log`. (`docs/debug-gates.md`, `docs/performance.md`)
 - Cross-platform: macOS/Linux vs Windows tile-URL forms; Windows tests need
