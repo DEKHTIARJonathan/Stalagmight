@@ -126,7 +126,7 @@ jobs:
       # The fixture test pins the prod-LOC strip heuristic (the under-count class).
       - name: Rust file-size ratchet
         run: |
-          node scripts/check-rust-file-size.test.mjs
+          pnpm lint:rust-file-size:test
           pnpm lint:rust-file-size
       # vitest unit + component tests (issue #107). `vitest` auto-detects CI
       # (CI=true) and runs once instead of watching.

@@ -40,7 +40,9 @@ const BASELINE_PATH = path.join(REPO_ROOT, 'src-tauri', 'file-size-baseline.json
 // Thresholds are owned by the script (the single source of truth). The baseline
 // JSON echoes them for readability, but `main()` asserts the echo matches these
 // and `--update` always writes these — so editing the generated artifact can't
-// quietly loosen the gate.
+// quietly loosen the *global thresholds*. (A per-file baseline number can still be
+// bumped to grant a specific file room, but that shows up in the baseline diff
+// right next to the grown file, so it's review-visible, not silent.)
 export const WARN_LOC = 1500;
 export const FAIL_LOC = 2000;
 
@@ -112,9 +114,11 @@ export function maskNonCode(lines) {
         out += maskStr(strStart[0]); i += strStart[0].length; continue;
       }
       if (c === "'") {
-        const charLit = /^'(?:\\.|[^'])'/.exec(rest); // '{' / '\n' — not a lifetime 'a
+        // '{' / '\n' / '\u{7d}' / '\x7d' — a char literal (masked). A bare 'a is a
+        // lifetime/label: keep the ' (harmless; carries no brace).
+        const charLit = /^'(?:\\u\{[0-9a-fA-F]*\}|\\x[0-9a-fA-F]{1,2}|\\.|[^'])'/.exec(rest);
         if (charLit) { out += maskStr(charLit[0]); i += charLit[0].length; continue; }
-        out += c; i++; continue; // lifetime: keep the ' (harmless; no brace)
+        out += c; i++; continue;
       }
       out += c; i++;
     }
@@ -135,16 +139,25 @@ export function markCfgTestItems(masked, warnings = []) {
     let depth = 0;
     let sawBrace = false;
     let endLine = -1;
+    let endCol = -1;
     for (let j = i; j < masked.length && endLine < 0; j++) {
-      for (const ch of masked[j]) {
+      const row = masked[j];
+      for (let c = 0; c < row.length; c++) {
+        const ch = row[c];
         if (ch === '{') { depth++; sawBrace = true; }
         else if (ch === '}') { depth--; }
-        else if (ch === ';' && depth === 0 && !sawBrace) { endLine = j; break; } // braceless item ends
-        if (sawBrace && depth === 0) { endLine = j; break; } // block item closed
+        else if (ch === ';' && depth === 0 && !sawBrace) { endLine = j; endCol = c; break; } // braceless item ends
+        if (sawBrace && depth === 0) { endLine = j; endCol = c; break; } // block item closed
       }
     }
     if (endLine >= 0) {
-      for (let k = i; k <= endLine; k++) drop[k] = true;
+      // If real code follows the terminator on the end line (non-idiomatic line
+      // mixing — rustfmt always splits these, but don't rely on that for the
+      // dangerous direction — e.g. `#[cfg(test)] use x; fn prod() {}`), keep the
+      // end line so the trailing production isn't dropped (over-count is safe).
+      const trailingCode = /\S/.test(masked[endLine].slice(endCol + 1));
+      const lastDrop = trailingCode ? endLine - 1 : endLine;
+      for (let k = i; k <= lastDrop; k++) drop[k] = true;
       i = endLine + 1;
     } else {
       if (sawBrace) {
@@ -202,7 +215,18 @@ function measureTree(warnings = []) {
 
 function loadBaseline() {
   if (!fs.existsSync(BASELINE_PATH)) return {};
-  return JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8'));
+  try {
+    return JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8'));
+  } catch (e) {
+    // A corrupted baseline (bad merge markers, truncated write) should fail with a
+    // clean diagnostic, not an uncaught SyntaxError. `--update` rebuilds from
+    // scratch and never calls this, so it can always self-heal a corrupt file.
+    console.error(
+      `check-rust-file-size: ${relPosix(BASELINE_PATH)} is not valid JSON (${e.message}). ` +
+        `Fix it, or regenerate with: pnpm lint:rust-file-size --update`,
+    );
+    process.exit(1);
+  }
 }
 
 function writeBaseline(measured) {
@@ -231,15 +255,27 @@ function isAllowed(rel) {
 
 // Pure classification of one file against its baseline. level ∈ 'ok'|'warn'|'error'.
 export function classify(rel, loc, base) {
-  if (isAllowed(rel)) return { level: 'ok' };
   const isNew = base === undefined;
   const grew = !isNew && loc > base;
+  if (isAllowed(rel)) {
+    // An allow-listed file is a documented irreducible exception: exempt from the
+    // warn/new/hard-cap thresholds, but it still may NOT grow past its baseline —
+    // an exception is not a licence to balloon without limit.
+    return grew
+      ? {
+          level: 'error',
+          message:
+            `${rel}: ${loc} LOC > baseline ${base} — allow-listed files are exempt from the ` +
+            `size budget but may not grow; split it, or run --update if the growth is intentional.`,
+        }
+      : { level: 'ok' };
+  }
   if (loc > FAIL_LOC && (isNew || grew)) {
     return {
       level: 'error',
       message:
         `${rel}: ${loc} LOC exceeds the hard ${FAIL_LOC}-prod-LOC budget — split it into ` +
-        `logical modules at an API boundary (#157).`,
+        `logical modules at an API boundary (#157), or run --update if the growth is intentional.`,
     };
   }
   if (grew && loc >= WARN_LOC) {
@@ -270,6 +306,23 @@ function main() {
     return 1;
   }
 
+  const warnings = [];
+  const measured = measureTree(warnings);
+
+  // --update rebuilds the baseline from scratch (writing the script's own
+  // thresholds), so it neither loads nor validates the old file — it always
+  // self-heals a corrupt or drifted baseline.
+  if (process.argv.includes('--update')) {
+    writeBaseline(measured);
+    const tracked = Object.values(measured).filter((v) => v >= WARN_LOC).length;
+    console.log(
+      `baseline updated: ${Object.keys(measured).length} files recorded ` +
+        `(${tracked} at/above warn=${WARN_LOC}). wrote ${relPosix(BASELINE_PATH)}`,
+    );
+    for (const w of warnings) console.warn(`  ⚠ ${w}`);
+    return 0;
+  }
+
   const baseline = loadBaseline();
   // The script owns the thresholds; a drifted echo in the generated baseline is a
   // tampering smell, not a config knob — fail loudly instead of honoring it.
@@ -284,20 +337,6 @@ function main() {
     }
   }
 
-  const warnings = [];
-  const measured = measureTree(warnings);
-
-  if (process.argv.includes('--update')) {
-    writeBaseline(measured);
-    const tracked = Object.values(measured).filter((v) => v >= WARN_LOC).length;
-    console.log(
-      `baseline updated: ${Object.keys(measured).length} files recorded ` +
-        `(${tracked} at/above warn=${WARN_LOC}). wrote ${relPosix(BASELINE_PATH)}`,
-    );
-    for (const w of warnings) console.warn(`  ⚠ ${w}`);
-    return 0;
-  }
-
   const recorded = baseline.files ?? {};
   const errors = [];
   const softWarnings = [];
@@ -306,6 +345,19 @@ function main() {
     const verdict = classify(rel, measured[rel], recorded[rel]);
     if (verdict.level === 'error') errors.push(verdict.message);
     else if (verdict.level === 'warn') softWarnings.push(verdict.message);
+  }
+
+  // Baselined files that no longer exist on disk (split/renamed/deleted) linger as
+  // dead rows and mask whether a split actually shrank the tree. They don't affect
+  // the gate (the loop above iterates `measured`), but flag them so a split PR
+  // runs --update to prune them.
+  const stale = Object.keys(recorded).filter((r) => measured[r] === undefined);
+  if (stale.length > 0) {
+    const shown = stale.slice(0, 5).join(', ');
+    console.warn(
+      `  ⚠ baseline: ${stale.length} recorded file(s) no longer exist ` +
+        `(${shown}${stale.length > 5 ? ', …' : ''}); run --update to prune.`,
+    );
   }
 
   for (const w of warnings) console.warn(`  ⚠ strip-heuristic: ${w}`);

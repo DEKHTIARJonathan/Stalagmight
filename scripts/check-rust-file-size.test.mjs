@@ -90,6 +90,19 @@ test('char literal containing a brace is not counted as a real brace', () => {
   assert.ok(!masked[0].includes('{'), "char-literal brace should be masked away");
 });
 
+test('multi-escape char literals (\\u{7b}, \\x7d) are masked, not leaked as braces', () => {
+  const masked = maskNonCode(["let a = '\\u{7b}'; let b = '\\x7d';"]);
+  assert.ok(!masked[0].includes('{') && !masked[0].includes('}'), 'escape braces must be masked');
+});
+
+test('REGRESSION: production code after a braceless cfg(test) on the SAME line survives', () => {
+  // The braceless strip used to drop the whole physical line, taking the inline
+  // production fn with it. rustfmt would split this, but the strip must be correct
+  // in the dangerous (under-count) direction without relying on that.
+  const src = ['let kept = mk();', '#[cfg(test)] use crate::y; fn prod() { go(); }'].join('\n');
+  assert.equal(prodLoc(src), 2); // both lines count; the cfg+use part over-counts (safe)
+});
+
 test('unbalanced strip is reported, not silently dropped to EOF', () => {
   // A genuinely unclosed block (no real `}`): keep the lines + warn.
   const warnings = [];
