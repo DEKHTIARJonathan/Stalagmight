@@ -8,6 +8,8 @@ mod project_io;
 mod raw_data;
 mod recent_projects;
 mod undo;
+mod undo_capture;
+mod undo_restore;
 mod warnings;
 
 #[cfg(test)]
