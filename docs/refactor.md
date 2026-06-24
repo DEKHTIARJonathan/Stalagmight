@@ -28,16 +28,23 @@ agent-context cost, with at most a marginal incremental-rebuild benefit. Honest
 ## How LOC was measured
 
 `tokei` `Code` column (excludes comments + blanks). **Production-only** LOC
-additionally strips inline `#[cfg(test)] mod tests { … }` blocks (re-run `tokei`
-on the file truncated at the test module) — that production number drives the
-priority tier. The as-written total is shown alongside so inline-test bloat stays
-visible.
+additionally strips **every** `#[cfg(test)]`-gated item — the trailing `mod tests
+{ … }` block *and* any scattered mid-file test items (`#[cfg(test)] fn`,
+`#[cfg(test)] use …;`, debug-assert helpers) — not just a single truncation at the
+test module. The inventory figures below are a tokei approximation that truncates
+at the trailing test module, so a file with scattered mid-file `#[cfg(test)]`
+items (notably `project.rs` and `lib.rs`) is slightly *over*-stated in Prod /
+under-stated in Inline-test. The **exact** production metric — strip-all-cfg(test),
+comment/blank-aware — is the one the committed file-size ratchet computes
+(`scripts/check-rust-file-size.mjs` → `src-tauri/file-size-baseline.json`, #159);
+treat that baseline as authoritative for the precise per-file numbers. The
+as-written total is shown alongside so inline-test bloat stays visible.
 
 ## Priority inventory (production-only LOC, ≥1000)
 
 | Tier | File | Prod | Total | Inline-test |
 |------|------|-----:|------:|-----:|
-| **HIGH** | `models/project.rs` | 7174 | 7174 | ~0 (tests already external) |
+| **HIGH** | `models/project.rs` | 7174 | 7174 | ~0 trailing; a few scattered `#[cfg(test)]` helpers (see method note) |
 | **HIGH** | `persistence/sqlite.rs` | 2844 | 2844 | ~0 (tests already external) |
 | **HIGH** | `core/state/commands.rs` | 2734 | 2904 | ~170 |
 | **MED** | `core/state/project_io.rs` | 1510 | 1613 | ~103 |
@@ -113,8 +120,8 @@ Per-candidate (test-body LOC, tokei; classification = `#[test]` counts narrow/br
 
 | File | Prod | Test | Handling | Classification |
 |---|---:|---:|---|---|
-| `parsers/tml.rs` | 1217 | 1510 | **spill** → `tml/tests.rs` | 33 narrow / 8 broad → still (B) |
-| `models/placement_suggest.rs` | 1116 | 1365 | **spill** → `placement_suggest/tests.rs` | 32 / 14 → (B) |
+| `parsers/tml.rs` | 1217 | 1510 | **spill** → `tml/tests.rs` | 40 `#[test]` (spill whole) → still (B) |
+| `models/placement_suggest.rs` | 1116 | 1365 | **spill** → `placement_suggest/tests.rs` | 45 `#[test]` (spill whole) → (B) |
 | `lib.rs` → `tile_fetch.rs` | 1101 | 1176 | **spill** → `tile_fetch/tests.rs` | all narrow, single module → no `pub(super)` |
 | `export/tml.rs` | 1130 | 1064 | **spill** → `export/tml/tests.rs` | 17 / 13, 16-of-17 → one child → (B) |
 | `parsers/compass.rs` | 1060 | 295 | **inline** (small) | stays in `compass.rs` |
@@ -138,12 +145,19 @@ A move perturbs exactly the lints this repo denies. The proposals account for:
 
 Every check is a deterministic command anyone can re-run (binary pass/fail):
 
-- **Tier 0 (baseline, on the base commit):** record `cargo test … --features
-  telemetry` `test result` counts; `cargo build --timings`; confirm
-  `pnpm gen:ipc-types` is clean.
-- **Tier 1 (must pass):** `cargo fmt --check`; `cargo clippy --all-targets
-  --features telemetry` clean (proves the move-hazard lints absent); `cargo test
-  --features telemetry` green **and counts == Tier-0** (no test silently dropped);
+  All `cargo` commands need `TELEMETRY_ENDPOINT` set and the manifest pinned, or
+  `build.rs` hard-errors before any test compiles (and `--features telemetry` gates
+  the `registry_covers_all_*` tests, so the flag genuinely changes the count):
+  `TELEMETRY_ENDPOINT=http://localhost/dummy cargo <cmd> --manifest-path
+  src-tauri/Cargo.toml --features telemetry …`.
+- **Tier 0 (baseline, on the base commit):** record `TELEMETRY_ENDPOINT=…
+  cargo test --manifest-path src-tauri/Cargo.toml --features telemetry` `test
+  result` counts; `cargo build --timings`; confirm `pnpm gen:ipc-types` is clean.
+- **Tier 1 (must pass):** `cargo fmt --manifest-path src-tauri/Cargo.toml --check`;
+  `TELEMETRY_ENDPOINT=… cargo clippy --manifest-path src-tauri/Cargo.toml
+  --all-targets --features telemetry` clean (proves the move-hazard lints absent);
+  `TELEMETRY_ENDPOINT=… cargo test --manifest-path src-tauri/Cargo.toml --features
+  telemetry` green **and counts == Tier-0** (no test silently dropped);
   `pnpm gen:ipc-types && git diff --exit-code src/types/` **empty** (no ts-rs
   drift).
 - **Tier 2 (reviewer confidence):** item/token-multiset diff (old vs new, minus
@@ -176,12 +190,19 @@ A **file-size ratchet + budget**, enforced on three surfaces:
 > _Filled from per-file structural analysis. Each section: current structure →
 > proposed child-module layout (with LOC estimates) → re-export plan → risks
 > (ts-rs / `#[expect]` / privacy) → effort + PR boundary._
+>
+> **Unit note:** the per-child `est LOC` columns are **raw** line counts (each
+> child carries its own `use`/re-export overhead), so they sum ~20–40% above the
+> parent's tokei **prod** LOC from the inventory — the two figures are different
+> units and are *not* expected to reconcile. No child crosses the 1500 warn line
+> in either unit.
 
 ## HIGH
 
 ### `models/project.rs` (7174 prod) — flagship
 
-One ~8100-line `impl Project` (two blocks) over ~20 type defs. Split into the root
+One `impl Project` of ~8100 lines as-written (two blocks, L492–8590; 7174 prod
+LOC) over ~20 type defs. Split into the root
 + **11 child modules** (`project/*.rs`); child layout means every cluster reaches
 `Project`'s private fields by descendant visibility — **no method needs its
 visibility raised** (the property that makes this clean).
@@ -463,7 +484,7 @@ cross-child items `pub(super)` with explicit `use super::{…}` (dense wiring is
 Prefer `crate::models::horizontal_length_from_slope` over `super::super::` to avoid
 `unused_qualifications`.
 
-**Tests (spill-whole — verified):** 46 tests, 32 narrow / 14 broad, but shared `make_*`/`MatchShot`
+**Tests (spill-whole — verified):** 45 `#[test]` fns, but shared `make_*`/`MatchShot`
 fixtures + a 4-child cross-cutting test (`single_adjacent_shot_can_support_station_alignment`)
 make distribution spray `pub(super)` and duplicate fixtures → keep one `placement_suggest/tests.rs`.
 `pub(super)` surface: `compute_shot_score`/`compute_single_shot_score`, `try_match_sequence`,
