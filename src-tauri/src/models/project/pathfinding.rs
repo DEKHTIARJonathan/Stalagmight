@@ -1,0 +1,682 @@
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, HashSet};
+
+use crate::models::{Coordinates, Section, SectionId, Station, StationRef};
+
+use super::{HeapItem, PathEdge, PathStep, Project, StationPath};
+
+impl Project {
+    /// Calculate the path length between two stations through shots, merges, and closures.
+    /// Both merges and closures are zero-distance edges.
+    pub(crate) fn calculate_path_length_between(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+    ) -> f64 {
+        self.calculate_path_length_impl(station_a, station_b, true)
+    }
+
+    /// Calculate path length through shots and merges only (no closures).
+    /// Use this when only rigid-group survey path length is needed.
+    #[cfg(test)]
+    pub(crate) fn calculate_merge_only_path_length(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+    ) -> f64 {
+        self.calculate_path_length_impl(station_a, station_b, false)
+    }
+
+    /// Internal Dijkstra path length implementation.
+    /// When `include_closures` is true, loop closures are treated as zero-distance edges.
+    fn calculate_path_length_impl(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+        include_closures: bool,
+    ) -> f64 {
+        if !self.station_exists(station_a) || !self.station_exists(station_b) {
+            return 0.0;
+        }
+
+        let section_lookup = self.build_section_lookup();
+        let merge_adj = self.build_merge_adjacency(&section_lookup);
+
+        let mut closure_adj: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        if include_closures {
+            for closure in &self.loop_closures {
+                let (Some(a), Some(b)) = (
+                    self.resolve_key(&closure.station_a),
+                    self.resolve_key(&closure.station_b),
+                ) else {
+                    continue;
+                };
+                closure_adj.entry(a).or_default().push(b);
+                closure_adj.entry(b).or_default().push(a);
+            }
+        }
+
+        let mut dist: HashMap<StationRef, f64> = HashMap::new();
+        let mut heap = BinaryHeap::new();
+        dist.insert(station_a, 0.0);
+        heap.push(HeapItem {
+            cost: 0.0,
+            node: station_a,
+        });
+
+        while let Some(HeapItem { cost, node }) = heap.pop() {
+            if let Some(&known) = dist.get(&node) {
+                if cost > known + 1e-9 {
+                    continue;
+                }
+            }
+
+            if node == station_b {
+                return cost;
+            }
+
+            let Some(section) = section_lookup.get(&node.section_id) else {
+                continue;
+            };
+
+            // Previous station (shot index = station_index - 1)
+            if node.station_index > 0 {
+                let prev_index = node.station_index - 1;
+                if (prev_index as usize) <= section.shots.len() {
+                    let shot_len = section
+                        .shots
+                        .get(prev_index as usize)
+                        .map_or(0.0, |s| s.length.max(0.0));
+                    let neighbor = StationRef::new(node.section_id, prev_index);
+                    let next_cost = cost + shot_len;
+                    if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
+                        dist.insert(neighbor, next_cost);
+                        heap.push(HeapItem {
+                            cost: next_cost,
+                            node: neighbor,
+                        });
+                    }
+                }
+            }
+
+            // Next station (shot index = station_index)
+            if (node.station_index as usize) < section.shots.len() {
+                let next_index = node.station_index + 1;
+                let shot_len = section
+                    .shots
+                    .get(node.station_index as usize)
+                    .map_or(0.0, |s| s.length.max(0.0));
+                let neighbor = StationRef::new(node.section_id, next_index);
+                let next_cost = cost + shot_len;
+                if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
+                    dist.insert(neighbor, next_cost);
+                    heap.push(HeapItem {
+                        cost: next_cost,
+                        node: neighbor,
+                    });
+                }
+            }
+
+            // Merge neighbors (zero distance)
+            if let Some(neighbors) = merge_adj.get(&node) {
+                for &neighbor in neighbors {
+                    let next_cost = cost;
+                    if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
+                        dist.insert(neighbor, next_cost);
+                        heap.push(HeapItem {
+                            cost: next_cost,
+                            node: neighbor,
+                        });
+                    }
+                }
+            }
+
+            // Closure neighbors (zero distance)
+            if include_closures {
+                if let Some(neighbors) = closure_adj.get(&node) {
+                    for &neighbor in neighbors {
+                        let next_cost = cost;
+                        if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
+                            dist.insert(neighbor, next_cost);
+                            heap.push(HeapItem {
+                                cost: next_cost,
+                                node: neighbor,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // No path found (shouldn't happen if sections are connected)
+        // Fall back to sum of all reachable section lengths
+        let fallback_sections = if include_closures {
+            self.get_connected_section_ids(station_a.section_id)
+        } else {
+            self.get_merged_section_ids(station_a.section_id)
+        };
+        fallback_sections
+            .iter()
+            .filter_map(|sid| self.get_section(*sid))
+            .flat_map(|s| s.shots.iter())
+            .map(|shot| shot.length)
+            .sum()
+    }
+
+    pub(crate) fn build_section_lookup(&self) -> HashMap<SectionId, &Section> {
+        self.sections.iter().map(|s| (s.id, s)).collect()
+    }
+
+    pub(crate) fn build_merge_adjacency(
+        &self,
+        section_lookup: &HashMap<SectionId, &Section>,
+    ) -> HashMap<StationRef, Vec<StationRef>> {
+        let mut adjacency: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for merge in &self.station_merges {
+            if !section_lookup.contains_key(&merge.station_a.section_id)
+                || !section_lookup.contains_key(&merge.station_b.section_id)
+            {
+                continue;
+            }
+            if let (Some(a), Some(b)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) {
+                adjacency.entry(a).or_default().push(b);
+                adjacency.entry(b).or_default().push(a);
+            }
+        }
+        adjacency
+    }
+
+    fn shortest_path_with_target<F>(
+        &self,
+        start: StationRef,
+        is_target: F,
+    ) -> Option<(StationRef, HashMap<StationRef, (StationRef, PathEdge)>)>
+    where
+        F: Fn(StationRef) -> bool,
+    {
+        let section_lookup = self.build_section_lookup();
+        let merge_adj = self.build_merge_adjacency(&section_lookup);
+
+        // Validate start station exists
+        let start_section = section_lookup.get(&start.section_id)?;
+        if start.station_index as usize > start_section.shots.len() {
+            return None;
+        }
+
+        let mut dist: HashMap<StationRef, f64> = HashMap::new();
+        let mut prev: HashMap<StationRef, (StationRef, PathEdge)> = HashMap::new();
+        let mut heap = BinaryHeap::new();
+
+        dist.insert(start, 0.0);
+        heap.push(HeapItem {
+            cost: 0.0,
+            node: start,
+        });
+
+        while let Some(HeapItem { cost, node }) = heap.pop() {
+            if let Some(&known) = dist.get(&node) {
+                if cost > known + 1e-9 {
+                    continue;
+                }
+            }
+
+            if is_target(node) {
+                return Some((node, prev));
+            }
+
+            let Some(section) = section_lookup.get(&node.section_id) else {
+                continue;
+            };
+
+            // Previous station
+            if node.station_index > 0 {
+                let prev_index = node.station_index - 1;
+                if (prev_index as usize) <= section.shots.len() {
+                    let shot_len = section
+                        .shots
+                        .get(prev_index as usize)
+                        .map_or(0.0, |s| s.length);
+                    let neighbor = StationRef::new(node.section_id, prev_index);
+                    let next_cost = cost + shot_len;
+                    if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
+                        dist.insert(neighbor, next_cost);
+                        prev.insert(
+                            neighbor,
+                            (
+                                node,
+                                PathEdge::Shot {
+                                    section_id: node.section_id,
+                                    shot_index: prev_index as usize,
+                                    forward: false,
+                                },
+                            ),
+                        );
+                        heap.push(HeapItem {
+                            cost: next_cost,
+                            node: neighbor,
+                        });
+                    }
+                }
+            }
+
+            // Next station
+            if (node.station_index as usize) < section.shots.len() {
+                let next_index = node.station_index + 1;
+                let shot_len = section
+                    .shots
+                    .get(node.station_index as usize)
+                    .map_or(0.0, |s| s.length);
+                let neighbor = StationRef::new(node.section_id, next_index);
+                let next_cost = cost + shot_len;
+                if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
+                    dist.insert(neighbor, next_cost);
+                    prev.insert(
+                        neighbor,
+                        (
+                            node,
+                            PathEdge::Shot {
+                                section_id: node.section_id,
+                                shot_index: node.station_index as usize,
+                                forward: true,
+                            },
+                        ),
+                    );
+                    heap.push(HeapItem {
+                        cost: next_cost,
+                        node: neighbor,
+                    });
+                }
+            }
+
+            // Merge neighbors (zero distance)
+            if let Some(neighbors) = merge_adj.get(&node) {
+                for &neighbor in neighbors {
+                    let next_cost = cost;
+                    if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
+                        dist.insert(neighbor, next_cost);
+                        prev.insert(neighbor, (node, PathEdge::Merge));
+                        heap.push(HeapItem {
+                            cost: next_cost,
+                            node: neighbor,
+                        });
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn reconstruct_path(
+        start: StationRef,
+        goal: StationRef,
+        prev: &HashMap<StationRef, (StationRef, PathEdge)>,
+    ) -> Option<StationPath> {
+        let mut steps_rev: Vec<PathStep> = Vec::new();
+        let mut current = goal;
+        while current != start {
+            let (p, edge) = prev.get(&current).copied()?;
+            steps_rev.push(PathStep { to: current, edge });
+            current = p;
+        }
+        steps_rev.reverse();
+        Some(StationPath {
+            start,
+            steps: steps_rev,
+        })
+    }
+
+    pub(super) fn shortest_path_shots_merges(
+        &self,
+        start: StationRef,
+        goal: StationRef,
+    ) -> Option<StationPath> {
+        let (found, prev) = self.shortest_path_with_target(start, |node| node == goal)?;
+        Self::reconstruct_path(start, found, &prev)
+    }
+
+    pub(super) fn shortest_path_to_any_zero_datum(
+        &self,
+        start: StationRef,
+    ) -> Option<(StationRef, StationPath)> {
+        if self.zero_datums.is_empty() {
+            return None;
+        }
+        let zero_set: HashSet<StationRef> = self
+            .zero_datums
+            .iter()
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .collect();
+        let (found, prev) =
+            self.shortest_path_with_target(start, |node| zero_set.contains(&node))?;
+        let path = Self::reconstruct_path(start, found, &prev)?;
+        Some((found, path))
+    }
+
+    pub(super) fn build_colocated_groups(&self) -> HashMap<StationRef, Vec<StationRef>> {
+        let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
+        let mut rank: HashMap<StationRef, usize> = HashMap::new();
+
+        for section in &self.sections {
+            for idx in 0..=section.shots.len() {
+                let sr = StationRef::new(section.id, idx as u32);
+                parent.insert(sr, sr);
+                rank.insert(sr, 0);
+            }
+        }
+
+        fn find(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationRef {
+            let mut current = x;
+            while let Some(&p) = parent.get(&current) {
+                if p == current {
+                    break;
+                }
+                current = p;
+            }
+            let mut node = x;
+            while let Some(&p) = parent.get(&node) {
+                if p == current {
+                    break;
+                }
+                parent.insert(node, current);
+                node = p;
+            }
+            current
+        }
+
+        fn union(
+            parent: &mut HashMap<StationRef, StationRef>,
+            rank: &mut HashMap<StationRef, usize>,
+            a: StationRef,
+            b: StationRef,
+        ) {
+            let ra = find(parent, a);
+            let rb = find(parent, b);
+            if ra == rb {
+                return;
+            }
+            let rank_a = *rank.get(&ra).unwrap_or(&0);
+            let rank_b = *rank.get(&rb).unwrap_or(&0);
+            match rank_a.cmp(&rank_b) {
+                Ordering::Less => {
+                    parent.insert(ra, rb);
+                }
+                Ordering::Greater => {
+                    parent.insert(rb, ra);
+                }
+                Ordering::Equal => {
+                    parent.insert(rb, ra);
+                    rank.insert(ra, rank_a + 1);
+                }
+            }
+        }
+
+        for merge in &self.station_merges {
+            if let (Some(a), Some(b)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) {
+                union(&mut parent, &mut rank, a, b);
+            }
+        }
+
+        for closure in &self.loop_closures {
+            if !closure.is_aligned {
+                continue;
+            }
+            if let (Some(a), Some(b)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) {
+                union(&mut parent, &mut rank, a, b);
+            }
+        }
+
+        let mut groups: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for section in &self.sections {
+            for idx in 0..=section.shots.len() {
+                let sr = StationRef::new(section.id, idx as u32);
+                let root = find(&mut parent, sr);
+                groups.entry(root).or_default().push(sr);
+            }
+        }
+
+        groups
+    }
+
+    pub(super) fn build_merge_groups(&self) -> HashMap<StationRef, Vec<StationRef>> {
+        let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
+        let mut rank: HashMap<StationRef, usize> = HashMap::new();
+
+        for section in &self.sections {
+            for idx in 0..=section.shots.len() {
+                let sr = StationRef::new(section.id, idx as u32);
+                parent.insert(sr, sr);
+                rank.insert(sr, 0);
+            }
+        }
+
+        fn find(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationRef {
+            let mut current = x;
+            while let Some(&p) = parent.get(&current) {
+                if p == current {
+                    break;
+                }
+                current = p;
+            }
+            let mut node = x;
+            while let Some(&p) = parent.get(&node) {
+                if p == current {
+                    break;
+                }
+                parent.insert(node, current);
+                node = p;
+            }
+            current
+        }
+
+        fn union(
+            parent: &mut HashMap<StationRef, StationRef>,
+            rank: &mut HashMap<StationRef, usize>,
+            a: StationRef,
+            b: StationRef,
+        ) {
+            let ra = find(parent, a);
+            let rb = find(parent, b);
+            if ra == rb {
+                return;
+            }
+            let rank_a = *rank.get(&ra).unwrap_or(&0);
+            let rank_b = *rank.get(&rb).unwrap_or(&0);
+            match rank_a.cmp(&rank_b) {
+                Ordering::Less => {
+                    parent.insert(ra, rb);
+                }
+                Ordering::Greater => {
+                    parent.insert(rb, ra);
+                }
+                Ordering::Equal => {
+                    parent.insert(rb, ra);
+                    rank.insert(ra, rank_a + 1);
+                }
+            }
+        }
+
+        for merge in &self.station_merges {
+            if let (Some(a), Some(b)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) {
+                union(&mut parent, &mut rank, a, b);
+            }
+        }
+
+        let mut groups: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for section in &self.sections {
+            for idx in 0..=section.shots.len() {
+                let sr = StationRef::new(section.id, idx as u32);
+                let root = find(&mut parent, sr);
+                groups.entry(root).or_default().push(sr);
+            }
+        }
+
+        groups
+    }
+
+    /// Build a `StationRef -> index` map for `stations` (index = position in the
+    /// slice) so graph builders can resolve shot/merge/closure endpoints to
+    /// nodes without a linear search.
+    pub(super) fn station_index_map(stations: &[Station]) -> HashMap<StationRef, usize> {
+        let mut m: HashMap<StationRef, usize> = HashMap::with_capacity(stations.len());
+        for (i, s) in stations.iter().enumerate() {
+            m.insert(s.station_ref, i);
+        }
+        m
+    }
+
+    /// Build the survey distance graph as an adjacency list over the `n` stations
+    /// (nodes indexed by position; `station_index` maps refs to those indices).
+    /// Edges are **every real topological connection**:
+    /// - every shot — permanent AND jump/reference — weighted by its measured
+    ///   `length` (reference shots are real measured legs / jumps a diver swims);
+    /// - `station_merges` (zero cost — the same physical point);
+    /// - every `loop_closures` entry (zero cost — a closed loop means the two
+    ///   stations are the same physical point), **regardless of `is_aligned`**;
+    ///   alignment is only a geometry-reconciliation strategy (`Move` vs `Batch`),
+    ///   so the topological connection exists either way.
+    ///
+    /// We deliberately include everything. Distances are shortest-path (Dijkstra
+    /// always takes the minimum), so an extra real edge can only ever yield a
+    /// shorter, more correct route — never inflate one. Excluding real
+    /// connections is what hides reachable areas or routes "the long way".
+    ///
+    /// NOTE (#77): the one residual risk is a *non-physical* reference tie (a pure
+    /// survey backsight, not swimmable) creating a false shortcut that understates
+    /// distance. Telling those apart from real jumps needs a first-class model;
+    /// until then we favor completeness — real data showed over-exclusion (a
+    /// dropped jump shortcut, excluded non-aligned closures) was the actual bug.
+    pub(super) fn build_survey_graph(
+        &self,
+        n: usize,
+        station_index: &HashMap<StationRef, usize>,
+        coords: Option<&[Coordinates]>,
+    ) -> Vec<Vec<(usize, f64)>> {
+        let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+
+        // Shots (permanent and jump/reference). Edge weight = straight-line
+        // distance between the endpoints' `coords` when supplied (the
+        // closure-adjusted geometry, for the distance gradient), else the
+        // measured shot length (penetration / topological queries).
+        for section in &self.sections {
+            for (i, shot) in section.shots.iter().enumerate() {
+                let from = StationRef::new(section.id, i as u32);
+                let to = StationRef::new(section.id, (i + 1) as u32);
+                if let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) {
+                    let w = match coords {
+                        Some(c) => {
+                            let (a, b) = (&c[fi], &c[ti]);
+                            let (dx, dy, dz) = (b.x - a.x, b.y - a.y, b.z - a.z);
+                            (dx * dx + dy * dy + dz * dz).sqrt()
+                        }
+                        None => shot.length.max(0.0),
+                    };
+                    adj[fi].push((ti, w));
+                    adj[ti].push((fi, w));
+                }
+            }
+        }
+        // Station merges: zero-cost (same physical point).
+        for merge in &self.station_merges {
+            if let (Some(a_sr), Some(b_sr)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) {
+                if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
+                    adj[a].push((b, 0.0));
+                    adj[b].push((a, 0.0));
+                }
+            }
+        }
+        // Loop closures: zero-cost, INCLUDING non-aligned ones — a closed loop is
+        // a real physical connection no matter the reconciliation strategy.
+        for closure in &self.loop_closures {
+            if let (Some(a_sr), Some(b_sr)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) {
+                if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
+                    adj[a].push((b, 0.0));
+                    adj[b].push((a, 0.0));
+                }
+            }
+        }
+
+        adj
+    }
+
+    /// Multi-source Dijkstra over `adj` from the given `roots` (node indices,
+    /// each seeded at distance 0). Returns the shortest-path distance to every
+    /// node; unreachable nodes — and every node when `roots` is empty — stay
+    /// `f64::INFINITY`.
+    pub(super) fn dijkstra(adj: &[Vec<(usize, f64)>], roots: &[usize]) -> Vec<f64> {
+        let n = adj.len();
+        let mut dist = vec![f64::INFINITY; n];
+
+        #[derive(Copy, Clone, PartialEq)]
+        struct Node(f64, usize);
+        impl Eq for Node {}
+        impl PartialOrd for Node {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl Ord for Node {
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.0
+                    .partial_cmp(&other.0)
+                    .unwrap_or(Ordering::Equal)
+                    .then(self.1.cmp(&other.1))
+            }
+        }
+
+        let mut heap: BinaryHeap<std::cmp::Reverse<Node>> = BinaryHeap::new();
+        for &r in roots {
+            // Bounds-guard only; a duplicate root just gets re-popped once and
+            // filtered by the `d > dist[u]` check below — no need to dedup here.
+            if r < n {
+                dist[r] = 0.0;
+                heap.push(std::cmp::Reverse(Node(0.0, r)));
+            }
+        }
+        while let Some(std::cmp::Reverse(Node(d, u))) = heap.pop() {
+            if d > dist[u] {
+                continue;
+            }
+            for &(v, w) in &adj[u] {
+                let nd = d + w;
+                if nd < dist[v] {
+                    dist[v] = nd;
+                    heap.push(std::cmp::Reverse(Node(nd, v)));
+                }
+            }
+        }
+        dist
+    }
+
+    /// Resolve the project's zero-datum stations to their indices in `stations`.
+    pub(super) fn zero_datum_roots(
+        &self,
+        station_index: &HashMap<StationRef, usize>,
+    ) -> Vec<usize> {
+        self.zero_datums
+            .iter()
+            .filter_map(|zd| {
+                self.resolve_key(&zd.station_ref)
+                    .and_then(|sr| station_index.get(&sr).copied())
+            })
+            .collect()
+    }
+}
