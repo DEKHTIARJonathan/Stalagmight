@@ -1,5 +1,13 @@
 mod app_state;
 mod collab;
+mod command_comment;
+mod command_delete_split;
+mod command_import;
+mod command_move;
+mod command_query;
+mod command_section;
+mod command_shot;
+mod command_station;
 mod commands;
 mod config;
 mod display_settings;
