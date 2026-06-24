@@ -15,7 +15,7 @@ use super::{LoopClosureWire, ZeroDatumWire};
 // Re-export the sibling module so the relocated `suggest_orphan_placements` (now in
 // the `distance` child) keeps resolving `super::placement_suggest` — its `super` is
 // now `project`, not `models`.
-pub(crate) use super::placement_suggest;
+use super::placement_suggest;
 
 mod closure;
 mod coordinates;
