@@ -1,5 +1,9 @@
 use chrono::Utc;
 use std::collections::HashSet;
+// `error!` is only reached inside the `#[cfg(debug_assertions)]` block in
+// `debug_assert_merge_alignment`, so gate the import to match (else it's an
+// unused import under `--release`).
+#[cfg(debug_assertions)]
 use tracing::error;
 
 use crate::models::{SectionId, StationMerge};
