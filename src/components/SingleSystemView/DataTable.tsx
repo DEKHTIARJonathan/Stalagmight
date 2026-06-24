@@ -121,7 +121,7 @@ function SubHeaderPickerMenu({
   const listStyle = useAnchoredFixedMenu(open, triggerRef, listRef, {
     align: 'center',
     gap: 4,
-    width: 208, // matches w-52
+    width: 208, // px; the hook also sets this as the list width (single source of truth)
     maxHeightCap: 256, // matches the old max-h-64 — stay compact + scroll on a tall window
   });
   // Close on outside mousedown / external scroll / resize (shared hook). The
@@ -161,7 +161,7 @@ function SubHeaderPickerMenu({
         <div
           ref={listRef}
           data-dropdown-open
-          className="w-52 overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg"
+          className="overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg"
           style={listStyle}
           data-testid={listTestId}
           onMouseLeave={() => onHoverOption?.(null)}
@@ -611,7 +611,7 @@ export default function DataTable({ sections }: DataTableProps) {
   const colMenuStyle = useAnchoredFixedMenu(colMenuOpen, colMenuBtnRef, colMenuListRef, {
     align: 'right',
     gap: 4,
-    width: 224, // matches w-56
+    width: 224, // px; the hook also sets this as the dropdown width (single source of truth)
   });
 
   const shotHiddenColumns = useMemo(() => {
@@ -1714,7 +1714,7 @@ export default function DataTable({ sections }: DataTableProps) {
           {colMenuOpen && (
             <div
               ref={colMenuListRef}
-              className="w-56 overflow-auto rounded border border-border bg-panel p-1 shadow-lg"
+              className="overflow-auto rounded border border-border bg-panel p-1 shadow-lg"
               style={colMenuStyle}
               data-dropdown-open
               data-testid="data-table-columns-dropdown"

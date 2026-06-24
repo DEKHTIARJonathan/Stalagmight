@@ -12,9 +12,12 @@ const EDGE_MARGIN = 8;
 interface AnchoredMenuOptions {
   /** Horizontal anchoring relative to the trigger. */
   align: 'center' | 'right';
-  /** Gap (px) between trigger and menu, and the minimum margin from any viewport edge. */
+  /** Gap (px) between the trigger and the menu, and the left/right viewport margin.
+   *  The top/bottom viewport margin is the fixed {@link EDGE_MARGIN}, not `gap`. */
   gap: number;
-  /** Menu width (px) — must match the menu's fixed width class (e.g. `w-52` = 208). */
+  /** Menu width (px). The hook uses this for the center/right alignment + left-clamp
+   *  math AND sets it as the element's width (returned in the style), so width has a
+   *  single source of truth — do NOT also put a `w-*` class on the menu. */
   width: number;
   /** Optional absolute cap (px) on the menu's height, applied on top of the
    *  per-side free-space cap — restores the old fixed `max-h-*` so a long list
@@ -42,6 +45,10 @@ interface Placement {
  * free space (a short window then scrolls the list instead of overflowing
  * off-screen). Dismissal/scroll/resize handling stays with the caller via
  * {@link useDismissableLayer}.
+ *
+ * NOTE: placement is computed ONCE per open. Keep the menu's content height stable
+ * while `open` — a menu with async/changing content (e.g. a loading-row → N-row
+ * swap) is NOT re-placed and may sit at a stale `top`/`maxHeight` until reopened.
  *
  * Returns a `fixed` CSS style for the menu element; render the menu while `open`
  * and spread the returned object onto its `style`.
@@ -92,20 +99,23 @@ export function useAnchoredFixedMenu(
       : Math.max(topBound, Math.min(rect.bottom + gap, bottomBound - maxHeight));
 
     const rawLeft = align === 'center' ? rect.left + rect.width / 2 - width / 2 : rect.right - width;
-    const left = Math.min(Math.max(rawLeft, gap), window.innerWidth - width - gap);
+    // Clamp the LOWER bound last so a menu wider than the viewport pins to the left
+    // edge (gap) rather than inverting off-screen.
+    const left = Math.max(gap, Math.min(rawLeft, window.innerWidth - width - gap));
 
     setPlacement({ top, left, maxHeight });
-  }, [open, triggerRef, menuRef, align, gap, width]);
+  }, [open, triggerRef, menuRef, align, gap, width, maxHeightCap]);
 
   if (!placement) {
     // Hidden first pass: render at natural size, out of the way, so the layout
     // effect can measure height before we place and reveal it (no flicker).
-    return { position: 'fixed', top: 0, left: 0, zIndex: 50, visibility: 'hidden', pointerEvents: 'none' };
+    return { position: 'fixed', top: 0, left: 0, width, zIndex: 50, visibility: 'hidden', pointerEvents: 'none' };
   }
   return {
     position: 'fixed',
     top: placement.top,
     left: placement.left,
+    width,
     maxHeight: placement.maxHeight,
     zIndex: 50,
     visibility: 'visible',

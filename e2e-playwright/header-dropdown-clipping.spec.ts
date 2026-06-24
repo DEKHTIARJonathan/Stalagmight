@@ -50,10 +50,16 @@ async function setDataTableHeight(page: Page, height: number): Promise<void> {
   }, height);
 }
 
+// Mirrors DATA_TABLE_MIN_HEIGHT in src/components/SingleSystemView/layoutConstants.ts
+// (the Dock's enforced minimum). Kept as a local literal because Playwright specs
+// don't import app source; the `expect.poll` on the pill's position below fails
+// loudly if this ever drifts out of sync with the real minimum.
+const DATA_TABLE_MIN_HEIGHT = 100;
+
 /** Shrink the data-table panel to its minimum so the sub-header sits low and its
  *  dropdowns flip up into (and out of) the panel's overflow-hidden clip box. */
 async function shrinkDataTable(page: Page): Promise<void> {
-  await setDataTableHeight(page, 100);
+  await setDataTableHeight(page, DATA_TABLE_MIN_HEIGHT);
 }
 
 async function openDataTable(page: Page): Promise<void> {
@@ -185,6 +191,22 @@ test.describe('#162 header dropdowns are usable when flipped up', () => {
     await expect(page.getByTestId('grid-header-comment')).toHaveCount(0);
   });
 
+  test('resizing the window while a picker is open dismisses it (no stale fixed position)', async ({
+    page,
+  }) => {
+    const pill = page.getByTestId('data-table-section-pill');
+    await pill.click();
+    const list = page.getByTestId('data-table-section-menu-list');
+    await expect(list).toBeVisible();
+    // The list is position:fixed at a rect captured ON OPEN; useAnchoredFixedMenu
+    // deliberately does NOT reposition on resize/scroll — it delegates stale-position
+    // handling to useDismissableLayer, which must dismiss the menu on resize (else it
+    // would float at a now-wrong spot). Pin that contract so a future change that
+    // drops the resize listener fails here.
+    await page.setViewportSize({ width: 1100, height: 700 });
+    await expect(list).toBeHidden();
+  });
+
   // The THIRD migrated dropdown — the raw-table picker (`data-table-raw-table-pill`)
   // — is intentionally not covered here. It is the very same `SubHeaderPickerMenu`
   // (and thus the same `useAnchoredFixedMenu` positioning) as the section picker
@@ -230,8 +252,8 @@ test.describe('#162 a downward-flipping picker is bounded above the status bar',
     // Flipped down: the menu's top is at/below the trigger's bottom.
     expect(m.y).toBeGreaterThanOrEqual(t.y + t.height - 1);
     // Bottom edge stops above the status bar, with an 8px breathing gap (before
-    // the fix it ran to the viewport bottom, clipped behind the status bar).
+    // the fix it ran to the viewport bottom, clipped behind the status bar). This
+    // already implies the menu clears the status bar entirely.
     expect(m.y + m.height).toBeLessThanOrEqual(statusBar.y - 8 + 1);
-    expect(m.y + m.height).toBeLessThanOrEqual(statusBar.y + 1);
   });
 });
