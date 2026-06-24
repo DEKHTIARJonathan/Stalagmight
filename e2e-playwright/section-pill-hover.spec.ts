@@ -251,3 +251,68 @@ test.describe('section pill hover highlighting', () => {
     expect(clearedId).toBeNull();
   });
 });
+
+/**
+ * Regression: hovering a section (e.g. a picker option, or map geometry) drives
+ * the Sections panel's debounced auto-scroll. If that off-screen scroll fires
+ * while the picker is open, the picker's outside-scroll dismissal would close it
+ * — so it must close "randomly" a moment after the pointer settled. The panel
+ * auto-scroll is suppressed while a dropdown is open; the picker stays open.
+ */
+test.describe('section picker is not dismissed by background auto-scroll', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupMockedPage(page);
+    await createProject(page, 'Picker Auto-Scroll');
+    const many: SectionSeed[] = Array.from({ length: 40 }, (_, i) => ({
+      name: `Section ${String(i).padStart(2, '0')}`,
+      direction: 'in',
+      shots: [{ azimuth_in: 45, azimuth_out: 225, length: 5, depth_in: -1, depth_out: -2 }],
+    }));
+    await seedProjectWithSections(page, many);
+    await waitForNoDialogs(page);
+    await waitForMapIdle(page);
+    await openDataTable(page);
+  });
+
+  test('hovering an off-screen section while the picker is open keeps it open', async ({ page }) => {
+    // Park the sections list at the top so the last section's row is off-screen
+    // (otherwise scrollIntoView is a no-op and there is nothing to reproduce).
+    const list = page.getByTestId('sections-list');
+    await expect(list).toBeVisible();
+    await list.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+
+    // Open the picker.
+    await getSectionPill(page).click();
+    const menu = page.getByTestId('data-table-section-menu-list');
+    await expect(menu).toBeVisible();
+
+    // Hover an off-screen section (as hovering a picker option / map geometry
+    // does) — this would auto-scroll the panel behind the picker after 120ms.
+    const lastId = await page.evaluate(() => {
+      const stores = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: { getState: () => { project: { sections: Array<{ id: number }> } | null } };
+          uiStore: { getState: () => { setHoveredSectionId: (id: number | null) => void } };
+        };
+      }).__E2E_TEST__;
+      const ids = stores?.projectStore.getState().project?.sections.map((s) => s.id) ?? [];
+      const id = ids[ids.length - 1] ?? null;
+      if (id !== null) stores?.uiStore.getState().setHoveredSectionId(id);
+      return id;
+    });
+    expect(lastId).not.toBeNull();
+
+    // Well past the 120ms hover-scroll debounce: the picker must still be open.
+    await page.waitForTimeout(300);
+    await expect(menu).toBeVisible();
+    // Positively prove the auto-scroll was SUPPRESSED, not merely slow to fire:
+    // the list must still be parked at the top. If the guard regressed, the
+    // debounced scrollIntoView would have moved scrollTop off 0 (and the
+    // resulting scroll event would have dismissed the picker). Asserting the
+    // visible-menu alone could false-pass if the 120ms timer simply hadn't run
+    // yet under a loaded runner.
+    expect(await list.evaluate((el) => el.scrollTop)).toBe(0);
+  });
+});
