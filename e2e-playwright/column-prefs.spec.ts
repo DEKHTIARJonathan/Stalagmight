@@ -188,15 +188,28 @@ test.describe('Data table column preferences', () => {
   test('header right-click hide entry hides the column and persists', async ({ page }) => {
     expect(await getViewCalls(page)).toHaveLength(0);
 
-    await page.getByTestId('grid-header-comment').click({ button: 'right' });
     const menu = page.getByTestId('data-table-header-menu');
-    await expect(menu).toBeVisible();
+    // The right-click → `contextmenu` → menu-open gesture intermittently does not
+    // register under CPU load: the menu never mounts (confirmed by repro — the
+    // element count is 0 at failure, i.e. NOT a slow paint, so a longer
+    // `toBeVisible` timeout cannot help). Retry the whole GESTURE, re-resolving the
+    // header locator each attempt, until the menu actually opens. This is a
+    // deterministic fix for a flaky input, not a masked timeout. (#171)
+    await expect(async () => {
+      await page.getByTestId('grid-header-comment').click({ button: 'right' });
+      await expect(menu).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 10_000 });
     await menu.getByRole('button', { name: 'Hide Comment' }).click();
 
     await expect(page.getByTestId('grid-header-comment')).toHaveCount(0);
 
-    const call = await waitForSingleViewCall(page);
-    expect(call.hiddenColumns).toEqual(['comment', 'section_id', 'shot_id']);
+    // The debounced view-save can emit an interim snapshot (e.g. the pre-hide
+    // [section_id, shot_id] state from the table settling) before the Hide save
+    // lands, so grabbing the *first* recorded call races. Poll the latest call
+    // until it settles on the expected hidden set. #171.
+    await expect
+      .poll(async () => (await getViewCalls(page)).at(-1)?.hiddenColumns, { timeout: 5000 })
+      .toEqual(['comment', 'section_id', 'shot_id']);
 
     await page.waitForFunction(
       () => {
