@@ -1,0 +1,239 @@
+use anyhow::{Context, Result};
+use chrono::Utc;
+use rusqlite::Connection;
+use std::path::Path;
+
+use super::{BackupInfo, Database, SalvagedData, SalvagedSection};
+
+impl Database {
+    /// Open a database for recovery purposes, skipping integrity checks.
+    /// This allows reading whatever data is still accessible from a corrupt file.
+    pub fn open_for_recovery(path: &Path) -> Result<Self> {
+        tracing::info!("Opening database for recovery at: {:?}", path);
+
+        if !path.exists() {
+            anyhow::bail!("File does not exist");
+        }
+
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .context("Failed to open database for recovery")?;
+
+        let db = Self { conn };
+        // Skip integrity check intentionally — we know the file may be corrupt
+        Ok(db)
+    }
+
+    /// Attempt to repair a corrupt database using REINDEX + VACUUM.
+    ///
+    /// Always creates a backup first (`path.stalx.backup`, with numeric
+    /// suffixes to avoid overwriting existing backups).
+    ///
+    /// Returns `(backup_path, integrity_ok)`.
+    pub fn attempt_repair(path: &Path) -> Result<(std::path::PathBuf, bool)> {
+        tracing::info!("Attempting repair of: {:?}", path);
+
+        // 1. Create backup (never overwrite existing backups)
+        let backup_path = Self::create_numbered_backup(path)?;
+        tracing::info!("Created backup at: {:?}", backup_path);
+
+        // 2. Open read-write (skip our integrity check wrapper)
+        let conn = Connection::open(path).context("Failed to open database for repair")?;
+
+        // 3. Rebuild indexes
+        if let Err(e) = conn.execute_batch("REINDEX;") {
+            tracing::warn!(error = %e, "REINDEX failed, continuing with VACUUM");
+        }
+
+        // 4. VACUUM rebuilds the entire database from readable pages
+        conn.execute_batch("VACUUM;")
+            .context("VACUUM failed — database may be too damaged to repair")?;
+
+        // 5. Verify result
+        let check: String = conn
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))
+            .unwrap_or_else(|_| "error".to_string());
+        let ok = check == "ok";
+
+        if ok {
+            tracing::info!("Repair succeeded — integrity check passed");
+        } else {
+            tracing::error!(result = %check, "Repair completed but integrity check still fails");
+        }
+
+        Ok((backup_path, ok))
+    }
+
+    /// Export whatever data can be read from a (possibly corrupt) database.
+    ///
+    /// Each table is read independently so a failure in one table doesn't
+    /// prevent salvaging data from others.
+    pub fn export_salvageable(path: &Path) -> Result<SalvagedData> {
+        let db = Self::open_for_recovery(path)?;
+        let mut salvaged = SalvagedData::default();
+
+        // Project metadata
+        match db.try_read_project_metadata() {
+            Ok(Some((name, location))) => {
+                salvaged.project_name = Some(name);
+                salvaged.project_location = location;
+            }
+            Ok(None) => salvaged.errors.push("Project table is empty".into()),
+            Err(e) => salvaged
+                .errors
+                .push(format!("Failed to read project metadata: {e}")),
+        }
+
+        // Sections
+        match db.try_read_sections() {
+            Ok(sections) => {
+                salvaged.section_count = sections.len();
+                salvaged.sections_json = serde_json::to_string(&sections).ok();
+            }
+            Err(e) => salvaged
+                .errors
+                .push(format!("Failed to read sections: {e}")),
+        }
+
+        // Shots
+        match db.try_read_shot_count() {
+            Ok(count) => salvaged.shot_count = count,
+            Err(e) => salvaged.errors.push(format!("Failed to read shots: {e}")),
+        }
+
+        // Station merges
+        match db.try_read_merge_count() {
+            Ok(count) => salvaged.merge_count = count,
+            Err(e) => salvaged
+                .errors
+                .push(format!("Failed to read station merges: {e}")),
+        }
+
+        // Full project (best-effort)
+        match db.load_project() {
+            Ok(project) => {
+                salvaged.full_project_json = serde_json::to_string(&project).ok();
+            }
+            Err(e) => salvaged
+                .errors
+                .push(format!("Failed to load full project: {e}")),
+        }
+
+        Ok(salvaged)
+    }
+
+    /// List backup files for a given project path.
+    pub fn list_backups(path: &Path) -> Vec<BackupInfo> {
+        let mut backups = Vec::new();
+        let Some(parent) = path.parent() else {
+            return backups;
+        };
+        let stem = path.file_name().unwrap_or_default().to_string_lossy();
+
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                // Match patterns: file.stalx.backup, file.stalx.backup.1, file.stalx.tmp
+                let is_backup = name.starts_with(&*stem)
+                    && (name.contains(".backup") || name.to_ascii_lowercase().ends_with(".tmp"));
+                if is_backup {
+                    if let Ok(meta) = entry.metadata() {
+                        backups.push(BackupInfo {
+                            path: entry.path().display().to_string(),
+                            size_bytes: meta.len(),
+                            modified_at: meta
+                                .modified()
+                                .ok()
+                                .map(|t| {
+                                    let dt: chrono::DateTime<Utc> = t.into();
+                                    dt.to_rfc3339()
+                                })
+                                .unwrap_or_default(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Sort by modification time, newest first
+        backups.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+        backups
+    }
+
+    /// Create a numbered backup: file.stalx.backup, .backup.1, .backup.2, etc.
+    pub(super) fn create_numbered_backup(path: &Path) -> Result<std::path::PathBuf> {
+        let base = path.with_extension("stalx.backup");
+        if !base.exists() {
+            std::fs::copy(path, &base)?;
+            return Ok(base);
+        }
+        for i in 1..100 {
+            let numbered = path.with_extension(format!("stalx.backup.{i}"));
+            if !numbered.exists() {
+                std::fs::copy(path, &numbered)?;
+                return Ok(numbered);
+            }
+        }
+        anyhow::bail!("Too many existing backups (max 100)")
+    }
+
+    pub(super) fn try_read_project_metadata(&self) -> Result<Option<(String, Option<String>)>> {
+        if !self.table_exists("project")? {
+            return Ok(None);
+        }
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM project", [], |row| row.get(0))?;
+        if count == 0 {
+            return Ok(None);
+        }
+        let (name, location): (String, Option<String>) =
+            self.conn
+                .query_row("SELECT name, location FROM project LIMIT 1", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?;
+        Ok(Some((name, location)))
+    }
+
+    pub(super) fn try_read_sections(&self) -> Result<Vec<SalvagedSection>> {
+        if !self.table_exists("sections")? {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, surveyor, date, color FROM sections ORDER BY id")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SalvagedSection {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                surveyor: row.get(2)?,
+                date: row.get(3)?,
+                color: row.get(4)?,
+            })
+        })?;
+        let mut sections = Vec::new();
+        for row in rows {
+            sections.push(row?);
+        }
+        Ok(sections)
+    }
+
+    pub(super) fn try_read_shot_count(&self) -> Result<usize> {
+        if !self.table_exists("shots")? {
+            return Ok(0);
+        }
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM shots", [], |row| row.get(0))?;
+        Ok(count as usize)
+    }
+
+    pub(super) fn try_read_merge_count(&self) -> Result<usize> {
+        if !self.table_exists("station_merges")? {
+            return Ok(0);
+        }
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM station_merges", [], |row| row.get(0))?;
+        Ok(count as usize)
+    }
+}
