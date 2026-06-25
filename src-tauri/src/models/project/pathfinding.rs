@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use crate::models::{Coordinates, Section, SectionId, Station, StationRef};
+use crate::models::{Coordinates, Section, SectionId, Shot, Station, StationRef};
 
 use super::{HeapItem, PathEdge, PathStep, Project, StationPath};
 
@@ -570,25 +570,46 @@ impl Project {
         station_index: &HashMap<StationRef, usize>,
         coords: Option<&[Coordinates]>,
     ) -> Vec<Vec<(usize, f64)>> {
+        // Thin wrapper over `build_survey_graph_weighted` preserving the original two
+        // weightings: straight-line between `coords` (closure-adjusted geometry, for the
+        // distance gradient) when supplied, else the measured `shot.length`. The gas engine
+        // (`models/project/gas`) calls the weighted form directly with a gas-cost closure.
+        match coords {
+            Some(c) => self.build_survey_graph_weighted(n, station_index, |_shot, fi, ti| {
+                let (a, b) = (&c[fi], &c[ti]);
+                let (dx, dy, dz) = (b.x - a.x, b.y - a.y, b.z - a.z);
+                (dx * dx + dy * dy + dz * dz).sqrt()
+            }),
+            None => self.build_survey_graph_weighted(n, station_index, |shot, _fi, _ti| {
+                shot.length.max(0.0)
+            }),
+        }
+    }
+
+    /// Generalisation of [`build_survey_graph`](Self::build_survey_graph): each shot edge's
+    /// weight is supplied by `shot_weight(shot, from_idx, to_idx)`. Shot edges (permanent +
+    /// jump/reference) take the closure's weight; station merges and loop closures stay
+    /// **zero-cost** (same physical point). The section/shot iteration order is byte-identical
+    /// to `build_survey_graph` — `along_line_between` keys a parallel shot-edge map on that
+    /// edge-emission order, so it must not change here.
+    pub(super) fn build_survey_graph_weighted<F>(
+        &self,
+        n: usize,
+        station_index: &HashMap<StationRef, usize>,
+        shot_weight: F,
+    ) -> Vec<Vec<(usize, f64)>>
+    where
+        F: Fn(&Shot, usize, usize) -> f64,
+    {
         let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
 
-        // Shots (permanent and jump/reference). Edge weight = straight-line
-        // distance between the endpoints' `coords` when supplied (the
-        // closure-adjusted geometry, for the distance gradient), else the
-        // measured shot length (penetration / topological queries).
+        // Shots (permanent and jump/reference).
         for section in &self.sections {
             for (i, shot) in section.shots.iter().enumerate() {
                 let from = StationRef::new(section.id, i as u32);
                 let to = StationRef::new(section.id, (i + 1) as u32);
                 if let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) {
-                    let w = match coords {
-                        Some(c) => {
-                            let (a, b) = (&c[fi], &c[ti]);
-                            let (dx, dy, dz) = (b.x - a.x, b.y - a.y, b.z - a.z);
-                            (dx * dx + dy * dy + dz * dz).sqrt()
-                        }
-                        None => shot.length.max(0.0),
-                    };
+                    let w = shot_weight(shot, fi, ti);
                     adj[fi].push((ti, w));
                     adj[ti].push((fi, w));
                 }
