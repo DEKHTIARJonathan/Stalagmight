@@ -47,6 +47,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.check_section_hashes",
     "command.clear_tile_cache",
     "command.close_project",
+    "command.compute_gas_reach_field",
     "command.create_loop_closure",
     "command.create_project",
     "command.create_project_full",
@@ -527,7 +528,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 401);
+        assert_eq!(EVENT_NAMES.len(), 402);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

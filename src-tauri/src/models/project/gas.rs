@@ -5,12 +5,8 @@
 //! `pub(super)` graph primitives (`build_survey_graph_weighted` / `dijkstra` /
 //! `zero_datum_roots`) exactly as the sibling `distance` module does. The engine consumes
 //! the **instant measured** coords (`compute_station_coordinates`) — reachability is
-//! coordinate-independent, so it never triggers the slow closure-adjusted solve.
-//!
-//! Everything here is dead in the lib build until the Phase 1.3 IPC command
-//! (`commands/gas.rs`) calls it; live under `cfg(test)`, so the expectation is scoped to the
-//! non-test build (matches `models/shot.rs`; `#[allow]` is denied crate-wide).
-#![cfg_attr(not(test), expect(dead_code))]
+//! coordinate-independent, so it never triggers the slow closure-adjusted solve. The engine is
+//! called by the `commands::gas` IPC command via `AppState::gas_reach_field`.
 
 mod model;
 mod physics;

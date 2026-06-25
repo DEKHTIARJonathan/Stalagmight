@@ -1230,6 +1230,8 @@ pub fn run() {
             commands::cache::get_tile_fetch_stats,
             commands::cache::fetch_tile,
             commands::cache::get_tile_providers,
+            // Gas planning (#38)
+            commands::gas::compute_gas_reach_field,
             // Project commands
             commands::project::create_project,
             commands::project::update_project_settings,
