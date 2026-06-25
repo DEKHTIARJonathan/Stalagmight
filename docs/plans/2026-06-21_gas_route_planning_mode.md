@@ -89,27 +89,35 @@ are later); multi-diver fan-out optimization (north star, §9).
 
 The domain layer is **already factored for this** — we extend, not rebuild:
 
-- `Project::build_survey_graph(n, station_index, coords)` (`src-tauri/src/models/project.rs:7363`)
-  → adjacency `Vec<Vec<(usize,f64)>>`. Edges = all shots (incl. jump/reference) + zero-cost
-  station merges + zero-cost loop closures.
-- `Project::dijkstra(adj, roots)` (`project.rs:7426`) — generic over **any non-negative edge
-  weights**, multi-source, `∞` for unreachable. Gas costs are non-negative ⇒ reused verbatim.
-- `compute_distances_from` (`project.rs:7492`) literally names *"a future gas-planning mode"*
-  as a target consumer; `distance_field_from` → `DistanceField {distances, station_refs,
-  max_reachable}` (`project.rs:7541`) is the exact shape to mirror.
+- `Project::build_survey_graph(n, station_index, coords)` (`models/project/pathfinding.rs:567`,
+  **`pub(super)`** — module-private to `models::project`) → adjacency `Vec<Vec<(usize,f64)>>`.
+  Edges = all shots (incl. jump/reference) + zero-cost station merges + zero-cost loop closures.
+- `Project::dijkstra(adj, roots)` (`pathfinding.rs:630`, **`pub(super)`**) — generic over **any
+  non-negative edge weights**, multi-source, `∞` for unreachable, returns `Vec<f64>` (distances
+  only, **no predecessors** — `distance.rs:321` has the pred-tracking variant to copy). Gas costs
+  are non-negative ⇒ reused verbatim.
+- `compute_distances_from` (`distance.rs:22`; its doc comment at `distance.rs:20` literally names
+  *"a future gas-planning mode"* as a target consumer) + `distance_field_from` →
+  `DistanceField {distances, station_refs, max_reachable}` (`distance.rs:71`; struct at the module
+  root `project.rs:358`) are the **sibling-submodule pattern to copy** — both reach the `pub(super)`
+  graph fns via `self.build_survey_graph(…)` / `Self::dijkstra(…)` (the basis for the §7.1 engine
+  home).
 
 **Gas edge cost** = `gas_rate(avg_depth) × (edge_length / speed)`, where
 `gas_rate(z) = RMV × ATA(z)`, `ATA(z) = 1 + max(z,0)/10` (10 msw ≈ 1 bar),
-`z = Coordinates.z` (meters, **positive-down**, `station.rs:228`, set at `project.rs:3314`).
+`z = Coordinates.z` (meters, **positive-down**, `station.rs:223`, set via `compute_station_depth()`
+`coordinates.rs:70`, written at `coordinates.rs:130`).
 `avg_depth = ½(z_from + z_to)` — trapezoidal mean over a straight leg, cheaply available
 from the measured station list (no extra survey walk). Merges/closures stay 0-cost (same
 physical point ⇒ 0 gas — correct).
 
 **Why it's cheap & correct:** reachability/distance is **coordinate-independent** (closure
 adjustment only nudges coords sub-meter), so the gas engine consumes the **instant** measured
-coords (`compute_station_coordinates()`, `project.rs:6758`) and **never** triggers the slow
-~2 s/~40 s closure solve. This mirrors the existing `AppState::distance_field` decision
-(`app_state.rs:364`), which already rejects the adjusted solve for the same reason.
+coords (`compute_station_coordinates()`, `models/project/coordinates.rs:266`) and **never**
+triggers the slow ~2 s/~40 s closure solve (`compute_adjusted_station_coordinates`,
+`coordinates.rs:354` — the one the gas command must NOT call). This mirrors the existing
+`AppState::distance_field` decision (`core/state/app_state.rs:364`), which already rejects the
+adjusted solve for the same reason.
 
 **Everything derives from the field:**
 - *Reachable within budget* = stations whose **round-trip** gas ≤ usable gas after the §5.1
@@ -569,7 +577,7 @@ Concretises the choices §7.2 left open:
   hand-computed `ata`/`gas_rate`/`edge_gas`; a 3–4 station survey with known depths where the
   thirds round-trip budget is hand-computed, asserting `reachable[]`, `turn_frontier`,
   `gas_to_reach[lead]` to tolerance. **Adversarial:** empty/no-zero-datum project (→ all
-  unreachable, like `compute_penetration_distances`, `project.rs:7514`), disconnected lead,
+  unreachable, like `compute_penetration_distances`, `models/project/distance.rs:42`), disconnected lead,
   merge/closure on the path (0-cost), a **jump shortcut (its distance counts)**, a **reference
   shot that resolves to the shortest path** (§6), near-zero/above-surface depth (`ata` clamps).
 - **Frontend:** vitest for store + unit conversions; Playwright `@smoke` for enter/exit +
@@ -584,14 +592,22 @@ Concretises the choices §7.2 left open:
 > `core/state/app_state.rs`. Verified by the 2026-06-24 re-assessment — re-check once more at
 > implementation time, as line numbers drift.
 
-- `src-tauri/src/models/project.rs` — `build_survey_graph:7363`, `dijkstra:7426`,
-  `compute_distances_from:7492`, `distance_field_from:7541` (factor the weight closure; add
-  predecessors), `coords.z = compute_station_depth():3314`.
+- `src-tauri/src/models/project/pathfinding.rs` — `build_survey_graph:567`, `dijkstra:630`,
+  `zero_datum_roots:676` (all **`pub(super)`**; the weight choice = the `match coords` at `:585`).
+- `src-tauri/src/models/project/distance.rs` — `compute_distances_from:22`,
+  `compute_penetration_distances:42`, `distance_field_from:71` (the sibling-call template);
+  **predecessor-tracking** shortest-path helper at `:321` (copy this for back-tracing, not the
+  shared `dijkstra`).
+- `src-tauri/src/models/project/coordinates.rs` — `compute_station_coordinates:266` (measured;
+  what the gas command calls), `compute_adjusted_station_coordinates:354` (**must NOT call**),
+  `compute_station_depth:70` → sets `coords.z` at `:130`.
+- `src-tauri/src/models/project.rs` (module root) — `DistanceField` struct `:358`; declares the
+  child `mod`s at `:20-40` (**add `mod gas;` here** — §7.1).
 - `src-tauri/src/core/state/app_state.rs` — `distance_field:364` (measured-coords precedent),
-  `adjusted_cache:44` (mirror-or-skip).
-- `src-tauri/src/commands/project.rs:128` — `get_station_distances_from` (the command template).
-- `src-tauri/src/config/types.rs:9` — `Config` (add `gas`); `:779` `UnitsConfig` (leave alone).
-- `src-tauri/src/models/station.rs:228` — `Coordinates.z` (depth, +down); `:364` `ZeroDatum`.
+  `adjusted_cache` field `:114` / `AdjustedStationsCache` struct `:49` (mirror-or-skip).
+- `src-tauri/src/commands/project.rs:129` — `get_station_distances_from` (the IPC command template).
+- `src-tauri/src/config/types.rs:9` — `Config` (add `gas`); `:828` `UnitsConfig` (leave alone).
+- `src-tauri/src/models/station.rs:223` — `Coordinates` (`.z` depth, +down); `:364` `ZeroDatum`.
 - `src/components/Map/MapCanvas.tsx` — distance fetch `:1738`, feature-state `:1753`, origin
   marker `:1787`, overlay region `:3312` (the overlay template).
 - `src/store/uiStore.ts` — `ViewType:25`, `setView` cleanup `:487`, distance-gradient sub-mode
