@@ -108,8 +108,10 @@ The domain layer is **already factored for this** — we extend, not rebuild:
 `z = Coordinates.z` (meters, **positive-down**, `station.rs:223`, set via `compute_station_depth()`
 `coordinates.rs:70`, written at `coordinates.rs:130`).
 `avg_depth = ½(z_from + z_to)` — trapezoidal mean over a straight leg, cheaply available
-from the measured station list (no extra survey walk). Merges/closures stay 0-cost (same
-physical point ⇒ 0 gas — correct).
+from the measured station list (no extra survey walk; ⚠ a leg that **crosses the surface** — air
+bell / sump — slightly under-counts because `ata` clamps the *average*, not the integral;
+negligible for cave penetration, but note it). Merges/closures stay 0-cost (same physical point ⇒
+0 gas — correct).
 
 **Why it's cheap & correct:** reachability/distance is **coordinate-independent** (closure
 adjustment only nudges coords sub-meter), so the gas engine consumes the **instant** measured
@@ -207,6 +209,12 @@ of the exit path (lead → exit):
 *(Reserve shrinks toward the exit — 100 → 70 bar of back gas held — because there's less cave
 left to swim out; the `−15` is a fixed buffer on each. Corrected 2026-06-22.)*
 
+**⚠ Calibration caveat (2026-06-24 audit):** `100/70/15` are raw **bar** and `½` is a
+per-cylinder-pressure thirds-equivalent — meaningful only against a **specific back-gas rig**. The
+volume-canonical engine must restate them as `reserve_volume(region) = held_pressure(region) ×
+Σ(back-gas water_volume)`, with `100/70/−15` a **named, editable `ReserveProfile`** (not literals
+baked in). See §10 for the open calibration question.
+
 **Pressure vs volume (Nico):** the engine computes in **volume** (liters — that's what
 RMV×ATA consumes), but **turn points, reserves, and recalc outputs read as PRESSURE per
 cylinder** (`bar = liters / water_volume_l`), because divers watch pressure gauges underwater.
@@ -226,8 +234,11 @@ a later phase**.
 pressure); the recalc regions/formulas are as above (corrected 2026-06-22 — recalc needs a
 stage in hand, so the deepest region has none).
 
-**⚠ Minor open:** confirm "turn at 1/N" = turn when 1/N of usable is *consumed* (the deepest
-region's "⅙ back gas" reads as the sixths reserve, consistent with that reading).
+**⚠ Open — NOT minor (2026-06-24 audit):** confirm "turn at 1/N" = turn when 1/N of usable is
+*consumed* (vs *reserved*). This is **load-bearing — it flips the sign of every `usable =` recalc
+formula above.** The deepest region's "⅙ back gas held" reads as the sixths *reserve* (consistent
+with "consume up to 5/6"), but the `((backgas−100)/2)` regions must be reconciled with that
+reading. See §10.
 
 ### 5.2 Surveying changes the gas math — asymmetric speed + a less-opinionated reserve (Nico)
 
@@ -236,7 +247,8 @@ gas reserved across all cylinders**. Gas can be **moved between cylinders** (Nic
 back-gas + 2 stages) — you may run plain ⅓-per-tank, or balance gas across tanks; the balanced
 scheme still preserves total thirds. The §5.1 presets are these thirds-preserving
 distributions; the engine's hard floor is **total-thirds**, presets only change *where* gas is
-spent.
+spent. *(Audit note: that quarters-backgas / sixths-backgas + the stage turns net to total-thirds
+isn't self-evident — show the arithmetic and assert it in a unit test.)*
 
 **Survey-in is 2–3× slower than the swim-out.** Surveying is slow work; the exit is a fast
 swim (default **10 m/min**, no DPV). So per-meter gas IN ≫ OUT, and **round-trip gas is NOT
@@ -333,8 +345,9 @@ identical for this purpose)**, which collapses to one pattern:
 
 **Model:** give each `Cylinder` a **role** (back gas / stage / **dil-out** / bailout). Available
 bailout = Σ usable over bailout-capable cylinders (dil-out gives `fill − dil_suit_reserve`;
-dedicated bailout bottles give full usable). **Constraint:** available bailout ≥ the exit integral from the worst
-point (the lead) everywhere along the penetration; where short, **stage bailout** (drop bottles
+dedicated bailout bottles give full usable). **Constraint:** available bailout ≥ the exit integral from the **single worst point** (the
+max-exit-gas point; on a monotone line that's the furthest penetration / the lead — branching caves
+take the max over branch tips), checked along the route; where short, **stage bailout** (drop bottles
 — §5.4 mechanics, bailout variant). Stressed-RMV multiplier applies (value still a knob — my
 1.5–2.0 placeholder, confirm). *(Sidemount dil-out is the common case; the role model also covers
 back-mount CCR — a non-bailout Diluent role + dedicated Bailout bottles.)*
@@ -603,28 +616,43 @@ Concretises the choices §7.2 left open:
 3. **DPV gas effect:** **no reduced RMV** on the scooter — same RMV as swimming. Hard
    scootering can demand as much gas as swimming; the unreduced RMV is a deliberate soft
    safety margin. DPV affects **speed + range/burn-time** only.
+4. **Architecture forks (2026-06-24):** engine = `models/project/gas/` sibling (§7.1); exit/bailout
+   = **reverse-of-entry-path**, not an exits-Dijkstra (§4/§6); UI entry = top-level toggle **outside**
+   `DisplayMenu` (§7.2); right panel = **reuse the `detail` `Dock` slot** (§7.3).
 
 **Still open:**
 4. **Memoization:** confirm "debounce-only" holds on the largest real survey, or add the
    single-slot `AppState` memo (§7.1).
-5. **Turn-gloss (§5.1):** confirm "turn at 1/N" = consumed (minor). *(Recalc regions/formulas,
-   direction, and pressure-semantics now resolved.)*
-6. **Planning Q&A batch — resolved** (traverses out; ≤2 stages; drop envelope; ephemeral plan +
-   print-out; survey-RMV slider; CCR "dil-out" w/ user-set dil+suit reserve; a **lead** = a
-   first-class marked point, station or shot — **lead-marking is future work** §9, MVP targets a
-   selected station). **Residual knob:** confirm the **stressed-RMV multiplier value**
-   (placeholder 1.5–2.0).
+5. **Turn-gloss (§5.1) — NOT minor:** confirm "turn at 1/N" = *consumed* vs *reserved*; it flips
+   the sign of the §5.1 recalc formulas (2026-06-24 audit).
+6. **Stressed-RMV value:** confirm `stressed_rmv_multiplier` (placeholder 1.5–2.0) — it scales every
+   CCR bailout number. *(Planning batch otherwise resolved: traverses out; ≤2 stages; drop envelope;
+   ephemeral plan + print-out; survey-RMV slider; CCR dil-out; lead = future marker §9, MVP targets a
+   selected station.)*
+7. **Recalc calibration (§5.1):** what back-gas rig are `100/70/15` bar calibrated to (single /
+   manifolded twins / independent doubles), and is `current_backgas` a per-cylinder gauge or a total?
+8. **Gas-mode teardown (§7.2):** `setView()` `exitGasPlan()` (stronger) vs a `created_at` `MapCanvas`
+   effect (matches the distance-overlay precedent)?
+9. **Two unit toggles (§7.2):** length/depth follow `UnitsConfig.length`, gas follows
+   `GasConfig.units` — reconcile the readout (one toggle for both, or independent + clear labels)?
+10. **Saved rig profiles (§7.3):** in Phase 1 scope, or later? And where does the list live (a
+    `Vec<RigProfile>` in global `Config`, edited via Settings)?
 
 ---
 
 ## 11. Verification
-- **Rust (gated `--features telemetry`):** golden-fixture unit tests in `core/gas/tests.rs` —
+- **Rust (gated `--features telemetry`):** golden-fixture unit tests in `models/project/gas/tests.rs` —
   hand-computed `ata`/`gas_rate`/`edge_gas`; a 3–4 station survey with known depths where the
   thirds round-trip budget is hand-computed, asserting `reachable[]`, `turn_frontier`,
   `gas_to_reach[lead]` to tolerance. **Adversarial:** empty/no-zero-datum project (→ all
   unreachable, like `compute_penetration_distances`, `models/project/distance.rs:42`), disconnected lead,
   merge/closure on the path (0-cost), a **jump shortcut (its distance counts)**, a **reference
   shot that resolves to the shortest path** (§6), near-zero/above-surface depth (`ata` clamps).
+- **Property/invariant tests (safety, §6):** beyond golden cases, assert on random small surveys —
+  gas *requirements* round up & reachable extent rounds down; `round_trip(X) ≥ gas_in(X)`; the
+  reverse-path `gas_out(X)` is **never less** than a free Dijkstra-to-exits would give (the safety
+  direction); reachability invariant to swapping measured↔adjusted coords. (Repo has a fuzz/property
+  precedent.)
 - **Frontend:** vitest for store + unit conversions; Playwright `@smoke` for enter/exit +
   reachable-overlay render-and-reset against mocked IPC (mirror the distance-gradient e2e).
 - **Manual/e2e:** load a real `e2e/fixtures/*.dmp`, enter the mode, check the reachable
