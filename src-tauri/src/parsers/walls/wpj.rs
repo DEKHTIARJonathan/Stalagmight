@@ -135,6 +135,20 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                     } else if entry.status & STATUS_TYPE_OTHER != 0 {
                         skipped_attachments += 1;
                     } else {
+                        // Defense-in-depth: an absolute / drive-qualified `.PATH`
+                        // is honored verbatim (genuine Walls does), but if it
+                        // escapes the project root the importer is reading outside
+                        // the `.wpj`'s own tree — tell the user rather than doing
+                        // it silently. (The read is NOT blocked: an explicit
+                        // absolute path is the author's deliberate choice.)
+                        if ctx.dir.is_absolute() && !ctx.dir.starts_with(&ctx.root) {
+                            let label = entry.name.clone().unwrap_or_else(|| entry.title.clone());
+                            warnings.push(format!(
+                                "survey '{label}' resolves through an absolute .PATH outside \
+                                 the project directory ({})",
+                                ctx.dir.display()
+                            ));
+                        }
                         match resolve_survey(&entry, &ctx) {
                             Some(file_path) if file_path.exists() => {
                                 match read_latin1(&file_path) {

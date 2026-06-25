@@ -396,9 +396,12 @@ pub(crate) struct WallsVector {
     /// CT shots.
     pub(crate) inch: f64,
     pub(crate) grid_relative: bool,
-    /// `#Units Grid=` grid convergence (degrees) to subtract from a CT vector's
-    /// azimuth (true → grid north). `0.0` for RECT vectors, whose `RECT=<angle>`
-    /// frame rotation is baked into the computed bearing instead.
+    /// `#Units Grid=` grid convergence (degrees) to subtract from the vector's
+    /// azimuth (true → grid north). Applies to CT and RECT vectors alike — it is
+    /// `units.grid` regardless of vector type. What a RECT vector excludes is the
+    /// `RECT=<angle>` FRAME rotation (already baked into the computed bearing) and
+    /// magnetic declination (forced to 0 for RECT); `Grid=` convergence is NOT
+    /// dropped, so do not "fix" RECT to skip it.
     pub(crate) grid_convergence: f64,
     /// Auto-derive declination from `#Date` (`.STATUS` derive-declination flag).
     pub(crate) derive_decl: bool,

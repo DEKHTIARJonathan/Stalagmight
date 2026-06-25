@@ -238,9 +238,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       }> = [];
       let mockOrphanPlacementSuggestions: unknown[] = [];
       let mockImportPlacementSuggestions: unknown[] = [];
+      // Records execute_walls_import args (esp. selectedSurveys) so the Walls
+      // import dialog spec can assert the select-all→null / explicit-index path.
+      let wallsImportCalls: Array<Record<string, unknown>> = [];
 
       (window as unknown as Record<string, unknown>).__MOCK_SET_CHECK_DUPLICATE_RESULT__ = (result: boolean) => {
         mockCheckDuplicateResult = result;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_GET_WALLS_IMPORT_CALLS__ = () => [...wallsImportCalls];
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_WALLS_IMPORT_CALLS__ = () => {
+        wallsImportCalls = [];
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ = () => [...trackImportedFileCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ = () => {
@@ -1346,6 +1353,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               sections: importedSections,
             };
           }
+
+          case 'execute_walls_import':
+            // Record the import args (selectedSurveys, includeSplays, …) for
+            // assertions, then return a one-section success so the dialog runs
+            // its "imported" exit path (not the "nothing imported" branch).
+            wallsImportCalls.push({ ...(args ?? {}) });
+            return {
+              success: true,
+              warnings: [],
+              error: null,
+              section_ids: [1],
+              section_id: 1,
+            };
 
           // File hash tracking for duplicate detection
           case 'calculate_file_hash':

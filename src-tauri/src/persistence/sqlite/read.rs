@@ -562,7 +562,11 @@ impl Database {
         for s in &sections {
             for (i, shot) in s.shots.iter().enumerate() {
                 if let Some(u) = &shot.uuid {
-                    shot_uuid_index.insert((s.id, u.clone()), i as u32);
+                    // First occurrence wins, matching `add_section` /
+                    // `rebuild_shot_uuid_index` / the `resolve_key` cold scan; a
+                    // plain `.insert` would be last-write-wins and silently break
+                    // that invariant if a duplicate UUID ever slipped through.
+                    shot_uuid_index.entry((s.id, u.clone())).or_insert(i as u32);
                 }
             }
         }

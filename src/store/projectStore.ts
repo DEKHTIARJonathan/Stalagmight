@@ -1792,19 +1792,31 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   executeWallsImport: async (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean, selectedSurveys?: number[] | null) => {
-    return executeCommand(
-      'execute_walls_import',
-      {
-        path,
-        fileHash: fileHash ?? null,
-        commentsOnStations: commentsOnStations ?? true,
-        includeSplays: includeSplays ?? false,
-        // `null` ⇒ import every survey; an array picks specific survey indices
-        // (into the preview's `surveys`, 1:1 with the parser order).
-        selectedSurveys: selectedSurveys ?? null,
-      },
-      { purpose: 'import Walls', fields: { path } }
-    );
+    // Re-arm the transient `_source` from the durable pending bridge (it resets
+    // ~50ms after being set), so `command.execute_walls_import` is attributed to
+    // the real entry point (hamburger/keyboard/drag-drop/dialog) instead of
+    // 'unknown' — matching executeCompassImport/Tml/Gpx.
+    const s = peekProjectActionSource();
+    if (s) setSource(s);
+    try {
+      return await executeCommand(
+        'execute_walls_import',
+        {
+          path,
+          fileHash: fileHash ?? null,
+          commentsOnStations: commentsOnStations ?? true,
+          includeSplays: includeSplays ?? false,
+          // `null` ⇒ import every survey; an array picks specific survey indices
+          // (into the preview's `surveys`, 1:1 with the parser order).
+          selectedSurveys: selectedSurveys ?? null,
+        },
+        { purpose: 'import Walls', fields: { path } }
+      );
+    } finally {
+      // Terminal flow: clear the pending source so a failed/abandoned import
+      // can't leak the armed project-action source into the next command.
+      clearProjectActionSource();
+    }
   },
 
   // Collaboration mode

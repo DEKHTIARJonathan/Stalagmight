@@ -36,7 +36,6 @@ pub(crate) fn parse_srv_contents(
     let mut segment = inherited_segment.to_string();
     let mut date: Option<NaiveDate> = None;
     let mut surveyor: Option<String> = None;
-    let mut first_comment_seen = false;
     let mut block_comment_depth: u32 = 0;
 
     let mut vectors: Vec<WallsVector> = Vec::new();
@@ -63,9 +62,6 @@ pub(crate) fn parse_srv_contents(
         // Whole-line comment.
         if trimmed.starts_with(';') {
             let body = trimmed[1..].trim();
-            if !first_comment_seen && !body.is_empty() {
-                first_comment_seen = true;
-            }
             // Heuristic: capture a team/surveyor annotation.
             if surveyor.is_none() {
                 if let Some(team) = extract_team(body) {
@@ -74,7 +70,6 @@ pub(crate) fn parse_srv_contents(
             }
             continue;
         }
-        first_comment_seen = true;
 
         // Directive line.
         if trimmed.starts_with('#') {
@@ -337,7 +332,11 @@ pub(crate) fn parse_vector_line(
     let mut from_depth = None;
     let mut to_depth = None;
     if is_dive {
-        // Two trailing depth columns (station depths below surface).
+        // Two trailing depth columns (station depths below surface). They scale
+        // by the S ("short") unit, NOT the D unit — matching genuine Walls
+        // `parse_height`, which reads depth/height columns via
+        // `parse_length_arg(val, i, u->bFeetS)` (the S feet flag). The S unit
+        // covers LRUD plus instrument/target heights and these station depths.
         if let Some(tok) = meas.get(cursor) {
             from_depth = parse_depth(tok, units.s_unit);
             cursor += 1;
@@ -760,6 +759,13 @@ pub(crate) fn parse_walls_date(s: &str) -> Option<NaiveDate> {
     // legacy survey, e.g. `64` → 1964, inside the IGRF range. Trade-off: a survey
     // actually done in 2025 but written `…-25` reads as 1925 — exactly as Walls
     // reads it; Walls itself warns that `yyyy-mm-dd` is preferred.)
+    //
+    // Leap-day exception: `02-29-00` parses (via `%y`) to 2000-02-29, but 1900
+    // was NOT a leap year, so `with_year(1900)` fails and `unwrap_or(d)` keeps
+    // 2000-02-29. That is the only valid date the two digits can denote (Feb 29
+    // 1900 does not exist), so we deliberately leave it at 2000 rather than force
+    // a parse failure — the single date that escapes the "every 2-digit year →
+    // 1900s" rule, by arithmetic necessity.
     for fmt in &["%m-%d-%y", "%m/%d/%y"] {
         if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
             return Some(if d.year() >= 2000 {

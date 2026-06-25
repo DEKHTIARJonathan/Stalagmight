@@ -155,7 +155,7 @@ pub fn build_preview(parsed: &ParsedWalls) -> WallsFile {
                 .iter()
                 .filter(|v| is_importable_shot(v, true) && !is_importable_shot(v, false))
                 .count() as u32,
-            fixed_station_count: s.fixes.iter().filter(|f| f.lat_long.is_some()).count() as u32,
+            fixed_station_count: survey_fixed_station_count(s),
             resolved: s.resolved,
         })
         .collect();
@@ -640,6 +640,29 @@ pub(crate) fn resolve_anchors(
         }
     }
     anchors
+}
+
+/// Count the `#Fix` stations in ONE survey that would actually anchor: unique by
+/// station name (first declaration wins) AND passing the same coordinate-validity
+/// check `resolve_anchors` applies (`GpsCoordinates::new`). Without this the
+/// per-survey preview stat counted raw `lat_long.is_some()` fixes — duplicates and
+/// out-of-range projections included — so it could exceed the deduped, validated
+/// project total and display nonsense like "3 / 2".
+pub(crate) fn survey_fixed_station_count(survey: &ParsedSurvey) -> u32 {
+    let mut seen: HashSet<&str> = HashSet::new();
+    survey
+        .fixes
+        .iter()
+        .filter(|f| {
+            let Some((lat, lon)) = f.lat_long else {
+                return false;
+            };
+            if !seen.insert(f.name.as_str()) {
+                return false;
+            }
+            GpsCoordinates::new(lat, lon, 0.0).is_ok()
+        })
+        .count() as u32
 }
 
 /// Generic head-to-tail chain splitter.

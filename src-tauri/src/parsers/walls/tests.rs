@@ -5,7 +5,9 @@
     clippy::print_stderr
 )]
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::Datelike;
 
@@ -50,12 +52,35 @@ fn approx(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-6
 }
 
-fn temp_dir(tag: &str) -> PathBuf {
+/// RAII temp directory: created on construction, removed on `Drop` (so a
+/// panicking test can't leak it). Isolation is by PID + tag + a process-wide
+/// atomic nonce, so two tests sharing a tag — or repeated calls in one test —
+/// never collide on the same path.
+struct TempDir {
+    path: PathBuf,
+}
+
+impl Deref for TempDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn temp_dir(tag: &str) -> TempDir {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let n = NONCE.fetch_add(1, Ordering::Relaxed);
     let mut d = std::env::temp_dir();
-    d.push(format!("walls_test_{tag}_{}", std::process::id()));
+    d.push(format!("walls_test_{tag}_{}_{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
-    d
+    TempDir { path: d }
 }
 
 // ----- datum recognition / projection ---------------------------------
@@ -227,6 +252,28 @@ fn depth_gauge_conversion_keeps_gauge_depths() {
     assert!(approx(sec.shots[0].length, 21.1));
     assert!(approx(sec.shots[0].azimuth_in, 339.0));
     assert!(matches!(sec.placement, ImportPlacement::Origin));
+}
+
+#[test]
+fn dive_depth_columns_scale_by_s_unit() {
+    // The two trailing dive-depth columns scale by the S ("short") unit, NOT the
+    // D unit — matching genuine Walls `parse_height`, which reads them via
+    // `parse_length_arg(val, i, u->bFeetS)` (the S feet flag). Here D=Meters but
+    // S=Feet, so depths `5.0`/`7.0` are feet and must come out ×0.3048, proving
+    // `s_unit` (not `d_unit`) is applied. (If d_unit were used they'd stay 5/7 m.)
+    let srv = "#UNITS Meters D=Meters S=Feet Order=DA Tape=SS\nA B 10 90 5.0 7.0\n";
+    let survey = parse_srv(srv);
+    assert_eq!(survey.vectors.len(), 1);
+    let v = &survey.vectors[0];
+    assert!(v.is_depth_gauge);
+    // Distance is the D unit (meters) and stays 10.
+    assert!(approx(v.length_m, 10.0));
+    // Depths are the S unit (feet) → meters.
+    assert_eq!(v.from_depth, Some(5.0 * FEET_TO_METERS));
+    assert_eq!(v.to_depth, Some(7.0 * FEET_TO_METERS));
+    // Guard against a silent regression to meters.
+    assert!(v.from_depth.unwrap() < 5.0);
+    assert!(v.to_depth.unwrap() < 7.0);
 }
 
 // ----- foresight / backsight ------------------------------------------
@@ -425,7 +472,6 @@ fn wpj_no_grid_bit_does_not_rotate_azimuth() {
         "no grid bit => convergence must not rotate the azimuth, got {}",
         configs[0].shots[0].azimuth_in
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -495,10 +541,28 @@ fn branch_splits_into_sections_with_closure() {
                D B 10 45 0\n\
                C A 14 200 0\n";
     let (configs, closures, _w) = convert_one(parse_srv(srv));
-    // Three chains: [A,B,C], [D,B], [C,A].
+    // Three chains: section 0 = [A,B,C], section 1 = [D,B], section 2 = [C,A].
     assert_eq!(configs.len(), 3);
-    // Non-tree shared stations produce closures (B and the C/A loop).
-    assert!(!closures.is_empty());
+    // B (section 1) and C (section 2) are the spanning-tree merge edges, so they
+    // do NOT close. The only non-tree shared station is A: it is canonical in
+    // section 0 (index 0) and revisited as the tail of section 2 (index 1), so
+    // exactly ONE closure ties (2,1) back to (0,0).
+    assert_eq!(
+        closures.len(),
+        1,
+        "expected exactly one closure: {closures:?}"
+    );
+    let c = &closures[0];
+    assert_eq!(
+        (
+            c.from_section_index,
+            c.from_station_index,
+            c.to_section_index,
+            c.to_station_index
+        ),
+        (2, 1, 0, 0),
+        "the C-A loop must tie station A at (2,1) back to (0,0): {closures:?}"
+    );
     // FromImporting targets precede dependents after topo-sort.
     let first = &configs[0];
     assert!(matches!(
@@ -549,8 +613,6 @@ fn wpj_tree_status_inheritance_and_resolution() {
     assert_eq!(preview.utm_zone, Some(16));
     assert_eq!(preview.datum.as_deref(), Some("NAD83"));
     assert!(preview.has_georeference);
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -574,7 +636,6 @@ fn latin1_decoding() {
     std::fs::write(&p, [b';', b' ', 0xE4, b'\n']).unwrap();
     let s = read_latin1(&p).unwrap();
     assert!(s.contains('\u{00E4}'));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1011,8 +1072,8 @@ fn resolve_survey_appends_srv_for_non_srv_extension() {
         reference: None,
     };
     let ctx = WpjContext {
-        dir: dir.clone(),
-        root: dir.clone(),
+        dir: dir.to_path_buf(),
+        root: dir.to_path_buf(),
         options: Vec::new(),
         reference: None,
         segment: String::new(),
@@ -1024,7 +1085,6 @@ fn resolve_survey_appends_srv_for_non_srv_extension() {
         resolved.file_name().unwrap().to_string_lossy(),
         "FOO.OLD.SRV"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1085,6 +1145,49 @@ fn resolve_path_clamps_traversal_and_honors_absolute() {
     assert_eq!(
         resolve_path(root, root, "D:\\Caves"),
         PathBuf::from("D:/Caves")
+    );
+}
+
+#[test]
+fn absolute_path_escaping_root_warns_but_still_reads() {
+    // An absolute `.PATH` that points outside the project tree is honored
+    // (genuine Walls does), but the importer warns that it read outside the
+    // project directory so the user is told.
+    let proj = temp_dir("abspath_proj");
+    let outside = temp_dir("abspath_outside");
+    // The survey file lives in the OUTSIDE dir; the .PATH points there absolutely.
+    std::fs::write(
+        outside.join("S.SRV"),
+        "#UNITS meters order=DAV\nA B 10 90 0\n",
+    )
+    .unwrap();
+    let wpj = format!(
+        ";WALLS Project File\n\
+         .BOOK Root\n.NAME ROOT\n.STATUS 8\n\
+         .PATH {}\n\
+         .SURVEY S\n.NAME S\n.STATUS 8\n\
+         .ENDBOOK\n",
+        outside.display()
+    );
+    let wpj_path = proj.join("T.wpj");
+    std::fs::write(&wpj_path, wpj).unwrap();
+    let parsed = parse_walls(&wpj_path).unwrap();
+    // The survey still resolved + parsed (read NOT blocked).
+    assert!(
+        parsed
+            .surveys
+            .iter()
+            .any(|s| s.resolved && !s.vectors.is_empty()),
+        "absolute .PATH must still be read"
+    );
+    // ...and a warning names the escape.
+    assert!(
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("absolute .PATH outside the project directory")),
+        "an absolute .PATH escaping the root must warn: {:?}",
+        parsed.warnings
     );
 }
 
@@ -1150,8 +1253,28 @@ fn cross_section_loop_still_emits_closure() {
                D C 10 180 0\n\
                D A 10 270 0\n";
     let (configs, closures, _w) = convert_one(parse_srv(srv));
-    assert!(configs.len() >= 3);
-    assert!(!closures.is_empty(), "a loop across survey legs must close");
+    // Three chains: section 0 = [A,B,C], section 1 = [D,C], section 2 = [D,A].
+    assert_eq!(configs.len(), 3);
+    // C (section 1) and A (section 2) are the spanning-tree merge edges and do
+    // NOT close; the one non-tree shared station is D, canonical in section 1
+    // (index 0) and revisited as the head of section 2 (index 0), so exactly ONE
+    // closure ties (2,0) back to (1,0).
+    assert_eq!(
+        closures.len(),
+        1,
+        "expected exactly one closure: {closures:?}"
+    );
+    let c = &closures[0];
+    assert_eq!(
+        (
+            c.from_section_index,
+            c.from_station_index,
+            c.to_section_index,
+            c.to_station_index
+        ),
+        (2, 0, 1, 0),
+        "the loop must tie station D at (2,0) back to (1,0): {closures:?}"
+    );
 }
 
 #[test]
@@ -1190,6 +1313,53 @@ fn preview_reports_fixed_station_count() {
     };
     let preview = build_preview(&parsed);
     assert_eq!(preview.fixed_station_count, 1);
+}
+
+#[test]
+fn per_survey_fixed_station_count_dedups_and_validates() {
+    // Two surveys share the fix `A0`, and survey 1 also carries `BAD` at an
+    // out-of-range latitude (N95) that fails `GpsCoordinates::new`. The project
+    // total (`resolve_anchors`) dedups `A0` across surveys and drops `BAD`, so it
+    // is 1. The per-survey counts must use the SAME dedup + validity rule, so
+    // neither survey can report more than the deduped, validated project total
+    // (the old raw `lat_long.is_some()` count gave survey 1 a 2 and produced the
+    // "2 / 1" mismatch this regresses).
+    let survey1 = parse_srv(
+        "#UNITS meters order=DAV\n\
+         #FIX A0 W90:00:00 N30:00:00 0\n\
+         #FIX BAD W30:00:00 N95:00:00 0\n\
+         A0 A1 10 90 0\n",
+    );
+    let survey2 = parse_srv(
+        "#UNITS meters order=DAV\n\
+         #FIX A0 W90:00:00 N30:00:00 0\n\
+         A0 A2 10 90 0\n",
+    );
+    let parsed = ParsedWalls {
+        project_name: "T".to_string(),
+        book_count: 0,
+        surveys: vec![survey1, survey2],
+        georef: None,
+        missing_files: Vec::new(),
+        skipped_attachments: 0,
+        warnings: Vec::new(),
+    };
+    let preview = build_preview(&parsed);
+    // Project total: A0 (deduped across both surveys) — BAD is out of range.
+    assert_eq!(preview.fixed_station_count, 1);
+    // Each per-survey count must not exceed the deduped, validated total.
+    for s in &preview.surveys {
+        assert!(
+            s.fixed_station_count <= preview.fixed_station_count,
+            "per-survey count {} exceeds project total {}",
+            s.fixed_station_count,
+            preview.fixed_station_count
+        );
+    }
+    // Specifically: survey 1's invalid `BAD` is dropped (so 1, not 2); survey 2
+    // counts its lone valid `A0`.
+    assert_eq!(preview.surveys[0].fixed_station_count, 1);
+    assert_eq!(preview.surveys[1].fixed_station_count, 1);
 }
 
 #[test]
@@ -2101,6 +2271,17 @@ fn two_digit_year_maps_to_1900s_like_walls() {
             "{s} should map to {y}"
         );
     }
+}
+
+#[test]
+fn two_digit_leap_day_stays_2000() {
+    // The one arithmetic exception to "every 2-digit year → 1900s": 1900-02-29
+    // does not exist (1900 was not a leap year), so `02-29-00` keeps its only
+    // valid interpretation, 2000-02-29, rather than being forced to fail.
+    assert_eq!(
+        parse_walls_date("02-29-00"),
+        NaiveDate::from_ymd_opt(2000, 2, 29)
+    );
 }
 
 #[test]
