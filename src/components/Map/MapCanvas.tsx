@@ -457,8 +457,13 @@ function MapCanvas() {
   // the persisted toggles, so no "prior coloring" snapshot can be lost and every
   // toggle of a coloring mode just triggers a recompute (issue #57, finding #6).
   const highlightWarningsOnTabSwitch = config?.map.highlight_warnings_on_tab_switch ?? true;
+  // The gas sub-mode (#38) swaps the detail panel away from Warnings but leaves
+  // detailPanelTab='warnings' in the store, so the warnings-tab highlight would
+  // otherwise stay derived-true and force needless severity rebuilds under the gas
+  // overlay. Suppress it while gas owns the layer paint.
   const effectiveIssueSeverity =
-    showIssueSeverity || (detailPanelOpen && detailPanelTab === 'warnings' && highlightWarningsOnTabSwitch);
+    showIssueSeverity ||
+    (detailPanelOpen && detailPanelTab === 'warnings' && highlightWarningsOnTabSwitch && !showGasPlan);
   // Severity takes visual precedence over the depth gradient when both apply.
   const effectiveDepthGradient = showDepthGradient && !effectiveIssueSeverity;
   // Gate the survey-layer rebuild on issue-severity coloring. `warnings` changes

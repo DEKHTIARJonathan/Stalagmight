@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useGasPlanStore } from '../../store/gasPlanStore';
@@ -104,14 +104,12 @@ export function GasPlanPanel() {
         <section className="space-y-1">
           <SectionLabel>{t('gasPanel.diver.rmvLabel')}</SectionLabel>
           <div className="flex items-center gap-2">
-            <input
-              type="number"
-              min={0}
-              step={1}
+            <PositiveNumberField
               value={diver.rmv_l_per_min}
-              onChange={(e) => setDiver({ ...diver, rmv_l_per_min: Number(e.target.value) })}
+              onCommit={(n) => setDiver({ ...diver, rmv_l_per_min: n })}
+              step={1}
               className="w-24 bg-transparent border border-border rounded px-2 py-1"
-              data-testid="gas-rmv-input"
+              testId="gas-rmv-input"
             />
             <span className="text-xs opacity-70">{t('gasPanel.diver.rmvUnit')}</span>
           </div>
@@ -158,15 +156,13 @@ export function GasPlanPanel() {
                 <span className="text-xs opacity-60 w-12">
                   {cyl.water_volume_l}L
                 </span>
-                <input
-                  type="number"
-                  min={0}
-                  step={5}
+                <PositiveNumberField
                   value={cyl.fill_bar}
-                  onChange={(e) => setFill(idx, Number(e.target.value))}
+                  onCommit={(n) => setFill(idx, n)}
+                  step={5}
                   className="w-16 bg-transparent border border-border rounded px-1 py-0.5"
-                  aria-label={t('gasPanel.tanks.fillAria', { tank: cyl.label ?? '' })}
-                  data-testid="gas-cylinder-fill"
+                  ariaLabel={t('gasPanel.tanks.fillAria', { tank: cyl.label ?? '' })}
+                  testId="gas-cylinder-fill"
                 />
                 <span className="text-xs opacity-70">{t('gasPanel.tanks.bar')}</span>
                 <select
@@ -280,5 +276,52 @@ export function GasPlanPanel() {
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
     <h3 className="text-xs font-semibold uppercase tracking-wide opacity-60">{children}</h3>
+  );
+}
+
+/**
+ * Controlled positive-number input with a local draft so the field is fully
+ * deletable (no leading-0 trap): an empty/intermediate value is shown but NOT
+ * committed, and only a finite, strictly-positive number reaches `onCommit`. This
+ * keeps a transient blank from poisoning the gas fetch (the backend rejects a 0/NaN
+ * RMV or fill, which would otherwise blank the whole overlay until re-typed).
+ */
+function PositiveNumberField({
+  value,
+  onCommit,
+  step,
+  className,
+  ariaLabel,
+  testId,
+}: {
+  value: number;
+  onCommit: (n: number) => void;
+  step?: number;
+  className?: string;
+  ariaLabel?: string;
+  testId?: string;
+}) {
+  const [draft, setDraft] = useState(() => String(value));
+  // Re-sync when the committed value changes from outside (reset / preset add /
+  // removal shifting row indices). A no-op when the draft already matches.
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+  return (
+    <input
+      type="number"
+      min={0}
+      step={step}
+      value={draft}
+      onChange={(e) => {
+        const text = e.target.value;
+        setDraft(text); // allow empty / intermediate so the field stays deletable
+        const n = Number(text);
+        if (Number.isFinite(n) && n > 0) onCommit(n);
+      }}
+      className={className}
+      aria-label={ariaLabel}
+      data-testid={testId}
+    />
   );
 }

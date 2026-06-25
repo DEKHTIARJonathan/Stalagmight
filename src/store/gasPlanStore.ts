@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import { defaultConfig } from '../types/config';
+import { TANK_PRESETS, cylinderFromPreset } from '../utils/tankPresets';
 import type { Cylinder, Diver, GasConfig, GasReachField } from '../types/ipc.generated';
 import type { StationRef } from '../types/project';
 
@@ -20,15 +21,9 @@ import type { StationRef } from '../types/project';
 const DEFAULT_DIVER: Diver = { rmv_l_per_min: 20, label: null };
 
 function defaultCylinders(): Cylinder[] {
-  const al80 = (): Cylinder => ({
-    water_volume_l: 11.1,
-    rated_pressure_bar: 207,
-    fill_bar: 207,
-    material: 'aluminium',
-    role: 'back_gas',
-    label: 'AL80',
-  });
-  return [al80(), al80()];
+  // Single source of truth: the canonical AL80 preset (tankPresets), as a twin set.
+  const al80 = TANK_PRESETS.find((p) => p.id === 'al80');
+  return al80 ? [cylinderFromPreset(al80), cylinderFromPreset(al80)] : [];
 }
 
 interface GasPlanState {

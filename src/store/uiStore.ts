@@ -1129,6 +1129,11 @@ export const useUIStore = create<UIStore>((set) => ({
     // overlay and the depth preference returns next session (distance is always
     // off on load). Turning the overlay off clears the origin + cached field, so
     // re-enabling starts fresh at the entrance (zero-datum) default.
+    // Gas reachability (#38) paints the same shots/stations layer — enabling a
+    // color overlay must also leave the gas sub-mode (no-op when gas is off). This
+    // closes the reverse hole: setColorMode exits gas, but this action is also
+    // reachable directly (e.g. a keyboard shortcut) without going through it.
+    if (on) useUIStore.getState().exitGasPlan();
     set(
       on
         ? { showDistanceGradient: true, showDepthGradient: false, showIssueSeverity: false }
@@ -1142,6 +1147,8 @@ export const useUIStore = create<UIStore>((set) => ({
     // Mutually exclusive with both gradients — all three paint the shots/stations
     // layer. Flip depth's *runtime* flag only (don't persist), and clear the
     // distance overlay's origin/field like toggleDistanceGradient does.
+    // Also leave the gas sub-mode (#38) — it owns the same layer paint.
+    if (on) useUIStore.getState().exitGasPlan();
     set(
       on
         ? {
@@ -1156,6 +1163,8 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   setIssueSeverity: (on) => {
     if (useUIStore.getState().showIssueSeverity === on) return;
+    // Enabling issue-severity leaves the gas sub-mode (#38) — shared layer paint.
+    if (on) useUIStore.getState().exitGasPlan();
     set(
       on
         ? {
@@ -1239,6 +1248,10 @@ export const useUIStore = create<UIStore>((set) => ({
             showIssueSeverity: false,
           }
         : {};
+    // Enabling the depth gradient also leaves the gas sub-mode (#38) — it owns the
+    // same shots/stations paint. Critical for the Shift+D keyboard shortcut, which
+    // calls toggleDisplay directly (bypassing setColorMode's gas-exit).
+    if (key === 'showDepthGradient' && newValue) useUIStore.getState().exitGasPlan();
     set({ [key]: newValue, ...exclusive });
     // Persist the setting asynchronously via the helper
     state.saveDisplaySetting(key, newValue);
