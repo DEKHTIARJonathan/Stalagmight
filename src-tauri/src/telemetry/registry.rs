@@ -118,6 +118,11 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.set_shot_reference",
     "command.set_station_comment",
     "command.set_zero_datum",
+    "command.speleodb_list_projects",
+    "command.speleodb_login",
+    "command.speleodb_logout",
+    "command.speleodb_open_project",
+    "command.speleodb_session",
     "command.suggest_all_import_placements",
     "command.suggest_import_placement",
     "command.suggest_orphan_placements",
@@ -203,6 +208,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.remove-closure",
     "action.dialog.section-adjust",
     "action.dialog.settings",
+    "action.dialog.speleodb-spike",
     "action.dialog.split-section",
     "action.dialog.swap-comments",
     "action.dialog.tml-import",
@@ -255,6 +261,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.remove-closure",
     "dialog-cancel.section-adjust",
     "dialog-cancel.settings",
+    "dialog-cancel.speleodb-spike",
     "dialog-cancel.split-section",
     "dialog-cancel.swap-comments",
     "dialog-cancel.tml-import",
@@ -333,6 +340,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.remove-closure",
     "dwell.dialog.section-adjust",
     "dwell.dialog.settings",
+    "dwell.dialog.speleodb-spike",
     "dwell.dialog.split-section",
     "dwell.dialog.swap-comments",
     "dwell.dialog.tml-import",
@@ -462,6 +470,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.remove-closure",
     "active-dwell.dialog.section-adjust",
     "active-dwell.dialog.settings",
+    "active-dwell.dialog.speleodb-spike",
     "active-dwell.dialog.split-section",
     "active-dwell.dialog.swap-comments",
     "active-dwell.dialog.tml-import",
@@ -537,13 +546,18 @@ mod tests {
 
     #[test]
     fn event_count() {
-        // 401 on master + 8 new events = 409:
-        //   - command.parse_walls, command.execute_walls_import (Walls import)
-        //   - undo-after.execute_walls_import, undo-after.execute_compass_import
-        //   - action.dialog.walls-import, dialog-cancel.walls-import,
-        //     dwell.dialog.walls-import, active-dwell.dialog.walls-import
-        //     (the walls-import dialog action/cancel/dwell + active-dwell mirror)
-        assert_eq!(EVENT_NAMES.len(), 409);
+        // 401 on the pre-feature master
+        //   + 8 walls-import events (#223):
+        //       command.parse_walls, command.execute_walls_import,
+        //       undo-after.execute_walls_import, undo-after.execute_compass_import,
+        //       action.dialog.walls-import, dialog-cancel.walls-import,
+        //       dwell.dialog.walls-import, active-dwell.dialog.walls-import
+        //   + 9 SpeleoDB events (#183):
+        //       command.speleodb_{login,list_projects,open_project,logout,session},
+        //       action.dialog.speleodb-spike, dialog-cancel.speleodb-spike,
+        //       dwell.dialog.speleodb-spike, active-dwell.dialog.speleodb-spike
+        //   = 418.
+        assert_eq!(EVENT_NAMES.len(), 418);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

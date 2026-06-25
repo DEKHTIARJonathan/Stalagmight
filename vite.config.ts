@@ -52,6 +52,17 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
   },
+  // Force a single React instance. The toolchain pins Node 22 (.nvmrc); on a
+  // newer Node major, Vite's dep optimizer can intermittently pre-bundle two
+  // copies of React, which surfaces as "Invalid hook call" + a blank window.
+  // dedupe makes every `react`/`react-dom` import resolve to one copy, and the
+  // explicit optimizeDeps entry keeps them pre-bundled together.
+  resolve: {
+    dedupe: ['react', 'react-dom'],
+  },
+  optimizeDeps: {
+    include: ['react', 'react-dom'],
+  },
   plugins,
   clearScreen: false,
   build: coverageEnabled ? { sourcemap: true } : undefined,

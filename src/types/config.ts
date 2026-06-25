@@ -267,6 +267,10 @@ export const defaultConfig: Config = {
     max_length_error_fraction: 0.03,
     max_length_error_floor: 0.4,
   },
+  speleodb: {
+    endpoint: null,
+    email: null,
+  },
 };
 
 /**

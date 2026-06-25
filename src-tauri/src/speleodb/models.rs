@@ -1,0 +1,263 @@
+//! Serde DTOs for the SpeleoDB v2 JSON API (read-only spike, #183), plus the
+//! IPC-facing summary types returned to the webview.
+//!
+//! Wire format: the `/api/v2/` endpoints return **bare** JSON (the serializer
+//! output directly). Only the deprecated `/api/v1/` alias is wrapped in a
+//! `{data, success, …}` envelope by `DRFWrapResponseMiddleware`, which
+//! early-returns unless `/api/v1/` is in the path. So a project list is a bare
+//! JSON array and a project detail is a bare JSON object — no envelope to peel.
+//!
+//! Only the fields the spike needs are modelled; serde ignores the rest. Fields
+//! the server *omits* when empty (notably `permission` when the user has no
+//! access) are `Option<_>` with `#[serde(default)]`.
+
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+/// Project permission level.
+///
+/// The server serializes the **label string** (e.g. `"READ_AND_WRITE"`), not the
+/// numeric `PermissionLevel` enum — verified in `serializers/project.py`
+/// (`get_permission` → `str(...level_label)`). Issues #188/#203 describe this as
+/// an integer; that is incorrect for the wire format.
+///
+/// Variants are ordered ascending so `>=` expresses capability thresholds
+/// (download ≥ `ReadOnly`, upload/lock ≥ `ReadAndWrite`, delete/collab = `Admin`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+pub enum Permission {
+    #[serde(rename = "WEB_VIEWER")]
+    WebViewer,
+    #[serde(rename = "READ_ONLY")]
+    ReadOnly,
+    #[serde(rename = "READ_AND_WRITE")]
+    ReadAndWrite,
+    #[serde(rename = "ADMIN")]
+    Admin,
+}
+
+/// A git commit as carried in `latest_commit`. Only the SHA is needed here.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Commit {
+    /// 40-hex git commit SHA.
+    pub(crate) id: String,
+}
+
+/// The active lock ("mutex") on a project, when one is held.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ActiveMutex {
+    /// Email of the user currently holding the lock.
+    pub(crate) user: String,
+}
+
+/// A SpeleoDB project as returned by `GET /api/v2/projects/` (and `/{id}/`),
+/// parsed down to the fields the spike consumes.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Project {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    /// Absent (not null) when the requesting user has no permission.
+    #[serde(default)]
+    pub(crate) permission: Option<Permission>,
+    /// Present only while the project is locked.
+    #[serde(default)]
+    pub(crate) active_mutex: Option<ActiveMutex>,
+    /// Null on an empty (never-committed) repo.
+    #[serde(default)]
+    pub(crate) latest_commit: Option<Commit>,
+    /// Raw project-type label (`ariane`/`compass`/…/`other`). Kept as the wire
+    /// string: it is only a display heuristic, and staying a string is robust to
+    /// new server types. The dump classifier is the authoritative openability check.
+    #[serde(default, rename = "type")]
+    pub(crate) kind: String,
+}
+
+/// IPC-facing summary of a project for the spike dialog's list. Derived from
+/// [`Project`]; carries only display fields — never a token or raw API detail.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoProjectSummary {
+    pub id: String,
+    pub name: String,
+    pub permission: Option<Permission>,
+    /// Email of the lock holder, if the project is currently locked.
+    pub lock_holder: Option<String>,
+    /// Raw project-type label (display heuristic only).
+    pub type_tag: String,
+    /// SHA of the latest commit, if the project has any commits.
+    pub latest_commit_sha: Option<String>,
+}
+
+impl SpeleoProjectSummary {
+    pub(crate) fn from_project(p: Project) -> Self {
+        Self {
+            id: p.id,
+            name: p.name,
+            permission: p.permission,
+            lock_holder: p.active_mutex.map(|m| m.user),
+            type_tag: p.kind,
+            latest_commit_sha: p.latest_commit.map(|c| c.id),
+        }
+    }
+}
+
+/// Result of a successful login, returned to the webview. Deliberately does NOT
+/// include the token — the token is stored backend-side only (see [`super::auth`]).
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoLoginResult {
+    pub user_email: String,
+    /// True when the token was stored in the OS keychain; false means a
+    /// session-only in-memory fallback (e.g. headless CI with no secret service).
+    pub keychain_backed: bool,
+}
+
+/// Result of pulling + extracting a project, returned to the webview. The
+/// frontend then opens `local_path` through the normal `open_project` flow.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoOpenResult {
+    pub local_path: String,
+}
+
+/// Current backend session status, so the dialog can restore its view when
+/// reopened instead of forcing a re-login: the in-memory/keychain token lives in
+/// `AppState` for the whole app run, but the dialog's React state resets on each
+/// remount. Carries no token — only whether one is held and for whom.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoSessionStatus {
+    pub logged_in: bool,
+    /// Email of the logged-in user, when `logged_in`.
+    pub user_email: Option<String>,
+    /// False when the token is held in memory only (no OS keychain) — surfaced so
+    /// the UI keeps showing the "won't survive a restart" note after a reopen.
+    pub keychain_backed: bool,
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used, reason = "unit test fixtures")]
+mod tests {
+    use super::{
+        Permission, Project, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
+        SpeleoSessionStatus,
+    };
+
+    #[test]
+    fn ipc_dtos_never_serialize_a_token() {
+        // Load-bearing invariant: no IPC-facing DTO carries the auth token (it
+        // lives only in the backend TokenStore). Pin it so a future field that
+        // names or holds a token can't silently break "token never in IPC".
+        let login = serde_json::to_string(&SpeleoLoginResult {
+            user_email: "u@x".to_owned(),
+            keychain_backed: true,
+        })
+        .expect("serialize login result");
+        let status = serde_json::to_string(&SpeleoSessionStatus {
+            logged_in: true,
+            user_email: Some("u@x".to_owned()),
+            keychain_backed: true,
+        })
+        .expect("serialize session status");
+        let summary = serde_json::to_string(&SpeleoProjectSummary {
+            id: "11111111-1111-1111-1111-111111111111".to_owned(),
+            name: "Cave".to_owned(),
+            permission: Some(Permission::ReadOnly),
+            lock_holder: None,
+            type_tag: "ariane".to_owned(),
+            latest_commit_sha: None,
+        })
+        .expect("serialize project summary");
+        let open = serde_json::to_string(&SpeleoOpenResult {
+            local_path: "/cache/project.stalx".to_owned(),
+        })
+        .expect("serialize open result");
+
+        for json in [&login, &status, &summary, &open] {
+            assert!(
+                !json.to_ascii_lowercase().contains("token"),
+                "IPC DTO must not expose a token field: {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn project_parses_full_v2_payload() {
+        // Extra server fields (creation_date, message, exclude_geojson) must be
+        // ignored — the DTO models only what the spike consumes.
+        let json = r#"{
+            "id": "11111111-1111-1111-1111-111111111111",
+            "name": "Test Cave",
+            "permission": "READ_AND_WRITE",
+            "active_mutex": {"user": "holder@example.com", "creation_date": "2026-01-01T00:00:00Z"},
+            "latest_commit": {"id": "0123456789abcdef0123456789abcdef01234567", "message": "init"},
+            "type": "ariane",
+            "exclude_geojson": false
+        }"#;
+        let p: Project = serde_json::from_str(json).expect("valid project JSON");
+        assert_eq!(p.id, "11111111-1111-1111-1111-111111111111");
+        assert_eq!(p.name, "Test Cave");
+        assert_eq!(p.permission, Some(Permission::ReadAndWrite));
+        assert_eq!(
+            p.active_mutex.as_ref().map(|m| m.user.as_str()),
+            Some("holder@example.com")
+        );
+        assert_eq!(
+            p.latest_commit.as_ref().map(|c| c.id.as_str()),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
+        assert_eq!(p.kind, "ariane"); // #[serde(rename = "type")]
+
+        // The display projection carries the lock holder + commit SHA across.
+        let summary = SpeleoProjectSummary::from_project(p);
+        assert_eq!(summary.lock_holder.as_deref(), Some("holder@example.com"));
+        assert_eq!(
+            summary.latest_commit_sha.as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
+        assert_eq!(summary.type_tag, "ariane");
+    }
+
+    #[test]
+    fn project_tolerates_omitted_and_null_optionals() {
+        // No permission (the server omits it when the user has none), no
+        // active_mutex, no latest_commit, no type.
+        let omitted: Project =
+            serde_json::from_str(r#"{"id": "a", "name": "Bare"}"#).expect("minimal project JSON");
+        assert_eq!(omitted.permission, None);
+        assert!(omitted.active_mutex.is_none());
+        assert!(omitted.latest_commit.is_none());
+        assert_eq!(omitted.kind, "");
+
+        // Explicit nulls deserialize to None just like absence.
+        let nulled: Project = serde_json::from_str(
+            r#"{"id": "b", "name": "N", "permission": null, "latest_commit": null, "type": "other"}"#,
+        )
+        .expect("nulled project JSON");
+        assert_eq!(nulled.permission, None);
+        assert!(nulled.latest_commit.is_none());
+        assert_eq!(nulled.kind, "other");
+    }
+
+    #[test]
+    fn permission_labels_round_trip() {
+        // The wire format is the uppercase label string (not the integer the
+        // issues describe); pin every variant both directions.
+        for (variant, label) in [
+            (Permission::WebViewer, "\"WEB_VIEWER\""),
+            (Permission::ReadOnly, "\"READ_ONLY\""),
+            (Permission::ReadAndWrite, "\"READ_AND_WRITE\""),
+            (Permission::Admin, "\"ADMIN\""),
+        ] {
+            assert_eq!(serde_json::to_string(&variant).expect("serialize"), label);
+            assert_eq!(
+                serde_json::from_str::<Permission>(label).expect("deserialize"),
+                variant
+            );
+        }
+    }
+
+    #[test]
+    fn permission_orders_by_capability() {
+        // `>=` is used as a capability threshold (download ≥ ReadOnly, upload/lock
+        // ≥ ReadAndWrite, …), so the ascending ordering must hold.
+        assert!(Permission::WebViewer < Permission::ReadOnly);
+        assert!(Permission::ReadOnly < Permission::ReadAndWrite);
+        assert!(Permission::ReadAndWrite < Permission::Admin);
+    }
+}

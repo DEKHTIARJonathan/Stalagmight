@@ -11,6 +11,7 @@ pub mod raw_data;
 pub mod recovery;
 pub mod section;
 pub mod shot;
+pub mod speleodb;
 pub mod station;
 pub mod survey_geometry;
 pub mod telemetry;

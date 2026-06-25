@@ -522,6 +522,19 @@ export default function GlobalView() {
   const menuItems: AppMenuItem[] = useMemo(
     () => [
       ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
+      // Dev-only spike entry (#183). The production "Open from SpeleoDB" menu +
+      // project browser is #203; this is gated to dev builds only.
+      ...(import.meta.env.DEV
+        ? [
+            {
+              id: 'global-speleodb-spike-button',
+              label: 'Open from SpeleoDB (spike)',
+              icon: <DownloadIcon size={18} />,
+              iconColor: MENU_ICON_COLORS.open,
+              onClick: () => openDialog('speleodb-spike'),
+            },
+          ]
+        : []),
       {
         id: 'global-import-menu-button',
         label: t('globalView.actions.import'),

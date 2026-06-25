@@ -34,12 +34,31 @@ pub struct Config {
     pub placement_suggestion: PlacementSuggestionConfig,
     #[serde(default)]
     pub syntactic_highlighting: SyntacticHighlightingConfig,
+    #[serde(default)]
+    pub speleodb: SpeleoDbConfig,
 
     // Legacy fields for backwards compatibility (deserialize only, never serialize)
     // Uses alias to match old TOML key name while keeping internal field name distinct
     #[serde(default, skip_serializing, alias = "snap")]
     #[ts(skip)]
     pub(super) legacy_snap: Option<LegacySnapConfig>,
+}
+
+/// SpeleoDB connection settings (#183 read-only spike).
+///
+/// The auth token is **never** stored here — it lives in the OS keychain (or an
+/// in-memory session fallback); see `crate::speleodb::auth`. At runtime the
+/// `DEV_SPELEODB_URL` env var overrides `endpoint`. The full Settings-tab schema
+/// (`token_fallback` preference, connection status) is #205.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+pub struct SpeleoDbConfig {
+    /// Persisted endpoint base URL (e.g. `https://www.speleodb.org`). Overridden
+    /// at runtime by `DEV_SPELEODB_URL` when set.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// Last-used account email, for prefilling the login dialog.
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 /// Legacy snap config for migration from old [snap] section
