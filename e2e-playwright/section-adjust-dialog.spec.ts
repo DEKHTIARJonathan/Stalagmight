@@ -78,9 +78,11 @@ test.describe('Section Adjust Dialog', () => {
     await expect(dxInput).toBeVisible();
     await expect(dyInput).toBeVisible();
 
-    // Verify initial values are 0
-    await expect(dxInput).toHaveValue('0');
-    await expect(dyInput).toHaveValue('0');
+    // Fields start empty (placeholder shows "0") so a leading '-' isn't rejected
+    // as '0-' — see the negative-input regression test below (#161).
+    await expect(dxInput).toHaveValue('');
+    await expect(dyInput).toHaveValue('');
+    await expect(dxInput).toHaveAttribute('placeholder', '0');
   });
 
   test('should accept numeric input for dx and dy', async ({ page }) => {
@@ -247,17 +249,19 @@ test.describe('Section Adjust Dialog', () => {
     const dialog = page.locator('[data-testid="section-adjust-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 3000 });
 
-    // Type the negative value KEY BY KEY. Unlike .fill() (used by the test above,
-    // which sets the value atomically and passed even while the bug was live),
-    // this exercises the intermediate '-' state the old numeric control snapped
-    // back to 0 — the actual #161 failure.
+    // Type the negative value KEY BY KEY onto the empty field — no clear/select.
+    // Unlike .fill() (used by the test above, which sets the value atomically and
+    // passed even while the bug was live), this exercises the intermediate '-'
+    // state the old numeric control snapped back to 0 — the actual #161 failure.
     const dxInput = dialog.locator('[data-testid="dx-input"]');
     await dxInput.click();
-    await dxInput.selectText();
     await dxInput.pressSequentially('-4');
     await expect(dxInput).toHaveValue('-4');
 
-    // Commit and confirm a negative-X offset actually reached the backend.
+    // Commit, then confirm the NET offset that reached the backend is -4. The
+    // live preview applies the move incrementally and Apply commits the residual,
+    // so we sum every move_section delta rather than match a single call (a lone
+    // "some call == -4" would be satisfied by the preview alone).
     await dialog.getByRole('button', { name: 'Apply' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 3000 });
 
@@ -267,10 +271,12 @@ test.describe('Section Adjust Dialog', () => {
           const calls =
             (window as unknown as { __MOCK_MOVE_CALLS__?: Array<{ command: string; args?: { offset?: { x?: number } } }> })
               .__MOCK_MOVE_CALLS__ ?? [];
-          return calls.some((c) => c.command === 'move_section' && c.args?.offset?.x === -4);
+          return calls
+            .filter((c) => c.command === 'move_section')
+            .reduce((sum, c) => sum + (c.args?.offset?.x ?? 0), 0);
         }),
       )
-      .toBe(true);
+      .toBe(-4);
   });
 
   test('applies delta when preview already applied', async ({ page }) => {

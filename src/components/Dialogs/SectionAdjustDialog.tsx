@@ -31,12 +31,15 @@ export default function SectionAdjustDialog() {
   const sectionId = dialogData.sectionId as SectionId | undefined;
   const section = project?.sections.find((s) => s.id === sectionId);
 
-  // Numeric offsets drive the preview / apply / dirty logic; the *Str fields back
-  // the text inputs so partial entries survive editing (see PARTIAL_DECIMAL).
-  const [dx, setDx] = useState(0);
-  const [dy, setDy] = useState(0);
-  const [dxStr, setDxStr] = useState('0');
-  const [dyStr, setDyStr] = useState('0');
+  // The text inputs are backed by string state so partial entries ('-', '', '.')
+  // survive editing; the numeric offset is derived via offsetValue() at the
+  // preview / apply / dirty sites (the single-string-input idiom the sibling shot
+  // dialogs use). Start empty (not '0') so a leading '-' typed onto the field isn't
+  // rejected as '0-' — a pre-filled 0 was un-overwritable without a prior clear,
+  // keeping negatives untypable in the natural click-then-type flow (#161). The
+  // placeholder still shows "0" so the no-offset default reads clearly.
+  const [dxStr, setDxStr] = useState('');
+  const [dyStr, setDyStr] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // How many sections move together: a section that is merged (or aligned-closure
@@ -88,30 +91,26 @@ export default function SectionAdjustDialog() {
   const handleDxChange = useCallback((raw: string) => {
     if (!PARTIAL_DECIMAL.test(raw)) return; // ignore non-numeric keystrokes
     setDxStr(raw);
-    const value = offsetValue(raw);
-    setDx(value);
     // Debounce the preview
     if (previewTimeoutRef.current) {
       clearTimeout(previewTimeoutRef.current);
     }
     previewTimeoutRef.current = setTimeout(() => {
-      applyPreview(value, dy);
+      applyPreview(offsetValue(raw), offsetValue(dyStr));
     }, 150);
-  }, [dy, applyPreview]);
+  }, [dyStr, applyPreview]);
 
   const handleDyChange = useCallback((raw: string) => {
     if (!PARTIAL_DECIMAL.test(raw)) return; // ignore non-numeric keystrokes
     setDyStr(raw);
-    const value = offsetValue(raw);
-    setDy(value);
     // Debounce the preview
     if (previewTimeoutRef.current) {
       clearTimeout(previewTimeoutRef.current);
     }
     previewTimeoutRef.current = setTimeout(() => {
-      applyPreview(dx, value);
+      applyPreview(offsetValue(dxStr), offsetValue(raw));
     }, 150);
-  }, [dx, applyPreview]);
+  }, [dxStr, applyPreview]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -129,6 +128,8 @@ export default function SectionAdjustDialog() {
     setError(null);
 
     try {
+      const dx = offsetValue(dxStr);
+      const dy = offsetValue(dyStr);
       // If preview was already applied, we just need to close
       // Otherwise, apply the full offset
       if (!previewApplied) {
@@ -171,8 +172,8 @@ export default function SectionAdjustDialog() {
     closeDialog();
   };
 
-  // Track if form has been modified
-  const isDirty = dx !== 0 || dy !== 0;
+  // Track if form has been modified (would Apply move anything?)
+  const isDirty = offsetValue(dxStr) !== 0 || offsetValue(dyStr) !== 0;
 
   if (!section) {
     return (
@@ -226,6 +227,7 @@ export default function SectionAdjustDialog() {
               value={dxStr}
               onChange={(e) => handleDxChange(e.target.value)}
               className="w-full"
+              placeholder="0"
               data-testid="dx-input"
             />
             <p className="text-xs text-text-secondary mt-1">Positive = East</p>
@@ -240,6 +242,7 @@ export default function SectionAdjustDialog() {
               value={dyStr}
               onChange={(e) => handleDyChange(e.target.value)}
               className="w-full"
+              placeholder="0"
               data-testid="dy-input"
             />
             <p className="text-xs text-text-secondary mt-1">Positive = North</p>

@@ -5,12 +5,14 @@
  * `value={dx}` coerced with `parseFloat(e.target.value) || 0`, so every
  * intermediate keystroke ('-', '', '.') collapsed to 0 and the controlled
  * re-render wiped it — negatives were impossible and a leading 0 couldn't be
- * cleared. The fix backs the inputs with string state.
+ * cleared. The fix backs the inputs with string state that starts empty.
  *
  * `userEvent.type` simulates real per-keystroke entry, which is what exercises
- * the bug. (Playwright's `.fill()` sets the value atomically and never hits the
- * buggy intermediate state — which is why the existing e2e `dyInput.fill('-3.2')`
- * passed while the bug was live. So this guard lives at the component tier.)
+ * the bug — and crucially these tests do NOT clear/select first, so they cover
+ * the natural click-then-type flow a user actually hits. (Playwright's `.fill()`
+ * sets the value atomically and never reaches the buggy intermediate state, which
+ * is why the existing e2e `dyInput.fill('-3.2')` passed while the bug was live —
+ * so this guard lives at the component tier.)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -46,25 +48,28 @@ beforeEach(() => {
 });
 
 describe('SectionAdjustDialog negative / partial input (#161)', () => {
-  it('accepts a typed negative decimal in dx', async () => {
+  it('types a leading minus with no prior clear/select (the natural flow)', async () => {
     render(<SectionAdjustDialog />);
     const dx = await screen.findByTestId('dx-input');
+    expect(dx).toHaveValue(''); // starts empty; placeholder shows "0"
 
-    await userEvent.clear(dx);
-    await userEvent.type(dx, '-2.5');
+    // The exact #161 failure: a lone '-' is the intermediate state the old
+    // numeric control snapped back to 0, making negatives untypable.
+    await userEvent.type(dx, '-');
+    expect(dx).toHaveValue('-');
 
+    await userEvent.type(dx, '2.5');
     expect(dx).toHaveValue('-2.5');
   });
 
-  it('can clear the field instead of snapping back to a pinned 0', async () => {
+  it('can clear a typed value back to empty (no pinned leading zero)', async () => {
     render(<SectionAdjustDialog />);
     const dy = await screen.findByTestId('dy-input');
 
-    await userEvent.clear(dy);
-    expect(dy).toHaveValue(''); // the bug pinned this to '0'
-
-    // and a fresh number has no clinging leading zero
     await userEvent.type(dy, '7');
     expect(dy).toHaveValue('7');
+
+    await userEvent.clear(dy);
+    expect(dy).toHaveValue(''); // the bug pinned this to '0'
   });
 });
