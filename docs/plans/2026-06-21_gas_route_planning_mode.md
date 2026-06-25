@@ -166,7 +166,8 @@ GasConfig {
   survey_speed_m_per_min: Option<f64>, // IN-leg speed while surveying — often 2–3× slower; None = symmetric. §5.2
   survey_rmv_multiplier: f64,    // IN-leg task-loading bump; DEFAULT 1.0. New surveyors report a bit; minor. §5.2
   dpv: Option<DpvProfile>,       // speed + burn-time/range (Phase 4); SAME rmv as swimming, no reduction
-  units: GasUnits,               // metric | imperial (display only)
+  units: GasUnits,               // metric | imperial (driven by the master unit toggle — §7.2)
+  conservative_tank_gas: bool,   // DEFAULT true: "call it an 80" derate covers real-gas Z; off = precise fill×vol×Z (§5.3)
 }
 enum PlanMode { OpenCircuit, CcrBailout }
 Team { divers: Vec<Diver>, cylinders_per_diver: Vec<Vec<Cylinder>>, mode: PlanMode }
@@ -307,22 +308,32 @@ comprehensive tank DB or commit a third-party table; **water volumes below are g
 
 | Tank | Material | Water vol (L, ≈) | Rated | Class |
 |------|----------|------------------|-------|-------|
-| **AL80**  | aluminium | ~11.1 | 3000 psi / 207 bar | MP |
-| **LP50**  | steel     | ~7.4  | 2400 psi / 165 bar | LP |
-| **LP72**  | steel     | ~9.9  | 2400 psi / 165 bar | LP |
-| **LP104** | steel     | ~14.5 | 2400 psi / 165 bar | LP |
-| **LP120** | steel     | ~17.0 | 2400 psi / 165 bar | LP |
-| **HP100** | steel     | ~12.9 | 3442 psi / 237 bar | HP |
-| **HP120** | steel     | ~15.4 | 3442 psi / 237 bar | HP |
+| **AL80**   | aluminium | ~11.1 | 3000 psi / 207 bar | MP |
+| **AL40** † | aluminium | ~5.7  | 3000 psi / 207 bar | MP |
+| **LP50**   | steel     | ~7.4  | 2600 psi / 179 bar (+) | LP |
+| **LP72**   | steel     | ~9.9  | 2600 psi / 179 bar (+) | LP |
+| **LP85**   | steel     | ~12.0 | 2600 psi / 179 bar (+) | LP |
+| **LP104**  | steel     | ~14.5 | 2600 psi / 179 bar (+) | LP |
+| **LP120**  | steel     | ~17.0 | 2600 psi / 179 bar (+) | LP |
+| **HP100**  | steel     | ~12.9 | 3442 psi / 237 bar | HP |
+| **HP120**  | steel     | ~15.4 | 3442 psi / 237 bar | HP |
+
+**+ rating:** LP steels carry a "+" stamp for a +10% fill (~2600 psi / 179 bar) — used as the rated
+reference here; actual cave fills go higher (210–230 bar, **user-set**). **† AL40** is a **deco-only**
+bottle — its gas is **never** travel/penetration gas (only on the deco/exit ceiling), so it's **out of
+current scope**; a `Deco` cylinder role (**excluded from the penetration budget**) is future work with
+the deco phase (§9). Listed now so the preset exists later.
 
 **Fill pressure is an INPUT, not the rating.** LP85s are routinely **overfilled to ~210–230
 bar absolute** — i.e. filled *to* ~230 bar, **not** 230 over the ~179 bar rating. Not strictly
 US-legal, but standard; safe data for newish steel passing hydro. The model takes `fill_bar`
 as given and **never clamps it to rated** — rated is reference only. A 12 L LP85 @ 230 bar
-holds well over an AL80's 80 cuft. ⚠ **Real-gas note:** `gas = fill_bar × water_volume` is the
-*ideal* relation; at 230+ bar real compressibility (Z) means a steel holds **~5–8% less** than
-ideal — the **unsafe / over-stating direction**. Flag it as a known assumption to revisit (a Z
-correction, or lean on the conservative "call-it-an-80" derate below to cover it).
+holds well over an AL80's 80 cuft. ⚠ **Real-gas note (Nico's call):** `gas = fill_bar × water_volume`
+is the *ideal* relation; at 230+ bar real compressibility (Z) means a steel holds **~5–8% less** than
+ideal — the **unsafe / over-stating direction**. **Decision:** default to the conservative
+**"call-it-an-80" derate** (`conservative_tank_gas = true`), which covers it; expose an **opt-in
+checkbox** to instead compute precise `fill × volume × Z(fill)` for the ~10% who want it (**default =
+safety**).
 
 **"Call it an 80" — conservative convention, and an automation-bias trap.** Because they're
 overfilled, divers often skip the dissimilar math and just call LP85s "80s" — *understating*
