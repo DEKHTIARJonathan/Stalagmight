@@ -38,10 +38,22 @@ describe('gas sub-mode ↔ color-overlay mutual exclusion (#38)', () => {
     ['distance via toggleDistanceGradient', () => useUIStore.getState().toggleDistanceGradient()],
     ['issue-severity via toggleIssueSeverity', () => useUIStore.getState().toggleIssueSeverity()],
     ['issue-severity via setIssueSeverity(true)', () => useUIStore.getState().setIssueSeverity(true)],
+    ['distance via setColorMode (the DisplayMenu path)', () => useUIStore.getState().setColorMode('distance')],
+    ['depth via setColorMode', () => useUIStore.getState().setColorMode('depth')],
   ])('enabling a color overlay (%s) leaves the gas sub-mode', (_name, enable) => {
     useUIStore.getState().toggleGasPlan();
     expect(useUIStore.getState().showGasPlan).toBe(true);
     enable();
+    expect(useUIStore.getState().showGasPlan).toBe(false);
+  });
+
+  it('setColorMode("section") while gas is active exits gas (no overlay selected)', () => {
+    // 'section' = no color overlay; gas still owns the layer paint, so picking it must
+    // leave gas mode. Guards the setColorMode early-return path (colorModeOf is already
+    // 'section' in gas mode, so the gas-exit must run BEFORE the no-op check).
+    useUIStore.getState().toggleGasPlan();
+    expect(useUIStore.getState().showGasPlan).toBe(true);
+    useUIStore.getState().setColorMode('section');
     expect(useUIStore.getState().showGasPlan).toBe(false);
   });
 

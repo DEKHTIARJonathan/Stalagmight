@@ -313,6 +313,65 @@ fn gas_reach_field_monotonic_and_disconnected_is_none() {
 }
 
 #[test]
+fn gas_reach_field_reaches_across_a_station_merge() {
+    // Cross-section reachability over a survey-tied StationMerge (0-cost edge in
+    // build_survey_graph_weighted). The disconnected test above proves separate
+    // components stay unreachable; this proves a merge bridges them — the multi-section
+    // integrity case (a diver swimming A→B via the join). LoopClosures take the same
+    // 0-cost path in the graph builder, so the merge exercises that edge class.
+    let mut project = Project::new("Gas".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![make_shot(100.0, 0.0, 10.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![make_shot(100.0, 10.0, 20.0)],
+            ..Default::default()
+        })
+        .id;
+    // Join A's terminal station (index 1) to B's entry station (index 0).
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+
+    let origin = StationRef::new(a, 0);
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field =
+        project.compute_gas_reach_field(Some(&origin), &diver, &[big], &GasConfig::default());
+
+    // B's far station is reachable across the merge (a separate component would be None).
+    let bidx = field
+        .station_refs
+        .iter()
+        .position(|r| *r == StationRef::new(b, 1))
+        .unwrap();
+    assert!(
+        field.reachable[bidx],
+        "station in section B must be reachable across the merge"
+    );
+    // Crossing the 0-cost merge adds no gas: A's terminal and B's entry are the same
+    // physical point, so they share a gas_to_reach.
+    let ga1 = field_gas(&field, StationRef::new(a, 1));
+    let gb0 = field_gas(&field, StationRef::new(b, 0));
+    assert!(
+        (ga1 - gb0).abs() < EPS,
+        "merged stations share gas_to_reach (0-cost join)"
+    );
+}
+
+#[test]
 fn gas_reach_field_pins_in_leg_gas_values() {
     // Default config: RMV 20, swim 10 m/min, multiplier 1.0, no survey speed. The three legs
     // (avg depths 5/15/25 m → 1.5/2.5/3.5 ATA) cost 20·1.5·10 / 20·2.5·10 / 20·3.5·10 =
@@ -388,6 +447,10 @@ fn gas_reach_field_partial_frontier_between_interior_stations() {
     assert!(field.reachable[idx(StationRef::new(sec, 2))]);
     assert!(!field.reachable[idx(StationRef::new(sec, 3))]);
     assert_eq!(field.turn_frontier, vec![StationRef::new(sec, 2)]);
+    // max_reachable_gas is the deepest WITHIN-budget cost (station 2 = 800 L), NOT the
+    // out-of-budget station 3's finite 1500 — it feeds the "max penetration gas" readout,
+    // which must never report gas the diver can't actually turn at.
+    assert!((field.max_reachable_gas - 800.0).abs() < 1e-6);
 }
 
 #[test]

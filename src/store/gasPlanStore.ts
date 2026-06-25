@@ -7,10 +7,12 @@ import type { StationRef } from '../types/project';
 
 /**
  * Gas & route-planning sub-mode state (#38, Phase 1). Runtime-only — never
- * persisted; seeded from `Config.gas` on entry and reset on exit (see
- * `uiStore.exitGasPlan`). Mirrors the distance-gradient pattern: every input
- * setter nulls the cached `reachField` so a stale reachable overlay never shows
- * under changed inputs while the new field is in flight.
+ * persisted. The store's intrinsic default is the compiled `defaultConfig.gas`;
+ * on sub-mode entry `GasPlanPanel` overwrites `gasConfig` with the live PERSISTED
+ * `projectStore.config.gas` (the user's saved gas prefs), and `uiStore.exitGasPlan`
+ * resets it. Mirrors the distance-gradient pattern: every input setter nulls the
+ * cached `reachField` so a stale reachable overlay never shows under changed inputs
+ * while the new field is in flight.
  *
  * Phase 1 is single-diver open-circuit; the `Vec<Cylinder>` shape is kept so the
  * later CCR/team phases add no migration (PRD §5).

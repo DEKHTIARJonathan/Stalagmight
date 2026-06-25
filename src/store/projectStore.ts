@@ -1098,6 +1098,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       });
       if (result.success) {
         set({ project: null, databaseOpen: false, stations: [], surveyData: null, stationsAdjusted: null, surveyDataAdjusted: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
+        // Closing a project bypasses the setView() cleanup funnel, so drop the gas
+        // sub-mode (#38) here too — a stale overlay/panel must not outlive the project.
+        useUIStore.getState().exitGasPlan();
       }
       return result;
     } finally {

@@ -35,6 +35,23 @@ describe('turnPressureBar', () => {
     expect(turnPressureBar([al80()], 999_999)).toBe(0);
   });
 
+  it('uses the ACTUAL fill for the gauge while the (derated) budget is passed in', () => {
+    // An overfilled LP85 (fill 230 on a 179-rated steel). The backend computes the
+    // conservative budget from min(230,179)=179: thirds = (1/3)·179·12 = 716 L. The
+    // gauge, however, starts at the ACTUAL fill (230), so the diver turns at
+    // 230 − 716/12 = 170.33 bar — well above 2/3 of the rated, the conservative side.
+    const lp85: Cylinder = {
+      water_volume_l: 12,
+      rated_pressure_bar: 179,
+      fill_bar: 230,
+      material: 'steel',
+      role: 'back_gas',
+      label: 'LP85',
+    };
+    const turn = turnPressureBar([lp85], 716);
+    expect(turn).toBeCloseTo(170.333, 2);
+  });
+
   it('counts only back-gas + stage cylinders (excludes bailout/dil-out/deco)', () => {
     const stage: Cylinder = { ...al80(), role: 'stage', label: 'AL80-stage' };
     const bailout: Cylinder = { ...al80(), role: 'bailout', label: 'AL80-bailout' };

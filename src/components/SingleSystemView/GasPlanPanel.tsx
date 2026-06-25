@@ -2,6 +2,8 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useGasPlanStore } from '../../store/gasPlanStore';
+import { useProjectStore } from '../../store/projectStore';
+import { defaultConfig } from '../../types/config';
 import { formatStationId } from '../../utils/formatters';
 import {
   formatPressure,
@@ -71,6 +73,16 @@ export function GasPlanPanel() {
       setGasConfig: s.setGasConfig,
     })),
   );
+
+  // Seed the working gas config from the live PERSISTED app config when the sub-mode
+  // opens (this panel mounts on entry), falling back to the compiled defaults when no
+  // config is loaded. Mount-only so a later unrelated config change doesn't clobber
+  // in-mode edits. Without this the plan would silently ignore the user's saved gas
+  // preferences (units/speeds/reserve) — the migration-lens "restore from current
+  // config, not a hardcoded default" rule.
+  useEffect(() => {
+    setGasConfig(useProjectStore.getState().config?.gas ?? defaultConfig.gas);
+  }, [setGasConfig]);
 
   const units = gasConfig.units;
   const originLabel = origin
