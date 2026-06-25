@@ -2220,6 +2220,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               if (existing) {
                 existing.gps = coordinates;
               } else {
+                // In-place mutation (same array identity) is load-bearing for the
+                // deep-clone reactivity guard: datum-closure-reactivity.spec.ts only
+                // catches a shallow-clone regression because the fresh array identity
+                // comes from get_project_state's structuredClone, NOT from this write.
+                // If this is ever changed to fresh-copy zero_datums, update that spec.
                 datums.push({ station_ref: stationRef, gps: coordinates });
               }
             }

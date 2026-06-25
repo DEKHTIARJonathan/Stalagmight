@@ -81,16 +81,17 @@ test.describe('zero-datum reactivity through the project refresh', () => {
     // gpsOrigin — and thus the transform of FIXED — only MOVES if the
     // `[project?.zero_datums]` memo recomputed, i.e. the refresh handed it a fresh
     // array identity (the deep clone), not the same mutated-in-place reference.
-    const sectionId = await page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __E2E_TEST__: { projectStore: { getState: () => { project: { sections: Array<{ id: number }> } } } };
-          }
-        ).__E2E_TEST__.projectStore.getState().project.sections[0]!.id,
-    );
-    await page.evaluate(async (sid) => {
-      await (
+    const sectionId = await page.evaluate(() => {
+      const first = (
+        window as unknown as {
+          __E2E_TEST__: { projectStore: { getState: () => { project: { sections: Array<{ id: number }> } } } };
+        }
+      ).__E2E_TEST__.projectStore.getState().project.sections[0];
+      if (!first) throw new Error('seed produced no section');
+      return first.id;
+    });
+    const setOk = await page.evaluate(async (sid) => {
+      const res = await (
         window as unknown as {
           __E2E_TEST__: {
             projectStore: {
@@ -99,7 +100,7 @@ test.describe('zero-datum reactivity through the project refresh', () => {
                   ref: { section_id: number; station_index: number },
                   gps: { latitude: number; longitude: number; depth_reference: number },
                   opts: { fitToBounds: boolean },
-                ) => Promise<void>;
+                ) => Promise<{ success: boolean }>;
               };
             };
           };
@@ -109,7 +110,29 @@ test.describe('zero-datum reactivity through the project refresh', () => {
         { latitude: 30.0, longitude: -85.0, depth_reference: 0 },
         { fitToBounds: false },
       );
+      return res.success;
     }, sectionId);
+    // Fail loudly + distinctly on a broken command setup, so a future arg-shape
+    // drift doesn't surface as a misleading "deep-clone regressed" poll timeout.
+    expect(setOk).toBe(true);
+
+    // Precondition the guard depends on: the refresh propagated the new datum into
+    // the store. (The mock pushes it in place onto zero_datums; get_project_state
+    // deep-clones it back out — see e2e-playwright/mocks/tauri-ipc.ts `set_zero_datum`.)
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (
+              (
+                window as unknown as {
+                  __E2E_TEST__: { projectStore: { getState: () => { project: { zero_datums: unknown[] } | null } } };
+                }
+              ).__E2E_TEST__.projectStore.getState().project?.zero_datums ?? []
+            ).length,
+        ),
+      )
+      .toBe(1);
 
     // The transform of FIXED must change once gpsOrigin re-derives. RED on a shallow
     // clone (zero_datums ref unchanged → memo frozen → transform never moves).
