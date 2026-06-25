@@ -70,7 +70,16 @@ impl Project {
             .unwrap_or(gas_config.swim_speed_m_per_min);
 
         let coords_ref = &coords;
-        let gas_in = if n == 0 || roots.is_empty() || in_speed <= 0.0 || !in_speed.is_finite() {
+        // Defensive: a non-positive / non-finite in-speed OR in-rmv (e.g. an un-normalized
+        // 0 survey_rmv_multiplier) would zero every edge cost and make the whole cave falsely
+        // reachable — the unsafe over-stating direction (§6) — so bail to all-unreachable.
+        let gas_in = if n == 0
+            || roots.is_empty()
+            || in_speed <= 0.0
+            || !in_speed.is_finite()
+            || in_rmv <= 0.0
+            || !in_rmv.is_finite()
+        {
             vec![f64::INFINITY; n]
         } else {
             let adj = self.build_survey_graph_weighted(n, &station_index, |shot, fi, ti| {
@@ -132,6 +141,11 @@ impl Project {
 /// Reserve turn-fraction for the preset (PRD §5.1): turn when this fraction of usable gas is
 /// consumed on the way in. All-thirds = ⅓; the pushy presets use their back-gas turn fraction
 /// (¼ / ⅙) — the full per-stage drop/recalc is Phase 2.
+///
+/// ⚠ Phase-1 interim: applying ¼/⅙ to TOTAL (back + stage) usable makes OneStage/TwoStage turn
+/// EARLIER than AllThirds (a NEARER frontier) — conservative (safe, §6), but the OPPOSITE of
+/// their "push farther" intent. Do **not** surface these as "pushier" in the UI until the
+/// per-stage drop + total-thirds netting (PRD §5.1/§5.2) lands in Phase 2.
 fn reserve_fraction(preset: ReservePreset) -> f64 {
     match preset {
         ReservePreset::AllThirds => 1.0 / 3.0,

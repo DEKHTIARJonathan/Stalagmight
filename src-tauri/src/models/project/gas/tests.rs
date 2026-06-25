@@ -7,7 +7,7 @@ use super::model::{CylRole, Cylinder, Diver, GasReachField, PlanMode, TankMateri
 use super::physics::{ata, avg_depth, cylinder_gas_volume, edge_gas, gas_rate, sac_to_rmv};
 use super::{reserve_fraction, usable_oc_gas};
 use crate::config::{GasConfig, ReservePreset};
-use crate::models::{Project, SectionData, ShotData, StationRef};
+use crate::models::{GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum};
 
 const EPS: f64 = 1e-9;
 
@@ -310,4 +310,105 @@ fn gas_reach_field_monotonic_and_disconnected_is_none() {
         .unwrap();
     assert_eq!(field.gas_to_reach[oidx], None);
     assert!(!field.reachable[oidx]);
+}
+
+#[test]
+fn gas_reach_field_pins_in_leg_gas_values() {
+    // Default config: RMV 20, swim 10 m/min, multiplier 1.0, no survey speed. The three legs
+    // (avg depths 5/15/25 m → 1.5/2.5/3.5 ATA) cost 20·1.5·10 / 20·2.5·10 / 20·3.5·10 =
+    // 300/500/700 L; cumulative gas_in = 300/800/1500. Pins the engine's depth + ATA + speed +
+    // RMV wiring end-to-end (a flattened depth, a swapped length↔speed, or a dropped multiplier
+    // would all change these — the structural tests would not catch it).
+    let (project, origin) = linear_descent_project();
+    let sec = origin.section_id;
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field =
+        project.compute_gas_reach_field(Some(&origin), &diver, &[big], &GasConfig::default());
+    assert!((field_gas(&field, StationRef::new(sec, 1)) - 300.0).abs() < 1e-6);
+    assert!((field_gas(&field, StationRef::new(sec, 2)) - 800.0).abs() < 1e-6);
+    assert!((field_gas(&field, StationRef::new(sec, 3)) - 1500.0).abs() < 1e-6);
+}
+
+#[test]
+fn gas_reach_field_honors_survey_speed_and_multiplier() {
+    // survey_speed 5 (½ the swim 10) and survey_rmv_multiplier 1.3 scale the in-leg gas by
+    // (10/5)·1.3 = 2.6× — station-1 reach 300 → 780 L. Pins the §5.2 in-leg inputs.
+    let (project, origin) = linear_descent_project();
+    let sec = origin.section_id;
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let config = GasConfig {
+        survey_speed_m_per_min: Some(5.0),
+        survey_rmv_multiplier: 1.3,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field(Some(&origin), &diver, &[big], &config);
+    assert!((field_gas(&field, StationRef::new(sec, 1)) - 780.0).abs() < 1e-6);
+}
+
+#[test]
+fn gas_reach_field_partial_frontier_between_interior_stations() {
+    // usable = 12·250 = 3000 → AllThirds budget = 1000 L, between gas_in(station 2)=800 and
+    // gas_in(station 3)=1500 → reach {0,1,2}, turn at station 2. Pins the preset→fraction→budget
+    // wiring and the frontier detection at an interior station (not just the origin).
+    let (project, origin) = linear_descent_project();
+    let sec = origin.section_id;
+    let diver = Diver::new(20.0, None).unwrap();
+    let cyl = Cylinder::new(
+        12.0,
+        250.0,
+        250.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field =
+        project.compute_gas_reach_field(Some(&origin), &diver, &[cyl], &GasConfig::default());
+    assert!((field.budget_litres - 1000.0).abs() < 1e-6);
+    assert_eq!(field.reachable.iter().filter(|&&r| r).count(), 3); // stations 0,1,2
+    let idx = |sr| field.station_refs.iter().position(|r| *r == sr).unwrap();
+    assert!(field.reachable[idx(StationRef::new(sec, 2))]);
+    assert!(!field.reachable[idx(StationRef::new(sec, 3))]);
+    assert_eq!(field.turn_frontier, vec![StationRef::new(sec, 2)]);
+}
+
+#[test]
+fn gas_reach_field_none_origin_seeds_from_zero_datums() {
+    let (mut project, origin) = linear_descent_project();
+    project.zero_datums.push(ZeroDatum {
+        station_ref: origin.into(),
+        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    });
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    // None origin → seeds from the zero datum (the entrance station).
+    let field = project.compute_gas_reach_field(None, &diver, &[big], &GasConfig::default());
+    assert!(field_gas(&field, origin).abs() < EPS); // gas to reach the seed datum is 0
+    assert!(field.reachable.iter().all(|&r| r)); // huge budget → all reachable from the datum
 }

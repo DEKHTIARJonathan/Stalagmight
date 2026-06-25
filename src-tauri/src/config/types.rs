@@ -954,7 +954,11 @@ impl GasConfig {
             self.swim_speed_m_per_min = default_swim_speed();
         }
         if let Some(survey) = self.survey_speed_m_per_min {
-            if !survey.is_finite() || survey <= 0.0 {
+            // Survey-in is slower than (or equal to) the swim-out; a survey speed FASTER than the
+            // swim speed is backwards and would make the in-leg-only reach field OVER-state reach
+            // (the unsafe direction, §6), so treat it as symmetric (None). Runs after the swim
+            // clamp above, so `self.swim_speed_m_per_min` is already valid.
+            if !survey.is_finite() || survey <= 0.0 || survey > self.swim_speed_m_per_min {
                 self.survey_speed_m_per_min = None;
             }
         }

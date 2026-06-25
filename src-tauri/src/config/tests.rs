@@ -137,6 +137,27 @@ fn test_gas_config_normalize_preserves_valid_values() {
 }
 
 #[test]
+fn test_gas_config_normalize_drops_backwards_survey_speed() {
+    // Survey faster than swim is backwards → dropped to symmetric (None).
+    let mut backwards = GasConfig {
+        swim_speed_m_per_min: 10.0,
+        survey_speed_m_per_min: Some(15.0),
+        ..GasConfig::default()
+    };
+    backwards.normalize();
+    assert_eq!(backwards.survey_speed_m_per_min, None);
+
+    // Survey slower than (or equal to) swim is kept.
+    let mut ok = GasConfig {
+        swim_speed_m_per_min: 10.0,
+        survey_speed_m_per_min: Some(4.0),
+        ..GasConfig::default()
+    };
+    ok.normalize();
+    assert_eq!(ok.survey_speed_m_per_min, Some(4.0));
+}
+
+#[test]
 fn test_station_validation_rejects_negative() {
     let mut config = StationConfig {
         radius: -1.0,
