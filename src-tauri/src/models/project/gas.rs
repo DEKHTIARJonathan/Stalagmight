@@ -1,14 +1,161 @@
 //! Gas & route-planning engine (issue #38).
 //!
-//! Phase 0 (this commit) ships the pure foundations: [`physics`] (`ata` / `gas_rate` /
-//! `edge_gas` / SAC→RMV) and the [`model`] (divers, cylinders, teams), golden-tested in
-//! [`tests`]. The graph-coupled engine — a gas-weighted Dijkstra over the survey graph —
-//! lands in Phase 1 as `impl Project` methods *here*, reaching the `pub(super)` graph
-//! primitives (`build_survey_graph` / `dijkstra` / `zero_datum_roots`) exactly as the
-//! sibling `distance` module already does.
+//! Phase 0 shipped the pure foundations ([`physics`], [`model`]). Phase 1 adds the
+//! gas-weighted reachability compute here as an `impl Project` method, reaching the
+//! `pub(super)` graph primitives (`build_survey_graph_weighted` / `dijkstra` /
+//! `zero_datum_roots`) exactly as the sibling `distance` module does. The engine consumes
+//! the **instant measured** coords (`compute_station_coordinates`) — reachability is
+//! coordinate-independent, so it never triggers the slow closure-adjusted solve.
+//!
+//! Everything here is dead in the lib build until the Phase 1.3 IPC command
+//! (`commands/gas.rs`) calls it; live under `cfg(test)`, so the expectation is scoped to the
+//! non-test build (matches `models/shot.rs`; `#[allow]` is denied crate-wide).
+#![cfg_attr(not(test), expect(dead_code))]
 
 mod model;
 mod physics;
 
 #[cfg(test)]
 mod tests;
+
+use crate::config::{GasConfig, ReservePreset};
+use crate::models::{Coordinates, StationKey, StationRef};
+
+use super::Project;
+use model::{CylRole, Cylinder, Diver, GasReachField};
+use physics::edge_gas;
+
+impl Project {
+    /// Single-diver open-circuit reachability field (PRD §4/§5.1, the Phase-1 headline).
+    ///
+    /// Seeds a gas-weighted Dijkstra from `origin` (or the zero datums when `None`) over the
+    /// survey graph, weighting each shot by the **in-leg** gas it costs
+    /// (`edge_gas(rmv·survey_mult, in_speed, length, avg_depth)`), then marks every station
+    /// whose one-way gas-to-reach is within the **turn budget** — `reserve_fraction × usable
+    /// open-circuit gas` (strict-thirds default; the diver holds the rest for the exit). The
+    /// turn frontier is the reachable stations bordering an unreachable one.
+    ///
+    /// Contract: `gas_config` is assumed normalized (`GasConfig::normalize` — finite/positive
+    /// speeds); a non-positive in-speed defensively yields an all-unreachable field rather
+    /// than dividing by zero.
+    pub(crate) fn compute_gas_reach_field(
+        &self,
+        origin: Option<&StationRef>,
+        diver: &Diver,
+        cylinders: &[Cylinder],
+        gas_config: &GasConfig,
+    ) -> GasReachField {
+        let stations = self.compute_station_coordinates();
+        let n = stations.len();
+        let station_refs: Vec<StationRef> = stations.iter().map(|s| s.station_ref).collect();
+        let station_index = Self::station_index_map(&stations);
+        let coords: Vec<Coordinates> = stations.iter().map(|s| s.coordinates).collect();
+
+        let roots: Vec<usize> = match origin {
+            Some(r) => {
+                let key: StationKey = (*r).into();
+                self.resolve_key(&key)
+                    .and_then(|sr| station_index.get(&sr).copied())
+                    .into_iter()
+                    .collect()
+            }
+            None => self.zero_datum_roots(&station_index),
+        };
+
+        // In-leg cost: survey RMV bump on the slower survey-in speed (falls back to the swim
+        // speed when no survey speed is set — symmetric). Depth from the measured coords.
+        let in_rmv = diver.rmv_l_per_min * gas_config.survey_rmv_multiplier;
+        let in_speed = gas_config
+            .survey_speed_m_per_min
+            .unwrap_or(gas_config.swim_speed_m_per_min);
+
+        let coords_ref = &coords;
+        let gas_in = if n == 0 || roots.is_empty() || in_speed <= 0.0 || !in_speed.is_finite() {
+            vec![f64::INFINITY; n]
+        } else {
+            let adj = self.build_survey_graph_weighted(n, &station_index, |shot, fi, ti| {
+                edge_gas(
+                    in_rmv,
+                    in_speed,
+                    shot.length.max(0.0),
+                    coords_ref[fi].z,
+                    coords_ref[ti].z,
+                )
+            });
+            Self::dijkstra(&adj, &roots)
+        };
+
+        let usable = usable_oc_gas(cylinders, gas_config.conservative_tank_gas);
+        let budget_litres = usable * reserve_fraction(gas_config.default_reserve);
+
+        let reachable: Vec<bool> = gas_in
+            .iter()
+            .map(|&g| g.is_finite() && g <= budget_litres)
+            .collect();
+
+        let mut max_reachable_gas = 0.0_f64;
+        let gas_to_reach: Vec<Option<f64>> = gas_in
+            .iter()
+            .zip(&reachable)
+            .map(|(&g, &ok)| {
+                if g.is_finite() {
+                    if ok && g > max_reachable_gas {
+                        max_reachable_gas = g;
+                    }
+                    Some(g)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Turn frontier: reachable stations with at least one neighbour that is NOT reachable
+        // (out of budget or in another component). Topology only — the unweighted graph's
+        // adjacency is enough; the gas weights are irrelevant to "who borders whom".
+        let adj_topo = self.build_survey_graph(n, &station_index, None);
+        let turn_frontier: Vec<StationRef> = (0..n)
+            .filter(|&u| reachable[u] && adj_topo[u].iter().any(|&(v, _)| !reachable[v]))
+            .map(|u| station_refs[u])
+            .collect();
+
+        GasReachField {
+            station_refs,
+            gas_to_reach,
+            reachable,
+            turn_frontier,
+            max_reachable_gas,
+            budget_litres,
+        }
+    }
+}
+
+/// Reserve turn-fraction for the preset (PRD §5.1): turn when this fraction of usable gas is
+/// consumed on the way in. All-thirds = ⅓; the pushy presets use their back-gas turn fraction
+/// (¼ / ⅙) — the full per-stage drop/recalc is Phase 2.
+fn reserve_fraction(preset: ReservePreset) -> f64 {
+    match preset {
+        ReservePreset::AllThirds => 1.0 / 3.0,
+        ReservePreset::OneStage => 1.0 / 4.0,
+        ReservePreset::TwoStage => 1.0 / 6.0,
+    }
+}
+
+/// Total usable **open-circuit** breathing gas (litres) across the diver's back-gas + stage
+/// cylinders. Dil-out / bailout / deco roles are excluded (CCR / deco, not OC penetration gas
+/// — §5.3/§5.5). `conservative` applies the "call-it-an-80" derate — the rated capacity when a
+/// tank is overfilled (`min(fill, rated)`), the safe community convention (§5.3); otherwise the
+/// actual fill (ideal gas; the real-gas Z correction is deferred).
+fn usable_oc_gas(cylinders: &[Cylinder], conservative: bool) -> f64 {
+    cylinders
+        .iter()
+        .filter(|c| matches!(c.role, CylRole::BackGas | CylRole::Stage))
+        .map(|c| {
+            let pressure = if conservative {
+                c.fill_bar.min(c.rated_pressure_bar)
+            } else {
+                c.fill_bar
+            };
+            pressure * c.water_volume_l
+        })
+        .sum()
+}

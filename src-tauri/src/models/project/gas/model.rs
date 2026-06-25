@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::models::StationRef;
+
 use super::physics::{cylinder_gas_volume, sac_to_rmv};
 
 /// Cylinder construction material. Hints role suitability — steel ≈ negative buoyancy →
@@ -148,4 +150,19 @@ pub(crate) struct Team {
     pub(crate) divers: Vec<Diver>,
     pub(crate) cylinders_per_diver: Vec<Vec<Cylinder>>,
     pub(crate) mode: PlanMode,
+}
+
+/// Result of the gas-weighted reachability compute — the gas analogue of `DistanceField`.
+/// Per-station gas-to-reach from the origin (one-way, in-leg), the reachable mask under the
+/// reserve budget, and the turn frontier (reachable stations with an unreachable neighbour).
+/// `gas_to_reach` is `None` for graph-unreachable stations (JSON-safe ∞); `station_refs` echo
+/// the input order so the field is self-describing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct GasReachField {
+    pub(crate) station_refs: Vec<StationRef>,
+    pub(crate) gas_to_reach: Vec<Option<f64>>,
+    pub(crate) reachable: Vec<bool>,
+    pub(crate) turn_frontier: Vec<StationRef>,
+    pub(crate) max_reachable_gas: f64,
+    pub(crate) budget_litres: f64,
 }

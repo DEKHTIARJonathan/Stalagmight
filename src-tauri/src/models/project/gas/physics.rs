@@ -5,11 +5,6 @@
 //! `GasConfig::normalize` (speeds/multipliers), so callers pass validated inputs (mirrors the
 //! `Coordinates::new` / `new_checked` split).
 
-// Dead in the lib build (no caller until the Phase 1 engine + commands/gas.rs); live under
-// `cfg(test)` where the derives + tests exercise every item, so the expectation is scoped to
-// the non-test build (matches the `models/shot.rs` idiom; `#[allow]` is denied crate-wide).
-#![cfg_attr(not(test), expect(dead_code))]
-
 /// Ambient pressure in atmospheres-absolute at depth `depth_m` metres (positive-down).
 /// 10 msw ≈ 1 bar, so `ata = 1 + max(depth, 0)/10`; above the surface clamps to 1 ATA.
 pub(crate) fn ata(depth_m: f64) -> f64 {

@@ -3,8 +3,11 @@
     reason = "tests construct from known-valid literals; a failed unwrap should fail the test"
 )]
 
-use super::model::{CylRole, Cylinder, Diver, PlanMode, TankMaterial, Team};
+use super::model::{CylRole, Cylinder, Diver, GasReachField, PlanMode, TankMaterial, Team};
 use super::physics::{ata, avg_depth, cylinder_gas_volume, edge_gas, gas_rate, sac_to_rmv};
+use super::{reserve_fraction, usable_oc_gas};
+use crate::config::{GasConfig, ReservePreset};
+use crate::models::{Project, SectionData, ShotData, StationRef};
 
 const EPS: f64 = 1e-9;
 
@@ -116,4 +119,195 @@ fn team_holds_divers_cylinders_and_mode() {
     assert_eq!(team.divers.len(), 1);
     assert_eq!(team.cylinders_per_diver[0].len(), 1);
     assert_eq!(team.mode, PlanMode::OpenCircuit);
+}
+
+// ---- Phase 1: gas reachability field ------------------------------------------------
+
+fn make_shot(length: f64, depth_in: f64, depth_out: f64) -> ShotData {
+    ShotData {
+        length,
+        depth_in,
+        depth_out,
+        ..Default::default()
+    }
+}
+
+/// One straight section of 3 shots descending 0 → 10 → 20 → 30 m, 100 m each (4 stations).
+fn linear_descent_project() -> (Project, StationRef) {
+    let mut project = Project::new("Gas".to_string(), None);
+    let sec = project
+        .add_section(SectionData {
+            shots: vec![
+                make_shot(100.0, 0.0, 10.0),
+                make_shot(100.0, 10.0, 20.0),
+                make_shot(100.0, 20.0, 30.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    (project, StationRef::new(sec, 0))
+}
+
+fn field_gas(field: &GasReachField, sr: StationRef) -> f64 {
+    let idx = field.station_refs.iter().position(|r| *r == sr).unwrap();
+    field.gas_to_reach[idx].unwrap()
+}
+
+#[test]
+fn reserve_fraction_matches_presets() {
+    assert!((reserve_fraction(ReservePreset::AllThirds) - 1.0 / 3.0).abs() < EPS);
+    assert!((reserve_fraction(ReservePreset::OneStage) - 0.25).abs() < EPS);
+    assert!((reserve_fraction(ReservePreset::TwoStage) - 1.0 / 6.0).abs() < EPS);
+}
+
+#[test]
+fn usable_oc_gas_counts_backgas_stage_excludes_others_and_derates() {
+    let bg = Cylinder::new(
+        12.0,
+        200.0,
+        200.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = Cylinder::new(
+        11.0,
+        207.0,
+        207.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let deco = Cylinder::new(
+        5.7,
+        207.0,
+        207.0,
+        TankMaterial::Aluminium,
+        CylRole::Deco,
+        None,
+    )
+    .unwrap();
+    let dilout = Cylinder::new(
+        3.0,
+        237.0,
+        200.0,
+        TankMaterial::Steel,
+        CylRole::DilOut,
+        None,
+    )
+    .unwrap();
+    let cyls = [bg, stage, deco, dilout];
+    // Non-conservative (actual fill): backgas 12×200 + stage 11×207; deco/dilout excluded.
+    assert!((usable_oc_gas(&cyls, false) - (2400.0 + 2277.0)).abs() < 1e-6);
+
+    // Overfilled backgas derates to rated under the conservative "call-it-an-80" convention.
+    let over = Cylinder::new(
+        12.0,
+        179.0,
+        230.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    assert!((usable_oc_gas(std::slice::from_ref(&over), true) - 179.0 * 12.0).abs() < 1e-6);
+    assert!((usable_oc_gas(&[over], false) - 230.0 * 12.0).abs() < 1e-6);
+}
+
+#[test]
+fn gas_reach_field_huge_budget_reaches_everything_no_frontier() {
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    // Absurdly large cylinder → budget dwarfs the cave → all reachable, no turn needed.
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field =
+        project.compute_gas_reach_field(Some(&origin), &diver, &[big], &GasConfig::default());
+    assert_eq!(field.station_refs.len(), 4); // 3 shots → 4 stations
+    assert!(field.reachable.iter().all(|&r| r));
+    assert!(field.gas_to_reach.iter().all(Option::is_some));
+    assert!(field.turn_frontier.is_empty()); // nothing borders an unreachable station
+}
+
+#[test]
+fn gas_reach_field_tiny_budget_only_origin_is_the_frontier() {
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    // Negligible cylinder → budget ≈ 0 → only the origin (gas_in 0) qualifies; it's the frontier.
+    let tiny = Cylinder::new(
+        0.01,
+        1.0,
+        1.0,
+        TankMaterial::Aluminium,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field =
+        project.compute_gas_reach_field(Some(&origin), &diver, &[tiny], &GasConfig::default());
+    let origin_idx = field
+        .station_refs
+        .iter()
+        .position(|r| *r == origin)
+        .unwrap();
+    assert!(field.reachable[origin_idx]);
+    assert_eq!(field.reachable.iter().filter(|&&r| r).count(), 1); // only the origin
+    assert_eq!(field.turn_frontier, vec![origin]);
+    assert_eq!(field.gas_to_reach[origin_idx], Some(0.0)); // gas to reach the origin is 0
+}
+
+#[test]
+fn gas_reach_field_monotonic_and_disconnected_is_none() {
+    let mut project = Project::new("Gas".to_string(), None);
+    let sec = project
+        .add_section(SectionData {
+            shots: vec![make_shot(100.0, 0.0, 10.0), make_shot(100.0, 10.0, 20.0)],
+            ..Default::default()
+        })
+        .id;
+    // A second, unconnected section (no merge/closure) → separate component.
+    let other = project
+        .add_section(SectionData {
+            shots: vec![make_shot(50.0, 0.0, 5.0)],
+            ..Default::default()
+        })
+        .id;
+    let origin = StationRef::new(sec, 0);
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field =
+        project.compute_gas_reach_field(Some(&origin), &diver, &[big], &GasConfig::default());
+
+    // Same-section stations: gas_to_reach is monotonically non-decreasing along the line.
+    let g0 = field_gas(&field, StationRef::new(sec, 0));
+    let g1 = field_gas(&field, StationRef::new(sec, 1));
+    let g2 = field_gas(&field, StationRef::new(sec, 2));
+    assert!(g0 <= g1 && g1 <= g2);
+    assert!(g0.abs() < EPS); // origin is 0
+
+    // The disconnected section is unreachable: gas_to_reach None, reachable false.
+    let oidx = field
+        .station_refs
+        .iter()
+        .position(|r| *r == StationRef::new(other, 0))
+        .unwrap();
+    assert_eq!(field.gas_to_reach[oidx], None);
+    assert!(!field.reachable[oidx]);
 }
