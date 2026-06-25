@@ -1843,6 +1843,13 @@
       "fromStation": "from {{id}}",
       "computing": "Distance: computing…"
     },
+    "gasLegend": {
+      "title": "Gas reach",
+      "aria": "Gas-to-reach scale from {{min}} (near) to {{max}} (turn budget)",
+      "fromEntrance": "from entrance",
+      "fromStation": "from {{id}}",
+      "computing": "Gas reach: computing…"
+    },
     "placement": {
       "title": "Placement",
       "instructions": "Click to place section. Esc for more placement options and metadata changes.",
@@ -2033,8 +2040,60 @@
       "saveError": "Auto-save didn't run — not saved"
     }
   },
+  "gasPanel": {
+    "title": "Gas & route planning",
+    "subtitle": "Reachable extent and turn point for your gas. Open-circuit, single diver.",
+    "origin": {
+      "label": "Origin",
+      "entrance": "Entrance",
+      "reset": "Reset",
+      "hint": "Click a station on the map to set the origin."
+    },
+    "diver": {
+      "rmvLabel": "RMV (surface air consumption)",
+      "rmvUnit": "L/min"
+    },
+    "reserve": {
+      "label": "Reserve",
+      "all_thirds": "All thirds",
+      "one_stage": "1-stage",
+      "two_stage": "2-stage"
+    },
+    "tanks": {
+      "label": "Tanks",
+      "bar": "bar",
+      "fillAria": "Fill pressure for {{tank}} (bar)",
+      "removeAria": "Remove {{tank}}",
+      "addPlaceholder": "Add tank…",
+      "conservative": "Conservative gas (call-it-an-80 derate)",
+      "notCounted": "This role isn't counted toward the open-circuit penetration budget."
+    },
+    "roles": {
+      "back_gas": "Back gas",
+      "stage": "Stage",
+      "dil_out": "Dil-out",
+      "bailout": "Bailout",
+      "deco": "Deco"
+    },
+    "units": {
+      "label": "Units",
+      "metric": "Metric",
+      "imperial": "Imperial"
+    },
+    "readout": {
+      "label": "Plan",
+      "budget": "Turn budget",
+      "maxPenetration": "Max penetration gas",
+      "reachable": "Reachable stations",
+      "turnPoints": "Turn points",
+      "computing": "Computing…"
+    }
+  },
   "toolbar": {
     "groupAria": "{{group}} tools",
+    "gasPlan": {
+      "tooltip": "Gas & route planning"
+    },
     "groups": {
       "move": "Move",
       "comment": "Comment",

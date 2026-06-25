@@ -12,6 +12,7 @@ import { OfflineIndicator } from '../common/OfflineIndicator';
 import Toolbar from './Toolbar';
 import SectionsPanel from './SectionsPanel';
 import DetailPanel from './DetailPanel';
+import { GasPlanPanel } from './GasPlanPanel';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
 import { PANEL_SIZE_BOUNDS, DETAIL_REVEAL_AUTOCLOSE_MS } from './layoutConstants';
@@ -72,6 +73,9 @@ export default function SingleSystemView() {
     ? 'linear-gradient(to left, rgba(248, 113, 113, 0.30), transparent 18%)'
     : undefined;
   const placementModeActive = useUIStore((s) => s.placementMode !== null);
+  // Gas & route-planning sub-mode (#38) swaps the detail Dock slot for its input
+  // panel (the toolbar toggle owns enter/exit; setView()/setColorMode reset it).
+  const showGasPlan = useUIStore((s) => s.showGasPlan);
 
   // Depend on the stable cancelPending useCallback (not the whole autoSave object,
   // which is a fresh object each render) so handleSaveProject keeps a stable
@@ -437,11 +441,11 @@ export default function SingleSystemView() {
         onKeyDownCapture={revealDetail}
       >
         <ErrorBoundary panelName="Details">
-          <DetailPanel />
+          {showGasPlan ? <GasPlanPanel /> : <DetailPanel />}
         </ErrorBoundary>
       </div>
     ),
-    [dimCls, revealDetail],
+    [dimCls, revealDetail, showGasPlan],
   );
   const dataInner = useMemo(
     () =>

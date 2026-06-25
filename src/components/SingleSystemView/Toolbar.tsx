@@ -7,6 +7,7 @@ import {
   ChevronDownIcon,
   DownloadIcon,
   ShrinkIcon,
+  TargetIcon,
 } from '../common/icons';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
@@ -135,6 +136,8 @@ export default function Toolbar({
   const activeTool = useUIStore((s) => s.activeTool);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
   const exitDataTableFullScreen = useUIStore((s) => s.exitDataTableFullScreen);
+  const showGasPlan = useUIStore((s) => s.showGasPlan);
+  const toggleGasPlan = useUIStore((s) => s.toggleGasPlan);
   // Toolbar icons appear at the 'toolbar_only' syntactic level and up; the
   // `--sh-*` color vars are the role colors there and a neutral gray at 'off'.
   const syntacticLevel = useUIStore((s) => s.syntacticLevel);
@@ -296,6 +299,18 @@ export default function Toolbar({
                 );
               })}
             </div>
+            {/* Gas & route-planning sub-mode (#38). A top-level toggle OUTSIDE
+                DisplayMenu — it's a sub-mode (swaps the detail panel + map
+                overlay), not just a color overlay. */}
+            <IconButton
+              icon={<TargetIcon size={18} />}
+              active={showGasPlan}
+              tooltip={t('toolbar.gasPlan.tooltip')}
+              onClick={() => { setSource('toolbar'); toggleGasPlan(); }}
+              disabled={placementModeActive}
+              aria-pressed={showGasPlan}
+              data-testid="toolbar-gas-plan-button"
+            />
             <DisplayMenu />
           </>
         )}

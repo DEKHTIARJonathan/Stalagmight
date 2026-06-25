@@ -30,6 +30,7 @@ import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
 import { DepthLegend } from './DepthLegend';
 import { DistanceLegend } from './DistanceLegend';
+import { GasLegend } from './GasLegend';
 import { MapDevStats } from './MapDevStats';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
@@ -3554,6 +3555,29 @@ function MapCanvas() {
           }}
         >
           {t('map.distanceLegend.computing')}
+        </div>
+      )}
+
+      {/* Gas reachable-frontier legend (#38) — gold→purple, 0 → turn budget. */}
+      {showGasPlan && gasReachField && (
+        <GasLegend field={gasReachField} units={gasPlanConfig.units} visible={showGasPlan} />
+      )}
+      {showGasPlan && !gasReachField && (
+        <div
+          data-testid="gas-legend-loading"
+          style={{
+            position: 'absolute',
+            bottom: 50,
+            left: 10,
+            background: 'var(--cc-text-halo-alt)',
+            color: 'var(--cc-depth-text)',
+            borderRadius: 4,
+            padding: 8,
+            zIndex: 1,
+            fontSize: 11,
+          }}
+        >
+          {t('map.gasLegend.computing')}
         </div>
       )}
 

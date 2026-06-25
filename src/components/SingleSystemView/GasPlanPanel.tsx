@@ -1,0 +1,284 @@
+import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useShallow } from 'zustand/react/shallow';
+import { useGasPlanStore } from '../../store/gasPlanStore';
+import { formatStationId } from '../../utils/formatters';
+import { formatVolume } from '../../utils/formatGas';
+import { TANK_PRESETS, cylinderFromPreset } from '../../utils/tankPresets';
+import type { CylRole, GasUnits, ReservePreset } from '../../types/ipc.generated';
+
+const RESERVE_PRESETS: readonly ReservePreset[] = ['all_thirds', 'one_stage', 'two_stage'];
+const CYL_ROLES: readonly CylRole[] = ['back_gas', 'stage', 'dil_out', 'bailout', 'deco'];
+const UNIT_OPTIONS: readonly GasUnits[] = ['metric', 'imperial'];
+
+/** Roles whose gas counts toward the open-circuit penetration budget (PRD §5.3). */
+function isBudgetRole(role: CylRole): boolean {
+  return role === 'back_gas' || role === 'stage';
+}
+
+/**
+ * Gas & route-planning input panel (#38, Phase 1). Rendered in the `detail` Dock
+ * slot while the sub-mode is active (see SingleSystemView). Edits the single-diver
+ * open-circuit inputs in `gasPlanStore`; every change nulls the cached field, so
+ * MapCanvas refetches and repaints the reachable overlay. Volumes follow the master
+ * units toggle; pressures/RMV stay canonical (bar / L·min⁻¹) for Phase 1 — full
+ * imperial input is the Phase-4 flip (PRD §7.2).
+ */
+export function GasPlanPanel() {
+  const { t } = useTranslation();
+  const {
+    origin,
+    diver,
+    cylinders,
+    gasConfig,
+    reachField,
+    setOrigin,
+    setDiver,
+    setCylinders,
+    setGasConfig,
+  } = useGasPlanStore(
+    useShallow((s) => ({
+      origin: s.origin,
+      diver: s.diver,
+      cylinders: s.cylinders,
+      gasConfig: s.gasConfig,
+      reachField: s.reachField,
+      setOrigin: s.setOrigin,
+      setDiver: s.setDiver,
+      setCylinders: s.setCylinders,
+      setGasConfig: s.setGasConfig,
+    })),
+  );
+
+  const units = gasConfig.units;
+  const originLabel = origin
+    ? formatStationId(origin.section_id, origin.station_index)
+    : t('gasPanel.origin.entrance');
+
+  const reachableCount = reachField ? reachField.reachable.filter(Boolean).length : null;
+  const turnCount = reachField ? reachField.turn_frontier.length : null;
+
+  const setFill = (idx: number, fillBar: number) =>
+    setCylinders(cylinders.map((c, i) => (i === idx ? { ...c, fill_bar: fillBar } : c)));
+  const setRole = (idx: number, role: CylRole) =>
+    setCylinders(cylinders.map((c, i) => (i === idx ? { ...c, role } : c)));
+  const removeCylinder = (idx: number) =>
+    setCylinders(cylinders.filter((_, i) => i !== idx));
+  const addPreset = (presetId: string) => {
+    const preset = TANK_PRESETS.find((p) => p.id === presetId);
+    if (preset) setCylinders([...cylinders, cylinderFromPreset(preset)]);
+  };
+
+  return (
+    <div
+      className="h-full bg-panel flex flex-col overflow-auto text-sm text-text-primary"
+      data-testid="gas-panel"
+    >
+      <div className="px-3 py-2 border-b border-border shrink-0">
+        <h2 className="font-semibold">{t('gasPanel.title')}</h2>
+        <p className="text-xs opacity-70">{t('gasPanel.subtitle')}</p>
+      </div>
+
+      <div className="p-3 space-y-4">
+        {/* Origin */}
+        <section className="space-y-1">
+          <SectionLabel>{t('gasPanel.origin.label')}</SectionLabel>
+          <div className="flex items-center justify-between gap-2">
+            <span data-testid="gas-origin-readout" className="font-mono">
+              {originLabel}
+            </span>
+            <button
+              type="button"
+              className="text-xs px-2 py-0.5 rounded border border-border hover:bg-border disabled:opacity-40"
+              onClick={() => setOrigin(null)}
+              disabled={origin === null}
+              data-testid="gas-reset-origin"
+            >
+              {t('gasPanel.origin.reset')}
+            </button>
+          </div>
+          <p className="text-xs opacity-60">{t('gasPanel.origin.hint')}</p>
+        </section>
+
+        {/* Diver RMV */}
+        <section className="space-y-1">
+          <SectionLabel>{t('gasPanel.diver.rmvLabel')}</SectionLabel>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={diver.rmv_l_per_min}
+              onChange={(e) => setDiver({ ...diver, rmv_l_per_min: Number(e.target.value) })}
+              className="w-24 bg-transparent border border-border rounded px-2 py-1"
+              data-testid="gas-rmv-input"
+            />
+            <span className="text-xs opacity-70">{t('gasPanel.diver.rmvUnit')}</span>
+          </div>
+        </section>
+
+        {/* Reserve preset */}
+        <section className="space-y-1">
+          <SectionLabel>{t('gasPanel.reserve.label')}</SectionLabel>
+          <div className="flex gap-1">
+            {RESERVE_PRESETS.map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                className={`text-xs px-2 py-1 rounded border ${
+                  gasConfig.default_reserve === preset
+                    ? 'border-accent ring-1 ring-accent'
+                    : 'border-border hover:bg-border'
+                }`}
+                onClick={() => setGasConfig({ ...gasConfig, default_reserve: preset })}
+                data-testid={`gas-reserve-${preset}`}
+              >
+                {t(`gasPanel.reserve.${preset}`)}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* Cylinders */}
+        <section className="space-y-2">
+          <SectionLabel>{t('gasPanel.tanks.label')}</SectionLabel>
+          <div className="space-y-2">
+            {cylinders.map((cyl, idx) => (
+              <div
+                key={idx}
+                className={`flex items-center gap-2 border border-border rounded px-2 py-1 ${
+                  isBudgetRole(cyl.role) ? '' : 'opacity-50'
+                }`}
+                title={isBudgetRole(cyl.role) ? undefined : t('gasPanel.tanks.notCounted')}
+                data-testid="gas-cylinder-row"
+              >
+                <span className="font-medium w-14 truncate" title={cyl.label ?? ''}>
+                  {cyl.label ?? `${cyl.water_volume_l}L`}
+                </span>
+                <span className="text-xs opacity-60 w-12">
+                  {cyl.water_volume_l}L
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  step={5}
+                  value={cyl.fill_bar}
+                  onChange={(e) => setFill(idx, Number(e.target.value))}
+                  className="w-16 bg-transparent border border-border rounded px-1 py-0.5"
+                  aria-label={t('gasPanel.tanks.fillAria', { tank: cyl.label ?? '' })}
+                  data-testid="gas-cylinder-fill"
+                />
+                <span className="text-xs opacity-70">{t('gasPanel.tanks.bar')}</span>
+                <select
+                  value={cyl.role}
+                  onChange={(e) => setRole(idx, e.target.value as CylRole)}
+                  className="text-xs bg-transparent border border-border rounded px-1 py-0.5 ml-auto"
+                  data-testid="gas-cylinder-role"
+                >
+                  {CYL_ROLES.map((role) => (
+                    <option key={role} value={role}>
+                      {t(`gasPanel.roles.${role}`)}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="text-xs px-1 opacity-60 hover:opacity-100"
+                  onClick={() => removeCylinder(idx)}
+                  aria-label={t('gasPanel.tanks.removeAria', { tank: cyl.label ?? '' })}
+                  data-testid="gas-cylinder-remove"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              className="text-xs bg-transparent border border-border rounded px-2 py-1"
+              value=""
+              onChange={(e) => {
+                if (e.target.value) addPreset(e.target.value);
+              }}
+              data-testid="gas-add-tank"
+            >
+              <option value="">{t('gasPanel.tanks.addPlaceholder')}</option>
+              {TANK_PRESETS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label} ({p.water_volume_l}L)
+                </option>
+              ))}
+            </select>
+          </div>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={gasConfig.conservative_tank_gas}
+              onChange={(e) =>
+                setGasConfig({ ...gasConfig, conservative_tank_gas: e.target.checked })
+              }
+              data-testid="gas-conservative-checkbox"
+            />
+            <span>{t('gasPanel.tanks.conservative')}</span>
+          </label>
+        </section>
+
+        {/* Units */}
+        <section className="space-y-1">
+          <SectionLabel>{t('gasPanel.units.label')}</SectionLabel>
+          <div className="flex gap-1">
+            {UNIT_OPTIONS.map((u) => (
+              <button
+                key={u}
+                type="button"
+                className={`text-xs px-2 py-1 rounded border ${
+                  units === u ? 'border-accent ring-1 ring-accent' : 'border-border hover:bg-border'
+                }`}
+                onClick={() => setGasConfig({ ...gasConfig, units: u })}
+                data-testid={`gas-units-${u}`}
+              >
+                {t(`gasPanel.units.${u}`)}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* Readout */}
+        <section
+          className="space-y-1 border-t border-border pt-3"
+          data-testid="gas-readout"
+        >
+          <SectionLabel>{t('gasPanel.readout.label')}</SectionLabel>
+          {reachField ? (
+            <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
+              <dt className="opacity-70">{t('gasPanel.readout.budget')}</dt>
+              <dd data-testid="gas-readout-budget" className="text-right font-mono">
+                {formatVolume(reachField.budget_litres, units)}
+              </dd>
+              <dt className="opacity-70">{t('gasPanel.readout.maxPenetration')}</dt>
+              <dd data-testid="gas-readout-max" className="text-right font-mono">
+                {formatVolume(reachField.max_reachable_gas, units)}
+              </dd>
+              <dt className="opacity-70">{t('gasPanel.readout.reachable')}</dt>
+              <dd data-testid="gas-readout-reachable" className="text-right font-mono">
+                {reachableCount}
+              </dd>
+              <dt className="opacity-70">{t('gasPanel.readout.turnPoints')}</dt>
+              <dd data-testid="gas-readout-turns" className="text-right font-mono">
+                {turnCount}
+              </dd>
+            </dl>
+          ) : (
+            <p className="text-xs opacity-60">{t('gasPanel.readout.computing')}</p>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <h3 className="text-xs font-semibold uppercase tracking-wide opacity-60">{children}</h3>
+  );
+}
