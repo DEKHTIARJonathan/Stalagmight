@@ -537,7 +537,9 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 403);
+        // 403 from master + 7 Walls-importer events (parse/execute/undo-after +
+        // the walls-import dialog action/cancel/dwell/active-dwell mirror).
+        assert_eq!(EVENT_NAMES.len(), 409);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
