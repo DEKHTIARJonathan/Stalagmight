@@ -8,11 +8,12 @@
 > code and keep the file:line seams honest. The phased plan at the bottom is the part that
 > becomes PRs.
 >
-> **⏸ Implementation hold (2026-06-23).** A Rust refactor is in flight on the other clone
-> (`~/src/Stalagmight`). **Planning continues; implementation waits** until it lands. The
-> file:line seams in §7/§12 are pinned pre-refactor — the design rides the *public* graph /
-> Dijkstra primitives so it should survive, but exact lines and the `build_survey_graph`
-> factoring may move, so every seam gets re-verified before any code is written.
+> **▶ Hold lifted (2026-06-24).** The Rust refactor (#157, PRs through #175) **landed** —
+> `project.rs` was split into `models/project/{pathfinding,distance,coordinates,closure,lsq,…}`,
+> and the #160/#167 GUI rework reshaped the frontend. The §4/§7/§11/§12 seams were
+> **re-verified and repinned** against the new layout (the 2026-06-24 re-assessment pass), and
+> four architecture/UX forks were resolved (engine home, exit-field, UI entry, right panel —
+> §7/§10). **Implementation can begin — local commits only until Nico approves a push** (§8).
 
 ---
 
@@ -577,9 +578,11 @@ Concretises the choices §7.2 left open:
   frontier + turn point against a hand calc.
 
 ## 12. Critical seams (file:line)
-> ⚠ Lines pinned to `master` @ 2026-06-22 (**pre-refactor**). A Rust refactor is in flight on
-> the other clone — **re-verify every seam before implementing** (especially the graph/Dijkstra
-> code, which both the refactor and our weight-closure change touch).
+> ✅ Repinned to `master` @ 2026-06-24 (**post-refactor #157 + post-#160/#167 GUI rework**).
+> `project.rs` is now the ~1178-line module ROOT; the graph/Dijkstra/coords logic lives in
+> `models/project/{pathfinding,distance,coordinates}.rs`, and AppState is at
+> `core/state/app_state.rs`. Verified by the 2026-06-24 re-assessment — re-check once more at
+> implementation time, as line numbers drift.
 
 - `src-tauri/src/models/project.rs` — `build_survey_graph:7363`, `dijkstra:7426`,
   `compute_distances_from:7492`, `distance_field_from:7541` (factor the weight closure; add
