@@ -597,8 +597,13 @@ impl Project {
         // present here.
         for (i, shot) in section.shots.iter().enumerate() {
             if let Some(u) = &shot.uuid {
+                // First-occurrence wins: mirror the cold-path `resolve_key`,
+                // which uses `shots.iter().position(...)` (first match). Under a
+                // duplicated within-section UUID, `or_insert` keeps the earliest
+                // index so the warm cache agrees with the cold scan.
                 self.shot_uuid_index
-                    .insert((section.id, u.clone()), i as u32);
+                    .entry((section.id, u.clone()))
+                    .or_insert(i as u32);
             }
         }
         self.sections.push(section);
@@ -774,7 +779,13 @@ impl Project {
         for s in &self.sections {
             for (i, shot) in s.shots.iter().enumerate() {
                 if let Some(u) = &shot.uuid {
-                    self.shot_uuid_index.insert((s.id, u.clone()), i as u32);
+                    // First-occurrence wins: mirror the cold-path `resolve_key`,
+                    // which uses `shots.iter().position(...)` (first match). Under
+                    // a duplicated within-section UUID, `or_insert` keeps the
+                    // earliest index so the warm cache agrees with the cold scan.
+                    self.shot_uuid_index
+                        .entry((s.id, u.clone()))
+                        .or_insert(i as u32);
                 }
             }
         }

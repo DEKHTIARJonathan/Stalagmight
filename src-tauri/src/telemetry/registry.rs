@@ -537,8 +537,12 @@ mod tests {
 
     #[test]
     fn event_count() {
-        // 403 from master + 7 Walls-importer events (parse/execute/undo-after +
-        // the walls-import dialog action/cancel/dwell/active-dwell mirror).
+        // 401 on master + 8 new events = 409:
+        //   - command.parse_walls, command.execute_walls_import (Walls import)
+        //   - undo-after.execute_walls_import, undo-after.execute_compass_import
+        //   - action.dialog.walls-import, dialog-cancel.walls-import,
+        //     dwell.dialog.walls-import, active-dwell.dialog.walls-import
+        //     (the walls-import dialog action/cancel/dwell + active-dwell mirror)
         assert_eq!(EVENT_NAMES.len(), 409);
     }
 

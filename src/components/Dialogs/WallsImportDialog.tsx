@@ -7,7 +7,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { WallsFile, OrphanPlacementSuggestion } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
-import { deferredSaveWarnings, surfaceImportWarnings } from '../../utils/saveFeedback';
+import { completeImportToSingleView, finalizeDeferredSaveWarnings } from '../../utils/saveFeedback';
 
 interface WallsImportDialogProps {
   wallsFile: WallsFile;
@@ -71,6 +71,28 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
     [wallsFile.surveys, selectedSurveys]
   );
 
+  // Splays / fixed stations in the SELECTED surveys, computed the same way as
+  // `selectedShotCount`. The Import gate's splay branch and the Fixed-stations
+  // stat/warning key off these so they track the selection rather than the whole
+  // file — deselecting a splay-only or fix-heavy survey no longer leaves the gate
+  // enabled or the anchor stat/warning stale.
+  const selectedSplayCount = useMemo(
+    () =>
+      wallsFile.surveys.reduce(
+        (sum, s, i) => (selectedSurveys.has(i) ? sum + s.splay_count : sum),
+        0
+      ),
+    [wallsFile.surveys, selectedSurveys]
+  );
+  const selectedFixedStationCount = useMemo(
+    () =>
+      wallsFile.surveys.reduce(
+        (sum, s, i) => (selectedSurveys.has(i) ? sum + s.fixed_station_count : sum),
+        0
+      ),
+    [wallsFile.surveys, selectedSurveys]
+  );
+
   // Re-check for a duplicate whenever the target file changes (the dialog may be
   // reused for a different import); reset the gate so Import stays disabled until
   // the new hash is verified, and ignore a stale in-flight result.
@@ -110,6 +132,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
     setIsImporting(true);
     startLoading(wallsFile.project_name || fileName, filePath);
     setLoadingProgress({ phase: 'import_parsing' });
+    const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
     try {
       // Pass the selection as the original survey indices; omit (null) when
       // everything resolved is selected so a full import stays unfiltered.
@@ -126,10 +149,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
       resetLoading();
 
       if (!result.success) {
-        trackDialogComplete('walls-import');
-        closeDialog();
-        setView('single');
-        triggerFitToBounds();
+        completeImportToSingleView('walls-import', importUi);
         openDialog('error', {
           title: 'Import Errors',
           message: result.error ?? 'Unknown error during import',
@@ -140,13 +160,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
       // A partial-success import (new-project deferred save failed) returns
       // success WITH a "SYSTEM" save-failure warning. Surface ONLY that — before
       // the optional orphan step — so "unsaved — save manually" isn't swallowed.
-      const saveWarnings = deferredSaveWarnings(result.warnings);
-      if (saveWarnings.length > 0) {
-        trackDialogComplete('walls-import');
-        closeDialog();
-        setView('single');
-        triggerFitToBounds();
-        surfaceImportWarnings(saveWarnings, openDialog);
+      if (finalizeDeferredSaveWarnings(result.warnings, 'walls-import', importUi)) {
         return;
       }
 
@@ -184,10 +198,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
         // Non-fatal: proceed without orphan detection
       }
 
-      trackDialogComplete('walls-import');
-      closeDialog();
-      setView('single');
-      triggerFitToBounds();
+      completeImportToSingleView('walls-import', importUi);
     } catch (e) {
       resetLoading();
       setIsImporting(false);
@@ -231,7 +242,10 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             <div className="text-xs text-text-tertiary" title="#Fix stations — each becomes a GPS zero datum on its connected component">
               Fixed stations
             </div>
-            <div className="text-sm font-medium">{wallsFile.fixed_station_count}</div>
+            <div className="text-sm font-medium">
+              {selectedFixedStationCount}
+              {!allSelected ? ` / ${wallsFile.fixed_station_count}` : ''}
+            </div>
           </div>
           <div>
             <div className="text-xs text-text-tertiary" title="Projection reference from the .wpj .REF directive — the coordinate system, not a station anchor">
@@ -240,7 +254,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             <div className="text-sm font-medium">{projectionLabel}</div>
           </div>
         </div>
-        {wallsFile.has_georeference && wallsFile.fixed_station_count === 0 && (
+        {wallsFile.has_georeference && selectedFixedStationCount === 0 && (
           <div className="text-xs text-text-secondary">
             This project has a coordinate reference (.REF) but no <code>#Fix</code> stations in the
             resolved surveys, so nothing is GPS-anchored. Walls keeps fixed points in separate
@@ -372,7 +386,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
               isImporting ||
               !hashChecked ||
               selectedSurveys.size === 0 ||
-              (selectedShotCount === 0 && !(includeSplays && wallsFile.splay_count > 0))
+              (selectedShotCount === 0 && !(includeSplays && selectedSplayCount > 0))
             }
           >
             {isImporting ? 'Importing...' : 'Import'}

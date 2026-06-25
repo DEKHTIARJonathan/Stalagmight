@@ -1737,6 +1737,98 @@ fn create_loop_closures_batch_matches_sequential() {
 }
 
 #[test]
+fn create_loop_closures_batch_matches_sequential_zero_datum_unconnected() {
+    // Covers the order-dependent branch the main equivalence test omits: two
+    // sections that are NOT merge-connected but BOTH carry a zero datum. That is
+    // the only path that accepts a closure between an unconnected pair
+    // (`!connected && a_has_zd && b_has_zd`), and it must stay byte-for-byte
+    // equivalent between the sequential and batch paths.
+    fn build() -> (Project, Vec<(StationRef, StationRef)>) {
+        let mut p = Project::new("BatchZD".to_string(), None);
+        let a = p
+            .add_section(SectionData {
+                shots: vec![
+                    shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                    shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                ],
+                ..Default::default()
+            })
+            .id;
+        let b = p
+            .add_section(SectionData {
+                shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+        // Two disconnected sections (no merge between them), each with its own
+        // zero datum — the only setup that accepts an unconnected closure pair.
+        p.set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+        )
+        .unwrap();
+        p.set_zero_datum(
+            StationRef::new(b, 0),
+            GpsCoordinates::new(46.0, -91.0, 0.0).unwrap(),
+        )
+        .unwrap();
+        let pairs = vec![
+            (StationRef::new(a, 1), StationRef::new(b, 1)), // unconnected but both datum'd → created
+            (StationRef::new(a, 1), StationRef::new(b, 1)), // duplicate → skip
+        ];
+        (p, pairs)
+    }
+
+    let (mut seq, pairs) = build();
+    // Clone so both runs share identical shot UUIDs (Section::new mints random
+    // ones), making the stored AfterShot(uuid) keys directly comparable.
+    let mut bat = seq.clone();
+    let seq_results: Vec<_> = pairs
+        .iter()
+        .map(|&(a, b)| seq.create_loop_closure(a, b, ClosureStrategy::Batch))
+        .collect();
+    let bat_results = bat.create_loop_closures_batch(&pairs);
+
+    assert_eq!(
+        seq.loop_closures.len(),
+        bat.loop_closures.len(),
+        "created-closure count differs (seq {} vs batch {})",
+        seq.loop_closures.len(),
+        bat.loop_closures.len()
+    );
+    for (s, t) in seq.loop_closures.iter().zip(&bat.loop_closures) {
+        assert_eq!(s.id, t.id, "closure id differs");
+        assert_eq!(s.station_a, t.station_a, "station_a key differs");
+        assert_eq!(s.station_b, t.station_b, "station_b key differs");
+        assert!(
+            (s.path_length - t.path_length).abs() < 1e-9,
+            "path_length differs: {} vs {}",
+            s.path_length,
+            t.path_length
+        );
+        assert!(
+            (s.misclosure_distance - t.misclosure_distance).abs() < 1e-9,
+            "misclosure differs"
+        );
+        assert!(
+            (s.error_percentage - t.error_percentage).abs() < 1e-9,
+            "error_percentage differs"
+        );
+        assert_eq!(s.is_aligned, t.is_aligned);
+    }
+    assert_eq!(seq_results.len(), bat_results.len());
+    for (s, t) in seq_results.iter().zip(&bat_results) {
+        assert_eq!(
+            s.is_ok(),
+            t.is_ok(),
+            "per-pair outcome differs: seq {s:?} vs batch {t:?}"
+        );
+    }
+    // Sanity: the unconnected-but-datum'd pair was accepted exactly once.
+    assert_eq!(bat.loop_closures.len(), 1);
+}
+
+#[test]
 fn create_loop_closure_proportional_is_deferred() {
     let mut project = Project::new("ClosureDist".to_string(), None);
 
@@ -10410,6 +10502,56 @@ fn check_structural_integrity_flags_and_repairs_duplicate_shot_uuid() {
     assert!(
         project.resolve_key(&anchor).is_some(),
         "first-shot anchor survives repair"
+    );
+}
+
+#[test]
+fn warm_shot_uuid_index_resolves_duplicate_to_first_occurrence() {
+    // Under a duplicated within-section UUID, the warm `shot_uuid_index` must
+    // resolve to the FIRST occurrence, matching the authoritative cold-path
+    // `resolve_key` (which uses `shots.iter().position(...)`, i.e. first match).
+    // Reachable by undoing a `duplicate_shot_uuid` integrity Repair: it restores
+    // the duplicate state and rebuilds the cache warm. If the index used
+    // last-write-wins, the warm cache would resolve to station 2 while a cold
+    // scan resolves to station 1 — a silent divergence.
+    let mut project = Project::new("DupWarm".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    let first_uuid = project.get_section(a).unwrap().shots[0]
+        .uuid
+        .clone()
+        .unwrap();
+    // Force shot 1 to collide with shot 0's UUID.
+    project.get_section_mut(a).unwrap().shots[1].uuid = Some(first_uuid.clone());
+
+    // The cold-path answer: position() returns the first match (station 1).
+    let cold = {
+        let section = project.get_section(a).unwrap();
+        let pos = section
+            .shots
+            .iter()
+            .position(|s| s.uuid.as_deref() == Some(first_uuid.as_str()))
+            .unwrap();
+        StationRef::new(a, (pos + 1) as u32)
+    };
+    assert_eq!(
+        cold,
+        StationRef::new(a, 1),
+        "cold scan picks the first shot"
+    );
+
+    // Rebuild the cache warm, then resolve through it.
+    project.rebuild_shot_uuid_index();
+    let anchor = StationKey::new(a, StationAnchor::AfterShot(first_uuid.clone()));
+    assert_eq!(
+        project.resolve_key(&anchor),
+        Some(cold),
+        "warm cache must agree with the cold scan on first occurrence"
     );
 }
 

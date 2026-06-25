@@ -90,7 +90,7 @@ function App() {
       return true;
     }
     // Block during new project for import dialog
-    if (activeDialog === 'new-project-for-import' && (dialogData.dmpFile || dialogData.tmlFile || dialogData.gpxFile)) {
+    if (activeDialog === 'new-project-for-import' && (dialogData.dmpFile || dialogData.tmlFile || dialogData.gpxFile || dialogData.compassFile || dialogData.wallsFile)) {
       return true;
     }
     return false;
