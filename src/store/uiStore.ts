@@ -16,6 +16,7 @@ export interface CommentTarget {
 import type { AppearanceConfig, PanelsConfig, SyntacticHighlightingConfig, SyntacticHighlightLevel } from '../types/config';
 import type { DisplaySettings } from '../types/loading';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
+import { useGasPlanStore } from './gasPlanStore';
 
 // Import tool utilities for internal use and re-export for convenience
 import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
@@ -385,6 +386,18 @@ interface UIStore {
   setDistanceGradientOrigin: (ref: StationRef | null) => void;
   setDistanceField: (field: DistanceField | null) => void;
 
+  // Gas & route-planning sub-mode (#38). Like the distance overlay it's a
+  // transient analytical sub-mode (never persisted); the rich inputs live in
+  // gasPlanStore, so here we hold only the on/off flag — the one source of truth
+  // the survey layer, the toolbar toggle, and the detail-panel swap all read.
+  showGasPlan: boolean;
+  /** Enter/leave the sub-mode; entering suppresses the color overlays (all paint
+   *  the same layer), leaving resets gasPlanStore. */
+  toggleGasPlan: () => void;
+  /** Idempotent exit — used by the setView() cleanup funnel so a stale gas
+   *  overlay can't outlive a project/view switch. */
+  exitGasPlan: () => void;
+
   // Issue-severity coloring overlay (#22). Runtime-only — like
   // showDistanceGradient it is NOT a DisplayToggleKey and is never persisted
   // (off on every load; the Warnings-tab auto-switch drives it transiently).
@@ -585,6 +598,9 @@ export const useUIStore = create<UIStore>((set) => ({
     useUIStore.getState().exitSectionFocus();
     // Fullscreen table is single-view scoped too — a view switch can't strand it.
     useUIStore.getState().exitDataTableFullScreen();
+    // Gas-planning sub-mode (#38) is single-view scoped too — drop it on any view
+    // switch so a stale reachable overlay + input panel can't outlive the view.
+    useUIStore.getState().exitGasPlan();
     setDwellState(view === 'global' ? 'global-view' : `tool.${useUIStore.getState().activeTool}`);
     if (view === 'single') {
       void advanceProjectSeq();
@@ -1154,6 +1170,11 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   setColorMode: (mode) => {
     const s = useUIStore.getState();
+    // Selecting any color overlay leaves the gas sub-mode — both own the shots
+    // layer paint, so they can't coexist (gas entry is the toolbar toggle,
+    // outside this menu). Done before the no-op check so picking 'section' while
+    // gas is active still exits it. No-op when gas is off.
+    s.exitGasPlan();
     if (colorModeOf(s) === mode) return;
     // Single entry point for the mutually-exclusive coloring overlays. Delegates to
     // the per-overlay actions, which each turn the others off and handle their own
@@ -1178,6 +1199,31 @@ export const useUIStore = create<UIStore>((set) => ({
     // under the new origin's legend/marker while the new field is being fetched.
     set({ distanceGradientOrigin, distanceField: null }),
   setDistanceField: (distanceField) => set({ distanceField }),
+  // Gas & route-planning sub-mode (#38) — runtime-only, never persisted.
+  showGasPlan: false,
+  toggleGasPlan: () => {
+    const on = !useUIStore.getState().showGasPlan;
+    if (on) {
+      // Gas reachability paints the shots/stations layer, so it's mutually
+      // exclusive with all three color overlays — suppress them (runtime flags
+      // only, like toggleDistanceGradient) and clear the distance origin/field.
+      set({
+        showGasPlan: true,
+        showDepthGradient: false,
+        showDistanceGradient: false,
+        showIssueSeverity: false,
+        distanceGradientOrigin: null,
+        distanceField: null,
+      });
+    } else {
+      useUIStore.getState().exitGasPlan();
+    }
+  },
+  exitGasPlan: () => {
+    if (!useUIStore.getState().showGasPlan) return;
+    set({ showGasPlan: false });
+    useGasPlanStore.getState().reset();
+  },
   toggleDisplay: (key) => {
     trackAction(`toggle.${key}`);
     const state = useUIStore.getState();
