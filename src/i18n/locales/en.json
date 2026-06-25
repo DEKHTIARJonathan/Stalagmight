@@ -2063,7 +2063,8 @@
     "tanks": {
       "label": "Tanks",
       "bar": "bar",
-      "fillAria": "Fill pressure for {{tank}} (bar)",
+      "psi": "psi",
+      "fillAria": "Fill pressure for {{tank}}",
       "removeAria": "Remove {{tank}}",
       "addPlaceholder": "Add tank…",
       "conservative": "Conservative gas (call-it-an-80 derate)",

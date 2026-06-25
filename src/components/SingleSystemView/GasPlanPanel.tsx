@@ -3,7 +3,14 @@ import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { formatStationId } from '../../utils/formatters';
-import { formatPressure, formatVolume, rmvFromDisplay, rmvToDisplay } from '../../utils/formatGas';
+import {
+  formatPressure,
+  formatVolume,
+  pressureFromDisplay,
+  pressureToDisplay,
+  rmvFromDisplay,
+  rmvToDisplay,
+} from '../../utils/formatGas';
 import { TANK_PRESETS, cylinderFromPreset } from '../../utils/tankPresets';
 import type { CylRole, Cylinder, GasUnits, ReservePreset } from '../../types/ipc.generated';
 
@@ -171,18 +178,21 @@ export function GasPlanPanel() {
                 <span className="font-medium w-14 truncate" title={cyl.label ?? ''}>
                   {cyl.label ?? `${cyl.water_volume_l}L`}
                 </span>
-                <span className="text-xs opacity-60 w-12">
-                  {cyl.water_volume_l}L
+                <span className="text-xs opacity-60 w-16">
+                  {formatVolume(cyl.water_volume_l, units, units === 'imperial' ? 2 : 1)}
                 </span>
                 <PositiveNumberField
-                  value={cyl.fill_bar}
-                  onCommit={(n) => setFill(idx, n)}
-                  step={5}
+                  value={pressureToDisplay(cyl.fill_bar, units)}
+                  onCommit={(n) => setFill(idx, pressureFromDisplay(n, units))}
+                  step={units === 'imperial' ? 50 : 5}
+                  displayPrecision={0}
                   className="w-16 bg-transparent border border-border rounded px-1 py-0.5"
                   ariaLabel={t('gasPanel.tanks.fillAria', { tank: cyl.label ?? '' })}
                   testId="gas-cylinder-fill"
                 />
-                <span className="text-xs opacity-70">{t('gasPanel.tanks.bar')}</span>
+                <span className="text-xs opacity-70">
+                  {t(units === 'imperial' ? 'gasPanel.tanks.psi' : 'gasPanel.tanks.bar')}
+                </span>
                 <select
                   value={cyl.role}
                   onChange={(e) => setRole(idx, e.target.value as CylRole)}

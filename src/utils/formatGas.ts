@@ -88,3 +88,13 @@ export function rmvToDisplay(lPerMin: number, units: GasUnits): number {
 export function rmvFromDisplay(value: number, units: GasUnits): number {
   return units === 'imperial' ? value / CUFT_PER_LITRE : value;
 }
+
+/** Canonical pressure (bar) → the number shown in the selected unit (bar or psi). */
+export function pressureToDisplay(bar: number, units: GasUnits): number {
+  return units === 'imperial' ? bar * PSI_PER_BAR : bar;
+}
+
+/** A pressure typed in the selected unit (bar or psi) → canonical bar for the store. */
+export function pressureFromDisplay(value: number, units: GasUnits): number {
+  return units === 'imperial' ? value / PSI_PER_BAR : value;
+}
