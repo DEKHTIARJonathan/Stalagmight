@@ -191,7 +191,9 @@ impl AppState {
         // reconcile derived offsets, and reject (roll back) if applying the
         // collaborator's changes introduced critical corruption. apply_changeset
         // writes foreign TML geometry directly, so this is the first gate it sees.
-        if self.finalize_structural_edit(pre_had_critical) {
+        // A collaborator's changeset can REMOVE shots/sections and strand a
+        // section behind a closure, so it must run the sole-bridge conversion.
+        if self.finalize_structural_edit(pre_had_critical, true) {
             self.rollback_project(&before);
             tracing::error!(
                 purpose = "block corruption at the source",

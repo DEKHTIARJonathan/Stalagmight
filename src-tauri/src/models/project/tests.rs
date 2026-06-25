@@ -1638,6 +1638,105 @@ fn create_loop_closure_creates_correct_values() {
 }
 
 #[test]
+fn create_loop_closures_batch_matches_sequential() {
+    // The batch path must be byte-for-byte equivalent to calling
+    // create_loop_closure(.., Batch) for each pair in order — same created
+    // closures (ids, keys, metrics) and same per-pair Ok/Err outcomes.
+    fn build() -> (Project, Vec<(StationRef, StationRef)>) {
+        let mut p = Project::new("Batch".to_string(), None);
+        let a = p
+            .add_section(SectionData {
+                shots: vec![
+                    shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                    shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                ],
+                ..Default::default()
+            })
+            .id;
+        let b = p
+            .add_section(SectionData {
+                shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+        let c = p
+            .add_section(SectionData {
+                shots: vec![shot(180.0, 180.0, 8.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+        let d = p
+            .add_section(SectionData {
+                shots: vec![shot(270.0, 270.0, 3.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+        // Tree of merges connecting all four sections.
+        p.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+            .unwrap();
+        p.merge_stations(StationRef::new(a, 2), StationRef::new(c, 0))
+            .unwrap();
+        p.merge_stations(StationRef::new(b, 1), StationRef::new(d, 0))
+            .unwrap();
+        let pairs = vec![
+            (StationRef::new(a, 0), StationRef::new(c, 1)), // valid loop
+            (StationRef::new(a, 1), StationRef::new(b, 0)), // already merged → skip
+            (StationRef::new(a, 0), StationRef::new(c, 1)), // duplicate → skip
+            (StationRef::new(d, 1), StationRef::new(c, 1)), // valid (connected via merges)
+        ];
+        (p, pairs)
+    }
+
+    let (mut seq, pairs) = build();
+    // Clone so both runs share identical shot UUIDs (Section::new mints random
+    // ones), making the stored AfterShot(uuid) keys directly comparable.
+    let mut bat = seq.clone();
+    let seq_results: Vec<_> = pairs
+        .iter()
+        .map(|&(a, b)| seq.create_loop_closure(a, b, ClosureStrategy::Batch))
+        .collect();
+    let bat_results = bat.create_loop_closures_batch(&pairs);
+
+    assert_eq!(
+        seq.loop_closures.len(),
+        bat.loop_closures.len(),
+        "created-closure count differs (seq {} vs batch {})",
+        seq.loop_closures.len(),
+        bat.loop_closures.len()
+    );
+    for (s, t) in seq.loop_closures.iter().zip(&bat.loop_closures) {
+        assert_eq!(s.id, t.id, "closure id differs");
+        assert_eq!(s.station_a, t.station_a, "station_a key differs");
+        assert_eq!(s.station_b, t.station_b, "station_b key differs");
+        assert!(
+            (s.path_length - t.path_length).abs() < 1e-9,
+            "path_length differs: {} vs {}",
+            s.path_length,
+            t.path_length
+        );
+        assert!(
+            (s.misclosure_distance - t.misclosure_distance).abs() < 1e-9,
+            "misclosure differs"
+        );
+        assert!(
+            (s.error_percentage - t.error_percentage).abs() < 1e-9,
+            "error_percentage differs"
+        );
+        assert_eq!(s.is_aligned, t.is_aligned);
+    }
+    assert_eq!(seq_results.len(), bat_results.len());
+    for (s, t) in seq_results.iter().zip(&bat_results) {
+        assert_eq!(
+            s.is_ok(),
+            t.is_ok(),
+            "per-pair outcome differs: seq {s:?} vs batch {t:?}"
+        );
+    }
+    // Sanity: exactly the two valid pairs were created.
+    assert_eq!(bat.loop_closures.len(), 2);
+}
+
+#[test]
 fn create_loop_closure_proportional_is_deferred() {
     let mut project = Project::new("ClosureDist".to_string(), None);
 

@@ -453,6 +453,7 @@ impl AppState {
                 }
                 restored.rebuild_section_index();
                 restored.rebuild_merge_adjacency();
+                restored.rebuild_shot_uuid_index();
                 // A snapshot blob persisted by a PRE-ANCHOR build can carry
                 // transitional positional `Index` cross-reference anchors (undo/redo
                 // history is persisted to SQLite and reloaded across sessions, and the
