@@ -377,19 +377,30 @@ first-class constraint, not a footnote.
 
 ## 7. Architecture
 
-### 7.1 Backend (Rust) — new `src-tauri/src/core/gas/`
-Registered in `core/mod.rs` (pure domain math over a graph snapshot — belongs by the other
-topology compute, not in `models/`). Files: `mod.rs` (public `plan_gas_reach` /
-`plan_to_lead`), `model.rs` (TS-deriving model + IPC structs), `physics.rs` (pure
-`ata`/`gas_rate`/`edge_gas` — golden-tested), `engine.rs` (gas-Dijkstra → `GasReachField`,
-CCR exit integral, OC stage/thirds, team reduction), `tests.rs`.
+### 7.1 Backend (Rust) — a new `models/project/gas/` submodule (NOT `core/gas/`)
+**Decision (2026-06-24, Nico):** the engine lives as a **sibling submodule of the topology code**
+— `src-tauri/src/models/project/gas.rs` (or a `gas/` dir), declared `mod gas;` in `project.rs`'s
+child-`mod` block (`:20-40`). The #157 refactor moved all topology compute *into* `models/project/`
+and made `build_survey_graph`/`dijkstra`/`zero_datum_roots` **`pub(super)`** — so a `core/gas/`
+module **could not call them** without re-widening the encapsulation the refactor just added. As a
+sibling it reaches them via `self.build_survey_graph(…)` / `Self::dijkstra(…)`, **exactly as
+`distance.rs` already does** — zero visibility changes. Only the thin IPC layer stays outside, in
+`commands/gas.rs`. Files (inside `models/project/gas/`): `mod.rs` (the `impl Project` driver —
+`plan_gas_reach` / `plan_to_lead` returning the IPC structs), `physics.rs` (pure
+`ata`/`gas_rate`/`edge_gas`, no graph — golden-tested), `model.rs` (TS-deriving model + IPC
+structs), `tests.rs`. *(Supersedes the earlier `core/gas/` plan — structurally impossible
+post-refactor: `core/mod.rs` holds loading/state/IO, not topology compute.)*
 
-- **Factor the weight out of `build_survey_graph`.** Today the weight choice is baked into one
-  `match coords` (`project.rs:7380`). Generalize to a closure —
-  `build_survey_graph_weighted<F>(…, weight: F)` — and make the current `build_survey_graph`
-  a thin wrapper passing the existing length/straight-line closures, so the **four existing
-  distance callers are behavior-preserving**. The gas engine passes a closure capturing
-  `(rmv, speed, &coords)`.
+- **Factor the weight out of `build_survey_graph`.** The weight choice is one `match coords` at
+  `pathfinding.rs:585` (`Some` ⇒ straight-line between coords; `None` ⇒ `shot.length`).
+  Generalize to a closure — `build_survey_graph_weighted<F>(…, weight: F)` (stays `pub(super)`) —
+  and make `build_survey_graph` a thin wrapper, so the **four existing callers**
+  (`compute_distances_from`, `compute_penetration_distances`, `distance_field_from`, and
+  `along_line_between`, all in `distance.rs`) are behavior-preserving. ⚠ **Preserve the
+  section/shot iteration order** — `along_line_between` (`distance.rs:239-254`) builds a parallel
+  shot-edge map keyed on that exact edge-emission order; reordering breaks it. The gas engine
+  passes a closure capturing `(rmv, speed, &coords)` computing per-edge gas; merges/closures stay
+  0-cost (`pathfinding.rs:597-621`).
 - **`GasReachField`** (mirror `DistanceField`, JSON-safe `Option` for `∞`):
   `{ station_refs, gas_to_reach: Vec<Option<f64>>, reachable: Vec<bool>,
   turn_frontier: Vec<StationRef>, max_reachable_gas, budget_litres }`.
@@ -398,18 +409,20 @@ CCR exit integral, OC stage/thirds, team reduction), `tests.rs`.
   with a **frontend debounce** (150–250 ms) on the param sliders. Add a single-slot
   `AppState` memo (key = `modified_at` + **origin** + **gas-params hash**) only if a large
   survey stutters — note the key needs the params hash, unlike distance.
-- **IPC** (`commands/gas.rs`, modeled on `get_station_distances_from`, `commands/project.rs:128`;
+- **IPC** (`commands/gas.rs`, modeled on `get_station_distances_from`, `commands/project.rs:129`;
   `spawn_blocking`, one reconciled snapshot): `compute_gas_reach_field(origin?, gas_config,
   team, mode)` and `compute_gas_plan_to_lead(origin?, lead, …)`. Delegate to `AppState`
-  methods that call `compute_station_coordinates()` (measured) — **never**
-  `get_adjusted_stations()`. Register in `tauri::generate_handler!` (`lib.rs:1242`).
-- **ts-rs**: all IPC structs `#[derive(TS)]` → regen via `pnpm gen:ipc-types`; never hand-edit
-  `src/types/ipc/`.
-- **Telemetry** (append-only/frozen registry): add `command.compute_gas_reach_field` /
-  `command.compute_gas_plan_to_lead` to `telemetry/registry.rs` + mirror in
-  `src/utils/telemetry.ts` (read-only query commands → **not** in `UNDOABLE_COMMANDS`). The
-  `registry_covers_all_commands` test (`registry.rs:571`) is CI-gated under `--features
-  telemetry` and will fail if missing.
+  (`core/state/app_state.rs`) methods that call `compute_station_coordinates()`
+  (`coordinates.rs:266`, measured) — **never** `compute_adjusted_station_coordinates()`
+  (`coordinates.rs:354`). Register in `tauri::generate_handler!` (`lib.rs:1225`).
+- **ts-rs**: all IPC structs `#[derive(TS)]`. Regen is now a **cargo example** — `pnpm gen:ipc-types`
+  runs `cargo run --example gen_ipc_types --features ipc-typegen` — and a new struct needs explicit
+  **import + export wiring** in that example, not just the derive. Never hand-edit `src/types/ipc/`.
+- **Telemetry** (append-only/frozen registry): the two **read-only query** commands auto-emit via the
+  `invokeIpc` wrapper — just add `command.compute_gas_reach_field` / `command.compute_gas_plan_to_lead`
+  to `telemetry/registry.rs` **and bump the exact `EVENT_NAMES.len()` count** (read-only ⇒ NOT in
+  `UNDOABLE_COMMANDS`). `registry_covers_all_commands` (`registry.rs:583`) is CI-gated under
+  `--features telemetry` and fails if missing.
 - **Lints/format are CI gates:** no `unwrap/expect/panic` in prod gas code; per-test-module
   `#[expect]` for the math tests; `cargo fmt` + clippy before pushing (`docs/linting.md`).
 
