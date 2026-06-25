@@ -6,10 +6,12 @@
 //! box without gnome-keyring/KWallet), the keychain calls fail and the token
 //! falls back to an in-memory, session-only slot.
 //!
-//! Deferred to #188 (the dedicated auth issue): the opt-in plaintext escape
-//! hatch, the `token_fallback` preference, the full endpoint-normalization
-//! edge cases, and the 401 auto-drop policy. This is the spike's minimum that
-//! still satisfies "token never in IPC".
+//! Deferred to #188 (the dedicated auth issue): startup re-hydration so a
+//! keychain-stored token actually survives a restart (today persistence is
+//! write-only — see [`TokenStore::load`]), the opt-in plaintext escape hatch,
+//! the `token_fallback` preference, the full endpoint-normalization edge cases,
+//! and the 401 auto-drop policy. This is the spike's minimum that still
+//! satisfies "token never in IPC".
 
 const KEYRING_SERVICE: &str = "stalagmight";
 
@@ -48,7 +50,7 @@ fn keychain_delete(endpoint: &str, email: &str) -> Result<(), keyring::Error> {
 /// an in-memory session-only fallback. The active token is never returned to the
 /// webview; only [`Self::keychain_backed`] is surfaced (so the UI can warn that a
 /// fallback token won't survive a restart).
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct TokenStore {
     /// The live token for this session: cached here after [`Self::store`] (so
     /// authed calls don't re-hit the keychain on every request) and the sole
@@ -58,6 +60,18 @@ pub(crate) struct TokenStore {
     /// `in_memory`). Surfaced to the UI so it can warn when a token won't survive
     /// a restart.
     keychain_backed: bool,
+}
+
+impl std::fmt::Debug for TokenStore {
+    /// Hand-written so the live token is never formatted: a stray
+    /// `tracing::debug!(?session, …)` must not write the secret to logs (the
+    /// token-never-in-logs invariant). Prints presence + `keychain_backed` only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenStore")
+            .field("token", &self.in_memory.as_ref().map(|_| "<redacted>"))
+            .field("keychain_backed", &self.keychain_backed)
+            .finish()
+    }
 }
 
 impl TokenStore {
@@ -93,11 +107,13 @@ impl TokenStore {
         self.keychain_backed
     }
 
-    /// Load the active token, if any. Serves the in-memory copy first (cached at
-    /// [`Self::store`] time), falling back to the keychain only on a cold restore
-    /// where a keychain-backed token has not been read into memory yet. A keychain
-    /// read error yields `None` (treated by callers as "not authenticated" →
-    /// re-login).
+    /// Load the active token, if any. Within a session this serves the in-memory
+    /// copy set by [`Self::store`]. The keychain branch is a forward-looking
+    /// fallback for a cold restore (seed `keychain_backed` + read the persisted
+    /// token on startup) — that startup re-hydration is **not wired yet** (#188),
+    /// so today a keychain-stored token is written but never read back across
+    /// restarts. A keychain read error yields `None` (callers treat it as "not
+    /// authenticated" → re-login).
     pub(crate) fn load(&self, endpoint: &str, email: &str) -> Option<String> {
         if let Some(token) = &self.in_memory {
             return Some(token.clone());

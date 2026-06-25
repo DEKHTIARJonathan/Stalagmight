@@ -83,11 +83,14 @@ trash = "5.2.6"
 
 # SpeleoDB auth token at rest (#183, full tiering in #188). Per-OS native secret
 # store. On Linux, Secret Service (gnome-keyring / KWallet) is persistent across
-# sessions — unlike the session-scoped `linux-native` keyutils — and `crypto-rust`
-# avoids a system OpenSSL dependency. Headless CI has no secret service, so the
-# client falls back to an in-memory session token (see speleodb::auth).
+# sessions — unlike the session-scoped `linux-native` keyutils. `crypto-rust`
+# avoids a system OpenSSL dependency, and `vendored` statically builds libdbus
+# (keyring → dbus-secret-service → dbus → libdbus-sys) so there is no
+# `libdbus-1-dev` system build dependency to install on a clean box or in CI.
+# Headless CI has no secret service at runtime, so the client falls back to an
+# in-memory session token (see speleodb::auth).
 [target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
+keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["apple-native"] }

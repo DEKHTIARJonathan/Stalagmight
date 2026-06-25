@@ -36,9 +36,11 @@ export default function SpeleoDbSpikeDialog() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refreshProjects = async () => {
+  const refreshProjects = async (isCancelled: () => boolean = () => false) => {
     const list = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
-    setProjects(list);
+    // Skip the state write if the dialog was torn down while this was in flight
+    // (Escape/backdrop close aren't gated by `busy`).
+    if (!isCancelled()) setProjects(list);
   };
 
   // The backend token lives in AppState for the whole app run, but this dialog's
@@ -53,7 +55,7 @@ export default function SpeleoDbSpikeDialog() {
         if (cancelled || !status.logged_in) return;
         setUserEmail(status.user_email ?? '');
         setKeychainBacked(status.keychain_backed);
-        await refreshProjects();
+        await refreshProjects(() => cancelled);
         if (!cancelled) setPhase('list');
       } catch {
         // No session (or it failed) → stay on the login form.
@@ -116,6 +118,20 @@ export default function SpeleoDbSpikeDialog() {
     // is no setState-after-unmount path here.
     closeDialog();
     await loadProject(localPath);
+  };
+
+  const handleRefresh = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await refreshProjects();
+    } catch (e) {
+      // A server-side-revoked token first surfaces here (status isn't re-validated
+      // against the server), so a rejected list must be shown, not swallowed.
+      setError(getErrorMessage(e, 'Could not refresh projects'));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleLogout = async () => {
@@ -222,7 +238,7 @@ export default function SpeleoDbSpikeDialog() {
               <Button
                 variant="primary"
                 onClick={handleLogin}
-                disabled={busy || (!useToken && !email.trim())}
+                disabled={busy || (useToken ? !token.trim() : !email.trim())}
                 data-testid="speleodb-login-button"
               >
                 {busy ? 'Connecting…' : 'Log in'}
@@ -268,7 +284,7 @@ export default function SpeleoDbSpikeDialog() {
             )}
 
             <div className="flex justify-end gap-2 pt-4 border-t border-border">
-              <Button onClick={() => void refreshProjects()} disabled={busy}>
+              <Button onClick={() => void handleRefresh()} disabled={busy}>
                 Refresh
               </Button>
               <Button onClick={closeDialog} disabled={busy}>

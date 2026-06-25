@@ -15,6 +15,11 @@ use std::path::Path;
 
 use super::SpeleoDbError;
 
+/// Hard ceiling on a single extracted dump entry. The `.stalx` is a SQLite DB;
+/// a few hundred MB is far past any real cave project but small enough that a
+/// lying ZIP header (a zip bomb) can't exhaust memory before we reject it.
+const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
+
 /// What a downloaded project dump contains, from the caller's point of view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DumpClassification {
@@ -99,19 +104,50 @@ impl<'a> Dump<'a> {
         entry_path: &str,
         dest: &Path,
     ) -> Result<(), SpeleoDbError> {
-        let mut entry = self.archive.by_name(entry_path).map_err(|e| {
+        self.extract_entry_capped(entry_path, dest, MAX_ENTRY_BYTES)
+    }
+
+    /// Extraction with an explicit byte ceiling (parameterized for testing). The
+    /// entry's declared size comes from the ZIP central directory — server- /
+    /// attacker-controlled — so it is rejected up front when it exceeds `max_bytes`
+    /// (a lying-high header that would otherwise trigger a huge up-front
+    /// allocation), and the read is bounded by `take(max_bytes + 1)` so a lying-low
+    /// header over a deflate stream (a zip bomb: tiny compressed, huge inflated)
+    /// can't exhaust memory either.
+    fn extract_entry_capped(
+        &mut self,
+        entry_path: &str,
+        dest: &Path,
+        max_bytes: u64,
+    ) -> Result<(), SpeleoDbError> {
+        let entry = self.archive.by_name(entry_path).map_err(|e| {
             SpeleoDbError::Parse(format!("entry `{entry_path}` not found in dump: {e}"))
         })?;
+
+        let declared = entry.size();
+        if declared > max_bytes {
+            return Err(SpeleoDbError::Parse(format!(
+                "dump entry `{entry_path}` declares {declared} bytes, over the {max_bytes}-byte limit"
+            )));
+        }
 
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 SpeleoDbError::Io(format!("could not create {}: {e}", parent.display()))
             })?;
         }
-        let mut buf = Vec::with_capacity(usize::try_from(entry.size()).unwrap_or(0));
+        // `declared <= max_bytes`, so the pre-allocation is bounded.
+        let limit = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+        let mut buf = Vec::with_capacity(usize::try_from(declared).unwrap_or(0));
         entry
+            .take(max_bytes + 1)
             .read_to_end(&mut buf)
             .map_err(|e| SpeleoDbError::Io(format!("could not read `{entry_path}`: {e}")))?;
+        if buf.len() > limit {
+            return Err(SpeleoDbError::Parse(format!(
+                "dump entry `{entry_path}` exceeded the {max_bytes}-byte limit while reading"
+            )));
+        }
         std::fs::write(dest, &buf)
             .map_err(|e| SpeleoDbError::Io(format!("could not write {}: {e}", dest.display())))?;
         Ok(())
@@ -258,5 +294,26 @@ mod tests {
         dump.extract_entry_to("misc/project.stalx", &dest)
             .expect("extract after listing");
         assert_eq!(std::fs::read(&dest).expect("readable"), b"PAYLOAD");
+    }
+
+    #[test]
+    fn extract_entry_rejects_oversized_entry() {
+        // An entry whose declared size exceeds the cap is rejected before it can
+        // allocate/read — guarding against a zip bomb from a hostile server.
+        let zip = make_zip(&[("misc/project.stalx", b"0123456789")]); // 10 bytes
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("out.stalx");
+        let mut dump = Dump::open(&zip).expect("valid zip opens");
+        let err = dump
+            .extract_entry_capped("misc/project.stalx", &dest, 4)
+            .expect_err("oversized entry must be rejected");
+        assert!(
+            matches!(err, SpeleoDbError::Parse(_)),
+            "oversized entry should map to Parse, got {err:?}"
+        );
+        assert!(
+            !dest.exists(),
+            "nothing should be written when over the cap"
+        );
     }
 }
