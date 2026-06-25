@@ -1653,8 +1653,13 @@ fn parse_vector_line(
         }
     }
 
-    // Apply the `IncD=` distance correction only when a distance was given.
-    let length_m = length_m.map(|d| d + units.incd).unwrap_or(0.0);
+    // Apply the `IncD=` distance correction only when a NON-ZERO distance was
+    // given — genuine Walls guards this as `if (u->incD != 0.0 && d != 0.0)`
+    // (`wall-srv.cpp`). Adding IncD to an exact-`0` leg would turn a deliberate
+    // coincident-station tie (`A B 0 …`) into a spurious IncD-long shot.
+    let length_m = length_m
+        .map(|d| if d != 0.0 { d + units.incd } else { 0.0 })
+        .unwrap_or(0.0);
 
     // Combine foresight/backsight azimuth into two forward readings.
     let (azimuth_in, azimuth_out) = combine_azimuth(&az, units);
@@ -1674,7 +1679,7 @@ fn parse_vector_line(
 
     // A floated/`(?)` variance is a network-adjustment hint on a REAL measured
     // leg — it does not make the shot a splay, so it must not be dropped by the
-    // splay filter. Only anonymous (`-`/`--`/`---`) wall endpoints are splays.
+    // splay filter. Only anonymous (`-`/`--`) wall endpoints are splays.
     let is_reference = from_anon || to_anon;
 
     // Pure station-equate (no distance, no depth, no bearing) — skip. A
@@ -1737,13 +1742,25 @@ struct ExtractedSpans {
     lrud: Option<String>,
 }
 
+/// True when `close` occurs at or after `start` in `chars` AND that closer is at
+/// end-of-body or immediately followed by whitespace — i.e. a *properly
+/// terminated* span. Returns the closer's index. Genuine Walls only treats a
+/// token-initial `<`/`*` as an LRUD when the matching `>`/`*` is followed by
+/// whitespace or end-of-line (`wall-srv.cpp`: `!pNote[1] || isspace(pNote[1])`);
+/// otherwise the delimiter is part of a station name.
+fn find_span_end(chars: &[char], start: usize, close: char) -> Option<usize> {
+    (start..chars.len())
+        .find(|&j| chars[j] == close && chars.get(j + 1).is_none_or(|c| c.is_whitespace()))
+}
+
 /// Walk a vector line body, pulling out `<...>`/`*...*` (LRUD) and `(...)`
 /// (variance) delimited spans, returning the remaining whitespace tokens.
 fn extract_spans(body: &str) -> ExtractedSpans {
+    let chars: Vec<char> = body.chars().collect();
     let mut tokens: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut lrud: Option<String> = None;
-    let mut chars = body.chars().peekable();
+    let mut i = 0;
 
     let flush = |current: &mut String, tokens: &mut Vec<String>| {
         if !current.is_empty() {
@@ -1751,7 +1768,8 @@ fn extract_spans(body: &str) -> ExtractedSpans {
         }
     };
 
-    while let Some(c) = chars.next() {
+    while i < chars.len() {
+        let c = chars[i];
         match c {
             c if c.is_whitespace() => flush(&mut current, &mut tokens),
             '#' => {
@@ -1761,46 +1779,36 @@ fn extract_spans(body: &str) -> ExtractedSpans {
                 break;
             }
             // LRUD/variance delimiters open a span ONLY at a token boundary
-            // (start of line or right after whitespace, i.e. `current` empty).
-            // Walls lays a shot out as whitespace-separated fields
-            // `from to <measures…> [lrud] [(var)]`, so a delimiter glued inside
-            // a token is a literal name character, NOT a span start. Station
-            // names legitimately contain these symbols — e.g. `W-*/2/46` uses a
-            // literal `*` — and without this guard `W-*/2/46  W-*/2/50` is torn
-            // into `from="W-"`, a bogus `*…*` LRUD span, and `to="/2/50"`,
-            // collapsing every such station onto a phantom `W-` hub.
-            '<' if current.is_empty() => {
-                let mut span = String::new();
-                for d in chars.by_ref() {
-                    if d == '>' {
-                        break;
-                    }
-                    span.push(d);
+            // (`current` empty) AND only when properly terminated (closer at
+            // end-of-body or before whitespace). Walls lays a shot out as
+            // whitespace-separated fields `from to <measures…> [lrud] [(var)]`,
+            // so a delimiter glued inside a token — e.g. the literal `*` in
+            // `W-*/2/46` — or an UNTERMINATED `<`/`*` — e.g. a station named
+            // `*8` — is a literal name character, not a span. Without this a
+            // mid-name `*` tore `W-*/2/46 W-*/2/50` into a phantom `W-` hub, and
+            // an unterminated `*8` swallowed the rest of the line as a bogus LRUD.
+            '<' | '*' if current.is_empty() => {
+                let close = if c == '<' { '>' } else { '*' };
+                if let Some(end) = find_span_end(&chars, i + 1, close) {
+                    lrud = Some(chars[i + 1..end].iter().collect());
+                    i = end + 1;
+                    continue;
                 }
-                lrud = Some(span);
-            }
-            '*' if current.is_empty() => {
-                let mut span = String::new();
-                for d in chars.by_ref() {
-                    if d == '*' {
-                        break;
-                    }
-                    span.push(d);
-                }
-                lrud = Some(span);
+                current.push(c); // unterminated → literal name character
             }
             '(' if current.is_empty() => {
-                // Variance override `(...)` — consume and discard. We don't
-                // model per-shot variance, and a floated `(?)` variance does
-                // NOT turn a real measured leg into a splay.
-                for d in chars.by_ref() {
-                    if d == ')' {
-                        break;
-                    }
-                }
+                // Variance override `(...)` — consume through the first `)` (or
+                // to end of body if unterminated) and discard. We don't model
+                // per-shot variance, and a floated `(?)` does NOT turn a real
+                // measured leg into a splay.
+                i = (i + 1..chars.len())
+                    .find(|&j| chars[j] == ')')
+                    .map_or(chars.len(), |e| e + 1);
+                continue;
             }
             other => current.push(other),
         }
+        i += 1;
     }
     flush(&mut current, &mut tokens);
 
@@ -2005,16 +2013,17 @@ fn is_omitted(tok: &str) -> bool {
     tok.len() >= 2 && tok.chars().all(|c| c == '-')
 }
 
-/// A from/to station of one-or-more dashes (`-`, `--`, `---`, …) is an
-/// anonymous wall/splay endpoint, not a real named station — matching
-/// Walls/dewalls' `optionalStationRx = "-+"` (`WallsSurveyParser::fromStation`
-/// / `toStation` clear the station when it exact-matches `-+`). Each anonymous
-/// endpoint is later given a globally-unique synthetic name so unrelated splays
-/// never collapse onto a single phantom `--` node. Only single `-` was matched
-/// before, so `U3 -- 7.8 098.7` wrongly created a real station literally named
-/// `--` and tied every such leg together.
+/// A from/to station of exactly one or two dashes (`-` or `--`) is an anonymous
+/// wall/splay endpoint, not a real named station — matching genuine Walls'
+/// `name_isnull` (`wall-srv.cpp`: `*p=='-'` and the next char is a space, or
+/// `--` then a space). Three-or-more dashes (`---`, `----`) are NOT null in
+/// Walls: they are stored as a real station name, so we must keep them too.
+/// (dewalls' `optionalStationRx = "-+"` treats any dash run as anonymous, which
+/// is the reverse-engineering being broader than McKenzie's source.) Each
+/// anonymous endpoint is later given a globally-unique synthetic name so
+/// unrelated splays never collapse onto a single phantom `--` node.
 fn is_anonymous(tok: &str) -> bool {
-    !tok.is_empty() && tok.bytes().all(|b| b == b'-')
+    matches!(tok, "-" | "--")
 }
 
 fn unquote(s: &str) -> &str {
@@ -2338,15 +2347,17 @@ fn parse_walls_date(s: &str) -> Option<NaiveDate> {
         }
         return None;
     }
-    // 2-digit year. chrono's `%y` pivots at 70 (00–69 → 2000–2069), which would
-    // date a 1960s legacy survey ~100 years in the FUTURE (e.g. `64` → 2064) and
-    // then push it outside the IGRF range, silently zeroing auto-declination.
-    // Cave surveys are never from the 2030s–2060s, so roll any resolved year past
-    // 2030 back a century (effective pivot at 30: 00–30 → 2000s, 31–99 →
-    // 1931–1999).
+    // 2-digit year. Genuine Walls maps EVERY 2-digit year into 1900–1999 with no
+    // pivot — `if (y < 100) y += 1900;` in `wall-srv.cpp` `ParseDate`. We mirror
+    // that exactly so the date (and any IGRF auto-declination Walls derived from
+    // it) reproduces Walls' own interpretation. chrono's `%y` pivots 00–69 →
+    // 2000s, so roll any 2000s result back a century. (This also keeps a 1960s
+    // legacy survey, e.g. `64` → 1964, inside the IGRF range. Trade-off: a survey
+    // actually done in 2025 but written `…-25` reads as 1925 — exactly as Walls
+    // reads it; Walls itself warns that `yyyy-mm-dd` is preferred.)
     for fmt in &["%m-%d-%y", "%m/%d/%y"] {
         if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
-            return Some(if d.year() > 2030 {
+            return Some(if d.year() >= 2000 {
                 d.with_year(d.year() - 100).unwrap_or(d)
             } else {
                 d
@@ -3842,10 +3853,12 @@ mod tests {
         // 098.7`. Previously only a single `-` was anonymous, so `--` became a
         // real station literally named `--`, and every `... -- ...` leg merged
         // onto one phantom node.
-        for dashes in ["--", "---", "----"] {
-            assert!(is_anonymous(dashes), "{dashes} must be anonymous");
-        }
+        // Genuine Walls `name_isnull` only treats `-` and `--` as null/anonymous;
+        // `---`+ is a REAL station name and must NOT be flagged anonymous.
         assert!(is_anonymous("-"));
+        assert!(is_anonymous("--"));
+        assert!(!is_anonymous("---"), "3+ dashes is a real station in Walls");
+        assert!(!is_anonymous("----"));
         assert!(!is_anonymous("U3"));
         assert!(!is_anonymous(""));
 
@@ -3920,6 +3933,41 @@ mod tests {
         assert_eq!(v.right, Some(2.0));
         assert_eq!(v.up, Some(3.0));
         assert_eq!(v.down, Some(4.0));
+    }
+
+    #[test]
+    fn unterminated_star_is_a_station_name_not_lrud() {
+        // Genuine Walls only treats a token-initial `*` as an LRUD when a closing
+        // `*` is followed by whitespace/EOL (wall-srv.cpp:1173). An unterminated
+        // `*8` is a real to-station named `*8` (e.g. `U23 *8 5 15`), not an LRUD
+        // that swallows the measurement columns.
+        let srv = "#UNITS meters order=DAV\nU23 *8 5 15 0\n";
+        let v = &parse_srv(srv).vectors[0];
+        assert_eq!(v.from, "U23");
+        assert_eq!(v.to, "*8", "unterminated `*8` is the to-station name");
+        assert!((v.length_m - 5.0).abs() < 1e-9, "distance column read");
+        // A REAL terminated LRUD still works (closer before whitespace).
+        let v2 =
+            &parse_srv("#UNITS meters order=DAV LRUD=F:LRUD\nA B 10 90 0 *1 2 3 4* x\n").vectors[0];
+        assert_eq!(v2.left, Some(1.0));
+        assert_eq!(v2.down, Some(4.0));
+    }
+
+    #[test]
+    fn triple_dash_is_a_real_station_not_anonymous() {
+        // Genuine Walls `name_isnull` flags only `-`/`--`; `---` is a real station
+        // name. Two legs ending at `---` must therefore tie to the SAME station
+        // (a real shared point), not become independent splays.
+        let srv = "#UNITS meters order=DAV\nA --- 10 90 0\nB --- 8 180 0\n";
+        let survey = parse_srv(srv);
+        assert_eq!(survey.vectors.len(), 2);
+        assert!(
+            survey
+                .vectors
+                .iter()
+                .all(|v| v.to == "---" && !v.to_anon && !v.is_reference),
+            "`---` is a real, non-anonymous station"
+        );
     }
 
     #[test]
@@ -5138,10 +5186,11 @@ mod tests {
     #[test]
     fn two_digit_year_dates_parse_to_full_year() {
         // chrono's `%Y` must NOT greedily eat a 2-digit leading field: `05/07/17`
-        // is May 7 2017, not year 0005.
+        // is year 17, not year 0005. Genuine Walls maps every 2-digit year into
+        // 1900-1999 (`y += 1900`), so `17` => 1917 (NOT 2017).
         assert_eq!(
             parse_walls_date("05/07/17"),
-            NaiveDate::from_ymd_opt(2017, 5, 7)
+            NaiveDate::from_ymd_opt(1917, 5, 7)
         );
         assert_eq!(
             parse_walls_date("5-7-99"),
@@ -5474,15 +5523,22 @@ mod tests {
     }
 
     #[test]
-    fn two_digit_year_does_not_resolve_to_future() {
-        assert_eq!(
-            parse_walls_date("03-15-64"),
-            NaiveDate::from_ymd_opt(1964, 3, 15)
-        );
-        assert_eq!(
-            parse_walls_date("05/07/17"),
-            NaiveDate::from_ymd_opt(2017, 5, 7)
-        );
+    fn two_digit_year_maps_to_1900s_like_walls() {
+        // Genuine Walls (`wall-srv.cpp` ParseDate) does `if (y < 100) y += 1900`,
+        // so EVERY 2-digit year lands in 1900-1999 — never the 2000s, never the
+        // future. `64` => 1964, `17` => 1917, `00` => 1900, `30` => 1930.
+        for (s, y) in [
+            ("03-15-64", 1964),
+            ("05/07/17", 1917),
+            ("1-1-00", 1900),
+            ("6-6-30", 1930),
+        ] {
+            assert_eq!(
+                parse_walls_date(s).map(|d| d.year()),
+                Some(y),
+                "{s} should map to {y}"
+            );
+        }
     }
 
     #[test]
