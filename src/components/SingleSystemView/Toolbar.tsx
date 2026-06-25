@@ -303,7 +303,11 @@ export default function Toolbar({
                 DisplayMenu — it's a sub-mode (swaps the detail panel + map
                 overlay), not just a color overlay. */}
             <IconButton
-              icon={<TargetIcon size={18} />}
+              icon={
+                <span style={{ color: 'var(--cc-gas-accent, #ff6f61)' }}>
+                  <TargetIcon size={18} />
+                </span>
+              }
               active={showGasPlan}
               tooltip={t('toolbar.gasPlan.tooltip')}
               onClick={() => { setSource('toolbar'); toggleGasPlan(); }}
