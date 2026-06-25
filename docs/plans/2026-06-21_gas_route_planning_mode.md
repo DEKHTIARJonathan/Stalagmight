@@ -209,11 +209,12 @@ of the exit path (lead → exit):
 *(Reserve shrinks toward the exit — 100 → 70 bar of back gas held — because there's less cave
 left to swim out; the `−15` is a fixed buffer on each. Corrected 2026-06-22.)*
 
-**⚠ Calibration caveat (2026-06-24 audit):** `100/70/15` are raw **bar** and `½` is a
-per-cylinder-pressure thirds-equivalent — meaningful only against a **specific back-gas rig**. The
-volume-canonical engine must restate them as `reserve_volume(region) = held_pressure(region) ×
-Σ(back-gas water_volume)`, with `100/70/−15` a **named, editable `ReserveProfile`** (not literals
-baked in). See §10 for the open calibration question.
+**✅ Calibration resolved (Nico, 2026-06-24):** "back gas" is a **matching twin set** — manifolded
+twins *or* unmanifolded doubles / sidemount (the two cylinders match and are worn hard-to-doff;
+assume kept on the diver throughout, bar tiny restrictions) — and is **planned as ONE volume**. So
+`current_backgas` is the **common per-cylinder gauge pressure** (both equal), and the engine restates
+the bar constants in volume as `reserve_volume(region) = held_pressure(region) × Σ(twin water_volumes)`.
+`100/70/−15` live in a **named, editable `ReserveProfile`** (not literals baked in).
 
 **Pressure vs volume (Nico):** the engine computes in **volume** (liters — that's what
 RMV×ATA consumes), but **turn points, reserves, and recalc outputs read as PRESSURE per
@@ -234,11 +235,12 @@ a later phase**.
 pressure); the recalc regions/formulas are as above (corrected 2026-06-22 — recalc needs a
 stage in hand, so the deepest region has none).
 
-**⚠ Open — NOT minor (2026-06-24 audit):** confirm "turn at 1/N" = turn when 1/N of usable is
-*consumed* (vs *reserved*). This is **load-bearing — it flips the sign of every `usable =` recalc
-formula above.** The deepest region's "⅙ back gas held" reads as the sixths *reserve* (consistent
-with "consume up to 5/6"), but the `((backgas−100)/2)` regions must be reconciled with that
-reading. See §10.
+**✅ Resolved (Nico, 2026-06-24): "turn at 1/N" = turn when 1/N of usable is *consumed*.** For
+All-thirds (N=3): consume ⅓ on the way in, **turn**, hold **⅔** for the exit (planned swim-out +
+emergency reserve). **OC only — CCR uses the dil-out/bailout model (§5.5), not this fractional
+rule.** Because survey-in is far costlier per metre than the fast swim-out (§5.2), the held ⅔ is
+*more* than the computed `gas_out` actually needs — that surplus is exactly the opt-in
+push-headroom (§5.2/§6).
 
 ### 5.2 Surveying changes the gas math — asymmetric speed + a less-opinionated reserve (Nico)
 
@@ -285,6 +287,13 @@ LP106, … — and there **real dissimilar-tank team matching is needed.** The r
 an optimization: **the lowest usable-volume diver gates the team** (everyone turns on the
 smallest member). So this lives in the **Team feature (Phase 5)**, computed from each diver's
 *actual* tank volumes — see §5 `Team` / §8.
+
+**Back gas = one planning volume (Nico).** "Back gas" means a **matching twin set** — manifolded
+twins *or* unmanifolded doubles / **sidemount** (sidemount is just unmanifolded twins). By
+convention the two cylinders are identical and worn hard-to-remove, and stay on the diver except at
+very tight restrictions — so for planning they're **one combined volume** at a **common gauge
+pressure** (`volume = pressure × Σ water_volume`), never two independent budgets. ⏳ **Tank-capacity
+table incoming** (Nico will supply) → populate the presets below from it.
 
 Two common tanks — ship as presets:
 
