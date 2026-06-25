@@ -4,12 +4,15 @@
 //! field downstream. The persisted/per-plan `GasConfig` (units, reserve preset, speeds)
 //! lives in `crate::config` — these are the per-dive, ephemeral parts.
 
-// Dead in the lib build (no caller until the Phase 1 engine + commands/gas.rs); live under
-// `cfg(test)` where the derives + tests read every field, so the expectation is scoped to the
-// non-test build (matches the `models/shot.rs` idiom; `#[allow]` is denied crate-wide).
+// The types/fields are `pub` (re-exported to `models` for IPC + ts-rs), so they are NOT dead;
+// but the guarding constructors (`new` / `from_sac` / `gas_volume_l`) are exercised only by
+// tests until the Phase-1.3 command uses them for input validation — dead in the lib build
+// until then, so the expectation is scoped to the non-test build (matches `models/shot.rs`;
+// `#[allow]` is denied crate-wide).
 #![cfg_attr(not(test), expect(dead_code))]
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::models::StationRef;
 
@@ -18,9 +21,10 @@ use super::physics::{cylinder_gas_volume, sac_to_rmv};
 /// Cylinder construction material. Hints role suitability — steel ≈ negative buoyancy →
 /// back gas; aluminium ≈ neutral → fine as a stage — but it is guidance, never a hard
 /// rule (PRD §5.3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum TankMaterial {
+#[ts(rename_all = "snake_case")]
+pub enum TankMaterial {
     Aluminium,
     Steel,
 }
@@ -28,9 +32,10 @@ pub(crate) enum TankMaterial {
 /// What a cylinder is carried for. Drives the reserve math (§5.1) and the CCR "dil-out"
 /// model (§5.5). `Deco` gas is reserved for a future deco phase and is **never**
 /// travel/penetration gas, so it is excluded from the penetration budget (§5.3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum CylRole {
+#[ts(rename_all = "snake_case")]
+pub enum CylRole {
     BackGas,
     Stage,
     DilOut,
@@ -40,9 +45,10 @@ pub(crate) enum CylRole {
 
 /// Open-circuit vs CCR bailout planning. CCR is not gas-limited on penetration; its
 /// constraint is the bailout volume to exit (§5.5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum PlanMode {
+#[ts(rename_all = "snake_case")]
+pub enum PlanMode {
     OpenCircuit,
     CcrBailout,
 }
@@ -50,10 +56,10 @@ pub(crate) enum PlanMode {
 /// A diver identified by RMV — the canonical, persisted gas-rate. SAC is a *constructor*
 /// concern only (see [`Diver::from_sac`]); it is never stored, so an inconsistent
 /// SAC/reference pair can't linger in the model.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Diver {
-    pub(crate) rmv_l_per_min: f64,
-    pub(crate) label: Option<String>,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct Diver {
+    pub rmv_l_per_min: f64,
+    pub label: Option<String>,
 }
 
 impl Diver {
@@ -94,14 +100,14 @@ impl Diver {
 /// A single cylinder. `fill_bar` is an INPUT and may exceed `rated_pressure_bar` —
 /// overfilling LP steels to MP or higher is routine (§5.3) — so rated is reference only
 /// and is **never** used to clamp the fill.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Cylinder {
-    pub(crate) water_volume_l: f64,
-    pub(crate) rated_pressure_bar: f64,
-    pub(crate) fill_bar: f64,
-    pub(crate) material: TankMaterial,
-    pub(crate) role: CylRole,
-    pub(crate) label: Option<String>,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct Cylinder {
+    pub water_volume_l: f64,
+    pub rated_pressure_bar: f64,
+    pub fill_bar: f64,
+    pub material: TankMaterial,
+    pub role: CylRole,
+    pub label: Option<String>,
 }
 
 impl Cylinder {
@@ -145,11 +151,11 @@ impl Cylinder {
 /// A team of divers, each with their own cylinders, planned in one [`PlanMode`]. Phase 1
 /// collapses to one diver / one cylinder; the `Vec` shape exists from day one so CCR
 /// (§5.5) and the team feature (Phase 5) add no migrations.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Team {
-    pub(crate) divers: Vec<Diver>,
-    pub(crate) cylinders_per_diver: Vec<Vec<Cylinder>>,
-    pub(crate) mode: PlanMode,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct Team {
+    pub divers: Vec<Diver>,
+    pub cylinders_per_diver: Vec<Vec<Cylinder>>,
+    pub mode: PlanMode,
 }
 
 /// Result of the gas-weighted reachability compute — the gas analogue of `DistanceField`.
@@ -157,12 +163,12 @@ pub(crate) struct Team {
 /// reserve budget, and the turn frontier (reachable stations with an unreachable neighbour).
 /// `gas_to_reach` is `None` for graph-unreachable stations (JSON-safe ∞); `station_refs` echo
 /// the input order so the field is self-describing.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct GasReachField {
-    pub(crate) station_refs: Vec<StationRef>,
-    pub(crate) gas_to_reach: Vec<Option<f64>>,
-    pub(crate) reachable: Vec<bool>,
-    pub(crate) turn_frontier: Vec<StationRef>,
-    pub(crate) max_reachable_gas: f64,
-    pub(crate) budget_litres: f64,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct GasReachField {
+    pub station_refs: Vec<StationRef>,
+    pub gas_to_reach: Vec<Option<f64>>,
+    pub reachable: Vec<bool>,
+    pub turn_frontier: Vec<StationRef>,
+    pub max_reachable_gas: f64,
+    pub budget_litres: f64,
 }

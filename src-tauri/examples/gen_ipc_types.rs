@@ -44,12 +44,13 @@ use stalagmight_lib::models::placement_suggest::{
 };
 use stalagmight_lib::models::{
     AlongLineResult, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate,
-    CollabState, ConnectivityResult, Coordinates, DeleteShotImpact, DeleteShotRangeImpact,
-    DistanceField, ExistingShotUpdate, FrozenShotRef, GpsBounds, GpsCoordinates, ImportPlacement,
-    ImportSectionConfig, LoopClosureWire, PathShot, Project, ProjectMetadata, ProjectStats,
-    ProjectWarning, RangeDeleteKind, RulerEndpoint, Section, SectionData, SectionRelationships,
-    SectionStats, SectionUpdates, Shot, ShotBaselineEntry, ShotData, ShotUpdates, Station,
-    StationMergeWire, StationPair, StationRef, SurveyDirection, ZeroDatumWire,
+    CollabState, ConnectivityResult, Coordinates, CylRole, Cylinder, DeleteShotImpact,
+    DeleteShotRangeImpact, DistanceField, Diver, ExistingShotUpdate, FrozenShotRef, GasReachField,
+    GpsBounds, GpsCoordinates, ImportPlacement, ImportSectionConfig, LoopClosureWire, PathShot,
+    PlanMode, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind,
+    RulerEndpoint, Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
+    ShotBaselineEntry, ShotData, ShotUpdates, Station, StationMergeWire, StationPair, StationRef,
+    SurveyDirection, TankMaterial, Team, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -107,6 +108,14 @@ fn main() {
     export::<ProjectMetadata>(&out_dir);
     export::<ProjectStats>(&out_dir);
     export::<DistanceField>(&out_dir);
+    // Gas planning (#38)
+    export::<TankMaterial>(&out_dir);
+    export::<CylRole>(&out_dir);
+    export::<PlanMode>(&out_dir);
+    export::<Diver>(&out_dir);
+    export::<Cylinder>(&out_dir);
+    export::<Team>(&out_dir);
+    export::<GasReachField>(&out_dir);
     export::<RulerEndpoint>(&out_dir);
     export::<PathShot>(&out_dir);
     export::<AlongLineResult>(&out_dir);
@@ -293,6 +302,13 @@ fn main() {
         "ProjectMetadata",
         "ProjectStats",
         "DistanceField",
+        "TankMaterial",
+        "CylRole",
+        "PlanMode",
+        "Diver",
+        "Cylinder",
+        "Team",
+        "GasReachField",
         "RulerEndpoint",
         "PathShot",
         "AlongLineResult",

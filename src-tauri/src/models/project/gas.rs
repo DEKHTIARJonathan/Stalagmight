@@ -22,7 +22,7 @@ use crate::config::{GasConfig, ReservePreset};
 use crate::models::{Coordinates, StationKey, StationRef};
 
 use super::Project;
-use model::{CylRole, Cylinder, Diver, GasReachField};
+pub use model::{CylRole, Cylinder, Diver, GasReachField, PlanMode, TankMaterial, Team};
 use physics::edge_gas;
 
 impl Project {
