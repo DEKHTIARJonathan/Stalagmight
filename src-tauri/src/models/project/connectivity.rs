@@ -152,7 +152,12 @@ impl Project {
             authoritative.insert(sid);
         }
         for zd in &self.zero_datums {
-            authoritative.insert(zd.station_ref.section_id);
+            // Skip dangling datums (anchor key no longer resolves) — they are not
+            // real anchors, mirroring `section_has_zero_datum`/`component_datum_refs`
+            // (#174). Otherwise an unanchored section gets frozen as authoritative.
+            if self.resolve_key(&zd.station_ref).is_some() {
+                authoritative.insert(zd.station_ref.section_id);
+            }
         }
 
         let sorted = |auth: &HashSet<SectionId>| {
@@ -255,11 +260,10 @@ impl Project {
             if !visited.insert(current) {
                 continue;
             }
-            if self
-                .zero_datums
-                .iter()
-                .any(|zd| zd.station_ref.section_id == current)
-            {
+            if self.zero_datums.iter().any(|zd| {
+                // A dangling datum (key no longer resolves) does not anchor (#174).
+                zd.station_ref.section_id == current && self.resolve_key(&zd.station_ref).is_some()
+            }) {
                 return true;
             }
             for m in &self.station_merges {

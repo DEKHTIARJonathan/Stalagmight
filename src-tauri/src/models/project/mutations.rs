@@ -720,11 +720,16 @@ impl Project {
         // Find the merge group containing the edited section
         let merge_group = self.get_merged_section_ids(edited_section_id);
 
-        // Find the zero datum for this merge group (if any)
+        // Find the zero datum for this merge group (if any). A dangling datum
+        // (anchor key no longer resolves) is not a real anchor — skip it so we
+        // don't run a realign pass on an unanchored group (#174).
         let datum = self
             .zero_datums
             .iter()
-            .find(|d| merge_group.contains(&d.station_ref.section_id))
+            .find(|d| {
+                merge_group.contains(&d.station_ref.section_id)
+                    && self.resolve_key(&d.station_ref).is_some()
+            })
             .cloned();
 
         let datum = match datum {

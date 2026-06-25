@@ -159,7 +159,8 @@ impl Project {
             .iter()
             .filter_map(|sid| self.get_section(*sid))
             .flat_map(|s| s.shots.iter())
-            .map(|shot| shot.length)
+            // Clamp negative lengths to 0, consistent with the main-loop edges (#176).
+            .map(|shot| shot.length.max(0.0))
             .sum()
     }
 
@@ -238,7 +239,11 @@ impl Project {
                     let shot_len = section
                         .shots
                         .get(prev_index as usize)
-                        .map_or(0.0, |s| s.length);
+                        // Clamp negative shot lengths to 0 — Dijkstra requires
+                        // non-negative edges. Interactive commands reject negative
+                        // lengths, but a corrupt import/parse or a deserialized file
+                        // can carry them; matches the other graph builders (#176).
+                        .map_or(0.0, |s| s.length.max(0.0));
                     let neighbor = StationRef::new(node.section_id, prev_index);
                     let next_cost = cost + shot_len;
                     if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
@@ -268,7 +273,8 @@ impl Project {
                 let shot_len = section
                     .shots
                     .get(node.station_index as usize)
-                    .map_or(0.0, |s| s.length);
+                    // Clamp negative shot lengths to 0 (see the previous-station edge).
+                    .map_or(0.0, |s| s.length.max(0.0));
                 let neighbor = StationRef::new(node.section_id, next_index);
                 let next_cost = cost + shot_len;
                 if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
