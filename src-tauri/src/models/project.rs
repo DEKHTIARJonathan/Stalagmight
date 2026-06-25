@@ -20,6 +20,7 @@ use super::placement_suggest;
 mod closure;
 mod coordinates;
 mod distance;
+mod gas;
 mod lsq;
 mod pathfinding;
 
