@@ -47,4 +47,22 @@ describe('formatGas', () => {
       expect(formatRmv(NaN, 'metric')).toBe('--');
     });
   });
+
+  // High-precision assertions that PIN the conversion constants. The expected values are
+  // computed by hand (not from the implementation), so a constant typo (e.g. 14.5 vs
+  // 14.5037738, or × vs ÷) flips the 4th decimal and fails — unlike the 0-dp cases above,
+  // where a ~2% constant error would round away.
+  describe('conversion constants (high-precision)', () => {
+    it('bar → psi factor is 14.5037738', () => {
+      // 10 bar × 14.5037738 = 145.037738
+      expect(formatPressure(10, 'imperial', 4)).toBe('145.0377 psi');
+    });
+    it('litre → cuft factor is 0.0353146667', () => {
+      // 1000 L × 0.0353146667 = 35.3146667
+      expect(formatVolume(1000, 'imperial', 4)).toBe('35.3147 cuft');
+    });
+    it('RMV uses the same litre → cuft factor', () => {
+      expect(formatRmv(1000, 'imperial', 4)).toBe('35.3147 cuft/min');
+    });
+  });
 });

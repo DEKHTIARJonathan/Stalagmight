@@ -36,6 +36,7 @@ describe('defaultConfig structure', () => {
       expect(defaultConfig).toHaveProperty('cache');
       expect(defaultConfig).toHaveProperty('debug');
       expect(defaultConfig).toHaveProperty('appearance');
+      expect(defaultConfig).toHaveProperty('gas');
     });
   });
 
@@ -183,6 +184,21 @@ describe('defaultConfig structure', () => {
     it('theme is a valid ThemeMode', () => {
       const theme: ThemeMode = defaultConfig.appearance.theme;
       expect(['dark', 'light', 'auto']).toContain(theme);
+    });
+  });
+
+  describe('gas config', () => {
+    // Mirrors GasConfig::default() in src-tauri/src/config/types.rs — these MUST stay in sync
+    // (defaultConfig.gas is hand-maintained). A drift here = TS default ≠ Rust default.
+    it('has correct gas defaults', () => {
+      expect(defaultConfig.gas.units).toBe('metric');
+      expect(defaultConfig.gas.default_reserve).toBe('all_thirds');
+      expect(defaultConfig.gas.swim_speed_m_per_min).toBe(10);
+      expect(defaultConfig.gas.survey_speed_m_per_min).toBeNull();
+      expect(defaultConfig.gas.survey_rmv_multiplier).toBe(1);
+      expect(defaultConfig.gas.stressed_rmv_multiplier).toBe(1.5);
+      expect(defaultConfig.gas.conservative_tank_gas).toBe(true);
+      expect(defaultConfig.gas.dpv).toBeNull();
     });
   });
 });
