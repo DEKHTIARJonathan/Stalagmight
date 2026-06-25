@@ -55,7 +55,10 @@ usvg = "0.43"
 resvg = "0.43"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
-ureq = "3"
+# Pinned exact: the SpeleoDB seed upload (#183) uses `unversioned::multipart`,
+# whose API is explicitly not semver-stable (see #185). `multipart` adds to the
+# existing default features (rustls, gzip); the tile fetch is unaffected.
+ureq = { version = "=3.1.4", features = ["multipart"] }
 http = "1"
 nalgebra = "0.33"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
@@ -77,6 +80,23 @@ time = "0.3"
 # off the Android `cdylib` target so `tauri android build` keeps compiling.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 trash = "5.2.6"
+
+# SpeleoDB auth token at rest (#183, full tiering in #188). Per-OS native secret
+# store. On Linux, Secret Service (gnome-keyring / KWallet) is persistent across
+# sessions — unlike the session-scoped `linux-native` keyutils. `crypto-rust`
+# avoids a system OpenSSL dependency, and `vendored` statically builds libdbus
+# (keyring → dbus-secret-service → dbus → libdbus-sys) so there is no
+# `libdbus-1-dev` system build dependency to install on a clean box or in CI.
+# Headless CI has no secret service at runtime, so the client falls back to an
+# in-memory session token (see speleodb::auth).
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 [profile.dev]
 # Backtraces still show file:line; skipping full debug info halves the link step.
