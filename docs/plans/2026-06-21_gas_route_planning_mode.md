@@ -119,20 +119,27 @@ triggers the slow ~2 s/~40 s closure solve (`compute_adjusted_station_coordinate
 `AppState::distance_field` decision (`core/state/app_state.rs:364`), which already rejects the
 adjusted solve for the same reason.
 
-**Everything derives from the field:**
+**Everything derives from ONE Dijkstra (the in-field) + its predecessor tree:**
 - *Reachable within budget* = stations whose **round-trip** gas ≤ usable gas after the §5.1
   reserve rule. **Round-trip is asymmetric** when surveying: `gas_in(X | survey speed) +
-  gas_out(X | swim speed)`, i.e. two Dijkstra fields (the OUT field is the same exit-leg field
-  CCR bailout needs), **not** one field doubled — see §5.2. **The exit follows the entry path
-  reversed, never an alternate/shorter unswum route** (§6, "exit the way you came"). The turn
-  frontier is a threshold on the field (reachable stations with an unreachable neighbor — one
-  pass over `adj`).
-- *Turn point toward a lead* = furthest point on the path where one-way gas = turn pressure.
-  (Store a predecessor array in the Dijkstra loop at `project.rs:7460` to back-trace paths.)
-- *CCR bailout / dead-scooter exit* = a **second** Dijkstra seeded **from the lead** toward
-  the zero-datum exits, with **exit-leg weights** (stressed RMV; swim speed, since you bail
-  off the scooter). The bailout "integral" is just that path's accumulated weight — no
-  separate integration code.
+  gas_out(X | swim speed)`. **⚠ Correction (2026-06-24): `gas_out(X)` is the gas integral along
+  the REVERSE of the entry path — re-weighted at exit RMV/swim speed — NOT an independent
+  shortest-path-to-exits Dijkstra.** A free exits-seeded field could route the exit through a
+  shorter *unswum* connection the graph offers, which (a) violates §6 "exit the way you came" and
+  (b) **under-budgets the return → over-states reach — the dangerous direction.** So: run ONE
+  Dijkstra (the in-field), track its **predecessor tree**, and for any X walk `pred[]` from X back
+  to the root accumulating exit-weighted edges. (Edge geometry — `length`, `avg_depth` — is
+  symmetric under reversal; only the RMV/speed weight differs, and survey→exit is a positive
+  rescale, so the in-field's chosen path IS the correct exit path.) The turn frontier is a
+  threshold on the field (reachable stations with an unreachable neighbor — one pass over `adj`).
+- *Turn point toward a lead* = furthest point on the entry path where one-way gas = turn pressure;
+  read straight off the predecessor walk above. Use the existing **predecessor-tracking
+  shortest-path helper** (`distance.rs:321`) as the template — do **not** bolt predecessors onto
+  the shared `pub(super)` `dijkstra`, which returns distances only.
+- *CCR bailout / dead-scooter exit* = the **same reverse-entry-path integral** at stressed RMV /
+  swim speed (you bail off the scooter and swim out the way you came). The bailout "integral" is
+  just the predecessor-walk's accumulated exit-weight — **one** field, no separate exits-seeded
+  Dijkstra.
 
 ---
 
@@ -233,8 +240,10 @@ spent.
 
 **Survey-in is 2–3× slower than the swim-out.** Surveying is slow work; the exit is a fast
 swim (default **10 m/min**, no DPV). So per-meter gas IN ≫ OUT, and **round-trip gas is NOT
-2× one-way**: `round_trip(X) = gas_in(X | survey speed) + gas_out(X | swim speed)` — two
-Dijkstra fields (in + out), the OUT field being the same exit-leg field CCR bailout needs.
+2× one-way**: `round_trip(X) = gas_in(X | survey speed) + gas_out(X | swim speed)`, where
+`gas_out` is the **reverse-of-entry-path** integral at swim speed (§4 — one Dijkstra + its
+predecessor tree, *not* an independent exits-seeded field; that same reverse path is what CCR
+bailout integrates over).
 **Optional in-leg RMV bump:** surveying *task-loads* the diver (reel, slate), which can raise
 RMV a little — minor and individual (new surveyors report it; veterans don't), so it's an
 **opt-in `survey_rmv_multiplier` slider** (default 1.0) on the IN leg only, never a baked-in
@@ -353,7 +362,9 @@ first-class constraint, not a footnote.
   team (sidemount) may be impassable for another (backmount + scooters + stages). So while
   shortest-path is fine for *penetration* (#77 above), the **return leg = the entry path
   reversed** — the engine must **never** route the exit through a shorter/alternate connection
-  the graph offers but the diver didn't swim. (Also why **traverses are out of scope**, §2.)
+  the graph offers but the diver didn't swim — **enforced in §4** by integrating `gas_out`/bailout
+  along the in-field's **predecessor tree** (the route actually swum), not a free Dijkstra to
+  exits. (Also why **traverses are out of scope**, §2.)
 - **Framing:** the UI is a planning aid, not an authority — show assumptions; never a single
   unlabelled "you're fine" number.
 - **Survey ≠ enforced thirds (§5.2):** the slow-in/fast-out asymmetry makes strict thirds
