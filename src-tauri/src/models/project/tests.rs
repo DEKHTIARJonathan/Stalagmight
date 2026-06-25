@@ -7159,6 +7159,40 @@ fn path_length_nonexistent_station_returns_zero() {
     assert!((path_len - 0.0).abs() < 1e-6);
 }
 
+#[test]
+fn path_length_fallback_clamps_negative_shot_lengths() {
+    // When the target station EXISTS but is unreachable, calculate_path_length_impl
+    // falls back to the sum of the start component's shot lengths. That sum must
+    // clamp negative lengths to 0 — same as the Dijkstra edges and the other graph
+    // builders — so a corrupt/deserialized negative leg doesn't under-count (#176).
+    let mut project = Project::new("NegFallback".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, -5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    // A disconnected second section so the target station exists yet is unreachable
+    // from A — this forces the fallback-sum branch, not the early not-found return.
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 7.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+
+    let len = project.calculate_path_length_between(StationRef::new(a, 0), StationRef::new(b, 0));
+    // 10 + max(0, -5) = 10; without the clamp this would be 10 + (-5) = 5.
+    assert!(
+        (len - 10.0).abs() < 1e-6,
+        "fallback sum must clamp the -5 leg to 0 (expected 10.0), got {len}"
+    );
+}
+
 // =====================================================================
 // compute_station_coordinates integration tests
 // =====================================================================

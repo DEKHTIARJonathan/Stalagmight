@@ -240,8 +240,9 @@ impl Project {
                         .shots
                         .get(prev_index as usize)
                         // Clamp negative shot lengths to 0 — Dijkstra requires
-                        // non-negative edges (negative lengths are warn-only, not
-                        // rejected); matches the other graph builders (#176).
+                        // non-negative edges. Interactive commands reject negative
+                        // lengths, but a corrupt import/parse or a deserialized file
+                        // can carry them; matches the other graph builders (#176).
                         .map_or(0.0, |s| s.length.max(0.0));
                     let neighbor = StationRef::new(node.section_id, prev_index);
                     let next_cost = cost + shot_len;
