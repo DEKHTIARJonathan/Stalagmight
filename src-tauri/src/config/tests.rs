@@ -99,6 +99,44 @@ fn test_station_validation_rejects_zero() {
 }
 
 #[test]
+fn test_gas_config_normalize_clamps_invalid_speeds_and_multipliers() {
+    let mut config = GasConfig {
+        swim_speed_m_per_min: 0.0,          // invalid -> default 10
+        survey_speed_m_per_min: Some(-1.0), // invalid -> None (symmetric)
+        survey_rmv_multiplier: f64::NAN,    // invalid -> default 1.0
+        stressed_rmv_multiplier: 0.0,       // invalid -> default 1.5
+        dpv: Some(DpvProfile {
+            speed_m_per_min: -5.0,
+            burn_minutes: None,
+            range_m: None,
+        }),
+        ..GasConfig::default()
+    };
+    config.normalize();
+    assert_eq!(config.swim_speed_m_per_min, 10.0);
+    assert_eq!(config.survey_speed_m_per_min, None);
+    assert_eq!(config.survey_rmv_multiplier, 1.0);
+    assert_eq!(config.stressed_rmv_multiplier, 1.5);
+    assert_eq!(config.dpv, None); // bad DPV speed drops the profile
+}
+
+#[test]
+fn test_gas_config_normalize_preserves_valid_values() {
+    let mut config = GasConfig {
+        swim_speed_m_per_min: 12.0,
+        survey_speed_m_per_min: Some(4.0),
+        survey_rmv_multiplier: 1.2,
+        stressed_rmv_multiplier: 2.0,
+        ..GasConfig::default()
+    };
+    config.normalize();
+    assert_eq!(config.swim_speed_m_per_min, 12.0);
+    assert_eq!(config.survey_speed_m_per_min, Some(4.0));
+    assert_eq!(config.survey_rmv_multiplier, 1.2);
+    assert_eq!(config.stressed_rmv_multiplier, 2.0);
+}
+
+#[test]
 fn test_station_validation_rejects_negative() {
     let mut config = StationConfig {
         radius: -1.0,

@@ -943,6 +943,35 @@ impl Default for GasConfig {
     }
 }
 
+impl GasConfig {
+    /// Clamp non-finite / non-positive speeds and multipliers back to their defaults, and drop a
+    /// DPV profile whose speed is invalid. A foreign or hand-edited config can carry a 0 / NaN /
+    /// negative `swim_speed_m_per_min` that would later divide into `edge_gas` (→ +Inf or NaN gas
+    /// and a poisoned reachability field), so guard it at the config boundary — mirrors the other
+    /// sub-configs' `normalize()`. Called from `Config::normalize`.
+    pub fn normalize(&mut self) {
+        if !self.swim_speed_m_per_min.is_finite() || self.swim_speed_m_per_min <= 0.0 {
+            self.swim_speed_m_per_min = default_swim_speed();
+        }
+        if let Some(survey) = self.survey_speed_m_per_min {
+            if !survey.is_finite() || survey <= 0.0 {
+                self.survey_speed_m_per_min = None;
+            }
+        }
+        if !self.survey_rmv_multiplier.is_finite() || self.survey_rmv_multiplier <= 0.0 {
+            self.survey_rmv_multiplier = default_survey_rmv_multiplier();
+        }
+        if !self.stressed_rmv_multiplier.is_finite() || self.stressed_rmv_multiplier <= 0.0 {
+            self.stressed_rmv_multiplier = default_stressed_rmv_multiplier();
+        }
+        if let Some(dpv) = self.dpv {
+            if !dpv.speed_m_per_min.is_finite() || dpv.speed_m_per_min <= 0.0 {
+                self.dpv = None;
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DisplayConfig {
     pub default_background: String,
@@ -1892,6 +1921,7 @@ impl Config {
         self.closure_adjustment.normalize();
         self.placement_suggestion.normalize();
         self.syntactic_highlighting.normalize();
+        self.gas.normalize();
         self.units.decimal_precision.normalize();
         if self.general.locale.trim().is_empty() {
             self.general.locale = default_locale();

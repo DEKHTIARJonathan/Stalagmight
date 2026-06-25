@@ -4,10 +4,10 @@
 //! field downstream. The persisted/per-plan `GasConfig` (units, reserve preset, speeds)
 //! lives in `crate::config` — these are the per-dive, ephemeral parts.
 
-#![expect(
-    dead_code,
-    reason = "Phase 0 gas foundation: the model is consumed by the Phase 1 gas engine + commands/gas.rs"
-)]
+// Dead in the lib build (no caller until the Phase 1 engine + commands/gas.rs); live under
+// `cfg(test)` where the derives + tests read every field, so the expectation is scoped to the
+// non-test build (matches the `models/shot.rs` idiom; `#[allow]` is denied crate-wide).
+#![cfg_attr(not(test), expect(dead_code))]
 
 use serde::{Deserialize, Serialize};
 

@@ -1,13 +1,14 @@
 //! Pure gas-planning physics — no graph, no config, no I/O. Golden-tested in
 //! `super::tests`. Canonical SI throughout: depth in metres (positive-down), RMV in
 //! L/min, pressure in bar, gas volume in litres. These are plain `f64` functions; the
-//! finite/positive guards live in the `model` constructors, so callers pass validated
-//! inputs (mirrors the `Coordinates::new` / `new_checked` split).
+//! finite/positive guards live in the `model` constructors (RMV, cylinders) and in
+//! `GasConfig::normalize` (speeds/multipliers), so callers pass validated inputs (mirrors the
+//! `Coordinates::new` / `new_checked` split).
 
-#![expect(
-    dead_code,
-    reason = "Phase 0 gas foundation: physics is consumed by the Phase 1 gas engine + commands/gas.rs"
-)]
+// Dead in the lib build (no caller until the Phase 1 engine + commands/gas.rs); live under
+// `cfg(test)` where the derives + tests exercise every item, so the expectation is scoped to
+// the non-test build (matches the `models/shot.rs` idiom; `#[allow]` is denied crate-wide).
+#![cfg_attr(not(test), expect(dead_code))]
 
 /// Ambient pressure in atmospheres-absolute at depth `depth_m` metres (positive-down).
 /// 10 msw ≈ 1 bar, so `ata = 1 + max(depth, 0)/10`; above the surface clamps to 1 ATA.
@@ -30,7 +31,8 @@ pub(crate) fn avg_depth(z_from: f64, z_to: f64) -> f64 {
 /// breathing `rmv_l_per_min`, the leg running from depth `z_from` to `z_to` metres.
 /// `gas = rate(avg_depth) × time = gas_rate(rmv, avg_depth) × (length / speed)`.
 ///
-/// Precondition: `speed_m_per_min > 0` (the `model` speed setters enforce it).
+/// Precondition: `speed_m_per_min > 0` — guaranteed for config-sourced speeds by
+/// `GasConfig::normalize`; any other caller must validate before calling.
 pub(crate) fn edge_gas(
     rmv_l_per_min: f64,
     speed_m_per_min: f64,
