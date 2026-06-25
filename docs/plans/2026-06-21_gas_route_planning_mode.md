@@ -540,7 +540,7 @@ Concretises the choices §7.2 left open:
 > CCR/team-shaped from day one so later phases add no migrations. Re-rank these freely.
 
 - **Phase 0 — Foundations (no UI):** `Config.gas` + gas units + `formatGas.ts`; the gas
-  domain model + SAC→RMV; `core/gas/{physics,model}.rs` with golden unit tests. Small, safe,
+  domain model + SAC→RMV; `models/project/gas/{physics,model}.rs` with golden unit tests. Small, safe,
   fully testable in isolation.
 - **Phase 1 — OC reachable-frontier (headline):** the `build_survey_graph_weighted` refactor;
   `GasReachField` + `compute_gas_reach_field`; sub-mode shell (enter/exit + `setView` reset),
@@ -555,10 +555,12 @@ Concretises the choices §7.2 left open:
 - **Phase 5 — Team:** matched gas (dissimilar-tank matching = **lowest usable-volume diver
   gates**; common in Florida — §5.3), weakest-link reserve, CCR team bailout sharing (a `fold`
   over per-diver fields — no new graph math).
-- **Dependency to schedule early:** the **#77** gas-graph edge filter (safety, §6) — needed
-  before Phase 1 ships numbers anyone trusts.
-- **Each phase = its own PR off `master`**, small semantic commits, `/pre-pr` before each,
-  tests included. Don't self-merge.
+- **No #77 dependency:** #77 is resolved as *no edge filter* (§6/§10) — the graph keeps all
+  jump/reference edges and trusts shortest-path, so there is nothing to schedule here.
+  *(Removed a stale "schedule the #77 edge filter early" bullet that contradicted §6/§10.)*
+- **Each phase = its own local branch off `master`**, small semantic commits, tests included.
+  **Local commits only — do NOT push or open a PR until Nico approves** (current directive). Run
+  `/pre-pr` locally before any eventual push (it's a local gate, not CI). Don't self-merge.
 
 ---
 
