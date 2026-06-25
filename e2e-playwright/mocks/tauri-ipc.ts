@@ -2169,10 +2169,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true };
           }
 
-          case 'move_section':
-            // Mock move section - just return success
+          case 'move_section': {
+            // Record the dispatched offset (mirrors move_segment/move_station) so
+            // commit-assertion tests can check the offset that reached the backend.
             console.log('[Mock IPC] move_section called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
+            calls.push({ command: 'move_section', args: args ?? null });
+            win.__MOCK_MOVE_CALLS__ = calls;
             return { success: true };
+          }
 
           case 'move_station': {
             console.log('[Mock IPC] move_station called with:', args);

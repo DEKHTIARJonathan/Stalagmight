@@ -239,6 +239,40 @@ test.describe('Section Adjust Dialog', () => {
     await expect(dialog.locator('text=Move failed')).toBeVisible();
   });
 
+  test('adjusts a section in the −X direction via typed negative input (#161)', async ({ page }) => {
+    const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
+    await sectionItem.click({ button: 'right' });
+    await page.click('button:has-text("Adjust Position...")');
+
+    const dialog = page.locator('[data-testid="section-adjust-dialog"]');
+    await expect(dialog).toBeVisible({ timeout: 3000 });
+
+    // Type the negative value KEY BY KEY. Unlike .fill() (used by the test above,
+    // which sets the value atomically and passed even while the bug was live),
+    // this exercises the intermediate '-' state the old numeric control snapped
+    // back to 0 — the actual #161 failure.
+    const dxInput = dialog.locator('[data-testid="dx-input"]');
+    await dxInput.click();
+    await dxInput.selectText();
+    await dxInput.pressSequentially('-4');
+    await expect(dxInput).toHaveValue('-4');
+
+    // Commit and confirm a negative-X offset actually reached the backend.
+    await dialog.getByRole('button', { name: 'Apply' }).click();
+    await expect(dialog).not.toBeVisible({ timeout: 3000 });
+
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const calls =
+            (window as unknown as { __MOCK_MOVE_CALLS__?: Array<{ command: string; args?: { offset?: { x?: number } } }> })
+              .__MOCK_MOVE_CALLS__ ?? [];
+          return calls.some((c) => c.command === 'move_section' && c.args?.offset?.x === -4);
+        }),
+      )
+      .toBe(true);
+  });
+
   test('applies delta when preview already applied', async ({ page }) => {
     const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
     await sectionItem.click({ button: 'right' });

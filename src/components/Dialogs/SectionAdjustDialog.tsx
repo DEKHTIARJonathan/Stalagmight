@@ -8,6 +8,18 @@ import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import type { SectionId } from '../../types/project';
 
+// A string the user can be partway through typing into a signed-decimal field:
+// '', '-', '.', '-.', '5', '-2.5', '.5'. Lets a controlled input hold these
+// intermediate states instead of a number that snaps '-'/'' back to 0 (#161).
+const PARTIAL_DECIMAL = /^-?\d*\.?\d*$/;
+
+// Numeric value of such a string; intermediate states with no digits yet read as
+// 0 so the live preview neutralizes without forcing the visible text back to '0'.
+function offsetValue(raw: string): number {
+  const n = parseFloat(raw);
+  return Number.isNaN(n) ? 0 : n;
+}
+
 /**
  * Dialog for adjusting section position with dx/dy offset.
  * Provides live preview as values change.
@@ -19,8 +31,12 @@ export default function SectionAdjustDialog() {
   const sectionId = dialogData.sectionId as SectionId | undefined;
   const section = project?.sections.find((s) => s.id === sectionId);
 
+  // Numeric offsets drive the preview / apply / dirty logic; the *Str fields back
+  // the text inputs so partial entries survive editing (see PARTIAL_DECIMAL).
   const [dx, setDx] = useState(0);
   const [dy, setDy] = useState(0);
+  const [dxStr, setDxStr] = useState('0');
+  const [dyStr, setDyStr] = useState('0');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // How many sections move together: a section that is merged (or aligned-closure
@@ -69,7 +85,10 @@ export default function SectionAdjustDialog() {
   // Debounce preview updates
   const previewTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const handleDxChange = useCallback((value: number) => {
+  const handleDxChange = useCallback((raw: string) => {
+    if (!PARTIAL_DECIMAL.test(raw)) return; // ignore non-numeric keystrokes
+    setDxStr(raw);
+    const value = offsetValue(raw);
     setDx(value);
     // Debounce the preview
     if (previewTimeoutRef.current) {
@@ -80,7 +99,10 @@ export default function SectionAdjustDialog() {
     }, 150);
   }, [dy, applyPreview]);
 
-  const handleDyChange = useCallback((value: number) => {
+  const handleDyChange = useCallback((raw: string) => {
+    if (!PARTIAL_DECIMAL.test(raw)) return; // ignore non-numeric keystrokes
+    setDyStr(raw);
+    const value = offsetValue(raw);
     setDy(value);
     // Debounce the preview
     if (previewTimeoutRef.current) {
@@ -200,11 +222,10 @@ export default function SectionAdjustDialog() {
               dx (meters)
             </label>
             <input
-              type="number" inputMode="decimal"
-              value={dx}
-              onChange={(e) => handleDxChange(parseFloat(e.target.value) || 0)}
+              type="text" inputMode="decimal"
+              value={dxStr}
+              onChange={(e) => handleDxChange(e.target.value)}
               className="w-full"
-              step="0.1"
               data-testid="dx-input"
             />
             <p className="text-xs text-text-secondary mt-1">Positive = East</p>
@@ -215,11 +236,10 @@ export default function SectionAdjustDialog() {
               dy (meters)
             </label>
             <input
-              type="number" inputMode="decimal"
-              value={dy}
-              onChange={(e) => handleDyChange(parseFloat(e.target.value) || 0)}
+              type="text" inputMode="decimal"
+              value={dyStr}
+              onChange={(e) => handleDyChange(e.target.value)}
               className="w-full"
-              step="0.1"
               data-testid="dy-input"
             />
             <p className="text-xs text-text-secondary mt-1">Positive = North</p>
