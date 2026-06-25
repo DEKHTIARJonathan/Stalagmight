@@ -13,11 +13,16 @@ impl AppState {
             "Opening project file"
         );
         // `try_exists()` rather than `exists()`: a metadata-access denial (e.g.
-        // macOS folder-permission loss after an OS/app update) must surface
-        // actionable guidance, not a misleading "not found" — `exists()` collapses
-        // that error to `false`. Parity with `do_load_project_full` + the save
-        // path (#169 / #92 / #104). A denial is tagged with `PERMISSION_DENIED_CODE`
-        // so the frontend (`isPermissionError`) shows folder-access guidance.
+        // macOS folder-permission loss after an OS/app update) must not collapse to
+        // a misleading "not found" — `exists()` would do exactly that. Parity with
+        // `do_load_project_full` (#169 / #92 / #104). A denial is tagged with
+        // `PERMISSION_DENIED_CODE`, matching the save path's `save_failure`.
+        // NOTE: `open_project` is the legacy command — its frontend consumer
+        // (`openProject`, projectStore.ts) does NOT strip the marker or run
+        // `isPermissionError` (the load/save paths do). So this tag is currently
+        // forward-compatible hardening, not live folder-access guidance; the
+        // production UI opens via `loadProject` → `load_project_full`, whose
+        // structured `LoadError::permission` is handled there.
         match path.try_exists() {
             Ok(true) => {}
             Ok(false) => {

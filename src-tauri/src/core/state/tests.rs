@@ -4370,6 +4370,44 @@ fn save_into_unwritable_dir_reports_permission_code() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn open_project_into_unreadable_dir_reports_permission_code() {
+    // open_project switched exists() -> try_exists() so a metadata-access denial
+    // surfaces as PERMISSION_DENIED_CODE instead of collapsing to "File not found"
+    // (#169). try_exists() on a path inside a 0o000 dir returns Err(PermissionDenied)
+    // because the dir can't be traversed. Same CI-safe 0o000 idiom (root-skip) as
+    // save_into_unwritable_dir_reports_permission_code.
+    use crate::core::loading::PERMISSION_DENIED_CODE;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = TempDir::new().unwrap();
+    let locked = temp_dir.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    // Root (some CI) bypasses 0o000, so try_exists would succeed and the permission
+    // scenario wouldn't apply — skip rather than false-fail. Restore perms first so
+    // TempDir cleanup can remove the directory.
+    if std::fs::File::create(locked.join(".probe")).is_ok() {
+        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+        return;
+    }
+
+    let state = AppState::new().unwrap();
+    let result = state.open_project(locked.join("p.stalx"));
+
+    // Restore perms so TempDir's drop can clean up the directory.
+    let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+
+    assert!(!result.success, "open inside an unreadable dir should fail");
+    let err = result.error.unwrap_or_default();
+    assert!(
+        err.starts_with(PERMISSION_DENIED_CODE),
+        "open_project should tag a metadata-access denial with the permission code, got: {err}"
+    );
+}
+
 #[test]
 fn save_into_missing_dir_is_not_a_permission_error() {
     use crate::core::loading::PERMISSION_DENIED_CODE;
