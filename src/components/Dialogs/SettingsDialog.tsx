@@ -221,6 +221,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
       ...(base.syntactic_highlighting ?? defaultConfig.syntactic_highlighting),
       overrides: { ...(base.syntactic_highlighting ?? defaultConfig.syntactic_highlighting).overrides },
     },
+    gas: { ...(base.gas ?? defaultConfig.gas) },
   };
 
   // Apply updates with deep merge for each key
@@ -306,6 +307,9 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   }
   if (updates.syntactic_highlighting) {
     result.syntactic_highlighting = { ...result.syntactic_highlighting, ...updates.syntactic_highlighting };
+  }
+  if (updates.gas) {
+    result.gas = { ...result.gas, ...updates.gas };
   }
 
   return result;

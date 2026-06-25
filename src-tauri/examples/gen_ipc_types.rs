@@ -16,12 +16,13 @@ use stalagmight_lib::commands::survey_geometry::{
 };
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
-    DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
-    GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
-    MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig,
-    PlacementSuggestionConfig, ProviderCacheConfig, SectionColorsConfig, ShortcutFeedback,
-    ShortcutsConfig, ShotConfig, StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset,
-    SyntacticHighlightingConfig, ThemeMode, UnitsConfig, ValidationConfig,
+    DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, DpvProfile, ExportConfig,
+    GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit,
+    LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig,
+    OverlapMode, PanelsConfig, PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset,
+    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, StationConfig,
+    SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig, ThemeMode,
+    UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, IntegrityCheckResult, IntegrityRepairResult, ValidationWarning,
@@ -225,6 +226,10 @@ fn main() {
     export::<Config>(&out_dir);
     export::<GeneralConfig>(&out_dir);
     export::<UnitsConfig>(&out_dir);
+    export::<GasConfig>(&out_dir);
+    export::<GasUnits>(&out_dir);
+    export::<ReservePreset>(&out_dir);
+    export::<DpvProfile>(&out_dir);
     export::<DisplayConfig>(&out_dir);
     export::<DepthGradientConfig>(&out_dir);
     export::<SectionColorsConfig>(&out_dir);
@@ -409,6 +414,10 @@ fn main() {
         "DecimalPrecision",
         "LengthUnit",
         "AngleUnit",
+        "GasConfig",
+        "GasUnits",
+        "ReservePreset",
+        "DpvProfile",
         "ShortcutFeedback",
         "ThemeMode",
         "ColorTheme",

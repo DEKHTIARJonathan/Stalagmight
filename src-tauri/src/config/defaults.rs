@@ -1,7 +1,7 @@
 use super::types::{default_sigma_azimuth_deg, default_sigma_depth_m, default_sigma_length_m};
 use super::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
-    DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
+    DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GasConfig, GeneralConfig,
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
     ProviderCacheConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
@@ -30,6 +30,7 @@ impl Default for Config {
             import: ImportConfig::default(),
             placement_suggestion: PlacementSuggestionConfig::default(),
             syntactic_highlighting: SyntacticHighlightingConfig::default(),
+            gas: GasConfig::default(),
             legacy_snap: None,
         }
     }
