@@ -12,15 +12,51 @@ impl AppState {
             purpose = "resume editing",
             "Opening project file"
         );
-        // Verify file exists before trying to open
-        if !path.exists() {
-            tracing::warn!(
-                path = ?path,
-                purpose = "resume editing",
-                reason = "file not found",
-                "Project open failed"
-            );
-            return CommandResult::failure(format!("File not found: {}", path.display()));
+        // `try_exists()` rather than `exists()`: a metadata-access denial (e.g.
+        // macOS folder-permission loss after an OS/app update) must not collapse to
+        // a misleading "not found" — `exists()` would do exactly that. Parity with
+        // `do_load_project_full` (#169 / #92 / #104). A denial is tagged with
+        // `PERMISSION_DENIED_CODE`, matching the save path's `save_failure`.
+        // NOTE: `open_project` is the legacy command — its frontend consumer
+        // (`openProject`, projectStore.ts) does NOT strip the marker or run
+        // `isPermissionError` (the load/save paths do). So this tag is currently
+        // forward-compatible hardening, not live folder-access guidance; the
+        // production UI opens via `loadProject` → `load_project_full`, whose
+        // structured `LoadError::permission` is handled there.
+        match path.try_exists() {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::warn!(
+                    path = ?path,
+                    purpose = "resume editing",
+                    reason = "file not found",
+                    "Project open failed"
+                );
+                return CommandResult::failure(format!("File not found: {}", path.display()));
+            }
+            Err(e) => {
+                let e = anyhow::Error::from(e);
+                if crate::core::loading::is_permission_denied(&e) {
+                    tracing::warn!(
+                        path = ?path,
+                        purpose = "resume editing",
+                        reason = "permission denied",
+                        "Project open failed"
+                    );
+                    return CommandResult::failure(format!(
+                        "{}: Cannot access {}: {e}",
+                        crate::core::loading::PERMISSION_DENIED_CODE,
+                        path.display()
+                    ));
+                }
+                tracing::warn!(
+                    path = ?path,
+                    purpose = "resume editing",
+                    reason = %e,
+                    "Project open failed (metadata access error)"
+                );
+                return CommandResult::failure(format!("File not found: {}", path.display()));
+            }
         }
 
         // Use open_existing which validates the file is a valid Stalagmight project
