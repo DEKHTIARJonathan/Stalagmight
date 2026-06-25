@@ -211,8 +211,19 @@ impl AppState {
     /// opened with a dangling ref or non-finite shot — permitted; the banner offers
     /// Repair) does not block an otherwise-clean collab apply / import: only NEWLY
     /// introduced corruption rolls back.
-    pub(super) fn finalize_structural_edit(&self, pre_had_critical: bool) -> bool {
-        self.convert_orphan_closures_in_open_project();
+    /// `can_orphan_closures` mirrors [`CommandIntegrity::can_orphan_closures`]:
+    /// only an operation that can SEVER connectivity can strand a section behind a
+    /// sole-bridge closure (issue #8). Pure-addition paths (a fresh import) never
+    /// create one, so they pass `false` and skip the O(closures × connectivity)
+    /// sole-bridge scan — which otherwise dominated a large import.
+    pub(super) fn finalize_structural_edit(
+        &self,
+        pre_had_critical: bool,
+        can_orphan_closures: bool,
+    ) -> bool {
+        if can_orphan_closures {
+            self.convert_orphan_closures_in_open_project();
+        }
         self.reconcile_geometry();
         if pre_had_critical {
             return false;

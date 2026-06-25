@@ -39,11 +39,14 @@ impl Project {
             return 0.0;
         }
 
-        let section_lookup = self.build_section_lookup();
-        let merge_adj = self.build_merge_adjacency(&section_lookup);
+        // Section access is O(1) via the cached `get_section` (no need to build a
+        // full section_lookup map per call); merge adjacency is the station-level
+        // map (identical to `build_merge_adjacency(&full_section_lookup)` since the
+        // lookup would contain every section).
+        let merge_adj = self.build_station_merge_adjacency();
 
-        let mut closure_adj: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
-        if include_closures {
+        let closure_adj = if include_closures {
+            let mut adj: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
             for closure in &self.loop_closures {
                 let (Some(a), Some(b)) = (
                     self.resolve_key(&closure.station_a),
@@ -51,11 +54,30 @@ impl Project {
                 ) else {
                     continue;
                 };
-                closure_adj.entry(a).or_default().push(b);
-                closure_adj.entry(b).or_default().push(a);
+                adj.entry(a).or_default().push(b);
+                adj.entry(b).or_default().push(a);
             }
-        }
+            Some(adj)
+        } else {
+            None
+        };
+        self.path_length_dijkstra(station_a, station_b, &merge_adj, closure_adj.as_ref())
+    }
 
+    /// Shortest survey-distance from `station_a` to `station_b`: shots are
+    /// length-weighted edges; merges (and closures, when `closure_adj` is `Some`)
+    /// are zero-cost edges. Takes PREBUILT adjacency so a batch caller can build
+    /// it once and reuse it across many closures instead of rebuilding per call.
+    /// Falls back to the reachable section lengths if no path is found (connected
+    /// stations always find one). Dijkstra naturally stays within the endpoints'
+    /// connected component, so disjoint components cost nothing.
+    pub(crate) fn path_length_dijkstra(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+        merge_adj: &HashMap<StationRef, Vec<StationRef>>,
+        closure_adj: Option<&HashMap<StationRef, Vec<StationRef>>>,
+    ) -> f64 {
         let mut dist: HashMap<StationRef, f64> = HashMap::new();
         let mut heap = BinaryHeap::new();
         dist.insert(station_a, 0.0);
@@ -75,7 +97,7 @@ impl Project {
                 return cost;
             }
 
-            let Some(section) = section_lookup.get(&node.section_id) else {
+            let Some(section) = self.get_section(node.section_id) else {
                 continue;
             };
 
@@ -120,11 +142,10 @@ impl Project {
             // Merge neighbors (zero distance)
             if let Some(neighbors) = merge_adj.get(&node) {
                 for &neighbor in neighbors {
-                    let next_cost = cost;
-                    if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
-                        dist.insert(neighbor, next_cost);
+                    if dist.get(&neighbor).is_none_or(|&d| cost < d - 1e-9) {
+                        dist.insert(neighbor, cost);
                         heap.push(HeapItem {
-                            cost: next_cost,
+                            cost,
                             node: neighbor,
                         });
                     }
@@ -132,14 +153,13 @@ impl Project {
             }
 
             // Closure neighbors (zero distance)
-            if include_closures {
-                if let Some(neighbors) = closure_adj.get(&node) {
+            if let Some(cadj) = closure_adj {
+                if let Some(neighbors) = cadj.get(&node) {
                     for &neighbor in neighbors {
-                        let next_cost = cost;
-                        if dist.get(&neighbor).is_none_or(|&d| next_cost < d - 1e-9) {
-                            dist.insert(neighbor, next_cost);
+                        if dist.get(&neighbor).is_none_or(|&d| cost < d - 1e-9) {
+                            dist.insert(neighbor, cost);
                             heap.push(HeapItem {
-                                cost: next_cost,
+                                cost,
                                 node: neighbor,
                             });
                         }
@@ -149,8 +169,8 @@ impl Project {
         }
 
         // No path found (shouldn't happen if sections are connected)
-        // Fall back to sum of all reachable section lengths
-        let fallback_sections = if include_closures {
+        // Fall back to sum of all reachable section lengths.
+        let fallback_sections = if closure_adj.is_some() {
             self.get_connected_section_ids(station_a.section_id)
         } else {
             self.get_merged_section_ids(station_a.section_id)

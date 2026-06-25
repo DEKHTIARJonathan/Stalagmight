@@ -279,6 +279,10 @@ export const defaultConfig: Config = {
     conservative_tank_gas: true,
     dpv: null,
   },
+  speleodb: {
+    endpoint: null,
+    email: null,
+  },
 };
 
 /**

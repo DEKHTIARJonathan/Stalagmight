@@ -238,9 +238,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       }> = [];
       let mockOrphanPlacementSuggestions: unknown[] = [];
       let mockImportPlacementSuggestions: unknown[] = [];
+      // Records execute_walls_import args (esp. selectedSurveys) so the Walls
+      // import dialog spec can assert the select-all→null / explicit-index path.
+      let wallsImportCalls: Array<Record<string, unknown>> = [];
 
       (window as unknown as Record<string, unknown>).__MOCK_SET_CHECK_DUPLICATE_RESULT__ = (result: boolean) => {
         mockCheckDuplicateResult = result;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_GET_WALLS_IMPORT_CALLS__ = () => [...wallsImportCalls];
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_WALLS_IMPORT_CALLS__ = () => {
+        wallsImportCalls = [];
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ = () => [...trackImportedFileCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ = () => {
@@ -1386,6 +1393,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
           }
 
+          case 'execute_walls_import':
+            // Record the import args (selectedSurveys, includeSplays, …) for
+            // assertions, then return a one-section success so the dialog runs
+            // its "imported" exit path (not the "nothing imported" branch).
+            wallsImportCalls.push({ ...(args ?? {}) });
+            return {
+              success: true,
+              warnings: [],
+              error: null,
+              section_ids: [1],
+              section_id: 1,
+            };
+
           // File hash tracking for duplicate detection
           case 'calculate_file_hash':
             // Return a mock SHA256 hash based on path for consistency
@@ -2208,10 +2228,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true };
           }
 
-          case 'move_section':
-            // Mock move section - just return success
+          case 'move_section': {
+            // Record the dispatched offset (mirrors move_segment/move_station) so
+            // commit-assertion tests can check the offset that reached the backend.
             console.log('[Mock IPC] move_section called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_MOVE_CALLS__ as unknown[]) ?? [];
+            calls.push({ command: 'move_section', args: args ?? null });
+            win.__MOCK_MOVE_CALLS__ = calls;
             return { success: true };
+          }
 
           case 'move_station': {
             console.log('[Mock IPC] move_station called with:', args);

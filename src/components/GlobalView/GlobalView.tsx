@@ -15,7 +15,7 @@ import { CloseIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIco
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { setProjectActionSource } from '../../utils/telemetry';
-import { dmpOpenFilters, tmlOpenFilters, compassOpenFilters, gpxOpenFilters } from '../../utils/fileDialogs';
+import { dmpOpenFilters, tmlOpenFilters, compassOpenFilters, wallsOpenFilters, gpxOpenFilters } from '../../utils/fileDialogs';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
@@ -522,6 +522,19 @@ export default function GlobalView() {
   const menuItems: AppMenuItem[] = useMemo(
     () => [
       ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
+      // Dev-only spike entry (#183). The production "Open from SpeleoDB" menu +
+      // project browser is #203; this is gated to dev builds only.
+      ...(import.meta.env.DEV
+        ? [
+            {
+              id: 'global-speleodb-spike-button',
+              label: 'Open from SpeleoDB (spike)',
+              icon: <DownloadIcon size={18} />,
+              iconColor: MENU_ICON_COLORS.open,
+              onClick: () => openDialog('speleodb-spike'),
+            },
+          ]
+        : []),
       {
         id: 'global-import-menu-button',
         label: t('globalView.actions.import'),
@@ -535,6 +548,7 @@ export default function GlobalView() {
           importMenuItem('global-import-dmp-button', t('globalView.actions.importDmp'), dmpOpenFilters, 'hamburger', 'import_dmp'),
           importMenuItem('global-import-tml-button', t('globalView.actions.importTml'), tmlOpenFilters, 'hamburger'),
           importMenuItem('global-import-compass-button', t('globalView.actions.importCompass'), compassOpenFilters, 'hamburger'),
+          importMenuItem('global-import-walls-button', t('globalView.actions.importWalls'), wallsOpenFilters, 'hamburger'),
           importMenuItem('global-import-gpx-button', t('globalView.actions.importGpx'), gpxOpenFilters, 'hamburger'),
         ],
       },

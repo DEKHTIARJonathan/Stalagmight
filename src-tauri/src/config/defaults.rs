@@ -5,7 +5,7 @@ use super::{
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
     ProviderCacheConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
-    StationConfig, SyntacticHighlightingConfig, UnitsConfig, ValidationConfig,
+    SpeleoDbConfig, StationConfig, SyntacticHighlightingConfig, UnitsConfig, ValidationConfig,
 };
 
 #[expect(clippy::derivable_impls)]
@@ -31,6 +31,7 @@ impl Default for Config {
             placement_suggestion: PlacementSuggestionConfig::default(),
             syntactic_highlighting: SyntacticHighlightingConfig::default(),
             gas: GasConfig::default(),
+            speleodb: SpeleoDbConfig::default(),
             legacy_snap: None,
         }
     }

@@ -42,6 +42,7 @@ export function dmpOpenFilters() {
 export const TML_EXTENSIONS = ['tml', 'tmlu'];
 export const GPX_EXTENSION = 'gpx';
 export const COMPASS_EXTENSIONS = ['mak', 'dat'];
+export const WALLS_EXTENSIONS = ['wpj', 'srv'];
 
 /**
  * Single source of truth for the importable survey formats, grouped by the
@@ -58,6 +59,7 @@ export const IMPORT_EXTENSIONS = {
   gpx: [GPX_EXTENSION],
   tml: TML_EXTENSIONS,
   compass: COMPASS_EXTENSIONS,
+  walls: WALLS_EXTENSIONS,
   dmp: [DMP_EXTENSION],
 } as const;
 
@@ -70,6 +72,7 @@ export const IMPORTABLE_EXTENSIONS: readonly string[] = [
   ...IMPORT_EXTENSIONS.gpx,
   ...IMPORT_EXTENSIONS.tml,
   ...IMPORT_EXTENSIONS.compass,
+  ...IMPORT_EXTENSIONS.walls,
   ...IMPORT_EXTENSIONS.dmp,
 ];
 
@@ -83,6 +86,13 @@ export function tmlOpenFilters() {
 export function compassOpenFilters() {
   return [
     { name: 'Compass Survey', extensions: COMPASS_EXTENSIONS },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+}
+
+export function wallsOpenFilters() {
+  return [
+    { name: 'Walls Survey', extensions: WALLS_EXTENSIONS },
     { name: 'All Files', extensions: ['*'] },
   ];
 }
@@ -127,6 +137,7 @@ export function importOpenFilters() {
     { name: 'mNemo DMP', extensions: [...IMPORT_EXTENSIONS.dmp] },
     { name: 'Ariane Survey', extensions: [...IMPORT_EXTENSIONS.tml] },
     { name: 'Compass Survey', extensions: [...IMPORT_EXTENSIONS.compass] },
+    { name: 'Walls Survey', extensions: [...IMPORT_EXTENSIONS.walls] },
     { name: 'GPX Files', extensions: [...IMPORT_EXTENSIONS.gpx] },
     { name: 'All Files', extensions: ['*'] },
   ];
@@ -150,6 +161,7 @@ export function openOrImportFilters() {
     { name: 'mNemo DMP', extensions: [DMP_EXTENSION] },
     { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
     { name: 'Compass Survey', extensions: COMPASS_EXTENSIONS },
+    { name: 'Walls Survey', extensions: WALLS_EXTENSIONS },
     { name: 'GPX Files', extensions: [GPX_EXTENSION] },
     { name: 'All Files', extensions: ['*'] },
   ];

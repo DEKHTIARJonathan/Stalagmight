@@ -186,7 +186,7 @@ impl AppState {
         section_hashes: Vec<String>,
         existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
     ) -> CommandResult {
-        use crate::models::{ClosureStrategy, ImportPlacement, StationRef};
+        use crate::models::{ImportPlacement, StationRef};
         use std::collections::{HashMap, HashSet};
 
         // Serialize command execution to prevent concurrent interleaving
@@ -507,6 +507,10 @@ impl AppState {
             if let Some(project) = proj_guard.as_mut() {
                 project.rebuild_section_index();
                 project.rebuild_merge_adjacency();
+                // Make `resolve_key`'s AfterShot lookup O(1) for the hot
+                // merge/closure connectivity loops below — without this, a large
+                // import (e.g. a big Walls project) pins a core for minutes.
+                project.rebuild_shot_uuid_index();
             }
         }
 
@@ -767,7 +771,11 @@ impl AppState {
             "final cascade after deferred placement loop"
         );
 
-        // Create loop closures from TML CLOSURE shots (non-fatal)
+        // Create loop closures from TML CLOSURE shots (non-fatal). Resolve every
+        // pair first (in order), then create them in ONE batch that builds the
+        // closure-graph invariants once instead of rebuilding the whole graph per
+        // closure — the dominant cost on a large import.
+        let mut closure_pairs: Vec<(StationRef, StationRef)> = Vec::with_capacity(closures.len());
         for closure in &closures {
             let Some(&from_section_id) = created_ids.get(&closure.from_section_index) else {
                 tracing::warn!(
@@ -785,39 +793,38 @@ impl AppState {
                 );
                 continue;
             };
-            let station_a = StationRef::new(from_section_id, closure.from_station_index);
-            let station_b = StationRef::new(to_section_id, closure.to_station_index);
-
-            // Create directly on the locked project to avoid double-locking
-            let result = {
+            closure_pairs.push((
+                StationRef::new(from_section_id, closure.from_station_index),
+                StationRef::new(to_section_id, closure.to_station_index),
+            ));
+        }
+        if !closure_pairs.is_empty() {
+            let results = {
                 let mut proj_guard = match self.project.lock() {
                     Ok(g) => g,
                     Err(poisoned) => poisoned.into_inner(),
                 };
-                if let Some(project) = proj_guard.as_mut() {
-                    project.create_loop_closure(station_a, station_b, ClosureStrategy::Batch)
-                } else {
-                    Err("No project open".to_string())
+                match proj_guard.as_mut() {
+                    Some(project) => project.create_loop_closures_batch(&closure_pairs),
+                    None => Vec::new(),
                 }
             };
-            match result {
-                Ok(lc) => {
-                    tracing::debug!(
+            for ((station_a, station_b), result) in closure_pairs.iter().zip(results) {
+                match result {
+                    Ok(lc) => tracing::debug!(
                         closure_id = lc.id,
                         ?station_a,
                         ?station_b,
                         purpose = "import loop closures",
                         "Created loop closure from TML import"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
+                    ),
+                    Err(e) => tracing::warn!(
                         ?station_a,
                         ?station_b,
                         error = %e,
                         purpose = "import loop closures",
                         "Failed to create loop closure from TML import, skipping"
-                    );
+                    ),
                 }
             }
         }
@@ -852,7 +859,11 @@ impl AppState {
         // corruption (dangling refs / non-finite geometry) rather than committing
         // and later persisting it. This custom path bypasses execute()'s guard, so
         // it must run the same epilogue itself (#integrity Root 4 / catalog #19).
-        if self.finalize_structural_edit(pre_had_critical) {
+        // An import only ADDS sections/merges/closures (its closures are loops over
+        // the spanning-tree merges, never sole bridges), so it can't strand a
+        // section behind a closure — skip the O(closures × connectivity)
+        // sole-bridge conversion that otherwise dominated a large import.
+        if self.finalize_structural_edit(pre_had_critical, false) {
             self.rollback_project(&before_snapshot);
             tracing::error!(
                 purpose = "block corruption at the source",

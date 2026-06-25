@@ -84,6 +84,9 @@ pub struct AppState {
     pub(super) config: Mutex<Config>,
     /// Recent projects list
     pub(super) recent_projects: Mutex<Vec<PathBuf>>,
+    /// SpeleoDB per-session connection state (endpoint, email, token store).
+    /// Read-only spike (#183); the token never crosses into the webview.
+    pub(super) speleodb: Mutex<super::speleodb::SpeleoDbSession>,
     /// In-memory display settings cache (used when no DB is open, e.g., new unsaved project)
     pub(super) display_settings_cache: Mutex<HashMap<String, String>>,
     /// Serialization lock for command execution.
@@ -155,6 +158,7 @@ impl AppState {
             undo_stack: Mutex::new(UndoStack::new_with_limit(undo_limit)),
             config: Mutex::new(config),
             recent_projects: Mutex::new(recent),
+            speleodb: Mutex::new(super::speleodb::SpeleoDbSession::default()),
             display_settings_cache: Mutex::new(HashMap::new()),
             command_lock: Mutex::new(()),
             tile_cache: Arc::new(Mutex::new(tile_cache)),
@@ -469,6 +473,7 @@ impl AppState {
                 }
                 restored.rebuild_section_index();
                 restored.rebuild_merge_adjacency();
+                restored.rebuild_shot_uuid_index();
                 // A snapshot blob persisted by a PRE-ANCHOR build can carry
                 // transitional positional `Index` cross-reference anchors (undo/redo
                 // history is persisted to SQLite and reloaded across sessions, and the

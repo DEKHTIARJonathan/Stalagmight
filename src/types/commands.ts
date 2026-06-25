@@ -23,6 +23,8 @@ export type {
   TmlClosure,
   CompassFile,
   CompassSurveySummary,
+  WallsFile,
+  WallsSurveySummary,
   ImportSectionConfig,
   ImportPlacement,
   SectionRelationships,

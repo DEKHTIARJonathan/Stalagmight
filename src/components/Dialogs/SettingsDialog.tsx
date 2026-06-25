@@ -222,6 +222,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
       overrides: { ...(base.syntactic_highlighting ?? defaultConfig.syntactic_highlighting).overrides },
     },
     gas: { ...(base.gas ?? defaultConfig.gas) },
+    speleodb: { ...(base.speleodb ?? defaultConfig.speleodb) },
   };
 
   // Apply updates with deep merge for each key

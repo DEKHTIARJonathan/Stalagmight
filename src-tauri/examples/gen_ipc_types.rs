@@ -20,9 +20,9 @@ use stalagmight_lib::config::{
     GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit,
     LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig,
     OverlapMode, PanelsConfig, PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset,
-    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, StationConfig,
-    SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig, ThemeMode,
-    UnitsConfig, ValidationConfig,
+    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
+    StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
+    ThemeMode, UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, IntegrityCheckResult, IntegrityRepairResult, ValidationWarning,
@@ -61,7 +61,11 @@ use stalagmight_lib::parsers::gpx::{
 use stalagmight_lib::parsers::tml::{
     TmlClosure, TmlFile, TmlGeoCoding, TmlSection, TmlShot, TmlShotType, TmlUnit,
 };
+use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
+use stalagmight_lib::speleodb::{
+    Permission, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus,
+};
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
 fn export<T: TS + 'static>(out_dir: &Path) {
@@ -197,6 +201,10 @@ fn main() {
     export::<CompassFile>(&out_dir);
     export::<CompassSurveySummary>(&out_dir);
 
+    // Walls import
+    export::<WallsFile>(&out_dir);
+    export::<WallsSurveySummary>(&out_dir);
+
     // Export/image types
     export::<ExportImageOptions>(&out_dir);
     export::<ImageFormat>(&out_dir);
@@ -273,6 +281,13 @@ fn main() {
     export::<ShortcutFeedback>(&out_dir);
     export::<ThemeMode>(&out_dir);
     export::<ColorTheme>(&out_dir);
+    export::<SpeleoDbConfig>(&out_dir);
+    // SpeleoDB IPC DTOs (#183)
+    export::<Permission>(&out_dir);
+    export::<SpeleoProjectSummary>(&out_dir);
+    export::<SpeleoLoginResult>(&out_dir);
+    export::<SpeleoOpenResult>(&out_dir);
+    export::<SpeleoSessionStatus>(&out_dir);
 
     let export_list = [
         "CommandResult",
@@ -376,6 +391,8 @@ fn main() {
         "TmlClosure",
         "CompassFile",
         "CompassSurveySummary",
+        "WallsFile",
+        "WallsSurveySummary",
         "ExportImageOptions",
         "ImageFormat",
         "DepthPreset",
@@ -437,6 +454,12 @@ fn main() {
         "ShortcutFeedback",
         "ThemeMode",
         "ColorTheme",
+        "SpeleoDbConfig",
+        "Permission",
+        "SpeleoProjectSummary",
+        "SpeleoLoginResult",
+        "SpeleoOpenResult",
+        "SpeleoSessionStatus",
     ];
 
     let mut generated =

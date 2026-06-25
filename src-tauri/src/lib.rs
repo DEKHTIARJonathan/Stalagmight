@@ -8,6 +8,7 @@ pub mod logging;
 pub mod models;
 pub mod parsers;
 pub mod persistence;
+pub mod speleodb;
 pub mod telemetry;
 #[cfg(test)]
 pub mod test_helpers;
@@ -1251,6 +1252,12 @@ pub fn run() {
             commands::project::load_project_full_binary,
             commands::project::create_project_full,
             commands::project::cancel_loading,
+            // SpeleoDB commands (read-only spike, #183)
+            commands::speleodb::speleodb_login,
+            commands::speleodb::speleodb_list_projects,
+            commands::speleodb::speleodb_open_project,
+            commands::speleodb::speleodb_logout,
+            commands::speleodb::speleodb_session,
             // Section commands
             commands::section::create_section,
             commands::section::update_section,
@@ -1308,6 +1315,8 @@ pub fn run() {
             commands::import::execute_tml_import,
             commands::import::parse_compass,
             commands::import::execute_compass_import,
+            commands::import::parse_walls,
+            commands::import::execute_walls_import,
             commands::import::parse_gpx,
             commands::import::execute_gpx_import,
             commands::import::suggest_import_placement,

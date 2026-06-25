@@ -43,6 +43,25 @@ impl Project {
         connected
     }
 
+    /// Station-level merge adjacency: each [`StationRef`] → the stations it is
+    /// directly merged with. Resolves every `station_merges` endpoint once
+    /// (O(merges)), so a BFS over it is O(merges + group) instead of the
+    /// O(group × merges) "rescan every merge per node" walk. Used by the merge
+    /// connectivity / colocation queries on the import hot path.
+    pub(crate) fn build_station_merge_adjacency(&self) -> HashMap<StationRef, Vec<StationRef>> {
+        let mut adjacency: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for merge in &self.station_merges {
+            if let (Some(sa), Some(sb)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) {
+                adjacency.entry(sa).or_default().push(sb);
+                adjacency.entry(sb).or_default().push(sa);
+            }
+        }
+        adjacency
+    }
+
     /// Get all section IDs connected through merges and aligned closures (rigid groups).
     /// Unaligned closures are ignored so sections can move independently before adjustment.
     pub fn get_rigid_connected_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
