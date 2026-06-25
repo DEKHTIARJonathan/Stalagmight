@@ -317,12 +317,29 @@ comprehensive tank DB or commit a third-party table; **water volumes below are g
 | **LP120**  | steel     | ~17.0 | 2600 psi / 179 bar (+) | LP |
 | **HP100**  | steel     | ~12.9 | 3442 psi / 237 bar | HP |
 | **HP120**  | steel     | ~15.4 | 3442 psi / 237 bar | HP |
+| **HP130**  | steel     | ~16.7 | 3442 psi / 237 bar | HP |
 
 **+ rating:** LP steels carry a "+" stamp for a +10% fill (~2600 psi / 179 bar) — used as the rated
 reference here; actual cave fills go higher (210–230 bar, **user-set**). **† AL40** is a **deco-only**
 bottle — its gas is **never** travel/penetration gas (only on the deco/exit ceiling), so it's **out of
 current scope**; a `Deco` cylinder role (**excluded from the penetration budget**) is future work with
 the deco phase (§9). Listed now so the preset exists later.
+
+**CCR diluent / small bottles** (sidemount-CCR diluent run "dil-out" — §5.5 — and pony/stage bailout;
+named by **water volume L**, e.g. "Faber 2L"). True-air capacity is given because at HP it already
+bakes in real-gas:
+
+| Cylinder (mfg) | Water vol (L) | Service | True air (ft³) | Class |
+|----------------|---------------|---------|----------------|-------|
+| **AL13** (Thunderbird 2L) | 2.0  | 3000 psi / 207 bar     | 13.3 | MP |
+| **AL19** (Thunderbird 3L) | 3.0  | 3000 psi / 207 bar     | 18.1 | MP |
+| **AL20** (Catalina 3L)    | ~3.0 | 3000 psi / 207 bar     | 20.1 | MP |
+| **S15**  (Faber 2L)       | 2.0  | 3442 psi / 237 bar     | 15.7 | HP |
+| **S23**  (Faber 3L)       | 3.0  | 3442 psi / 237 bar     | 23.5 | HP |
+| **S27**  (Faber 4L)       | 4.0  | 2640 psi / 182 bar (+) | 25.0 | LP |
+
+*(All run negative full→empty — even the aluminiums — fine for the worn sidemount-CCR diluent role.
+For CCR the binding constraint is **bailout volume**, not these onboard volumes — §5.5.)*
 
 **Fill pressure is an INPUT, not the rating.** LP85s are routinely **overfilled to ~210–230
 bar absolute** — i.e. filled *to* ~230 bar, **not** 230 over the ~179 bar rating. Not strictly
