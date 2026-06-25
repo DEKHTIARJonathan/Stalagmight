@@ -161,7 +161,7 @@ Cylinder { water_volume_l, rated_pressure_bar, fill_bar, material: TankMaterial,
   // (diluent + suit inflation), rest = bailout (§5.5).
 GasConfig {
   reserve: ReservePreset,        // AllThirds | OneStage | TwoStage — see §5.1; pushy presets gated to "advanced"
-  stressed_rmv_multiplier: f64,  // bailout/contingency bump, e.g. 1.5–2.0
+  stressed_rmv_multiplier: f64,  // user-settable; DEFAULT 1.5×; bailout/contingency bump (§5.5)
   swim_speed_m_per_min: f64,     // EXIT-leg speed (fast). DEFAULT 10 m/min (no DPV — Nico)
   survey_speed_m_per_min: Option<f64>, // IN-leg speed while surveying — often 2–3× slower; None = symmetric. §5.2
   survey_rmv_multiplier: f64,    // IN-leg task-loading bump; DEFAULT 1.0. New surveyors report a bit; minor. §5.2
@@ -357,8 +357,7 @@ bailout = Σ usable over bailout-capable cylinders (dil-out gives `fill − dil_
 dedicated bailout bottles give full usable). **Constraint:** available bailout ≥ the exit integral from the **single worst point** (the
 max-exit-gas point; on a monotone line that's the furthest penetration / the lead — branching caves
 take the max over branch tips), checked along the route; where short, **stage bailout** (drop bottles
-— §5.4 mechanics, bailout variant). Stressed-RMV multiplier applies (value still a knob — my
-1.5–2.0 placeholder, confirm). *(Sidemount dil-out is the common case; the role model also covers
+— §5.4 mechanics, bailout variant). Stressed-RMV multiplier applies — **user-settable, default 1.5×** (Nico, 2026-06-24). *(Sidemount dil-out is the common case; the role model also covers
 back-mount CCR — a non-bailout Diluent role + dedicated Bailout bottles.)*
 
 ---
@@ -506,9 +505,10 @@ each); the mirror strategy survives** — three structural changes folded in bel
   TS default at `src/types/config.ts` alongside `units:`; add `src/utils/formatGas.ts`
   (`formatPressure`/`formatVolume`/`formatRmv`, metric first, conversion seam so imperial is a
   Phase-4 flip — never hardcode suffixes; cf. `formatStats.ts:54` `formatLength` / `:29`
-  `getUnitSuffix`); extend `settings/UnitsSettings.tsx` with a gas sub-section. ⚠ This yields **two
-  independent unit toggles** (length/depth from `UnitsConfig.length`, gas from `GasConfig.units`) —
-  reconcile the readout copy (§10).
+  `getUnitSuffix`); extend `settings/UnitsSettings.tsx` with a gas sub-section. **✅ One MASTER unit toggle
+  (Nico):** a single metric/imperial selector drives length/depth (`UnitsConfig`) **and** gas
+  pressure/volume together — no independent gas toggle; `GasConfig.units` (if kept) derives from the
+  master selector, never set separately.
 
 ### 7.3 UX — layout & interaction (Nico, 2026-06-23)
 
@@ -537,9 +537,10 @@ Concretises the choices §7.2 left open:
   snap-to-station machinery to reuse. Scope it in **Phase 2** (draggable `Marker` + project the
   dragged lng/lat onto the nearest shot polyline + snap within a threshold + re-validate against the
   reach field on drag); a station-list / click-to-place picker is the simpler v1 fallback.
-- **Rig setup: saved rig profiles.** Pick a saved rig ("my standard rig" — e.g. 2× LP85 back
-  gas + 2× AL80 stages) from **user config**, then tweak fills per dive. Built on the §5.3 tank
-  presets; profiles are personal defaults (user config, never the `.stalx`).
+- **Rig setup: saved rig profiles (Phase 1 — Nico).** Pick a saved rig ("my standard rig" — e.g.
+  2× LP85 back gas + 2× AL80 stages) from **user config** (a `Vec<RigProfile>` in global `Config`,
+  edited via Settings), then tweak fills per dive. Built on the §5.3 tank presets; profiles are
+  personal defaults (user config, never the `.stalx`). **In Phase-1 scope**, not deferred.
 - **Push-headroom: explicit opt-in toggle, OFF by default.** A "Show push-headroom" control,
   default **off**, so the conservative thirds view is the resting state; when on, the faint
   labeled extension (above) appears. Strongest §6 automation-bias posture.
@@ -566,8 +567,9 @@ Concretises the choices §7.2 left open:
   fully testable in isolation.
 - **Phase 1 — OC reachable-frontier (headline):** the `build_survey_graph_weighted` refactor;
   `GasReachField` + `compute_gas_reach_field`; sub-mode shell (enter/exit + `setView` reset),
-  single-diver input panel, reachable-extent overlay + turn point + readout; `gasPlanStore`.
-  Single diver, both unit systems. **First user-visible vertical slice.**
+  single-diver input panel, reachable-extent overlay + turn point + readout; `gasPlanStore`;
+  **saved rig profiles** (`Vec<RigProfile>` in `Config`). Single diver, both unit systems.
+  **First user-visible vertical slice.**
 - **Phase 2 — Lead→plan + OC stages + drops:** `compute_gas_plan_to_lead` (back-traced path),
   stage gas, turn pressures, suggested + draggable-validated drops, drop markers.
 - **Phase 3 — CCR bailout (dil-out model, §5.5):** `PlanMode::CcrBailout`, bailout volume
