@@ -25,6 +25,52 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
   const [commentsOnStations, setCommentsOnStations] = useState(true);
   const [includeSplays, setIncludeSplays] = useState(false);
 
+  // Indices (into `wallsFile.surveys`, 1:1 with the backend's survey order) the
+  // user has chosen to import. Only resolved surveys are selectable (an
+  // unresolved one has no .SRV on disk). Default: everything resolved, so the
+  // import matches prior behavior until the user deselects (e.g. a huge surface
+  // terrain mesh). Reset whenever the previewed file changes.
+  const resolvedIndices = useMemo(
+    () => wallsFile.surveys.flatMap((s, i) => (s.resolved ? [i] : [])),
+    [wallsFile.surveys]
+  );
+  const [selectedSurveys, setSelectedSurveys] = useState<Set<number>>(
+    () => new Set(resolvedIndices)
+  );
+  useEffect(() => {
+    setSelectedSurveys(new Set(resolvedIndices));
+  }, [resolvedIndices]);
+
+  const allSelected =
+    resolvedIndices.length > 0 && resolvedIndices.every((i) => selectedSurveys.has(i));
+  const toggleSurvey = useCallback((i: number) => {
+    setSelectedSurveys((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  }, []);
+  const toggleAll = useCallback(() => {
+    setSelectedSurveys((prev) => {
+      const allOn = resolvedIndices.length > 0 && resolvedIndices.every((i) => prev.has(i));
+      return allOn ? new Set() : new Set(resolvedIndices);
+    });
+  }, [resolvedIndices]);
+
+  // Importable shots in the CURRENTLY SELECTED surveys (each summary's
+  // shot_count already excludes splays, same filter as the project total), so
+  // the Shots stat and the Import gate track the selection rather than the
+  // whole file — deselecting every shot-bearing survey disables Import.
+  const selectedShotCount = useMemo(
+    () =>
+      wallsFile.surveys.reduce(
+        (sum, s, i) => (selectedSurveys.has(i) ? sum + s.shot_count : sum),
+        0
+      ),
+    [wallsFile.surveys, selectedSurveys]
+  );
+
   // Re-check for a duplicate whenever the target file changes (the dialog may be
   // reused for a different import); reset the gate so Import stays disabled until
   // the new hash is verified, and ignore a stale in-flight result.
@@ -65,7 +111,18 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
     startLoading(wallsFile.project_name || fileName, filePath);
     setLoadingProgress({ phase: 'import_parsing' });
     try {
-      const result = await executeWallsImport(filePath, fileHash, commentsOnStations, includeSplays);
+      // Pass the selection as the original survey indices; omit (null) when
+      // everything resolved is selected so a full import stays unfiltered.
+      const surveySelection = allSelected
+        ? null
+        : [...selectedSurveys].sort((a, b) => a - b);
+      const result = await executeWallsImport(
+        filePath,
+        fileHash,
+        commentsOnStations,
+        includeSplays,
+        surveySelection
+      );
       resetLoading();
 
       if (!result.success) {
@@ -139,7 +196,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
         message: getErrorMessage(e, 'Failed to import Walls file'),
       });
     }
-  }, [executeWallsImport, filePath, fileHash, commentsOnStations, includeSplays, wallsFile.project_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
+  }, [executeWallsImport, filePath, fileHash, commentsOnStations, includeSplays, selectedSurveys, allSelected, wallsFile.project_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
 
   return (
     <DialogWrapper title="Import Walls Survey" onClose={closeDialog} size="lg" data-testid="walls-import-dialog">
@@ -165,7 +222,10 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
           </div>
           <div>
             <div className="text-xs text-text-tertiary">Shots</div>
-            <div className="text-sm font-medium">{wallsFile.shot_count}</div>
+            <div className="text-sm font-medium">
+              {selectedShotCount}
+              {!allSelected ? ` / ${wallsFile.shot_count}` : ''}
+            </div>
           </div>
           <div>
             <div className="text-xs text-text-tertiary" title="#Fix stations — each becomes a GPS zero datum on its connected component">
@@ -194,7 +254,9 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-sm">
             {wallsFile.missing_file_count > 0
               ? `None of the ${wallsFile.missing_file_count} referenced .SRV survey file(s) were found next to "${fileName}", so there is nothing to import. A .wpj references its survey files by name — put the .SRV files in the same folder as the .wpj, or import a single .srv file directly.`
-              : 'This file contains no survey shots to import.'}
+              : wallsFile.splay_count > 0
+                ? `This file has no regular survey shots, but ${wallsFile.splay_count} anonymous wall / splay shot(s). Enable "Include anonymous wall / splay shots" below to import them.`
+                : 'This file contains no survey shots to import.'}
           </div>
         )}
 
@@ -211,28 +273,56 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             </div>
           )}
 
-        {/* Survey list */}
-        <div className="max-h-64 overflow-y-auto border border-border rounded">
-          <table className="w-full text-sm">
-            <thead className="bg-surface-alt sticky top-0">
-              <tr className="text-left text-text-tertiary text-xs">
-                <th className="px-3 py-1.5">Survey</th>
-                <th className="px-3 py-1.5">Shots</th>
-                <th className="px-3 py-1.5">Segment</th>
-                <th className="px-3 py-1.5">Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {wallsFile.surveys.filter((s) => s.resolved).map((survey, i) => (
-                <tr key={i} className="border-t border-border">
-                  <td className="px-3 py-1.5">{survey.title || survey.name}</td>
-                  <td className="px-3 py-1.5">{survey.shot_count}</td>
-                  <td className="px-3 py-1.5 text-text-secondary">{survey.segment || '-'}</td>
-                  <td className="px-3 py-1.5 text-text-secondary">{survey.date || '-'}</td>
+        {/* Survey list — choose which surveys to import */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-xs text-text-tertiary">
+            <span>Surveys to import</span>
+            <span data-testid="walls-selected-count">
+              {selectedSurveys.size} of {resolvedIndices.length} selected
+            </span>
+          </div>
+          <div className="max-h-64 overflow-y-auto border border-border rounded">
+            <table className="w-full text-sm">
+              <thead className="bg-surface-alt sticky top-0">
+                <tr className="text-left text-text-tertiary text-xs">
+                  <th className="px-3 py-1.5 w-8">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={toggleAll}
+                      aria-label="Select all surveys"
+                      data-testid="walls-select-all"
+                    />
+                  </th>
+                  <th className="px-3 py-1.5">Survey</th>
+                  <th className="px-3 py-1.5">Shots</th>
+                  <th className="px-3 py-1.5">Segment</th>
+                  <th className="px-3 py-1.5">Date</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {wallsFile.surveys.map((survey, i) =>
+                  survey.resolved ? (
+                    <tr key={i} className="border-t border-border">
+                      <td className="px-3 py-1.5">
+                        <input
+                          type="checkbox"
+                          checked={selectedSurveys.has(i)}
+                          onChange={() => toggleSurvey(i)}
+                          aria-label={`Import ${survey.title || survey.name}`}
+                          data-testid={`walls-survey-${i}`}
+                        />
+                      </td>
+                      <td className="px-3 py-1.5">{survey.title || survey.name}</td>
+                      <td className="px-3 py-1.5">{survey.shot_count}</td>
+                      <td className="px-3 py-1.5 text-text-secondary">{survey.segment || '-'}</td>
+                      <td className="px-3 py-1.5 text-text-secondary">{survey.date || '-'}</td>
+                    </tr>
+                  ) : null
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/* Parser warnings */}
@@ -278,7 +368,12 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             data-primary-action=""
             data-testid="walls-import-confirm"
             onClick={handleImport}
-            disabled={isImporting || !hashChecked || wallsFile.shot_count === 0}
+            disabled={
+              isImporting ||
+              !hashChecked ||
+              selectedSurveys.size === 0 ||
+              (selectedShotCount === 0 && !(includeSplays && wallsFile.splay_count > 0))
+            }
           >
             {isImporting ? 'Importing...' : 'Import'}
           </Button>

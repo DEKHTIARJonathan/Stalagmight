@@ -348,7 +348,7 @@ interface ProjectStore {
   parseCompass: (path: string) => Promise<CompassFile>;
   executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseWalls: (path: string) => Promise<WallsFile>;
-  executeWallsImport: (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean) => Promise<CommandResult>;
+  executeWallsImport: (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean, selectedSurveys?: number[] | null) => Promise<CommandResult>;
   // Per-project settings (#57): name + validation thresholds, stored in the .stalx
   updateProjectSettings: (name: string, validation: Config['validation']) => Promise<CommandResult>;
   // Collaboration mode
@@ -1791,7 +1791,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     });
   },
 
-  executeWallsImport: async (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean) => {
+  executeWallsImport: async (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean, selectedSurveys?: number[] | null) => {
     return executeCommand(
       'execute_walls_import',
       {
@@ -1799,6 +1799,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         fileHash: fileHash ?? null,
         commentsOnStations: commentsOnStations ?? true,
         includeSplays: includeSplays ?? false,
+        // `null` ⇒ import every survey; an array picks specific survey indices
+        // (into the preview's `surveys`, 1:1 with the parser order).
+        selectedSurveys: selectedSurveys ?? null,
       },
       { purpose: 'import Walls', fields: { path } }
     );

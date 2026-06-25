@@ -567,6 +567,7 @@ pub fn execute_walls_import(
     file_hash: Option<String>,
     comments_on_stations: bool,
     include_splays: bool,
+    selected_surveys: Option<Vec<u32>>,
 ) -> CommandResult {
     tracing::info!(
         path = ?path,
@@ -595,6 +596,10 @@ pub fn execute_walls_import(
     let opts = WallsImportOptions {
         comments_on_stations,
         include_splays,
+        // `None` ⇒ import every survey; `Some(list)` ⇒ only the chosen survey
+        // indices (into the preview's `WallsFile::surveys`, which is 1:1 with
+        // the parser's survey order).
+        selected_surveys: selected_surveys.map(|v| v.into_iter().collect()),
     };
     let (sections, closures, warnings) =
         match crate::parsers::walls::convert_walls_to_import_configs(&parsed, &opts) {

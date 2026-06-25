@@ -32,7 +32,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -68,6 +68,11 @@ pub struct WallsFile {
     /// Surveys whose `.SRV` file was found on disk and parsed.
     pub resolved_survey_count: u32,
     pub shot_count: u32,
+    /// Anonymous-wall / splay shots that are excluded from `shot_count` but
+    /// WOULD be imported with "Include splays" enabled. Lets the dialog allow
+    /// import of a splay-only file (where `shot_count == 0`) once the user opts
+    /// in, instead of leaving the button permanently disabled.
+    pub splay_count: u32,
     /// True when the project carries a `.REF` projection reference (UTM/datum).
     /// This is the coordinate system, NOT a station anchor — see
     /// `fixed_station_count` for actual GPS anchors.
@@ -104,6 +109,13 @@ pub struct WallsImportOptions {
     pub comments_on_stations: bool,
     /// Include anonymous "wall" / splay shots (a `-` station) as reference shots.
     pub include_splays: bool,
+    /// Survey indices (into `ParsedWalls::surveys`, matching the preview's
+    /// `WallsFile::surveys` order 1:1) the user chose to import. `None` imports
+    /// every survey; `Some(set)` imports only the listed indices (an empty set
+    /// imports nothing). Filtering by the ORIGINAL index keeps synthetic splay
+    /// names (`anon:{si}:…`) stable and lets a deselected survey's `#Fix`
+    /// anchors drop out cleanly instead of becoming "unused anchor" warnings.
+    pub selected_surveys: Option<HashSet<u32>>,
 }
 
 impl Default for WallsImportOptions {
@@ -111,6 +123,18 @@ impl Default for WallsImportOptions {
         Self {
             comments_on_stations: true,
             include_splays: false,
+            selected_surveys: None,
+        }
+    }
+}
+
+impl WallsImportOptions {
+    /// Whether survey index `si` (into `ParsedWalls::surveys`) is included by the
+    /// current selection. `None` selection ⇒ all surveys.
+    fn includes_survey(&self, si: usize) -> bool {
+        match &self.selected_surveys {
+            Some(sel) => sel.contains(&(si as u32)),
+            None => true,
         }
     }
 }
@@ -195,7 +219,12 @@ enum TapeEnd {
 #[derive(Clone, Debug)]
 struct WallsUnits {
     vector_type: VectorType,
-    order: Vec<OrderElem>,
+    /// Measurement column order for compass-and-tape (CT) shots, e.g. D/A/V.
+    ct_order: Vec<OrderElem>,
+    /// Measurement column order for rectangular (RECT) shots, e.g. E/N/U. Kept
+    /// independent of `ct_order` (matching Walls/dewalls' separate ctOrder /
+    /// rectOrder) so a CT↔RECT switch never clobbers the other type's order.
+    rect_order: Vec<OrderElem>,
     d_unit: LengthUnit,
     s_unit: LengthUnit,
     a_unit: AngleUnit,
@@ -237,7 +266,8 @@ impl Default for WallsUnits {
     fn default() -> Self {
         Self {
             vector_type: VectorType::Ct,
-            order: vec![OrderElem::Dist, OrderElem::Azm, OrderElem::Inc],
+            ct_order: vec![OrderElem::Dist, OrderElem::Azm, OrderElem::Inc],
+            rect_order: vec![OrderElem::East, OrderElem::North, OrderElem::Up],
             d_unit: LengthUnit::Meters,
             s_unit: LengthUnit::Meters,
             a_unit: AngleUnit::Degrees,
@@ -270,6 +300,14 @@ impl Default for WallsUnits {
 }
 
 impl WallsUnits {
+    /// The measurement column order active for the current vector type.
+    fn active_order(&self) -> &[OrderElem] {
+        match self.vector_type {
+            VectorType::Ct => &self.ct_order,
+            VectorType::Rect => &self.rect_order,
+        }
+    }
+
     /// True when this survey records dive depth-gauge data: compass-and-tape,
     /// station-to-station taping, distance+azimuth order with no inclination
     /// column (`#Units Order=DA Tape=SS`).
@@ -277,9 +315,9 @@ impl WallsUnits {
         self.vector_type == VectorType::Ct
             && self.tape_from == TapeEnd::Station
             && self.tape_to == TapeEnd::Station
-            && self.order.contains(&OrderElem::Dist)
-            && self.order.contains(&OrderElem::Azm)
-            && !self.order.contains(&OrderElem::Inc)
+            && self.ct_order.contains(&OrderElem::Dist)
+            && self.ct_order.contains(&OrderElem::Azm)
+            && !self.ct_order.contains(&OrderElem::Inc)
     }
 }
 
@@ -370,6 +408,11 @@ struct WallsFix {
     lat_long: Option<(f64, f64)>,
     /// Up coordinate (meters) if supplied — used to seed the station's depth.
     up: Option<f64>,
+    /// True when `lat_long` came from projecting UTM E/N through the inherited
+    /// `.REF` datum (rather than explicit lat/long). Lets the survey emit ONE
+    /// aggregated "unrecognized datum" warning instead of one per fixed point
+    /// (surface terrain files carry thousands of `#Fix` rows).
+    projected_from_utm: bool,
 }
 
 /// A resolved + parsed survey leaf.
@@ -445,6 +488,7 @@ fn parse_single_srv(path: &Path) -> Result<ParsedWalls> {
         &name,
         "",
         &WallsUnits::default(),
+        &HashMap::new(),
         None,
         true,  // grid-relative inherit -> default on; harmless with no georef
         false, // no auto-declination for a bare .srv (no georef/status)
@@ -549,7 +593,8 @@ fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                             Some(file_path) if file_path.exists() => {
                                 match read_latin1(&file_path) {
                                     Ok(contents) => {
-                                        let initial = build_initial_units(&ctx, &mut warnings);
+                                        let (initial, initial_macros) =
+                                            build_initial_units(&ctx, &mut warnings);
                                         let name = entry
                                             .name
                                             .clone()
@@ -560,6 +605,7 @@ fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                                             &name,
                                             &ctx.segment,
                                             &initial,
+                                            &initial_macros,
                                             ctx.reference.clone(),
                                             ctx.grid_relative,
                                             ctx.derive_decl,
@@ -805,8 +851,11 @@ fn parse_ref(line: &str) -> Result<WallsRef, String> {
         .split_whitespace()
         .map(|t| t.parse::<f64>().unwrap_or(f64::NAN))
         .collect();
-    if f.len() < 12 || f[..12].iter().any(|v| v.is_nan()) {
-        return Err(format!("expected >=12 numeric fields, got {}", f.len()));
+    if f.len() < 12 || f[..12].iter().any(|v| !v.is_finite()) {
+        return Err(format!(
+            "expected >=12 finite numeric fields, got {}",
+            f.len()
+        ));
     }
     // Fields: 0 N, 1 E, 2 zone, 3 convergence, 4 elev, 5 flags,
     // 6-8 lat d/m/s, 9-11 lon d/m/s, [12 datum index].
@@ -838,15 +887,22 @@ fn dms(d: f64, m: f64, s: f64) -> f64 {
     sign * (d.abs() + m / 60.0 + s / 3600.0)
 }
 
-/// Build the initial `#Units` state for a survey from inherited `.OPTIONS`.
-fn build_initial_units(ctx: &WpjContext, warnings: &mut Vec<String>) -> WallsUnits {
+/// Build the initial `#Units` state and macro table for a survey from inherited
+/// `.OPTIONS`. Macros defined in a parent/book/survey `.OPTIONS` string (e.g.
+/// `$cave=ABC`) must be visible to the child `.SRV` body, so they are returned
+/// alongside the units rather than discarded — otherwise any `$(cave)` reference
+/// in the survey fails to expand and those shots are silently dropped.
+fn build_initial_units(
+    ctx: &WpjContext,
+    warnings: &mut Vec<String>,
+) -> (WallsUnits, HashMap<String, String>) {
     let mut units = WallsUnits::default();
     let mut macros: HashMap<String, String> = HashMap::new();
     let mut stack: Vec<WallsUnits> = Vec::new();
     for opts in &ctx.options {
         apply_units_options(&mut units, opts, &mut stack, &mut macros, warnings);
     }
-    units
+    (units, macros)
 }
 
 // ---------------------------------------------------------------------------
@@ -860,6 +916,7 @@ fn parse_srv_contents(
     name: &str,
     inherited_segment: &str,
     initial_units: &WallsUnits,
+    initial_macros: &HashMap<String, String>,
     georef: Option<WallsRef>,
     grid_relative: bool,
     derive_decl: bool,
@@ -867,7 +924,9 @@ fn parse_srv_contents(
 ) -> ParsedSurvey {
     let mut units = initial_units.clone();
     let mut unit_stack: Vec<WallsUnits> = Vec::new();
-    let mut macros: HashMap<String, String> = HashMap::new();
+    // Seed with macros inherited from the project/book/survey `.OPTIONS`; inline
+    // `#units $name=value` directives add to this same table as parsing proceeds.
+    let mut macros: HashMap<String, String> = initial_macros.clone();
     let mut segment = inherited_segment.to_string();
     let mut date: Option<NaiveDate> = None;
     let mut surveyor: Option<String> = None;
@@ -949,6 +1008,22 @@ fn parse_srv_contents(
         }
     }
 
+    // If this survey projected any UTM `#Fix` through an unrecognized datum,
+    // warn ONCE (the datum is a `.REF` property shared by every fix, so a
+    // per-fix warning would repeat identically across thousands of rows).
+    if let Some(r) = &georef {
+        if !r.datum.trim().is_empty() && !datum_recognized(&r.datum) {
+            let projected = fixes.iter().filter(|f| f.projected_from_utm).count();
+            if projected > 0 {
+                warnings.push(format!(
+                    "{name}: datum '{}' is not recognized; {projected} fixed station(s) given \
+                     as UTM coordinates were projected as WGS84 and may be off by tens of meters.",
+                    r.datum
+                ));
+            }
+        }
+    }
+
     let survey_date = vectors.iter().find_map(|v| v.date).or(date);
     ParsedSurvey {
         title: title.to_string(),
@@ -992,18 +1067,27 @@ fn handle_directive(
     warnings: &mut Vec<String>,
 ) {
     let (directive, rest) = split_first_token(line);
+    // Strip any trailing `;` comment from the directive arguments (quote-aware).
+    // Walls allows an inline comment after a directive (e.g. `#Date 2008-12-01
+    // ;TODO`); without this the date/segment/prefix value would carry the note.
+    let rest = strip_inline_comment(rest);
     let key = directive.trim_start_matches('#').to_ascii_lowercase();
     match key.as_str() {
         "units" | "u" => {
             apply_units_options(units, rest, unit_stack, macros, warnings);
         }
         "date" => {
-            *date = parse_walls_date(rest.trim());
-            if date.is_none() && !rest.trim().is_empty() {
-                warnings.push(format!(
-                    "{name}:{line_no}: unrecognized #Date '{}'",
-                    rest.trim()
-                ));
+            let raw = rest.trim();
+            match parse_walls_date(raw) {
+                Some(parsed) => *date = Some(parsed),
+                // A later malformed `#Date` must NOT clobber a previously-set
+                // valid date — that would silently drop the survey date and
+                // force 0° auto-declination for the shots that follow. Keep the
+                // prior value and warn instead.
+                None if !raw.is_empty() => {
+                    warnings.push(format!("{name}:{line_no}: unrecognized #Date '{raw}'"));
+                }
+                None => {}
             }
         }
         "segment" | "seg" | "s" => {
@@ -1013,7 +1097,7 @@ fn handle_directive(
         "prefix2" => set_prefix(units, 1, rest.trim()),
         "prefix3" => set_prefix(units, 2, rest.trim()),
         "fix" => {
-            if let Some(fix) = parse_fix(rest, units, georef, warnings) {
+            if let Some(fix) = parse_fix(rest, units, georef) {
                 fixes.push(fix);
             }
         }
@@ -1026,6 +1110,36 @@ fn handle_directive(
     }
 }
 
+/// Split a `#Units` argument string into tokens on whitespace, treating a
+/// double-quoted span as a single token (the quotes are retained so `unquote`
+/// can strip them later). Walls permits quoted values with embedded spaces —
+/// e.g. `Flag="loose rock"`, `Prefix="A B"`, `$name="meters decl"` — which a
+/// plain `split_whitespace` would tear across tokens, corrupting the value and
+/// emitting spurious "unknown option" warnings.
+fn split_units_args(args: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for ch in args.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
 /// Apply a `#Units` argument string to the running units state.
 fn apply_units_options(
     units: &mut WallsUnits,
@@ -1034,7 +1148,10 @@ fn apply_units_options(
     macros: &mut HashMap<String, String>,
     warnings: &mut Vec<String>,
 ) {
-    for token in args.split_whitespace() {
+    // Drop an inline `;` comment and glue values back onto keys split by stray
+    // spaces around `=` (`Order =DAV` -> `Order=DAV`) before tokenizing.
+    let cleaned = collapse_eq_spaces(strip_inline_comment(args));
+    for token in split_units_args(&cleaned) {
         if token.is_empty() {
             continue;
         }
@@ -1051,6 +1168,12 @@ fn apply_units_options(
             Some((k, v)) => (k.to_ascii_lowercase(), Some(v)),
             None => (token.to_ascii_lowercase(), None),
         };
+        // A token like `=DAV` (a leading `=`, from a stray space that
+        // `collapse_eq_spaces` couldn't reattach) has no key — skip it silently
+        // rather than warn "Unknown #units option ''".
+        if key.is_empty() {
+            continue;
+        }
         apply_units_option(units, &key, value, unit_stack, warnings);
     }
 }
@@ -1112,13 +1235,17 @@ fn apply_units_option(
             units.d_unit = LengthUnit::Feet;
             units.s_unit = LengthUnit::Feet;
         }
+        // CT/RECT only flip the active vector type — the per-type column orders
+        // (`ct_order` / `rect_order`) are independent and untouched, matching
+        // dewalls. This is what lets a bare `#Units CT` after a `#Units RECT`
+        // block read shots with the CT order again instead of dropping them.
         "ct" => units.vector_type = VectorType::Ct,
         "rect" => {
-            // `Rect` (or `Rect=<azimuth>`) switches to rectangular E/N/U vectors;
-            // the optional value is the bearing of the +N (Y) axis, i.e. the grid
-            // rotation applied to the computed bearing at conversion.
+            // `Rect` switches to rectangular E/N/U vectors; `Rect=<azimuth>` sets
+            // the bearing of the +N (Y) axis (the grid rotation applied to the
+            // computed bearing at conversion). Either way the rectangular column
+            // order lives in `rect_order`, not here.
             units.vector_type = VectorType::Rect;
-            units.order = vec![OrderElem::East, OrderElem::North, OrderElem::Up];
             if let Some(v) = value {
                 units.rect = parse_signed_angle(v).unwrap_or(units.rect);
             }
@@ -1126,7 +1253,18 @@ fn apply_units_option(
         "order" | "o" => {
             if let Some(v) = value {
                 match parse_order(v) {
-                    Some(order) => units.order = order,
+                    // Route by the element letters, not the current vector type
+                    // (dewalls `order()` -> ctOrder/rectOrder): E/N/U is a
+                    // rectangular order, anything else (D/A/V) is compass-and-tape.
+                    Some(order) => {
+                        if order.iter().any(|e| {
+                            matches!(e, OrderElem::East | OrderElem::North | OrderElem::Up)
+                        }) {
+                            units.rect_order = order;
+                        } else {
+                            units.ct_order = order;
+                        }
+                    }
                     None => warnings.push(format!(
                         "Ignoring unparseable #Units Order='{v}'; keeping the previous order"
                     )),
@@ -1424,7 +1562,7 @@ fn parse_vector_line(
     let mut north = 0.0;
     let mut up_rect = 0.0;
 
-    for elem in &units.order {
+    for elem in units.active_order() {
         let tok = meas.get(cursor);
         cursor += 1;
         let Some(tok) = tok else { break };
@@ -1534,8 +1672,15 @@ fn parse_vector_line(
     // splay filter. Only anonymous (`-`) wall endpoints are splays.
     let is_reference = from_anon || to_anon;
 
-    // Pure station-equate (no distance, no depth) — skip.
-    if length_m <= 0.0 && from_depth.is_none() && to_depth.is_none() && az.fs.is_none() {
+    // Pure station-equate (no distance, no depth, no bearing) — skip. A
+    // zero-length leg that still carries a bearing (fore- OR back-sight) is a
+    // coincident-station tie worth keeping, matching `is_importable_shot`.
+    if length_m <= 0.0
+        && from_depth.is_none()
+        && to_depth.is_none()
+        && az.fs.is_none()
+        && az.bs.is_none()
+    {
         if left.is_none() && right.is_none() && up.is_none() && down.is_none() {
             return None;
         }
@@ -1731,12 +1876,7 @@ fn parse_lrud(
 // #Fix parsing
 // ---------------------------------------------------------------------------
 
-fn parse_fix(
-    rest: &str,
-    units: &WallsUnits,
-    georef: &Option<WallsRef>,
-    warnings: &mut Vec<String>,
-) -> Option<WallsFix> {
+fn parse_fix(rest: &str, units: &WallsUnits, georef: &Option<WallsRef>) -> Option<WallsFix> {
     // #Fix <name> <E> <N> <U> [(var)] [/note] [#seg]
     // Strip a trailing `;` comment before tokenizing (the vector path does the
     // same); otherwise `467427 2258942;datum` swallows the northing token.
@@ -1752,20 +1892,11 @@ fn parse_fix(
     let name = normalize_station(&tokens[0], units);
     let coords = &tokens[1..];
     // `#Fix` columns are E/N/U coordinates, independent of the vector
-    // measurement `Order=` (a dive survey's `Order=DA` must NOT truncate the
-    // elevation column). Honor an explicit rectangular order if one is set,
-    // otherwise default to E, N, U. Each column is a length or an N/S/E/W-
-    // prefixed geographic angle.
-    const ENU: [OrderElem; 3] = [OrderElem::East, OrderElem::North, OrderElem::Up];
-    let coord_order: &[OrderElem] = if units
-        .order
-        .iter()
-        .any(|e| matches!(e, OrderElem::East | OrderElem::North | OrderElem::Up))
-    {
-        &units.order
-    } else {
-        &ENU
-    };
+    // measurement order (a dive survey's CT `Order=DA` must NOT truncate the
+    // elevation column). The rectangular `rect_order` is exactly that — an
+    // explicit `Order=ENU…` if one was set, otherwise the E/N/U default. Each
+    // column is a length or an N/S/E/W-prefixed geographic angle.
+    let coord_order: &[OrderElem] = &units.rect_order;
     let mut east_val: Option<f64> = None;
     let mut north_val: Option<f64> = None;
     let mut up_val: Option<f64> = None;
@@ -1805,18 +1936,18 @@ fn parse_fix(
         }
     }
 
+    // The datum a UTM fix projects under is a property of the inherited `.REF`,
+    // not of the individual fix, so any "unrecognized datum" warning is emitted
+    // ONCE per survey (see `parse_srv_contents`) rather than here — otherwise a
+    // surface file's thousands of `#Fix` rows each repeat the same message.
+    let mut projected_from_utm = false;
     let lat_long = match (lat, lon) {
         (Some(la), Some(lo)) => Some((la, lo)),
         _ => match (east_val, north_val, georef) {
             (Some(e), Some(n), Some(r)) => {
-                if !r.datum.trim().is_empty() && !datum_recognized(&r.datum) {
-                    warnings.push(format!(
-                        "#Fix '{name}': datum '{}' is not recognized; UTM coordinates were \
-                         projected as WGS84 and may be off by tens of meters.",
-                        r.datum
-                    ));
-                }
-                utm_to_wgs84(e, n, r.zone, &r.datum)
+                let projected = utm_to_wgs84(e, n, r.zone, &r.datum);
+                projected_from_utm = projected.is_some();
+                projected
             }
             _ => None,
         },
@@ -1826,6 +1957,7 @@ fn parse_fix(
         name,
         lat_long,
         up: up_val,
+        projected_from_utm,
     })
 }
 
@@ -1879,6 +2011,53 @@ fn split_first_token(line: &str) -> (&str, &str) {
         Some(pos) => (&trimmed[..pos], trimmed[pos..].trim_start()),
         None => (trimmed, ""),
     }
+}
+
+/// Strip a trailing `;` line-comment from a directive argument, honoring
+/// double-quoted spans so a quoted value containing `;` is preserved. Walls
+/// treats `;` as a comment start anywhere outside quotes, so e.g.
+/// `#Date 2008-12-01 ;TODO` and `#Date 2000-06-06; oraz 2000-06-30` carry the
+/// date plus a trailing note — without stripping, the date fails to parse.
+fn strip_inline_comment(s: &str) -> &str {
+    let mut in_quotes = false;
+    for (i, c) in s.char_indices() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            ';' if !in_quotes => return &s[..i],
+            _ => {}
+        }
+    }
+    s
+}
+
+/// Collapse whitespace immediately around `=` (outside quotes) in a `#Units`
+/// argument string, so a hand-edited `Order = DAV` / `Order =DAV` / `Order= DAV`
+/// is read as `Order=DAV`. Walls keys bind tightly to `=`; stray spaces would
+/// otherwise split the value into its own token and emit spurious
+/// "unknown option" / empty-option warnings.
+fn collapse_eq_spaces(args: &str) -> String {
+    let mut out = String::with_capacity(args.len());
+    let mut in_quotes = false;
+    let mut chars = args.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                in_quotes = !in_quotes;
+                out.push(c);
+            }
+            '=' if !in_quotes => {
+                while out.ends_with([' ', '\t']) {
+                    out.pop();
+                }
+                out.push('=');
+                while matches!(chars.peek(), Some(' ' | '\t')) {
+                    chars.next();
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn split_unit_suffix<'a>(t: &'a str, suffixes: &[char]) -> (&'a str, Option<char>) {
@@ -2127,16 +2306,32 @@ fn parse_walls_date(s: &str) -> Option<NaiveDate> {
     let parts: Vec<&str> = s.split(['-', '/']).map(str::trim).collect();
     let first_len = parts.first().map_or(0, |f| f.len());
     let last_len = parts.last().map_or(0, |f| f.len());
-    let formats: &[&str] = if first_len == 4 {
-        &["%Y-%m-%d", "%Y/%m/%d"]
-    } else if last_len == 4 {
-        &["%m-%d-%Y", "%m/%d/%Y"]
-    } else {
-        &["%m-%d-%y", "%m/%d/%y"]
-    };
-    for fmt in formats {
+    if first_len == 4 || last_len == 4 {
+        let formats: &[&str] = if first_len == 4 {
+            &["%Y-%m-%d", "%Y/%m/%d"]
+        } else {
+            &["%m-%d-%Y", "%m/%d/%Y"]
+        };
+        for fmt in formats {
+            if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
+                return Some(d);
+            }
+        }
+        return None;
+    }
+    // 2-digit year. chrono's `%y` pivots at 70 (00–69 → 2000–2069), which would
+    // date a 1960s legacy survey ~100 years in the FUTURE (e.g. `64` → 2064) and
+    // then push it outside the IGRF range, silently zeroing auto-declination.
+    // Cave surveys are never from the 2030s–2060s, so roll any resolved year past
+    // 2030 back a century (effective pivot at 30: 00–30 → 2000s, 31–99 →
+    // 1931–1999).
+    for fmt in &["%m-%d-%y", "%m/%d/%y"] {
         if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
-            return Some(d);
+            return Some(if d.year() > 2030 {
+                d.with_year(d.year() - 100).unwrap_or(d)
+            } else {
+                d
+            });
         }
     }
     None
@@ -2149,32 +2344,22 @@ fn normalize_station(raw: &str, units: &WallsUnits) -> String {
         Case::Lower => raw.to_lowercase(),
         Case::Mixed => raw.to_string(),
     };
-    let entered: Vec<&str> = cased.split(':').collect();
-    let base = entered.last().copied().unwrap_or("");
-    let explicit = &entered[..entered.len().saturating_sub(1)];
-
-    let mut levels: [Option<String>; 3] = units.prefix.clone();
-    for (k, e) in explicit.iter().rev().take(3).enumerate() {
-        // rightmost explicit prefix maps to level 2, then 1, then 0
-        let lvl = 2 - k;
-        levels[lvl] = if e.trim().is_empty() {
-            None
-        } else {
-            Some(e.trim().to_string())
-        };
+    // Combine the entered name with the active prefix levels exactly as Walls
+    // does (dewalls `WallsUnits::processStationName`): the count of explicit
+    // `:`-separated segments already typed suppresses that many of the LOWEST
+    // inherited prefix levels, and each remaining level is prepended so the
+    // outermost ends up at the front (Prefix3:Prefix2:Prefix1:name); leading
+    // `:` (from unset/suppressed levels) are then stripped. `units.prefix` is
+    // indexed [Prefix1, Prefix2, Prefix3] (innermost → outermost). A leading
+    // colon therefore cancels the inherited Prefix1, e.g. `:A1` under
+    // `Prefix=CAVE` resolves to bare `A1`, not `CAVE:A1`.
+    let explicit_count = cased.matches(':').count();
+    let mut name = cased;
+    for level in explicit_count..units.prefix.len() {
+        let p = units.prefix[level].as_deref().unwrap_or("");
+        name = format!("{p}:{name}");
     }
-
-    let mut out = String::new();
-    for lvl in levels.iter() {
-        if let Some(p) = lvl {
-            if !p.is_empty() {
-                out.push_str(p);
-                out.push(':');
-            }
-        }
-    }
-    out.push_str(base);
-    out
+    name.trim_start_matches(':').to_string()
 }
 
 /// Expand `$(name)` macro references in a line. Operates on `&str` slices
@@ -2223,29 +2408,62 @@ fn utm_to_wgs84(easting: f64, northing: f64, zone: i32, datum: &str) -> Option<(
     Some((lat, lon))
 }
 
-fn datum_proj_token(datum: &str) -> String {
-    let upper = datum.to_ascii_uppercase();
-    if upper.contains("NAD83") || upper.contains("NAD 83") {
-        "datum=NAD83".to_string()
-    } else if upper.contains("NAD27") || upper.contains("NAD 27") {
-        "datum=NAD27".to_string()
-    } else if upper.contains("WGS72") || upper.contains("WGS 72") {
-        "ellps=WGS72".to_string()
+/// Geodetic family of a Walls datum name that this importer can project with a
+/// dedicated PROJ token. Walls stores datum *display* names (the first column
+/// of its 28-entry datum table — e.g. `WGS 1984`, `NAD83`, `NAD27 CONUS`); the
+/// long NIMA names (`North American 1983`/`1927`) also appear in the wild. Any
+/// datum outside these four families is an obscure regional datum that PROJ's
+/// simple `datum=`/`ellps=` tokens don't cover, so it is approximated as WGS84.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DatumFamily {
+    Wgs84,
+    Wgs72,
+    Nad83,
+    Nad27,
+    /// Unrecognized — projected as WGS84 and may be off by tens of meters.
+    OtherApproxWgs84,
+}
+
+/// Classify a Walls `.REF`/`#Fix` datum name. Whitespace is stripped and case
+/// folded so `WGS 1984` == `WGS1984` and `North American 1983` matches, then
+/// the canonical names plus their common abbreviations are recognized. This is
+/// the single source of truth for both [`datum_proj_token`] and
+/// [`datum_recognized`], so the projection used can never disagree with whether
+/// we consider the datum "recognized".
+fn datum_family(datum: &str) -> DatumFamily {
+    let key = datum
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if key.contains("NAD83") || key.contains("NORTHAMERICAN1983") {
+        DatumFamily::Nad83
+    } else if key.contains("NAD27") || key.contains("NORTHAMERICAN1927") {
+        DatumFamily::Nad27
+    } else if key.contains("WGS1984") || key.contains("WGS84") {
+        DatumFamily::Wgs84
+    } else if key.contains("WGS1972") || key.contains("WGS72") {
+        DatumFamily::Wgs72
     } else {
-        "datum=WGS84".to_string()
+        DatumFamily::OtherApproxWgs84
     }
 }
 
-/// Whether `datum_proj_token` maps this datum to a specific projection rather
+fn datum_proj_token(datum: &str) -> String {
+    match datum_family(datum) {
+        DatumFamily::Nad83 => "datum=NAD83",
+        DatumFamily::Nad27 => "datum=NAD27",
+        DatumFamily::Wgs72 => "ellps=WGS72",
+        DatumFamily::Wgs84 | DatumFamily::OtherApproxWgs84 => "datum=WGS84",
+    }
+    .to_string()
+}
+
+/// Whether [`datum_proj_token`] maps this datum to a specific projection rather
 /// than the WGS84 fallback. Used to warn when an unusual datum is silently
 /// approximated as WGS84.
 fn datum_recognized(datum: &str) -> bool {
-    let upper = datum.to_ascii_uppercase();
-    [
-        "NAD83", "NAD 83", "NAD27", "NAD 27", "WGS72", "WGS 72", "WGS84", "WGS 84",
-    ]
-    .iter()
-    .any(|tag| upper.contains(tag))
+    datum_family(datum) != DatumFamily::OtherApproxWgs84
 }
 
 // ---------------------------------------------------------------------------
@@ -2283,11 +2501,20 @@ pub fn build_preview(parsed: &ParsedWalls) -> WallsFile {
         .flat_map(|s| s.vectors.iter())
         .filter(|v| is_importable_shot(v, false))
         .count() as u32;
+    // Splay/anonymous-wall shots not counted above but importable once the user
+    // enables "Include splays" — so a splay-only file isn't reported as empty.
+    let splay_count = parsed
+        .surveys
+        .iter()
+        .flat_map(|s| s.vectors.iter())
+        .filter(|v| is_importable_shot(v, true) && !is_importable_shot(v, false))
+        .count() as u32;
     let resolved_survey_count = parsed.surveys.iter().filter(|s| s.resolved).count() as u32;
     // DISTINCT geographic `#Fix` stations the import would actually anchor on.
     // Reuse `resolve_anchors` (the importer's own logic) as the single source of
     // truth so the preview count can never drift from the anchors created.
-    let fixed_station_count = resolve_anchors(parsed, &mut Vec::new()).len() as u32;
+    let fixed_station_count =
+        resolve_anchors(parsed, &WallsImportOptions::default(), &mut Vec::new()).len() as u32;
     let surveys = parsed
         .surveys
         .iter()
@@ -2310,6 +2537,7 @@ pub fn build_preview(parsed: &ParsedWalls) -> WallsFile {
         survey_count: parsed.surveys.len() as u32,
         resolved_survey_count,
         shot_count,
+        splay_count,
         has_georeference: parsed.georef.is_some(),
         datum: parsed.georef.as_ref().map(|r| r.datum.clone()),
         utm_zone: parsed.georef.as_ref().map(|r| r.zone),
@@ -2342,7 +2570,7 @@ pub fn convert_walls_to_import_configs(
     // connected survey component gets at most ONE of them as a zero datum (the
     // model forbids multiple datums per merge component); extra fixes in the
     // same component are tied in by the normal merges + loop closures.
-    let anchors = resolve_anchors(parsed, &mut warnings);
+    let anchors = resolve_anchors(parsed, opts, &mut warnings);
 
     // Pass 1: finalize per-survey vectors, collect graph edges + known depths.
     struct KeptSurvey {
@@ -2373,6 +2601,11 @@ pub fn convert_walls_to_import_configs(
     let mut known_depth: HashMap<String, f64> = HashMap::new();
 
     for (si, survey) in parsed.surveys.iter().enumerate() {
+        // Skip surveys the user deselected. `si` stays the ORIGINAL index so
+        // synthetic splay names remain stable and match `resolve_anchors`.
+        if !opts.includes_survey(si) {
+            continue;
+        }
         if survey.vectors.is_empty() {
             continue;
         }
@@ -2437,7 +2670,21 @@ pub fn convert_walls_to_import_configs(
             let gain = if v.is_depth_gauge {
                 match (v.from_depth, v.to_depth) {
                     (Some(fd), Some(td)) => fd - td,
-                    _ => 0.0,
+                    // Exactly one depth column was supplied (the other was `--` or
+                    // absent). The leg's vertical change is unknown, so it is
+                    // integrated as flat and the unmeasured station inherits its
+                    // neighbour's depth — surface that rather than asserting a
+                    // zero gain silently. (A genuine depth-gauge reading for that
+                    // station from another leg still overrides the estimate.)
+                    (Some(_), None) | (None, Some(_)) => {
+                        warnings.push(format!(
+                            "Shot {}->{}: dive leg is missing a depth reading; its \
+                             vertical change was treated as zero.",
+                            v.from, v.to
+                        ));
+                        0.0
+                    }
+                    (None, None) => 0.0,
                 }
             } else {
                 let inc = v.inc_deg.unwrap_or(0.0);
@@ -2508,6 +2755,11 @@ pub fn convert_walls_to_import_configs(
         surveyor: Option<String>,
         date: Option<NaiveDate>,
     }
+    // The model has no zero-length shot (it can't place two stations at one
+    // point as a leg), so a Walls zero-length coincident-station tie is nudged to
+    // a negligible length and counted here for a single aggregated warning.
+    const COINCIDENT_TIE_EPSILON_M: f64 = 0.001;
+    let mut coincident_ties = 0usize;
     let mut chains: Vec<PendingChain> = Vec::new();
     for survey in &kept {
         let split = split_into_chains(&survey.vectors, |v| (v.from.as_str(), v.to.as_str()));
@@ -2540,6 +2792,17 @@ pub fn convert_walls_to_import_configs(
                     dz
                 } else {
                     v.length_m
+                };
+                // A zero-length leg that survived the keep filter is a
+                // coincident-station tie (e.g. `A B 0 0 0` equating two names, or
+                // a bearing with no tape). The model rejects length == 0, so nudge
+                // it to a negligible length: the two stations stay connected and
+                // effectively coincident instead of failing the whole import.
+                let length = if length <= 0.0 {
+                    coincident_ties += 1;
+                    COINCIDENT_TIE_EPSILON_M
+                } else {
+                    length
                 };
                 // Resolve this shot's FROM-station LRUD honoring `#Units LRUD`. A
                 // From-typed leg contributes its own LRUD; a To-typed leg's LRUD
@@ -2602,6 +2865,14 @@ pub fn convert_walls_to_import_configs(
                 date: survey.date,
             });
         }
+    }
+
+    if coincident_ties > 0 {
+        warnings.push(format!(
+            "{coincident_ties} zero-length coincident-station tie(s) were given a \
+             negligible {COINCIDENT_TIE_EPSILON_M} m length so they import as valid shots \
+             (the model has no zero-length shot)."
+        ));
     }
 
     // Pass 2b: spanning-tree placement over chain connectivity. Each component
@@ -2705,10 +2976,19 @@ fn survey_label(survey: &ParsedSurvey) -> String {
 
 /// Collect every `#Fix` station that resolves to a geographic position, deduped
 /// by station name (first declaration wins).
-fn resolve_anchors(parsed: &ParsedWalls, warnings: &mut Vec<String>) -> Vec<AnchorGeo> {
+fn resolve_anchors(
+    parsed: &ParsedWalls,
+    opts: &WallsImportOptions,
+    warnings: &mut Vec<String>,
+) -> Vec<AnchorGeo> {
     let mut anchors: Vec<AnchorGeo> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for survey in &parsed.surveys {
+    for (si, survey) in parsed.surveys.iter().enumerate() {
+        // A deselected survey's fixes must not anchor (or warn as "unused") —
+        // skip them so deselecting a fix-heavy surface mesh stays silent.
+        if !opts.includes_survey(si) {
+            continue;
+        }
         for fix in &survey.fixes {
             let Some((lat, lon)) = fix.lat_long else {
                 continue;
@@ -2848,7 +3128,26 @@ fn build_station_depths(
                                 }
                                 gauge
                             }
-                            None => integrated,
+                            // Only the seed anchor sets a component's depth datum
+                            // (like the single horizontal zero-datum); a SECOND
+                            // #Fix in the same component is a consistency check,
+                            // not a second datum. Surface a material disagreement
+                            // as a vertical misclosure but KEEP the integrated
+                            // (measured-geometry) depth — overriding it would
+                            // inject a fake vertical change and corrupt shot
+                            // lengths, which Walls/dewalls never do.
+                            None => {
+                                if let Some(&anchor) = anchors.get(*m) {
+                                    if (anchor - integrated).abs() > 2.0 {
+                                        warnings.push(format!(
+                                            "Station {m}: fixed-station depth {anchor:.2} m \
+                                             disagrees with the integrated depth {integrated:.2} m; \
+                                             keeping the integrated depth (vertical misclosure)."
+                                        ));
+                                    }
+                                }
+                                integrated
+                            }
                         };
                         depth.insert((*m).to_string(), d);
                         queue.push_back(*m);
@@ -3081,10 +3380,20 @@ fn build_closures(chains: &[(u32, Vec<String>)], placements: &Placements) -> Vec
         let parent_section = placements.parent[ci].map(|p| chains[p].0);
         for (k, name) in names.iter().enumerate() {
             if let Some(&(canon_sec, canon_st)) = canonical.get(name.as_str()) {
-                if canon_sec == *section_index {
+                // The canonical occurrence itself needs no closure.
+                if canon_sec == *section_index && canon_st == k as u32 {
                     continue;
                 }
-                if Some(k as u32) == merge_st && parent_section == Some(canon_sec) {
+                // A station revisited later within the SAME chain (a contiguous
+                // intra-chain loop, e.g. A->B->C->A) is the same physical station
+                // as its canonical occurrence and must be tied by an
+                // intra-section closure — fall through to emit it. The
+                // already-joined-by-merge shortcut only applies to cross-section
+                // ties.
+                if canon_sec != *section_index
+                    && Some(k as u32) == merge_st
+                    && parent_section == Some(canon_sec)
+                {
                     continue;
                 }
                 let key = (*section_index, k as u32, canon_sec, canon_st);
@@ -3177,6 +3486,7 @@ mod tests {
             "TEST",
             "",
             &WallsUnits::default(),
+            &HashMap::new(),
             None,
             true,
             false,
@@ -3209,6 +3519,127 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    // ----- datum recognition / projection ---------------------------------
+
+    #[test]
+    fn datum_family_classifies_canonical_walls_names() {
+        // The authoritative Walls datum table (wallcss.cpp `sDatum[]`) writes
+        // these display names into `.REF`; the long NIMA names also appear.
+        for name in ["WGS 1984", "WGS1984", "wgs 84", "WGS84"] {
+            assert_eq!(datum_family(name), DatumFamily::Wgs84, "{name}");
+        }
+        for name in ["WGS 1972", "WGS72"] {
+            assert_eq!(datum_family(name), DatumFamily::Wgs72, "{name}");
+        }
+        for name in ["NAD83", "North American 1983"] {
+            assert_eq!(datum_family(name), DatumFamily::Nad83, "{name}");
+        }
+        for name in [
+            "NAD27 Alaska",
+            "NAD27 CONUS",
+            "NAD27 Mexico",
+            "North American 1927",
+        ] {
+            assert_eq!(datum_family(name), DatumFamily::Nad27, "{name}");
+        }
+        // Obscure regional datums fall back to a WGS84 approximation.
+        for name in ["Camp Area Astro", "European 1950", "Tokyo", ""] {
+            assert_eq!(datum_family(name), DatumFamily::OtherApproxWgs84, "{name}");
+        }
+    }
+
+    #[test]
+    fn datum_proj_token_and_recognition_agree() {
+        // The classifier is the single source of truth, so projection and
+        // recognition can never disagree.
+        assert_eq!(datum_proj_token("WGS 1984"), "datum=WGS84");
+        assert_eq!(datum_proj_token("WGS 1972"), "ellps=WGS72");
+        assert_eq!(datum_proj_token("North American 1983"), "datum=NAD83");
+        assert_eq!(datum_proj_token("NAD27 Alaska"), "datum=NAD27");
+        assert_eq!(datum_proj_token("Camp Area Astro"), "datum=WGS84");
+        assert!(datum_recognized("WGS 1984"));
+        assert!(datum_recognized("NAD27 Alaska"));
+        assert!(!datum_recognized("Camp Area Astro"));
+    }
+
+    #[test]
+    fn wgs1984_utm_fix_does_not_warn() {
+        // Regression: "WGS 1984" is the standard Walls name for WGS84, so a
+        // surface file of many UTM `#Fix` points under it must produce ZERO
+        // datum warnings (previously one per fix — hundreds of them).
+        let georef = Some(WallsRef {
+            zone: 34,
+            convergence: 0.0,
+            latitude: 49.0,
+            longitude: 20.0,
+            datum: "WGS 1984".to_string(),
+        });
+        let srv = "#units rect order=ENU\n#units meters\n#prefix UTM3\n\
+                   #fix 1 417727.726 5456614.566 970\n\
+                   #fix 72 417753.428 5456614.566 980\n\
+                   #fix 242 413813.448 5456614.566 990\n";
+        let mut warnings = Vec::new();
+        let survey = parse_srv_contents(
+            srv,
+            "t",
+            "t",
+            "",
+            &WallsUnits::default(),
+            &HashMap::new(),
+            georef,
+            true,
+            false,
+            &mut warnings,
+        );
+        assert_eq!(survey.fixes.len(), 3, "all three #Fix rows parsed");
+        assert!(
+            survey.fixes.iter().all(|f| f.lat_long.is_some()),
+            "WGS 1984 UTM fixes project to lat/long"
+        );
+        assert!(
+            warnings.iter().all(|w| !w.contains("not recognized")),
+            "WGS 1984 must not warn, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn unrecognized_datum_warns_once_per_survey() {
+        // An unrecognized datum on many UTM fixes warns exactly ONCE, not once
+        // per fixed point.
+        let georef = Some(WallsRef {
+            zone: 16,
+            convergence: 0.0,
+            latitude: 20.0,
+            longitude: -87.0,
+            datum: "Camp Area Astro".to_string(),
+        });
+        let srv = "#units rect order=ENU\n#units meters\n\
+                   #fix A 467427 2258942 0\n\
+                   #fix B 467500 2259000 0\n\
+                   #fix C 467600 2259100 0\n";
+        let mut warnings = Vec::new();
+        parse_srv_contents(
+            srv,
+            "t",
+            "t",
+            "",
+            &WallsUnits::default(),
+            &HashMap::new(),
+            georef,
+            true,
+            false,
+            &mut warnings,
+        );
+        let datum_warnings = warnings
+            .iter()
+            .filter(|w| w.contains("not recognized"))
+            .count();
+        assert_eq!(
+            datum_warnings, 1,
+            "exactly one aggregated datum warning, got {warnings:?}"
+        );
     }
 
     // ----- depth-gauge dive surveys ---------------------------------------
@@ -3463,6 +3894,7 @@ mod tests {
             "FIX",
             "",
             &WallsUnits::default(),
+            &HashMap::new(),
             None,
             true,
             false,
@@ -3495,6 +3927,166 @@ mod tests {
         convert_walls_to_import_configs(&parsed, opts).unwrap()
     }
 
+    #[test]
+    fn selected_surveys_filters_conversion() {
+        // Two surveys with disjoint station namespaces -> separate sections.
+        let s0 = parse_srv("#UNITS meters order=DAV\nA0 A1 10 90 0\nA1 A2 10 90 0\n");
+        let s1 = parse_srv("#UNITS meters order=DAV\nB0 B1 10 90 0\nB1 B2 10 90 0\n");
+        let parsed = ParsedWalls {
+            project_name: "T".to_string(),
+            book_count: 0,
+            surveys: vec![s0, s1],
+            georef: None,
+            missing_files: Vec::new(),
+            skipped_attachments: 0,
+            warnings: Vec::new(),
+        };
+        let conv = |sel: Option<HashSet<u32>>| {
+            convert_walls_to_import_configs(
+                &parsed,
+                &WallsImportOptions {
+                    selected_surveys: sel,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .0
+        };
+
+        let all = conv(None);
+        let only0 = conv(Some([0].into_iter().collect()));
+        let only1 = conv(Some([1].into_iter().collect()));
+        let none = conv(Some(HashSet::new()));
+
+        assert!(!all.is_empty(), "all surveys produce sections");
+        assert!(!only0.is_empty() && !only1.is_empty());
+        // Selecting each survey alone partitions the full output exactly.
+        assert_eq!(
+            only0.len() + only1.len(),
+            all.len(),
+            "per-survey selections must partition the unfiltered conversion"
+        );
+        assert!(none.is_empty(), "empty selection imports nothing");
+    }
+
+    // ----- directive comment / stray-space robustness ---------------------
+
+    #[test]
+    fn strip_inline_comment_respects_quotes() {
+        assert_eq!(strip_inline_comment("2008-12-01\t;TODO x"), "2008-12-01\t");
+        assert_eq!(
+            strip_inline_comment("2000-06-06; oraz 2000-06-30"),
+            "2000-06-06"
+        );
+        assert_eq!(strip_inline_comment("2003-08-01;TODO"), "2003-08-01");
+        assert_eq!(strip_inline_comment("flag=\"a;b\" x"), "flag=\"a;b\" x");
+        assert_eq!(strip_inline_comment("no comment here"), "no comment here");
+    }
+
+    #[test]
+    fn date_directive_ignores_trailing_comment() {
+        // Real KATASTER lines: a valid date followed by a `;`-comment (tab- or
+        // space-separated, or glued straight on) must still parse.
+        for srv in [
+            "#DATE 2008-12-01\t;TODO dzien nieznany\nA B 10 90 0\n",
+            "#date 2000-06-06; oraz 2000-06-30\nA B 10 90 0\n",
+            "#DATE 2003-08-01;TODO szacunkowa\nA B 10 90 0\n",
+        ] {
+            let mut warnings = Vec::new();
+            let survey = parse_srv_contents(
+                srv,
+                "t",
+                "t",
+                "",
+                &WallsUnits::default(),
+                &HashMap::new(),
+                None,
+                true,
+                false,
+                &mut warnings,
+            );
+            assert!(
+                survey.date.is_some(),
+                "date must parse despite comment: {srv:?}"
+            );
+            assert!(
+                !warnings.iter().any(|w| w.contains("unrecognized #Date")),
+                "no #Date warning expected, got {warnings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn collapse_eq_spaces_glues_values_outside_quotes() {
+        assert_eq!(collapse_eq_spaces("order =DAV"), "order=DAV");
+        assert_eq!(collapse_eq_spaces("order= DAV"), "order=DAV");
+        assert_eq!(collapse_eq_spaces("order = DAV"), "order=DAV");
+        assert_eq!(collapse_eq_spaces("meters decl=2"), "meters decl=2");
+        assert_eq!(collapse_eq_spaces("flag=\"a b\""), "flag=\"a b\"");
+        // A space inside a quoted value is preserved.
+        assert_eq!(collapse_eq_spaces("f=\"a = b\""), "f=\"a = b\"");
+    }
+
+    #[test]
+    fn units_tolerates_stray_spaces_around_equals() {
+        // `order =ADV` (space before `=`) previously produced "Unknown #units
+        // option ''"; `order= ADV` produced "Order=''" + "'adv'". Both must now
+        // be read as `order=ADV` with no spurious warnings.
+        for srv in [
+            "#UNITS meters order =ADV\nA B 10 5 0\n",
+            "#UNITS meters order= ADV\nA B 10 5 0\n",
+        ] {
+            let mut warnings = Vec::new();
+            let survey = parse_srv_contents(
+                srv,
+                "t",
+                "t",
+                "",
+                &WallsUnits::default(),
+                &HashMap::new(),
+                None,
+                true,
+                false,
+                &mut warnings,
+            );
+            assert!(
+                !warnings
+                    .iter()
+                    .any(|w| w.contains("Unknown #units option") || w.contains("Order=")),
+                "stray spaces around = must not warn: {warnings:?}"
+            );
+            // order=ADV puts Distance in the 2nd column, so `A B 10 5 0` has
+            // length 5 (not the default DAV's 10) — proving the order applied.
+            assert_eq!(survey.vectors.len(), 1);
+            assert!(
+                (survey.vectors[0].length_m - 5.0).abs() < 1e-9,
+                "order=ADV must apply (distance is column 2), got {}",
+                survey.vectors[0].length_m
+            );
+        }
+    }
+
+    #[test]
+    fn zero_length_tie_clamped_not_rejected() {
+        // `A B 0 0 0` is a coincident-station tie; the model forbids 0 length, so
+        // the importer must emit a positive (negligible) length instead of a
+        // zero-length shot that execute_import_sections would reject outright.
+        let srv = "#UNITS meters order=DAV\nA B 0 0 0\nB C 10 90 0\n";
+        let (configs, _closures, warnings) = convert_one(parse_srv(srv));
+        assert!(
+            configs
+                .iter()
+                .all(|c| c.shots.iter().all(|s| s.length > 0.0)),
+            "no zero-length shot may be emitted: {configs:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("coincident-station tie")),
+            "expected an aggregated coincident-tie warning, got {warnings:?}"
+        );
+    }
+
     fn test_ref(convergence: f64, lat: f64, lon: f64) -> WallsRef {
         WallsRef {
             zone: 16,
@@ -3513,6 +4105,7 @@ mod tests {
             "t",
             "",
             &WallsUnits::default(),
+            &HashMap::new(),
             georef,
             true,
             derive_decl,
@@ -3532,6 +4125,7 @@ mod tests {
         let opts = WallsImportOptions {
             comments_on_stations: true,
             include_splays: true,
+            ..Default::default()
         };
         let (configs, closures, _w) = convert_survey_with(parse_srv(srv), None, &opts);
         // The A-component and B-component are separate -> two Origin roots.
@@ -3662,6 +4256,7 @@ mod tests {
             "t",
             "",
             &WallsUnits::default(),
+            &HashMap::new(),
             georef,
             true,
             false,
@@ -4303,7 +4898,7 @@ mod tests {
         let mut units = WallsUnits::default();
         let mut stack = Vec::new();
         let mut w = Vec::new();
-        let default_order = units.order.clone();
+        let default_order = units.ct_order.clone();
         apply_units_option(&mut units, "order", Some("DAX"), &mut stack, &mut w);
         apply_units_option(&mut units, "tape", Some("ZZ"), &mut stack, &mut w);
         apply_units_option(&mut units, "lrud", Some("F:XYZW"), &mut stack, &mut w);
@@ -4320,7 +4915,7 @@ mod tests {
             "bad LRUD must warn: {w:?}"
         );
         // Rejected values leave the prior state intact.
-        assert_eq!(units.order, default_order);
+        assert_eq!(units.ct_order, default_order);
         assert_eq!(units.lrud_order, ['L', 'R', 'U', 'D']);
         assert_eq!(units.tape_from, TapeEnd::Instrument);
         assert_eq!(units.tape_to, TapeEnd::Target);
@@ -4523,6 +5118,12 @@ mod tests {
             preview.shot_count, 0,
             "a splay-only survey must preview 0 importable shots"
         );
+        // ...but the splays are still importable with "Include splays" enabled,
+        // so the dialog can offer import rather than greying the button out.
+        assert_eq!(
+            preview.splay_count, 2,
+            "both anonymous-wall splays must be counted as opt-in importable"
+        );
     }
 
     #[test]
@@ -4537,5 +5138,217 @@ mod tests {
             warnings.iter().any(|w| w.contains("disagrees")),
             "a gross gauge/integrated contradiction must warn, got {warnings:?}"
         );
+    }
+
+    // ----- regression tests for the second code-review pass -----------------
+
+    #[test]
+    fn prefix_leading_colon_and_level_order_match_walls() {
+        // dewalls `processStationName`: the explicit ':' count suppresses that
+        // many of the LOWEST inherited prefix levels, and remaining levels are
+        // emitted outermost-first (Prefix2:Prefix1:name). A leading colon cancels
+        // the inherited Prefix1.
+        let mut u = WallsUnits::default();
+        set_prefix(&mut u, 0, "CAVE"); // Prefix1
+        assert_eq!(normalize_station("A1", &u), "CAVE:A1");
+        assert_eq!(normalize_station(":A1", &u), "A1");
+        set_prefix(&mut u, 1, "AREA"); // Prefix2
+        assert_eq!(normalize_station("A1", &u), "AREA:CAVE:A1");
+        // One explicit segment suppresses only Prefix1, keeping Prefix2.
+        assert_eq!(normalize_station("X:STN", &u), "AREA:X:STN");
+    }
+
+    #[test]
+    fn ct_after_rect_restores_order_and_keeps_shots() {
+        // `#Units RECT` set order to E/N/U; a later bare `#Units CT` must restore
+        // the CT order so the following compass-and-tape shot survives parsing.
+        let srv = "#UNITS RECT\n#UNITS CT\nA B 10 90 0\n";
+        let survey = parse_srv(srv);
+        assert_eq!(
+            survey.vectors.len(),
+            1,
+            "a CT shot after a RECT block must not be dropped"
+        );
+        assert!(approx(survey.vectors[0].length_m, 10.0));
+    }
+
+    #[test]
+    fn custom_ct_order_survives_rect_round_trip() {
+        // ct_order and rect_order are independent (dewalls): a custom CT
+        // `Order=AVD` set while in RECT must still govern the CT shot, and must
+        // NOT be clobbered back to the default by the CT switch.
+        let srv = "#UNITS RECT\n#UNITS Order=AVD CT\nA B 90 0 10\n";
+        let survey = parse_srv(srv);
+        assert_eq!(survey.vectors.len(), 1);
+        let v = &survey.vectors[0];
+        // AVD => azimuth, inclination, distance columns.
+        assert!(
+            approx(v.length_m, 10.0),
+            "distance must be the 3rd (D) column per AVD, got {}",
+            v.length_m
+        );
+        assert_eq!(
+            v.azimuth_in,
+            Some(90.0),
+            "azimuth must be the 1st (A) column per AVD"
+        );
+    }
+
+    #[test]
+    fn project_macros_available_to_srv_body() {
+        // A macro defined in the project/book `.OPTIONS` must expand in the child
+        // `.SRV` body (regression: it was parsed then discarded).
+        let mut initial_macros = HashMap::new();
+        initial_macros.insert("cave".to_string(), "ABC".to_string());
+        let mut warnings = Vec::new();
+        let survey = parse_srv_contents(
+            "#UNITS meters order=DAV\n$(cave)1 $(cave)2 10 0 0\n",
+            "t",
+            "t",
+            "",
+            &WallsUnits::default(),
+            &initial_macros,
+            None,
+            true,
+            false,
+            &mut warnings,
+        );
+        assert_eq!(
+            survey.vectors.len(),
+            1,
+            "a shot referencing a project macro must import, warnings: {warnings:?}"
+        );
+        assert_eq!(survey.vectors[0].from, "ABC1");
+        assert_eq!(survey.vectors[0].to, "ABC2");
+    }
+
+    #[test]
+    fn malformed_date_keeps_previous_valid() {
+        // A later unparseable `#Date` must not clobber an earlier valid one.
+        let srv = "#DATE 2017-05-07\n#DATE 0000-99-99\n#UNITS meters order=DAV\nA B 10 0 0\n";
+        let survey = parse_srv(srv);
+        assert_eq!(survey.date, NaiveDate::from_ymd_opt(2017, 5, 7));
+    }
+
+    #[test]
+    fn backsight_only_zero_length_tie_kept() {
+        // A zero-length leg carrying only a backsight bearing is a coincident-
+        // station tie and must not be dropped (the guard checked only foresight).
+        let srv = "#UNITS meters order=DAV\nA B 0 /200\n";
+        let survey = parse_srv(srv);
+        assert_eq!(
+            survey.vectors.len(),
+            1,
+            "a backsight-only zero-length tie must be kept"
+        );
+    }
+
+    #[test]
+    fn split_units_args_keeps_quoted_spans() {
+        // Quoted `#Units` values with embedded spaces must stay single tokens.
+        let toks = split_units_args("feet decl=0.0 $foo=\"meters decl\" Flag=\"loose rock\"");
+        assert_eq!(
+            toks,
+            vec![
+                "feet",
+                "decl=0.0",
+                "$foo=\"meters decl\"",
+                "Flag=\"loose rock\""
+            ]
+        );
+    }
+
+    #[test]
+    fn quoted_units_value_emits_no_spurious_warning() {
+        let mut warnings = Vec::new();
+        let survey = parse_srv_contents(
+            "#UNITS meters order=DAV Flag=\"loose rock\"\nA B 10 0 0\n",
+            "t",
+            "t",
+            "",
+            &WallsUnits::default(),
+            &HashMap::new(),
+            None,
+            true,
+            false,
+            &mut warnings,
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("Unknown #units option")),
+            "a quoted value with a space must not trip the unknown-option arm: {warnings:?}"
+        );
+        assert_eq!(survey.vectors.len(), 1);
+    }
+
+    #[test]
+    fn contiguous_self_loop_emits_closure() {
+        // A->B->C->A in one survey is a single chain whose revisited station must
+        // get an intra-section loop closure (regression: it was dropped).
+        let srv = "#UNITS meters order=DAV\nA B 10 90 0\nB C 10 0 0\nC A 14 200 0\n";
+        let (_configs, closures, _w) = convert_one(parse_srv(srv));
+        assert!(
+            closures
+                .iter()
+                .any(|c| c.from_section_index == c.to_section_index
+                    && c.from_station_index == 3
+                    && c.to_station_index == 0),
+            "an intra-chain loop must emit a same-section closure, got {closures:?}"
+        );
+    }
+
+    #[test]
+    fn second_fix_anchor_depth_disagreement_warns() {
+        // Two #Fix in one connected component whose elevations disagree with the
+        // integrated geometry must warn (regression: the 2nd anchor was ignored).
+        let srv = "#UNITS meters order=DAV\n\
+                   #FIX AA W87:18:44 N20:25:42 100\n\
+                   #FIX ZZ W87:18:44 N20:25:42 50\n\
+                   AA ZZ 10 90 0\n";
+        let (_c, _cl, warnings) = convert_one(parse_srv(srv));
+        assert!(
+            warnings.iter().any(|w| w.contains("fixed-station depth")),
+            "a disagreeing second fixed-station depth must warn: {warnings:?}"
+        );
+        // ...but the measured shot geometry must be preserved (the 2nd anchor is
+        // a consistency check, not a second datum) — a 10 m flat shot must not be
+        // stretched by a fabricated 50 m vertical, so no length clamp fires.
+        assert!(
+            !warnings.iter().any(|w| w.contains("clamped")),
+            "honoring the 2nd anchor must not corrupt shot length: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn dive_leg_missing_one_depth_warns() {
+        // A depth-gauge leg with only one depth column integrates as flat; that
+        // estimate must be surfaced, not asserted silently.
+        let srv = "#UNITS meters ORDER=DA Tape=SS\nA B 21.1 339 13 --\n";
+        let (_c, _cl, warnings) = convert_one(parse_srv(srv));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("missing a depth reading")),
+            "a single-depth dive leg must warn: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn two_digit_year_does_not_resolve_to_future() {
+        assert_eq!(
+            parse_walls_date("03-15-64"),
+            NaiveDate::from_ymd_opt(1964, 3, 15)
+        );
+        assert_eq!(
+            parse_walls_date("05/07/17"),
+            NaiveDate::from_ymd_opt(2017, 5, 7)
+        );
+    }
+
+    #[test]
+    fn parse_ref_rejects_infinite_field() {
+        // An over-large numeric parses to +inf; it must be rejected, not turned
+        // into NaN azimuths downstream.
+        let line = "0 0 16 1e400 0 0 20 25 42 87 18 44";
+        assert!(parse_ref(line).is_err());
     }
 }
