@@ -32,6 +32,12 @@ import {
   DISTANCE_FAR,
   type DistanceFeatureState,
 } from '../../utils/distanceGradient';
+import {
+  gasReachColorExpression,
+  GAS_NEAR,
+  GAS_FAR,
+  type GasReachFeatureState,
+} from '../../utils/gasReach';
 import { metersToMapCoords } from '../../utils/coordinates';
 import { formatFixed } from '../../i18n/format';
 import { getErrorColor } from '../../utils/colors';
@@ -249,6 +255,11 @@ export default class SurveyLayer {
   // feature-state on every setData().
   private distanceMode: boolean = false;
   private distanceState: DistanceFeatureState | null = null;
+  // Gas reachable-frontier overlay (#38). Same feature-state mechanics as the
+  // distance gradient (own `gasReach` key); mutually exclusive with it (both own
+  // the shots/stations color paint), enforced upstream in uiStore.
+  private gasReachMode: boolean = false;
+  private gasReachState: GasReachFeatureState | null = null;
   // Measured along-line path (#26): the path's shots AND stations are tinted via
   // a `measured` feature-state + a paint `case` on shots line-color / stations
   // circle-color, in a user-configurable color. Re-applied after setData() (which
@@ -1779,8 +1790,23 @@ export default class SurveyLayer {
     this.distanceMode = enabled;
     this.distanceState = state;
     if (!this.map || !hasLiveStyle(this.map)) return;
-    this.applyDistancePaint();
+    this.applyOverlayPaint();
     this.applyDistanceFeatureState();
+  }
+
+  /**
+   * Apply the gas reachable-frontier overlay (#38). Mirrors
+   * {@link setDistanceGradient}: `enabled` swaps the shots/stations color to the
+   * gas ramp (gold near the origin → purple at the turn budget, grey =
+   * unreachable); `state` carries per-feature `gasReach` (litres-to-reach).
+   * Re-running on an input change just calls this again — no feature rebuild.
+   */
+  setGasReach(enabled: boolean, state: GasReachFeatureState | null): void {
+    this.gasReachMode = enabled;
+    this.gasReachState = state;
+    if (!this.map || !hasLiveStyle(this.map)) return;
+    this.applyOverlayPaint();
+    this.applyGasReachFeatureState();
   }
 
   /** The distance-gradient color ramp, shared by the shots line-color and the
@@ -1790,6 +1816,17 @@ export default class SurveyLayer {
       DISTANCE_NEAR,
       DISTANCE_FAR,
       this.distanceState?.max ?? 0,
+      this.themeColors.grayLine,
+    );
+  }
+
+  /** The gas reachable-frontier ramp, shared by the shots line-color and the
+   *  stations circle-color so the two can't drift. */
+  private gasReachRampExpression(): ExpressionSpecification {
+    return gasReachColorExpression(
+      GAS_NEAR,
+      GAS_FAR,
+      this.gasReachState?.max ?? 0,
       this.themeColors.grayLine,
     );
   }
@@ -1814,6 +1851,7 @@ export default class SurveyLayer {
    *  is off and centralizes the distance-vs-tint precedence.) */
   private shotsLineColor(): ExpressionSpecification {
     if (this.distanceMode) return this.distanceRampExpression();
+    if (this.gasReachMode) return this.gasReachRampExpression();
     return this.measuredTintExpression(this.measuredPathIds);
   }
 
@@ -1821,12 +1859,14 @@ export default class SurveyLayer {
    *  measured-path tint for the path's stations (#26), else plain. */
   private stationsCircleColor(): ExpressionSpecification {
     if (this.distanceMode) return this.distanceRampExpression();
+    if (this.gasReachMode) return this.gasReachRampExpression();
     return this.measuredTintExpression(this.measuredPathStationIds);
   }
 
-  /** Swap shots/stations color to the distance ramp (or restore), and suspend the
-   *  depth sub-segment layer so distance wins cleanly. */
-  private applyDistancePaint(): void {
+  /** Swap shots/stations color to whichever analytical overlay is active (the
+   *  distance gradient or the gas reachable-frontier), or restore, and suspend the
+   *  depth sub-segment layer so the overlay wins cleanly. */
+  private applyOverlayPaint(): void {
     if (!this.map) return;
     if (this.map.getLayer(this.shotsLayerId)) {
       this.map.setPaintProperty(this.shotsLayerId, 'line-color', this.shotsLineColor());
@@ -1848,7 +1888,7 @@ export default class SurveyLayer {
       this.map.setLayoutProperty(
         this.shotGradientsLayerId,
         'visibility',
-        this.distanceMode ? 'none' : shotsVisibility,
+        this.distanceMode || this.gasReachMode ? 'none' : shotsVisibility,
       );
     }
   }
@@ -1863,6 +1903,19 @@ export default class SurveyLayer {
     }
     for (const [id, dist] of this.distanceState.stations) {
       this.map.setFeatureState({ source: stationsSource, id }, { dist });
+    }
+  }
+
+  /** Push per-feature `gasReach` into feature-state (no-op when the overlay is off). */
+  private applyGasReachFeatureState(): void {
+    if (!this.map || !this.gasReachMode || !this.gasReachState) return;
+    const shotsSource = this.sourceId + '-shots';
+    const stationsSource = this.sourceId + '-stations';
+    for (const [id, gasReach] of this.gasReachState.shots) {
+      this.map.setFeatureState({ source: shotsSource, id }, { gasReach });
+    }
+    for (const [id, gasReach] of this.gasReachState.stations) {
+      this.map.setFeatureState({ source: stationsSource, id }, { gasReach });
     }
   }
 
@@ -4056,6 +4109,10 @@ export default class SurveyLayer {
     // would tank FPS (60→10 on large surveys). (#34)
     if (this.distanceMode) {
       this.applyDistanceFeatureState();
+    }
+    // Gas reachable-frontier overlay (#38) — same setData()-wipe re-apply.
+    if (this.gasReachMode) {
+      this.applyGasReachFeatureState();
     }
     // Likewise re-apply the measured along-line path tint (#26).
     if (this.measuredPathIds || this.measuredPathStationIds) {
