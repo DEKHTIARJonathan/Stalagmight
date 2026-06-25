@@ -78,3 +78,13 @@ export function formatRmv(lPerMin: number, units: GasUnits, precision?: number):
   const resolved = precision ?? (imperial ? 2 : 1);
   return `${formatFixed(value, undefined, clampPrecision(resolved))} ${suffix}`;
 }
+
+/** Canonical RMV (L/min) → the number shown in the selected unit (L/min or cuft/min). */
+export function rmvToDisplay(lPerMin: number, units: GasUnits): number {
+  return units === 'imperial' ? lPerMin * CUFT_PER_LITRE : lPerMin;
+}
+
+/** An RMV typed in the selected unit (L/min or cuft/min) → canonical L/min for the store. */
+export function rmvFromDisplay(value: number, units: GasUnits): number {
+  return units === 'imperial' ? value / CUFT_PER_LITRE : value;
+}

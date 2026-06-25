@@ -3,9 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { formatStationId } from '../../utils/formatters';
-import { formatVolume } from '../../utils/formatGas';
+import { formatPressure, formatVolume, rmvFromDisplay, rmvToDisplay } from '../../utils/formatGas';
 import { TANK_PRESETS, cylinderFromPreset } from '../../utils/tankPresets';
-import type { CylRole, GasUnits, ReservePreset } from '../../types/ipc.generated';
+import type { CylRole, Cylinder, GasUnits, ReservePreset } from '../../types/ipc.generated';
 
 const RESERVE_PRESETS: readonly ReservePreset[] = ['all_thirds', 'one_stage', 'two_stage'];
 const CYL_ROLES: readonly CylRole[] = ['back_gas', 'stage', 'dil_out', 'bailout', 'deco'];
@@ -14,6 +14,21 @@ const UNIT_OPTIONS: readonly GasUnits[] = ['metric', 'imperial'];
 /** Roles whose gas counts toward the open-circuit penetration budget (PRD §5.3). */
 function isBudgetRole(role: CylRole): boolean {
   return role === 'back_gas' || role === 'stage';
+}
+
+/**
+ * The diver's gauge pressure (bar) at the turn point — the number divers actually
+ * watch underwater. It's the volume-weighted average start gauge of the budget-role
+ * cylinders minus the turn budget expressed as a common-gauge pressure drop
+ * (`budget ÷ Σ water-volume`). Exact for a matched set (one gauge); a common-gauge
+ * equivalent for mixed tanks. `null` when there's no penetration gas. (PRD §5.1.)
+ */
+export function turnPressureBar(cylinders: Cylinder[], budgetLitres: number): number | null {
+  const budget = cylinders.filter((c) => isBudgetRole(c.role));
+  const sumWaterVol = budget.reduce((s, c) => s + c.water_volume_l, 0);
+  if (sumWaterVol <= 0) return null;
+  const avgStartBar = budget.reduce((s, c) => s + c.fill_bar * c.water_volume_l, 0) / sumWaterVol;
+  return Math.max(0, avgStartBar - budgetLitres / sumWaterVol);
 }
 
 /**
@@ -55,8 +70,8 @@ export function GasPlanPanel() {
     ? formatStationId(origin.section_id, origin.station_index)
     : t('gasPanel.origin.entrance');
 
-  const reachableCount = reachField ? reachField.reachable.filter(Boolean).length : null;
   const turnCount = reachField ? reachField.turn_frontier.length : null;
+  const turnBar = reachField ? turnPressureBar(cylinders, reachField.budget_litres) : null;
 
   const setFill = (idx: number, fillBar: number) =>
     setCylinders(cylinders.map((c, i) => (i === idx ? { ...c, fill_bar: fillBar } : c)));
@@ -105,13 +120,16 @@ export function GasPlanPanel() {
           <SectionLabel>{t('gasPanel.diver.rmvLabel')}</SectionLabel>
           <div className="flex items-center gap-2">
             <PositiveNumberField
-              value={diver.rmv_l_per_min}
-              onCommit={(n) => setDiver({ ...diver, rmv_l_per_min: n })}
-              step={1}
+              value={rmvToDisplay(diver.rmv_l_per_min, units)}
+              onCommit={(n) => setDiver({ ...diver, rmv_l_per_min: rmvFromDisplay(n, units) })}
+              step={units === 'imperial' ? 0.05 : 1}
+              displayPrecision={units === 'imperial' ? 2 : 1}
               className="w-24 bg-transparent border border-border rounded px-2 py-1"
               testId="gas-rmv-input"
             />
-            <span className="text-xs opacity-70">{t('gasPanel.diver.rmvUnit')}</span>
+            <span className="text-xs opacity-70">
+              {t(units === 'imperial' ? 'gasPanel.diver.rmvUnitImperial' : 'gasPanel.diver.rmvUnit')}
+            </span>
           </div>
         </section>
 
@@ -247,6 +265,10 @@ export function GasPlanPanel() {
           <SectionLabel>{t('gasPanel.readout.label')}</SectionLabel>
           {reachField ? (
             <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
+              <dt className="opacity-70">{t('gasPanel.readout.turnPressure')}</dt>
+              <dd data-testid="gas-readout-turn-pressure" className="text-right font-mono">
+                {turnBar != null ? formatPressure(turnBar, units) : '--'}
+              </dd>
               <dt className="opacity-70">{t('gasPanel.readout.budget')}</dt>
               <dd data-testid="gas-readout-budget" className="text-right font-mono">
                 {formatVolume(reachField.budget_litres, units)}
@@ -254,10 +276,6 @@ export function GasPlanPanel() {
               <dt className="opacity-70">{t('gasPanel.readout.maxPenetration')}</dt>
               <dd data-testid="gas-readout-max" className="text-right font-mono">
                 {formatVolume(reachField.max_reachable_gas, units)}
-              </dd>
-              <dt className="opacity-70">{t('gasPanel.readout.reachable')}</dt>
-              <dd data-testid="gas-readout-reachable" className="text-right font-mono">
-                {reachableCount}
               </dd>
               <dt className="opacity-70">{t('gasPanel.readout.turnPoints')}</dt>
               <dd data-testid="gas-readout-turns" className="text-right font-mono">
@@ -279,17 +297,30 @@ function SectionLabel({ children }: { children: ReactNode }) {
   );
 }
 
+/** Round a value to `precision` decimals for display; `String(value)` when omitted. */
+function formatDraft(value: number, precision?: number): string {
+  if (precision == null) return String(value);
+  const factor = 10 ** precision;
+  return String(Math.round(value * factor) / factor);
+}
+
 /**
  * Controlled positive-number input with a local draft so the field is fully
  * deletable (no leading-0 trap): an empty/intermediate value is shown but NOT
  * committed, and only a finite, strictly-positive number reaches `onCommit`. This
  * keeps a transient blank from poisoning the gas fetch (the backend rejects a 0/NaN
  * RMV or fill, which would otherwise blank the whole overlay until re-typed).
+ *
+ * `value`/`onCommit` are in whatever unit the caller chooses (the RMV field passes
+ * display-unit values + converts in onCommit). The draft re-syncs from an EXTERNAL
+ * value change (reset / preset add / unit toggle) ONLY while not focused, so a
+ * unit-toggle re-labels the field but in-progress keystrokes are never clobbered.
  */
 function PositiveNumberField({
   value,
   onCommit,
   step,
+  displayPrecision,
   className,
   ariaLabel,
   testId,
@@ -297,22 +328,27 @@ function PositiveNumberField({
   value: number;
   onCommit: (n: number) => void;
   step?: number;
+  displayPrecision?: number;
   className?: string;
   ariaLabel?: string;
   testId?: string;
 }) {
-  const [draft, setDraft] = useState(() => String(value));
-  // Re-sync when the committed value changes from outside (reset / preset add /
-  // removal shifting row indices). A no-op when the draft already matches.
+  const [draft, setDraft] = useState(() => formatDraft(value, displayPrecision));
+  const [focused, setFocused] = useState(false);
   useEffect(() => {
-    setDraft(String(value));
-  }, [value]);
+    if (!focused) setDraft(formatDraft(value, displayPrecision));
+  }, [value, focused, displayPrecision]);
   return (
     <input
       type="number"
       min={0}
       step={step}
       value={draft}
+      onFocus={() => setFocused(true)}
+      onBlur={() => {
+        setFocused(false);
+        setDraft(formatDraft(value, displayPrecision));
+      }}
       onChange={(e) => {
         const text = e.target.value;
         setDraft(text); // allow empty / intermediate so the field stays deletable
