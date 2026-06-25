@@ -208,7 +208,13 @@ test.describe('Data table column preferences', () => {
     // lands, so grabbing the *first* recorded call races. Poll the latest call
     // until it settles on the expected hidden set. #171.
     await expect
-      .poll(async () => (await getViewCalls(page)).at(-1)?.hiddenColumns, { timeout: 5000 })
+      .poll(
+        async () => {
+          const calls = await getViewCalls(page);
+          return calls[calls.length - 1]?.hiddenColumns;
+        },
+        { timeout: 5000 },
+      )
       .toEqual(['comment', 'section_id', 'shot_id']);
 
     await page.waitForFunction(
