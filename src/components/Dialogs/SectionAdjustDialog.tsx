@@ -8,6 +8,18 @@ import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import type { SectionId } from '../../types/project';
 
+// A string the user can be partway through typing into a signed-decimal field:
+// '', '-', '.', '-.', '5', '-2.5', '.5'. Lets a controlled input hold these
+// intermediate states instead of a number that snaps '-'/'' back to 0 (#161).
+const PARTIAL_DECIMAL = /^-?\d*\.?\d*$/;
+
+// Numeric value of such a string; intermediate states with no digits yet read as
+// 0 so the live preview neutralizes without forcing the visible text back to '0'.
+function offsetValue(raw: string): number {
+  const n = parseFloat(raw);
+  return Number.isNaN(n) ? 0 : n;
+}
+
 /**
  * Dialog for adjusting section position with dx/dy offset.
  * Provides live preview as values change.
@@ -19,8 +31,15 @@ export default function SectionAdjustDialog() {
   const sectionId = dialogData.sectionId as SectionId | undefined;
   const section = project?.sections.find((s) => s.id === sectionId);
 
-  const [dx, setDx] = useState(0);
-  const [dy, setDy] = useState(0);
+  // The text inputs are backed by string state so partial entries ('-', '', '.')
+  // survive editing; the numeric offset is derived via offsetValue() at the
+  // preview / apply / dirty sites (the single-string-input idiom the sibling shot
+  // dialogs use). Start empty (not '0') so a leading '-' typed onto the field isn't
+  // rejected as '0-' — a pre-filled 0 was un-overwritable without a prior clear,
+  // keeping negatives untypable in the natural click-then-type flow (#161). The
+  // placeholder still shows "0" so the no-offset default reads clearly.
+  const [dxStr, setDxStr] = useState('');
+  const [dyStr, setDyStr] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // How many sections move together: a section that is merged (or aligned-closure
@@ -69,27 +88,29 @@ export default function SectionAdjustDialog() {
   // Debounce preview updates
   const previewTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const handleDxChange = useCallback((value: number) => {
-    setDx(value);
+  const handleDxChange = useCallback((raw: string) => {
+    if (!PARTIAL_DECIMAL.test(raw)) return; // ignore non-numeric keystrokes
+    setDxStr(raw);
     // Debounce the preview
     if (previewTimeoutRef.current) {
       clearTimeout(previewTimeoutRef.current);
     }
     previewTimeoutRef.current = setTimeout(() => {
-      applyPreview(value, dy);
+      applyPreview(offsetValue(raw), offsetValue(dyStr));
     }, 150);
-  }, [dy, applyPreview]);
+  }, [dyStr, applyPreview]);
 
-  const handleDyChange = useCallback((value: number) => {
-    setDy(value);
+  const handleDyChange = useCallback((raw: string) => {
+    if (!PARTIAL_DECIMAL.test(raw)) return; // ignore non-numeric keystrokes
+    setDyStr(raw);
     // Debounce the preview
     if (previewTimeoutRef.current) {
       clearTimeout(previewTimeoutRef.current);
     }
     previewTimeoutRef.current = setTimeout(() => {
-      applyPreview(dx, value);
+      applyPreview(offsetValue(dxStr), offsetValue(raw));
     }, 150);
-  }, [dx, applyPreview]);
+  }, [dxStr, applyPreview]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -103,10 +124,19 @@ export default function SectionAdjustDialog() {
   const handleApply = async () => {
     if (sectionId === undefined) return;
 
+    // Cancel any pending debounced preview so it can't fire a second move_section
+    // concurrently with the Apply below — a slow (>150ms) IPC would otherwise let
+    // the late preview double-apply the offset.
+    if (previewTimeoutRef.current) {
+      clearTimeout(previewTimeoutRef.current);
+    }
+
     setIsLoading(true);
     setError(null);
 
     try {
+      const dx = offsetValue(dxStr);
+      const dy = offsetValue(dyStr);
       // If preview was already applied, we just need to close
       // Otherwise, apply the full offset
       if (!previewApplied) {
@@ -137,6 +167,11 @@ export default function SectionAdjustDialog() {
   };
 
   const handleCancel = async () => {
+    // Cancel any pending preview before reverting, so it can't re-apply after the
+    // revert below and leave the section shifted.
+    if (previewTimeoutRef.current) {
+      clearTimeout(previewTimeoutRef.current);
+    }
     // If preview was applied, we need to revert it
     if (previewApplied && sectionId !== undefined) {
       // Apply inverse offset to revert
@@ -149,8 +184,8 @@ export default function SectionAdjustDialog() {
     closeDialog();
   };
 
-  // Track if form has been modified
-  const isDirty = dx !== 0 || dy !== 0;
+  // Track if form has been modified (would Apply move anything?)
+  const isDirty = offsetValue(dxStr) !== 0 || offsetValue(dyStr) !== 0;
 
   if (!section) {
     return (
@@ -199,12 +234,16 @@ export default function SectionAdjustDialog() {
             <label className="block text-sm text-text-secondary mb-1">
               dx (meters)
             </label>
+            {/* type="text" (not number): a number input strips the partial "-"/"."
+                being typed, which re-breaks #161. inputMode="text" (not "decimal")
+                keeps the minus key on touch keypads. */}
             <input
-              type="number" inputMode="decimal"
-              value={dx}
-              onChange={(e) => handleDxChange(parseFloat(e.target.value) || 0)}
+              type="text" inputMode="text"
+              value={dxStr}
+              onChange={(e) => handleDxChange(e.target.value)}
               className="w-full"
-              step="0.1"
+              placeholder="0"
+              disabled={isLoading}
               data-testid="dx-input"
             />
             <p className="text-xs text-text-secondary mt-1">Positive = East</p>
@@ -214,12 +253,14 @@ export default function SectionAdjustDialog() {
             <label className="block text-sm text-text-secondary mb-1">
               dy (meters)
             </label>
+            {/* See dx above: type="text"/inputMode="text" are load-bearing for #161. */}
             <input
-              type="number" inputMode="decimal"
-              value={dy}
-              onChange={(e) => handleDyChange(parseFloat(e.target.value) || 0)}
+              type="text" inputMode="text"
+              value={dyStr}
+              onChange={(e) => handleDyChange(e.target.value)}
               className="w-full"
-              step="0.1"
+              placeholder="0"
+              disabled={isLoading}
               data-testid="dy-input"
             />
             <p className="text-xs text-text-secondary mt-1">Positive = North</p>
