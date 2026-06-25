@@ -1755,8 +1755,16 @@ fn extract_spans(body: &str) -> ExtractedSpans {
                 flush(&mut current, &mut tokens);
                 break;
             }
-            '<' => {
-                flush(&mut current, &mut tokens);
+            // LRUD/variance delimiters open a span ONLY at a token boundary
+            // (start of line or right after whitespace, i.e. `current` empty).
+            // Walls lays a shot out as whitespace-separated fields
+            // `from to <measures…> [lrud] [(var)]`, so a delimiter glued inside
+            // a token is a literal name character, NOT a span start. Station
+            // names legitimately contain these symbols — e.g. `W-*/2/46` uses a
+            // literal `*` — and without this guard `W-*/2/46  W-*/2/50` is torn
+            // into `from="W-"`, a bogus `*…*` LRUD span, and `to="/2/50"`,
+            // collapsing every such station onto a phantom `W-` hub.
+            '<' if current.is_empty() => {
                 let mut span = String::new();
                 for d in chars.by_ref() {
                     if d == '>' {
@@ -1766,8 +1774,7 @@ fn extract_spans(body: &str) -> ExtractedSpans {
                 }
                 lrud = Some(span);
             }
-            '*' => {
-                flush(&mut current, &mut tokens);
+            '*' if current.is_empty() => {
                 let mut span = String::new();
                 for d in chars.by_ref() {
                     if d == '*' {
@@ -1777,11 +1784,10 @@ fn extract_spans(body: &str) -> ExtractedSpans {
                 }
                 lrud = Some(span);
             }
-            '(' => {
+            '(' if current.is_empty() => {
                 // Variance override `(...)` — consume and discard. We don't
                 // model per-shot variance, and a floated `(?)` variance does
                 // NOT turn a real measured leg into a splay.
-                flush(&mut current, &mut tokens);
                 for d in chars.by_ref() {
                     if d == ')' {
                         break;
@@ -3779,6 +3785,54 @@ mod tests {
         assert_eq!(v.down, Some(3.0));
         assert_eq!(v.right, Some(4.0));
         assert_eq!(v.left, Some(5.0));
+    }
+
+    #[test]
+    fn star_in_station_name_is_literal_not_lrud() {
+        // Regression: stations may contain a literal `*` (real corpus:
+        // `W-*/2/46` in the Tatra KATASTER cave). The `*` is only an LRUD
+        // delimiter at a token boundary; glued inside a station name it must be
+        // kept verbatim. Previously `W-*/2/46  W-*/2/50` was torn into
+        // from="W-", a bogus `*…*` span, and to="/2/50", collapsing every such
+        // station onto a phantom "W-" hub (turning a chain into a star of
+        // single-shot sections all sharing one point).
+        let srv = "#UNITS meters order=DAV\n\
+                   W-*/2/46 W-*/2/50 9.2 242 25\n\
+                   W-*/2/50 W-*/2/51 7.3 262 8\n\
+                   W-*/2/51 W-*/2/52 2.7 278 -6\n";
+        let parsed = parse_srv(srv);
+        assert_eq!(parsed.vectors.len(), 3);
+        assert_eq!(parsed.vectors[0].from, "W-*/2/46");
+        assert_eq!(parsed.vectors[0].to, "W-*/2/50");
+        assert_eq!(parsed.vectors[1].from, "W-*/2/50");
+        assert_eq!(parsed.vectors[2].to, "W-*/2/52");
+        // No LRUD was leaked from the names.
+        assert!(parsed
+            .vectors
+            .iter()
+            .all(|v| v.left.is_none() && v.right.is_none() && v.up.is_none() && v.down.is_none()));
+        // The three shots form ONE head-to-tail chain (one section), not three
+        // fragments hanging off a phantom hub.
+        let (configs, _closures, _w) = convert_one(parsed);
+        assert_eq!(
+            configs.len(),
+            1,
+            "star-named stations must chain into a single section, got {configs:?}"
+        );
+    }
+
+    #[test]
+    fn star_named_station_still_allows_real_lrud() {
+        // A literal `*` in the station name AND a genuine `*…*` LRUD on the same
+        // line: the name keeps its `*`, the space-delimited `*L R U D*` is read.
+        let srv = "#UNITS meters order=DAV LRUD=F:LRUD\nA*1 B*2 10 90 0 *1 2 3 4*\n";
+        let v = &parse_srv(srv).vectors[0];
+        assert_eq!(v.from, "A*1");
+        assert_eq!(v.to, "B*2");
+        assert_eq!(v.left, Some(1.0));
+        assert_eq!(v.right, Some(2.0));
+        assert_eq!(v.up, Some(3.0));
+        assert_eq!(v.down, Some(4.0));
     }
 
     #[test]
