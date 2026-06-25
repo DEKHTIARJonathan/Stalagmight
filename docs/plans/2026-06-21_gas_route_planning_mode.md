@@ -438,52 +438,67 @@ post-refactor: `core/mod.rs` holds loading/state/IO, not topology compute.)*
   `#[expect]` for the math tests; `cargo fmt` + clippy before pushing (`docs/linting.md`).
 
 ### 7.2 Frontend (TS/React) — a single-view sub-mode, NOT a new top-level view
-Recommended after evaluating both. A third `ViewType` (`uiStore.ts:25`, branch at
-`App.tsx:578`) would **re-mount its own map**, losing survey layers/camera/GPS origin. Gas
-planning wants the *same* `MapCanvas` + overlays + a panel — exactly the distance-gradient
-shape (a runtime-only flag + origin + fetched field, reset on view switch).
+A third `ViewType` (`uiStore.ts:27`, branch at `App.tsx:475`) would **re-mount its own map**,
+losing survey layers/camera/GPS origin. Gas planning wants the *same* `MapCanvas` + overlays + a
+panel. **The distance-gradient infra it mirrors all still exists post-#160 (lines moved ~80–90
+each); the mirror strategy survives** — three structural changes folded in below.
 
-- **`uiStore` additions** (model on the distance-gradient block, `uiStore.ts:330`/`:855`):
-  a `gasPlanActive` sub-mode flag; add `exitGasPlan()` to the `setView()` cleanup funnel
-  (`uiStore.ts:487`, beside `exitSectionFocus()`/`exitDataTableFullScreen()`) so a stale gas
-  overlay can't outlive a project switch or a return to global view. Suppress the
-  depth/distance/severity gradients while active (they paint the same shots layer) — runtime
-  flags only, like `toggleDistanceGradient`.
-- **`src/store/gasPlanStore.ts`** (new, mirrors `globalViewStore.ts`): `gasConfig` (seeded
-  from `Config.gas`), `team`, `mode`, `origin`, `selectedLead`, `reachField`, `leadPlan`,
+- **Entry = a top-level toggle, OUTSIDE `DisplayMenu` (Nico's call).** Post-#160 the color overlays
+  (section/depth/distance/issues) are a **single mutually-exclusive `ColorMode`** (`uiStore.ts:52`,
+  single owner `setColorMode()` `:1155`, radio pills `DisplayMenu.tsx:222`). Gas-plan is a full
+  interaction *mode*, not a paint style, so it does **not** join that radio family. Add a
+  `gasPlanActive` flag entered via a **toolbar/Display toggle + Esc**; while active it **forces a
+  gas-specific paint and suppresses the `ColorMode` overlays — suppression is now structural via
+  `setColorMode`**, not the parallel flag-toggle the pre-rework draft assumed.
+- **Teardown:** add `exitGasPlan()` to the `setView()` cleanup funnel (`uiStore.ts:581`, beside
+  `exitSectionFocus()` `:585` / `exitDataTableFullScreen()` `:587`) so a stale gas overlay can't
+  outlive a project switch or return-to-global. ⚠ The distance-gradient precedent does NOT reset via
+  `setView` — it uses a `MapCanvas` effect keyed on `project?.created_at` (~`:1877`); a `setView`
+  teardown is the stronger choice for a heavier mode, but confirm (§10 open).
+- **`src/store/gasPlanStore.ts`** (new, mirrors `globalViewStore.ts`): `gasConfig` (seeded from
+  `Config.gas`), `team`, `mode`, `entranceStation`, `selectedLead`, `reachField`, `leadPlan`,
   `userDrops` (Phase 2). Setters **null the result on input change** (mirror
-  `setDistanceGradientOrigin` clearing `distanceField`) so stale colors never show under a
-  new legend. `reset()` called from `exitGasPlan()`.
-- **IPC effects** (model on the distance fetch, `MapCanvas.tsx:1738`): `let cancelled` guard;
-  **debounce** the `gasConfig` dep; deps include `project?.modified_at`; **also** capture
-  `projectIdentityKey(project)` (`useMapTools.ts:24`) at request time and drop stale replies
-  on project switch — stronger than distance's `modified_at`-only guard, because a selected
-  lead persists across more interactions.
-- **Map overlays** (`MapCanvas.tsx:3312`/`:3341` region, runtime-only, reset on switch):
-  reachable-extent feature-state (`utils/gasReach.ts`, sibling of `utils/distanceGradient.ts`);
-  turn-point marker (MapLibre `Marker`, `MapCanvas.tsx:1787`); selected-lead path tint (reuse
-  `setMeasuredPath`, `:1768`); drop markers (Phase 2). A `GasLegend.tsx` mirrors
+  `setDistanceGradientOrigin` clearing `distanceField`, `uiStore.ts:378-389`/`:1104`) so stale
+  colors never show under a new legend. `reset()` from `exitGasPlan()`. ⚠ **The seed point is the
+  penetration ENTRANCE STATION, not the GPS `gpsOrigin`** (`MapCanvas.tsx:284`) used for the ENU map
+  transform — don't conflate them; reachability is GPS-origin-independent.
+- **IPC effects** (model on the distance fetch, `MapCanvas.tsx:1828`, use `invokeIpc` not raw
+  `invoke`): `let cancelled` guard (`:1830`); **debounce** the `gasConfig` dep; deps include
+  `project?.modified_at`; **also** capture a project-identity signal at request time and drop stale
+  replies on project switch. ⚠ `projectIdentityKey` (`useMapTools.ts`) is **private / not exported**
+  — export it, or reuse `project?.created_at` (the switch detector the distance overlay already uses).
+- **Map overlays** (overlay region `MapCanvas.tsx:3385`, runtime-only, reset on switch):
+  reachable-extent feature-state (`utils/gasReach.ts`, sibling of `utils/distanceGradient.ts`,
+  whose `buildDistanceFeatureState` is at `:41`); turn-point marker (MapLibre `Marker`, cf. origin
+  marker `:1877`); selected-lead path tint (reuse `setMeasuredPath`, `MapCanvas.tsx:1866`); drop
+  markers (Phase 2 — ⚠ **draggable markers are NEW**: every existing `Marker` is non-draggable and
+  there's no drag-along-line/snap machinery to reuse — see §5.4/§7.3). A `GasLegend.tsx` mirrors
   `DistanceLegend.tsx`.
-- **Input panel + readout** (in `SingleSystemView`, entry via a `DisplayMenu` item like the
-  other analytical overlays): origin picker (reuse the map-click station pick that drives
-  `setDistanceGradientOrigin`), RMV/SAC, swim/DPV speed, reserve fraction, stressed ×, OC/CCR
-  toggle, cylinder editor; readout of budget, max penetration, turn pressure per cylinder, and
-  (lead selected) gas-to-reach + within-budget.
-- **Gas units**: new `Config.gas` block (`config/types.rs:9`, `#[serde(default)]` like the
-  other newer blocks — **bundle gas units in `GasConfig`, don't bloat `UnitsConfig`**); seed
-  the TS default at `src/types/config.ts` alongside `units:`; add `src/utils/formatGas.ts`
-  (`formatPressure`/`formatVolume`/`formatRmv`, metric path first, conversion seam in place so
-  imperial is a Phase-4 flip, never hardcoded suffixes at call sites); extend
-  `settings/UnitsSettings.tsx` with a gas sub-section.
+- **Input panel + readout:** see §7.3 — it **reuses the right `Dock` slot** (swaps `DetailPanel`
+  content in gas mode). Fields: diver/RMV/SAC, cylinders + roles, reserve preset, swim/DPV/survey
+  speeds, OC/CCR toggle; readout of budget, max penetration, per-cylinder turn pressure, and (lead
+  selected) gas-to-reach + within-budget. The **map-click station pick** to set the entrance lives
+  in `useMapTools.ts` (surfaced via `DetailPanel`), **not** `MapCanvas` as the earlier draft implied.
+- **Gas units**: new `Config.gas` block (`config/types.rs:9`, `#[serde(default)]` like the other
+  newer blocks — **bundle gas units in `GasConfig`, don't bloat `UnitsConfig`** at `:828`); seed the
+  TS default at `src/types/config.ts` alongside `units:`; add `src/utils/formatGas.ts`
+  (`formatPressure`/`formatVolume`/`formatRmv`, metric first, conversion seam so imperial is a
+  Phase-4 flip — never hardcode suffixes; cf. `formatStats.ts:54` `formatLength` / `:29`
+  `getUnitSuffix`); extend `settings/UnitsSettings.tsx` with a gas sub-section. ⚠ This yields **two
+  independent unit toggles** (length/depth from `UnitsConfig.length`, gas from `GasConfig.units`) —
+  reconcile the readout copy (§10).
 
 ### 7.3 UX — layout & interaction (Nico, 2026-06-23)
 
 Concretises the choices §7.2 left open:
-- **Layout: a dockable RIGHT panel** (mirrors `DetailPanel`) holding inputs (diver/RMV,
-  cylinders + roles, reserve preset, speeds, OC/CCR, team) **and** readout (turn pressure per
-  cylinder, penetration, bailout). The **map stays central** for the spatial layer — frontier
-  shading, turn-point ●, drop markers ▽. Enter/exit via a toolbar/`DisplayMenu` toggle + Esc;
-  reset through the `setView()` funnel.
+- **Layout: REUSE the right `Dock` slot (Nico's call).** Post-#160 the right edge is a single
+  `Dock` (`SingleSystemView.tsx:586`, `edge="right"`) owned by `DetailPanel`; `PanelId` is a closed
+  union `'sections'|'detail'|'data-table'` (`uiStore.ts:74`). So gas-plan **swaps the `detail`
+  slot's content while gas mode is active** (Details hidden meanwhile) rather than adding a 4th
+  panel — holding inputs (diver/RMV, cylinders + roles, reserve preset, speeds, OC/CCR, team) **and**
+  readout (turn pressure per cylinder, penetration, bailout). The **map stays central** — frontier
+  shading, turn-point ●, drop markers ▽. Enter/exit via a **toolbar/Display toggle (outside the
+  `ColorMode` menu) + Esc**; reset through the `setView()` funnel.
 - **Flow: frontier-first.** On entry the diver's rig/RMV/reserve paint the **reachable frontier
   immediately**; **clicking any station drills into** its turn / gas / bailout readout. No
   target is required (§1 resurvey case) — selecting one just deepens the readout.
@@ -495,7 +510,11 @@ Concretises the choices §7.2 left open:
 - **Drop placement: suggest + drag-validate.** The tool drops a suggested marker inside the
   gas-feasible envelope (§5.4); the diver **drags it along the line**, live-colored green
   (works) / red (outside the envelope), **snapping to stations**. The judgment is the diver's,
-  the guardrail the tool's.
+  the guardrail the tool's. ⚠ **This is NEW interaction — no precedent:** every existing MapLibre
+  `Marker` is non-draggable and there's no drag-along-line / project-onto-nearest-segment /
+  snap-to-station machinery to reuse. Scope it in **Phase 2** (draggable `Marker` + project the
+  dragged lng/lat onto the nearest shot polyline + snap within a threshold + re-validate against the
+  reach field on drag); a station-list / click-to-place picker is the simpler v1 fallback.
 - **Rig setup: saved rig profiles.** Pick a saved rig ("my standard rig" — e.g. 2× LP85 back
   gas + 2× AL80 stages) from **user config**, then tweak fills per dive. Built on the §5.3 tank
   presets; profiles are personal defaults (user config, never the `.stalx`).
@@ -632,8 +651,13 @@ Concretises the choices §7.2 left open:
 - `src-tauri/src/commands/project.rs:129` — `get_station_distances_from` (the IPC command template).
 - `src-tauri/src/config/types.rs:9` — `Config` (add `gas`); `:828` `UnitsConfig` (leave alone).
 - `src-tauri/src/models/station.rs:223` — `Coordinates` (`.z` depth, +down); `:364` `ZeroDatum`.
-- `src/components/Map/MapCanvas.tsx` — distance fetch `:1738`, feature-state `:1753`, origin
-  marker `:1787`, overlay region `:3312` (the overlay template).
-- `src/store/uiStore.ts` — `ViewType:25`, `setView` cleanup `:487`, distance-gradient sub-mode
-  `:330`/`:855` (the sub-mode + reset template).
-- `src/utils/formatStats.ts:53` — `formatLength` (template for `formatGas.ts`).
+- `src/components/Map/MapCanvas.tsx` (3567 LOC) — distance fetch `:1828`, feature-state `:1843`
+  (`buildDistanceFeatureState`, `utils/distanceGradient.ts:41`), origin marker `:1877`,
+  `setMeasuredPath` `:1866`, overlay region `:3385` (the overlay template); `gpsOrigin` derive `:284`.
+- `src/store/uiStore.ts` (1507 LOC) — `ViewType:27`, `setView` cleanup `:581`, `ColorMode:52` +
+  `setColorMode:1155` (the overlay paint owner), distance-gradient state `:378-389`/impl `:1104`,
+  `PanelId:74` (closed 3-union). `App.tsx` view branch `:475`.
+- `src/components/SingleSystemView/SingleSystemView.tsx:586` — the right `Dock` (`edge="right"`,
+  `DetailPanel`); `DisplayMenu.tsx:222` (ColorMode pills); `useMapTools.ts` (private
+  `projectIdentityKey` + the map-click station pick).
+- `src/utils/formatStats.ts:54` — `formatLength` / `:29` `getUnitSuffix` (template for `formatGas.ts`).
