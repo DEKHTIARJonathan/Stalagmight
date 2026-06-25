@@ -292,21 +292,37 @@ smallest member). So this lives in the **Team feature (Phase 5)**, computed from
 twins *or* unmanifolded doubles / **sidemount** (sidemount is just unmanifolded twins). By
 convention the two cylinders are identical and worn hard-to-remove, and stay on the diver except at
 very tight restrictions — so for planning they're **one combined volume** at a **common gauge
-pressure** (`volume = pressure × Σ water_volume`), never two independent budgets. ⏳ **Tank-capacity
-table incoming** (Nico will supply) → populate the presets below from it.
+pressure** (`volume = pressure × Σ water_volume`), never two independent budgets. ✅ **Tank specs supplied** (Nico, 2026-06-24) — general preset set
+below; fill is user-set.
 
-Two common tanks — ship as presets:
+**Pressure classes (Nico):** **HP > 3400 psi**, **MP > 3000 psi**, **LP** = the rest. **All
+aluminium is MP** (not further specified). ⚠ In cave diving **LP steels are routinely overfilled to
+MP or higher**, so the rating only fixes the *class label* — **always ask the diver their actual
+fill pressure** (the canonical input).
 
-| Tank | Water vol | Rated | Typical fill | Role |
-|------|-----------|-------|--------------|------|
-| **AL80** (aluminium) | 11.2 L | — | ~210 bar (≈ 80 cuft → the name) | stages **and** back gas |
-| **LP85** (steel) | 12 L | ~2600 psi (~179 bar) | **210–230 bar, overfilled** | **back gas only** (negative buoyancy → poor stage) |
+**General presets** — ship this small set; the engine stores **water (internal) volume in L** as the
+canonical property (the "80/100/120" name is just nominal cuft at rating). Do **not** surface a
+comprehensive tank DB or commit a third-party table; **water volumes below are general/representative
+— confirm per actual cylinder before shipping**:
+
+| Tank | Material | Water vol (L, ≈) | Rated | Class |
+|------|----------|------------------|-------|-------|
+| **AL80**  | aluminium | ~11.1 | 3000 psi / 207 bar | MP |
+| **LP50**  | steel     | ~7.4  | 2400 psi / 165 bar | LP |
+| **LP72**  | steel     | ~9.9  | 2400 psi / 165 bar | LP |
+| **LP104** | steel     | ~14.5 | 2400 psi / 165 bar | LP |
+| **LP120** | steel     | ~17.0 | 2400 psi / 165 bar | LP |
+| **HP100** | steel     | ~12.9 | 3442 psi / 237 bar | HP |
+| **HP120** | steel     | ~15.4 | 3442 psi / 237 bar | HP |
 
 **Fill pressure is an INPUT, not the rating.** LP85s are routinely **overfilled to ~210–230
 bar absolute** — i.e. filled *to* ~230 bar, **not** 230 over the ~179 bar rating. Not strictly
 US-legal, but standard; safe data for newish steel passing hydro. The model takes `fill_bar`
 as given and **never clamps it to rated** — rated is reference only. A 12 L LP85 @ 230 bar
-holds well over an AL80's 80 cuft.
+holds well over an AL80's 80 cuft. ⚠ **Real-gas note:** `gas = fill_bar × water_volume` is the
+*ideal* relation; at 230+ bar real compressibility (Z) means a steel holds **~5–8% less** than
+ideal — the **unsafe / over-stating direction**. Flag it as a known assumption to revisit (a Z
+correction, or lean on the conservative "call-it-an-80" derate below to cover it).
 
 **"Call it an 80" — conservative convention, and an automation-bias trap.** Because they're
 overfilled, divers often skip the dissimilar math and just call LP85s "80s" — *understating*
@@ -634,14 +650,16 @@ Concretises the choices §7.2 left open:
    **OC-only** (§5.1); back gas = **matching twins planned as one volume**, gauge = common pressure
    (§5.1/§5.3); **stressed-RMV default 1.5×**, user-settable (§5.5); **one master metric/imperial
    toggle** drives length + gas (§7.2); **saved rig profiles in Phase 1** (`Vec<RigProfile>` in
-   `Config`, §7.3/§8). ⏳ Tank-capacity table incoming from Nico → §5.3 presets.
+   `Config`, §7.3/§8). **Tank presets** added to §5.3 (general/representative; classes
+   HP>3400 / MP>3000 / LP rest; all-AL=MP; fill always user-set).
 
 **Still open (impl-time, non-blocking):**
 - **Memoization (§7.1):** confirm "debounce-only" holds on the largest real survey, else add the
   single-slot `AppState` memo.
 - **Gas-mode teardown (§7.2):** `setView()` `exitGasPlan()` (stronger) vs a `created_at` `MapCanvas`
   effect (the distance-overlay precedent) — pick at build time.
-- ⏳ **Tank-capacity table** from Nico → populate the §5.3 presets.
+- **Tank water-volumes (§5.3):** confirm the representative values against actual cylinders before
+  shipping presets (these are general/approx, not catalog-exact).
 
 ---
 
