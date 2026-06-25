@@ -324,6 +324,19 @@ pub struct Project {
     #[serde(skip, default)]
     #[ts(skip)]
     pub merge_adjacency_cache: HashMap<SectionId, Vec<SectionId>>,
+
+    /// `(section_id, shot_uuid)` → shot vector index. Transient, NOT persisted.
+    /// Turns `resolve_key`'s `AfterShot` arm from an O(shots) linear scan with a
+    /// per-element UUID string compare into an O(1) lookup — the dominant cost
+    /// when building merge/closure connectivity over a large import (issue:
+    /// importing a big Walls project pinned one core for minutes). Populated only
+    /// by [`Self::rebuild_shot_uuid_index`] (batch import, post-load, snapshot
+    /// restore); empty after deserialization, where `resolve_key` falls back to
+    /// the linear scan. `resolve_key` re-checks the cached index against the
+    /// shot's UUID, so a stale entry is harmless (it falls back to the scan).
+    #[serde(skip, default)]
+    #[ts(skip)]
+    pub shot_uuid_index: HashMap<(SectionId, String), u32>,
 }
 
 /// Project metadata for listing
@@ -540,6 +553,7 @@ impl Project {
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
             merge_adjacency_cache: HashMap::new(),
+            shot_uuid_index: HashMap::new(),
         }
     }
 
@@ -576,6 +590,22 @@ impl Project {
         self.next_section_id += 1;
         let new_idx = self.sections.len();
         self.section_index_cache.insert(section.id, new_idx);
+        // Maintain the shot-UUID index incrementally so `resolve_key`'s AfterShot
+        // lookup stays O(1) as the batch importer creates sections AND the
+        // merges/closures that reference them by shot UUID (the import's hot
+        // path). `Section::new` mints a UUID for every shot, so they are all
+        // present here.
+        for (i, shot) in section.shots.iter().enumerate() {
+            if let Some(u) = &shot.uuid {
+                // First-occurrence wins: mirror the cold-path `resolve_key`,
+                // which uses `shots.iter().position(...)` (first match). Under a
+                // duplicated within-section UUID, `or_insert` keeps the earliest
+                // index so the warm cache agrees with the cold scan.
+                self.shot_uuid_index
+                    .entry((section.id, u.clone()))
+                    .or_insert(i as u32);
+            }
+        }
         self.sections.push(section);
         self.touch();
         &self.sections[new_idx]
@@ -735,6 +765,29 @@ impl Project {
                 .entry(m.station_b.section_id)
                 .or_default()
                 .push(m.station_a.section_id);
+        }
+    }
+
+    /// Rebuild the `(section_id, shot_uuid)` → shot-index cache from the current
+    /// `sections`. O(total shots). Call before a hot `resolve_key` loop (batch
+    /// import, post-load, snapshot restore). Because `resolve_key` re-checks the
+    /// cached index against the shot's UUID, a stale entry is harmless — it falls
+    /// back to the linear scan — so this only needs to run often enough to keep
+    /// the lookups fast, not for correctness.
+    pub fn rebuild_shot_uuid_index(&mut self) {
+        self.shot_uuid_index.clear();
+        for s in &self.sections {
+            for (i, shot) in s.shots.iter().enumerate() {
+                if let Some(u) = &shot.uuid {
+                    // First-occurrence wins: mirror the cold-path `resolve_key`,
+                    // which uses `shots.iter().position(...)` (first match). Under
+                    // a duplicated within-section UUID, `or_insert` keeps the
+                    // earliest index so the warm cache agrees with the cold scan.
+                    self.shot_uuid_index
+                        .entry((s.id, u.clone()))
+                        .or_insert(i as u32);
+                }
+            }
         }
     }
 
@@ -964,6 +1017,20 @@ impl Project {
         let index = match &key.anchor {
             StationAnchor::SectionStart => 0,
             StationAnchor::AfterShot(uuid) => {
+                // O(1) via the shot-UUID index when warm. The index re-check
+                // makes a stale/absent entry harmless: it falls back to the
+                // authoritative linear scan, so the cache can never resolve to the
+                // wrong station and never needs eager invalidation for safety.
+                if let Some(&i) = self.shot_uuid_index.get(&(key.section_id, uuid.clone())) {
+                    if section
+                        .shots
+                        .get(i as usize)
+                        .and_then(|s| s.uuid.as_deref())
+                        == Some(uuid.as_str())
+                    {
+                        return Some(StationRef::new(key.section_id, i + 1));
+                    }
+                }
                 let pos = section
                     .shots
                     .iter()

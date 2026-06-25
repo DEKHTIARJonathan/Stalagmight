@@ -273,8 +273,10 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "undo-after.delete_shot",
     "undo-after.delete_shot_and_split",
     "undo-after.execute_batch",
+    "undo-after.execute_compass_import",
     "undo-after.execute_gpx_import",
     "undo-after.execute_tml_import",
+    "undo-after.execute_walls_import",
     "undo-after.import_sections",
     "undo-after.merge_stations",
     "undo-after.move_comment",
@@ -477,6 +479,14 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.project-settings",
     "active-dwell.dialog.delete-project",
     "active-dwell.dialog.bulk-delete",
+    // Walls (.wpj/.srv) survey import.
+    "command.parse_walls",
+    "command.execute_walls_import",
+    // walls-import dialog (action/cancel/dwell + active-dwell mirror).
+    "action.dialog.walls-import",
+    "dialog-cancel.walls-import",
+    "dwell.dialog.walls-import",
+    "active-dwell.dialog.walls-import",
 ];
 
 #[cfg(test)]
@@ -527,7 +537,13 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 401);
+        // 401 on master + 8 new events = 409:
+        //   - command.parse_walls, command.execute_walls_import (Walls import)
+        //   - undo-after.execute_walls_import, undo-after.execute_compass_import
+        //   - action.dialog.walls-import, dialog-cancel.walls-import,
+        //     dwell.dialog.walls-import, active-dwell.dialog.walls-import
+        //     (the walls-import dialog action/cancel/dwell + active-dwell mirror)
+        assert_eq!(EVENT_NAMES.len(), 409);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

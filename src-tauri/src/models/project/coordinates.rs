@@ -12,6 +12,24 @@ impl Project {
     /// Returns a vec including the station itself plus all merge/closure partners,
     /// transitively connected.
     fn get_colocated_stations(&self, station_ref: StationRef) -> Vec<StationRef> {
+        // Colocation adjacency = merges + ALIGNED closures, every endpoint
+        // resolved once (O(edges)). BFS over it is O(edges + group) instead of
+        // rescanning all merges/closures at each BFS node — the latter made
+        // coordinate/closure work on a large merged component O(group × edges).
+        let mut adjacency = self.build_station_merge_adjacency();
+        for closure in &self.loop_closures {
+            if !closure.is_aligned {
+                continue;
+            }
+            if let (Some(sa), Some(sb)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) {
+                adjacency.entry(sa).or_default().push(sb);
+                adjacency.entry(sb).or_default().push(sa);
+            }
+        }
+
         let mut group = vec![station_ref];
         let mut visited = HashSet::new();
         visited.insert(station_ref);
@@ -19,39 +37,13 @@ impl Project {
         queue.push_back(station_ref);
 
         while let Some(current) = queue.pop_front() {
-            // Check merges
-            for merge in &self.station_merges {
-                let partner = if self.key_is_ref(&merge.station_a, current) {
-                    self.resolve_key(&merge.station_b)
-                } else if self.key_is_ref(&merge.station_b, current) {
-                    self.resolve_key(&merge.station_a)
-                } else {
-                    None
-                };
-                if let Some(p) = partner {
-                    if visited.insert(p) {
-                        group.push(p);
-                        queue.push_back(p);
-                    }
-                }
-            }
-            // Check aligned closures
-            for closure in &self.loop_closures {
-                if !closure.is_aligned {
-                    continue;
-                }
-                let partner = if self.key_is_ref(&closure.station_a, current) {
-                    self.resolve_key(&closure.station_b)
-                } else if self.key_is_ref(&closure.station_b, current) {
-                    self.resolve_key(&closure.station_a)
-                } else {
-                    None
-                };
-                if let Some(p) = partner {
-                    if visited.insert(p) {
-                        group.push(p);
-                        queue.push_back(p);
-                    }
+            let Some(neighbors) = adjacency.get(&current) else {
+                continue;
+            };
+            for &p in neighbors {
+                if visited.insert(p) {
+                    group.push(p);
+                    queue.push_back(p);
                 }
             }
         }
@@ -137,6 +129,34 @@ impl Project {
         }
 
         Some(coords)
+    }
+
+    /// World `(x, y)` of a single station via the shot-walk only — the same x/y
+    /// [`Self::compute_station_raw_coords`] returns, but WITHOUT the
+    /// `get_colocated_stations` colocation BFS that computes Z. For callers that
+    /// only need the horizontal position (e.g. merge offset alignment), this
+    /// avoids an O(group × merges) traversal per call — the dominant cost when
+    /// merging the thousands of stations of a large import.
+    pub(crate) fn compute_station_raw_xy(&self, station_ref: StationRef) -> Option<(f64, f64)> {
+        let section = self.get_section(station_ref.section_id)?;
+        let (offset_x, offset_y) = self
+            .section_offsets
+            .get(&section.id)
+            .copied()
+            .unwrap_or((0.0, 0.0));
+        let (mut x, mut y) = (offset_x, offset_y);
+        for i in 0..station_ref.station_index as usize {
+            let shot = section.shots.get(i)?;
+            let azimuth_rad = shot.average_azimuth().to_radians();
+            let horizontal = shot.horizontal_length();
+            x += horizontal * azimuth_rad.sin();
+            y += horizontal * azimuth_rad.cos();
+        }
+        if let Some((ox, oy, _)) = self.station_offset_for_ref(station_ref) {
+            x += ox;
+            y += oy;
+        }
+        Some((x, y))
     }
 
     /// Coordinate-only, component-scoped batch of raw (measured) station

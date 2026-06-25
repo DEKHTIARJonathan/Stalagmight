@@ -556,6 +556,20 @@ impl Database {
                 .or_default()
                 .push(m.station_a.section_id);
         }
+        // Pre-build the shot-UUID index too, so `resolve_key`'s `AfterShot` arm
+        // is O(1) right after load (mirrors the two caches above).
+        let mut shot_uuid_index = HashMap::new();
+        for s in &sections {
+            for (i, shot) in s.shots.iter().enumerate() {
+                if let Some(u) = &shot.uuid {
+                    // First occurrence wins, matching `add_section` /
+                    // `rebuild_shot_uuid_index` / the `resolve_key` cold scan; a
+                    // plain `.insert` would be last-write-wins and silently break
+                    // that invariant if a duplicate UUID ever slipped through.
+                    shot_uuid_index.entry((s.id, u.clone())).or_insert(i as u32);
+                }
+            }
+        }
         Ok(Project {
             name,
             location,
@@ -578,6 +592,7 @@ impl Database {
             cascade_deferred: false,
             section_index_cache,
             merge_adjacency_cache,
+            shot_uuid_index,
         })
     }
 

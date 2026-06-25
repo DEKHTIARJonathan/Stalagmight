@@ -8,6 +8,7 @@
  * - `.gpx`              -> GPX import (new project only; rejected if one is open)
  * - `.tml` / `.tmlu`    -> Ariane import (always a new project)
  * - `.mak` / `.dat`     -> Compass import (always a new project)
+ * - `.wpj` / `.srv`     -> Walls import (always a new project)
  * - `.dmp`              -> DMP import (add to current project, or new project)
  * - anything else       -> unsupported-file error (NOT silently treated as DMP)
  *
@@ -139,6 +140,23 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
         filePath: path,
         defaultName: extractFilename(path, /\.(mak|dat)$/i) || 'Imported',
         importType: 'compass',
+      });
+      handedOff = true;
+    } else if (lowerPath.endsWith('.wpj') || lowerPath.endsWith('.srv')) {
+      // Walls import always creates a new project.
+      if (store.project) {
+        ui.openDialog('error', IMPORT_SURVEY_CLOSE_FIRST);
+        return;
+      }
+      const wallsFile = await store.parseWalls(path);
+      if (!wallsFile) return;
+      ui.openDialog('new-project-for-import', {
+        wallsFile,
+        filePath: path,
+        // Prefer the .wpj project name; fall back to the file stem.
+        defaultName:
+          wallsFile.project_name || extractFilename(path, /\.(wpj|srv)$/i) || 'Imported',
+        importType: 'walls',
       });
       handedOff = true;
     } else if (lowerPath.endsWith('.dmp')) {

@@ -5,7 +5,7 @@ import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { ensureExtension, projectSaveFilters, saveDialog, PROJECT_EXTENSION } from '../../utils/fileDialogs';
-import type { DmpFile, TmlFile, GpxFile, CompassFile } from '../../types/commands';
+import type { DmpFile, TmlFile, GpxFile, CompassFile, WallsFile } from '../../types/commands';
 import { setSource, trackDialogComplete, peekProjectActionSource, setProjectActionSource } from '../../utils/telemetry';
 
 /**
@@ -23,12 +23,14 @@ export default function NewProjectForImportDialog() {
   const tmlFile = dialogData.tmlFile as TmlFile | undefined;
   const gpxFile = dialogData.gpxFile as GpxFile | undefined;
   const compassFile = dialogData.compassFile as CompassFile | undefined;
+  const wallsFile = dialogData.wallsFile as WallsFile | undefined;
   const filePath = dialogData.filePath as string | undefined;
   const importType = dialogData.importType as string | undefined;
   const defaultName = (dialogData.defaultName as string) || '';
   const isTml = importType === 'tml' || !!tmlFile;
   const isGpx = importType === 'gpx' || !!gpxFile;
   const isCompass = importType === 'compass' || !!compassFile;
+  const isWalls = importType === 'walls' || !!wallsFile;
 
   const [name, setName] = useState(defaultName);
   const [projectLocation, setProjectLocation] = useState('');
@@ -120,7 +122,7 @@ export default function NewProjectForImportDialog() {
       return;
     }
 
-    if (!filePath || (!dmpFile && !tmlFile && !gpxFile && !compassFile)) {
+    if (!filePath || (!dmpFile && !tmlFile && !gpxFile && !compassFile && !wallsFile)) {
       setError('Import file data is missing');
       return;
     }
@@ -157,6 +159,10 @@ export default function NewProjectForImportDialog() {
           // Open Compass import dialog
           setSource('dialog');
           openDialog('compass-import', { compassFile, filePath });
+        } else if (isWalls && wallsFile) {
+          // Open Walls import dialog
+          setSource('dialog');
+          openDialog('walls-import', { wallsFile, filePath });
         } else if (dmpFile) {
           // Open DMP selection dialog
           setSource('dialog');
@@ -235,6 +241,16 @@ export default function NewProjectForImportDialog() {
               {compassFile.survey_count} surveys •{' '}
               {compassFile.shot_count} shots
               {compassFile.cave_name ? ` • ${compassFile.cave_name}` : ''}
+            </div>
+          </div>
+        )}
+        {wallsFile && (
+          <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
+            <div className="font-medium mb-1">Importing from Walls survey:</div>
+            <div className="text-text-secondary">
+              {wallsFile.resolved_survey_count} surveys •{' '}
+              {wallsFile.shot_count} shots
+              {wallsFile.project_name ? ` • ${wallsFile.project_name}` : ''}
             </div>
           </div>
         )}

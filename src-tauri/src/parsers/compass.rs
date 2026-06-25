@@ -20,7 +20,6 @@ use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -32,8 +31,8 @@ use compass_data::{
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
 use crate::models::shot::ShotData;
 use crate::models::station::GpsCoordinates;
+use crate::parsers::geo::{non_empty, FEET_TO_METERS};
 
-const FEET_TO_METERS: f64 = 0.3048;
 /// Distances/LRUD at or above this are Compass "missing data" sentinels.
 const MISSING_VALUE_THRESHOLD: f64 = 990.0;
 /// Angles at or below this are Compass "missing data" sentinels.
@@ -457,15 +456,6 @@ fn lrud_meters(raw: f64, length_to_m: f64) -> Option<f64> {
     }
 }
 
-fn non_empty(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
 /// Corrected azimuth (grid, 0..360), slope length (m), inclination (deg, +up),
 /// and elevation gain (m, +up) for a shot.
 fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
@@ -752,16 +742,18 @@ fn survey_declination(
         DeclinationMode::Ignore => 0.0,
         DeclinationMode::Entered => survey.parameters.declination,
         DeclinationMode::Auto => match anchor_lat_lng {
-            Some((lat, lng)) => match igrf_declination(lat, lng, survey.date) {
-                Ok(value) => value,
-                Err(reason) => {
-                    warnings.push(format!(
-                        "Survey '{}': auto declination failed ({reason}); using entered value",
-                        survey.name
-                    ));
-                    survey.parameters.declination
+            Some((lat, lng)) => {
+                match crate::parsers::geo::igrf_declination(lat, lng, survey.date) {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        warnings.push(format!(
+                            "Survey '{}': auto declination failed ({reason}); using entered value",
+                            survey.name
+                        ));
+                        survey.parameters.declination
+                    }
                 }
-            },
+            }
             None => {
                 warnings.push(format!(
                     "Survey '{}': auto declination needs a georeference; using entered value",
@@ -771,15 +763,6 @@ fn survey_declination(
             }
         },
     }
-}
-
-fn igrf_declination(lat: f64, lng: f64, date: chrono::NaiveDate) -> Result<f64, String> {
-    let ordinal = u16::try_from(date.ordinal()).map_err(|_| "invalid day-of-year".to_string())?;
-    let date = time::Date::from_ordinal_date(date.year(), ordinal)
-        .map_err(|e| format!("invalid date: {e}"))?;
-    igrf::declination(lat, lng, 0, date)
-        .map(|field| field.d)
-        .map_err(|e| format!("{e:?}"))
 }
 
 /// Map a Compass datum to a proj4rs datum/ellipsoid token, warning when only an
@@ -847,17 +830,9 @@ fn utm_to_wgs84(
     warnings: &mut Vec<String>,
 ) -> Option<(f64, f64)> {
     let token = datum_proj_token(datum, warnings);
-    let to = proj4rs::Proj::from_proj_string("+proj=longlat +datum=WGS84 +no_defs").ok()?;
 
-    let project = |south: bool| -> Option<(f64, f64)> {
-        let south_token = if south { " +south" } else { "" };
-        let from = proj4rs::Proj::from_proj_string(&format!(
-            "+proj=utm +zone={zone}{south_token} +{token} +units=m +no_defs"
-        ))
-        .ok()?;
-        let (lon, lat, _) =
-            proj4rs::adaptors::transform_xyz(&from, &to, easting, northing, 0.0).ok()?;
-        Some((lon.to_degrees(), lat.to_degrees()))
+    let project = |south: bool| {
+        crate::parsers::geo::project_utm(easting, northing, zone as u32, south, &token)
     };
 
     // Strong signal: datum implies hemisphere.

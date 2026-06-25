@@ -59,6 +59,7 @@ use stalagmight_lib::parsers::gpx::{
 use stalagmight_lib::parsers::tml::{
     TmlClosure, TmlFile, TmlGeoCoding, TmlSection, TmlShot, TmlShotType, TmlUnit,
 };
+use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -186,6 +187,10 @@ fn main() {
     // Compass import
     export::<CompassFile>(&out_dir);
     export::<CompassSurveySummary>(&out_dir);
+
+    // Walls import
+    export::<WallsFile>(&out_dir);
+    export::<WallsSurveySummary>(&out_dir);
 
     // Export/image types
     export::<ExportImageOptions>(&out_dir);
@@ -355,6 +360,8 @@ fn main() {
         "TmlClosure",
         "CompassFile",
         "CompassSurveySummary",
+        "WallsFile",
+        "WallsSurveySummary",
         "ExportImageOptions",
         "ImageFormat",
         "DepthPreset",

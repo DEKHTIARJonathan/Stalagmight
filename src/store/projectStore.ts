@@ -28,7 +28,7 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy } from '../types/survey-data';
@@ -347,6 +347,8 @@ interface ProjectStore {
   executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseCompass: (path: string) => Promise<CompassFile>;
   executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
+  parseWalls: (path: string) => Promise<WallsFile>;
+  executeWallsImport: (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean, selectedSurveys?: number[] | null) => Promise<CommandResult>;
   // Per-project settings (#57): name + validation thresholds, stored in the .stalx
   updateProjectSettings: (name: string, validation: Config['validation']) => Promise<CommandResult>;
   // Collaboration mode
@@ -1774,6 +1776,41 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           commentsOnStations: commentsOnStations ?? true,
         },
         { purpose: 'import Compass', fields: { path } }
+      );
+    } finally {
+      // Terminal flow: clear the pending source so a failed/abandoned import
+      // can't leak the armed project-action source into the next command.
+      clearProjectActionSource();
+    }
+  },
+
+  parseWalls: async (path: string) => {
+    return await invokeIpc<WallsFile>('parse_walls', { path }, {
+      purpose: 'parse Walls for import preview',
+      fields: { path },
+    });
+  },
+
+  executeWallsImport: async (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean, selectedSurveys?: number[] | null) => {
+    // Re-arm the transient `_source` from the durable pending bridge (it resets
+    // ~50ms after being set), so `command.execute_walls_import` is attributed to
+    // the real entry point (hamburger/keyboard/drag-drop/dialog) instead of
+    // 'unknown' — matching executeCompassImport/Tml/Gpx.
+    const s = peekProjectActionSource();
+    if (s) setSource(s);
+    try {
+      return await executeCommand(
+        'execute_walls_import',
+        {
+          path,
+          fileHash: fileHash ?? null,
+          commentsOnStations: commentsOnStations ?? true,
+          includeSplays: includeSplays ?? false,
+          // `null` ⇒ import every survey; an array picks specific survey indices
+          // (into the preview's `surveys`, 1:1 with the parser order).
+          selectedSurveys: selectedSurveys ?? null,
+        },
+        { purpose: 'import Walls', fields: { path } }
       );
     } finally {
       // Terminal flow: clear the pending source so a failed/abandoned import

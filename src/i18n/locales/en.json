@@ -1621,6 +1621,7 @@
       "importDmp": "Import DMP",
       "importTml": "Import Ariane",
       "importCompass": "Import Compass",
+      "importWalls": "Import Walls",
       "importGpx": "Import GPX",
       "mergeProjects": "Merge {{countFormatted}} projects",
       "mergeProjectsAria": "Merge {{countFormatted}} selected projects",

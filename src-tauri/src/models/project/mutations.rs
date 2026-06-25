@@ -1,10 +1,10 @@
 use chrono::Utc;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::{debug, error, info, trace};
 
 use crate::models::{
-    gps_to_local, ClosurePreview, ClosureStrategy, GpsCoordinates, LoopClosure, SectionId,
-    StationMerge, StationRef, ZeroDatum,
+    gps_to_local, ClosurePreview, ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure,
+    SectionId, StationMerge, StationRef, ZeroDatum,
 };
 
 use super::Project;
@@ -67,13 +67,15 @@ impl Project {
             "Resolved zero datum anchors for merge"
         );
 
-        // Compute current coordinates (includes existing section offsets)
-        // Coordinates are in the world coordinate system established by the datum
+        // Current horizontal (x/y) positions in the world coordinate system. Only
+        // x/y are needed to align the merge point (the offset below is purely
+        // horizontal), so use the x/y-only walk and skip the expensive Z/colocation
+        // computation — this is on the per-merge hot path of a large import.
         let coords_a = self
-            .compute_station_raw_coords(station_a)
+            .compute_station_raw_xy(station_a)
             .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
         let coords_b = self
-            .compute_station_raw_coords(station_b)
+            .compute_station_raw_xy(station_b)
             .ok_or_else(|| "Failed to compute coordinates for station B".to_string())?;
 
         // Datum propagation: When merging a section without datum into a datum group,
@@ -84,7 +86,7 @@ impl Project {
         // - If A has zero datum (direct or transitive), B's group moves to align with A
         // - If B has zero datum (direct or transitive), A's group moves to align with B
         // - If neither has zero datum, A's group moves to align with B (arbitrary choice)
-        let (anchor_coords, moving_coords, moving_section_id) = if a_has_zd {
+        let ((anchor_x, anchor_y), (moving_x, moving_y), moving_section_id) = if a_has_zd {
             (coords_a, coords_b, station_b.section_id)
         } else {
             // B has zero datum OR neither has one (in which case B is the anchor)
@@ -93,8 +95,8 @@ impl Project {
 
         // Calculate offset to move the merge point station from its current position
         // to the anchor station's position, aligning them in world coordinates
-        let offset_x = anchor_coords.x - moving_coords.x;
-        let offset_y = anchor_coords.y - moving_coords.y;
+        let offset_x = anchor_x - moving_x;
+        let offset_y = anchor_y - moving_y;
 
         // Apply offset to all sections in the moving merge group (rigid body)
         // This repositions the entire moving group relative to the datum coordinate system
@@ -297,6 +299,207 @@ impl Project {
         Ok(closure)
     }
 
+    /// Batch-create `Batch`-strategy loop closures (the importer's hot path).
+    ///
+    /// Semantically identical to calling
+    /// `create_loop_closure(a, b, ClosureStrategy::Batch)` for each pair IN
+    /// ORDER, but builds the graph invariants ONCE and reuses them: station
+    /// coordinates, a station-level merge-group union-find (the "already merged?"
+    /// check → O(α) instead of a BFS per closure), a section-level connectivity
+    /// union-find (merges + closures; grown as closures are added), the
+    /// station-merge adjacency, the closure adjacency, and a duplicate-pair set.
+    /// Sections/merges/offsets are fixed for the batch (the import's cascade ran
+    /// first and Batch closures are never `is_aligned`, so they don't rigidify),
+    /// so only the closure-dependent state (connectivity UF, closure adjacency,
+    /// dup set) updates per created closure — exactly what path-length needs to
+    /// still see earlier closures. Returns one result per input pair (Ok =
+    /// created, Err = skipped, with the same reason strings as the single path).
+    pub fn create_loop_closures_batch(
+        &mut self,
+        pairs: &[(StationRef, StationRef)],
+    ) -> Vec<Result<LoopClosure, String>> {
+        // Order-independent pair key (StationRef is not Ord).
+        fn norm(a: StationRef, b: StationRef) -> (StationRef, StationRef) {
+            if (a.section_id, a.station_index) <= (b.section_id, b.station_index) {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        }
+        fn uf_find<K: std::hash::Hash + Eq + Copy>(p: &mut HashMap<K, K>, x: K) -> K {
+            let mut root = x;
+            while let Some(&pr) = p.get(&root) {
+                if pr == root {
+                    break;
+                }
+                root = pr;
+            }
+            let mut cur = x;
+            while let Some(&pr) = p.get(&cur) {
+                if pr == root {
+                    break;
+                }
+                p.insert(cur, root);
+                cur = pr;
+            }
+            root
+        }
+        fn uf_union<K: std::hash::Hash + Eq + Copy>(p: &mut HashMap<K, K>, a: K, b: K) {
+            p.entry(a).or_insert(a);
+            p.entry(b).or_insert(b);
+            let ra = uf_find(p, a);
+            let rb = uf_find(p, b);
+            if ra != rb {
+                p.insert(ra, rb);
+            }
+        }
+
+        // Raw station coordinates (same x/y/z as compute_station_raw_coords; built
+        // once via the colocated-group pass).
+        let coords: HashMap<StationRef, Coordinates> = self
+            .compute_station_coordinates()
+            .into_iter()
+            .map(|s| (s.station_ref, s.coordinates))
+            .collect();
+
+        // Station-level merge-group union-find (immutable for the batch).
+        let mut merge_uf: HashMap<StationRef, StationRef> = HashMap::new();
+        for merge in &self.station_merges {
+            if let (Some(a), Some(b)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) {
+                uf_union(&mut merge_uf, a, b);
+            }
+        }
+
+        // Section-level connectivity union-find (merges + closures); grows below.
+        let mut conn_uf: HashMap<SectionId, SectionId> = HashMap::new();
+        for merge in &self.station_merges {
+            uf_union(
+                &mut conn_uf,
+                merge.station_a.section_id,
+                merge.station_b.section_id,
+            );
+        }
+        for closure in &self.loop_closures {
+            uf_union(
+                &mut conn_uf,
+                closure.station_a.section_id,
+                closure.station_b.section_id,
+            );
+        }
+
+        // Path-length adjacency: merges (immutable) + closures (grows below).
+        let merge_adj = self.build_station_merge_adjacency();
+        let mut closure_adj: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        let mut closure_pairs: HashSet<(StationRef, StationRef)> = HashSet::new();
+        for closure in &self.loop_closures {
+            if let (Some(a), Some(b)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) {
+                closure_adj.entry(a).or_default().push(b);
+                closure_adj.entry(b).or_default().push(a);
+                closure_pairs.insert(norm(a, b));
+            }
+        }
+
+        // Normalize the id counter once (legacy id=0 projects).
+        let max_existing = self.loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
+        if self.next_closure_id <= max_existing {
+            self.next_closure_id = max_existing + 1;
+        }
+
+        let mut results = Vec::with_capacity(pairs.len());
+        let mut created_any = false;
+        for &(station_a, station_b) in pairs {
+            if !self.station_exists(station_a) || !self.station_exists(station_b) {
+                results.push(Err("One or both stations do not exist".to_string()));
+                continue;
+            }
+            merge_uf.entry(station_a).or_insert(station_a);
+            merge_uf.entry(station_b).or_insert(station_b);
+            if uf_find(&mut merge_uf, station_a) == uf_find(&mut merge_uf, station_b) {
+                results.push(Err(
+                    "These stations are already merged. Closures are for unmerged station pairs."
+                        .to_string(),
+                ));
+                continue;
+            }
+            conn_uf
+                .entry(station_a.section_id)
+                .or_insert(station_a.section_id);
+            conn_uf
+                .entry(station_b.section_id)
+                .or_insert(station_b.section_id);
+            let connected = uf_find(&mut conn_uf, station_a.section_id)
+                == uf_find(&mut conn_uf, station_b.section_id);
+            if !connected
+                && !(self.section_has_zero_datum(station_a.section_id)
+                    && self.section_has_zero_datum(station_b.section_id))
+            {
+                results.push(Err("Stations are not connected. They must be in the same connected group to create a loop closure.".to_string()));
+                continue;
+            }
+            if closure_pairs.contains(&norm(station_a, station_b)) {
+                results.push(Err(
+                    "A loop closure already exists between these stations.".to_string()
+                ));
+                continue;
+            }
+            let (Some(&ca), Some(&cb)) = (coords.get(&station_a), coords.get(&station_b)) else {
+                results.push(Err("Failed to compute coordinates for station".to_string()));
+                continue;
+            };
+            let horizontal_misclosure = ca.horizontal_distance_to(&cb);
+            let vertical_misclosure = (ca.z - cb.z).abs();
+            let misclosure_distance = ca.distance_to(&cb);
+            let path_length =
+                self.path_length_dijkstra(station_a, station_b, &merge_adj, Some(&closure_adj));
+            let error_percentage = if path_length > 0.0 {
+                (misclosure_distance / path_length) * 100.0
+            } else {
+                0.0
+            };
+            let (Some(key_a), Some(key_b)) =
+                (self.key_for_ref(station_a), self.key_for_ref(station_b))
+            else {
+                results.push(Err(
+                    "Cannot create loop closure: station has no stable anchor".to_string(),
+                ));
+                continue;
+            };
+            let id = self.next_closure_id;
+            self.next_closure_id += 1;
+            let closure = LoopClosure {
+                id,
+                station_a: key_a,
+                station_b: key_b,
+                path_length,
+                misclosure_distance,
+                error_percentage,
+                horizontal_misclosure,
+                vertical_misclosure,
+                strategy: ClosureStrategy::Batch,
+                is_aligned: false,
+            };
+            self.loop_closures.push(closure.clone());
+            // Update the closure-dependent invariants so the NEXT closure's
+            // connectivity + path-length see this one (matches the sequential path).
+            closure_adj.entry(station_a).or_default().push(station_b);
+            closure_adj.entry(station_b).or_default().push(station_a);
+            closure_pairs.insert(norm(station_a, station_b));
+            uf_union(&mut conn_uf, station_a.section_id, station_b.section_id);
+            created_any = true;
+            results.push(Ok(closure));
+        }
+        if created_any {
+            self.touch();
+        }
+        results
+    }
+
     /// Remove a loop closure by ID
     pub fn remove_loop_closure(&mut self, closure_id: u64) -> Result<LoopClosure, String> {
         if let Some(pos) = self.loop_closures.iter().position(|lc| lc.id == closure_id) {
@@ -376,27 +579,28 @@ impl Project {
         // Check transitive merge equivalence using BFS through merge graph.
         // Two stations are "merged" if there's any chain of merges connecting them
         // (i.e., they're in the same merge group).
+        //
+        // Resolve every merge endpoint to a station-level adjacency map ONCE
+        // (resolve_key is O(1)), then BFS over that. The previous version
+        // re-scanned ALL `station_merges` at every BFS node — O(group × merges)
+        // per call — which made a batch import that checks this once per loop
+        // closure (with thousands of merges) quadratic-to-cubic.
+        let adjacency = self.build_station_merge_adjacency();
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
         visited.insert(a);
         queue.push_back(a);
 
         while let Some(current) = queue.pop_front() {
-            for merge in &self.station_merges {
-                let neighbor = if self.key_is_ref(&merge.station_a, current) {
-                    self.resolve_key(&merge.station_b)
-                } else if self.key_is_ref(&merge.station_b, current) {
-                    self.resolve_key(&merge.station_a)
-                } else {
-                    None
-                };
-                if let Some(n) = neighbor {
-                    if n == b {
-                        return true;
-                    }
-                    if visited.insert(n) {
-                        queue.push_back(n);
-                    }
+            let Some(neighbors) = adjacency.get(&current) else {
+                continue;
+            };
+            for &n in neighbors {
+                if n == b {
+                    return true;
+                }
+                if visited.insert(n) {
+                    queue.push_back(n);
                 }
             }
         }

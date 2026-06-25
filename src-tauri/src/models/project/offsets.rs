@@ -71,6 +71,16 @@ impl Project {
         // user can fix at runtime.
         #[cfg(debug_assertions)]
         {
+            // During a deferred-cascade batch (e.g. a large import) connections
+            // are created in dependency order, so intermediate states are
+            // transiently misaligned BY DESIGN — and running this
+            // O(merges × colocation-BFS) check after every command would make the
+            // batch O(N³) (the import of a large Walls project pinned a core for
+            // minutes in dev builds). Skip until the batch completes; the cascade
+            // that runs when the guard is disarmed restores alignment.
+            if self.cascade_deferred {
+                return;
+            }
             for merge in &self.station_merges {
                 // Skip same-section merges (physically meaningless, used only in tests)
                 if merge.station_a.section_id == merge.station_b.section_id {
@@ -158,6 +168,7 @@ impl Project {
     pub fn redrive_offsets_after_load(&mut self) -> usize {
         self.rebuild_section_index();
         self.rebuild_merge_adjacency();
+        self.rebuild_shot_uuid_index();
         // Normalize any closure that is really a sole-bridge attachment into a
         // merge before solving, so a file persisted in that state (e.g. a section
         // stranded by an older delete) opens correctly.
