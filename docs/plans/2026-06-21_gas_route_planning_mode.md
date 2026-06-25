@@ -630,24 +630,18 @@ Concretises the choices §7.2 left open:
 4. **Architecture forks (2026-06-24):** engine = `models/project/gas/` sibling (§7.1); exit/bailout
    = **reverse-of-entry-path**, not an exits-Dijkstra (§4/§6); UI entry = top-level toggle **outside**
    `DisplayMenu` (§7.2); right panel = **reuse the `detail` `Dock` slot** (§7.3).
+5. **Domain knobs (2026-06-24, batch 2):** turn = **1/N consumed**, hold the rest for the exit,
+   **OC-only** (§5.1); back gas = **matching twins planned as one volume**, gauge = common pressure
+   (§5.1/§5.3); **stressed-RMV default 1.5×**, user-settable (§5.5); **one master metric/imperial
+   toggle** drives length + gas (§7.2); **saved rig profiles in Phase 1** (`Vec<RigProfile>` in
+   `Config`, §7.3/§8). ⏳ Tank-capacity table incoming from Nico → §5.3 presets.
 
-**Still open:**
-4. **Memoization:** confirm "debounce-only" holds on the largest real survey, or add the
-   single-slot `AppState` memo (§7.1).
-5. **Turn-gloss (§5.1) — NOT minor:** confirm "turn at 1/N" = *consumed* vs *reserved*; it flips
-   the sign of the §5.1 recalc formulas (2026-06-24 audit).
-6. **Stressed-RMV value:** confirm `stressed_rmv_multiplier` (placeholder 1.5–2.0) — it scales every
-   CCR bailout number. *(Planning batch otherwise resolved: traverses out; ≤2 stages; drop envelope;
-   ephemeral plan + print-out; survey-RMV slider; CCR dil-out; lead = future marker §9, MVP targets a
-   selected station.)*
-7. **Recalc calibration (§5.1):** what back-gas rig are `100/70/15` bar calibrated to (single /
-   manifolded twins / independent doubles), and is `current_backgas` a per-cylinder gauge or a total?
-8. **Gas-mode teardown (§7.2):** `setView()` `exitGasPlan()` (stronger) vs a `created_at` `MapCanvas`
-   effect (matches the distance-overlay precedent)?
-9. **Two unit toggles (§7.2):** length/depth follow `UnitsConfig.length`, gas follows
-   `GasConfig.units` — reconcile the readout (one toggle for both, or independent + clear labels)?
-10. **Saved rig profiles (§7.3):** in Phase 1 scope, or later? And where does the list live (a
-    `Vec<RigProfile>` in global `Config`, edited via Settings)?
+**Still open (impl-time, non-blocking):**
+- **Memoization (§7.1):** confirm "debounce-only" holds on the largest real survey, else add the
+  single-slot `AppState` memo.
+- **Gas-mode teardown (§7.2):** `setView()` `exitGasPlan()` (stronger) vs a `created_at` `MapCanvas`
+  effect (the distance-overlay precedent) — pick at build time.
+- ⏳ **Tank-capacity table** from Nico → populate the §5.3 presets.
 
 ---
 
