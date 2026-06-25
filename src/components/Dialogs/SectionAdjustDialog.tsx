@@ -124,6 +124,13 @@ export default function SectionAdjustDialog() {
   const handleApply = async () => {
     if (sectionId === undefined) return;
 
+    // Cancel any pending debounced preview so it can't fire a second move_section
+    // concurrently with the Apply below — a slow (>150ms) IPC would otherwise let
+    // the late preview double-apply the offset.
+    if (previewTimeoutRef.current) {
+      clearTimeout(previewTimeoutRef.current);
+    }
+
     setIsLoading(true);
     setError(null);
 
@@ -160,6 +167,11 @@ export default function SectionAdjustDialog() {
   };
 
   const handleCancel = async () => {
+    // Cancel any pending preview before reverting, so it can't re-apply after the
+    // revert below and leave the section shifted.
+    if (previewTimeoutRef.current) {
+      clearTimeout(previewTimeoutRef.current);
+    }
     // If preview was applied, we need to revert it
     if (previewApplied && sectionId !== undefined) {
       // Apply inverse offset to revert
@@ -222,12 +234,16 @@ export default function SectionAdjustDialog() {
             <label className="block text-sm text-text-secondary mb-1">
               dx (meters)
             </label>
+            {/* type="text" (not number): a number input strips the partial "-"/"."
+                being typed, which re-breaks #161. inputMode="text" (not "decimal")
+                keeps the minus key on touch keypads. */}
             <input
-              type="text" inputMode="decimal"
+              type="text" inputMode="text"
               value={dxStr}
               onChange={(e) => handleDxChange(e.target.value)}
               className="w-full"
               placeholder="0"
+              disabled={isLoading}
               data-testid="dx-input"
             />
             <p className="text-xs text-text-secondary mt-1">Positive = East</p>
@@ -237,12 +253,14 @@ export default function SectionAdjustDialog() {
             <label className="block text-sm text-text-secondary mb-1">
               dy (meters)
             </label>
+            {/* See dx above: type="text"/inputMode="text" are load-bearing for #161. */}
             <input
-              type="text" inputMode="decimal"
+              type="text" inputMode="text"
               value={dyStr}
               onChange={(e) => handleDyChange(e.target.value)}
               className="w-full"
               placeholder="0"
+              disabled={isLoading}
               data-testid="dy-input"
             />
             <p className="text-xs text-text-secondary mt-1">Positive = North</p>

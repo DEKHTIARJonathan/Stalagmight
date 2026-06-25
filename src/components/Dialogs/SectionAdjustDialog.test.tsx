@@ -15,7 +15,7 @@
  * so this guard lives at the component tier.)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../utils/telemetry', async (importOriginal) => ({
@@ -71,5 +71,33 @@ describe('SectionAdjustDialog negative / partial input (#161)', () => {
 
     await userEvent.clear(dy);
     expect(dy).toHaveValue(''); // the bug pinned this to '0'
+  });
+
+  it('accepts a negative and a leading-dot decimal in dy', async () => {
+    // dy goes through handleDyChange — a separate handler/closure from dx, so it
+    // needs its own coverage. fireEvent.change is atomic (no debounce-interleave),
+    // and the per-keystroke negative path is already covered by the dx test above.
+    render(<SectionAdjustDialog />);
+    const dy = await screen.findByTestId('dy-input');
+
+    fireEvent.change(dy, { target: { value: '-1.5' } });
+    expect(dy).toHaveValue('-1.5');
+
+    fireEvent.change(dy, { target: { value: '.5' } }); // leading dot is valid
+    expect(dy).toHaveValue('.5');
+  });
+
+  it('drops input the partial-decimal gate rejects', async () => {
+    render(<SectionAdjustDialog />);
+    const dx = await screen.findByTestId('dx-input');
+
+    // fireEvent.change is atomic + synchronous, so it exercises the reject branch
+    // deterministically — per-keystroke userEvent.type of rejected chars races
+    // React's controlled-value restore under load (a flake we already hit once).
+    fireEvent.change(dx, { target: { value: '-2' } });
+    expect(dx).toHaveValue('-2');
+
+    fireEvent.change(dx, { target: { value: '-2e3' } }); // 'e' fails /^-?\d*\.?\d*$/
+    expect(dx).toHaveValue('-2'); // rejected → field unchanged
   });
 });
