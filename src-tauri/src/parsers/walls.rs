@@ -558,7 +558,12 @@ fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
         reference: None,
         segment: String::new(),
         derive_decl: false,
-        grid_relative: true,
+        // Root default matches dewalls `WpjEntry::gridRelative()` (false when no
+        // ancestor sets a grid STATUS bit) and our own `derive_decl: false`
+        // default above. A `true` default would silently rotate every CT azimuth
+        // by the `.REF` grid convergence on a project that carries a `.REF` but
+        // sets no grid-relative bit.
+        grid_relative: false,
     };
 
     // Flush `pending` (a fully-described entry) into the tree: push books onto
@@ -1548,7 +1553,7 @@ fn parse_vector_line(
     let from = normalize_station(from_raw, units);
     let to = normalize_station(to_raw, units);
 
-    // Anonymous wall point (-): a splay reading, not a connected leg.
+    // Anonymous wall point (`-`/`--`/`---`): a splay reading, not a connected leg.
     let from_anon = is_anonymous(from_raw);
     let to_anon = is_anonymous(to_raw);
 
@@ -1669,7 +1674,7 @@ fn parse_vector_line(
 
     // A floated/`(?)` variance is a network-adjustment hint on a REAL measured
     // leg — it does not make the shot a splay, so it must not be dropped by the
-    // splay filter. Only anonymous (`-`) wall endpoints are splays.
+    // splay filter. Only anonymous (`-`/`--`/`---`) wall endpoints are splays.
     let is_reference = from_anon || to_anon;
 
     // Pure station-equate (no distance, no depth, no bearing) — skip. A
@@ -2000,8 +2005,16 @@ fn is_omitted(tok: &str) -> bool {
     tok.len() >= 2 && tok.chars().all(|c| c == '-')
 }
 
+/// A from/to station of one-or-more dashes (`-`, `--`, `---`, …) is an
+/// anonymous wall/splay endpoint, not a real named station — matching
+/// Walls/dewalls' `optionalStationRx = "-+"` (`WallsSurveyParser::fromStation`
+/// / `toStation` clear the station when it exact-matches `-+`). Each anonymous
+/// endpoint is later given a globally-unique synthetic name so unrelated splays
+/// never collapse onto a single phantom `--` node. Only single `-` was matched
+/// before, so `U3 -- 7.8 098.7` wrongly created a real station literally named
+/// `--` and tied every such leg together.
 fn is_anonymous(tok: &str) -> bool {
-    tok == "-"
+    !tok.is_empty() && tok.bytes().all(|b| b == b'-')
 }
 
 fn unquote(s: &str) -> &str {
@@ -3819,6 +3832,80 @@ mod tests {
             1,
             "star-named stations must chain into a single section, got {configs:?}"
         );
+    }
+
+    #[test]
+    fn multi_dash_station_is_anonymous_not_named() {
+        // Regression: a from/to station of two-or-more dashes (`--`, `---`) is an
+        // anonymous wall/splay endpoint per Walls/dewalls (`optionalStationRx =
+        // "-+"`), not a real station. Corpus: survex/walls.srv uses `U3 -- 7.8
+        // 098.7`. Previously only a single `-` was anonymous, so `--` became a
+        // real station literally named `--`, and every `... -- ...` leg merged
+        // onto one phantom node.
+        for dashes in ["--", "---", "----"] {
+            assert!(is_anonymous(dashes), "{dashes} must be anonymous");
+        }
+        assert!(is_anonymous("-"));
+        assert!(!is_anonymous("U3"));
+        assert!(!is_anonymous(""));
+
+        // Two distinct legs each ending at `--` must NOT share a station: with
+        // splays included they get globally-unique synthetic anon names.
+        let srv = "#UNITS meters order=DAV\n\
+                   U3 -- 7.8 098.7 0\n\
+                   U5 -- 4.2 120.0 0\n";
+        let survey = parse_srv(srv);
+        // Both legs parse with the dashed endpoint flagged anonymous.
+        assert_eq!(survey.vectors.len(), 2);
+        assert!(survey.vectors.iter().all(|v| v.to_anon && v.is_reference));
+        let parsed = ParsedWalls {
+            project_name: "T".to_string(),
+            book_count: 0,
+            surveys: vec![survey],
+            georef: None,
+            missing_files: Vec::new(),
+            skipped_attachments: 0,
+            warnings: Vec::new(),
+        };
+        let opts = WallsImportOptions {
+            include_splays: true,
+            ..Default::default()
+        };
+        let (configs, _closures, _w) = convert_walls_to_import_configs(&parsed, &opts).unwrap();
+        // The two splays import as reference shots and stay independent — there
+        // is no real shared station named after the dashes (the regression
+        // produced a phantom `--` hub joining unrelated splays).
+        let splay_shots: usize = configs.iter().map(|c| c.shots.len()).sum();
+        assert_eq!(splay_shots, 2, "both splay legs import, got {configs:?}");
+    }
+
+    #[test]
+    fn wpj_no_grid_bit_does_not_rotate_azimuth() {
+        // Regression (root grid_relative defaulted to `true`): a .wpj that
+        // carries a .REF with nonzero grid convergence but sets NO grid STATUS
+        // bit must NOT rotate azimuths — matching dewalls
+        // `WpjEntry::gridRelative()` (false at the root) and our own
+        // `derive_decl: false` default. Convergence here is 5°; a 90° reading
+        // must import as 90°, not 85°.
+        let dir = temp_dir("wpjgrid");
+        std::fs::write(dir.join("S.SRV"), "#UNITS meters order=DAV\nA B 10 90 0\n").unwrap();
+        let wpj = ";WALLS Project File\n\
+                   .BOOK Root\n.NAME ROOT\n.STATUS 8\n\
+                   .REF 2258942.000 467427.000 16 5.0 30 6 20 25 42.950 87 18 44.073 19 \"NAD83\"\n\
+                   .SURVEY S\n.NAME S\n.STATUS 8\n\
+                   .ENDBOOK\n";
+        let wpj_path = dir.join("T.wpj");
+        std::fs::write(&wpj_path, wpj).unwrap();
+        let parsed = parse_walls(&wpj_path).unwrap();
+        let (configs, _c, _w) =
+            convert_walls_to_import_configs(&parsed, &WallsImportOptions::default()).unwrap();
+        assert!(!configs.is_empty(), "survey must resolve");
+        assert!(
+            approx(configs[0].shots[0].azimuth_in, 90.0),
+            "no grid bit => convergence must not rotate the azimuth, got {}",
+            configs[0].shots[0].azimuth_in
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
