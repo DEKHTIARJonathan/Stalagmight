@@ -1224,6 +1224,9 @@ export const useUIStore = create<UIStore>((set) => ({
         distanceGradientOrigin: null,
         distanceField: null,
       });
+      // The gas inputs live in the detail Dock slot — reveal it so entering the
+      // sub-mode always surfaces the panel even if the dock was closed.
+      useUIStore.getState().revealDetailPanel();
     } else {
       useUIStore.getState().exitGasPlan();
     }
