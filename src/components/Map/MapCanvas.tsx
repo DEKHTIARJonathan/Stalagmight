@@ -2,9 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, mem
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
+import type { GasReachField } from '../../types/ipc.generated';
 import type { BatchCommand, ProjectWarning } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
+import { useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
 import { isMutatingTool } from '../../utils/toolUtils';
 import { hasEligibleClosures } from '../../utils/closures';
@@ -17,6 +19,7 @@ import {
 } from '../../store/displaySelectors';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import { buildDistanceFeatureState } from '../../utils/distanceGradient';
+import { buildGasReachFeatureState } from '../../utils/gasReach';
 import { buildMeasuredPathIds, buildMeasuredStationIds, MEASURE_TINT } from '../../utils/measurePath';
 import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
@@ -186,6 +189,8 @@ function MapCanvas() {
   const map = useRef<maplibregl.Map | null>(null);
   const surveyLayerRef = useRef<SurveyLayer | null>(null);
   const originMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const gasOriginMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const gasTurnMarkersRef = useRef<maplibregl.Marker[]>([]);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
@@ -367,6 +372,7 @@ function MapCanvas() {
     showReferenceShots,
     showDepthGradient,
     showDistanceGradient,
+    showGasPlan,
     showIssueSeverity,
     distanceGradientOrigin,
     distanceField,
@@ -422,6 +428,26 @@ function MapCanvas() {
     // leave-tool cleanup below reads it via getState() instead.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest)
+  );
+
+  // Gas & route-planning sub-mode inputs (#38) — a separate store so editing the
+  // diver/cylinders/config doesn't re-render via the big uiStore subscription.
+  const {
+    origin: gasOrigin,
+    diver: gasDiver,
+    cylinders: gasCylinders,
+    gasConfig: gasPlanConfig,
+    reachField: gasReachField,
+    setReachField: setGasReachField,
+  } = useGasPlanStore(
+    useShallow((s) => ({
+      origin: s.origin,
+      diver: s.diver,
+      cylinders: s.cylinders,
+      gasConfig: s.gasConfig,
+      reachField: s.reachField,
+      setReachField: s.setReachField,
+    }))
   );
 
   // Issue-severity coloring is active when the user enabled it OR while the
@@ -1792,6 +1818,13 @@ function MapCanvas() {
     setDistanceGradientOrigin(null);
   }, [project?.created_at, setDistanceGradientOrigin]);
 
+  // Same project-switch reset for the gas origin (#38): drop the picked origin (and
+  // its cached field) so the new project's reachable overlay re-seeds from its
+  // entrance. Keyed on created_at alone, like the distance reset.
+  useEffect(() => {
+    useGasPlanStore.getState().setOrigin(null);
+  }, [project?.created_at]);
+
   // Reset the ruler on a switch too, but keyed on file_path + created_at so opening
   // a distinct file that happens to share created_at — e.g. a duplicated project —
   // still clears stale ruler state (#26, Codex). (Save As also clears the ruler,
@@ -1838,6 +1871,31 @@ function MapCanvas() {
     return () => { cancelled = true; };
   }, [showDistanceGradient, distanceGradientOrigin, project?.modified_at, setDistanceField]);
 
+  // Gas reachable-frontier overlay (#38): fetch the reachability field when the
+  // sub-mode is on and any input (origin / diver / cylinders / config) or the
+  // project data changes. Like distances it uses MEASURED geometry, so the display
+  // geometryMode / closure config don't affect it. No debounce: the compute is
+  // ms-fast and the inputs are discrete (number fields / presets), not continuous
+  // sliders. `origin` null = the entrance (zero-datum) default; the command
+  // returns null when no project is open (Ok(None)) or throws on invalid input.
+  useEffect(() => {
+    if (!showGasPlan) return undefined;
+    let cancelled = false;
+    invokeIpc<GasReachField | null>(
+      'compute_gas_reach_field',
+      {
+        origin: gasOrigin ?? null,
+        diver: gasDiver,
+        cylinders: gasCylinders,
+        gasConfig: gasPlanConfig,
+      },
+      { purpose: 'gas reachable-frontier field', fields: { origin: gasOrigin ?? 'entrance' } }
+    )
+      .then((field) => { if (!cancelled) setGasReachField(field); })
+      .catch((e) => console.warn('[gas-plan] field fetch failed', e));
+    return () => { cancelled = true; };
+  }, [showGasPlan, gasOrigin, gasDiver, gasCylinders, gasPlanConfig, project?.modified_at, setGasReachField]);
+
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
   useEffect(() => {
@@ -1850,6 +1908,18 @@ function MapCanvas() {
       surveyLayerRef.current.setDistanceGradient(false, null);
     }
   }, [showDistanceGradient, effectiveIssueSeverity, distanceField, project, mapLoaded, surveyLayerRef]);
+
+  // Apply the gas field to the layer (feature-state + paint swap). Separate from
+  // the fetch so re-rooting / re-computing never triggers a feature rebuild.
+  useEffect(() => {
+    if (!surveyLayerRef.current || !mapLoaded) return;
+    if (showGasPlan && gasReachField && project) {
+      const state = buildGasReachFeatureState(project.sections, gasReachField);
+      surveyLayerRef.current.setGasReach(true, state);
+    } else {
+      surveyLayerRef.current.setGasReach(false, null);
+    }
+  }, [showGasPlan, gasReachField, project, mapLoaded, surveyLayerRef]);
 
   // Tint the measured along-line path's shots AND stations (#26) in the
   // user-configured color. Keyed on the along-line result so it applies when the
@@ -1907,6 +1977,74 @@ function MapCanvas() {
       originMarkerRef.current = null;
     };
   }, [showDistanceGradient, effectiveIssueSeverity, distanceGradientOrigin, activeStations, gpsOrigin, mapLoaded]);
+
+  // Gas-plan origin marker (#38): a teal ring on the chosen origin (mirrors the
+  // distance origin marker; teal to distinguish "start" from the gold→purple
+  // reachable ramp). Only for a *picked* origin — the entrance default is the
+  // zero datum(s), already starred.
+  useEffect(() => {
+    gasOriginMarkerRef.current?.remove();
+    gasOriginMarkerRef.current = null;
+    if (!map.current || !mapLoaded || !showGasPlan || !gasOrigin) return undefined;
+    const originStation = activeStations.find(
+      (s) =>
+        s.station_ref.section_id === gasOrigin.section_id &&
+        s.station_ref.station_index === gasOrigin.station_index
+    );
+    if (!originStation) return undefined;
+    const lngLat = metersToMapCoords(
+      originStation.coordinates.x,
+      originStation.coordinates.y,
+      gpsOrigin
+    ) as [number, number];
+    const el = document.createElement('div');
+    el.setAttribute('data-testid', 'gas-origin-marker');
+    el.style.cssText =
+      'width:18px;height:18px;border-radius:50%;border:3px solid #16a085;' +
+      'box-shadow:0 0 0 2px #ffffff,0 0 4px rgba(0,0,0,0.6);' +
+      'background:rgba(255,255,255,0.15);pointer-events:none;';
+    gasOriginMarkerRef.current = new maplibregl.Marker({ element: el })
+      .setLngLat(lngLat)
+      .addTo(map.current);
+    return () => {
+      gasOriginMarkerRef.current?.remove();
+      gasOriginMarkerRef.current = null;
+    };
+  }, [showGasPlan, gasOrigin, activeStations, gpsOrigin, mapLoaded]);
+
+  // Gas turn-frontier markers (#38): a red dot on each reachable station that
+  // borders an unreachable one — "this is where you turn". Rebuilt whenever the
+  // field changes; bounded by the frontier size (a handful of leads in practice).
+  useEffect(() => {
+    for (const m of gasTurnMarkersRef.current) m.remove();
+    gasTurnMarkersRef.current = [];
+    if (!map.current || !mapLoaded || !showGasPlan || !gasReachField) return undefined;
+    for (const ref of gasReachField.turn_frontier) {
+      const st = activeStations.find(
+        (s) =>
+          s.station_ref.section_id === ref.section_id &&
+          s.station_ref.station_index === ref.station_index
+      );
+      if (!st) continue;
+      const lngLat = metersToMapCoords(
+        st.coordinates.x,
+        st.coordinates.y,
+        gpsOrigin
+      ) as [number, number];
+      const el = document.createElement('div');
+      el.setAttribute('data-testid', 'gas-turn-marker');
+      el.style.cssText =
+        'width:14px;height:14px;border-radius:50%;border:2px solid #ffffff;' +
+        'background:#c0392b;box-shadow:0 0 3px rgba(0,0,0,0.7);pointer-events:none;';
+      gasTurnMarkersRef.current.push(
+        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map.current)
+      );
+    }
+    return () => {
+      for (const m of gasTurnMarkersRef.current) m.remove();
+      gasTurnMarkersRef.current = [];
+    };
+  }, [showGasPlan, gasReachField, activeStations, gpsOrigin, mapLoaded]);
 
   // Lazily fetch closure-adjusted geometry when the adjusted view is active and
   // we don't have it yet (first switch, or after an edit invalidated it). The
