@@ -373,7 +373,7 @@ function MapCanvas() {
     showReferenceShots,
     showDepthGradient,
     showDistanceGradient,
-    showGasPlan,
+    appMode,
     showIssueSeverity,
     distanceGradientOrigin,
     distanceField,
@@ -430,6 +430,10 @@ function MapCanvas() {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest)
   );
+
+  // The gas overlay belongs to the Plan workspace mode (the former showGasPlan
+  // sub-mode). Derived so the existing showGasPlan-gated effects below are unchanged.
+  const showGasPlan = appMode === 'plan';
 
   // Gas & route-planning sub-mode inputs (#38) — a separate store so editing the
   // diver/cylinders/config doesn't re-render via the big uiStore subscription.
@@ -2080,12 +2084,15 @@ function MapCanvas() {
     }
   }, [geometryMode, project, setGeometryMode]);
 
-  // The adjusted view is read-only: drop any geometry-mutating tool back to select.
+  // The adjusted view is read-only — and so is the whole map in Plan/Export, even on a
+  // project with no closures where the display falls back to measured geometry. Drop any
+  // geometry-mutating tool back to select in either case (appMode is the robust authority;
+  // geometryMode only drives which coords are drawn).
   useEffect(() => {
-    if (geometryMode === 'closureAdjusted' && isMutatingTool(activeTool)) {
+    if ((geometryMode === 'closureAdjusted' || appMode !== 'survey') && isMutatingTool(activeTool)) {
       setActiveTool('select');
     }
-  }, [geometryMode, activeTool, setActiveTool]);
+  }, [geometryMode, appMode, activeTool, setActiveTool]);
 
   // Update callbacks when they change
   useEffect(() => {

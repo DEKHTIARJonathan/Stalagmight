@@ -35,6 +35,19 @@ export type ViewType = 'global' | 'single';
  */
 export type GeometryMode = 'measured' | 'closureAdjusted';
 
+/**
+ * Top-level workspace mode (#38 follow-up, Daniel's reframe). Selected from the
+ * top-middle carousel when a project is open:
+ *  - `survey` — the editable survey workspace (everything as it was).
+ *  - `plan`   — the gas planner: read-only closure map + gas overlay, Plan-setup
+ *               sidebar, tabbed bottom tables.
+ *  - `export` — read-only closure map + an export stub (SVG/JPG, future work).
+ * Plan/Export force the read-only closure-adjusted map; only Survey edits. Runtime
+ * only (never persisted) and meaningful only in single-project view.
+ */
+export type AppMode = 'survey' | 'plan' | 'export';
+export const APP_MODE_DEFAULT: AppMode = 'survey';
+
 /** Geometry mode used before any saved preference exists (first run). */
 export const GEOMETRY_MODE_DEFAULT: GeometryMode = 'measured';
 
@@ -386,16 +399,19 @@ interface UIStore {
   setDistanceGradientOrigin: (ref: StationRef | null) => void;
   setDistanceField: (field: DistanceField | null) => void;
 
-  // Gas & route-planning sub-mode (#38). Like the distance overlay it's a
-  // transient analytical sub-mode (never persisted); the rich inputs live in
-  // gasPlanStore, so here we hold only the on/off flag — the one source of truth
-  // the survey layer, the toolbar toggle, and the detail-panel swap all read.
-  showGasPlan: boolean;
-  /** Enter/leave the sub-mode; entering suppresses the color overlays (all paint
-   *  the same layer), leaving resets gasPlanStore. */
-  toggleGasPlan: () => void;
-  /** Idempotent exit — used by the setView() cleanup funnel so a stale gas
-   *  overlay can't outlive a project/view switch. */
+  // Top-level workspace mode (#38 follow-up): Survey / Plan / Export. Runtime-only
+  // (never persisted), meaningful only in single-project view. `plan` subsumes the
+  // former gas sub-mode — the survey layer, the carousel, and the panel swaps all read
+  // `appMode`. Plan/Export force the read-only closure-adjusted map (see setAppMode).
+  appMode: AppMode;
+  /** Switch workspace mode. Entering Plan/Export forces the closure-adjusted (read-only)
+   *  map and suppresses the survey color overlays; returning to Survey restores the prior
+   *  geometry mode. Entering Plan reveals the Plan-setup sidebar; leaving Plan resets
+   *  gasPlanStore. */
+  setAppMode: (mode: AppMode) => void;
+  /** Idempotent "return to Survey" — used by the setView() cleanup funnel (and the
+   *  color-overlay actions) so a stale Plan/Export workspace can't outlive a project/view
+   *  switch or coexist with a survey overlay. No-op when already in Survey. */
   exitGasPlan: () => void;
 
   // Issue-severity coloring overlay (#22). Runtime-only — like
@@ -548,6 +564,14 @@ let focusLayoutSnapshot:
       dataTableHeight: number;
     }
   | null = null;
+
+/**
+ * The survey geometry mode captured when entering Plan/Export, restored on return to
+ * Survey. Plan/Export force `closureAdjusted` (the read-only closure map); this remembers
+ * what the user had so Survey comes back to it. Module-level bookkeeping (the UI never
+ * reads it), like {@link focusLayoutSnapshot}.
+ */
+let prePlanGeometryMode: GeometryMode | null = null;
 
 /**
  * The data table's open/mode captured when entering fullscreen, restored on exit.
@@ -1208,33 +1232,55 @@ export const useUIStore = create<UIStore>((set) => ({
     // under the new origin's legend/marker while the new field is being fetched.
     set({ distanceGradientOrigin, distanceField: null }),
   setDistanceField: (distanceField) => set({ distanceField }),
-  // Gas & route-planning sub-mode (#38) — runtime-only, never persisted.
-  showGasPlan: false,
-  toggleGasPlan: () => {
-    const on = !useUIStore.getState().showGasPlan;
-    if (on) {
-      // Gas reachability paints the shots/stations layer, so it's mutually
-      // exclusive with all three color overlays — suppress them (runtime flags
-      // only, like toggleDistanceGradient) and clear the distance origin/field.
-      set({
-        showGasPlan: true,
-        showDepthGradient: false,
-        showDistanceGradient: false,
-        showIssueSeverity: false,
-        distanceGradientOrigin: null,
-        distanceField: null,
-      });
-      // The gas inputs live in the detail Dock slot — reveal it so entering the
-      // sub-mode always surfaces the panel even if the dock was closed.
+  // Top-level workspace mode (#38 follow-up) — runtime-only, never persisted.
+  appMode: APP_MODE_DEFAULT,
+  setAppMode: (mode) => {
+    const s = useUIStore.getState();
+    if (s.appMode === mode) return;
+    if (mode === 'survey') {
+      // Returning to Survey: restore the geometry mode we had before entering
+      // Plan/Export, and reset the (transient) gas plan so its overlay/inputs
+      // can't linger in the editable survey workspace.
+      const restore = prePlanGeometryMode ?? GEOMETRY_MODE_DEFAULT;
+      prePlanGeometryMode = null;
+      set({ appMode: 'survey', geometryMode: restore, ...MEASURE_CLEARED });
+      useGasPlanStore.getState().reset();
+      return;
+    }
+    // Entering Plan or Export. Both show the read-only closure map, so:
+    //  - drop the survey-editing modes (section focus, fullscreen table) that
+    //    assume an editable measured view;
+    //  - remember the survey geometry mode (only when coming FROM survey — a
+    //    plan↔export switch must not overwrite the saved survey value with
+    //    'closureAdjusted'), then force closureAdjusted. Set directly (not via
+    //    setGeometryMode) so this forced display isn't persisted as the user's
+    //    "remember last used" preference;
+    //  - suppress the three color overlays (they paint the same shots/stations
+    //    layer the gas overlay uses, and are a survey concern).
+    s.exitSectionFocus();
+    s.exitDataTableFullScreen();
+    if (s.appMode === 'survey') prePlanGeometryMode = s.geometryMode;
+    set({
+      appMode: mode,
+      geometryMode: 'closureAdjusted',
+      showDepthGradient: false,
+      showDistanceGradient: false,
+      showIssueSeverity: false,
+      distanceGradientOrigin: null,
+      distanceField: null,
+      ...MEASURE_CLEARED,
+    });
+    if (mode === 'plan') {
+      // The Plan-setup inputs live in the detail Dock slot — reveal it on entry.
       useUIStore.getState().revealDetailPanel();
     } else {
-      useUIStore.getState().exitGasPlan();
+      // Export has no gas inputs — clear any plan state so nothing strands.
+      useGasPlanStore.getState().reset();
     }
   },
   exitGasPlan: () => {
-    if (!useUIStore.getState().showGasPlan) return;
-    set({ showGasPlan: false });
-    useGasPlanStore.getState().reset();
+    if (useUIStore.getState().appMode === 'survey') return;
+    useUIStore.getState().setAppMode('survey');
   },
   toggleDisplay: (key) => {
     trackAction(`toggle.${key}`);

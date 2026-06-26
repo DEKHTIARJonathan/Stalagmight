@@ -2069,7 +2069,13 @@
       "removeAria": "Remove {{tank}}",
       "addPlaceholder": "Add tank…",
       "conservative": "Conservative gas (call-it-an-80 derate)",
-      "notCounted": "This role isn't counted toward the open-circuit penetration budget."
+      "notCounted": "This role isn't counted toward the open-circuit penetration budget.",
+      "colTank": "Tank",
+      "colWater": "Water vol",
+      "colFillBar": "Fill (bar)",
+      "colFillPsi": "Fill (psi)",
+      "colRole": "Role",
+      "editHint": "Edit your cylinders in the Cylinders tab below."
     },
     "roles": {
       "back_gas": "Back gas",
@@ -2091,6 +2097,31 @@
       "turnPoints": "Turn points",
       "computing": "Computing…"
     }
+  },
+  "modeCarousel": {
+    "aria": "Workspace mode",
+    "survey": "Survey",
+    "plan": "Plan",
+    "export": "Export"
+  },
+  "planTables": {
+    "tabs": {
+      "cylinders": "Cylinders",
+      "profile": "Profile"
+    },
+    "profile": {
+      "title": "Anticipated dive profile",
+      "subtitle": "Depth · time · gas along the planned route",
+      "comingSoon": "Export to Subsurface — coming soon"
+    }
+  },
+  "exportPanel": {
+    "title": "Export",
+    "subtitle": "Export the closure map for sharing or print.",
+    "description": "Export the current closure map as a vector or image file.",
+    "svg": "Export SVG",
+    "jpg": "Export JPG",
+    "comingSoon": "Export is coming soon."
   },
   "toolbar": {
     "groupAria": "{{group}} tools",

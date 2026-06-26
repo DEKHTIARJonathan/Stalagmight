@@ -3,17 +3,18 @@ import { useUIStore } from '../uiStore';
 import { useGasPlanStore } from '../gasPlanStore';
 
 /**
- * The gas sub-mode (#38) paints the same shots/stations layer as the three color
- * overlays (depth / distance / issue-severity), so all four must be mutually
- * exclusive. The original slice only enforced it one way (gas entry cleared the
- * color overlays); enabling a color overlay — reachable via the Shift+D keyboard
- * shortcut, which calls toggleDisplay directly, bypassing setColorMode — left gas
- * stranded. These guards pin BOTH directions.
+ * The Plan workspace mode (#38) paints the same shots/stations layer as the three
+ * color overlays (depth / distance / issue-severity), so they must be mutually
+ * exclusive. Entering Plan clears the color overlays; enabling a color overlay —
+ * reachable via the Shift+D keyboard shortcut, which calls toggleDisplay directly,
+ * bypassing setColorMode — returns to Survey (exitGasPlan). These guards pin BOTH
+ * directions.
  */
-describe('gas sub-mode ↔ color-overlay mutual exclusion (#38)', () => {
+describe('Plan mode ↔ color-overlay mutual exclusion (#38)', () => {
   beforeEach(() => {
     useUIStore.setState({
-      showGasPlan: false,
+      appMode: 'survey',
+      geometryMode: 'measured',
       showDepthGradient: false,
       showDistanceGradient: false,
       showIssueSeverity: false,
@@ -23,11 +24,12 @@ describe('gas sub-mode ↔ color-overlay mutual exclusion (#38)', () => {
     useGasPlanStore.getState().reset();
   });
 
-  it('entering gas mode clears all three color overlays', () => {
+  it('entering Plan clears all three color overlays and forces the read-only closure map', () => {
     useUIStore.setState({ showDepthGradient: true });
-    useUIStore.getState().toggleGasPlan();
+    useUIStore.getState().setAppMode('plan');
     const s = useUIStore.getState();
-    expect(s.showGasPlan).toBe(true);
+    expect(s.appMode).toBe('plan');
+    expect(s.geometryMode).toBe('closureAdjusted');
     expect(s.showDepthGradient).toBe(false);
     expect(s.showDistanceGradient).toBe(false);
     expect(s.showIssueSeverity).toBe(false);
@@ -40,29 +42,44 @@ describe('gas sub-mode ↔ color-overlay mutual exclusion (#38)', () => {
     ['issue-severity via setIssueSeverity(true)', () => useUIStore.getState().setIssueSeverity(true)],
     ['distance via setColorMode (the DisplayMenu path)', () => useUIStore.getState().setColorMode('distance')],
     ['depth via setColorMode', () => useUIStore.getState().setColorMode('depth')],
-  ])('enabling a color overlay (%s) leaves the gas sub-mode', (_name, enable) => {
-    useUIStore.getState().toggleGasPlan();
-    expect(useUIStore.getState().showGasPlan).toBe(true);
+  ])('enabling a color overlay (%s) returns to Survey', (_name, enable) => {
+    useUIStore.getState().setAppMode('plan');
+    expect(useUIStore.getState().appMode).toBe('plan');
     enable();
-    expect(useUIStore.getState().showGasPlan).toBe(false);
+    expect(useUIStore.getState().appMode).toBe('survey');
   });
 
-  it('setColorMode("section") while gas is active exits gas (no overlay selected)', () => {
-    // 'section' = no color overlay; gas still owns the layer paint, so picking it must
-    // leave gas mode. Guards the setColorMode early-return path (colorModeOf is already
-    // 'section' in gas mode, so the gas-exit must run BEFORE the no-op check).
-    useUIStore.getState().toggleGasPlan();
-    expect(useUIStore.getState().showGasPlan).toBe(true);
+  it('setColorMode("section") while in Plan returns to Survey (no overlay selected)', () => {
+    // 'section' = no color overlay; Plan still owns the layer paint, so picking it must
+    // leave Plan. Guards the setColorMode early-return path (colorModeOf is already
+    // 'section' in Plan, so the exit must run BEFORE the no-op check).
+    useUIStore.getState().setAppMode('plan');
+    expect(useUIStore.getState().appMode).toBe('plan');
     useUIStore.getState().setColorMode('section');
-    expect(useUIStore.getState().showGasPlan).toBe(false);
+    expect(useUIStore.getState().appMode).toBe('survey');
   });
 
-  it('exitGasPlan resets the gasPlanStore (origin back to entrance)', () => {
-    useUIStore.getState().toggleGasPlan();
+  it('returning to Survey restores the prior geometry mode and resets the gasPlanStore', () => {
+    // Enter Plan from a closure-adjusted survey view: the forced closureAdjusted is the
+    // same value, but on exit the saved survey value must come back (here: closureAdjusted).
+    useUIStore.setState({ geometryMode: 'closureAdjusted' });
+    useUIStore.getState().setAppMode('plan');
     useGasPlanStore.getState().setOrigin({ section_id: 2, station_index: 1 });
     expect(useGasPlanStore.getState().origin).not.toBeNull();
-    useUIStore.getState().exitGasPlan();
-    expect(useUIStore.getState().showGasPlan).toBe(false);
+    useUIStore.getState().setAppMode('survey');
+    expect(useUIStore.getState().appMode).toBe('survey');
+    expect(useUIStore.getState().geometryMode).toBe('closureAdjusted');
     expect(useGasPlanStore.getState().origin).toBeNull();
+  });
+
+  it('exitGasPlan returns to Survey from Plan and from Export', () => {
+    useUIStore.getState().setAppMode('plan');
+    useUIStore.getState().exitGasPlan();
+    expect(useUIStore.getState().appMode).toBe('survey');
+
+    useUIStore.getState().setAppMode('export');
+    expect(useUIStore.getState().appMode).toBe('export');
+    useUIStore.getState().exitGasPlan();
+    expect(useUIStore.getState().appMode).toBe('survey');
   });
 });

@@ -13,6 +13,8 @@ import Toolbar from './Toolbar';
 import SectionsPanel from './SectionsPanel';
 import DetailPanel from './DetailPanel';
 import { GasPlanPanel } from './GasPlanPanel';
+import { PlanTablesPanel } from './PlanTablesPanel';
+import { ExportPanel } from './ExportPanel';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
 import { PANEL_SIZE_BOUNDS, DETAIL_REVEAL_AUTOCLOSE_MS } from './layoutConstants';
@@ -73,9 +75,12 @@ export default function SingleSystemView() {
     ? 'linear-gradient(to left, rgba(248, 113, 113, 0.30), transparent 18%)'
     : undefined;
   const placementModeActive = useUIStore((s) => s.placementMode !== null);
-  // Gas & route-planning sub-mode (#38) swaps the detail Dock slot for its input
-  // panel (the toolbar toggle owns enter/exit; setView()/setColorMode reset it).
-  const showGasPlan = useUIStore((s) => s.showGasPlan);
+  // Top-level workspace mode (#38, Daniel's reframe). Survey shows the editable data
+  // table + detail panel; Plan swaps the right Dock for the gas setup sidebar and the
+  // bottom Dock for the tabbed plan tables; Export swaps the right Dock for the export
+  // stub and hides the bottom table. The carousel owns enter/exit; setView()/setColorMode
+  // reset it. The left Sections Dock is survey-only (Plan/Export are read-only).
+  const appMode = useUIStore((s) => s.appMode);
 
   // Depend on the stable cancelPending useCallback (not the whole autoSave object,
   // which is a fresh object each render) so handleSaveProject keeps a stable
@@ -441,22 +446,34 @@ export default function SingleSystemView() {
         onKeyDownCapture={revealDetail}
       >
         <ErrorBoundary panelName="Details">
-          {showGasPlan ? <GasPlanPanel /> : <DetailPanel />}
+          {appMode === 'plan' ? (
+            <GasPlanPanel />
+          ) : appMode === 'export' ? (
+            <ExportPanel />
+          ) : (
+            <DetailPanel />
+          )}
         </ErrorBoundary>
       </div>
     ),
-    [dimCls, revealDetail, showGasPlan],
+    [dimCls, revealDetail, appMode],
   );
   const dataInner = useMemo(
     () =>
-      sections ? (
+      appMode === 'plan' ? (
+        <div className="h-full">
+          <ErrorBoundary panelName="Plan Tables">
+            <PlanTablesPanel />
+          </ErrorBoundary>
+        </div>
+      ) : sections ? (
         <div className={`h-full ${dimCls}`}>
           <ErrorBoundary panelName="Data Table">
             <DataTable sections={sections} />
           </ErrorBoundary>
         </div>
       ) : null,
-    [sections, dimCls],
+    [appMode, sections, dimCls],
   );
 
   // Memoized on `t` (changes only on locale switch): each Dock's `label` and
@@ -517,7 +534,9 @@ export default function SingleSystemView() {
           side Docks' overlays + tabs. Each Dock renders a flow spacer (the only
           thing that reflows the map) plus a single absolute panel instance. */}
       <div ref={setMainEl} className="relative flex-1 flex overflow-hidden">
-        {/* Sections (left) */}
+        {/* Sections (left) — survey-only; Plan/Export show the read-only closure map
+            with no section-editing affordances. */}
+        {appMode === 'survey' && (
         <Dock
           reveal={sectionsReveal}
           edge="left"
@@ -541,6 +560,7 @@ export default function SingleSystemView() {
         >
           {sectionsContent}
         </Dock>
+        )}
 
         {/* Map + data table. `min-w-0` lets this column shrink when both side
             panels dock (otherwise flex refuses and push behavior breaks). */}
@@ -554,7 +574,9 @@ export default function SingleSystemView() {
           </div>
 
           {/* Data (bottom) — inside the center column so docked side panels push
-              it (and its tab) for free. Fullscreen renders without reparenting. */}
+              it (and its tab) for free. Fullscreen renders without reparenting. In
+              Plan mode it holds the tabbed plan tables; Export hides it (map only). */}
+          {appMode !== 'export' && (
           <Dock
             reveal={dataReveal}
             edge="bottom"
@@ -582,6 +604,7 @@ export default function SingleSystemView() {
           >
             {dataInner}
           </Dock>
+          )}
         </div>
 
         {/* Details (right) */}

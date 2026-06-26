@@ -101,12 +101,15 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     showToast,
     showDistanceGradient,
     setDistanceGradientOrigin,
-    showGasPlan,
+    appMode,
     // measureSnapShot is excluded too: it's rewritten on every mousemove over a
     // shot (the live `t`), and is only ever read via getState() at click time — so
     // subscribing here would re-render MapCanvas ~60×/s for nothing (#26).
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
   } = useUIStore(useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest));
+
+  // Gas origin-pick on map click belongs to the Plan workspace mode (former showGasPlan).
+  const showGasPlan = appMode === 'plan';
 
   const { stations, project, checkMergeConnectivity } = useProjectStore();
   // Coordinate lookups for read-only inspection (the measure tool) follow the
