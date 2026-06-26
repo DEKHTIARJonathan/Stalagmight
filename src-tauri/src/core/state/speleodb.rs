@@ -10,9 +10,13 @@ use std::path::PathBuf;
 use super::AppState;
 use crate::speleodb::auth::TokenStore;
 use crate::speleodb::client;
+// [Track A] #186/D-B2: typed Endpoint + SpeleoDbError→SpeleoErrorDto conversion.
+use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
 use crate::speleodb::models::SpeleoProjectSummary;
-use crate::speleodb::{SpeleoDbError, SpeleoLoginResult, SpeleoOpenResult, SpeleoSessionStatus};
+use crate::speleodb::{
+    SpeleoDbError, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult, SpeleoSessionStatus,
+};
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
 /// inside [`TokenStore`] (keychain or in-memory fallback) and is never exposed
@@ -51,6 +55,14 @@ fn validate_project_id(project_id: &str) -> Result<(), SpeleoDbError> {
     uuid::Uuid::parse_str(project_id)
         .map(|_| ())
         .map_err(|_| SpeleoDbError::InvalidProjectId)
+}
+
+/// [Track A] #186/D-B2: map a non-endpoint (local / session) `SpeleoDbError` to
+/// the IPC `SpeleoErrorDto`. Local errors always fail closed to `Fatal`
+/// regardless of endpoint, so the endpoint passed to [`dto_for_error`] is
+/// irrelevant for them (`User` is an arbitrary, non-load-bearing choice).
+fn local_dto(err: SpeleoDbError) -> SpeleoErrorDto {
+    dto_for_error(Endpoint::User, &err)
 }
 
 /// Map a downloaded dump's entry list to the single openable `.stalx` path, or
@@ -126,6 +138,17 @@ impl AppState {
         )
     }
 
+    /// [Track A] #187/D-B10: read the persisted `insecure_http` override under the
+    /// config lock. It is threaded into every client call → `with_retry` →
+    /// `tls::enforce`, where it relaxes ONLY the public-`http://` scheme block.
+    /// Defaults `false` (the secure default) when the config lock is unavailable.
+    fn speleodb_insecure_http(&self) -> bool {
+        self.config
+            .lock()
+            .ok()
+            .is_some_and(|c| c.speleodb.insecure_http)
+    }
+
     fn speleodb_session_lock(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, SpeleoDbSession>, SpeleoDbError> {
@@ -143,8 +166,9 @@ impl AppState {
     /// Report whether a usable token is held (and for whom), so the dialog can
     /// restore the project list on reopen instead of forcing a re-login. The
     /// token itself never leaves the backend.
-    pub(crate) fn speleodb_session_status(&self) -> Result<SpeleoSessionStatus, SpeleoDbError> {
-        Ok(self.speleodb_session_lock()?.status())
+    pub(crate) fn speleodb_session_status(&self) -> Result<SpeleoSessionStatus, SpeleoErrorDto> {
+        // No network call — only the (local) session-lock error can surface here.
+        Ok(self.speleodb_session_lock().map_err(local_dto)?.status())
     }
 
     /// Persist the user-supplied endpoint (when given) + email — never the token —
@@ -174,7 +198,7 @@ impl AppState {
         email: Option<String>,
         password: Option<String>,
         token: Option<String>,
-    ) -> Result<SpeleoLoginResult, SpeleoDbError> {
+    ) -> Result<SpeleoLoginResult, SpeleoErrorDto> {
         // Only a user-supplied endpoint (the dialog override) is persisted; the env
         // default must not leak into the saved config (see speleodb_persist_account).
         let persist_endpoint = override_endpoint
@@ -185,7 +209,10 @@ impl AppState {
 
         let endpoint = self
             .speleodb_resolve_endpoint(override_endpoint.as_deref())
-            .ok_or(SpeleoDbError::NoEndpoint)?;
+            .ok_or(SpeleoDbError::NoEndpoint)
+            .map_err(local_dto)?;
+        // [Track A] #187: read the override and thread it into every client call.
+        let insecure_http = self.speleodb_insecure_http();
 
         // Two login modes, each yielding both the token and the *authoritative*
         // account email used for the session/keychain key:
@@ -196,7 +223,8 @@ impl AppState {
         //   typed email is authoritative by construction.
         let (token, email) =
             if let Some(t) = token.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()) {
-                let email = client::fetch_user_email(&endpoint, &t)?;
+                let email = client::fetch_user_email(&endpoint, &t, insecure_http)
+                    .map_err(|e| dto_for_error(Endpoint::User, &e))?;
                 (t, email)
             } else {
                 let email = email.map(|e| e.trim().to_owned()).unwrap_or_default();
@@ -204,14 +232,15 @@ impl AppState {
                 // Reject blank credentials at the boundary rather than POSTing them
                 // and relying on the server to 400.
                 if email.is_empty() || password.is_empty() {
-                    return Err(SpeleoDbError::MissingCredentials);
+                    return Err(local_dto(SpeleoDbError::MissingCredentials));
                 }
-                let token = client::login(&endpoint, &email, &password)?;
+                let token = client::login(&endpoint, insecure_http, &email, &password)
+                    .map_err(|e| dto_for_error(Endpoint::Login, &e))?;
                 (token, email)
             };
 
         let keychain_backed = {
-            let mut session = self.speleodb_session_lock()?;
+            let mut session = self.speleodb_session_lock().map_err(local_dto)?;
             // If a *different* account is already active, forget it first so its
             // keychain entry isn't orphaned. (The UI logs out before re-login, but
             // the backend shouldn't depend on that; a same-account re-login just
@@ -238,9 +267,11 @@ impl AppState {
     /// List the projects visible to the logged-in user, as display summaries.
     pub(crate) fn speleodb_list_projects(
         &self,
-    ) -> Result<Vec<SpeleoProjectSummary>, SpeleoDbError> {
-        let (endpoint, token) = self.speleodb_active_token()?;
-        let projects = client::list_projects(&endpoint, &token)?;
+    ) -> Result<Vec<SpeleoProjectSummary>, SpeleoErrorDto> {
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+        let projects = client::list_projects(&endpoint, &token, insecure_http)
+            .map_err(|e| dto_for_error(Endpoint::ListProjects, &e))?;
         Ok(projects
             .into_iter()
             .map(SpeleoProjectSummary::from_project)
@@ -265,20 +296,27 @@ impl AppState {
         project_id: String,
         project_name: String,
         latest_commit_sha: Option<String>,
-    ) -> Result<SpeleoOpenResult, SpeleoDbError> {
+    ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         // Validate the id at the trust boundary, before it reaches the download
         // URL or the cache-path join (closes the path/route-traversal vector).
-        validate_project_id(&project_id)?;
-        let (endpoint, token) = self.speleodb_active_token()?;
-        let zip = client::download_dump(&endpoint, &token, &project_id)?;
+        validate_project_id(&project_id).map_err(local_dto)?;
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+        // FRESHNESS-FOLD SEAM (D-B1, #189/#191): #185's get_project/list_projects
+        // return the authoritative Project; the pull stamp (project_name +
+        // latest_commit_sha → speleo_link) and the cache-the-verdict fold land
+        // with #189/#191 — this call site is where they hook in.
+        let zip = client::download_dump(&endpoint, &token, insecure_http, &project_id)
+            .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
 
         // Open the dump once: list entries (to classify) and extract the chosen
         // `.stalx` from the same parsed archive.
-        let mut dump = dump::Dump::open(&zip)?;
-        let entry = classify_dump_entry(&dump.entry_paths()?)?;
+        let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
+        let entry =
+            classify_dump_entry(&dump.entry_paths().map_err(local_dto)?).map_err(local_dto)?;
 
-        let dest = self.speleodb_cache_path(&project_id)?;
-        dump.extract_entry_to(&entry, &dest)?;
+        let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
+        dump.extract_entry_to(&entry, &dest).map_err(local_dto)?;
 
         // [Track B] (#189, D-B9) Stamp the SpeleoDB hand-off link into the pulled
         // `.stalx`. Opening via `open_existing` runs `ensure_schema_version`,
@@ -325,8 +363,8 @@ impl AppState {
 
     /// Forget the local token (keychain + in-memory) and clear the session. No
     /// server-side call — logout is purely local (the DRF token is not revoked).
-    pub(crate) fn speleodb_logout(&self) -> Result<(), SpeleoDbError> {
-        self.speleodb_session_lock()?.forget();
+    pub(crate) fn speleodb_logout(&self) -> Result<(), SpeleoErrorDto> {
+        self.speleodb_session_lock().map_err(local_dto)?.forget();
         Ok(())
     }
 

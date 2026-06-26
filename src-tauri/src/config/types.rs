@@ -63,6 +63,12 @@ pub struct SpeleoDbConfig {
     /// Last-used account email, for prefilling the login dialog.
     #[serde(default)]
     pub email: Option<String>,
+    // [Track A] #187/D-B10: opt-in override that relaxes ONLY the public-`http://`
+    // scheme block in `speleodb::tls::enforce` (it never disables TLS cert
+    // verification). Owned by Track C config (#205 Settings binds to it); added
+    // here identically so this worktree compiles — the integrator dedupes.
+    #[serde(default)]
+    pub insecure_http: bool,
 }
 
 /// Legacy snap config for migration from old [snap] section

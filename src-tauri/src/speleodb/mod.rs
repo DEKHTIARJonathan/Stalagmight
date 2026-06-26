@@ -16,11 +16,18 @@
 
 pub(crate) mod auth;
 pub(crate) mod client;
+// [Track A] #186 status→action contract (pure map_status + ts-rs SpeleoDbAction).
+pub(crate) mod contract;
 pub(crate) mod dump;
 pub mod models;
+// [Track A] #187 http/https private-network TLS policy (pure classify_addr + enforce).
+pub(crate) mod tls;
 
+// [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
+pub use contract::SpeleoDbAction;
 pub use models::{
-    Permission, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus,
+    Permission, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
+    SpeleoSessionStatus,
 };
 
 /// Errors from the SpeleoDB client and dump handling.
@@ -67,6 +74,12 @@ pub(crate) enum SpeleoDbError {
     /// route traversal at the trust boundary.
     #[error("invalid SpeleoDB project id")]
     InvalidProjectId,
+    // [Track A] #187: the endpoint scheme/host failed the http private-network
+    // policy (public `http://`, a missing/unknown scheme, or an unresolvable
+    // host). Non-retryable by construction — `tls::enforce` errors before any
+    // request attempt, so `with_retry` never loops on it.
+    #[error("refusing to use an insecure SpeleoDB endpoint: {endpoint}")]
+    InsecureEndpoint { endpoint: String },
 }
 
 #[cfg(test)]
@@ -109,6 +122,15 @@ mod tests {
             SpeleoDbError::AmbiguousDump(vec!["a.stalx".to_owned(), "b.stalx".to_owned()])
                 .to_string(),
             "the project dump contained multiple .stalx files: [\"a.stalx\", \"b.stalx\"]"
+        );
+        // [Track A] #187: the insecure-endpoint message is the human-facing
+        // surface for a blocked public-http / scheme-less endpoint; pin it.
+        assert_eq!(
+            SpeleoDbError::InsecureEndpoint {
+                endpoint: "http://example.com".to_owned(),
+            }
+            .to_string(),
+            "refusing to use an insecure SpeleoDB endpoint: http://example.com"
         );
     }
 }
@@ -184,7 +206,7 @@ mod live_tests {
             eprintln!("skipping live_bad_credentials_returns_400: set DEV_SPELEODB_URL");
             return;
         };
-        let err = client::login(&url, "nobody@example.com", "definitely-wrong")
+        let err = client::login(&url, false, "nobody@example.com", "definitely-wrong")
             .expect_err("junk credentials must be rejected");
         assert!(
             matches!(&err, SpeleoDbError::Status { status: 400, .. }),
@@ -207,12 +229,14 @@ mod live_tests {
         };
 
         // 1. Auth.
-        let token = client::login(&url, &email, &password).expect("login should succeed");
+        let token = client::login(&url, false, &email, &password).expect("login should succeed");
 
         // 2. Create a throwaway project so the test owns its own state, and
         //    register cleanup before doing anything else that could panic.
         let name = format!("stalagmight-spike-{}", uuid::Uuid::new_v4());
-        let project_id = client::create_project(&url, &token, &name).expect("create project");
+        let project_id = client::create_project(&url, &token, false, &name)
+            .expect("create project")
+            .id;
         let _cleanup = ProjectCleanup {
             url: &url,
             token: &token,
@@ -220,22 +244,40 @@ mod live_tests {
         };
 
         // It should now be visible to this account.
-        let projects = client::list_projects(&url, &token).expect("list_projects should succeed");
+        let projects =
+            client::list_projects(&url, &token, false).expect("list_projects should succeed");
         assert!(
             projects.iter().any(|p| p.id == project_id),
             "freshly created project {project_id} not visible in list"
         );
 
-        // 3. Seed a known-good .stalx: acquire the mutex, upload, release.
+        // 3. Seed a known-good .stalx (+ a tiny .tml sidecar so the production
+        //    two-`artifact` upload_auto path is exercised): acquire, upload,
+        //    release. The returned Project's latest_commit.id is the new hexsha.
         let fixture = std::path::Path::new(SEED_FIXTURE);
         assert!(fixture.exists(), "seed fixture missing: {SEED_FIXTURE}");
-        client::acquire_lock(&url, &token, &project_id).expect("acquire mutex");
-        client::upload_auto_single(&url, &token, &project_id, fixture, "spike seed")
-            .expect("seed upload");
-        client::release_lock(&url, &token, &project_id).expect("release mutex");
+        let tml_dir = tempfile::tempdir().expect("tml tempdir");
+        let tml_sidecar = tml_dir.path().join("ariane.tml");
+        std::fs::write(&tml_sidecar, b"<CaveFile/>").expect("write tml sidecar");
+        client::acquire_lock(&url, &token, false, &project_id).expect("acquire mutex");
+        let uploaded = client::upload_auto(
+            &url,
+            &token,
+            false,
+            &project_id,
+            fixture,
+            &tml_sidecar,
+            "spike seed",
+        )
+        .expect("seed upload");
+        assert!(
+            uploaded.latest_commit.is_some(),
+            "upload should return a Project carrying the new commit"
+        );
+        client::release_lock(&url, &token, false, &project_id).expect("release mutex");
 
         // 4. Pull the dump, classify, extract, and open the .stalx self-contained.
-        let zip = client::download_dump(&url, &token, &project_id).expect("download dump");
+        let zip = client::download_dump(&url, &token, false, &project_id).expect("download dump");
         let mut dump = dump::Dump::open(&zip).expect("open dump zip");
         let names = dump.entry_paths().expect("read dump entries");
         let DumpClassification::Stalx(entry) = dump::classify(&names) else {
@@ -272,8 +314,9 @@ mod live_tests {
             eprintln!("skipping live_fetch_user_email: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
             return;
         };
-        let token = client::login(&url, &email, &password).expect("login should succeed");
-        let got = client::fetch_user_email(&url, &token).expect("fetch_user_email should succeed");
+        let token = client::login(&url, false, &email, &password).expect("login should succeed");
+        let got =
+            client::fetch_user_email(&url, &token, false).expect("fetch_user_email should succeed");
         assert_eq!(got, email, "whoami should return the token owner's email");
     }
 
@@ -294,9 +337,11 @@ mod live_tests {
             eprintln!("skipping live_collaborator_sees_read_only_label: set DEV_SPELEODB_* and _EMAIL2/_PASSWORD2");
             return;
         };
-        let owner = client::login(&url, &owner_email, &owner_pw).expect("owner login");
+        let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
         let name = format!("stalagmight-perm-{}", uuid::Uuid::new_v4());
-        let project_id = client::create_project(&url, &owner, &name).expect("create project");
+        let project_id = client::create_project(&url, &owner, false, &name)
+            .expect("create project")
+            .id;
         let _cleanup = ProjectCleanup {
             url: &url,
             token: &owner,
@@ -305,8 +350,8 @@ mod live_tests {
         client::grant_permission(&url, &owner, &project_id, &email2, "READ_ONLY")
             .expect("grant READ_ONLY");
 
-        let collab = client::login(&url, &email2, &pw2).expect("collaborator login");
-        let projects = client::list_projects(&url, &collab).expect("collaborator list");
+        let collab = client::login(&url, false, &email2, &pw2).expect("collaborator login");
+        let projects = client::list_projects(&url, &collab, false).expect("collaborator list");
         let project = projects
             .iter()
             .find(|p| p.id == project_id)
@@ -335,25 +380,39 @@ mod live_tests {
             eprintln!("skipping live_web_viewer_cannot_download: set DEV_SPELEODB_* and _EMAIL2/_PASSWORD2");
             return;
         };
-        let owner = client::login(&url, &owner_email, &owner_pw).expect("owner login");
+        let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
         let name = format!("stalagmight-wv-{}", uuid::Uuid::new_v4());
-        let project_id = client::create_project(&url, &owner, &name).expect("create project");
+        let project_id = client::create_project(&url, &owner, false, &name)
+            .expect("create project")
+            .id;
         let _cleanup = ProjectCleanup {
             url: &url,
             token: &owner,
             id: project_id.clone(),
         };
-        // Seed a real .stalx so the only thing stopping the download is permission.
+        // Seed a real .stalx (+ .tml sidecar) so the only thing stopping the
+        // download is permission.
         let fixture = std::path::Path::new(SEED_FIXTURE);
-        client::acquire_lock(&url, &owner, &project_id).expect("acquire mutex");
-        client::upload_auto_single(&url, &owner, &project_id, fixture, "seed")
-            .expect("seed upload");
-        client::release_lock(&url, &owner, &project_id).expect("release mutex");
+        let tml_dir = tempfile::tempdir().expect("tml tempdir");
+        let tml_sidecar = tml_dir.path().join("ariane.tml");
+        std::fs::write(&tml_sidecar, b"<CaveFile/>").expect("write tml sidecar");
+        client::acquire_lock(&url, &owner, false, &project_id).expect("acquire mutex");
+        client::upload_auto(
+            &url,
+            &owner,
+            false,
+            &project_id,
+            fixture,
+            &tml_sidecar,
+            "seed",
+        )
+        .expect("seed upload");
+        client::release_lock(&url, &owner, false, &project_id).expect("release mutex");
         client::grant_permission(&url, &owner, &project_id, &email2, "WEB_VIEWER")
             .expect("grant WEB_VIEWER");
 
-        let viewer = client::login(&url, &email2, &pw2).expect("viewer login");
-        let err = client::download_dump(&url, &viewer, &project_id)
+        let viewer = client::login(&url, false, &email2, &pw2).expect("viewer login");
+        let err = client::download_dump(&url, &viewer, false, &project_id)
             .expect_err("WEB_VIEWER must be denied the dump download");
         assert!(
             matches!(&err, SpeleoDbError::Status { status: 403, .. }),
@@ -378,9 +437,11 @@ mod live_tests {
             eprintln!("skipping live_lock_holder_reflects_other_user: set DEV_SPELEODB_* and _EMAIL2/_PASSWORD2");
             return;
         };
-        let owner = client::login(&url, &owner_email, &owner_pw).expect("owner login");
+        let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
         let name = format!("stalagmight-lock-{}", uuid::Uuid::new_v4());
-        let project_id = client::create_project(&url, &owner, &name).expect("create project");
+        let project_id = client::create_project(&url, &owner, false, &name)
+            .expect("create project")
+            .id;
         let _cleanup = ProjectCleanup {
             url: &url,
             token: &owner,
@@ -389,10 +450,11 @@ mod live_tests {
         client::grant_permission(&url, &owner, &project_id, &email2, "READ_AND_WRITE")
             .expect("grant READ_AND_WRITE");
 
-        let collab = client::login(&url, &email2, &pw2).expect("collaborator login");
-        client::acquire_lock(&url, &collab, &project_id).expect("collaborator acquire mutex");
+        let collab = client::login(&url, false, &email2, &pw2).expect("collaborator login");
+        client::acquire_lock(&url, &collab, false, &project_id)
+            .expect("collaborator acquire mutex");
 
-        let projects = client::list_projects(&url, &owner).expect("owner list");
+        let projects = client::list_projects(&url, &owner, false).expect("owner list");
         let project = projects
             .iter()
             .find(|p| p.id == project_id)
@@ -405,7 +467,7 @@ mod live_tests {
         );
 
         // Release the collaborator's lock so cleanup's delete isn't fighting it.
-        if let Err(e) = client::release_lock(&url, &collab, &project_id) {
+        if let Err(e) = client::release_lock(&url, &collab, false, &project_id) {
             eprintln!("cleanup: failed to release collaborator lock: {e:?}");
         }
     }

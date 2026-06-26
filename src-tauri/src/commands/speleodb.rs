@@ -16,20 +16,29 @@
 use tauri::{AppHandle, Manager};
 
 use crate::core::AppState;
+// [Track A] #186/D-B2: commands now return the structured SpeleoErrorDto (carrying
+// the typed SpeleoDbAction) instead of a flattened String, so the FE branches on
+// `err.action`. The orchestration `AppState::speleodb_*` methods build the DTO at
+// the call site where the endpoint is known.
 use crate::speleodb::{
-    SpeleoDbError, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus,
+    SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
+    SpeleoSessionStatus,
 };
 
-/// Run a blocking SpeleoDB orchestration call off the main thread, mapping the
-/// structured error to a string at the boundary.
+/// Run a blocking SpeleoDB orchestration call off the main thread. The
+/// orchestration already returns the typed [`SpeleoErrorDto`]; a task panic is
+/// the only error this layer originates, surfaced as a `Fatal` DTO.
 async fn run_blocking<T: Send + 'static>(
     app: AppHandle,
-    f: impl FnOnce(&AppState) -> Result<T, SpeleoDbError> + Send + 'static,
-) -> Result<T, String> {
+    f: impl FnOnce(&AppState) -> Result<T, SpeleoErrorDto> + Send + 'static,
+) -> Result<T, SpeleoErrorDto> {
     tauri::async_runtime::spawn_blocking(move || f(app.state::<AppState>().inner()))
         .await
-        .map_err(|e| format!("SpeleoDB task panicked: {e}"))?
-        .map_err(|e| e.to_string())
+        .map_err(|e| SpeleoErrorDto {
+            message: format!("SpeleoDB task panicked: {e}"),
+            action: SpeleoDbAction::Fatal,
+            status: None,
+        })?
 }
 
 /// Log in to SpeleoDB. Either email+`password` (exchanged for a token) or a
@@ -44,7 +53,7 @@ pub async fn speleodb_login(
     email: Option<String>,
     password: Option<String>,
     token: Option<String>,
-) -> Result<SpeleoLoginResult, String> {
+) -> Result<SpeleoLoginResult, SpeleoErrorDto> {
     run_blocking(app, move |s| {
         s.speleodb_login(endpoint, email, password, token)
     })
@@ -53,7 +62,9 @@ pub async fn speleodb_login(
 
 /// List the projects visible to the logged-in user (display summaries).
 #[tauri::command]
-pub async fn speleodb_list_projects(app: AppHandle) -> Result<Vec<SpeleoProjectSummary>, String> {
+pub async fn speleodb_list_projects(
+    app: AppHandle,
+) -> Result<Vec<SpeleoProjectSummary>, SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_list_projects).await
 }
 
@@ -69,7 +80,7 @@ pub async fn speleodb_open_project(
     project_id: String,
     project_name: String,
     latest_commit_sha: Option<String>,
-) -> Result<SpeleoOpenResult, String> {
+) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     run_blocking(app, move |s| {
         s.speleodb_open_project(project_id, project_name, latest_commit_sha)
     })
@@ -78,7 +89,7 @@ pub async fn speleodb_open_project(
 
 /// Forget the locally stored token and clear the session (no server call).
 #[tauri::command]
-pub async fn speleodb_logout(app: AppHandle) -> Result<(), String> {
+pub async fn speleodb_logout(app: AppHandle) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_logout).await
 }
 
@@ -86,6 +97,6 @@ pub async fn speleodb_logout(app: AppHandle) -> Result<(), String> {
 /// dialog calls this on open to restore the project list instead of re-prompting
 /// for credentials — the in-memory token outlives the dialog's React state.
 #[tauri::command]
-pub async fn speleodb_session(app: AppHandle) -> Result<SpeleoSessionStatus, String> {
+pub async fn speleodb_session(app: AppHandle) -> Result<SpeleoSessionStatus, SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_session_status).await
 }

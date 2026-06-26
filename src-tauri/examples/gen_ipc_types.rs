@@ -64,7 +64,8 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    Permission, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus,
+    Permission, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
+    SpeleoProjectSummary, SpeleoSessionStatus,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -284,12 +285,14 @@ fn main() {
     export::<ThemeMode>(&out_dir);
     export::<ColorTheme>(&out_dir);
     export::<SpeleoDbConfig>(&out_dir);
-    // SpeleoDB IPC DTOs (#183)
+    // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
     export::<SpeleoLoginResult>(&out_dir);
     export::<SpeleoOpenResult>(&out_dir);
     export::<SpeleoSessionStatus>(&out_dir);
+    export::<SpeleoDbAction>(&out_dir);
+    export::<SpeleoErrorDto>(&out_dir);
 
     let export_list = [
         "CommandResult",
@@ -462,6 +465,8 @@ fn main() {
         "SpeleoLoginResult",
         "SpeleoOpenResult",
         "SpeleoSessionStatus",
+        "SpeleoDbAction",
+        "SpeleoErrorDto",
     ];
 
     let mut generated =

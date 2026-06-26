@@ -283,6 +283,9 @@ export const defaultConfig: Config = {
   speleodb: {
     endpoint: null,
     email: null,
+    // [Track A] #187/D-B10: secure default — only an explicit opt-in (#205
+    // Settings, Track C) relaxes the public-http scheme block.
+    insecure_http: false,
   },
 };
 
