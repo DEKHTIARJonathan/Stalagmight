@@ -157,7 +157,7 @@ mod live_tests {
     //!   `live_fetch_user_email_matches_token_owner`,
     //!   `live_upload_200_returns_hexsha_and_project`, `live_upload_304_when_unchanged`,
     //!   `live_upload_422_missing_revision`, `live_stalx_round_trips_through_auto`,
-    //!   `live_auto_rejects_unknown_extension_CANARY`, `live_http_to_private_box_allowed`.
+    //!   `live_auto_rejects_unknown_extension_canary`, `live_http_to_private_box_allowed`.
     //! - **Two-account** (additionally needs `DEV_SPELEODB_EMAIL2` + `_PASSWORD2`,
     //!   via `live_env2()`): `live_collaborator_sees_read_only_label`,
     //!   `live_web_viewer_cannot_download`, `live_lock_holder_reflects_other_user`,
@@ -972,11 +972,11 @@ mod live_tests {
         clippy::print_stderr,
         reason = "ignored live integration test"
     )]
-    fn live_auto_rejects_unknown_extension_CANARY() {
+    fn live_auto_rejects_unknown_extension_canary() {
         use ureq::unversioned::multipart::{Form, Part};
 
         let Some((url, email, password)) = live_env() else {
-            eprintln!("skipping live_auto_rejects_unknown_extension_CANARY: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
+            eprintln!("skipping live_auto_rejects_unknown_extension_canary: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
             return;
         };
         let token = client::login(&url, false, &email, &password).expect("login");
