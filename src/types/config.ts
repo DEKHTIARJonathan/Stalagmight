@@ -276,6 +276,7 @@ export const defaultConfig: Config = {
     survey_speed_m_per_min: null,
     survey_rmv_multiplier: 1,
     stressed_rmv_multiplier: 1.5,
+    jump_rmv_multiplier: 1,
     conservative_tank_gas: true,
     dpv: null,
   },

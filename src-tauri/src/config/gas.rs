@@ -23,6 +23,10 @@ fn default_stressed_rmv_multiplier() -> f64 {
     1.5
 }
 
+fn default_jump_rmv_multiplier() -> f64 {
+    1.0
+}
+
 /// Display units for gas: metric (bar / litres) or imperial (psi / cuft).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
 #[serde(rename_all = "lowercase")]
@@ -79,6 +83,14 @@ pub struct GasConfig {
     /// Stressed-RMV multiplier for CCR bailout / contingency. Default 1.5×, user-settable.
     #[serde(default = "default_stressed_rmv_multiplier")]
     pub stressed_rmv_multiplier: f64,
+    /// Per-jump RMV multiplier applied to *reference/jump* legs only (not permanent shots).
+    /// Tying in a jump is extra task-loading that raises the breathing rate, so its gas burns
+    /// at a higher RMV. Default 1.0 (no bump); 1.5 is a useful "putting in a jump" value. Always
+    /// ≥1.0 after `normalize`, so it can only ever *raise* gas (the conservative direction, §6).
+    /// Today this covers all `is_reference` shots — a non-swimmable backsight is also a reference
+    /// (the #77 jump-vs-reference distinction is still future work), and bumping its RMV is safe.
+    #[serde(default = "default_jump_rmv_multiplier")]
+    pub jump_rmv_multiplier: f64,
     /// `true` (default) = the conservative "call-it-an-80" derate covers real-gas Z; `false`
     /// = precise `fill × volume × Z` for the few who want it (PRD §5.3).
     #[serde(default = "default_true")]
@@ -97,6 +109,7 @@ impl Default for GasConfig {
             survey_speed_m_per_min: None,
             survey_rmv_multiplier: default_survey_rmv_multiplier(),
             stressed_rmv_multiplier: default_stressed_rmv_multiplier(),
+            jump_rmv_multiplier: default_jump_rmv_multiplier(),
             conservative_tank_gas: true,
             dpv: None,
         }
@@ -127,6 +140,12 @@ impl GasConfig {
         }
         if !self.stressed_rmv_multiplier.is_finite() || self.stressed_rmv_multiplier <= 0.0 {
             self.stressed_rmv_multiplier = default_stressed_rmv_multiplier();
+        }
+        // Jump bump must never *reduce* gas: a multiplier below 1.0 would under-state a jump
+        // leg's gas (the unsafe direction, §6), so clamp anything non-finite or <1.0 up to the
+        // 1.0 default (stricter than the `<= 0.0` siblings above — a jump is never less work).
+        if !self.jump_rmv_multiplier.is_finite() || self.jump_rmv_multiplier < 1.0 {
+            self.jump_rmv_multiplier = default_jump_rmv_multiplier();
         }
         if let Some(dpv) = self.dpv {
             if !dpv.speed_m_per_min.is_finite() || dpv.speed_m_per_min <= 0.0 {

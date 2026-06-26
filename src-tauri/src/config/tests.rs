@@ -105,6 +105,7 @@ fn test_gas_config_normalize_clamps_invalid_speeds_and_multipliers() {
         survey_speed_m_per_min: Some(-1.0), // invalid -> None (symmetric)
         survey_rmv_multiplier: f64::NAN,    // invalid -> default 1.0
         stressed_rmv_multiplier: 0.0,       // invalid -> default 1.5
+        jump_rmv_multiplier: 0.5,           // below 1.0 (would cut gas) -> default 1.0
         dpv: Some(DpvProfile {
             speed_m_per_min: -5.0,
             burn_minutes: None,
@@ -117,6 +118,7 @@ fn test_gas_config_normalize_clamps_invalid_speeds_and_multipliers() {
     assert_eq!(config.survey_speed_m_per_min, None);
     assert_eq!(config.survey_rmv_multiplier, 1.0);
     assert_eq!(config.stressed_rmv_multiplier, 1.5);
+    assert_eq!(config.jump_rmv_multiplier, 1.0); // clamped up: a jump is never less work
     assert_eq!(config.dpv, None); // bad DPV speed drops the profile
 }
 
@@ -127,6 +129,7 @@ fn test_gas_config_normalize_preserves_valid_values() {
         survey_speed_m_per_min: Some(4.0),
         survey_rmv_multiplier: 1.2,
         stressed_rmv_multiplier: 2.0,
+        jump_rmv_multiplier: 1.5,
         ..GasConfig::default()
     };
     config.normalize();
@@ -134,6 +137,7 @@ fn test_gas_config_normalize_preserves_valid_values() {
     assert_eq!(config.survey_speed_m_per_min, Some(4.0));
     assert_eq!(config.survey_rmv_multiplier, 1.2);
     assert_eq!(config.stressed_rmv_multiplier, 2.0);
+    assert_eq!(config.jump_rmv_multiplier, 1.5);
 }
 
 #[test]

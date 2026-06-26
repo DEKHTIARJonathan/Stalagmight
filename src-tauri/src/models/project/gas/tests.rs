@@ -422,6 +422,65 @@ fn gas_reach_field_honors_survey_speed_and_multiplier() {
     assert!((field_gas(&field, StationRef::new(sec, 1)) - 780.0).abs() < 1e-6);
 }
 
+/// One permanent shot then a reference/jump shot (0 → 10 → 20 m, 100 m each): 3 stations.
+fn project_with_jump_second_leg() -> (Project, StationRef) {
+    let mut project = Project::new("Gas".to_string(), None);
+    let sec = project
+        .add_section(SectionData {
+            shots: vec![
+                make_shot(100.0, 0.0, 10.0),
+                ShotData {
+                    length: 100.0,
+                    depth_in: 10.0,
+                    depth_out: 20.0,
+                    is_reference: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        })
+        .id;
+    (project, StationRef::new(sec, 0))
+}
+
+#[test]
+fn gas_reach_field_jump_multiplier_raises_only_jump_legs() {
+    // Leg 0 is a permanent shot (avg 5 m → 1.5 ATA → 20·1.5·10 = 300 L); leg 1 is a
+    // reference/jump (avg 15 m → 2.5 ATA → base 20·2.5·10 = 500 L). A 1.5× jump multiplier
+    // scales ONLY the jump leg's RMV (20 → 30 → 750 L): station 1 is untouched at 300, while
+    // station 2 rises from 300+500=800 to 300+750=1050. Pins that the bump targets is_reference
+    // legs and nothing else (a misapplied multiplier would also move station 1).
+    let (project, origin) = project_with_jump_second_leg();
+    let sec = origin.section_id;
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+
+    let base = project.compute_gas_reach_field(
+        Some(&origin),
+        &diver,
+        std::slice::from_ref(&big),
+        &GasConfig::default(),
+    );
+    assert!((field_gas(&base, StationRef::new(sec, 1)) - 300.0).abs() < 1e-6);
+    assert!((field_gas(&base, StationRef::new(sec, 2)) - 800.0).abs() < 1e-6);
+
+    let bumped = GasConfig {
+        jump_rmv_multiplier: 1.5,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field(Some(&origin), &diver, &[big], &bumped);
+    assert!((field_gas(&field, StationRef::new(sec, 1)) - 300.0).abs() < 1e-6);
+    assert!((field_gas(&field, StationRef::new(sec, 2)) - 1050.0).abs() < 1e-6);
+}
+
 #[test]
 fn gas_reach_field_partial_frontier_between_interior_stations() {
     // usable = 12·250 = 3000 → AllThirds budget = 1000 L, between gas_in(station 2)=800 and

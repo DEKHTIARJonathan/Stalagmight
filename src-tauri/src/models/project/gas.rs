@@ -79,8 +79,16 @@ impl Project {
             vec![f64::INFINITY; n]
         } else {
             let adj = self.build_survey_graph_weighted(n, &station_index, |shot, fi, ti| {
+                // Jump/reference legs burn gas at a higher RMV: tying in a jump is extra
+                // task-loading. `normalize` keeps the multiplier ≥1.0, so this can only ever
+                // *raise* a jump's gas — never under-state it (the safe direction, §6).
+                let edge_rmv = if shot.is_reference {
+                    in_rmv * gas_config.jump_rmv_multiplier
+                } else {
+                    in_rmv
+                };
                 edge_gas(
-                    in_rmv,
+                    edge_rmv,
                     in_speed,
                     shot.length.max(0.0),
                     coords_ref[fi].z,
