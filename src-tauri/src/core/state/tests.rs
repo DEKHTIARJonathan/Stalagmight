@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use crate::core::undo::{UndoData, UndoEntry};
-use crate::core::{Command, UndoStack};
+use crate::core::{Command, CommandResult, UndoStack};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, ImportPlacement, ImportSectionConfig,
     LoopClosure, Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates,
@@ -18714,4 +18714,454 @@ fn repair_open_project_integrity_reports_fixed_and_remaining() {
         state.integrity_violation_messages().len(),
         "remaining matches the true post-repair count"
     );
+}
+
+// ===========================================================================
+// #191 — read-only edit gate + dirty bit + chokepoint enumeration (Track B).
+// Stamped-remote fixture: a temp .stalx carrying a speleo_link row, opened so
+// edit_enabled flips false (remote-open-without-lock). See guard_mutation /
+// mark_remote_dirty / is_lifecycle_passthrough.
+// ===========================================================================
+
+use crate::core::command::EDIT_DISABLED_CODE;
+use crate::models::SpeleoLink;
+
+/// A SpeleoLink fixture (clean: no unpushed edits).
+fn fixture_speleo_link() -> SpeleoLink {
+    SpeleoLink {
+        endpoint: "http://10.10.0.220:8000/".to_string(),
+        project_id: "11111111-1111-1111-1111-111111111111".to_string(),
+        project_name: "Remote Cave".to_string(),
+        base_commit_sha: Some("abc123".to_string()),
+        has_unpushed_edits: false,
+    }
+}
+
+/// Build an AppState with an OPEN, STAMPED-REMOTE project: a temp `.stalx` saved
+/// with one section + one shot, stamped with a speleo_link row, then opened via
+/// `open_project` so `edit_enabled` flips false (remote-open-without-lock).
+/// Returns `(state, section_id, shot_id, _temp)` — keep `_temp` alive.
+fn remote_fixture() -> (AppState, SectionId, ShotId, TempDir) {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("remote.stalx");
+
+    let mut project = Project::new("Remote Cave".to_string(), None);
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(2.0), test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project).unwrap();
+    db.save_speleo_link(Some(&fixture_speleo_link())).unwrap();
+    drop(db);
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(path).success, "open remote fixture");
+    // open_project should have flipped edit_enabled false (link present).
+    assert!(!state.edit_enabled(), "remote-open disables editing");
+
+    let project = state.get_project_state().unwrap();
+    let shot_id = project.sections[0].shots[0].id;
+    (state, section_id, shot_id, temp)
+}
+
+/// Build the same fixture but force editing ENABLED (simulating a later
+/// lock-acquire) so the dirty-bit plumbing can be exercised.
+fn remote_fixture_editable() -> (AppState, SectionId, ShotId, TempDir) {
+    let (state, sid, shid, temp) = remote_fixture();
+    state.set_edit_enabled(true);
+    (state, sid, shid, temp)
+}
+
+/// Read has_unpushed_edits straight from the open database.
+fn dirty_bit(state: &AppState) -> bool {
+    let guard = state.database.lock().unwrap();
+    guard
+        .as_ref()
+        .unwrap()
+        .load_speleo_link()
+        .unwrap()
+        .unwrap()
+        .has_unpushed_edits
+}
+
+#[test]
+fn edit_enabled_defaults_true_and_local_project_passes() {
+    // A fresh local-only project (no speleo_link) is always editable; the gate is
+    // a no-op off-SpeleoDB.
+    let state = AppState::new().unwrap();
+    assert!(state.edit_enabled(), "default-true");
+    assert!(
+        state
+            .execute(Command::CreateProject {
+                name: "Local".to_string(),
+                location: None,
+            })
+            .success
+    );
+    assert!(state.edit_enabled(), "create keeps edit enabled");
+    let result = state.execute(Command::CreateSection {
+        name: Some("S".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#abcdef".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(1.0)],
+    });
+    assert!(result.success, "local project edits succeed");
+}
+
+#[test]
+fn remote_open_without_lock_disables_edit() {
+    let (state, _sid, _shid, _temp) = remote_fixture();
+    assert!(!state.edit_enabled(), "remote project opens read-only");
+    // Closing resets the gate so the next open isn't stuck.
+    assert!(state.close_project().success);
+    assert!(state.edit_enabled(), "close resets the gate");
+}
+
+/// The chokepoint enumeration tripwire (D-B6): every routed mutation entry must
+/// reject on a read-only remote project with the EDIT_DISABLED code (or, for
+/// repair, changed == false). A newly-added mutation path that forgets the guard
+/// fails here. The names are pinned in MUTATION_ENTRYPOINTS below.
+const MUTATION_ENTRYPOINTS: &[&str] = &[
+    // execute() + its in-execute arms (MoveComment, ApplyCollabChanges)
+    "execute",
+    "execute:MoveComment",
+    "execute:ApplyCollabChanges",
+    // history entrypoints
+    "undo",
+    "redo",
+    "undo_to",
+    "redo_to",
+    // direct-lock bypass methods
+    "update_project_settings",
+    "repair_open_project_integrity",
+    "execute_delete_shot_and_split",
+    "execute_delete_shot_range_split",
+    "execute_delete_shot_range_shift",
+    "execute_delete_last_shot_and_section",
+    "execute_create_and_merge",
+    "execute_import_sections",
+    // collab toggles
+    "set_collab_enabled",
+    "set_collab_enabled_for_path",
+];
+
+#[test]
+fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
+    // Tripwire doc: when a new state-mutating entry is added, route it through
+    // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call below.
+    assert_eq!(
+        MUTATION_ENTRYPOINTS.len(),
+        17,
+        "update both the routing and this list when adding a mutation entry"
+    );
+
+    let assert_disabled = |label: &str, r: &CommandResult| {
+        assert!(!r.success, "{label} must be rejected when edit disabled");
+        assert!(
+            r.error
+                .as_deref()
+                .is_some_and(|e| e.starts_with(EDIT_DISABLED_CODE)),
+            "{label} must carry the EDIT_DISABLED code, got: {:?}",
+            r.error
+        );
+    };
+
+    // --- execute() and its in-execute arms ---
+    {
+        let (state, sid, shid, _temp) = remote_fixture();
+        assert_disabled(
+            "execute",
+            &state.execute(Command::UpdateShot {
+                section_id: sid,
+                shot_id: shid,
+                updates: ShotUpdates::default(),
+            }),
+        );
+        assert_disabled(
+            "execute:MoveComment",
+            &state.execute(Command::MoveComment {
+                source: crate::core::CommentHolder::Shot {
+                    section_id: sid,
+                    shot_id: shid,
+                },
+                target: crate::core::CommentHolder::Shot {
+                    section_id: sid,
+                    shot_id: shid,
+                },
+                swap: false,
+            }),
+        );
+        assert_disabled(
+            "execute:ApplyCollabChanges",
+            &state.execute(Command::ApplyCollabChanges),
+        );
+    }
+
+    // --- history entrypoints ---
+    {
+        let (state, _sid, _shid, _temp) = remote_fixture();
+        assert_disabled("undo", &state.undo());
+        assert_disabled("redo", &state.redo());
+        assert_disabled("undo_to", &state.undo_to(0));
+        assert_disabled("redo_to", &state.redo_to(0));
+    }
+
+    // --- direct-lock bypass methods ---
+    {
+        let (state, sid, shid, _temp) = remote_fixture();
+        assert_disabled(
+            "update_project_settings",
+            &state.update_project_settings("Renamed".to_string(), state.get_config().validation),
+        );
+        // repair returns IntegrityRepairResult (no coded failure surface) →
+        // changed == false (D-B5).
+        let repair = state.repair_open_project_integrity();
+        assert!(!repair.changed, "repair on read-only remote is a no-op");
+        assert_disabled(
+            "execute_delete_shot_and_split",
+            &state.execute_delete_shot_and_split(sid, shid, "A".to_string(), "B".to_string()),
+        );
+        assert_disabled(
+            "execute_delete_shot_range_split",
+            &state.execute_delete_shot_range_split(
+                sid,
+                shid,
+                shid,
+                "A".to_string(),
+                "B".to_string(),
+            ),
+        );
+        assert_disabled(
+            "execute_delete_shot_range_shift",
+            &state.execute_delete_shot_range_shift(sid, shid, shid),
+        );
+        assert_disabled(
+            "execute_delete_last_shot_and_section",
+            &state.execute_delete_last_shot_and_section(sid, shid),
+        );
+        assert_disabled(
+            "execute_create_and_merge",
+            &state.execute_create_and_merge(
+                Some("Imp".to_string()),
+                None,
+                None,
+                "#00ff00".to_string(),
+                None,
+                vec![test_shot_data(3.0)],
+                0,
+                StationRef::new(sid, 1),
+                ClosureStrategy::Batch,
+            ),
+        );
+        assert_disabled(
+            "execute_import_sections",
+            &state.execute_import_sections(
+                vec![ImportSectionConfig {
+                    section_index: 0,
+                    name: Some("Imp".to_string()),
+                    surveyor: None,
+                    date: None,
+                    color: "#00ff00".to_string(),
+                    direction: None,
+                    quality: 1.0,
+                    shots: vec![test_shot_data(3.0)],
+                    station_comments: Vec::new(),
+                    placement: ImportPlacement::Origin,
+                }],
+                Vec::new(),
+                None,
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+    }
+
+    // --- collab toggles ---
+    {
+        let (state, _sid, _shid, _temp) = remote_fixture();
+        assert_disabled("set_collab_enabled", &state.set_collab_enabled(true));
+        // set_collab_enabled_for_path is gated only when path == the OPEN project.
+        let open_path = state.get_project_state().unwrap().file_path.unwrap();
+        assert_disabled(
+            "set_collab_enabled_for_path",
+            &state.set_collab_enabled_for_path(open_path, true),
+        );
+    }
+}
+
+#[test]
+fn lifecycle_commands_pass_through_gate() {
+    // Save / Close must NOT be blocked on a read-only remote project (autosave
+    // must keep working). Open/Create/MergeProjects are lifecycle too.
+    let (state, _sid, _shid, _temp) = remote_fixture();
+    assert!(!state.edit_enabled());
+
+    // Autosave (SaveProject) passes the gate.
+    let save = state.execute(Command::SaveProject {
+        path: None,
+        is_autosave: true,
+    });
+    assert!(save.success, "autosave must pass through the gate");
+
+    // The dirty bit is NOT set by a local save.
+    assert!(!dirty_bit(&state), "save/autosave never sets the dirty bit");
+
+    // Close passes through (and resets the gate).
+    assert!(state.close_project().success);
+}
+
+#[test]
+fn dirty_bit_flips_false_to_true_on_successful_remote_edit() {
+    let (state, sid, shid, _temp) = remote_fixture_editable();
+    assert!(!dirty_bit(&state), "starts clean");
+
+    let r = state.execute(Command::UpdateShot {
+        section_id: sid,
+        shot_id: shid,
+        updates: ShotUpdates {
+            length: Some(9.0),
+            ..Default::default()
+        },
+    });
+    assert!(r.success);
+    assert!(
+        dirty_bit(&state),
+        "successful remote edit flips the dirty bit"
+    );
+}
+
+#[test]
+fn dirty_bit_is_idempotent_and_set_only() {
+    let (state, sid, shid, _temp) = remote_fixture_editable();
+
+    // First edit sets it.
+    assert!(
+        state
+            .execute(Command::UpdateShot {
+                section_id: sid,
+                shot_id: shid,
+                updates: ShotUpdates {
+                    length: Some(9.0),
+                    ..Default::default()
+                },
+            })
+            .success
+    );
+    assert!(dirty_bit(&state));
+
+    // A second edit + a local autosave both leave it set (idempotent; set-only —
+    // a local save NEVER clears it).
+    assert!(
+        state
+            .execute(Command::UpdateShot {
+                section_id: sid,
+                shot_id: shid,
+                updates: ShotUpdates {
+                    length: Some(8.0),
+                    ..Default::default()
+                },
+            })
+            .success
+    );
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: None,
+                is_autosave: true,
+            })
+            .success
+    );
+    assert!(dirty_bit(&state), "dirty bit stays set after autosave");
+}
+
+#[test]
+fn dirty_bit_noop_for_local_only_project() {
+    // A local-only project has no speleo_link → mark_remote_dirty is a no-op and
+    // never errors.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("local.stalx");
+    let mut project = Project::new("Local".to_string(), None);
+    let sid = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project).unwrap();
+    drop(db);
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(path).success);
+    assert!(state.edit_enabled(), "local project stays editable");
+
+    let shid = state.get_project_state().unwrap().sections[0].shots[0].id;
+    assert!(
+        state
+            .execute(Command::UpdateShot {
+                section_id: sid,
+                shot_id: shid,
+                updates: ShotUpdates {
+                    length: Some(5.0),
+                    ..Default::default()
+                },
+            })
+            .success
+    );
+    // No speleo_link row exists; mark_remote_dirty was a silent no-op.
+    let guard = state.database.lock().unwrap();
+    assert!(guard
+        .as_ref()
+        .unwrap()
+        .load_speleo_link()
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn edit_disabled_code_prefix_is_distinct() {
+    // The EDIT_DISABLED code is distinct from the FS permission code, so the FE
+    // can pattern-match it independently (#204).
+    assert_eq!(EDIT_DISABLED_CODE, "EDIT_DISABLED");
+    assert_ne!(
+        EDIT_DISABLED_CODE,
+        crate::core::loading::PERMISSION_DENIED_CODE
+    );
+    let (state, sid, shid, _temp) = remote_fixture();
+    let err = state
+        .execute(Command::UpdateShot {
+            section_id: sid,
+            shot_id: shid,
+            updates: ShotUpdates::default(),
+        })
+        .error
+        .unwrap();
+    assert!(err.starts_with(EDIT_DISABLED_CODE));
+    assert!(
+        !err.starts_with(crate::core::loading::PERMISSION_DENIED_CODE),
+        "must not collide with the permission-denied prefix"
+    );
+}
+
+#[test]
+fn repair_and_settings_gated_on_locked_remote() {
+    let (state, _sid, _shid, _temp) = remote_fixture();
+    // Repair: returns changed == false (no coded-failure surface; D-B5).
+    let repair = state.repair_open_project_integrity();
+    assert!(!repair.changed);
+    assert_eq!(repair.fixed, 0);
+    // Settings: returns the EDIT_DISABLED coded failure.
+    let settings =
+        state.update_project_settings("New Name".to_string(), state.get_config().validation);
+    assert!(!settings.success);
+    assert!(settings
+        .error
+        .as_deref()
+        .is_some_and(|e| e.starts_with(EDIT_DISABLED_CODE)));
 }

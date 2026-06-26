@@ -384,6 +384,21 @@ impl AppState {
             }
         };
 
+        // [Track B] (#191, D-B13c) The SpeleoDB hand-off link (speleo_link) lives
+        // in its own table, not the Project model, so save_project() won't carry
+        // it. The save pipeline writes a FRESH temp .stalx and atomically renames
+        // it over the destination, so without this snapshot+re-apply a local save
+        // would DROP the link entirely — silently un-remoting the project and
+        // clearing has_unpushed_edits (exactly the "local save NEVER clears the
+        // dirty bit" invariant). Snapshot it here and re-apply to the fresh file
+        // below. base_commit_sha + the dirty bit are carried verbatim.
+        let speleo_link = {
+            let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
+            db_guard
+                .as_ref()
+                .and_then(|db| db.load_speleo_link().ok().flatten())
+        };
+
         // Remove any leftover temp file from previous failed saves
         if temp_path.exists() {
             let _ = std::fs::remove_file(&temp_path);
@@ -430,6 +445,19 @@ impl AppState {
                     error = %e,
                     purpose = "preserve resolved warnings on save",
                     "Failed to copy resolved warnings"
+                );
+            }
+        }
+
+        // [Track B] (#191, D-B13c) Carry the SpeleoDB hand-off link forward so a
+        // local save never un-remotes the project or clears the dirty bit. The
+        // dirty bit is set-only here — only a later server push clears it.
+        if let Some(link) = &speleo_link {
+            if let Err(e) = db.save_speleo_link(Some(link)) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve SpeleoDB hand-off link on save",
+                    "Failed to copy speleo_link onto the fresh save file"
                 );
             }
         }
