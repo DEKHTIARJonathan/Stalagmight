@@ -31,7 +31,7 @@ interface ContextMenuItem {
 }
 
 export default function ContextMenu() {
-  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToSection, geometryMode, syntacticLevel } = useUIStore(useShallow((s) => ({
+  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToSection, geometryMode, appMode, syntacticLevel } = useUIStore(useShallow((s) => ({
     closeDialog: s.closeDialog,
     dialogData: s.dialogData,
     openDialog: s.openDialog,
@@ -39,6 +39,7 @@ export default function ContextMenu() {
     setMergeStationA: s.setMergeStationA,
     triggerZoomToSection: s.triggerZoomToSection,
     geometryMode: s.geometryMode,
+    appMode: s.appMode,
     syntacticLevel: s.syntacticLevel,
   })));
   const { project, stations, setShotReference, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
@@ -526,10 +527,11 @@ export default function ContextMenu() {
     }
   };
 
-  // The closure-adjusted view is read-only: disable every mutation item (all of
-  // them except read-only navigation like "Zoom to Section"). Edits are made in
-  // the measured view.
-  const geometryReadOnly = geometryMode === 'closureAdjusted';
+  // Read-only: disable every mutation item (all except read-only navigation like
+  // "Zoom to Section"). Both the closure-adjusted view AND Plan/Export are read-only —
+  // and Plan/Export can sit on geometryMode 'measured' (no-closures fallback), so the
+  // appMode check is load-bearing, not redundant. Edits are made in the survey view.
+  const geometryReadOnly = geometryMode === 'closureAdjusted' || appMode !== 'survey';
   const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Section']);
   const items = buildMenuItems().map((item) => {
     const withIcon = item.separator ? item : { ...item, icon: iconForLabel(item.label) };

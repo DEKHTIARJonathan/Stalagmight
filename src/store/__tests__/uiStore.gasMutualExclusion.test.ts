@@ -82,4 +82,29 @@ describe('Plan mode ↔ color-overlay mutual exclusion (#38)', () => {
     useUIStore.getState().exitGasPlan();
     expect(useUIStore.getState().appMode).toBe('survey');
   });
+
+  it('restores measured geometry after Plan on the default (measured) survey view', () => {
+    // The realistic default path: forced closureAdjusted ≠ saved measured, so this
+    // distinguishes "restored the saved value" from "left the forced value" (the
+    // closureAdjusted-entry case can't tell those apart — they're equal).
+    expect(useUIStore.getState().geometryMode).toBe('measured');
+    useUIStore.getState().setAppMode('plan');
+    expect(useUIStore.getState().geometryMode).toBe('closureAdjusted');
+    useUIStore.getState().setAppMode('survey');
+    expect(useUIStore.getState().geometryMode).toBe('measured');
+  });
+
+  it('a project load is authoritative: drops Plan mode without restoring stale geometry', () => {
+    // Project A in Plan (measured survey view) captures prePlanGeometryMode='measured'.
+    // Loading project B whose saved geometry is closureAdjusted: applyDisplaySettings must
+    // reset appMode to survey and clear the stale capture, so the later exitGasPlan funnel
+    // can't restore A's 'measured' over B's 'closureAdjusted'.
+    useUIStore.getState().setAppMode('plan');
+    useUIStore.getState().applyDisplaySettings({ geometryMode: 'closureAdjusted' } as never);
+    expect(useUIStore.getState().appMode).toBe('survey');
+    expect(useUIStore.getState().geometryMode).toBe('closureAdjusted');
+    // The leftover funnel is now a no-op (already survey) — geometry stays B's.
+    useUIStore.getState().exitGasPlan();
+    expect(useUIStore.getState().geometryMode).toBe('closureAdjusted');
+  });
 });

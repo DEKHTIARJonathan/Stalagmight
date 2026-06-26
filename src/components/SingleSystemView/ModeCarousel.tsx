@@ -10,14 +10,16 @@ const MODES: readonly AppMode[] = ['survey', 'plan', 'export'];
  * Lives in the Toolbar's center slot — the active *tool* is already shown by the
  * highlighted toolbar button, so the center is free for the mode switch.
  */
-export function ModeCarousel() {
+export function ModeCarousel({ disabled = false }: { disabled?: boolean }) {
   const { t } = useTranslation();
   const appMode = useUIStore((s) => s.appMode);
   const setAppMode = useUIStore((s) => s.setAppMode);
 
   return (
     <div
-      className="inline-flex rounded border border-border overflow-hidden"
+      className={`inline-flex rounded border border-border overflow-hidden ${
+        disabled ? 'opacity-45 grayscale' : ''
+      }`}
       role="tablist"
       aria-label={t('modeCarousel.aria')}
       data-testid="mode-carousel"
@@ -30,9 +32,12 @@ export function ModeCarousel() {
             type="button"
             role="tab"
             aria-selected={active}
+            // Disabled while a survey placement is in progress: switching to the
+            // read-only Plan/Export map would otherwise leave that mutation live.
+            disabled={disabled}
             data-testid={`mode-${mode}`}
             onClick={() => setAppMode(mode)}
-            className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+            className={`px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed ${
               i > 0 ? 'border-l border-border' : ''
             } ${
               active ? 'bg-accent text-accent-on' : 'text-text-secondary hover:text-text hover:bg-panel'

@@ -1400,10 +1400,18 @@ export const useUIStore = create<UIStore>((set) => ({
   },
 
   applyDisplaySettings: (settings: DisplaySettings) => {
+    // A load is authoritative: drop any Plan/Export workspace mode left over from the
+    // PREVIOUS project before applying this project's saved geometry below. Without this,
+    // a later setView()→exitGasPlan()→setAppMode('survey') would restore the prior
+    // project's saved `prePlanGeometryMode` and clobber the geometry we set here (the
+    // module var outlives the project that set it). Clearing it + forcing survey here
+    // makes that restore a no-op (appMode already 'survey').
+    prePlanGeometryMode = null;
     // Apply display settings from backend, merging with existing state.
     // Uses ?? to only apply fields that are defined, preserving current state for undefined fields.
     // EXACT 11 fields matching uiStore - NO showShots, NO colorBy (those aren't persisted).
     set((state) => ({
+      appMode: APP_MODE_DEFAULT,
       showStations: settings.showStations ?? state.showStations,
       showSectionNames: settings.showSectionNames ?? state.showSectionNames,
       showStationLabels: settings.showStationLabels ?? state.showStationLabels,

@@ -215,6 +215,37 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="export-panel"]')).toHaveCount(0);
   });
 
+  test('Plan map is read-only: Delete on a selection opens no confirm dialog @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    // Select a shot via the store, then press Delete. Plan/Export are read-only even on a
+    // no-closures project (where geometryMode falls back to 'measured'), so the appMode
+    // guard must block the delete — no confirm dialog opens.
+    await page.evaluate(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> } | null;
+            };
+          };
+          uiStore: {
+            getState: () => {
+              setSelection: (s: { type: string; sectionId: number; shotId: number }) => void;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+      const sec = e2e!.projectStore.getState().project!.sections[0];
+      e2e!.uiStore
+        .getState()
+        .setSelection({ type: 'shot', sectionId: sec.id, shotId: sec.shots[0].id });
+    });
+    await page.keyboard.press('Delete');
+    await expect(page.locator('[data-testid="confirm-dialog"]')).toHaveCount(0);
+  });
+
   test('Plan stars the zero datum; clicking the star picks it as the origin @smoke', async ({
     page,
   }) => {

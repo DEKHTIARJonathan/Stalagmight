@@ -267,7 +267,7 @@ export default function Toolbar({
            justify-between would drift it when the right cluster's width changes
            (mutating tools + DisplayMenu drop out in Plan/Export). */
         <div className="absolute left-1/2 -translate-x-1/2">
-          <ModeCarousel />
+          <ModeCarousel disabled={placementModeActive} />
         </div>
       )}
 
