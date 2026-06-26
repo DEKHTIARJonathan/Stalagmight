@@ -27,7 +27,9 @@ use super::SpeleoDbError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub enum SpeleoDbAction {
-    /// Genuine 401 — the token was revoked. Feeds Track C's 401-drop (D-B4).
+    /// The token is dead (revoked / invalid): a 401 on any authed endpoint, or a
+    /// 403 on the `/user/` whoami chokepoint (the box's DRF 401→403 downgrade,
+    /// verified live). Drives Track C's auto-drop (D-B4).
     ReLogin,
     /// 403 on a read-capable endpoint (list/get/download = read-only access).
     ReadOnly,
@@ -123,14 +125,23 @@ pub(crate) fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
         // we still special-case Login here so it is explicit and 401 never maps
         // to ReLogin for the unauthenticated login call.
         401 if !matches!(endpoint, Endpoint::Login) => SpeleoDbAction::ReLogin,
-        // 403: per-endpoint. A 403 NEVER drops the token (robust to a DRF
-        // 401→403 downgrade, D-B4).
+        // 403 on the whoami (User) chokepoint = the unambiguous dead-token signal:
+        // the box returns 200 for any valid token and 403 for a dead one (the DRF
+        // 401→403 downgrade, verified live), and `/user/` carries no per-resource
+        // permission, so a 403 there can ONLY mean the token is bad → ReLogin.
+        403 if matches!(endpoint, Endpoint::User) => SpeleoDbAction::ReLogin,
+        // 403 on a resource endpoint is ambiguous (a real read-only/fence grant vs
+        // a dead token) and NEVER drops the token here (D-B4); the orchestration
+        // disambiguates it with a whoami probe (`speleodb_token_is_dead`).
         403 if endpoint.is_read() => SpeleoDbAction::ReadOnly,
-        403 => SpeleoDbAction::Fence, // UploadAuto / Acquire / Release / CreateProject / User / Login
+        403 => SpeleoDbAction::Fence, // UploadAuto / Acquire / Release / CreateProject / Login
         // Upload-304: the remote tree already matches — benign, dirty bit
         // unchanged. Without this row 304 would fall to the Fatal default.
         304 if matches!(endpoint, Endpoint::UploadAuto) => SpeleoDbAction::UpToDate,
-        // 422: distinct unprocessable / missing-revision fatal row.
+        // 422: defensive unprocessable fatal row. NOTE (verified live): the box
+        // answers a malformed/missing-artifact upload with 400, NOT 422 — that 400
+        // has no first-class row and correctly falls to the fail-closed default
+        // below. 422 is kept as a defensive mapping in case the server ever uses it.
         422 => SpeleoDbAction::Fatal,
         // 5xx: idempotent reads were already retried → surface the exhausted
         // Retry state; writes never auto-retried → StayDirty (keep dirty, g7).
@@ -177,6 +188,8 @@ mod tests {
         // The load-bearing rows from the ledger's #186 table.
         assert_eq!(map_status(Endpoint::Login, 400), SpeleoDbAction::Fatal);
         assert_eq!(map_status(Endpoint::User, 401), SpeleoDbAction::ReLogin);
+        // whoami 403 = dead-token signal (the live box's DRF 401→403 downgrade).
+        assert_eq!(map_status(Endpoint::User, 403), SpeleoDbAction::ReLogin);
         assert_eq!(
             map_status(Endpoint::ListProjects, 403),
             SpeleoDbAction::ReadOnly
@@ -198,6 +211,9 @@ mod tests {
             SpeleoDbAction::UpToDate
         );
         assert_eq!(map_status(Endpoint::UploadAuto, 422), SpeleoDbAction::Fatal);
+        // Verified live: a malformed / missing-artifact upload is 400, which has
+        // no first-class row and must fail closed to Fatal.
+        assert_eq!(map_status(Endpoint::UploadAuto, 400), SpeleoDbAction::Fatal);
         assert_eq!(
             map_status(Endpoint::UploadAuto, 503),
             SpeleoDbAction::StayDirty
@@ -282,6 +298,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn map_status_whoami_403_is_relogin_but_resource_403_is_not() {
+        // Verified live: `/user/` returns 403 for a dead token, so a whoami 403 is
+        // the unambiguous dead-token signal → ReLogin. The SAME 403 on a resource
+        // endpoint stays ReadOnly (read) / Fence (write) — it must NOT map to
+        // ReLogin, or a read-only user would be logged out (D-B4); the
+        // orchestration disambiguates a resource 403 with a whoami probe.
+        assert_eq!(map_status(Endpoint::User, 403), SpeleoDbAction::ReLogin);
+        assert_eq!(
+            map_status(Endpoint::ListProjects, 403),
+            SpeleoDbAction::ReadOnly
+        );
+        assert_eq!(
+            map_status(Endpoint::DownloadDump, 403),
+            SpeleoDbAction::ReadOnly
+        );
+        assert_eq!(map_status(Endpoint::UploadAuto, 403), SpeleoDbAction::Fence);
+        assert_eq!(map_status(Endpoint::Acquire, 403), SpeleoDbAction::Fence);
     }
 
     #[test]

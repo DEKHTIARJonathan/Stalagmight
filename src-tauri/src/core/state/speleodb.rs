@@ -104,6 +104,22 @@ fn auth_error_drops_token<T>(endpoint: Endpoint, result: &Result<T, SpeleoDbErro
     )
 }
 
+/// Decide, from a whoami (`GET /user/`) probe result, whether the session token
+/// is dead. The live box returns 200 for any valid token and 403 for a dead one
+/// (the DRF 401→403 downgrade), so a probe whose status maps to
+/// [`SpeleoDbAction::ReLogin`] (a 403 or 401 on the `User` endpoint) means the
+/// token is dead. A success means it is alive — so a resource 403 was a genuine
+/// permission denial, keep the token (D-B4). A transport error is inconclusive
+/// and is treated as not-dead (never drop on a flaky probe). Pure + unit-tested;
+/// the network call lives in [`AppState::speleodb_token_is_dead`].
+fn whoami_indicates_dead_token(probe: &Result<String, SpeleoDbError>) -> bool {
+    matches!(
+        probe,
+        Err(SpeleoDbError::Status { status, .. })
+            if map_status(Endpoint::User, *status) == SpeleoDbAction::ReLogin
+    )
+}
+
 impl SpeleoDbSession {
     /// Resolve the active `(endpoint, token)` for this session, or
     /// [`SpeleoDbError::NotAuthenticated`] if endpoint, email, or token is
@@ -284,12 +300,62 @@ impl AppState {
         endpoint: Endpoint,
         result: Result<T, SpeleoDbError>,
     ) -> Result<T, SpeleoDbError> {
-        if auth_error_drops_token(endpoint, &result) {
-            if let Ok(mut session) = self.speleodb_session_lock() {
-                session.forget(); // full clear() across all tiers
-            }
+        // Unambiguous dead token (a 401, or a 403 on the whoami `User` endpoint)
+        // drops immediately. An ambiguous resource/write 403 (a real read-only /
+        // fence grant vs a dead token) is disambiguated with a whoami probe.
+        if auth_error_drops_token(endpoint, &result)
+            || self.speleodb_ambiguous_403_is_dead_token(endpoint, &result)
+        {
+            self.speleodb_forget();
         }
         result
+    }
+
+    /// Full local token clear (keychain + plaintext + memory) + session reset —
+    /// the shared sink for the C5 auto-drop paths.
+    fn speleodb_forget(&self) {
+        if let Ok(mut session) = self.speleodb_session_lock() {
+            session.forget();
+        }
+    }
+
+    /// Disambiguate a resource/write **403** (D-B4 + the live-verified DRF 401→403
+    /// downgrade): the box answers 403 for BOTH a real read-only / fence grant AND
+    /// a dead token, so a 403 here is ambiguous. Probe the `/user/` whoami
+    /// chokepoint (200 for any valid token, 403 for a dead one) and report the
+    /// token dead **iff** the probe also indicates death — a whoami success means a
+    /// genuine permission denial, so the token is kept (never log out a read-only
+    /// user). Only the ambiguous 403s (`ReadOnly` / `Fence`) reach the probe; an
+    /// unambiguous `ReLogin` (whoami 403 / 401) is handled by
+    /// [`auth_error_drops_token`], and other statuses never indicate a dead token.
+    fn speleodb_ambiguous_403_is_dead_token<T>(
+        &self,
+        endpoint: Endpoint,
+        result: &Result<T, SpeleoDbError>,
+    ) -> bool {
+        let Err(SpeleoDbError::Status { status, .. }) = result else {
+            return false;
+        };
+        if *status != 403
+            || !matches!(
+                map_status(endpoint, *status),
+                SpeleoDbAction::ReadOnly | SpeleoDbAction::Fence
+            )
+        {
+            return false;
+        }
+        self.speleodb_token_is_dead()
+    }
+
+    /// One whoami round-trip to test whether the current session token is still
+    /// valid (see [`whoami_indicates_dead_token`]). Taken only on an ambiguous 403.
+    /// Returns `false` when there is no established token (nothing to drop).
+    fn speleodb_token_is_dead(&self) -> bool {
+        let Ok((endpoint, token)) = self.speleodb_active_token() else {
+            return false;
+        };
+        let insecure_http = self.speleodb_insecure_http();
+        whoami_indicates_dead_token(&client::fetch_user_email(&endpoint, &token, insecure_http))
     }
 
     /// Persist the user-supplied endpoint (when given) + email — never the token —
@@ -539,7 +605,7 @@ impl AppState {
 mod tests {
     use super::{
         auth_error_drops_token, classify_dump_entry, resolve_endpoint, validate_project_id,
-        Endpoint, SpeleoDbSession,
+        whoami_indicates_dead_token, Endpoint, SpeleoDbSession,
     };
     use crate::speleodb::auth::{InMemoryStore, SecretStore, TokenStore};
     use crate::speleodb::SpeleoDbError;
@@ -733,6 +799,33 @@ mod tests {
         if auth_error_drops_token(Endpoint::ListProjects, result) {
             session.forget();
         }
+    }
+
+    #[test]
+    fn whoami_probe_decision_distinguishes_dead_from_alive() {
+        // The pure half of the ambiguous-403 disambiguation: a whoami 403/401
+        // (→ ReLogin on the User endpoint) means the token is dead; a whoami
+        // success means it is alive (so a resource 403 was a real permission
+        // denial — keep it, D-B4); a 5xx / transport probe is inconclusive → not
+        // dead (never drop on a flaky probe).
+        assert!(whoami_indicates_dead_token(&Err(SpeleoDbError::Status {
+            status: 403,
+            message: "forbidden".to_owned(),
+        })));
+        assert!(whoami_indicates_dead_token(&Err(SpeleoDbError::Status {
+            status: 401,
+            message: "unauthorized".to_owned(),
+        })));
+        assert!(!whoami_indicates_dead_token(&Ok(
+            "user@example.com".to_owned()
+        )));
+        assert!(!whoami_indicates_dead_token(&Err(SpeleoDbError::Status {
+            status: 503,
+            message: "server".to_owned(),
+        })));
+        assert!(!whoami_indicates_dead_token(&Err(
+            SpeleoDbError::Transport("timeout".to_owned())
+        )));
     }
 
     #[test]
