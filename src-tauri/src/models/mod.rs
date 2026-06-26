@@ -5,6 +5,7 @@ pub mod placement_suggest;
 pub mod project;
 pub mod section;
 pub mod shot;
+pub mod speleo_link;
 pub mod station;
 pub mod warning;
 
@@ -15,6 +16,7 @@ pub use placement_suggest::*;
 pub use project::*;
 pub use section::*;
 pub use shot::*;
+pub use speleo_link::*;
 pub use station::ClosureStrategy;
 pub use station::*;
 pub use warning::*;

@@ -103,7 +103,11 @@ export default function SpeleoDbSpikeDialog() {
     let localPath: string;
     try {
       const result = await invokeIpc<SpeleoOpenResult>('speleodb_open_project', {
+        // [Track B] (#189) pass name + latest commit SHA so the backend stamps
+        // the speleo_link row (is_remote) on the pulled .stalx.
         projectId: project.id,
+        projectName: project.name,
+        latestCommitSha: project.latest_commit_sha ?? null,
       });
       localPath = result.local_path;
     } catch (e) {

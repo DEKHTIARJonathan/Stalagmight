@@ -59,12 +59,21 @@ pub async fn speleodb_list_projects(app: AppHandle) -> Result<Vec<SpeleoProjectS
 
 /// Pull a project from SpeleoDB and extract its `.stalx` into the app cache,
 /// returning the local path. The frontend then opens it via `open_project`.
+///
+/// [Track B] (#189, D-B9) `project_name` + `latest_commit_sha` are extra args
+/// (NOT a new command name → EVENT_NAMES stays 418) used to stamp the
+/// `speleo_link` row so the pulled project is `is_remote == true` end-to-end.
 #[tauri::command]
 pub async fn speleodb_open_project(
     app: AppHandle,
     project_id: String,
+    project_name: String,
+    latest_commit_sha: Option<String>,
 ) -> Result<SpeleoOpenResult, String> {
-    run_blocking(app, move |s| s.speleodb_open_project(project_id)).await
+    run_blocking(app, move |s| {
+        s.speleodb_open_project(project_id, project_name, latest_commit_sha)
+    })
+    .await
 }
 
 /// Forget the locally stored token and clear the session (no server call).

@@ -62,6 +62,12 @@ impl Project {
             gps_center,
             gps_bounds,
             collab_enabled: self.collab.as_ref().is_some_and(|c| c.enabled),
+            // [Track B] (#189) is_remote is DERIVED from the on-disk speleo_link
+            // table (load_metadata), which this in-memory Project does not carry.
+            // The recent-projects listing goes through Database::load_metadata
+            // (the authoritative probe); this in-memory metadata() path conserves
+            // the prior behaviour with a safe default.
+            is_remote: false,
         })
     }
 

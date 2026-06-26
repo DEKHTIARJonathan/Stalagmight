@@ -249,10 +249,22 @@ impl AppState {
 
     /// Pull a project's dump, extract its `.stalx` into the app cache, and return
     /// the local path. The frontend then opens it via the normal `open_project`
-    /// flow. Read-only: nothing is locked or written server-side.
+    /// flow. Read-only against the server (nothing is locked or pushed).
+    ///
+    /// [Track B] (#189, D-B9) `project_name` + `latest_commit_sha` are threaded
+    /// through the open path (extra args, SAME command name → EVENT_NAMES stays
+    /// 418) so the extracted `.stalx` is stamped `is_remote == true` end-to-end.
+    ///
+    /// FRESHNESS-FOLD SEAM (D-B1): #185's get_project/list_projects return the
+    /// authoritative Project on every call. The persistence fold (cache the
+    /// freshness verdict + reset last_verify_at) is a DOCUMENTED NO-OP until the
+    /// #202 piggyback path consumes it. base_commit_sha is captured ONCE here on
+    /// pull and NEVER mutated by #189 (a later Sync/Release issue re-stamps it).
     pub(crate) fn speleodb_open_project(
         &self,
         project_id: String,
+        project_name: String,
+        latest_commit_sha: Option<String>,
     ) -> Result<SpeleoOpenResult, SpeleoDbError> {
         // Validate the id at the trust boundary, before it reaches the download
         // URL or the cache-path join (closes the path/route-traversal vector).
@@ -267,6 +279,44 @@ impl AppState {
 
         let dest = self.speleodb_cache_path(&project_id)?;
         dump.extract_entry_to(&entry, &dest)?;
+
+        // [Track B] (#189, D-B9) Stamp the SpeleoDB hand-off link into the pulled
+        // `.stalx`. Opening via `open_existing` runs `ensure_schema_version`,
+        // which creates the v9 `speleo_link` table on the freshly-extracted file;
+        // then upsert the single row. `base_commit_sha` = the pulled SHA (NULL /
+        // None for an empty repo). After this, `load_metadata().is_remote` is
+        // true and the dirty bit (`has_unpushed_edits`) starts false.
+        match crate::persistence::Database::open_existing(&dest) {
+            Ok(db) => {
+                let link = crate::models::SpeleoLink {
+                    endpoint: endpoint.clone(),
+                    project_id: project_id.clone(),
+                    project_name,
+                    base_commit_sha: latest_commit_sha,
+                    has_unpushed_edits: false,
+                };
+                if let Err(e) = db.save_speleo_link(Some(&link)) {
+                    // Non-fatal: the pull succeeded and the file is openable; the
+                    // worst case is the project opens as local-only (editable)
+                    // rather than read-only-remote. Surfacing a hard error here
+                    // would strand a successfully-downloaded `.stalx`.
+                    tracing::warn!(
+                        error = %e,
+                        project_id = %project_id,
+                        purpose = "stamp SpeleoDB hand-off link on pull",
+                        "speleodb_open_project: failed to stamp speleo_link; project will open local-only"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    project_id = %project_id,
+                    purpose = "stamp SpeleoDB hand-off link on pull",
+                    "speleodb_open_project: could not reopen extracted .stalx to stamp speleo_link"
+                );
+            }
+        }
 
         Ok(SpeleoOpenResult {
             local_path: dest.to_string_lossy().into_owned(),
