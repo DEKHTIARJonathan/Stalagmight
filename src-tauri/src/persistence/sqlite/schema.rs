@@ -11,7 +11,11 @@ use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
 /// the SpeleoDB hand-off identity or drops the dirty bit. `(name, decl_type,
 /// notnull)`.
 pub(super) const PRESERVED_SPELEOLINK_COLUMNS: &[(&str, &str, bool)] = &[
-    ("id", "INTEGER", true),
+    // `id INTEGER PRIMARY KEY` is a rowid alias: SQLite reports notnull=0 for it
+    // in pragma_table_info even though a rowid PK can never be NULL. The fence
+    // asserts the column as the schema actually reports it, so notnull is `false`
+    // here (the PK + CHECK(id=1) still enforce single-row identity).
+    ("id", "INTEGER", false),
     ("endpoint", "TEXT", true),
     ("project_id", "TEXT", true),
     ("project_name", "TEXT", true),
