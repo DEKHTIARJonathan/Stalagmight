@@ -289,7 +289,7 @@ impl AppState {
         match crate::persistence::Database::open_existing(&dest) {
             Ok(db) => {
                 let link = crate::models::SpeleoLink {
-                    endpoint: endpoint.clone(),
+                    endpoint,
                     project_id: project_id.clone(),
                     project_name,
                     base_commit_sha: latest_commit_sha,
