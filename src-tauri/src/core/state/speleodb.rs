@@ -649,8 +649,6 @@ mod tests {
     fn rehydration_is_idempotent_and_skips_live_session() {
         // Once attempted, a second rehydrate (even with a now-seeded keychain) is
         // a no-op — it won't clobber or re-probe.
-        let endpoint = "https://x/";
-        let email = "u@x";
         let mut session = fresh_session_with_stores(Box::new(InMemoryStore::new()), None);
         session.rehydrate(None, None); // marks attempted, finds nothing
         assert!(session.rehydrate_attempted);
