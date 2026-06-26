@@ -1483,6 +1483,10 @@ export const useUIStore = create<UIStore>((set) => ({
   // Placement mode state
   placementMode: null,
   startPlacementMode: (sectionData, alignStationIndex, onComplete, onCancel, additionalSections) => {
+    // Placement mode bypasses the setView() cleanup funnel, so leave the gas sub-mode
+    // (#38) here too — its overlay/panel must not outlive entry into placement
+    // (idempotent no-op when gas is off).
+    useUIStore.getState().exitGasPlan();
     setDwellState('placement');
     set({
       placementMode: {

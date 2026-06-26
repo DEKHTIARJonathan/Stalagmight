@@ -133,5 +133,16 @@ impl GasConfig {
                 self.dpv = None;
             }
         }
+        // Drop a NaN / non-positive burn-time or range too (the Phase-4 dead-scooter path
+        // would otherwise divide by them). Runs after the speed clamp above, so `dpv` is
+        // only still Some when its speed is already valid.
+        if let Some(dpv) = self.dpv.as_mut() {
+            if dpv.burn_minutes.is_some_and(|b| !b.is_finite() || b <= 0.0) {
+                dpv.burn_minutes = None;
+            }
+            if dpv.range_m.is_some_and(|r| !r.is_finite() || r <= 0.0) {
+                dpv.range_m = None;
+            }
+        }
     }
 }

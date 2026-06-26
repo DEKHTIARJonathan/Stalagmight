@@ -188,8 +188,11 @@ describe('defaultConfig structure', () => {
   });
 
   describe('gas config', () => {
-    // Mirrors GasConfig::default() in src-tauri/src/config/types.rs — these MUST stay in sync
-    // (defaultConfig.gas is hand-maintained). A drift here = TS default ≠ Rust default.
+    // Pins the hand-maintained TS defaultConfig.gas values (mirrors GasConfig::default() in
+    // src-tauri/src/config/gas.rs). NOTE: this guards TS-internal consistency only — it does
+    // NOT read the Rust default, so on its own it can't catch TS↔Rust drift (a golden-fixtured
+    // Rust default would be the real cross-language guard — follow-up). It does fail loudly if
+    // a TS default value here is changed unintentionally.
     it('has correct gas defaults', () => {
       expect(defaultConfig.gas.units).toBe('metric');
       expect(defaultConfig.gas.default_reserve).toBe('all_thirds');

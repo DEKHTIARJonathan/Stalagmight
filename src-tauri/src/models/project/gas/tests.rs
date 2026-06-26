@@ -454,6 +454,63 @@ fn gas_reach_field_partial_frontier_between_interior_stations() {
 }
 
 #[test]
+fn gas_reach_field_unnormalized_config_bails_to_all_unreachable() {
+    // The engine's defensive guard: a non-positive / non-finite in-speed or in-rmv (a config
+    // that skipped GasConfig::normalize) MUST yield an all-unreachable field — never the unsafe
+    // over-stating direction (§6). compute_gas_reach_field is called DIRECTLY here, bypassing
+    // normalize (covered separately in config/tests.rs), so a future refactor can't silently
+    // invert the guard without failing this test.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let cyl = Cylinder::new(
+        12.0,
+        250.0,
+        250.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+
+    for cfg in [
+        // Zero survey-in speed (present, so in_speed uses it rather than the swim fallback).
+        GasConfig {
+            survey_speed_m_per_min: Some(0.0),
+            ..GasConfig::default()
+        },
+        // Zero / NaN survey-RMV multiplier → in_rmv = 0 / NaN.
+        GasConfig {
+            survey_rmv_multiplier: 0.0,
+            ..GasConfig::default()
+        },
+        GasConfig {
+            survey_rmv_multiplier: f64::NAN,
+            ..GasConfig::default()
+        },
+    ] {
+        let field = project.compute_gas_reach_field(
+            Some(&origin),
+            &diver,
+            std::slice::from_ref(&cyl),
+            &cfg,
+        );
+        assert!(
+            field.reachable.iter().all(|&r| !r),
+            "all stations unreachable"
+        );
+        assert!(
+            field.gas_to_reach.iter().all(|g| g.is_none()),
+            "all gas_to_reach None"
+        );
+        assert!(field.turn_frontier.is_empty(), "empty turn frontier");
+        assert!(
+            field.max_reachable_gas.abs() < EPS,
+            "max_reachable_gas == 0"
+        );
+    }
+}
+
+#[test]
 fn gas_reach_field_none_origin_seeds_from_zero_datums() {
     let (mut project, origin) = linear_descent_project();
     project.zero_datums.push(ZeroDatum {

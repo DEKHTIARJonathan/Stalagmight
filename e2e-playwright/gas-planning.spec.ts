@@ -90,7 +90,10 @@ async function anyStationHasGasReach(page: Page): Promise<boolean> {
     return map.queryRenderedFeatures({ layers: ['survey-stations'] }).some((f) => {
       if (f.id == null) return false;
       const state = map.getFeatureState({ source: 'survey-data-stations', id: f.id });
-      return typeof state?.gasReach === 'number';
+      // >= 0 (not just "is a number"): the UNREACHABLE_GAS sentinel is -1, which is
+      // also a number, so this proves the reachable gold→purple ramp is populated —
+      // not that every station went grey/unreachable.
+      return typeof state?.gasReach === 'number' && state.gasReach >= 0;
     });
   });
 }

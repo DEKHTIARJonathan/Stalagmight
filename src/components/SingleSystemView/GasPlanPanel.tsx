@@ -78,10 +78,17 @@ export function GasPlanPanel() {
   // opens (this panel mounts on entry), falling back to the compiled defaults when no
   // config is loaded. Mount-only so a later unrelated config change doesn't clobber
   // in-mode edits. Without this the plan would silently ignore the user's saved gas
-  // preferences (units/speeds/reserve) — the migration-lens "restore from current
-  // config, not a hardcoded default" rule.
+  // preferences (speeds/reserve) — the migration-lens "restore from current config,
+  // not a hardcoded default" rule. Display units follow the app-wide MASTER units
+  // (Settings ▸ Units): feet ⇒ imperial, so an imperial app opens an imperial gas
+  // panel (the in-panel toggle still overrides for the session).
   useEffect(() => {
-    setGasConfig(useProjectStore.getState().config?.gas ?? defaultConfig.gas);
+    const cfg = useProjectStore.getState().config;
+    const masterImperial = cfg?.units?.length === 'feet';
+    setGasConfig({
+      ...(cfg?.gas ?? defaultConfig.gas),
+      units: masterImperial ? 'imperial' : 'metric',
+    });
   }, [setGasConfig]);
 
   const units = gasConfig.units;
@@ -190,8 +197,11 @@ export function GasPlanPanel() {
                 <span className="font-medium w-14 truncate" title={cyl.label ?? ''}>
                   {cyl.label ?? `${cyl.water_volume_l}L`}
                 </span>
-                <span className="text-xs opacity-60 w-16">
-                  {formatVolume(cyl.water_volume_l, units, units === 'imperial' ? 2 : 1)}
+                <span className="text-xs opacity-60 w-12">
+                  {/* Tank water (internal) capacity is canonically litres — converting it
+                      to "cuft" is dimensionally water-volume-in-cubic-feet, meaningless to a
+                      diver (who knows the tank by its nominal "80" name), so keep it in L. */}
+                  {cyl.water_volume_l} L
                 </span>
                 <PositiveNumberField
                   value={pressureToDisplay(cyl.fill_bar, units)}
