@@ -156,7 +156,7 @@ mod live_tests {
     //!   `live_env()`): `live_round_trip_seed_pull_open`,
     //!   `live_fetch_user_email_matches_token_owner`,
     //!   `live_upload_200_returns_hexsha_and_project`, `live_upload_304_when_unchanged`,
-    //!   `live_upload_422_missing_revision`, `live_stalx_round_trips_through_auto`,
+    //!   `live_upload_malformed_returns_400`, `live_stalx_round_trips_through_auto`,
     //!   `live_auto_rejects_unknown_extension_canary`, `live_http_to_private_box_allowed`.
     //! - **Two-account** (additionally needs `DEV_SPELEODB_EMAIL2` + `_PASSWORD2`,
     //!   via `live_env2()`): `live_collaborator_sees_read_only_label`,
@@ -189,6 +189,17 @@ mod live_tests {
     const SEED_FIXTURE: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../e2e/fixtures/fractal_plant_iter2.stalx"
+    );
+
+    /// A **real** Ariane `.tml` (a ZIP archive — verified live: the server's
+    /// `ArianeTMLFileProcessor` 400s a non-zip with "File is not a zip file").
+    /// Tracks A/B/C do not generate a `.tml` (that is the #184/#196 render path),
+    /// so the upload live tests seed with this known-good Ariane fixture to
+    /// exercise the #185 transport path independent of our exporter. Copied in as
+    /// `ariane.tml` so the multipart part keeps the contract filename.
+    const TML_FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/test_simple.tml"
     );
 
     /// Build a `base/api/v2/{suffix}` URL the same way `client::api_url` does
@@ -298,7 +309,7 @@ mod live_tests {
         assert!(fixture.exists(), "seed fixture missing: {SEED_FIXTURE}");
         let tml_dir = tempfile::tempdir().expect("tml tempdir");
         let tml_sidecar = tml_dir.path().join("ariane.tml");
-        std::fs::write(&tml_sidecar, b"<CaveFile/>").expect("write tml sidecar");
+        std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
         client::acquire_lock(&url, &token, false, &project_id).expect("acquire mutex");
         let uploaded = client::upload_auto(
             &url,
@@ -435,7 +446,7 @@ mod live_tests {
         let fixture = std::path::Path::new(SEED_FIXTURE);
         let tml_dir = tempfile::tempdir().expect("tml tempdir");
         let tml_sidecar = tml_dir.path().join("ariane.tml");
-        std::fs::write(&tml_sidecar, b"<CaveFile/>").expect("write tml sidecar");
+        std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
         client::acquire_lock(&url, &owner, false, &project_id).expect("acquire mutex");
         client::upload_auto(
             &url,
@@ -457,6 +468,19 @@ mod live_tests {
         assert!(
             matches!(&err, SpeleoDbError::Status { status: 403, .. }),
             "WEB_VIEWER download should be HTTP 403, got: {err:?}"
+        );
+
+        // #188 C5 / D-B4: the download 403 above is AMBIGUOUS (a real read-only
+        // grant vs a dead token). The whoami probe disambiguates it — and this
+        // WEB_VIEWER token is *alive*, so `GET /user/` returns 200 (resolves the
+        // viewer's own email). The probe therefore KEEPS the token: a read-only
+        // user is never logged out by the ambiguous-403 auto-drop. (Contrast
+        // `live_dead_token_returns_403`, where whoami 403s and the token is dropped.)
+        let whoami = client::fetch_user_email(&url, &viewer, false)
+            .expect("a live WEB_VIEWER token must still resolve whoami (probe keeps it)");
+        assert_eq!(
+            whoami, email2,
+            "whoami should resolve the viewer's own email — proving the token is alive, not dead"
         );
     }
 
@@ -774,7 +798,7 @@ mod live_tests {
         let token = client::login(&url, false, &email, &password).expect("login");
         let (cleanup, fixture, tml_dir) = seed_and_acquire(&url, &token);
         let tml_sidecar = tml_dir.path().join("ariane.tml");
-        std::fs::write(&tml_sidecar, b"<CaveFile/>").expect("write tml sidecar");
+        std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
 
         let project = client::upload_auto(
             &url,
@@ -820,7 +844,7 @@ mod live_tests {
         let token = client::login(&url, false, &email, &password).expect("login");
         let (cleanup, fixture, tml_dir) = seed_and_acquire(&url, &token);
         let tml_sidecar = tml_dir.path().join("ariane.tml");
-        std::fs::write(&tml_sidecar, b"<CaveFile/>").expect("write tml sidecar");
+        std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
 
         // First upload lands the tree (200).
         client::upload_auto(
@@ -856,11 +880,15 @@ mod live_tests {
     }
 
     /// L14: a malformed `upload/auto` payload (a multipart that omits the required
-    /// revision/artifact, here a `message`-only form with no `artifact` part) is
-    /// rejected with HTTP **422** — the distinct unprocessable/fatal row
-    /// `map_status(UploadAuto, 422) == Fatal`. Sent raw because the typed
-    /// `upload_auto` always builds a well-formed two-part form, so the malformed
-    /// case can only be produced with a hand-built `ureq::Form`.
+    /// `artifact` part, here a `message`-only form) is rejected with HTTP **400** —
+    /// NOT 422 (verified live: this API answers 400 for malformed input across the
+    /// board — bad creds, non-zip, missing artifact). A 400 on upload has no
+    /// first-class `map_status` row, so it correctly falls to the fail-closed
+    /// default (`map_status(UploadAuto, 400) == Fatal`). The 422 row is kept as a
+    /// defensive fail-closed mapping but is not the missing-artifact status. Sent
+    /// raw because the typed `upload_auto` always builds a well-formed two-part
+    /// form, so the malformed case can only be produced with a hand-built
+    /// `ureq::Form`.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
     #[expect(
@@ -868,15 +896,15 @@ mod live_tests {
         clippy::print_stderr,
         reason = "ignored live integration test"
     )]
-    fn live_upload_422_missing_revision() {
+    fn live_upload_malformed_returns_400() {
         use ureq::unversioned::multipart::Form;
 
         let Some((url, email, password)) = live_env() else {
-            eprintln!("skipping live_upload_422: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
+            eprintln!("skipping live_upload_malformed: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
             return;
         };
         let token = client::login(&url, false, &email, &password).expect("login");
-        let name = format!("stalagmight-upload422-{}", uuid::Uuid::new_v4());
+        let name = format!("stalagmight-upload400-{}", uuid::Uuid::new_v4());
         let project_id = client::create_project(&url, &token, false, &name)
             .expect("create project")
             .id;
@@ -888,7 +916,7 @@ mod live_tests {
         client::acquire_lock(&url, &token, false, &cleanup.id).expect("acquire mutex");
 
         // A deliberately malformed multipart: only the message text part, NO
-        // `artifact` part — the server cannot derive a revision → 422.
+        // `artifact` part — the server rejects it as a bad request → 400.
         let upload_url = api_url(&url, &format!("projects/{}/upload/auto/", cleanup.id));
         let resp = raw_agent()
             .put(&upload_url)
@@ -897,8 +925,8 @@ mod live_tests {
             .expect("request should reach the server (status branched below)");
         assert_eq!(
             resp.status().as_u16(),
-            422,
-            "a malformed upload/auto (missing artifact/revision) should be HTTP 422"
+            400,
+            "a malformed upload/auto (missing artifact) should be HTTP 400 (verified live; NOT 422)"
         );
 
         if let Err(e) = client::release_lock(&url, &token, false, &cleanup.id) {
@@ -929,7 +957,7 @@ mod live_tests {
         let token = client::login(&url, false, &email, &password).expect("login");
         let (cleanup, fixture, tml_dir) = seed_and_acquire(&url, &token);
         let tml_sidecar = tml_dir.path().join("ariane.tml");
-        std::fs::write(&tml_sidecar, b"<CaveFile/>").expect("write tml sidecar");
+        std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
         client::upload_auto(
             &url,
             &token,

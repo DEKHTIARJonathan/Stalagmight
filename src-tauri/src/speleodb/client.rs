@@ -437,7 +437,19 @@ pub(crate) fn upload_auto(
     // by #191 — do NOT clear the dirty bit unconditionally here.
     // FRESHNESS FOLD (#189/#191): authoritative Project available here; cache +
     // reset last_verify_at lands later (D-B1, #202).
-    parse_project(&body, "upload auto response")
+    //
+    // The upload/auto success body is an ENVELOPE — `{ files, message, hexsha,
+    // browser_url, project: {…} }` — with the authoritative Project NESTED under
+    // `project` (verified against the live server; a bare `parse_project` here
+    // failed with "missing field `id`"). Parse the nested project, not the
+    // envelope top level. `hexsha` / `browser_url` are surfaced later by #191/#197.
+    #[derive(serde::Deserialize)]
+    struct UploadAutoResponse {
+        project: Project,
+    }
+    let parsed: UploadAutoResponse = serde_json::from_slice(&body)
+        .map_err(|e| SpeleoDbError::Parse(format!("upload auto response: {e}")))?;
+    Ok(parsed.project)
 }
 
 /// `POST /api/v2/projects/{id}/acquire/` — take the project mutex, returning the
