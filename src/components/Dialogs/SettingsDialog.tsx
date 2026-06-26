@@ -13,6 +13,7 @@ import {
 } from './SettingsSidebar';
 import { GeneralSettings } from './settings/GeneralSettings';
 import { UnitsSettings } from './settings/UnitsSettings';
+import { GasSettings } from './settings/GasSettings';
 import { DisplaySettings } from './settings/DisplaySettings';
 import { MapSettings } from './settings/MapSettings';
 import { ValidationSettings } from './settings/ValidationSettings';
@@ -79,6 +80,8 @@ function getCategoryDefaults(category: SettingsCategory, resolvedTheme: Resolved
       return { general: { ...defaultConfig.general } };
     case 'units':
       return { units: { ...defaultConfig.units } };
+    case 'gas':
+      return { gas: { ...defaultConfig.gas } };
     case 'display':
       return {
         display: getThemedDisplayDefaults(resolvedTheme),
@@ -560,6 +563,8 @@ export default function SettingsDialog() {
         return <GeneralSettings {...commonProps} />;
       case 'units':
         return <UnitsSettings {...commonProps} />;
+      case 'gas':
+        return <GasSettings {...commonProps} />;
       case 'display':
         return <DisplaySettings {...commonProps} />;
       case 'map':

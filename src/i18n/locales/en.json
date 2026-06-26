@@ -64,6 +64,7 @@
       "general": "General",
       "appearance": "Appearance",
       "units": "Units",
+      "gas": "Gas planning",
       "display": "Display",
       "map": "Map",
       "validation": "Validation",
@@ -296,6 +297,22 @@
         "merge": "Merge tool",
         "pan": "Pan tool",
         "zoom": "Zoom tool"
+      }
+    },
+    "gas": {
+      "title": "Gas planning",
+      "sections": {
+        "planning": "Route planning"
+      },
+      "swimSpeed": {
+        "label": "Swim speed (m/min)",
+        "help": "Default exit-leg swim speed used to estimate gas along the route. 10 m/min is typical.",
+        "aria": "Swim speed in meters per minute"
+      },
+      "jumpMultiplier": {
+        "label": "Jump RMV multiplier",
+        "help": "Extra breathing-rate factor on jump/reference legs (tying in a jump is more work). 1.0 = no bump; 1.5 is a useful value. Never below 1.0.",
+        "aria": "Jump RMV multiplier"
       }
     },
     "units": {

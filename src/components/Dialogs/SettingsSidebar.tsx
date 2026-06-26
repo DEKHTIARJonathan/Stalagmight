@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 export type SettingsCategory =
   | 'general'
   | 'units'
+  | 'gas'
   | 'display'
   | 'map'
   | 'validation'
@@ -28,6 +29,7 @@ const CATEGORIES: CategoryConfig[] = [
   { id: 'general', labelKey: 'settings.sidebar.general' },
   { id: 'appearance', labelKey: 'settings.sidebar.appearance' },
   { id: 'units', labelKey: 'settings.sidebar.units' },
+  { id: 'gas', labelKey: 'settings.sidebar.gas' },
   { id: 'display', labelKey: 'settings.sidebar.display' },
   { id: 'map', labelKey: 'settings.sidebar.map' },
   { id: 'validation', labelKey: 'settings.sidebar.validation' },
