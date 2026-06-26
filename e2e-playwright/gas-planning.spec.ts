@@ -215,6 +215,49 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="export-panel"]')).toHaveCount(0);
   });
 
+  test('Plan stars the zero datum; clicking the star picks it as the origin @smoke', async ({
+    page,
+  }) => {
+    // Flag station 0 of the first section as a zero datum, then refresh so the map
+    // reflects it (the gas solve's "Entrance" default already starts from the datum;
+    // this marks it so the user can see + pick it).
+    await page.evaluate(async () => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              project: { sections: Array<{ id: number }> } | null;
+              setZeroDatum: (
+                ref: { section_id: number; station_index: number },
+                gps: { latitude: number; longitude: number; depth_reference: number },
+              ) => Promise<unknown>;
+              refreshProjectState: () => Promise<void>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+      const ps = e2e!.projectStore.getState();
+      const secId = ps.project!.sections[0].id;
+      await ps.setZeroDatum(
+        { section_id: secId, station_index: 0 },
+        { latitude: 24.55, longitude: -81.78, depth_reference: 0 },
+      );
+      await ps.refreshProjectState();
+    });
+
+    await enterMode(page, 'plan');
+    // The black star renders on the zero-datum station.
+    await expect
+      .poll(() => page.locator('[data-testid="gas-zero-datum-marker"]').count(), { timeout: 3000 })
+      .toBeGreaterThan(0);
+    // Default origin is the entrance; clicking the star picks the datum explicitly, so
+    // the readout leaves "Entrance" for the station id.
+    const readout = page.locator('[data-testid="gas-origin-readout"]');
+    await expect(readout).toHaveText('Entrance');
+    await page.locator('[data-testid="gas-zero-datum-marker"]').first().click();
+    await expect(readout).not.toHaveText('Entrance');
+  });
+
   test('gas feature-state survives a feature rebuild, and a turn marker renders', async ({
     page,
   }) => {

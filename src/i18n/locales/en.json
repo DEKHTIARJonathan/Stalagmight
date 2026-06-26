@@ -2065,7 +2065,9 @@
       "label": "Origin",
       "entrance": "Entrance",
       "reset": "Reset",
-      "hint": "Click a station on the map to set the origin."
+      "hint": "Click a station to set the origin, or the ★ to start from a zero datum.",
+      "datumAria": "Start the plan from this zero datum",
+      "datumTooltip": "Zero datum — click to start the plan here"
     },
     "diver": {
       "rmvLabel": "RMV (surface air consumption)",

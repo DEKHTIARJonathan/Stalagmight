@@ -192,6 +192,7 @@ function MapCanvas() {
   const originMarkerRef = useRef<maplibregl.Marker | null>(null);
   const gasOriginMarkerRef = useRef<maplibregl.Marker | null>(null);
   const gasTurnMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const gasZeroDatumMarkersRef = useRef<maplibregl.Marker[]>([]);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
@@ -444,6 +445,7 @@ function MapCanvas() {
     gasConfig: gasPlanConfig,
     reachField: gasReachField,
     setReachField: setGasReachField,
+    setOrigin: setGasOrigin,
   } = useGasPlanStore(
     useShallow((s) => ({
       origin: s.origin,
@@ -452,6 +454,7 @@ function MapCanvas() {
       gasConfig: s.gasConfig,
       reachField: s.reachField,
       setReachField: s.setReachField,
+      setOrigin: s.setOrigin,
     }))
   );
 
@@ -2055,6 +2058,45 @@ function MapCanvas() {
       gasTurnMarkersRef.current = [];
     };
   }, [showGasPlan, gasReachField, activeStations, gpsOrigin, mapLoaded]);
+
+  // Zero-datum star markers (#38): a black star (white outline) on each zero-datum
+  // station while planning. The gas solve's "Entrance" default already starts from the
+  // zero datum(s); this marks them so the user can SEE where they are and click one to
+  // pick it explicitly as the origin. Plan mode only; bounded by the datum count (≈1).
+  useEffect(() => {
+    for (const m of gasZeroDatumMarkersRef.current) m.remove();
+    gasZeroDatumMarkersRef.current = [];
+    if (!map.current || !mapLoaded || !showGasPlan) return undefined;
+    for (const st of activeStations) {
+      if (!st.is_zero_datum) continue;
+      const lngLat = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin) as [
+        number,
+        number,
+      ];
+      const el = document.createElement('div');
+      el.setAttribute('data-testid', 'gas-zero-datum-marker');
+      el.setAttribute('role', 'button');
+      el.setAttribute('aria-label', t('gasPanel.origin.datumAria'));
+      el.title = t('gasPanel.origin.datumTooltip');
+      el.style.cssText = 'cursor:pointer;line-height:0;filter:drop-shadow(0 0 1px rgba(0,0,0,0.6));';
+      el.innerHTML =
+        '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">' +
+        '<path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" ' +
+        'fill="#000000" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+      const ref = st.station_ref;
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setGasOrigin(ref);
+      });
+      gasZeroDatumMarkersRef.current.push(
+        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map.current)
+      );
+    }
+    return () => {
+      for (const m of gasZeroDatumMarkersRef.current) m.remove();
+      gasZeroDatumMarkersRef.current = [];
+    };
+  }, [showGasPlan, activeStations, gpsOrigin, mapLoaded, setGasOrigin, t]);
 
   // Lazily fetch closure-adjusted geometry when the adjusted view is active and
   // we don't have it yet (first switch, or after an edit invalidated it). The
