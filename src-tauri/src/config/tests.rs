@@ -2424,12 +2424,13 @@ fn test_panels_config_deserializes_legacy_table_without_reveal_fields() {
 fn token_fallback_unknown_normalizes_to_session_only() {
     // An unrecognized TOML value parses to the #[serde(other)] sentinel, then
     // normalize() coerces it back to the safe default (mirrors ThemeMode).
-    let toml = r#"
-        [speleodb]
-        token_fallback = "definitely_not_a_real_value"
-    "#;
-    let mut config: Config = toml::from_str(toml).expect("unknown value must not block loading");
-    assert_eq!(config.speleodb.token_fallback, TokenFallback::Unknown);
+    let sdb: SpeleoDbConfig = toml::from_str("token_fallback = \"definitely_not_a_real_value\"")
+        .expect("unknown value must not block loading");
+    assert_eq!(sdb.token_fallback, TokenFallback::Unknown);
+
+    // The coercion is reachable through the top-level Config::normalize too.
+    let mut config = Config::default();
+    config.speleodb.token_fallback = TokenFallback::Unknown;
     config.normalize();
     assert_eq!(config.speleodb.token_fallback, TokenFallback::SessionOnly);
 }
@@ -2440,14 +2441,17 @@ fn speleodb_config_defaults_are_safe() {
     let config = SpeleoDbConfig::default();
     assert_eq!(config.token_fallback, TokenFallback::SessionOnly);
     assert!(!config.insecure_http);
-    // An empty [speleodb] table loads the same safe defaults.
-    let config: Config = toml::from_str("[speleodb]\n").expect("empty table loads");
-    assert_eq!(config.speleodb.token_fallback, TokenFallback::SessionOnly);
-    assert!(!config.speleodb.insecure_http);
-    // A config with NO [speleodb] table at all also defaults safely.
-    let config: Config = toml::from_str("").expect("absent table loads");
-    assert_eq!(config.speleodb.token_fallback, TokenFallback::SessionOnly);
-    assert!(!config.speleodb.insecure_http);
+    // An empty [speleodb] table (no fields) loads the same safe defaults, since
+    // both new fields are #[serde(default)] — existing configs load unchanged.
+    let sdb: SpeleoDbConfig = toml::from_str("").expect("empty table loads");
+    assert_eq!(sdb.token_fallback, TokenFallback::SessionOnly);
+    assert!(!sdb.insecure_http);
+    // Only the legacy endpoint/email present (pre-Track-C config) still defaults
+    // the new fields safely.
+    let sdb: SpeleoDbConfig =
+        toml::from_str("endpoint = \"https://x\"\nemail = \"u@x\"").expect("legacy table loads");
+    assert_eq!(sdb.token_fallback, TokenFallback::SessionOnly);
+    assert!(!sdb.insecure_http);
 }
 
 #[test]

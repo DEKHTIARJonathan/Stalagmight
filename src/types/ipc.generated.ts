@@ -163,6 +163,7 @@ export * from './ipc/ShortcutFeedback';
 export * from './ipc/ThemeMode';
 export * from './ipc/ColorTheme';
 export * from './ipc/SpeleoDbConfig';
+export * from './ipc/TokenFallback';
 export * from './ipc/Permission';
 export * from './ipc/SpeleoProjectSummary';
 export * from './ipc/SpeleoLoginResult';

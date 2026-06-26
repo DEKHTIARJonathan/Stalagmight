@@ -283,8 +283,10 @@ export const defaultConfig: Config = {
   speleodb: {
     endpoint: null,
     email: null,
-    // [Track A] #187/D-B10: secure default — only an explicit opt-in (#205
-    // Settings, Track C) relaxes the public-http scheme block.
+    // [Track C] (#188): opt-in plaintext fallback OFF + insecure-http override
+    // OFF by default (secure defaults; #187/D-B10 keeps the public-http scheme
+    // block on unless explicitly relaxed). #205 Settings binds the UI to these.
+    token_fallback: 'session_only',
     insecure_http: false,
   },
 };
