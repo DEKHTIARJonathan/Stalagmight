@@ -5,7 +5,7 @@
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
 
 Stalagmight is an intuitive, modern, open underwater cave survey application.
-It takes other surveys, hand surveys, or `.dmp` files from an MNemo device
+It takes other surveys, hand surveys, or `.dmp` files from an mNemo device
 and guides the user into creating a clean, editable, georeferenced
 map you can reason about and plan future exploration with. It
 imports the formats divers already use (Ariane, Compass), adjusts
@@ -14,8 +14,9 @@ the editing and planning workflows that come after the dive.
 
 Stalagmight is an open source project because we believe in transparency,
 accessibility, and freedom for users to manipulate their tools. Stalagmight
-does not store any user data, and the only tracking is an opt-in telemetry, which
-is meant to help developers fix issues with Stalagmight.
+does not store your data on our servers — everything stays local to your
+machine — and the only tracking is opt-in telemetry, meant to help developers
+fix issues.
 
 Stalagmight use is meant for certified cave survey divers who
 understand that cave surveying is risky, all software has bugs, and
@@ -33,7 +34,7 @@ replacement for, cave survey training.
 
 - **Import** — Ariane `.dmp` (raw survey, versions 2–5) and `.tml`, and Compass
   `.mak`/`.dat` projects.
-- **Export** — `.svg`, `.jpg`, `.tml` 
+- **Export** — map images (`.svg`, `.png`, `.pdf`) plus `.tml`, `.csv`, `.json`
 - **Map** — survey lines and stations rendered with [MapLibre](https://maplibre.org/)
   over satellite imagery, with snapping, measurement, a distance-gradient overlay,
   and hover/selection highlighting.

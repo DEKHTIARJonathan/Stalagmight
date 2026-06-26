@@ -98,6 +98,7 @@ Run the same checks CI runs. All of these must pass:
 
 ```bash
 pnpm tsc --noEmit                                                  # TypeScript
+CI=true pnpm test                                                 # vitest unit + component (CI=true runs once, not watch)
 pnpm test:ui                                                       # Playwright (needs a display)
 pnpm lint:rust-file-size                                           # file-size ratchet (a CI gate)
 cargo fmt --manifest-path src-tauri/Cargo.toml --check             # Rust formatting
