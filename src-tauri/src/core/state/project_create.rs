@@ -154,6 +154,10 @@ impl AppState {
         // Clear display settings cache for new project
         self.clear_display_settings_cache();
         self.invalidate_adjusted_cache();
+        // [Track B] (#191) A freshly-created local project is always editable;
+        // reset the gate so a previously-open read-only remote project's disabled
+        // flag can't leak in.
+        self.set_edit_enabled(true);
 
         CommandResult::success()
     }
@@ -176,6 +180,12 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        // Read-only edit gate (#191, D-B5): a settings change mutates the project,
+        // so it is gated on a read-only remote project (returns the EDIT_DISABLED
+        // coded failure).
+        if let Err(f) = self.guard_mutation("Update project settings") {
+            return f;
+        }
         let before_snapshot = self.capture_project_snapshot().ok();
         {
             let mut guard = match self.project.lock() {
@@ -205,6 +215,9 @@ impl AppState {
                         before_json,
                         after_json,
                     );
+                    // Dirty-bit flip (#191, D-B16): settings mutated a remote
+                    // project. Set-only; no-op for local-only.
+                    self.mark_remote_dirty();
                 }
             }
         }
@@ -419,6 +432,10 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+
+        // [Track B] (#191) A freshly-created local project is always editable;
+        // reset the gate so a prior read-only remote project can't leak in.
+        self.set_edit_enabled(true);
 
         // Track whether the initial save is still pending: a deferred new project
         // has no file on disk yet, so its first import must durably persist it.

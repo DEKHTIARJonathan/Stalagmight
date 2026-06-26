@@ -87,6 +87,12 @@ pub struct AppState {
     /// SpeleoDB per-session connection state (endpoint, email, token store).
     /// Read-only spike (#183); the token never crosses into the webview.
     pub(super) speleodb: Mutex<super::speleodb::SpeleoDbSession>,
+    /// Whether the open project may be edited. TRANSIENT, never persisted,
+    /// DEFAULT-TRUE; `false` ONLY for a remote SpeleoDB project opened without a
+    /// write lock (#191). Reset to `true` on every open/close so a previously
+    /// read-only project can't leave the flag stuck. The mutation chokepoint
+    /// (`guard_mutation`) reads it.
+    pub(super) edit_enabled: AtomicBool,
     /// In-memory display settings cache (used when no DB is open, e.g., new unsaved project)
     pub(super) display_settings_cache: Mutex<HashMap<String, String>>,
     /// Serialization lock for command execution.
@@ -159,6 +165,9 @@ impl AppState {
             config: Mutex::new(config),
             recent_projects: Mutex::new(recent),
             speleodb: Mutex::new(super::speleodb::SpeleoDbSession::default()),
+            // Default-true: editing is enabled unless a remote project is opened
+            // read-only (#191). Reset on open/close.
+            edit_enabled: AtomicBool::new(true),
             display_settings_cache: Mutex::new(HashMap::new()),
             command_lock: Mutex::new(()),
             tile_cache: Arc::new(Mutex::new(tile_cache)),
@@ -237,6 +246,73 @@ impl AppState {
                 if Arc::ptr_eq(current, expected_token) {
                     *guard = None;
                 }
+            }
+        }
+    }
+
+    // === Read-only edit gate + dirty bit (#191) ===
+
+    /// Whether the open project may currently be edited (transient; #191).
+    pub(super) fn edit_enabled(&self) -> bool {
+        self.edit_enabled.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Set the transient edit-enabled flag. `false` only for a remote SpeleoDB
+    /// project opened without a write lock; reset to `true` on every open/close.
+    pub(crate) fn set_edit_enabled(&self, v: bool) {
+        self.edit_enabled
+            .store(v, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// THE mutation chokepoint (#191, D-B6). Every state-mutating entry
+    /// (`execute`, `undo`, `redo`, `undo_to`, `redo_to`, every `execute_*`
+    /// bypass, the collab toggles) calls this FIRST, after taking `command_lock`
+    /// and before mutating. `Err` aborts the mutation when the open project is a
+    /// remote SpeleoDB project opened read-only. No-op (`Ok`) for local-only
+    /// (default-true `edit_enabled`) projects and non-mutating reads.
+    pub(super) fn guard_mutation(&self, what: &str) -> Result<(), CommandResult> {
+        if self.edit_enabled() {
+            return Ok(());
+        }
+        Err(CommandResult::failure(format!(
+            "{}: {what} is disabled: this SpeleoDB project is open read-only. \
+             Acquire the lock to edit.",
+            crate::core::command::EDIT_DISABLED_CODE
+        )))
+    }
+
+    /// Flip `has_unpushed_edits` `false → true` on a successful edit of a remote
+    /// project (#191, D-B16). Idempotent (no-op once true). No-op for local-only
+    /// (`load_speleo_link → None`). SET-ONLY in #191: local save/autosave NEVER
+    /// clears it; only a successful server push (later: Sync/Release) does.
+    pub(super) fn mark_remote_dirty(&self) {
+        let Ok(db_guard) = self.database.lock() else {
+            return;
+        };
+        let Some(db) = db_guard.as_ref() else {
+            return; // no open database (e.g. unsaved project) — nothing to stamp
+        };
+        match db.load_speleo_link() {
+            Ok(Some(mut link)) => {
+                if link.has_unpushed_edits {
+                    return; // idempotent: already dirty
+                }
+                link.has_unpushed_edits = true;
+                if let Err(e) = db.save_speleo_link(Some(&link)) {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "flip SpeleoDB dirty bit after a remote edit",
+                        "mark_remote_dirty: failed to persist has_unpushed_edits"
+                    );
+                }
+            }
+            Ok(None) => {} // local-only project: no link, no-op
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "flip SpeleoDB dirty bit after a remote edit",
+                    "mark_remote_dirty: failed to load speleo_link"
+                );
             }
         }
     }

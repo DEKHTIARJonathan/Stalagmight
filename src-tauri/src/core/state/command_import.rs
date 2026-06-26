@@ -85,6 +85,11 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        // Read-only edit gate (#191, D-B6): a TML create+merge mutates the
+        // project, so it is gated on a read-only remote project.
+        if let Err(f) = self.guard_mutation("Import section and merge") {
+            return f;
+        }
         tracing::info!(
             purpose = "keep undo atomic for import merge",
             "Executing create_section_and_merge as single undo unit"
@@ -160,6 +165,9 @@ impl AppState {
         };
 
         self.push_snapshot_undo(batch_cmd, snapshot, after_snapshot);
+        // Dirty-bit flip (#191, D-B16): a create+merge import mutated a remote
+        // project. Set-only; no-op for local-only.
+        self.mark_remote_dirty();
 
         // Combine warnings from both operations
         let mut all_warnings = create_result.warnings;
@@ -193,6 +201,12 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        // Read-only edit gate (#191, D-B6): a TML import mutates the project, so
+        // it is gated on a read-only remote project. (Empty-import early return
+        // below is a no-op, but gating first keeps the chokepoint uniform.)
+        if let Err(f) = self.guard_mutation("Import sections") {
+            return f;
+        }
 
         if sections.is_empty() {
             return CommandResult::success();
@@ -890,6 +904,9 @@ impl AppState {
             before_snapshot,
             after_snapshot,
         );
+        // Dirty-bit flip (#191, D-B16): a sections import mutated a remote
+        // project. Set-only; no-op for local-only.
+        self.mark_remote_dirty();
 
         let result = CommandResult::success().with_section_ids(all_section_ids);
         if all_warnings.is_empty() {

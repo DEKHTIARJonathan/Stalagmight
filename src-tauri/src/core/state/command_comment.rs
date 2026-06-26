@@ -61,6 +61,17 @@ impl AppState {
         swap: bool,
         cmd: Command,
     ) -> CommandResult {
+        // [Track B] (#191, D-B6) This is reached ONLY via execute()'s
+        // `Command::MoveComment` arm (early `return self.execute_move_comment(..)`),
+        // already under execute()'s command_lock AND past its read-only edit gate
+        // (MoveComment is not a lifecycle pass-through). It takes no command_lock
+        // of its own, so it inherits the guard rather than calling it directly. If
+        // a future DIRECT caller is added, it MUST route through guard_mutation —
+        // the chokepoint enumeration test fails if MoveComment leaks past execute.
+        debug_assert!(
+            self.edit_enabled(),
+            "execute_move_comment reached with edit disabled — it must run only via execute()'s gate"
+        );
         // Step 1: Take BEFORE snapshot
         let before_snapshot = match self.capture_project_snapshot() {
             Ok(s) => s,
@@ -112,6 +123,9 @@ impl AppState {
 
         // Step 4: Push single undo entry
         self.push_snapshot_undo(cmd, before_snapshot, after_snapshot);
+        // Dirty-bit flip (#191, D-B16): moving a comment mutated a remote project.
+        // Set-only; no-op for local-only.
+        self.mark_remote_dirty();
 
         tracing::info!(
             swap = swap,

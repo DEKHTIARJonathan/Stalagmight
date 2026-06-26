@@ -192,6 +192,15 @@ pub enum Command {
     UpdateProjectSettings,
 }
 
+/// Coded-failure prefix for a mutation rejected because the open project is a
+/// remote SpeleoDB project opened without a write lock (#191, D-B7). Mirrors the
+/// `loading::PERMISSION_DENIED_CODE` string-prefix idiom: `CommandResult` has no
+/// `code` field, so the code is prefixed onto the `error` string and the FE
+/// (#204) pattern-matches `err.starts_with(EDIT_DISABLED_CODE)` to suppress the
+/// toast. Deliberately NO `edit_enabled` query command here (that IPC is
+/// #204/#209).
+pub(crate) const EDIT_DISABLED_CODE: &str = "EDIT_DISABLED";
+
 /// Result of command execution
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandResult {

@@ -15,6 +15,13 @@ impl AppState {
     /// Enable or disable collaboration mode on the open project. The companion
     /// `.tml` is always `<stalx-stem>.tml`. Persisted on the next save.
     pub fn set_collab_enabled(&self, enabled: bool) -> CommandResult {
+        // Read-only edit gate (#191, D-B6): a collab toggle mutates the open
+        // project (project.collab + touch()), so it is treated as a gated
+        // mutation. This method has NO command_lock; gating reads the transient
+        // edit_enabled state, not the project, so it is sufficient.
+        if let Err(f) = self.guard_mutation("Toggle collaboration") {
+            return f;
+        }
         let mut guard = match self.project.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
@@ -36,6 +43,10 @@ impl AppState {
             c.enabled = false;
         }
         project.touch();
+        drop(guard);
+        // Dirty-bit flip (#191, D-B16): a collab toggle mutated a remote project.
+        // Set-only; no-op for local-only.
+        self.mark_remote_dirty();
         CommandResult::success()
     }
 
@@ -70,19 +81,49 @@ impl AppState {
             c.enabled = false;
         }
 
+        // Read-only edit gate (#191, D-B6): this method mutates a `.stalx` BY PATH
+        // — usually NOT the open AppState project — so the transient edit_enabled
+        // flag (which describes the *open* project) can only speak for it when the
+        // path IS the currently open project. So compute the open-project identity
+        // FIRST, BEFORE the disk write, and gate only on a match. The identity
+        // check is deliberately reordered ABOVE `db.save_collab_state` (the disk
+        // write) so guard_mutation can abort before ANY mutation. A *closed*
+        // remote file is NOT gated here: cross-file remote-gating of a closed file
+        // is deferred to the issue that owns closed-file remote state.
+        let is_open_project = {
+            let guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            guard
+                .as_ref()
+                .is_some_and(|open| open.file_path.as_deref() == Some(path.as_path()))
+        };
+        if is_open_project {
+            if let Err(f) = self.guard_mutation("Toggle collaboration") {
+                return f;
+            }
+        }
+
         if let Err(e) = db.save_collab_state(project.collab.as_ref()) {
             return CommandResult::failure(format!("Failed to save collaboration state: {e}"));
         }
 
         // Keep the open project's in-memory state consistent if it's the same file.
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
-        };
-        if let Some(open) = guard.as_mut() {
-            if open.file_path.as_deref() == Some(path.as_path()) {
-                open.collab = project.collab.clone();
+        if is_open_project {
+            let mut guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            if let Some(open) = guard.as_mut() {
+                if open.file_path.as_deref() == Some(path.as_path()) {
+                    open.collab = project.collab.clone();
+                }
             }
+            // Dirty-bit flip (#191, D-B16): only when the gated open project was
+            // mutated (a closed file's link is not the open project's link).
+            // Set-only; no-op for local-only.
+            self.mark_remote_dirty();
         }
 
         CommandResult::success()
@@ -211,6 +252,12 @@ impl AppState {
             Err(r) => return r,
         };
         self.push_snapshot_undo(crate::core::Command::ApplyCollabChanges, before, after);
+        // Dirty-bit flip (#191, D-B16): applying a collaborator's changes mutated
+        // a remote project. apply_collab_changes is reached via execute(
+        // ApplyCollabChanges) — already guarded by execute()'s chokepoint — so the
+        // gate is inherited; here we only flip the dirty bit. Set-only; no-op for
+        // local-only.
+        self.mark_remote_dirty();
 
         let mut result = CommandResult::success();
         result.warnings = skipped
