@@ -600,6 +600,34 @@ mod tests {
         }
     }
 
+    /// A `SecretStore` that shares one `InMemoryStore` behind an `Arc`, so a test
+    /// can keep a handle to seed/inspect the store *after* it has been boxed into
+    /// a `TokenStore`. `InMemoryStore` is interior-mutable (`Mutex<HashMap>`), so
+    /// every op delegates straight through the shared backend.
+    struct SharedStore(std::sync::Arc<InMemoryStore>);
+
+    impl SecretStore for SharedStore {
+        fn kind(&self) -> &'static str {
+            self.0.kind()
+        }
+        fn store(
+            &self,
+            account_key: &str,
+            token: &str,
+        ) -> Result<(), crate::speleodb::auth::SecretStoreError> {
+            self.0.store(account_key, token)
+        }
+        fn load(
+            &self,
+            account_key: &str,
+        ) -> Result<Option<String>, crate::speleodb::auth::SecretStoreError> {
+            self.0.load(account_key)
+        }
+        fn delete(&self, account_key: &str) -> Result<(), crate::speleodb::auth::SecretStoreError> {
+            self.0.delete(account_key)
+        }
+    }
+
     #[test]
     fn rehydration_seeds_session_from_config_and_keychain() {
         // A keychain holds a prior-run token; rehydrate seeds endpoint+email from
@@ -648,10 +676,46 @@ mod tests {
     #[test]
     fn rehydration_is_idempotent_and_skips_live_session() {
         // Once attempted, a second rehydrate (even with a now-seeded keychain) is
-        // a no-op — it won't clobber or re-probe.
-        let mut session = fresh_session_with_stores(Box::new(InMemoryStore::new()), None);
+        // a no-op — it won't clobber or re-probe. The `Arc<InMemoryStore>` handle
+        // (via the `SharedStore` delegating wrapper below) lets the test seed the
+        // keychain *after* the latch is set, proving the latch — not an empty
+        // store — is what keeps the second rehydrate logged-out.
+        let endpoint = "https://x/";
+        let email = "u@x";
+        let keychain = std::sync::Arc::new(InMemoryStore::new());
+
+        // First rehydrate with no account: latches `rehydrate_attempted`, probes
+        // nothing, stays logged-out.
+        let mut session = fresh_session_with_stores(
+            Box::new(SharedStore(std::sync::Arc::clone(&keychain))),
+            None,
+        );
         session.rehydrate(None, None); // marks attempted, finds nothing
         assert!(session.rehydrate_attempted);
+        assert!(!session.status().logged_in);
+
+        // Now seed the SAME keychain store (shared via the Arc) with a usable
+        // token for this account. A naive re-probe would find it and log in.
+        keychain
+            .store(
+                &crate::speleodb::auth::account_key(endpoint, email),
+                "kc-tok",
+            )
+            .expect("seed keychain after the latch is set");
+
+        // Second rehydrate, this time WITH the account: the latch short-circuits
+        // before any seed/probe, so the session stays logged-out and never adopts
+        // endpoint/email despite the now-present token. This is the idempotency
+        // invariant: `rehydrate_attempted` gates the keychain probe to once.
+        session.rehydrate(Some(endpoint.to_owned()), Some(email.to_owned()));
+        assert!(
+            !session.status().logged_in,
+            "the latch must block the re-probe even with a now-seeded keychain"
+        );
+        assert_eq!(
+            session.endpoint, None,
+            "a latched rehydrate must not adopt the account or probe the token"
+        );
 
         // A live session (endpoint set) is also skipped.
         let mut live = authed_session();
