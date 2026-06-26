@@ -10,22 +10,29 @@ use std::path::PathBuf;
 use super::AppState;
 use crate::speleodb::auth::TokenStore;
 use crate::speleodb::client;
-// [Track A] #186/D-B2: typed Endpoint + SpeleoDbError→SpeleoErrorDto conversion.
-use crate::speleodb::contract::{dto_for_error, Endpoint};
+// [Track A] #186/D-B2: typed Endpoint + map_status + SpeleoDbError→SpeleoErrorDto
+// conversion. [Integration] map_status/SpeleoDbAction also drive Track C's C5
+// 401 auto-drop (auth_error_drops_token).
+use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
 use crate::speleodb::models::SpeleoProjectSummary;
+use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
     SpeleoDbError, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult, SpeleoSessionStatus,
 };
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
-/// inside [`TokenStore`] (keychain or in-memory fallback) and is never exposed
-/// to the webview.
+/// inside [`TokenStore`] (keychain / plaintext / in-memory tiers) and is never
+/// exposed to the webview.
 #[derive(Debug, Default)]
 pub(crate) struct SpeleoDbSession {
     endpoint: Option<String>,
     email: Option<String>,
     token_store: TokenStore,
+    /// [Track C] (#188, C4): set once per process after the lazy silent startup
+    /// rehydration runs (whether it found a token or not), so an empty/failed
+    /// `load()` doesn't re-hit the keychain on every authed call.
+    rehydrate_attempted: bool,
 }
 
 /// Pure endpoint-precedence resolver (extracted so it is unit-testable without
@@ -77,12 +84,35 @@ fn classify_dump_entry(names: &[String]) -> Result<String, SpeleoDbError> {
     }
 }
 
+/// [Track C] (#188, C5): the pure 401 auto-drop predicate. A genuine 401 on an
+/// established-session call drops the token; **everything else is kept** — 403 is
+/// never a drop (D-B4, robust to a DRF 401→403 downgrade), and 2xx/5xx/transport/
+/// local errors pass through. Extracted so the drop decision is unit-testable
+/// without a full `AppState`.
+///
+/// [Integration] The drop decision now consumes Track A's #186 contract: the
+/// token is dropped **iff** `map_status(endpoint, status) == SpeleoDbAction::ReLogin`
+/// (the single authoritative status→action mapping). 401 on an authenticated
+/// endpoint maps to `ReLogin`; 403/2xx/5xx/unmapped never do, so this is
+/// behaviorally identical to the prior bare-401 guard while removing the
+/// duplicate status logic.
+fn auth_error_drops_token<T>(endpoint: Endpoint, result: &Result<T, SpeleoDbError>) -> bool {
+    matches!(
+        result,
+        Err(SpeleoDbError::Status { status, .. })
+            if map_status(endpoint, *status) == SpeleoDbAction::ReLogin
+    )
+}
+
 impl SpeleoDbSession {
     /// Resolve the active `(endpoint, token)` for this session, or
     /// [`SpeleoDbError::NotAuthenticated`] if endpoint, email, or token is
     /// missing. Extracted from [`AppState::speleodb_active_token`] so the branch
     /// logic is testable without a full `AppState`.
-    fn active_token(&self) -> Result<(String, String), SpeleoDbError> {
+    ///
+    /// `&mut self` because [`TokenStore::load`] caches its result + updates the
+    /// active tier ([Track C] #188: keychain-first read populates the cache).
+    fn active_token(&mut self) -> Result<(String, String), SpeleoDbError> {
         let endpoint = self
             .endpoint
             .clone()
@@ -97,11 +127,13 @@ impl SpeleoDbSession {
 
     /// Current session status for the dialog. `logged_in` means a usable token is
     /// held *locally* — it is not re-validated against the server here (a token
-    /// revoked server-side is only caught on the next real call; 401 auto-drop is
-    /// #188). When not logged in, neither the email nor the keychain flag is
-    /// surfaced, so the status can never claim a keychain-backed token while
-    /// reporting logged-out.
-    fn status(&self) -> SpeleoSessionStatus {
+    /// revoked server-side is caught on the next real call by the 401 auto-drop
+    /// handler, [Track C] #188 C5). When not logged in, neither the email nor the
+    /// keychain flag is surfaced, so the status can never claim a keychain-backed
+    /// token while reporting logged-out.
+    ///
+    /// `&mut self` because resolving the token may rehydrate + cache it.
+    fn status(&mut self) -> SpeleoSessionStatus {
         let logged_in = self.active_token().is_ok();
         SpeleoSessionStatus {
             user_email: logged_in.then(|| self.email.clone()).flatten(),
@@ -110,14 +142,48 @@ impl SpeleoDbSession {
         }
     }
 
-    /// Forget the local token (keychain + in-memory) and clear the session. No
-    /// server-side call — logout is purely local (the DRF token is not revoked).
+    /// Forget the local token (every tier: keychain + plaintext + in-memory) and
+    /// clear the session. No server-side call — logout is purely local (the DRF
+    /// token is not revoked). [Track C] (#188): also the 401-drop sink (C5).
     fn forget(&mut self) {
         if let (Some(endpoint), Some(email)) = (self.endpoint.clone(), self.email.clone()) {
             self.token_store.clear(&endpoint, &email);
         }
         self.endpoint = None;
         self.email = None;
+    }
+
+    /// [Track C] (#188, C4): lazy **silent** startup rehydration, run once on the
+    /// first authed/session call. Seeds `endpoint`/`email` from config (resolved
+    /// through the same precedence as login so `DEV_SPELEODB_URL` still wins) and
+    /// wires `TokenStore::load` for the **first time** so a prior-run keychain (or
+    /// plaintext) token survives an app restart. **No network, no prompt.**
+    ///
+    /// Idempotent: marks `rehydrate_attempted` so a failed/empty load doesn't
+    /// re-hit the keychain every call, and short-circuits if a session is already
+    /// established this run.
+    fn rehydrate(&mut self, resolved_endpoint: Option<String>, config_email: Option<String>) {
+        if self.rehydrate_attempted || self.endpoint.is_some() {
+            return;
+        }
+        self.rehydrate_attempted = true;
+
+        let (Some(endpoint), Some(email)) = (resolved_endpoint, config_email) else {
+            // No persisted account → stay logged-out (no keychain probe).
+            return;
+        };
+        let endpoint = endpoint.trim().to_owned();
+        let email = email.trim().to_owned();
+        if endpoint.is_empty() || email.is_empty() {
+            return;
+        }
+
+        self.endpoint = Some(endpoint.clone());
+        self.email = Some(email.clone());
+        // First wiring of load(): keychain-first read (then plaintext). On a hit
+        // the token is cached + the active tier set; on a miss the session stays
+        // seeded-but-unauthenticated and the next call surfaces NotAuthenticated.
+        let _ = self.token_store.load(&endpoint, &email);
     }
 }
 
@@ -157,9 +223,39 @@ impl AppState {
             .map_err(|_| SpeleoDbError::Io("SpeleoDB session lock poisoned".to_owned()))
     }
 
+    /// [Track C] (#188, C4): lazy silent startup rehydration. Resolve the config
+    /// endpoint (same precedence as login, sans a dialog override) + email
+    /// **outside** the session lock to avoid a config↔session lock-order hazard,
+    /// then let [`SpeleoDbSession::rehydrate`] seed + wire `load()` once. Called
+    /// before locking in the authed/session entry points. No network, no prompt,
+    /// no config write.
+    fn speleodb_ensure_rehydrated(&self) {
+        // Cheap idempotency check first: if rehydration already ran (or a session
+        // is live), skip the config read entirely.
+        if let Ok(session) = self.speleodb_session_lock() {
+            if session.rehydrate_attempted || session.endpoint.is_some() {
+                return;
+            }
+        } else {
+            return;
+        }
+
+        let resolved_endpoint = self.speleodb_resolve_endpoint(None);
+        let config_email = self
+            .config
+            .lock()
+            .ok()
+            .and_then(|c| c.speleodb.email.clone());
+
+        if let Ok(mut session) = self.speleodb_session_lock() {
+            session.rehydrate(resolved_endpoint, config_email);
+        }
+    }
+
     /// Resolve the active `(endpoint, token)` for an authenticated call, or
     /// [`SpeleoDbError::NotAuthenticated`] if there is no usable token.
     fn speleodb_active_token(&self) -> Result<(String, String), SpeleoDbError> {
+        self.speleodb_ensure_rehydrated();
         self.speleodb_session_lock()?.active_token()
     }
 
@@ -167,8 +263,33 @@ impl AppState {
     /// restore the project list on reopen instead of forcing a re-login. The
     /// token itself never leaves the backend.
     pub(crate) fn speleodb_session_status(&self) -> Result<SpeleoSessionStatus, SpeleoErrorDto> {
+        // [Track C] (#188): rehydrate first so a restart with a stored keychain
+        // token reports logged_in:true without a re-login (the headline fix).
+        self.speleodb_ensure_rehydrated();
         // No network call — only the (local) session-lock error can surface here.
         Ok(self.speleodb_session_lock().map_err(local_dto)?.status())
+    }
+
+    /// [Track C] (#188, C5): centralized session-level 401 auto-drop handler.
+    /// Every **established-session** authed call (list/open) routes its `Result`
+    /// through this; a **genuine 401** fully clears the token (keychain +
+    /// plaintext + memory) via `forget()`. A 403 is **never** a drop (D-B4:
+    /// per-endpoint read-only / fence semantics, robust to a DRF 401→403
+    /// downgrade); 2xx/5xx pass through untouched.
+    ///
+    /// The login path is deliberately NOT routed here: login's 401 is a
+    /// pasted-dead-token, not the drop of an *established* session.
+    fn speleodb_handle_auth<T>(
+        &self,
+        endpoint: Endpoint,
+        result: Result<T, SpeleoDbError>,
+    ) -> Result<T, SpeleoDbError> {
+        if auth_error_drops_token(endpoint, &result) {
+            if let Ok(mut session) = self.speleodb_session_lock() {
+                session.forget(); // full clear() across all tiers
+            }
+        }
+        result
     }
 
     /// Persist the user-supplied endpoint (when given) + email — never the token —
@@ -239,6 +360,18 @@ impl AppState {
                 (token, email)
             };
 
+        // [Track C] (#188, C6) Gate 1 of the two-gate plaintext opt-in: the
+        // persisted `token_fallback == Plaintext` preference (read under the
+        // config lock). Gate 2 (the keychain failed this session) is intrinsic to
+        // TokenStore::store, which only reaches plaintext in the keychain-Err
+        // branch. The warned confirmation that flips this preference is #205.
+        let allow_plaintext = self
+            .config
+            .lock()
+            .ok()
+            .map(|c| c.speleodb.token_fallback == crate::config::TokenFallback::Plaintext)
+            .unwrap_or(false);
+
         let keychain_backed = {
             let mut session = self.speleodb_session_lock().map_err(local_dto)?;
             // If a *different* account is already active, forget it first so its
@@ -250,10 +383,18 @@ impl AppState {
             if switching {
                 session.forget();
             }
-            let backed = session.token_store.store(&endpoint, &email, &token);
+            // [Track C] (#188): store() now returns the resolved TokenTier; only
+            // Keychain counts as "backed" for the UI's restart warning (Plaintext
+            // and Memory both report false — #205 owns surfacing the distinction).
+            let tier = session
+                .token_store
+                .store(&endpoint, &email, &token, allow_plaintext);
             session.endpoint = Some(endpoint.clone());
             session.email = Some(email.clone());
-            backed
+            // A fresh login established a session this run; don't let a later lazy
+            // rehydration clobber it.
+            session.rehydrate_attempted = true;
+            tier == crate::speleodb::auth::TokenTier::Keychain
         };
 
         self.speleodb_persist_account(persist_endpoint.as_deref(), &email);
@@ -270,7 +411,14 @@ impl AppState {
     ) -> Result<Vec<SpeleoProjectSummary>, SpeleoErrorDto> {
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
-        let projects = client::list_projects(&endpoint, &token, insecure_http)
+        // [Track C] (#188, C5): route through the 401 auto-drop handler — a
+        // genuine 401 on this established-session call fully clears the token —
+        // then map the surfaced SpeleoDbError to the typed DTO ([Track A] D-B2).
+        let projects = self
+            .speleodb_handle_auth(
+                Endpoint::ListProjects,
+                client::list_projects(&endpoint, &token, insecure_http),
+            )
             .map_err(|e| dto_for_error(Endpoint::ListProjects, &e))?;
         Ok(projects
             .into_iter()
@@ -306,7 +454,14 @@ impl AppState {
         // return the authoritative Project; the pull stamp (project_name +
         // latest_commit_sha → speleo_link) and the cache-the-verdict fold land
         // with #189/#191 — this call site is where they hook in.
-        let zip = client::download_dump(&endpoint, &token, insecure_http, &project_id)
+        //
+        // [Track C] (#188, C5): route through the 401 auto-drop handler before
+        // mapping the surfaced SpeleoDbError to the typed DTO ([Track A] D-B2).
+        let zip = self
+            .speleodb_handle_auth(
+                Endpoint::DownloadDump,
+                client::download_dump(&endpoint, &token, insecure_http, &project_id),
+            )
             .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
 
         // Open the dump once: list entries (to classify) and extract the chosen
@@ -382,16 +537,21 @@ impl AppState {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{classify_dump_entry, resolve_endpoint, validate_project_id, SpeleoDbSession};
-    use crate::speleodb::auth::TokenStore;
+    use super::{
+        auth_error_drops_token, classify_dump_entry, resolve_endpoint, validate_project_id,
+        Endpoint, SpeleoDbSession,
+    };
+    use crate::speleodb::auth::{InMemoryStore, SecretStore, TokenStore};
     use crate::speleodb::SpeleoDbError;
 
-    /// A session seeded with an in-memory token (no real keychain).
+    /// A session seeded with an in-memory token (no real keychain). Marked
+    /// already-rehydrated so it behaves like a live, established session.
     fn authed_session() -> SpeleoDbSession {
         SpeleoDbSession {
             endpoint: Some("https://x/".to_owned()),
             email: Some("u@x".to_owned()),
             token_store: TokenStore::from_in_memory_token("tok-1"),
+            rehydrate_attempted: true,
         }
     }
 
@@ -422,6 +582,152 @@ mod tests {
         assert!(!status.logged_in);
         assert_eq!(status.user_email, None);
         assert!(session.active_token().is_err());
+    }
+
+    // ── [Track C] (#188) C4 rehydration + C5 401-drop unit tests ────────────
+
+    /// A logged-out session whose token store has a keychain (and optional
+    /// plaintext) backend pre-seeded, so `rehydrate` can find a token.
+    fn fresh_session_with_stores(
+        keychain: Box<dyn SecretStore>,
+        plaintext: Option<Box<dyn SecretStore>>,
+    ) -> SpeleoDbSession {
+        SpeleoDbSession {
+            endpoint: None,
+            email: None,
+            token_store: TokenStore::from_stores(keychain, plaintext),
+            rehydrate_attempted: false,
+        }
+    }
+
+    #[test]
+    fn rehydration_seeds_session_from_config_and_keychain() {
+        // A keychain holds a prior-run token; rehydrate seeds endpoint+email from
+        // "config" and the first load() finds + caches it (the restart fix).
+        let endpoint = "https://x/";
+        let email = "u@x";
+        let keychain = InMemoryStore::new();
+        keychain
+            .store(
+                &crate::speleodb::auth::account_key(endpoint, email),
+                "kc-tok",
+            )
+            .expect("seed keychain");
+
+        let mut session = fresh_session_with_stores(Box::new(keychain), None);
+        session.rehydrate(Some(endpoint.to_owned()), Some(email.to_owned()));
+
+        let status = session.status();
+        assert!(status.logged_in, "a stored keychain token survives restart");
+        assert!(status.keychain_backed);
+        assert_eq!(status.user_email.as_deref(), Some(email));
+        // The active token resolves to the keychain value.
+        let (ep, tok) = session
+            .active_token()
+            .expect("authenticated after rehydrate");
+        assert_eq!(ep, endpoint);
+        assert_eq!(tok, "kc-tok");
+    }
+
+    #[test]
+    fn rehydration_noop_without_config_account() {
+        // No persisted account → stays logged-out, and the keychain is NOT probed
+        // (no endpoint/email to key it). rehydrate_attempted is still latched so
+        // it won't retry every call.
+        let mut session = fresh_session_with_stores(Box::new(InMemoryStore::new()), None);
+        session.rehydrate(None, None);
+        assert!(!session.status().logged_in);
+        assert!(session.rehydrate_attempted);
+
+        // A blank endpoint/email also yields a logged-out no-op.
+        let mut session = fresh_session_with_stores(Box::new(InMemoryStore::new()), None);
+        session.rehydrate(Some("   ".to_owned()), Some(String::new()));
+        assert!(!session.status().logged_in);
+    }
+
+    #[test]
+    fn rehydration_is_idempotent_and_skips_live_session() {
+        // Once attempted, a second rehydrate (even with a now-seeded keychain) is
+        // a no-op — it won't clobber or re-probe.
+        let endpoint = "https://x/";
+        let email = "u@x";
+        let mut session = fresh_session_with_stores(Box::new(InMemoryStore::new()), None);
+        session.rehydrate(None, None); // marks attempted, finds nothing
+        assert!(session.rehydrate_attempted);
+
+        // A live session (endpoint set) is also skipped.
+        let mut live = authed_session();
+        live.rehydrate(Some("https://other/".to_owned()), Some("z@z".to_owned()));
+        assert_eq!(live.endpoint.as_deref(), Some("https://x/"));
+    }
+
+    /// Apply the 401 auto-drop decision to a session the way
+    /// `speleodb_handle_auth` does (predicate → full clear), so the C5 effect is
+    /// asserted without constructing a full `AppState`. Returns the session for
+    /// post-condition checks. [Integration] the predicate now keys off
+    /// `map_status(endpoint, status) == ReLogin`; these tests use a read endpoint
+    /// (`ListProjects`) where 401→ReLogin, 403→ReadOnly, 5xx→Retry.
+    fn apply_auth_drop(session: &mut SpeleoDbSession, result: &Result<(), SpeleoDbError>) {
+        if auth_error_drops_token(Endpoint::ListProjects, result) {
+            session.forget();
+        }
+    }
+
+    #[test]
+    fn auth_handler_drops_token_on_401() {
+        let mut session = authed_session();
+        assert!(session.status().logged_in);
+        let result: Result<(), SpeleoDbError> = Err(SpeleoDbError::Status {
+            status: 401,
+            message: "invalid token".to_owned(),
+        });
+        assert!(auth_error_drops_token(Endpoint::ListProjects, &result));
+        apply_auth_drop(&mut session, &result);
+        // Full clear: session is logged out and the token is gone from every tier.
+        assert!(!session.status().logged_in);
+        assert!(session.active_token().is_err());
+    }
+
+    #[test]
+    fn auth_handler_keeps_token_on_403() {
+        // 403 is NEVER a drop (D-B4: read-only/fence per-endpoint meaning,
+        // robust to a DRF 401→403 downgrade).
+        let mut session = authed_session();
+        let result: Result<(), SpeleoDbError> = Err(SpeleoDbError::Status {
+            status: 403,
+            message: "forbidden".to_owned(),
+        });
+        assert!(!auth_error_drops_token(Endpoint::ListProjects, &result));
+        apply_auth_drop(&mut session, &result);
+        assert!(session.status().logged_in, "403 must not drop the session");
+    }
+
+    #[test]
+    fn auth_handler_keeps_token_on_2xx_and_5xx() {
+        // A successful call and a 5xx both leave the session intact (writes never
+        // auto-drop; reads surface for manual retry).
+        let ok: Result<(), SpeleoDbError> = Ok(());
+        assert!(!auth_error_drops_token(Endpoint::ListProjects, &ok));
+
+        for status in [500u16, 502, 503] {
+            let mut session = authed_session();
+            let result: Result<(), SpeleoDbError> = Err(SpeleoDbError::Status {
+                status,
+                message: "server error".to_owned(),
+            });
+            assert!(!auth_error_drops_token(Endpoint::ListProjects, &result));
+            apply_auth_drop(&mut session, &result);
+            assert!(
+                session.status().logged_in,
+                "HTTP {status} must not drop the session"
+            );
+        }
+        // A transport error also never drops.
+        let mut session = authed_session();
+        let result: Result<(), SpeleoDbError> = Err(SpeleoDbError::Transport("timeout".to_owned()));
+        assert!(!auth_error_drops_token(Endpoint::ListProjects, &result));
+        apply_auth_drop(&mut session, &result);
+        assert!(session.status().logged_in);
     }
 
     #[test]
@@ -479,41 +785,46 @@ mod tests {
     #[test]
     fn active_token_requires_endpoint_email_and_token() {
         // Fully populated → Ok((endpoint, token)).
-        let session = SpeleoDbSession {
+        let mut session = SpeleoDbSession {
             endpoint: Some("https://x/".to_owned()),
             email: Some("u@x".to_owned()),
             token_store: TokenStore::from_in_memory_token("tok-1"),
+            rehydrate_attempted: true,
         };
         let (endpoint, token) = session.active_token().expect("authenticated session");
         assert_eq!(endpoint, "https://x/");
         assert_eq!(token, "tok-1");
 
-        // Each missing field independently yields NotAuthenticated (none of these
-        // reach the keychain — the in-memory store has no token / is short-circuited).
-        let no_token = SpeleoDbSession {
+        // Each missing field independently yields NotAuthenticated. The empty
+        // in-memory keychain (NOT TokenStore::default(), which would probe the
+        // real OS keychain) keeps this hermetic.
+        let mut no_token = SpeleoDbSession {
             endpoint: Some("https://x/".to_owned()),
             email: Some("u@x".to_owned()),
-            token_store: TokenStore::default(),
+            token_store: TokenStore::from_stores(Box::new(InMemoryStore::new()), None),
+            rehydrate_attempted: true,
         };
         assert!(matches!(
             no_token.active_token(),
             Err(SpeleoDbError::NotAuthenticated)
         ));
 
-        let no_email = SpeleoDbSession {
+        let mut no_email = SpeleoDbSession {
             endpoint: Some("https://x/".to_owned()),
             email: None,
             token_store: TokenStore::from_in_memory_token("tok-1"),
+            rehydrate_attempted: true,
         };
         assert!(matches!(
             no_email.active_token(),
             Err(SpeleoDbError::NotAuthenticated)
         ));
 
-        let no_endpoint = SpeleoDbSession {
+        let mut no_endpoint = SpeleoDbSession {
             endpoint: None,
             email: Some("u@x".to_owned()),
             token_store: TokenStore::from_in_memory_token("tok-1"),
+            rehydrate_attempted: true,
         };
         assert!(matches!(
             no_endpoint.active_token(),

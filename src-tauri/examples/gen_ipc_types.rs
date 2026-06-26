@@ -22,7 +22,7 @@ use stalagmight_lib::config::{
     OverlapMode, PanelsConfig, PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset,
     SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
     StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
-    ThemeMode, UnitsConfig, ValidationConfig,
+    ThemeMode, TokenFallback, UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, IntegrityCheckResult, IntegrityRepairResult, ValidationWarning,
@@ -285,6 +285,7 @@ fn main() {
     export::<ThemeMode>(&out_dir);
     export::<ColorTheme>(&out_dir);
     export::<SpeleoDbConfig>(&out_dir);
+    export::<TokenFallback>(&out_dir);
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
@@ -460,6 +461,7 @@ fn main() {
         "ThemeMode",
         "ColorTheme",
         "SpeleoDbConfig",
+        "TokenFallback",
         "Permission",
         "SpeleoProjectSummary",
         "SpeleoLoginResult",

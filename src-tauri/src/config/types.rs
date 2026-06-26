@@ -48,12 +48,35 @@ pub struct Config {
     pub(super) legacy_snap: Option<LegacySnapConfig>,
 }
 
+/// Opt-in fallback tier for the SpeleoDB token when no OS keychain is available.
+///
+/// [Track C] (#188, D-188): the user-facing surface is **two-valued**
+/// (`SessionOnly` default, `Plaintext`); `Unknown` is the serde `#[serde(other)]`
+/// sentinel (same idiom as [`ThemeMode::Unknown`]), normalized back to
+/// `SessionOnly` so an unrecognized TOML value never blocks loading. `Plaintext`
+/// is the headless-Linux escape hatch; the warned confirmation that *sets* it is
+/// #205 Settings — Track C only honors the persisted preference.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum TokenFallback {
+    /// Token lives in memory only (lost on restart) when the keychain is absent.
+    #[default]
+    SessionOnly,
+    /// Opt-in: write the token to a `0o600` plaintext file when the keychain
+    /// fails this session (the two-gate plaintext write).
+    Plaintext,
+    /// Catch-all for unrecognized values; normalized to `SessionOnly`.
+    #[serde(other, rename = "unknown")]
+    Unknown,
+}
+
 /// SpeleoDB connection settings (#183 read-only spike).
 ///
-/// The auth token is **never** stored here — it lives in the OS keychain (or an
-/// in-memory session fallback); see `crate::speleodb::auth`. At runtime the
-/// `DEV_SPELEODB_URL` env var overrides `endpoint`. The full Settings-tab schema
-/// (`token_fallback` preference, connection status) is #205.
+/// The auth token is **never** stored here — it lives in the OS keychain (or a
+/// plaintext escape hatch / in-memory session fallback); see
+/// `crate::speleodb::auth`. At runtime the `DEV_SPELEODB_URL` env var overrides
+/// `endpoint`. The full Settings-tab UI binding is #205.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct SpeleoDbConfig {
     /// Persisted endpoint base URL (e.g. `https://www.speleodb.org`). Overridden
@@ -63,12 +86,32 @@ pub struct SpeleoDbConfig {
     /// Last-used account email, for prefilling the login dialog.
     #[serde(default)]
     pub email: Option<String>,
-    // [Track A] #187/D-B10: opt-in override that relaxes ONLY the public-`http://`
-    // scheme block in `speleodb::tls::enforce` (it never disables TLS cert
-    // verification). Owned by Track C config (#205 Settings binds to it); added
-    // here identically so this worktree compiles — the integrator dedupes.
+    /// [Track C] (#188, D-188): opt-in plaintext token fallback preference.
+    /// Default `SessionOnly`; only `Plaintext` enables the two-gate plaintext
+    /// write. #205 Settings owns the warned confirmation that flips it.
+    #[serde(default)]
+    pub token_fallback: TokenFallback,
+    /// [Track C] (#187/D-B10/D-B19): allow an `http://` endpoint to a PUBLIC host.
+    /// Off by default. Relaxes ONLY the public-http scheme block in
+    /// `speleodb::tls::enforce` (Track A #187) — NEVER TLS cert verification
+    /// (self-signed / internal CAs stay rejected). Pre-wired for #205 Settings;
+    /// D-B19's scheme reject lives in `tls.rs`, not here.
     #[serde(default)]
     pub insecure_http: bool,
+}
+
+impl SpeleoDbConfig {
+    /// [Track C] (#188): coerce the `#[serde(other)]` sentinel back to the safe
+    /// default. `insecure_http` needs no normalization. Mirrors
+    /// [`AppearanceConfig::normalize`]; wired into [`Config::normalize`].
+    pub fn normalize(&mut self) {
+        if self.token_fallback == TokenFallback::Unknown {
+            tracing::warn!(
+                "Unknown token_fallback value in config, normalizing to \"session_only\""
+            );
+            self.token_fallback = TokenFallback::SessionOnly;
+        }
+    }
 }
 
 /// Legacy snap config for migration from old [snap] section
@@ -1824,6 +1867,8 @@ impl Config {
         self.panels.normalize();
         self.global_view.normalize();
         self.appearance.normalize();
+        // [Track C] (#188): coerce token_fallback's #[serde(other)] sentinel.
+        self.speleodb.normalize();
         self.closure_adjustment.normalize();
         self.placement_suggestion.normalize();
         self.syntactic_highlighting.normalize();
