@@ -175,13 +175,24 @@ test.describe('Gas planning', () => {
   }) => {
     await expect(page.locator('[data-testid="mode-carousel"]')).toBeVisible();
 
+    // Export directly from Survey: the right Dock must reveal the stub (it would stay
+    // hidden in a closed dock if entry didn't reveal it).
+    await enterMode(page, 'export');
+    expect(await appMode(page)).toBe('export');
+    await expect(page.locator('[data-testid="export-panel"]')).toBeVisible({ timeout: 3000 });
+
     // Plan: setup sidebar + tabbed tables; the map is read-only.
     await enterMode(page, 'plan');
     expect(await appMode(page)).toBe('plan');
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await expect(page.locator('[data-testid="plan-tables-panel"]')).toBeVisible();
     await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible();
-    // A mutating tool selected programmatically snaps back to select (read-only map).
+    // Mutating tools (merge/comment/move) are HIDDEN in Plan, not just disabled; the
+    // non-mutating Select/Pan/Measure remain.
+    await expect(page.locator('[data-testid="tool-merge"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="tool-select"]')).toBeVisible();
+    await expect(page.locator('[data-testid="tool-measure"]')).toBeVisible();
+    // A mutating tool selected programmatically (e.g. via shortcut) snaps back to select.
     await page.evaluate(() =>
       (window as unknown as E2EWindow).__E2E_TEST__?.uiStore.getState().setActiveTool('merge'),
     );

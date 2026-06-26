@@ -121,6 +121,25 @@ const TOOLBAR_ITEMS: ToolbarItem[] = [
   { kind: 'standalone', id: 'measure', shortcut: 'R' },
 ];
 
+// Plan/Export are read-only workspaces (#38): the mutating tools (merge, comment,
+// move) make no sense there, so they're HIDDEN — not merely disabled — leaving only
+// the non-mutating Select / Pan / Zoom / Measure. Filtered once from TOOLBAR_ITEMS so
+// it stays in sync, with separators left dangling by the removals cleaned up.
+const READ_ONLY_TOOLBAR_ITEMS: ToolbarItem[] = (() => {
+  const kept = TOOLBAR_ITEMS.filter((item) => {
+    if (item.kind === 'separator') return true;
+    if (item.kind === 'standalone') return !isMutatingTool(item.id);
+    const group = TOOL_GROUPS.find((g) => g.id === item.groupId);
+    return group ? group.tools.some((tool) => !isMutatingTool(tool)) : false;
+  });
+  return kept.filter((item, i, arr) => {
+    if (item.kind !== 'separator') return true;
+    const prev = arr[i - 1];
+    const next = arr[i + 1];
+    return Boolean(prev && next && prev.kind !== 'separator' && next.kind !== 'separator');
+  });
+})();
+
 export default function Toolbar({
   menuItems,
   saveFailed = false,
@@ -147,6 +166,8 @@ export default function Toolbar({
   const geometryReadOnly = useUIStore(
     (s) => s.geometryMode === 'closureAdjusted' || s.appMode !== 'survey'
   );
+  // Survey shows the full toolbar; Plan/Export show only the non-mutating tools.
+  const toolbarItems = appMode === 'survey' ? TOOLBAR_ITEMS : READ_ONLY_TOOLBAR_ITEMS;
 
   return (
     <header className="relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
@@ -242,7 +263,12 @@ export default function Toolbar({
           {t('dataTable.title')}
         </div>
       ) : (
-        <ModeCarousel />
+        /* Absolutely centered so the carousel stays put as modes cycle — otherwise
+           justify-between would drift it when the right cluster's width changes
+           (mutating tools + DisplayMenu drop out in Plan/Export). */
+        <div className="absolute left-1/2 -translate-x-1/2">
+          <ModeCarousel />
+        </div>
       )}
 
       {/* Right section - tools and display menu; while the table is fullscreen,
@@ -258,7 +284,7 @@ export default function Toolbar({
               className={`flex items-center gap-1 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
               data-testid="toolbar-tools-group"
             >
-              {TOOLBAR_ITEMS.map((item, index) => {
+              {toolbarItems.map((item, index) => {
                 if (item.kind === 'separator') {
                   return <div key={`sep-${index}`} className="w-px h-6 bg-border mx-1" />;
                 }

@@ -1270,11 +1270,12 @@ export const useUIStore = create<UIStore>((set) => ({
       distanceField: null,
       ...MEASURE_CLEARED,
     });
+    // Both Plan (setup sidebar) and Export (export stub) render in the right Dock —
+    // reveal it on entry so the panel surfaces even from a closed dock.
+    useUIStore.getState().revealDetailPanel();
     if (mode === 'plan') {
-      // Reveal both Plan docks on entry: the setup sidebar (right Dock) and the tabbed
-      // plan tables (bottom Dock, pinned open so the Cylinders/Profile tabs are visible
-      // without hunting for a closed dock). Mirrors revealDetailPanel's reveal-on-entry.
-      useUIStore.getState().revealDetailPanel();
+      // Plan also pins the bottom Dock open so the Cylinders/Profile tabs are visible
+      // without hunting for a closed dock.
       set({ dataTableOpen: true, dataTableMode: 'pin' });
     } else {
       // Export has no gas inputs — clear any plan state so nothing strands.
