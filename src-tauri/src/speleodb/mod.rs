@@ -150,7 +150,7 @@ mod live_tests {
     //! Env-var tiers (each test early-returns/skips cleanly when its tier's vars
     //! are absent — they NEVER run in CI, there is no dev box there):
     //! - **URL-only** (needs `DEV_SPELEODB_URL`): `live_bad_credentials_returns_400`,
-    //!   `live_missing_auth_header_returns_403`, `live_dead_token_returns_401`,
+    //!   `live_missing_auth_header_returns_403`, `live_dead_token_returns_403`,
     //!   `live_http_to_public_blocked` (the public-host block needs no box at all).
     //! - **Single-account** (needs `DEV_SPELEODB_URL` + `_EMAIL` + `_PASSWORD`, via
     //!   `live_env()`): `live_round_trip_seed_pull_open`,
@@ -516,9 +516,11 @@ mod live_tests {
 
     /// L4: a `GET /projects/` with **no** `Authorization` header is rejected with
     /// HTTP **403** (DRF "not authenticated on a protected endpoint with no
-    /// credentials"), distinct from a present-but-dead token (→ 401, L5). The typed
-    /// client always sends a Bearer header, so this is a raw `ureq` call. Needs
-    /// only `DEV_SPELEODB_URL`.
+    /// credentials"). NOTE (verified live): a present-but-dead token is **also**
+    /// 403 (L5) — the status alone does not distinguish missing-vs-dead; only a
+    /// whoami 200-vs-403 separates a valid token from a dead one. The typed client
+    /// always sends a Bearer header, so this is a raw `ureq` call. Needs only
+    /// `DEV_SPELEODB_URL`.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_URL (run with --ignored)"]
     #[expect(
@@ -543,10 +545,21 @@ mod live_tests {
         );
     }
 
-    /// L5: a `GET /user/` with a **junk/revoked** token is rejected with HTTP
-    /// **401** ("authenticated route, bad token"), the contrast to the
-    /// missing-header 403 (L4). Sent raw with a garbage Bearer token. Needs only
-    /// `DEV_SPELEODB_URL`.
+    /// L5: a `GET /user/` (whoami) with a **junk/dead** token is rejected with HTTP
+    /// **403**, NOT 401 — verified against the live box. This is the DRF `401→403`
+    /// downgrade the research flagged (D-B4): a `TokenAuthentication` that fails to
+    /// resolve the token supplies no `WWW-Authenticate` challenge, so DRF answers
+    /// 403. A *valid* token returns 200 (see `live_fetch_user_email…`), so a **403
+    /// from the whoami endpoint is the unambiguous dead-token signal** — no
+    /// per-resource permission applies to `/user/`. Sent with the production
+    /// `Bearer` scheme so it exercises the real client's dead-token path. Needs
+    /// only `DEV_SPELEODB_URL`.
+    ///
+    /// DESIGN NOTE (#188 C5 / D-B4): because the server never emits 401 for auth,
+    /// the 401-based auto-drop (`map_status == ReLogin` only on 401) cannot fire on
+    /// a revoked token. The dead-token trigger must instead key off a whoami-403.
+    /// This test pins the server fact that fix depends on. See the design
+    /// follow-up.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_URL (run with --ignored)"]
     #[expect(
@@ -554,9 +567,9 @@ mod live_tests {
         clippy::print_stderr,
         reason = "ignored live integration test"
     )]
-    fn live_dead_token_returns_401() {
+    fn live_dead_token_returns_403() {
         let Ok(url) = std::env::var("DEV_SPELEODB_URL") else {
-            eprintln!("skipping live_dead_token_returns_401: set DEV_SPELEODB_URL");
+            eprintln!("skipping live_dead_token_returns_403: set DEV_SPELEODB_URL");
             return;
         };
         let resp = raw_agent()
@@ -566,8 +579,9 @@ mod live_tests {
             .expect("request should reach the server (status branched below)");
         assert_eq!(
             resp.status().as_u16(),
-            401,
-            "a present-but-dead token should be HTTP 401 (vs missing header → 403)"
+            403,
+            "the live box returns 403 (not 401) for a dead token — the DRF \
+             downgrade; a whoami-403 is the dead-token signal"
         );
     }
 
