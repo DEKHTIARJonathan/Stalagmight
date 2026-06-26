@@ -1271,8 +1271,11 @@ export const useUIStore = create<UIStore>((set) => ({
       ...MEASURE_CLEARED,
     });
     if (mode === 'plan') {
-      // The Plan-setup inputs live in the detail Dock slot — reveal it on entry.
+      // Reveal both Plan docks on entry: the setup sidebar (right Dock) and the tabbed
+      // plan tables (bottom Dock, pinned open so the Cylinders/Profile tabs are visible
+      // without hunting for a closed dock). Mirrors revealDetailPanel's reveal-on-entry.
       useUIStore.getState().revealDetailPanel();
+      set({ dataTableOpen: true, dataTableMode: 'pin' });
     } else {
       // Export has no gas inputs — clear any plan state so nothing strands.
       useGasPlanStore.getState().reset();

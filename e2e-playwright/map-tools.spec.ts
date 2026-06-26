@@ -50,16 +50,18 @@ test.describe('Map Tools', () => {
     await setupMockedPage(page);
   });
 
-  test('toolbar center shows the active tool name and updates on switch (#51)', async ({ page }) => {
+  test('toolbar center holds the workspace carousel; filename stays out of it (#51, #38)', async ({ page }) => {
     await createProjectWithSections(page);
-    const center = page.getByTestId('toolbar-active-tool');
-    await expect(center).toBeVisible();
-    // The filename is no longer in the toolbar center.
+    // The center now holds the Survey/Plan/Export carousel (#38). The active tool moved
+    // to the highlighted toolbar button (asserted in the shortcut test below), and the
+    // filename is not in the toolbar center.
+    await expect(page.getByTestId('mode-carousel')).toBeVisible();
     await expect(page.getByTestId('toolbar-project-name')).toHaveCount(0);
+    // Tool shortcuts still switch the active tool.
     await page.keyboard.press('m');
-    await expect(center).toContainText('Merge');
+    await waitForActiveTool(page, 'merge');
     await page.keyboard.press('r');
-    await expect(center).toContainText('Measure');
+    await waitForActiveTool(page, 'measure');
 
     // The project name and full file path live in the Project Stats panel
     // (shown when nothing is selected).

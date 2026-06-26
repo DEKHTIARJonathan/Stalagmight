@@ -3,13 +3,15 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
 import { seedProjectWithSections, type SectionSeed } from './helpers/app';
 
 /**
- * E2E for the gas reachable-frontier sub-mode (#38). Like the sibling
- * distance-gradient overlay, gas colors via `setFeatureState('gasReach')` + a
- * swapped `circle-color`/`line-color` interpolate paint — so we assert on the paint
- * expression + feature-state + the legend, and that the overlay survives a feature
- * rebuild (the MapLibre setData-wipe correctness risk). The sub-mode is entered from
- * a top-level toolbar toggle (outside the Display menu), and its inputs render in the
- * detail Dock slot, swapping out the normal DetailPanel. The IPC field is mocked
+ * E2E for the gas reachable-frontier overlay, now the Plan workspace mode (#38,
+ * Daniel's reframe). Plan is entered from the top-middle Survey/Plan/Export carousel
+ * (not the old toolbar toggle); it forces the read-only closure map, swaps the right
+ * Dock for the gas setup sidebar, and the bottom Dock for the tabbed plan tables.
+ *
+ * Like the sibling distance-gradient overlay, gas colors via
+ * `setFeatureState('gasReach')` + a swapped `circle-color`/`line-color` paint — so we
+ * assert on the paint expression + feature-state + legend, and that the overlay
+ * survives a feature rebuild (the MapLibre setData-wipe risk). The IPC field is mocked
  * (`compute_gas_reach_field`).
  */
 
@@ -53,13 +55,22 @@ async function waitForMapLoaded(page: Page): Promise<void> {
     .toBe(true);
 }
 
-async function gasPlanActive(page: Page): Promise<boolean> {
-  return page.evaluate(() => {
-    const e2e = (window as unknown as {
-      __E2E_TEST__?: { uiStore: { getState: () => { showGasPlan: boolean } } };
-    }).__E2E_TEST__;
-    return e2e?.uiStore.getState().showGasPlan ?? false;
-  });
+type E2EWindow = {
+  __E2E_TEST__?: {
+    uiStore: {
+      getState: () => { appMode: string; activeTool: string; setActiveTool: (t: string) => void };
+    };
+  };
+};
+
+async function appMode(page: Page): Promise<string> {
+  return page.evaluate(() => (window as unknown as E2EWindow).__E2E_TEST__?.uiStore.getState().appMode ?? '');
+}
+
+async function activeTool(page: Page): Promise<string> {
+  return page.evaluate(
+    () => (window as unknown as E2EWindow).__E2E_TEST__?.uiStore.getState().activeTool ?? '',
+  );
 }
 
 /** circle-color paint of the stations layer, JSON-stringified. */
@@ -98,8 +109,8 @@ async function anyStationHasGasReach(page: Page): Promise<boolean> {
   });
 }
 
-async function toggleGasPlan(page: Page): Promise<void> {
-  await page.locator('[data-testid="toolbar-gas-plan-button"]').click();
+async function enterMode(page: Page, mode: 'survey' | 'plan' | 'export'): Promise<void> {
+  await page.locator(`[data-testid="mode-${mode}"]`).click();
 }
 
 test.describe('Gas planning', () => {
@@ -112,10 +123,10 @@ test.describe('Gas planning', () => {
     await waitForMapLoaded(page);
   });
 
-  test('toolbar toggle enters the sub-mode (panel + overlay + legend) and exit resets @smoke', async ({
+  test('Plan mode shows the gas overlay (panel + paint + legend); back to Survey resets @smoke', async ({
     page,
   }) => {
-    expect(await gasPlanActive(page)).toBe(false);
+    expect(await appMode(page)).toBe('survey');
     await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);
 
     // Wait for stations to render, then capture the baseline paint.
@@ -138,10 +149,10 @@ test.describe('Gas planning', () => {
     const paintBefore = await stationColorPaint(page);
     expect(paintBefore).not.toContain('gasReach');
 
-    await toggleGasPlan(page);
-    expect(await gasPlanActive(page)).toBe(true);
+    await enterMode(page, 'plan');
+    expect(await appMode(page)).toBe('plan');
 
-    // The input panel replaces the detail panel in the Dock slot.
+    // The setup sidebar replaces the detail panel in the right Dock slot.
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     // Legend appears with the entrance origin.
     await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible({ timeout: 3000 });
@@ -151,18 +162,52 @@ test.describe('Gas planning', () => {
     // A station carries a numeric `gasReach` feature-state.
     await expect.poll(() => anyStationHasGasReach(page), { timeout: 3000 }).toBe(true);
 
-    // Exit → panel + legend gone, paint restored, store flag cleared.
-    await toggleGasPlan(page);
-    expect(await gasPlanActive(page)).toBe(false);
+    // Back to Survey → panel + legend gone, paint restored, store reset.
+    await enterMode(page, 'survey');
+    expect(await appMode(page)).toBe('survey');
     await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="gas-legend"]')).not.toBeVisible();
     await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).not.toContain('gasReach');
   });
 
+  test('carousel switches Survey/Plan/Export; Plan is read-only; Export is a stub @smoke', async ({
+    page,
+  }) => {
+    await expect(page.locator('[data-testid="mode-carousel"]')).toBeVisible();
+
+    // Plan: setup sidebar + tabbed tables; the map is read-only.
+    await enterMode(page, 'plan');
+    expect(await appMode(page)).toBe('plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="plan-tables-panel"]')).toBeVisible();
+    await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible();
+    // A mutating tool selected programmatically snaps back to select (read-only map).
+    await page.evaluate(() =>
+      (window as unknown as E2EWindow).__E2E_TEST__?.uiStore.getState().setActiveTool('merge'),
+    );
+    await expect.poll(() => activeTool(page), { timeout: 2000 }).toBe('select');
+    // Profile tab is a stub.
+    await page.locator('[data-testid="plan-tab-profile"]').click();
+    await expect(page.locator('[data-testid="plan-profile-stub"]')).toBeVisible();
+
+    // Export: stub panel, no gas/plan tables.
+    await enterMode(page, 'export');
+    expect(await appMode(page)).toBe('export');
+    await expect(page.locator('[data-testid="export-panel"]')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="export-svg-button"]')).toBeVisible();
+    await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="plan-tables-panel"]')).toHaveCount(0);
+
+    // Back to Survey.
+    await enterMode(page, 'survey');
+    expect(await appMode(page)).toBe('survey');
+    await expect(page.locator('[data-testid="export-panel"]')).toHaveCount(0);
+  });
+
   test('gas feature-state survives a feature rebuild, and a turn marker renders', async ({
     page,
   }) => {
-    await toggleGasPlan(page);
+    await enterMode(page, 'plan');
     await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).toContain('gasReach');
     await expect.poll(() => anyStationHasGasReach(page), { timeout: 3000 }).toBe(true);
     // The mock's fixed budget leaves the far stations unreachable, so the turn

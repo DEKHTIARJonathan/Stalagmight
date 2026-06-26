@@ -185,9 +185,9 @@ test.describe('Data table fullscreen mode', () => {
   test('reduced toolbar: tools give way to the table picker, Import button drops out', async ({ page }) => {
     await enterFullScreen(page);
 
-    // Center title instead of the active map tool.
+    // Center title instead of the workspace carousel.
     await expect(page.getByTestId('toolbar-data-table-title')).toHaveText('Data table');
-    await expect(page.getByTestId('toolbar-active-tool')).toHaveCount(0);
+    await expect(page.getByTestId('mode-carousel')).toHaveCount(0);
 
     // Map tools and the display menu are gone; only the table picker remains on the right.
     await expect(page.getByTestId('toolbar-tools-group')).toHaveCount(0);
@@ -252,7 +252,9 @@ test.describe('Data table fullscreen mode', () => {
     // tool shortcut works.
     await page.keyboard.press('Escape');
     await expectWindowed(page);
-    await page.getByTestId('toolbar-active-tool').click();
+    // Click a neutral, non-input toolbar element to move focus off the table so the
+    // 'p' shortcut fires. The Survey carousel button is a no-op while already in Survey.
+    await page.getByTestId('mode-survey').click();
     await page.keyboard.press('p');
     await expect.poll(() => getActiveTool(page)).toBe('pan');
   });
