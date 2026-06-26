@@ -2076,6 +2076,9 @@ function MapCanvas() {
       const el = document.createElement('div');
       el.setAttribute('data-testid', 'gas-zero-datum-marker');
       el.setAttribute('role', 'button');
+      // Keyboard-operable, not just clickable (it carries role="button"): focusable +
+      // Enter/Space activation, so keyboard / AT users can pick the datum origin too.
+      el.setAttribute('tabindex', '0');
       el.setAttribute('aria-label', t('gasPanel.origin.datumAria'));
       el.title = t('gasPanel.origin.datumTooltip');
       el.style.cssText = 'cursor:pointer;line-height:0;filter:drop-shadow(0 0 1px rgba(0,0,0,0.6));';
@@ -2084,9 +2087,16 @@ function MapCanvas() {
         '<path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" ' +
         'fill="#000000" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>';
       const ref = st.station_ref;
+      const pick = () => setGasOrigin(ref);
       el.addEventListener('click', (e) => {
         e.stopPropagation();
-        setGasOrigin(ref);
+        pick();
+      });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          pick();
+        }
       });
       gasZeroDatumMarkersRef.current.push(
         new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map.current)

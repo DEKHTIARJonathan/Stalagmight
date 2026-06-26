@@ -20,7 +20,7 @@ export function ModeCarousel({ disabled = false }: { disabled?: boolean }) {
       className={`inline-flex rounded border border-border overflow-hidden ${
         disabled ? 'opacity-45 grayscale' : ''
       }`}
-      role="tablist"
+      role="group"
       aria-label={t('modeCarousel.aria')}
       data-testid="mode-carousel"
     >
@@ -30,8 +30,7 @@ export function ModeCarousel({ disabled = false }: { disabled?: boolean }) {
           <button
             key={mode}
             type="button"
-            role="tab"
-            aria-selected={active}
+            aria-pressed={active}
             // Disabled while a survey placement is in progress: switching to the
             // read-only Plan/Export map would otherwise leave that mutation live.
             disabled={disabled}

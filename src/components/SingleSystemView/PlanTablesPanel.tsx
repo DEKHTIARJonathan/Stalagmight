@@ -60,8 +60,7 @@ function TabButton({
     <button
       type="button"
       onClick={onClick}
-      role="tab"
-      aria-selected={active}
+      aria-pressed={active}
       className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
         active
           ? 'border-accent text-text-primary'
