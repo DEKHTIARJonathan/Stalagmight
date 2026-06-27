@@ -18823,10 +18823,18 @@ fn remote_open_without_lock_disables_edit() {
     assert!(state.edit_enabled(), "close resets the gate");
 }
 
-/// The chokepoint enumeration tripwire (D-B6): every routed mutation entry must
-/// reject on a read-only remote project with the EDIT_DISABLED code (or, for
-/// repair, changed == false). A newly-added mutation path that forgets the guard
-/// fails here. The names are pinned in MUTATION_ENTRYPOINTS below.
+/// The chokepoint enumeration tripwire (D-B6): every SURVEY-CONTENT mutation entry
+/// listed in MUTATION_ENTRYPOINTS must reject on a read-only remote project with the
+/// EDIT_DISABLED code (or, for repair, changed == false).
+///
+/// CAVEAT — this list is hand-maintained and only checks its own length, so it
+/// catches a forgotten guard on a KNOWN entry, NOT a brand-new `execute_*`/
+/// `set_*_for_path` method added without a `guard_mutation` call (that would compile
+/// and pass green). The exhaustive `is_lifecycle_passthrough` match closes the hole
+/// for new `Command` *variants*; a source-scan test asserting every gated method body
+/// contains `guard_mutation` would close it for new *methods* (follow-up). And note
+/// the deliberately-ungated local-only writes documented on `guard_mutation`
+/// (display settings, warning resolve/unresolve, import-dedup) are NOT in this list.
 const MUTATION_ENTRYPOINTS: &[&str] = &[
     // execute() + a representative spread of non-lifecycle Command variants. The
     // guard runs BEFORE the variant match, so one code path gates them all — but

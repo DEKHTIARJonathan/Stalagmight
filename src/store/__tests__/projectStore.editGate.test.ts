@@ -74,4 +74,21 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
     // then propagate so callers' existing error handling is unchanged.
     expect(refreshProjectState).toHaveBeenCalled();
   });
+
+  it('undo shows the friendly read-only notice (not the raw EDIT_DISABLED string)', async () => {
+    invokeIpcMock.mockResolvedValue({
+      success: false,
+      error: `${EDIT_DISABLED}: Undo is disabled: this SpeleoDB project is open read-only.`,
+    });
+
+    await useProjectStore.getState().undo();
+
+    // executeUndoRedo must match executeCommand: friendly notice under the shared
+    // 'edit-disabled' dedup key, never the raw coded string under the undo toastId.
+    expect(showToast).toHaveBeenCalledWith(READ_ONLY_EDIT_NOTICE, 'edit-disabled');
+    expect(showToast).not.toHaveBeenCalledWith(
+      expect.stringContaining(EDIT_DISABLED),
+      expect.anything()
+    );
+  });
 });

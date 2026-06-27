@@ -264,12 +264,21 @@ impl AppState {
             .store(v, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// THE mutation chokepoint (#191, D-B6). Every state-mutating entry
-    /// (`execute`, `undo`, `redo`, `undo_to`, `redo_to`, every `execute_*`
-    /// bypass, the collab toggles) calls this FIRST, after taking `command_lock`
-    /// and before mutating. `Err` aborts the mutation when the open project is a
-    /// remote SpeleoDB project opened read-only. No-op (`Ok`) for local-only
-    /// (default-true `edit_enabled`) projects and non-mutating reads.
+    /// THE mutation chokepoint (#191, D-B6). Every SURVEY-CONTENT mutation entry
+    /// (`execute` + all its `execute_*` siblings, `undo`/`redo`/`undo_to`/`redo_to`,
+    /// the collab toggles, `set_project_name_for_path`) calls this FIRST, after
+    /// taking `command_lock` and before mutating. `Err` aborts the mutation when
+    /// the open project is a remote SpeleoDB project opened read-only. No-op (`Ok`)
+    /// for local-only (default-true `edit_enabled`) projects and non-mutating reads.
+    ///
+    /// NOT YET GATED (intentionally, for now): a handful of LOCAL-ONLY project-DB
+    /// writes that are not survey content and are overwritten on the next pull —
+    /// `save_display_setting` (view prefs), `resolve_warning`/`unresolve_warning`
+    /// (local annotations), and the `track_imported_file`/`track_section_hashes`
+    /// import-dedup bookkeeping. They reach the `.stalx` but never the server (this
+    /// PR has no push path). Gate them — or consciously confirm the exemption — when
+    /// the release/push flow (#197) lands, since carry-forward would then ship them.
+    /// `MUTATION_ENTRYPOINTS` (tests.rs) enumerates only the gated set above.
     pub(super) fn guard_mutation(&self, what: &str) -> Result<(), CommandResult> {
         if self.edit_enabled() {
             return Ok(());

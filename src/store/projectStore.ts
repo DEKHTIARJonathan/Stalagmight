@@ -459,7 +459,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (checkPartialFailure && isPartialMultiStepFailure(result.error)) {
           set({ isDirty: true });
         }
-        useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId);
+        // A read-only rejection (EDIT_DISABLED) gets the same friendly notice +
+        // dedup key as executeCommand, not the raw coded string — mashing Ctrl+Z
+        // on a read-only remote project shows one tidy toast, not "EDIT_DISABLED:…".
+        if (isEditDisabledError(result.error)) {
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled');
+        } else {
+          useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId);
+        }
       }
     } catch (e) {
       result = emptyCommandResult(false, String(e));
