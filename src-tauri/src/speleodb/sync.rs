@@ -11,7 +11,7 @@
 //! - [`classify_ancestry`] — guardrail-7 ancestry recovery (#193): after a push
 //!   whose confirmation was lost, did my edit actually land on the server?
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::models::RevisionCommit;
 
@@ -185,6 +185,87 @@ pub(crate) fn classify_ancestry(
     }
 }
 
+/// Resolve the server HEAD as the leaf of a linear commit history: the unique
+/// commit that **no other commit lists as a parent**.
+///
+/// We CANNOT use the server's `latest_commit` field for this. It is computed as
+/// `commits.order_by("-authored_date").first()` — the max git *author* timestamp
+/// — and project-creation + the first upload land within the same second, so
+/// their author timestamps tie and the tie breaks arbitrarily (verified live: it
+/// returns the service-account ROOT, not the real HEAD; confirmed in the server
+/// source). The parent-id topology is unambiguous, so the fence resolves the tip
+/// from it instead.
+///
+/// Returns `None` for an empty history OR an ambiguous one (zero or multiple
+/// leaves — e.g. a fork), so the caller fails closed rather than guessing.
+pub(crate) fn tip_of(commits: &[RevisionCommit]) -> Option<&str> {
+    let parents: HashSet<&str> = commits
+        .iter()
+        .flat_map(|c| c.parent_ids.iter().map(String::as_str))
+        .collect();
+    let mut leaves = commits
+        .iter()
+        .map(|c| c.id.as_str())
+        .filter(|id| !parents.contains(id));
+    let head = leaves.next()?;
+    if leaves.next().is_some() {
+        return None; // more than one head (fork) — ambiguous, fail closed
+    }
+    Some(head)
+}
+
+/// Pure structural check: is `base` reachable by walking the linear parent chain
+/// back from `tip`? I.e. is the server `tip` a genuine **descendant** of our
+/// `base` (a real fast-forward) rather than an **ancestor** or a fork.
+///
+/// This guards the clean `FastForward` path against the server's
+/// eventually-consistent `latest_commit`: right after a confirmed push, `acquire`
+/// / `get_project` were observed live to still report the PRIOR tip (the
+/// service-account root) as `latest_commit`. Fast-forwarding to that stale
+/// ancestor would re-pull an OLDER tree and reset the project BACKWARD, losing the
+/// just-pushed state. Only fast-forward when this returns `true`.
+///
+/// - `base == None` → we hold no commit yet (fresh open); any tip is adoptable → `true`.
+/// - `base == tip` → already there → `true`.
+/// - a merge (non-linear) or a commit missing from `commits` → `false` (fail safe:
+///   never fast-forward into something we cannot verify).
+/// - reaching a root without meeting `base` → `base` is not an ancestor → `false`.
+pub(crate) fn base_is_ancestor_of_tip(
+    base: Option<&str>,
+    tip: &str,
+    commits: &[RevisionCommit],
+) -> bool {
+    let Some(base) = base else {
+        return true;
+    };
+    if base == tip {
+        return true;
+    }
+    let by_id: HashMap<&str, &RevisionCommit> =
+        commits.iter().map(|c| (c.id.as_str(), c)).collect();
+    let mut cursor: &str = tip;
+    let mut steps = 0usize;
+    loop {
+        if cursor == base {
+            return true;
+        }
+        let Some(c) = by_id.get(cursor).copied() else {
+            return false; // tip (or an ancestor) absent from history — can't verify
+        };
+        if c.parent_ids.len() > 1 {
+            return false; // a merge is non-linear — refuse
+        }
+        let Some(parent) = c.parent_ids.first() else {
+            return false; // reached a root without meeting base → not an ancestor
+        };
+        cursor = parent.as_str();
+        steps += 1;
+        if steps > commits.len() {
+            return false; // cycle / runaway guard
+        }
+    }
+}
+
 /// Whether a confirmed-landed push captured all our local edits — i.e. no edit
 /// happened after the push began. Biased to **false** (keep the dirty bit) on any
 /// uncertainty: a wrongly-kept dirty bit costs only a redundant no-op re-push,
@@ -205,7 +286,10 @@ fn edits_captured_by_push(last_edit_at: Option<&str>, push_start_at: Option<&str
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_ancestry, fence, AncestryOutcome, FenceOutcome, RevisionCommit};
+    use super::{
+        base_is_ancestor_of_tip, classify_ancestry, fence, tip_of, AncestryOutcome, FenceOutcome,
+        RevisionCommit,
+    };
 
     /// Build a revision-history commit with the given parents and author.
     fn commit(id: &str, parents: &[&str], email: &str) -> RevisionCommit {
@@ -227,6 +311,81 @@ mod tests {
     fn up_to_date_when_both_at_empty_base() {
         // None == None: empty repo on both sides.
         assert_eq!(fence(None, None, false), FenceOutcome::UpToDate);
+    }
+
+    // --- tip_of (topological HEAD resolution) ---
+
+    #[test]
+    fn tip_of_finds_the_leaf_regardless_of_order() {
+        // root <- a <- b. b is the leaf (HEAD). Order in the slice is irrelevant
+        // (the server returns commits newest-first by authored_date, which ties).
+        let commits = [
+            commit("root", &[], OTHER),
+            commit("b", &["a"], ME),
+            commit("a", &["root"], ME),
+        ];
+        assert_eq!(tip_of(&commits), Some("b"));
+    }
+
+    #[test]
+    fn tip_of_single_commit_is_the_root() {
+        let commits = [commit("root", &[], OTHER)];
+        assert_eq!(tip_of(&commits), Some("root"));
+    }
+
+    #[test]
+    fn tip_of_none_for_empty_or_forked() {
+        assert_eq!(tip_of(&[]), None);
+        // Two leaves (b and c both children of a) → ambiguous fork → None.
+        let forked = [
+            commit("a", &[], ME),
+            commit("b", &["a"], ME),
+            commit("c", &["a"], ME),
+        ];
+        assert_eq!(tip_of(&forked), None);
+    }
+
+    // --- base_is_ancestor_of_tip (clean fast-forward guard) ---
+
+    #[test]
+    fn ancestor_guard_true_for_genuine_fast_forward() {
+        // root <- a(base) <- b(tip): base IS an ancestor of tip → real FF.
+        let commits = [
+            commit("b", &["a"], OTHER),
+            commit("a", &["root"], ME),
+            commit("root", &[], OTHER),
+        ];
+        assert!(base_is_ancestor_of_tip(Some("a"), "b", &commits));
+    }
+
+    #[test]
+    fn ancestor_guard_false_for_stale_ancestor_tip() {
+        // The server reports a STALE tip "a" that is an ANCESTOR of our base "b"
+        // (the eventual-consistency lag after our own push). Must NOT fast-forward
+        // backward.
+        let commits = [
+            commit("b", &["a"], ME),
+            commit("a", &["root"], OTHER),
+            commit("root", &[], OTHER),
+        ];
+        assert!(!base_is_ancestor_of_tip(Some("b"), "a", &commits));
+    }
+
+    #[test]
+    fn ancestor_guard_true_for_none_base_and_equal() {
+        // No base yet → adopt any tip; and base == tip is trivially an ancestor.
+        let commits = [commit("root", &[], OTHER)];
+        assert!(base_is_ancestor_of_tip(None, "root", &commits));
+        assert!(base_is_ancestor_of_tip(Some("root"), "root", &commits));
+    }
+
+    #[test]
+    fn ancestor_guard_false_for_missing_or_merge() {
+        // Tip absent from history → can't verify → false.
+        assert!(!base_is_ancestor_of_tip(Some("a"), "ghost", &[]));
+        // A merge commit on the path is non-linear → false.
+        let merged = [commit("m", &["a", "x"], ME), commit("a", &[], ME)];
+        assert!(!base_is_ancestor_of_tip(Some("a"), "m", &merged));
     }
 
     #[test]

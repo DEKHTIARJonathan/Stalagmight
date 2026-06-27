@@ -580,11 +580,35 @@ impl AppState {
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
         dump.extract_entry_to(&entry, &dest).map_err(local_dto)?;
 
+        // Stamp BASE = the server's TRUE HEAD (the revision-topology leaf), NOT the
+        // list/get_project `latest_commit` field, which is `max(authored_date)` and
+        // ties to the root creation commit (see speleodb_server_head). The dump we
+        // just downloaded IS this HEAD's working tree, so BASE must match it — else
+        // the first Start editing would needlessly fast-forward. Best-effort: fall
+        // back to the caller-supplied SHA if the history can't be fetched (Start
+        // editing then fast-forwards to reconcile).
+        let base_sha = match self.speleodb_server_head(
+            &endpoint,
+            &token,
+            insecure_http,
+            &project_id,
+        ) {
+            Ok((tip, _commits)) => tip.or(latest_commit_sha),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    project_id = %project_id,
+                    purpose = "resolve server HEAD on pull",
+                    "speleodb_open_project: could not resolve server HEAD; using list latest_commit"
+                );
+                latest_commit_sha
+            }
+        };
+
         // [Track B] (#189, D-B9) Stamp the SpeleoDB hand-off link into the pulled
         // `.stalx`. Opening via `open_existing` runs `ensure_schema_version`,
-        // which creates the v9 `speleo_link` table on the freshly-extracted file;
-        // then upsert the single row. `base_commit_sha` = the pulled SHA (NULL /
-        // None for an empty repo). After this, `load_metadata().is_remote` is
+        // which creates the `speleo_link` table on the freshly-extracted file;
+        // then upsert the single row. After this, `load_metadata().is_remote` is
         // true and the dirty bit (`has_unpushed_edits`) starts false.
         match crate::persistence::Database::open_existing(&dest) {
             Ok(db) => {
@@ -592,7 +616,7 @@ impl AppState {
                     endpoint,
                     project_id: project_id.clone(),
                     project_name,
-                    base_commit_sha: latest_commit_sha,
+                    base_commit_sha: base_sha,
                     has_unpushed_edits: false,
                     last_edit_at: None, // freshly pulled: no local edits yet
                 };
@@ -664,8 +688,10 @@ impl AppState {
             Endpoint::Acquire,
             client::acquire_lock(&endpoint, &token, insecure_http, &link.project_id),
         );
-        let project = match acquired {
-            Ok(p) => p,
+        // We only need the acquire to confirm we hold the lock; its `latest_commit`
+        // is unreliable (see speleodb_server_head) so it is intentionally dropped.
+        match acquired {
+            Ok(_project) => {}
             Err(SpeleoDbError::Status { status: 400, .. }) => {
                 return Ok(self.speleodb_locked_by(
                     &endpoint,
@@ -675,10 +701,23 @@ impl AppState {
                 ));
             }
             Err(e) => return Err(dto_for_error(Endpoint::Acquire, &e)),
-        };
+        }
 
-        // We hold the lock. Fence our BASE against the tip the acquire returned.
-        let tip = project.latest_commit.as_ref().map(|c| c.id.clone());
+        // We hold the lock. Resolve the true HEAD from the revision topology and
+        // fence our BASE against it.
+        let (tip, commits) =
+            match self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.speleodb_release_best_effort(
+                        &endpoint,
+                        &token,
+                        insecure_http,
+                        &link.project_id,
+                    );
+                    return Err(dto_for_error(Endpoint::GetProject, &e));
+                }
+            };
         match sync::fence(
             link.base_commit_sha.as_deref(),
             tip.as_deref(),
@@ -688,12 +727,29 @@ impl AppState {
                 self.set_edit_enabled(true);
                 Ok(StartEditingResult::Editing)
             }
-            FenceOutcome::FastForward => {
+            FenceOutcome::FastForward
+                if sync::base_is_ancestor_of_tip(
+                    link.base_commit_sha.as_deref(),
+                    tip.as_deref().unwrap_or_default(),
+                    &commits,
+                ) =>
+            {
                 let local_path = self
                     .speleodb_fast_forward(&endpoint, &token, insecure_http, &link, tip.as_deref())
                     .map_err(local_dto)?;
                 self.set_edit_enabled(true);
                 Ok(StartEditingResult::FastForwarded { local_path })
+            }
+            // A moved-tip the BASE isn't an ancestor of: a genuine fork (not a
+            // forward move). Don't overwrite — reconcile, releasing the lock.
+            FenceOutcome::FastForward => {
+                self.speleodb_release_best_effort(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &link.project_id,
+                );
+                Ok(StartEditingResult::DivergenceNeeded)
             }
             FenceOutcome::Diverged => {
                 // Can't edit a diverged copy. Release the lock we just took so it
@@ -927,13 +983,9 @@ impl AppState {
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
-        let project = self
-            .speleodb_handle_auth(
-                Endpoint::GetProject,
-                client::get_project(&endpoint, &token, insecure_http, &link.project_id),
-            )
+        let (tip, commits) = self
+            .speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
-        let tip = project.latest_commit.as_ref().map(|c| c.id.clone());
 
         match sync::fence(
             link.base_commit_sha.as_deref(),
@@ -941,17 +993,48 @@ impl AppState {
             link.has_unpushed_edits,
         ) {
             FenceOutcome::UpToDate => Ok(UpdateResult::UpToDate),
-            FenceOutcome::FastForward => {
+            FenceOutcome::FastForward
+                if sync::base_is_ancestor_of_tip(
+                    link.base_commit_sha.as_deref(),
+                    tip.as_deref().unwrap_or_default(),
+                    &commits,
+                ) =>
+            {
                 let local_path = self
                     .speleodb_fast_forward(&endpoint, &token, insecure_http, &link, tip.as_deref())
                     .map_err(local_dto)?;
                 Ok(UpdateResult::FastForwarded { local_path })
             }
+            // Moved tip the BASE isn't an ancestor of → a fork, not a forward move.
+            FenceOutcome::FastForward => Ok(UpdateResult::DivergenceNeeded),
             FenceOutcome::Diverged => Ok(UpdateResult::DivergenceNeeded),
             FenceOutcome::FailClosed => Err(local_dto(SpeleoDbError::Sync(
                 "the server reports no commits for a project with a recorded base".to_owned(),
             ))),
         }
+    }
+
+    /// Resolve the server's TRUE HEAD and return it with the full revision
+    /// history. The server's `latest_commit` field (carried by acquire /
+    /// get_project / list) is `max(authored_date)` and ties to the ROOT creation
+    /// commit when commits land within the same second — verified unreliable both
+    /// live and in the server source — so every fence resolves the tip from the
+    /// parent-id topology ([`sync::tip_of`]) instead. Returns `(tip, commits)`;
+    /// `tip` is `None` for an empty / ambiguous (forked) history.
+    fn speleodb_server_head(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        project_id: &str,
+    ) -> Result<(Option<String>, Vec<crate::speleodb::models::RevisionCommit>), SpeleoDbError> {
+        // No GetRevisions endpoint exists; reuse GetProject for the auth/error map.
+        let history = self.speleodb_handle_auth(
+            Endpoint::GetProject,
+            client::get_revisions(endpoint, token, insecure_http, project_id),
+        )?;
+        let tip = sync::tip_of(&history.commits).map(str::to_owned);
+        Ok((tip, history.commits))
     }
 
     /// The push half of [`Self::speleodb_done`]: fence BASE vs the server tip,
@@ -967,14 +1050,12 @@ impl AppState {
     ) -> Result<PushOutcome, SpeleoErrorDto> {
         let project_id = &link.project_id;
 
-        // Authoritative server tip.
-        let project = self
-            .speleodb_handle_auth(
-                Endpoint::GetProject,
-                client::get_project(endpoint, token, insecure_http, project_id),
-            )
+        // Authoritative server tip — the revision topology, NOT the unreliable
+        // latest_commit field (see speleodb_server_head). The fetched history is
+        // reused for ancestry recovery below, so this is the only revisions GET.
+        let (tip, commits) = self
+            .speleodb_server_head(endpoint, token, insecure_http, project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
-        let tip = project.latest_commit.as_ref().map(|c| c.id.clone());
 
         match sync::fence(link.base_commit_sha.as_deref(), tip.as_deref(), true) {
             // base == tip: push our edits directly.
@@ -985,16 +1066,10 @@ impl AppState {
                 let my_email = self
                     .speleodb_my_email()
                     .ok_or_else(|| local_dto(SpeleoDbError::NotAuthenticated))?;
-                let revisions = self
-                    .speleodb_handle_auth(
-                        Endpoint::GetProject,
-                        client::get_revisions(endpoint, token, insecure_http, project_id),
-                    )
-                    .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
                 match sync::classify_ancestry(
                     link.base_commit_sha.as_deref(),
                     tip.as_deref(),
-                    &revisions.commits,
+                    &commits,
                     &my_email,
                     link.last_edit_at.as_deref(),
                     // push-start is not persisted, so g7 stays conservative

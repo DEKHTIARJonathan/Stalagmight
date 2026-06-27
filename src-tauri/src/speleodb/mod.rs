@@ -869,7 +869,10 @@ mod live_tests {
         let tml_sidecar = tml_dir.path().join("ariane.tml");
         std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
 
-        let pushed = client::upload_auto(
+        // upload_auto adopts the TOP-LEVEL `hexsha` (the commit this push created),
+        // not the nested `project.latest_commit` (which is max-authored-date and
+        // ties to the service-account root — see speleodb_server_head).
+        let hexsha = client::upload_auto(
             &url,
             &token,
             false,
@@ -878,13 +881,10 @@ mod live_tests {
             &tml_sidecar,
             "live get_revisions test",
         )
-        .expect("upload/auto should be 200");
-        let tip = pushed
-            .latest_commit
-            .as_ref()
-            .expect("200 carries latest_commit")
-            .id
-            .clone();
+        .expect("upload/auto should be 200")
+        .latest_commit
+        .expect("200 carries the adopted hexsha")
+        .id;
 
         let history =
             client::get_revisions(&url, &token, false, &cleanup.id).expect("get_revisions");
@@ -899,15 +899,23 @@ mod live_tests {
                 c.parent_ids
             );
         }
-        let tip_commit = history
+        // The TOPOLOGICAL leaf — the tip the fence trusts — must equal the commit
+        // upload_auto just created (NOT necessarily the server's latest_commit).
+        assert_eq!(
+            super::sync::tip_of(&history.commits),
+            Some(hexsha.as_str()),
+            "the revision-topology HEAD must equal the just-pushed hexsha"
+        );
+        // That HEAD commit is authored by us — the property g7 ancestry keys off.
+        let head = history
             .commits
             .iter()
-            .find(|c| c.id == tip)
-            .expect("the uploaded tip must appear in the revision history");
+            .find(|c| c.id == hexsha)
+            .expect("the pushed commit must appear in the history");
         assert!(
-            tip_commit.author_email.eq_ignore_ascii_case(&my_email),
-            "the tip commit must be authored by us: {} vs {my_email}",
-            tip_commit.author_email
+            head.author_email.eq_ignore_ascii_case(&my_email),
+            "the HEAD commit must be authored by us: {} vs {my_email}",
+            head.author_email
         );
 
         if let Err(e) = client::release_lock(&url, &token, false, &cleanup.id) {

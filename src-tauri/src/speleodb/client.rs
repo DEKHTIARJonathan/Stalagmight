@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use super::models::{Project, RevisionHistory};
+use super::models::{Commit, Project, RevisionHistory};
 use super::SpeleoDbError;
 
 /// Global per-request timeout for reads. Larger than the tile timeout because a
@@ -453,24 +453,31 @@ pub(crate) fn upload_auto(
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
     }
-    // CONDITIONAL CLEAR (#191): the returned latest_commit.id is the adopted
-    // hexsha; the edit-epoch comparison that clears has_unpushed_edits is owned
-    // by #191 — do NOT clear the dirty bit unconditionally here.
+    // CONDITIONAL CLEAR (#191): the adopted hexsha is the edit-epoch the
+    // comparison that clears has_unpushed_edits is owned by #191 — do NOT clear
+    // the dirty bit unconditionally here.
     // FRESHNESS FOLD (#189/#191): authoritative Project available here; cache +
     // reset last_verify_at lands later (D-B1, #202).
     //
     // The upload/auto success body is an ENVELOPE — `{ files, message, hexsha,
-    // browser_url, project: {…} }` — with the authoritative Project NESTED under
-    // `project` (verified against the live server; a bare `parse_project` here
-    // failed with "missing field `id`"). Parse the nested project, not the
-    // envelope top level. `hexsha` / `browser_url` are surfaced later by #191/#197.
+    // browser_url, project: {…} }` — with the Project NESTED under `project`
+    // (verified live; a bare `parse_project` here failed with "missing field
+    // `id`"). The authoritative SHA of the commit THIS push created is the
+    // TOP-LEVEL `hexsha`. The nested `project.latest_commit` is
+    // eventually-consistent and was observed live still pointing at the PRIOR tip
+    // (the service-account root creation commit) immediately after a push — so we
+    // adopt `hexsha`, not the nested pointer, and overwrite `latest_commit` with
+    // it so every caller's `latest_commit.id` is the commit just created (#197).
     #[derive(serde::Deserialize)]
     struct UploadAutoResponse {
+        hexsha: String,
         project: Project,
     }
     let parsed: UploadAutoResponse = serde_json::from_slice(&body)
         .map_err(|e| SpeleoDbError::Parse(format!("upload auto response: {e}")))?;
-    Ok(parsed.project)
+    let mut project = parsed.project;
+    project.latest_commit = Some(Commit { id: parsed.hexsha });
+    Ok(project)
 }
 
 /// `POST /api/v2/projects/{id}/acquire/` — take the project mutex, returning the
