@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
@@ -46,6 +46,12 @@ export default function SpeleoDbSpikeDialog() {
   // Dev sync trigger (#194/#197): the JSON outcome of the last sync action, shown
   // so the backend hand-off can be driven + verified by hand. Throwaway (#204).
   const [syncResult, setSyncResult] = useState<string | null>(null);
+  // Tracks mount state so runSync's post-await setState is skipped after an
+  // Escape/backdrop close (which isn't gated by `busy`) tears the dialog down.
+  const mountedRef = useRef(true);
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
 
   const refreshProjects = async (isCancelled: () => boolean = () => false) => {
     const list = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
@@ -175,16 +181,37 @@ export default function SpeleoDbSpikeDialog() {
   // --- Dev sync trigger (#194/#197): act on the currently-open project ---
   // These drive the single-writer hand-off by hand. Open a remote project first
   // (the Open button closes this dialog), then reopen it to use these.
+
+  // A fast_forward reloads a DIFFERENT project tree backend-side (close_project +
+  // do_load_project_full), so the frontend store must re-load it or it would show
+  // the pre-FF project. start_editing/update can return this; done never does.
+  const fastForwardPath = (r: unknown): string | null =>
+    typeof r === 'object' && r !== null && (r as { kind?: unknown }).kind === 'fast_forwarded'
+      ? (r as { local_path: string }).local_path
+      : null;
+
   const runSync = async (label: string, op: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
     setSyncResult(null);
     try {
-      setSyncResult(`${label}: ${JSON.stringify(await op())}`);
+      const result = await op();
+      const ffPath = fastForwardPath(result);
+      if (ffPath) {
+        // Backend swapped the open project in place; hand off exactly like
+        // handleOpen so the store matches. closeDialog unmounts us — do not touch
+        // state after it.
+        closeDialog();
+        await loadProject(ffPath);
+        return;
+      }
+      // Escape/backdrop close isn't gated by `busy`, so skip the writes if the
+      // dialog was torn down mid-flight (these calls do network round-trips).
+      if (mountedRef.current) setSyncResult(`${label}: ${JSON.stringify(result)}`);
     } catch (e) {
-      setError(getErrorMessage(e, `${label} failed`));
+      if (mountedRef.current) setError(getErrorMessage(e, `${label} failed`));
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   };
 

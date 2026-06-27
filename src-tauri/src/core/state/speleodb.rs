@@ -219,28 +219,14 @@ enum PushOutcome {
     Unconfirmed,
 }
 
-/// Clear the dirty bit in a push SNAPSHOT copy so the `.stalx` uploaded to the
-/// server never carries `has_unpushed_edits` (the next puller would otherwise see
-/// a dirty file). Best-effort — a failure only means the pushed file keeps a stale
-/// flag, which the puller re-stamps anyway.
+/// Sanitize a push SNAPSHOT copy before upload: clear the dirty bit and strip
+/// local / per-machine / advisory tables so only shared survey data + project
+/// config ride to the server (#197). Best-effort — a failure only means the
+/// pushed file keeps some local state, which the next puller re-derives anyway.
+/// See [`crate::persistence::Database::sanitize_push_snapshot`] for the exact set.
 fn clear_snapshot_dirty(snapshot: &Path) {
-    match crate::persistence::Database::open_existing(snapshot) {
-        Ok(db) => match db.load_speleo_link() {
-            Ok(Some(mut link)) => {
-                link.has_unpushed_edits = false;
-                link.last_edit_at = None;
-                if let Err(e) = db.save_speleo_link(Some(&link)) {
-                    tracing::warn!(error = %e, "clear_snapshot_dirty: failed to clear flag in snapshot");
-                }
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(error = %e, "clear_snapshot_dirty: failed to read snapshot link");
-            }
-        },
-        Err(e) => {
-            tracing::warn!(error = %e, "clear_snapshot_dirty: failed to open snapshot");
-        }
+    if let Err(e) = crate::persistence::Database::sanitize_push_snapshot(snapshot) {
+        tracing::warn!(error = %e, "clear_snapshot_dirty: failed to sanitize push snapshot");
     }
 }
 
@@ -353,8 +339,16 @@ impl AppState {
     }
 
     /// Full local token clear (keychain + plaintext + memory) + session reset —
-    /// the shared sink for the C5 auto-drop paths.
+    /// the shared sink for the C5 auto-drop paths. Also drops the transient edit
+    /// gate: `guard_mutation` reads only `edit_enabled`, so leaving it open after
+    /// the token is gone would let the user keep editing a remote project that can
+    /// no longer be pushed. The server lock is intentionally NOT released here — a
+    /// 401 may be transient, and surrendering the single-writer claim on a flaky
+    /// blip is worse than holding it; a re-login reconciles. (This is the AppState
+    /// auto-drop sink; `Session::forget` is left untouched so the login
+    /// switch-account path does not spuriously close the gate.)
     fn speleodb_forget(&self) {
+        self.set_edit_enabled(false);
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.forget();
         }
@@ -648,9 +642,31 @@ impl AppState {
         })
     }
 
-    /// Forget the local token (keychain + in-memory) and clear the session. No
-    /// server-side call — logout is purely local (the DRF token is not revoked).
+    /// Forget the local token (keychain + in-memory) and clear the session. The
+    /// DRF token is not revoked server-side, but if we were mid-edit on a remote
+    /// project we best-effort RELEASE the write lock (it needs the token, so before
+    /// `forget`) so it isn't stranded, and drop the transient edit gate — a
+    /// token-less session must not keep mutating a project it can never push.
     pub(crate) fn speleodb_logout(&self) -> Result<(), SpeleoErrorDto> {
+        // A held write lock exists only on a remote EDIT session (edit_enabled +
+        // a remote link); a read-only-open or local project holds none. In that
+        // case best-effort RELEASE the lock (needs the token, so before `forget`)
+        // and drop the gate — independent of whether the token still resolves, a
+        // logged-out session must not keep editing a project it can never push.
+        if self.edit_enabled() {
+            if let Ok(link) = self.speleodb_open_link() {
+                if let Ok((endpoint, token)) = self.speleodb_active_token() {
+                    let insecure_http = self.speleodb_insecure_http();
+                    self.speleodb_release_best_effort(
+                        &endpoint,
+                        &token,
+                        insecure_http,
+                        &link.project_id,
+                    );
+                }
+                self.set_edit_enabled(false);
+            }
+        }
         self.speleodb_session_lock().map_err(local_dto)?.forget();
         Ok(())
     }
@@ -1018,9 +1034,21 @@ impl AppState {
                     &commits,
                 ) =>
             {
+                // speleodb_fast_forward reloads in place, which re-derives the edit
+                // gate from is_remote (= false for a remote project). If the caller
+                // was mid-edit-session (gate on, lock held — reachable if the lock
+                // lapsed/was admin-released and another writer advanced the tip),
+                // a clean FF must NOT silently strip editability; restore it after
+                // the reload, mirroring speleodb_start_editing's FF arm. Captured
+                // BEFORE the reload (which sets the gate false). FF only fires with
+                // dirty == false, so there are no un-pushed edits to strand.
+                let was_editing = self.edit_enabled();
                 let local_path = self
                     .speleodb_fast_forward(&endpoint, &token, insecure_http, &link, tip.as_deref())
                     .map_err(local_dto)?;
+                if was_editing {
+                    self.set_edit_enabled(true);
+                }
                 Ok(UpdateResult::FastForwarded { local_path })
             }
             // Moved tip the BASE isn't an ancestor of → a fork, not a forward move.
@@ -1164,6 +1192,15 @@ impl AppState {
         let snapshot = dir.join("snapshot.stalx");
         let tml = dir.join("ariane.tml");
 
+        // Push-start fence (#197): capture the instant BEFORE the flush/snapshot.
+        // Any edit recorded after this (last_edit_at > push_start) is NOT in the
+        // snapshot we upload, so a confirmed push must NOT clear its dirty bit — it
+        // is re-pushed on the next Done instead of being silently dropped. (dirty
+        // edits always carry a last_edit_at: mark_remote_dirty stamps both
+        // together, so the None branch of edits_captured_by_push is unreachable for
+        // a real dirty bit here.)
+        let push_start = chrono::Utc::now().to_rfc3339();
+
         // Flush in-memory state to the live `.stalx` FIRST, THEN render the `.tml`.
         // save_project heals the in-memory project (mints + DEDUPS shot UUIDs and
         // sanitizes non-finite geometry); rendering the `.tml` after that heal is
@@ -1197,23 +1234,35 @@ impl AppState {
             ),
         );
         match result {
-            // 200: BASE advances to the adopted hexsha; dirty cleared.
+            // 200: BASE advances to the adopted hexsha. Clear the dirty bit ONLY if
+            // no edit was recorded after push_start (else a concurrent edit during
+            // the upload would be dropped — keep it dirty so the next Done re-pushes
+            // it). BASE advances unconditionally: the uploaded snapshot IS the new
+            // base; a kept late edit is a clean second commit on top of it.
             Ok(pushed) => {
                 let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
                 self.speleodb_mutate_link(|l| {
                     l.base_commit_sha = new_base;
-                    l.has_unpushed_edits = false;
-                    l.last_edit_at = None;
+                    if sync::edits_captured_by_push(l.last_edit_at.as_deref(), Some(&push_start)) {
+                        l.has_unpushed_edits = false;
+                        l.last_edit_at = None;
+                    }
                 })
                 .map_err(local_dto)?;
                 Ok(PushOutcome::Confirmed)
             }
             Err(e) => {
-                // 304: the remote tree already matches — clear dirty, BASE unchanged.
+                // 304: the remote tree already matches — clear dirty (same push-start
+                // guard as the 200 path), BASE unchanged.
                 if matches!(&e, SpeleoDbError::Status { status: 304, .. }) {
                     self.speleodb_mutate_link(|l| {
-                        l.has_unpushed_edits = false;
-                        l.last_edit_at = None;
+                        if sync::edits_captured_by_push(
+                            l.last_edit_at.as_deref(),
+                            Some(&push_start),
+                        ) {
+                            l.has_unpushed_edits = false;
+                            l.last_edit_at = None;
+                        }
                     })
                     .map_err(local_dto)?;
                     return Ok(PushOutcome::Confirmed);

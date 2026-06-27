@@ -3902,3 +3902,86 @@ fn vacuum_snapshot_missing_source_errors() {
     assert!(Database::vacuum_snapshot(&src, &dest).is_err());
     assert!(!dest.exists(), "no snapshot written on error");
 }
+
+#[test]
+fn sanitize_push_snapshot_strips_local_state_keeps_survey() {
+    // #197: the push snapshot must carry shared survey data + config only — never
+    // the dirty bit or per-machine / advisory tables (display_settings, the import
+    // dedup hashes, resolved_warnings). The survey project row is preserved.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("push.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Push".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&sample_speleo_link(Some("abc"), true)))
+            .unwrap();
+        // A non-null edit timestamp so the clear is observable, plus a row in each
+        // local / advisory table that must NOT ride to the server. (FK off so the
+        // resolved_warnings seed needn't materialize a real section — we only need
+        // the row present to prove sanitize strips it.)
+        db.conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+        db.conn
+            .execute(
+                "UPDATE speleo_link SET last_edit_at = '2026-01-01T00:00:00+00:00'",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO display_settings (key, value) VALUES ('zoom', '2')",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at) \
+                 VALUES (1, 1, 'X', '2026-01-01T00:00:00+00:00')",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute("INSERT INTO imported_file_hashes (hash) VALUES ('h1')", [])
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO imported_section_hashes (hash) VALUES ('h2')",
+                [],
+            )
+            .unwrap();
+    }
+
+    Database::sanitize_push_snapshot(&path).unwrap();
+
+    let snap = Database::open_existing(&path).unwrap();
+    for table in [
+        "display_settings",
+        "resolved_warnings",
+        "imported_file_hashes",
+        "imported_section_hashes",
+    ] {
+        let n: i64 = snap
+            .conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "{table} must be stripped from the push snapshot");
+    }
+    // Dirty bit + edit timestamp cleared; the hand-off identity is preserved.
+    let link = snap.load_speleo_link().unwrap().expect("link kept");
+    assert!(
+        !link.has_unpushed_edits,
+        "dirty bit cleared in the push snapshot"
+    );
+    assert_eq!(link.last_edit_at, None, "edit timestamp cleared");
+    assert_eq!(
+        link.base_commit_sha.as_deref(),
+        Some("abc"),
+        "identity preserved"
+    );
+    // Survey data survives the sanitize.
+    assert_eq!(
+        snap.load_project().unwrap().name,
+        "Push",
+        "survey project preserved in the push snapshot"
+    );
+}

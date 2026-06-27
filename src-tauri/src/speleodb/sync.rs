@@ -270,7 +270,15 @@ pub(crate) fn base_is_ancestor_of_tip(
 /// happened after the push began. Biased to **false** (keep the dirty bit) on any
 /// uncertainty: a wrongly-kept dirty bit costs only a redundant no-op re-push,
 /// whereas a wrongly-cleared one drops un-pushed edits.
-fn edits_captured_by_push(last_edit_at: Option<&str>, push_start_at: Option<&str>) -> bool {
+///
+/// Used both by `classify_ancestry` (g7) and by the push 200/304 dirty-clear
+/// (#197): a confirmed push clears the dirty bit ONLY when this returns true, so a
+/// concurrent edit recorded after `push_start_at` (not in the uploaded snapshot)
+/// keeps its dirty bit and is re-pushed on the next Done rather than silently lost.
+pub(crate) fn edits_captured_by_push(
+    last_edit_at: Option<&str>,
+    push_start_at: Option<&str>,
+) -> bool {
     match (last_edit_at, push_start_at) {
         (Some(le), Some(ps)) => match (
             chrono::DateTime::parse_from_rfc3339(le),

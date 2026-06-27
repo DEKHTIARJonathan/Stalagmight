@@ -45,6 +45,50 @@ impl Database {
         Ok(())
     }
 
+    /// Sanitize a push SNAPSHOT in place (#197) so the `.stalx` uploaded to the
+    /// server carries only shared survey data + project config — never local,
+    /// per-machine, per-session, or advisory state:
+    ///
+    /// - clears `speleo_link.has_unpushed_edits` / `last_edit_at` (the dirty bit
+    ///   must not ride to the server; the next puller re-stamps it anyway);
+    /// - empties `display_settings` (per-machine view toggles), the
+    ///   `imported_file_hashes` / `imported_section_hashes` import-dedup bookkeeping
+    ///   (re-derived locally), and `resolved_warnings` (advisory; a read-only
+    ///   viewer can resolve warnings without the edit lock, and those resolutions
+    ///   must not propagate to collaborators — see #197 / the carry-forward note).
+    ///
+    /// `project_settings` is deliberately KEPT: it is the shared validation config
+    /// (#57), is edit-gated, and is meant to travel with the project.
+    ///
+    /// Operates on a SNAPSHOT copy via its own connection; the live project file is
+    /// never touched. Statements run independently so a missing table (an older
+    /// snapshot shape) is logged, not fatal.
+    pub fn sanitize_push_snapshot(snapshot: &Path) -> Result<()> {
+        let conn = Connection::open(snapshot).context("open snapshot to sanitize for push")?;
+        // The dirty bit / edit timestamp are local hand-off state, never server state.
+        conn.execute(
+            "UPDATE speleo_link SET has_unpushed_edits = 0, last_edit_at = NULL",
+            [],
+        )
+        .context("clear dirty bit in push snapshot")?;
+        // Local / advisory tables stripped so they don't carry forward to the server.
+        for table in [
+            "display_settings",
+            "imported_file_hashes",
+            "imported_section_hashes",
+            "resolved_warnings",
+        ] {
+            if let Err(e) = conn.execute(&format!("DELETE FROM {table}"), []) {
+                tracing::warn!(
+                    error = %e,
+                    table,
+                    "sanitize_push_snapshot: failed to strip local table from snapshot"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Open a database for recovery purposes, skipping integrity checks.
     /// This allows reading whatever data is still accessible from a corrupt file.
     pub fn open_for_recovery(path: &Path) -> Result<Self> {

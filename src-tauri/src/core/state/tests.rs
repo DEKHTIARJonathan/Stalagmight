@@ -18824,6 +18824,43 @@ fn remote_open_without_lock_disables_edit() {
     assert!(state.edit_enabled(), "close resets the gate");
 }
 
+#[test]
+fn logout_closes_edit_gate_on_remote_edit_session() {
+    // #197: logging out mid-edit on a remote project must drop the edit gate (so a
+    // token-less session can't keep mutating a project it can never push) — the
+    // lock release is best-effort and needs no token in this offline fixture.
+    let (state, _sid, _shid, _temp) = remote_fixture_editable();
+    assert!(
+        state.edit_enabled(),
+        "precondition: remote edit session, gate on"
+    );
+    state.speleodb_logout().expect("logout");
+    assert!(
+        !state.edit_enabled(),
+        "logout must drop the edit gate on a remote edit session"
+    );
+}
+
+#[test]
+fn logout_leaves_local_project_editable() {
+    // Logout must NOT touch a local-only project's gate (no remote link → no lock).
+    let state = AppState::new().unwrap();
+    assert!(
+        state
+            .execute(Command::CreateProject {
+                name: "Local".to_string(),
+                location: None,
+            })
+            .success
+    );
+    assert!(state.edit_enabled(), "local project editable");
+    state.speleodb_logout().expect("logout");
+    assert!(
+        state.edit_enabled(),
+        "logout must not disable editing on a local-only project"
+    );
+}
+
 /// The chokepoint enumeration tripwire (D-B6): every SURVEY-CONTENT mutation entry
 /// listed in MUTATION_ENTRYPOINTS must reject on a read-only remote project with the
 /// EDIT_DISABLED code (or, for repair, changed == false).
