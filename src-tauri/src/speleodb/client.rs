@@ -318,9 +318,13 @@ fn parse_project(body: &[u8], context: &str) -> Result<Project, SpeleoDbError> {
     serde_json::from_slice(body).map_err(|e| SpeleoDbError::Parse(format!("{context}: {e}")))
 }
 
-/// MIME type for an artifact part, by extension (D-A-mime). The server routes on
-/// extension via the AUTO catch-all; explicit MIME is robustness, not a hard
-/// requirement (OPEN-1, corrected).
+/// MIME type for an artifact part, by extension (D-A-mime). The server selects
+/// the processor by *extension* via the AUTO catch-all, but then validates the
+/// part's `Content-Type` against that processor's allow-list — so for `.tml` the
+/// explicit MIME is **REQUIRED, not just robustness**: `ArianeTMLFileProcessor`
+/// allows only `application/octet-stream` / `application/zip` (no `text/plain`),
+/// and a bare `.tml` part is rejected with HTTP 400 (OPEN-1, resolved live at
+/// #184: `live_open1_bare_tml_mime_outcome`; see `docs/speleodb-dev-testing.md`).
 fn mime_for(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
         Some("stalx") => "application/vnd.sqlite3",

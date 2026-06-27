@@ -138,3 +138,80 @@ Checked against `~/src/cave/SpeleoDB`; these override the stale issue text:
   `TARGET_FOLDER` change).
 - **Upload requires the mutex** — `PUT /projects/{id}/upload/auto/` is gated by
   `UserOwnsProjectMutex`, so seed via `acquire_lock` first, then `release_lock`.
+
+## Render-compat verification (#184 — the P0.5 gate)
+
+The premise of the whole `.tml` render sidecar is that SpeleoDB's `openspeleo_lib`
+accepts **our exporter's** `.tml` and regenerates a `ProjectGeoJSON`. #184 proves
+that against the live box. Three `#[ignore]` tests live in `speleodb::live_tests`
+(single-account tier):
+
+- `live_render_compat_georef_generates_geojson` — **the gate.** Builds an in-memory
+  georeferenced project (a `ZeroDatum` with real lat/long), `export_tml`s it, pushes
+  it via the production two-`artifact` `upload/auto`, then **reads the render back**
+  and asserts features exist.
+- `live_render_compat_no_anchor_records_geojson_state` — pushes an un-georeferenced
+  project (0/0 START) and records that no new render is generated (the D2 path).
+- `live_open1_bare_tml_mime_outcome` — resolves OPEN-1 (below).
+
+Key server facts these depend on (checked against `~/src/cave/SpeleoDB`):
+
+- **A 200 upload does NOT prove a render.** `survey_to_geojson` runs best-effort
+  *after* the commit; `api/v2/views/file.py` catches `NoKnownAnchorError` /
+  `EmptySurveyError` / any `Exception` and `continue`s, so the push still 200s with
+  no `ProjectGeoJSON`. The render must be read back to be verified.
+- **Read the render back via OGC API - Features** (no `Authorization` header — the
+  token authenticates via the URL path; the `user_token` converter requires a
+  **40-hex** key, which the DRF token is):
+
+  ```
+  GET /api/v2/gis-ogc/user/<token>/collections/<commit_sha>_points/items
+  GET /api/v2/gis-ogc/user/<token>/collections/<commit_sha>_lines/items
+  ```
+
+  Returns a **bare** `FeatureCollection` (`{"type":"FeatureCollection","features":[…],
+  "numberMatched":N,…}`, a `StreamingHttpResponse`) on 200, and **404** when no
+  `ProjectGeoJSON` exists for that commit + geometry group. The collection id is
+  `<sha>_(points|lines)` (`ogc_typed_id` converter). A lighter
+  `GET /api/v2/projects/{id}/geojson/` (Bearer, ≥ READ_ONLY) lists the commits that
+  have a render.
+- **No-anchor → "may be stale", not blank.** On `NoKnownAnchorError` the server keeps
+  the previous commit's `ProjectGeoJSON` row (it only skips generating a *new* one),
+  which is why the D2 banner copy says the map *may be stale* rather than missing.
+
+### OPEN-1 — is explicit per-part MIME required for the `.tml`?
+
+The server selects the upload processor by **extension** (`processors/auto_selector.py`:
+`.tml` → `ArianeTMLFileProcessor`), then validates the multipart part's `Content-Type`
+against `ArianeTMLFileProcessor.ALLOWED_MIMETYPES = ["application/octet-stream",
+"application/zip"]` (enforced in `processors/artifact.py::assert_valid`). **`text/plain`
+is not allowed**, so a part whose Content-Type is `text/plain` (the multipart default
+when none is set, or `mime_guess` on the unknown `.tml` extension) is rejected →
+`ValidationError` → `ATOMIC_REQUESTS` rollback → **400**. Our production
+`client::upload_auto` always sends `application/octet-stream`, so it passes. This means
+the `client.rs::mime_for` comment ("explicit MIME is robustness, not a hard
+requirement") is **wrong on the server contract**: an `octet-stream`/`zip` Content-Type
+is genuinely required for the `.tml` part. `live_open1_bare_tml_mime_outcome` confirms
+empirically what Content-Type `ureq`'s bare `Part::file()` actually sends (and thus
+whether *our client specifically* could omit the explicit MIME); it prints the verdict.
+
+### Live-run results (2026-06-27, box `http://10.10.0.220:8000/`)
+
+Ran `live_render_compat_georef_generates_geojson`, `live_render_compat_no_anchor_records_geojson_state`,
+and `live_open1_bare_tml_mime_outcome` against the box — all pass:
+
+- **🟢 GATE GREEN.** A Stalagmight-exported **georeferenced** `.tml` regenerated a
+  `ProjectGeoJSON`: the OGC `<sha>_points` layer returned HTTP 200 with **1** feature
+  and `<sha>_lines` returned 200 with **2** features (the 2 shot segments). So
+  `openspeleo_lib` accepts our exporter output — the P1 render/push half is de-risked;
+  no exporter fix / #219 fast-track is needed to proceed.
+- **No-anchor → no render.** A push of the same project with **no** zero datum (0/0
+  START) still 200'd, but both `<sha>_points` and `<sha>_lines` returned **404** — i.e.
+  no new `ProjectGeoJSON` for that commit (the D2 "may be stale" banner path). 0/0 IS
+  treated as "no known anchor".
+- **OPEN-1 resolved → explicit MIME REQUIRED.** A `.tml` part sent **without** an
+  explicit `Content-Type` (bare `ureq` `Part::file()`) was rejected with **HTTP 400** —
+  ureq's default part Content-Type is not in `ArianeTMLFileProcessor`'s
+  `{octet-stream, zip}` allow-list. So `client::mime_for`'s explicit
+  `application/octet-stream` for `.tml` is load-bearing, not defensive (the old "not a
+  hard requirement" comment was wrong and has been corrected).
