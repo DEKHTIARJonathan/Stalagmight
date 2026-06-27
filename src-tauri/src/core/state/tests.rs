@@ -18828,8 +18828,17 @@ fn remote_open_without_lock_disables_edit() {
 /// repair, changed == false). A newly-added mutation path that forgets the guard
 /// fails here. The names are pinned in MUTATION_ENTRYPOINTS below.
 const MUTATION_ENTRYPOINTS: &[&str] = &[
-    // execute() + its in-execute arms (MoveComment, ApplyCollabChanges)
+    // execute() + a representative spread of non-lifecycle Command variants. The
+    // guard runs BEFORE the variant match, so one code path gates them all — but
+    // probing the GEOMETRY variants the move/drag tools use (MoveStation/Segment/
+    // Section/Batch) guards against a future misclassification into the
+    // is_lifecycle_passthrough arm, which the lone UpdateShot probe would NOT
+    // catch. That gap sat behind the move-shot read-only "shots vanish" report.
     "execute",
+    "execute:MoveStation",
+    "execute:MoveSegment",
+    "execute:MoveSection",
+    "execute:Batch",
     "execute:MoveComment",
     "execute:ApplyCollabChanges",
     // history entrypoints
@@ -18846,9 +18855,10 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "execute_delete_last_shot_and_section",
     "execute_create_and_merge",
     "execute_import_sections",
-    // collab toggles
+    // by-path / metadata methods (gated only when path == the OPEN project)
     "set_collab_enabled",
     "set_collab_enabled_for_path",
+    "set_project_name_for_path",
 ];
 
 #[test]
@@ -18857,7 +18867,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call below.
     assert_eq!(
         MUTATION_ENTRYPOINTS.len(),
-        17,
+        22,
         "update both the routing and this list when adding a mutation entry"
     );
 
@@ -18881,6 +18891,39 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                 section_id: sid,
                 shot_id: shid,
                 updates: ShotUpdates::default(),
+            }),
+        );
+        // Geometry variants (the move/drag tools) — explicitly gated so a future
+        // reclassification into is_lifecycle_passthrough can't silently reopen the
+        // move-shot read-only hole.
+        assert_disabled(
+            "execute:MoveStation",
+            &state.execute(Command::MoveStation {
+                station_ref: StationRef::new(sid, 1),
+                offset: Coordinates::new(1.0, 2.0, 0.0),
+            }),
+        );
+        assert_disabled(
+            "execute:MoveSegment",
+            &state.execute(Command::MoveSegment {
+                section_id: sid,
+                offset: Coordinates::new(1.0, 2.0, 0.0),
+            }),
+        );
+        assert_disabled(
+            "execute:MoveSection",
+            &state.execute(Command::MoveSection {
+                section_id: sid,
+                offset: Coordinates::new(1.0, 2.0, 0.0),
+            }),
+        );
+        assert_disabled(
+            "execute:Batch",
+            &state.execute(Command::Batch {
+                commands: vec![Command::MoveStation {
+                    station_ref: StationRef::new(sid, 1),
+                    offset: Coordinates::new(1.0, 2.0, 0.0),
+                }],
             }),
         );
         assert_disabled(
@@ -18986,11 +19029,15 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     {
         let (state, _sid, _shid, _temp) = remote_fixture();
         assert_disabled("set_collab_enabled", &state.set_collab_enabled(true));
-        // set_collab_enabled_for_path is gated only when path == the OPEN project.
+        // The by-path methods are gated only when path == the OPEN project.
         let open_path = state.get_project_state().unwrap().file_path.unwrap();
         assert_disabled(
             "set_collab_enabled_for_path",
-            &state.set_collab_enabled_for_path(open_path, true),
+            &state.set_collab_enabled_for_path(open_path.clone(), true),
+        );
+        assert_disabled(
+            "set_project_name_for_path",
+            &state.set_project_name_for_path(open_path, "Renamed Remote".to_string()),
         );
     }
 }
