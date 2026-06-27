@@ -20,6 +20,8 @@ pub(crate) mod client;
 pub(crate) mod contract;
 pub(crate) mod dump;
 pub mod models;
+// [P1] #192/#193 pure sync-engine logic: base-SHA fence + ancestry recovery.
+pub(crate) mod sync;
 // [Track A] #187 http/https private-network TLS policy (pure classify_addr + enforce).
 pub(crate) mod tls;
 
