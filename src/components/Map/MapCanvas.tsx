@@ -193,6 +193,8 @@ function MapCanvas() {
   const gasOriginMarkerRef = useRef<maplibregl.Marker | null>(null);
   const gasTurnMarkersRef = useRef<maplibregl.Marker[]>([]);
   const gasZeroDatumMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const gasDropMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const gasFinalTurnMarkerRef = useRef<maplibregl.Marker | null>(null);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
@@ -2115,6 +2117,69 @@ function MapCanvas() {
       gasZeroDatumMarkersRef.current = [];
     };
   }, [showGasPlan, activeStations, gpsOrigin, mapLoaded, setGasOrigin, t]);
+
+  // Staged-strategy route markers (#233): a ▼ drop marker where each stage is dropped along the
+  // deepest-penetration route, plus a distinct final-turn marker where the back-gas leg runs out.
+  // The backend leaves `stage_drop_refs`/`final_turn_ref` empty for All-thirds, so these only
+  // appear for the Half-Minus strategies. Plan mode only; bounded by the stage count (≤2).
+  useEffect(() => {
+    for (const m of gasDropMarkersRef.current) m.remove();
+    gasDropMarkersRef.current = [];
+    gasFinalTurnMarkerRef.current?.remove();
+    gasFinalTurnMarkerRef.current = null;
+    if (!map.current || !mapLoaded || !showGasPlan || !gasReachField) return undefined;
+    const mapInst = map.current;
+    const lngLatFor = (ref: { section_id: number; station_index: number }) => {
+      const st = activeStations.find(
+        (s) =>
+          s.station_ref.section_id === ref.section_id &&
+          s.station_ref.station_index === ref.station_index
+      );
+      return st
+        ? (metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin) as [number, number])
+        : null;
+    };
+
+    gasReachField.stage_drop_refs.forEach((ref, i) => {
+      const lngLat = lngLatFor(ref);
+      if (!lngLat) return;
+      const el = document.createElement('div');
+      el.setAttribute('data-testid', 'gas-drop-marker');
+      el.title = t('gasPanel.map.dropTooltip', { n: i + 1 });
+      el.style.cssText = 'line-height:0;pointer-events:none;filter:drop-shadow(0 0 1px rgba(0,0,0,0.6));';
+      // Downward triangle = "drop the stage here".
+      el.innerHTML =
+        '<svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">' +
+        '<path d="M3 6h18L12 20z" fill="#e08a1e" stroke="#ffffff" stroke-width="1.5" ' +
+        'stroke-linejoin="round"/></svg>';
+      gasDropMarkersRef.current.push(
+        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(mapInst)
+      );
+    });
+
+    const finalRef = gasReachField.final_turn_ref;
+    if (finalRef) {
+      const lngLat = lngLatFor(finalRef);
+      if (lngLat) {
+        const el = document.createElement('div');
+        el.setAttribute('data-testid', 'gas-final-turn-marker');
+        el.title = t('gasPanel.map.finalTurnTooltip');
+        el.style.cssText =
+          'width:16px;height:16px;border-radius:50%;border:3px solid #ffffff;' +
+          'background:#7b2fbf;box-shadow:0 0 4px rgba(0,0,0,0.7);pointer-events:none;';
+        gasFinalTurnMarkerRef.current = new maplibregl.Marker({ element: el })
+          .setLngLat(lngLat)
+          .addTo(mapInst);
+      }
+    }
+
+    return () => {
+      for (const m of gasDropMarkersRef.current) m.remove();
+      gasDropMarkersRef.current = [];
+      gasFinalTurnMarkerRef.current?.remove();
+      gasFinalTurnMarkerRef.current = null;
+    };
+  }, [showGasPlan, gasReachField, activeStations, gpsOrigin, mapLoaded, t]);
 
   // Lazily fetch closure-adjusted geometry when the adjusted view is active and
   // we don't have it yet (first switch, or after an edit invalidated it). The

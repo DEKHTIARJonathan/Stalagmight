@@ -204,7 +204,7 @@ describe('defaultConfig structure', () => {
       expect(defaultConfig.gas.conservative_tank_gas).toBe(true);
       expect(defaultConfig.gas.dpv).toBeNull();
       expect(defaultConfig.gas.reserve_profile).toEqual({
-        turn_buffer_bar: 15,
+        stage_reserve_bar: 30,
         recalc_hold_stage2_bar: 100,
         recalc_hold_stage1_bar: 70,
       });

@@ -2075,13 +2075,14 @@
       "rmvUnitImperial": "cu ft/min"
     },
     "reserve": {
-      "label": "Reserve",
+      "label": "Gas strategy",
       "all_thirds": "All thirds",
-      "one_stage": "1-stage",
-      "two_stage": "2-stage",
-      "needsStages": "Add {{count}} stage cylinder(s) to your rig to use this preset.",
-      "advancedTitle": "Advanced reserve preset",
-      "advancedBody": "Staged presets push past strict thirds and require multi-cylinder gas management. Use only if you're trained to balance gas across back gas and stages.",
+      "one_stage": "Half Minus: 1 stage",
+      "two_stage": "Half Minus: 2 stages",
+      "needsStages": "Add {{count}} stage cylinder(s) to your rig to use this strategy.",
+      "stageReserveLabel": "Stage reserve",
+      "advancedTitle": "Advanced gas strategy",
+      "advancedBody": "Use only if you're trained to balance gas across back gas and stages.",
       "advancedConfirm": "I understand",
       "advancedCancel": "Cancel"
     },
@@ -2115,12 +2116,18 @@
     },
     "readout": {
       "label": "Plan",
-      "turnPressure": "Turn pressure",
+      "backgasTurnPressure": "Backgas turn pressure",
+      "stage1DropPressure": "Stage 1 drop pressure",
+      "stage2DropPressure": "Stage 2 drop pressure",
       "budget": "Turn budget",
       "maxPenetration": "Gas to farthest point",
       "maxPenetrationHint": "Gas consumed to reach the deepest in-budget station (a volume, not a distance).",
       "turnPoints": "Turn points",
       "computing": "Computing…"
+    },
+    "map": {
+      "dropTooltip": "Drop stage {{n}} here",
+      "finalTurnTooltip": "Turn around here"
     }
   },
   "modeCarousel": {

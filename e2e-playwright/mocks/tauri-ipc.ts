@@ -1269,6 +1269,29 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const turn_frontier = stations
               .filter((_s, i) => reachable[i] && i + 1 < stations.length && !reachable[i + 1])
               .map((s) => s.station_ref);
+            // Staged-strategy route + drops (Half-Minus). Mirror the backend: only the staged
+            // strategies (one_stage / two_stage) carry a route + drop points; All-thirds leaves
+            // them empty. Synthesize drops from the reachable stations so the markers render.
+            const strategy =
+              (args?.gasConfig as { default_reserve?: string } | undefined)?.default_reserve ??
+              'all_thirds';
+            const dropCount = strategy === 'two_stage' ? 2 : strategy === 'one_stage' ? 1 : 0;
+            const reachableRefs = stations
+              .filter((_s, i) => reachable[i])
+              .map((s) => s.station_ref);
+            let deepestIdx = -1;
+            let deepestGas = -1;
+            for (let i = 0; i < gas_to_reach.length; i += 1) {
+              if (reachable[i] && gas_to_reach[i] > deepestGas) {
+                deepestGas = gas_to_reach[i];
+                deepestIdx = i;
+              }
+            }
+            const route_refs = dropCount > 0 ? reachableRefs : [];
+            const stage_drop_refs =
+              dropCount > 0 ? reachableRefs.slice(1, 1 + dropCount) : [];
+            const final_turn_ref =
+              dropCount > 0 && deepestIdx >= 0 ? stations[deepestIdx].station_ref : null;
             return {
               station_refs: stations.map((s) => s.station_ref),
               gas_to_reach,
@@ -1276,6 +1299,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               turn_frontier,
               max_reachable_gas,
               budget_litres,
+              route_refs,
+              stage_drop_refs,
+              final_turn_ref,
             };
           }
 
@@ -2406,7 +2432,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 units: 'metric',
                 default_reserve: 'all_thirds',
                 reserve_profile: {
-                  turn_buffer_bar: 15,
+                  stage_reserve_bar: 30,
                   recalc_hold_stage2_bar: 100,
                   recalc_hold_stage1_bar: 70,
                 },
@@ -2651,7 +2677,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 units: 'metric',
                 default_reserve: 'all_thirds',
                 reserve_profile: {
-                  turn_buffer_bar: 15,
+                  stage_reserve_bar: 30,
                   recalc_hold_stage2_bar: 100,
                   recalc_hold_stage1_bar: 70,
                 },

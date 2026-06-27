@@ -186,6 +186,10 @@ test.describe('Gas planning', () => {
     // The "max" readout is labelled as a gas volume, not a penetration distance.
     await expect(page.locator('[data-testid="gas-readout-max"]')).toBeVisible({ timeout: 3000 });
     await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Gas to farthest point');
+    // The strategy is "Gas strategy" with the back-gas turn-pressure gauge (All-thirds default).
+    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Gas strategy');
+    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Backgas turn pressure');
+    await expect(page.locator('[data-testid="gas-readout-backgas-turn"]')).toBeVisible();
   });
 
   test('adding a stage enables a pushy preset behind the advanced acknowledgment @smoke', async ({
@@ -208,10 +212,22 @@ test.describe('Gas planning', () => {
     await oneStage.click();
     await expect(page.locator('[data-testid="gas-pushy-ack"]')).toBeVisible();
 
-    // Confirming applies the preset (selected ring) and dismisses the gate.
+    // Confirming applies the strategy (selected ring) and dismisses the gate.
     await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
     await expect(page.locator('[data-testid="gas-pushy-ack"]')).toHaveCount(0);
     await expect(oneStage).toHaveClass(/ring-accent/);
+
+    // The staged strategy refetches a field with a route → a ▼ drop marker + the ◉ final-turn
+    // marker render, and the readout gains the per-stage drop gauge.
+    await expect
+      .poll(() => page.locator('[data-testid="gas-drop-marker"]').count(), { timeout: 3000 })
+      .toBeGreaterThan(0);
+    await expect
+      .poll(() => page.locator('[data-testid="gas-final-turn-marker"]').count(), { timeout: 3000 })
+      .toBeGreaterThan(0);
+    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Stage 1 drop pressure');
+    // The per-stage reserve input appears for a staged strategy (default 30 bar).
+    await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toBeVisible();
   });
 
   test('carousel switches Survey/Plan/Export; Plan is read-only; Export is a stub @smoke', async ({
