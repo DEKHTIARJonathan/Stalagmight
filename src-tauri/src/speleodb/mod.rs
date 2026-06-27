@@ -29,7 +29,7 @@ pub(crate) mod tls;
 pub use contract::SpeleoDbAction;
 pub use models::{
     Permission, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
-    SpeleoSessionStatus,
+    SpeleoSessionStatus, StartEditingResult,
 };
 
 /// Errors from the SpeleoDB client and dump handling.
@@ -82,6 +82,15 @@ pub(crate) enum SpeleoDbError {
     // request attempt, so `with_retry` never loops on it.
     #[error("refusing to use an insecure SpeleoDB endpoint: {endpoint}")]
     InsecureEndpoint { endpoint: String },
+    /// [P1] No open remote SpeleoDB project to act on (start editing / done /
+    /// update require one). Fails closed (Fatal).
+    #[error("no open SpeleoDB project")]
+    NoRemoteProject,
+    /// [P1] A sync-engine invariant could not be satisfied safely (e.g. the
+    /// base-SHA fence or ancestry recovery saw an anomalous server state). Fails
+    /// closed (Fatal) — never an invitation to overwrite.
+    #[error("SpeleoDB sync error: {0}")]
+    Sync(String),
 }
 
 #[cfg(test)]
@@ -115,6 +124,14 @@ mod tests {
         assert_eq!(
             SpeleoDbError::InvalidProjectId.to_string(),
             "invalid SpeleoDB project id"
+        );
+        assert_eq!(
+            SpeleoDbError::NoRemoteProject.to_string(),
+            "no open SpeleoDB project"
+        );
+        assert_eq!(
+            SpeleoDbError::Sync("base vanished".to_owned()).to_string(),
+            "SpeleoDB sync error: base vanished"
         );
         assert_eq!(
             SpeleoDbError::MissingCredentials.to_string(),

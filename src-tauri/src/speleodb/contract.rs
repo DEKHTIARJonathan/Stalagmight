@@ -64,14 +64,11 @@ pub(crate) enum Endpoint {
     )]
     GetProject,
     DownloadDump,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by #194 lock caller")
-    )]
+    // [P1] #194 start_editing constructs Acquire (auth handler + dto_for_error).
     Acquire,
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "constructed by #194 lock caller")
+        expect(dead_code, reason = "constructed by #197 release caller")
     )]
     Release,
     #[cfg_attr(

@@ -50,10 +50,6 @@ pub(crate) enum FenceOutcome {
 /// - `tip`   — the server's current latest commit (`None` = server reports none).
 /// - `dirty` — `has_unpushed_edits`.
 #[must_use]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "fence consumer is #194 start_editing (Unit 4)")
-)]
 pub(crate) fn fence(base: Option<&str>, tip: Option<&str>, dirty: bool) -> FenceOutcome {
     match (base, tip) {
         // base == tip (including the empty-repo None == None): nothing remote to

@@ -224,11 +224,8 @@ pub(crate) fn list_projects(
 
 /// `GET /api/v2/projects/{id}/` — fetch a single project (D-B11, #185). A ~10-line
 /// mirror of [`list_projects`] parsing one bare [`Project`]. The caller validates
-/// `project_id` (UUID) before calling. #202 consumes this on the freshness-fold
-/// path.
-// Production primitive landed now (D-B11); its orchestration caller is #202, so
-// it is dead in the non-test lib build until then.
-#[cfg_attr(not(test), expect(dead_code, reason = "get_project caller is #202"))]
+/// `project_id` (UUID) before calling. Consumed by #194 start_editing (the
+/// lock-holder re-GET) and #202 (the freshness fold).
 pub(crate) fn get_project(
     base: &str,
     token: &str,
@@ -488,12 +485,8 @@ pub(crate) fn upload_auto(
 
 /// `POST /api/v2/projects/{id}/acquire/` — take the project mutex, returning the
 /// updated [`Project`]. The upload endpoint requires the caller to hold the lock
-/// (`UserOwnsProjectMutex`). `idempotent = false`. The real acquire/reconcile
-/// orchestration is #194; this is the production primitive.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "lock orchestration caller is #194")
-)]
+/// (`UserOwnsProjectMutex`). `idempotent = false`. Consumed by #194
+/// `speleodb_start_editing`.
 pub(crate) fn acquire_lock(
     base: &str,
     token: &str,
@@ -510,11 +503,7 @@ pub(crate) fn acquire_lock(
 }
 
 /// `POST /api/v2/projects/{id}/release/` — release the project mutex, returning
-/// the updated [`Project`]. `idempotent = false`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "lock orchestration caller is #194")
-)]
+/// the updated [`Project`]. `idempotent = false`. Consumed by #194/#197.
 pub(crate) fn release_lock(
     base: &str,
     token: &str,

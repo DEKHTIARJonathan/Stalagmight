@@ -16,9 +16,11 @@ use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
 use crate::speleodb::models::SpeleoProjectSummary;
+use crate::speleodb::sync::{self, FenceOutcome};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
     SpeleoDbError, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult, SpeleoSessionStatus,
+    StartEditingResult,
 };
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
@@ -598,6 +600,202 @@ impl AppState {
             .join("speleodb")
             .join(project_id)
             .join("project.stalx"))
+    }
+
+    /// Acquire the write lock on the open remote project and reconcile it against
+    /// the server (#194). On a clean reconcile the transient edit gate is enabled;
+    /// on divergence the freshly-taken lock is released and the user is asked to
+    /// reconcile; on contention the lock holder is reported. Errors (no
+    /// permission, an anomalous server state, network) surface as `SpeleoErrorDto`.
+    ///
+    /// Uses the base-SHA fence (#192) — NOT ancestry recovery (#193), which is the
+    /// push path's concern (#197): start-editing only reconciles, it never pushes.
+    /// `set_edit_enabled(true)` happens ONLY on a clean reconcile (UpToDate /
+    /// FastForward), and for FastForward it happens AFTER the in-place reload (the
+    /// reload re-derives the gate from `is_remote` and would otherwise re-disable).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "IPC command wired in #197 (Unit 6)")
+    )]
+    pub(crate) fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
+        let link = self.speleodb_open_link().map_err(local_dto)?;
+        validate_project_id(&link.project_id).map_err(local_dto)?;
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+
+        // Acquire the lock. A 400 is the server's "someone else holds it" signal;
+        // it has no first-class map_status row, so it is handled here (per #194).
+        let acquired = self.speleodb_handle_auth(
+            Endpoint::Acquire,
+            client::acquire_lock(&endpoint, &token, insecure_http, &link.project_id),
+        );
+        let project = match acquired {
+            Ok(p) => p,
+            Err(SpeleoDbError::Status { status: 400, .. }) => {
+                return Ok(self.speleodb_locked_by(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &link.project_id,
+                ));
+            }
+            Err(e) => return Err(dto_for_error(Endpoint::Acquire, &e)),
+        };
+
+        // We hold the lock. Fence our BASE against the tip the acquire returned.
+        let tip = project.latest_commit.as_ref().map(|c| c.id.clone());
+        match sync::fence(
+            link.base_commit_sha.as_deref(),
+            tip.as_deref(),
+            link.has_unpushed_edits,
+        ) {
+            FenceOutcome::UpToDate => {
+                self.set_edit_enabled(true);
+                Ok(StartEditingResult::Editing)
+            }
+            FenceOutcome::FastForward => {
+                let local_path = self
+                    .speleodb_fast_forward(&endpoint, &token, insecure_http, &link, tip.as_deref())
+                    .map_err(local_dto)?;
+                self.set_edit_enabled(true);
+                Ok(StartEditingResult::FastForwarded { local_path })
+            }
+            FenceOutcome::Diverged => {
+                // Can't edit a diverged copy. Release the lock we just took so it
+                // isn't stranded while the user reconciles (#198, next batch); the
+                // edit gate stays disabled.
+                self.speleodb_release_best_effort(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &link.project_id,
+                );
+                Ok(StartEditingResult::DivergenceNeeded)
+            }
+            FenceOutcome::FailClosed => {
+                self.speleodb_release_best_effort(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &link.project_id,
+                );
+                Err(local_dto(SpeleoDbError::Sync(
+                    "the server reports no commits for a project with a recorded base; \
+                     refusing to edit"
+                        .to_owned(),
+                )))
+            }
+        }
+    }
+
+    /// Read the open project's persisted SpeleoDB hand-off link, or
+    /// [`SpeleoDbError::NoRemoteProject`] when no remote project is open.
+    fn speleodb_open_link(&self) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
+        let db_guard = self
+            .database
+            .lock()
+            .map_err(|_| SpeleoDbError::Io("database lock poisoned".to_owned()))?;
+        let db = db_guard.as_ref().ok_or(SpeleoDbError::NoRemoteProject)?;
+        db.load_speleo_link()
+            .map_err(|e| SpeleoDbError::Io(e.to_string()))?
+            .ok_or(SpeleoDbError::NoRemoteProject)
+    }
+
+    /// Re-GET the project to report who holds the contended lock. Best-effort: a
+    /// failed GET (or a lock that has since cleared) reports the holder as unknown.
+    fn speleodb_locked_by(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        project_id: &str,
+    ) -> StartEditingResult {
+        let email = client::get_project(endpoint, token, insecure_http, project_id)
+            .ok()
+            .and_then(|p| p.active_mutex.map(|m| m.user));
+        StartEditingResult::LockedBy { email }
+    }
+
+    /// Best-effort lock release for when start-editing took the lock but can't
+    /// proceed (divergence / anomaly). A failure is logged, never surfaced.
+    fn speleodb_release_best_effort(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        project_id: &str,
+    ) {
+        if let Err(e) = client::release_lock(endpoint, token, insecure_http, project_id) {
+            tracing::warn!(
+                error = %e,
+                project_id,
+                purpose = "release a lock taken before a no-edit reconcile outcome",
+                "speleodb_start_editing: failed to release lock"
+            );
+        }
+    }
+
+    /// Fast-forward the open remote project to the server tip: re-pull the dump,
+    /// re-stamp the link (`base = tip`, dirty cleared, `last_edit_at` reset), then
+    /// reload the project in place (resetting undo/redo). Returns the reloaded
+    /// `.stalx` path.
+    fn speleodb_fast_forward(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        link: &crate::models::SpeleoLink,
+        tip: Option<&str>,
+    ) -> Result<String, SpeleoDbError> {
+        let project_id = &link.project_id;
+        let zip = self.speleodb_handle_auth(
+            Endpoint::DownloadDump,
+            client::download_dump(endpoint, token, insecure_http, project_id),
+        )?;
+        let mut dump = dump::Dump::open(&zip)?;
+        let entry = classify_dump_entry(&dump.entry_paths()?)?;
+        let dest = self.speleodb_cache_path(project_id)?;
+        dump.extract_entry_to(&entry, &dest)?;
+
+        // Re-stamp the hand-off link onto the refreshed file: BASE advances to the
+        // server tip, the dirty bit clears, last_edit_at resets (clean checkout).
+        match crate::persistence::Database::open_existing(&dest) {
+            Ok(db) => {
+                let new_link = crate::models::SpeleoLink {
+                    endpoint: endpoint.to_owned(),
+                    project_id: project_id.clone(),
+                    project_name: link.project_name.clone(),
+                    base_commit_sha: tip.map(str::to_owned),
+                    has_unpushed_edits: false,
+                    last_edit_at: None,
+                };
+                if let Err(e) = db.save_speleo_link(Some(&new_link)) {
+                    tracing::warn!(
+                        error = %e,
+                        project_id = %project_id,
+                        purpose = "re-stamp speleo_link after fast-forward",
+                        "speleodb_fast_forward: failed to re-stamp speleo_link"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    project_id = %project_id,
+                    purpose = "re-stamp speleo_link after fast-forward",
+                    "speleodb_fast_forward: could not reopen extracted .stalx to re-stamp"
+                );
+            }
+        }
+
+        // Reload from the refreshed cache file. close_project clears the in-memory
+        // project so do_load_project_full's "already open" guard won't reject the
+        // same path; do_load_project_full re-opens it and resets undo/redo.
+        let local_path = dest.to_string_lossy().into_owned();
+        self.close_project();
+        self.do_load_project_full(dest)
+            .map_err(|e| SpeleoDbError::Io(format!("reload after fast-forward failed: {e}")))?;
+        Ok(local_path)
     }
 }
 

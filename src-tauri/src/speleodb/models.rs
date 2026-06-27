@@ -160,6 +160,29 @@ pub struct SpeleoOpenResult {
     pub local_path: String,
 }
 
+/// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write
+/// lock and reconciling the open project against the server. A discriminated
+/// union (`kind`) the webview branches on. Errors (no permission, anomalies,
+/// network) surface through the `Err(SpeleoErrorDto)` channel instead.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StartEditingResult {
+    /// Lock acquired; the local copy already matched the server tip. Editing is
+    /// now enabled.
+    Editing,
+    /// Lock acquired; the server had advanced with no local edits, so we
+    /// fast-forwarded (re-pulled + reloaded the project) and enabled editing. The
+    /// webview should refresh its view from the reloaded `local_path`.
+    FastForwarded { local_path: String },
+    /// The server diverged from our base AND we hold un-pushed local edits:
+    /// editing is NOT enabled and the freshly-acquired lock was released. The
+    /// user must reconcile (the divergence prompt is #198, next batch).
+    DivergenceNeeded,
+    /// Someone else holds the write lock; `email` is the holder when known.
+    LockedBy { email: Option<String> },
+}
+
 /// Current backend session status, so the dialog can restore its view when
 /// reopened instead of forcing a re-login: the in-memory/keychain token lives in
 /// `AppState` for the whole app run, but the dialog's React state resets on each
