@@ -1240,6 +1240,45 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
           }
 
+          case 'compute_gas_reach_field': {
+            // Gas reachable-frontier field (#38). No real graph in the mock —
+            // synthesize a field from each station's mock x-coordinate (origin at
+            // x=0) so the overlay + legend + turn markers have finite values to
+            // render. Diver/cylinders/gasConfig inputs are ignored; the budget is a
+            // fixed plausible value so far-enough stations fall outside it.
+            const state = mockHandler('get_project_state', args) as
+              | {
+                  stations?: Array<{
+                    station_ref: { section_id: number; station_index: number };
+                    coordinates: { x: number; y: number; z: number };
+                  }>;
+                }
+              | null;
+            const stations = state?.stations ?? [];
+            const budget_litres = 1500;
+            const gas_to_reach = stations.map((s) => Math.abs(s.coordinates.x) * 20);
+            const reachable = gas_to_reach.map((g) => g <= budget_litres);
+            let max_reachable_gas = 0;
+            for (let i = 0; i < gas_to_reach.length; i += 1) {
+              if (reachable[i] && gas_to_reach[i] > max_reachable_gas) {
+                max_reachable_gas = gas_to_reach[i];
+              }
+            }
+            // Turn frontier: a reachable station whose next (by array order) is not
+            // reachable — enough for the marker layer to render in the smoke test.
+            const turn_frontier = stations
+              .filter((_s, i) => reachable[i] && i + 1 < stations.length && !reachable[i + 1])
+              .map((s) => s.station_ref);
+            return {
+              station_refs: stations.map((s) => s.station_ref),
+              gas_to_reach,
+              reachable,
+              turn_frontier,
+              max_reachable_gas,
+              budget_litres,
+            };
+          }
+
           case 'get_along_line_distance': {
             // Ruler along-line distance (#26). No real survey graph in the mock —
             // return a deterministic distance and tint the first couple of shots
@@ -2363,6 +2402,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 angle: 'degrees',
                 decimal_precision: { length: 1, coordinates: 2, depth: 1, azimuth: 1, inclination: 1, gps: 6 },
               },
+              gas: {
+                units: 'metric',
+                default_reserve: 'all_thirds',
+                swim_speed_m_per_min: 10,
+                survey_speed_m_per_min: null,
+                survey_rmv_multiplier: 1,
+                stressed_rmv_multiplier: 1.5,
+                jump_rmv_multiplier: 1,
+                conservative_tank_gas: true,
+                dpv: null,
+              },
               display: {
                 default_background: '#1a1a2e',
                 grid_color: '#333366',
@@ -2591,6 +2641,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 depth: 'meters',
                 angle: 'degrees',
                 decimal_precision: { length: 1, coordinates: 2, depth: 1, azimuth: 1, inclination: 1, gps: 6 },
+              },
+              gas: {
+                units: 'metric',
+                default_reserve: 'all_thirds',
+                swim_speed_m_per_min: 10,
+                survey_speed_m_per_min: null,
+                survey_rmv_multiplier: 1,
+                stressed_rmv_multiplier: 1.5,
+                jump_rmv_multiplier: 1,
+                conservative_tank_gas: true,
+                dpv: null,
               },
               display: {
                 default_background: '#1a1a2e',

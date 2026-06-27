@@ -4,6 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
+use super::gas::GasConfig;
+
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Config {
@@ -34,6 +36,8 @@ pub struct Config {
     pub placement_suggestion: PlacementSuggestionConfig,
     #[serde(default)]
     pub syntactic_highlighting: SyntacticHighlightingConfig,
+    #[serde(default)]
+    pub gas: GasConfig,
     #[serde(default)]
     pub speleodb: SpeleoDbConfig,
 
@@ -1817,6 +1821,7 @@ impl Config {
         self.closure_adjustment.normalize();
         self.placement_suggestion.normalize();
         self.syntactic_highlighting.normalize();
+        self.gas.normalize();
         self.units.decimal_precision.normalize();
         if self.general.locale.trim().is_empty() {
             self.general.locale = default_locale();

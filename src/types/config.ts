@@ -267,6 +267,19 @@ export const defaultConfig: Config = {
     max_length_error_fraction: 0.03,
     max_length_error_floor: 0.4,
   },
+  // Gas & route-planning defaults (#38). Mirrors GasConfig::default() in the Rust config;
+  // keep in sync (hand-maintained). Units follow the master metric/imperial toggle (§7.2).
+  gas: {
+    units: 'metric',
+    default_reserve: 'all_thirds',
+    swim_speed_m_per_min: 10,
+    survey_speed_m_per_min: null,
+    survey_rmv_multiplier: 1,
+    stressed_rmv_multiplier: 1.5,
+    jump_rmv_multiplier: 1,
+    conservative_tank_gas: true,
+    dpv: null,
+  },
   speleodb: {
     endpoint: null,
     email: null,

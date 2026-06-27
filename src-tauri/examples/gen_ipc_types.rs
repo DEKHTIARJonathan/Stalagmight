@@ -16,13 +16,13 @@ use stalagmight_lib::commands::survey_geometry::{
 };
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
-    DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
-    GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
-    MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig,
-    PlacementSuggestionConfig, ProviderCacheConfig, SectionColorsConfig, ShortcutFeedback,
-    ShortcutsConfig, ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel,
-    SyntacticHighlightPreset, SyntacticHighlightingConfig, ThemeMode, UnitsConfig,
-    ValidationConfig,
+    DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, DpvProfile, ExportConfig,
+    GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit,
+    LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig,
+    OverlapMode, PanelsConfig, PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset,
+    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
+    StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
+    ThemeMode, UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, IntegrityCheckResult, IntegrityRepairResult, ValidationWarning,
@@ -44,12 +44,13 @@ use stalagmight_lib::models::placement_suggest::{
 };
 use stalagmight_lib::models::{
     AlongLineResult, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate,
-    CollabState, ConnectivityResult, Coordinates, DeleteShotImpact, DeleteShotRangeImpact,
-    DistanceField, ExistingShotUpdate, FrozenShotRef, GpsBounds, GpsCoordinates, ImportPlacement,
-    ImportSectionConfig, LoopClosureWire, PathShot, Project, ProjectMetadata, ProjectStats,
-    ProjectWarning, RangeDeleteKind, RulerEndpoint, Section, SectionData, SectionRelationships,
-    SectionStats, SectionUpdates, Shot, ShotBaselineEntry, ShotData, ShotUpdates, Station,
-    StationMergeWire, StationPair, StationRef, SurveyDirection, ZeroDatumWire,
+    CollabState, ConnectivityResult, Coordinates, CylRole, Cylinder, DeleteShotImpact,
+    DeleteShotRangeImpact, DistanceField, Diver, ExistingShotUpdate, FrozenShotRef, GasReachField,
+    GpsBounds, GpsCoordinates, ImportPlacement, ImportSectionConfig, LoopClosureWire, PathShot,
+    PlanMode, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind,
+    RulerEndpoint, Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
+    ShotBaselineEntry, ShotData, ShotUpdates, Station, StationMergeWire, StationPair, StationRef,
+    SurveyDirection, TankMaterial, Team, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -111,6 +112,14 @@ fn main() {
     export::<ProjectMetadata>(&out_dir);
     export::<ProjectStats>(&out_dir);
     export::<DistanceField>(&out_dir);
+    // Gas planning (#38)
+    export::<TankMaterial>(&out_dir);
+    export::<CylRole>(&out_dir);
+    export::<PlanMode>(&out_dir);
+    export::<Diver>(&out_dir);
+    export::<Cylinder>(&out_dir);
+    export::<Team>(&out_dir);
+    export::<GasReachField>(&out_dir);
     export::<RulerEndpoint>(&out_dir);
     export::<PathShot>(&out_dir);
     export::<AlongLineResult>(&out_dir);
@@ -234,6 +243,10 @@ fn main() {
     export::<Config>(&out_dir);
     export::<GeneralConfig>(&out_dir);
     export::<UnitsConfig>(&out_dir);
+    export::<GasConfig>(&out_dir);
+    export::<GasUnits>(&out_dir);
+    export::<ReservePreset>(&out_dir);
+    export::<DpvProfile>(&out_dir);
     export::<DisplayConfig>(&out_dir);
     export::<DepthGradientConfig>(&out_dir);
     export::<SectionColorsConfig>(&out_dir);
@@ -304,6 +317,13 @@ fn main() {
         "ProjectMetadata",
         "ProjectStats",
         "DistanceField",
+        "TankMaterial",
+        "CylRole",
+        "PlanMode",
+        "Diver",
+        "Cylinder",
+        "Team",
+        "GasReachField",
         "RulerEndpoint",
         "PathShot",
         "AlongLineResult",
@@ -427,6 +447,10 @@ fn main() {
         "DecimalPrecision",
         "LengthUnit",
         "AngleUnit",
+        "GasConfig",
+        "GasUnits",
+        "ReservePreset",
+        "DpvProfile",
         "ShortcutFeedback",
         "ThemeMode",
         "ColorTheme",

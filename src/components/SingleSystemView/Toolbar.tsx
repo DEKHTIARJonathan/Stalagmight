@@ -14,6 +14,7 @@ import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
 import type { CSSProperties } from 'react';
 import DisplayMenu from './DisplayMenu';
+import { ModeCarousel } from './ModeCarousel';
 import TableSelectDropdown from './TableSelectDropdown';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, type ToolGroupDef } from '../../utils/toolGroups';
@@ -120,6 +121,25 @@ const TOOLBAR_ITEMS: ToolbarItem[] = [
   { kind: 'standalone', id: 'measure', shortcut: 'R' },
 ];
 
+// Plan/Export are read-only workspaces (#38): the mutating tools (merge, comment,
+// move) make no sense there, so they're HIDDEN — not merely disabled — leaving only
+// the non-mutating Select / Pan / Zoom / Measure. Filtered once from TOOLBAR_ITEMS so
+// it stays in sync, with separators left dangling by the removals cleaned up.
+const READ_ONLY_TOOLBAR_ITEMS: ToolbarItem[] = (() => {
+  const kept = TOOLBAR_ITEMS.filter((item) => {
+    if (item.kind === 'separator') return true;
+    if (item.kind === 'standalone') return !isMutatingTool(item.id);
+    const group = TOOL_GROUPS.find((g) => g.id === item.groupId);
+    return group ? group.tools.some((tool) => !isMutatingTool(tool)) : false;
+  });
+  return kept.filter((item, i, arr) => {
+    if (item.kind !== 'separator') return true;
+    const prev = arr[i - 1];
+    const next = arr[i + 1];
+    return Boolean(prev && next && prev.kind !== 'separator' && next.kind !== 'separator');
+  });
+})();
+
 export default function Toolbar({
   menuItems,
   saveFailed = false,
@@ -135,13 +155,19 @@ export default function Toolbar({
   const activeTool = useUIStore((s) => s.activeTool);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
   const exitDataTableFullScreen = useUIStore((s) => s.exitDataTableFullScreen);
+  const appMode = useUIStore((s) => s.appMode);
   // Toolbar icons appear at the 'toolbar_only' syntactic level and up; the
   // `--sh-*` color vars are the role colors there and a neutral gray at 'off'.
   const syntacticLevel = useUIStore((s) => s.syntacticLevel);
   const showToolbarIcons = syntacticLevelAtLeast(syntacticLevel, 'toolbar_only');
-  // The closure-adjusted view is read-only: geometry-mutating tools are disabled
-  // there (edits are made in the measured view).
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  // Read-only both in the closure-adjusted view AND in Plan/Export (the whole map is
+  // non-editable there) — disable the geometry-mutating tools in both. Select/Pan/Zoom/
+  // Measure stay enabled, so they remain available in every mode.
+  const geometryReadOnly = useUIStore(
+    (s) => s.geometryMode === 'closureAdjusted' || s.appMode !== 'survey'
+  );
+  // Survey shows the full toolbar; Plan/Export show only the non-mutating tools.
+  const toolbarItems = appMode === 'survey' ? TOOLBAR_ITEMS : READ_ONLY_TOOLBAR_ITEMS;
 
   return (
     <header className="relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
@@ -222,10 +248,10 @@ export default function Toolbar({
         </UndoHistoryDropdown>
       </div>
 
-      {/* Center - the active tool's name + duotone icon, tinted with its color
-          (#51). The project name/file path live in the Project Stats panel; the
-          focused section (if any) is shown in the status bar. Fullscreen table
-          mode has no active map tool, so it shows the table's title instead. */}
+      {/* Center - the Survey/Plan/Export workspace carousel (#38, Daniel's reframe).
+          The active map *tool* is already shown by the highlighted toolbar button on
+          the right, so the center is free for the mode switch. Fullscreen table mode
+          (a survey sub-state) shows the table's title instead. */}
       {dataTableFullScreen ? (
         /* Absolutely centered: justify-between would drift the title by the
            side blocks' width difference, visibly off against the centered
@@ -237,20 +263,11 @@ export default function Toolbar({
           {t('dataTable.title')}
         </div>
       ) : (
-        <div
-          className="flex items-center gap-1.5"
-          data-testid="toolbar-active-tool"
-          style={{ '--o': toolAccentVar(activeTool) } as CSSProperties}
-        >
-          <ToolGlyph tool={activeTool} size={18} />
-          <span
-            className="font-medium"
-            /* Mix with the theme text color so the tool-tinted label stays legible
-               on light/cave toolbars (raw --o can be too pale on a light panel). */
-            style={{ color: 'color-mix(in oklab, var(--o) 80%, var(--cc-text-primary))' }}
-          >
-            {t(TOOL_LABEL_KEYS[activeTool])}
-          </span>
+        /* Absolutely centered so the carousel stays put as modes cycle — otherwise
+           justify-between would drift it when the right cluster's width changes
+           (mutating tools + DisplayMenu drop out in Plan/Export). */
+        <div className="absolute left-1/2 -translate-x-1/2">
+          <ModeCarousel disabled={placementModeActive} />
         </div>
       )}
 
@@ -267,7 +284,7 @@ export default function Toolbar({
               className={`flex items-center gap-1 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
               data-testid="toolbar-tools-group"
             >
-              {TOOLBAR_ITEMS.map((item, index) => {
+              {toolbarItems.map((item, index) => {
                 if (item.kind === 'separator') {
                   return <div key={`sep-${index}`} className="w-px h-6 bg-border mx-1" />;
                 }
@@ -296,7 +313,10 @@ export default function Toolbar({
                 );
               })}
             </div>
-            <DisplayMenu />
+            {/* DisplayMenu (color overlays + the geometry measured/adjusted toggle) is
+                a survey concern — Plan/Export are read-only focused modes that force the
+                closure map, so it's hidden there (and the geometry toggle stays locked). */}
+            {appMode === 'survey' && <DisplayMenu />}
           </>
         )}
       </div>

@@ -2,9 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, mem
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
+import type { GasReachField } from '../../types/ipc.generated';
 import type { BatchCommand, ProjectWarning } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
+import { useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
 import { isMutatingTool } from '../../utils/toolUtils';
 import { hasEligibleClosures } from '../../utils/closures';
@@ -17,6 +19,7 @@ import {
 } from '../../store/displaySelectors';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import { buildDistanceFeatureState } from '../../utils/distanceGradient';
+import { buildGasReachFeatureState } from '../../utils/gasReach';
 import { buildMeasuredPathIds, buildMeasuredStationIds, MEASURE_TINT } from '../../utils/measurePath';
 import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
@@ -27,6 +30,7 @@ import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
 import { DepthLegend } from './DepthLegend';
 import { DistanceLegend } from './DistanceLegend';
+import { GasLegend } from './GasLegend';
 import { MapDevStats } from './MapDevStats';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
@@ -186,6 +190,9 @@ function MapCanvas() {
   const map = useRef<maplibregl.Map | null>(null);
   const surveyLayerRef = useRef<SurveyLayer | null>(null);
   const originMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const gasOriginMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const gasTurnMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const gasZeroDatumMarkersRef = useRef<maplibregl.Marker[]>([]);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
@@ -367,6 +374,7 @@ function MapCanvas() {
     showReferenceShots,
     showDepthGradient,
     showDistanceGradient,
+    appMode,
     showIssueSeverity,
     distanceGradientOrigin,
     distanceField,
@@ -424,14 +432,45 @@ function MapCanvas() {
     useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest)
   );
 
+  // The gas overlay belongs to the Plan workspace mode (the former showGasPlan
+  // sub-mode). Derived so the existing showGasPlan-gated effects below are unchanged.
+  const showGasPlan = appMode === 'plan';
+
+  // Gas & route-planning sub-mode inputs (#38) — a separate store so editing the
+  // diver/cylinders/config doesn't re-render via the big uiStore subscription.
+  const {
+    origin: gasOrigin,
+    diver: gasDiver,
+    cylinders: gasCylinders,
+    gasConfig: gasPlanConfig,
+    reachField: gasReachField,
+    setReachField: setGasReachField,
+    setOrigin: setGasOrigin,
+  } = useGasPlanStore(
+    useShallow((s) => ({
+      origin: s.origin,
+      diver: s.diver,
+      cylinders: s.cylinders,
+      gasConfig: s.gasConfig,
+      reachField: s.reachField,
+      setReachField: s.setReachField,
+      setOrigin: s.setOrigin,
+    }))
+  );
+
   // Issue-severity coloring is active when the user enabled it OR while the
   // Warnings tab is open (auto-highlight, gated by the setting). It is DERIVED,
   // never written to the store: leaving the tab simply recomputes the colors from
   // the persisted toggles, so no "prior coloring" snapshot can be lost and every
   // toggle of a coloring mode just triggers a recompute (issue #57, finding #6).
   const highlightWarningsOnTabSwitch = config?.map.highlight_warnings_on_tab_switch ?? true;
+  // The gas sub-mode (#38) swaps the detail panel away from Warnings but leaves
+  // detailPanelTab='warnings' in the store, so the warnings-tab highlight would
+  // otherwise stay derived-true and force needless severity rebuilds under the gas
+  // overlay. Suppress it while gas owns the layer paint.
   const effectiveIssueSeverity =
-    showIssueSeverity || (detailPanelOpen && detailPanelTab === 'warnings' && highlightWarningsOnTabSwitch);
+    showIssueSeverity ||
+    (detailPanelOpen && detailPanelTab === 'warnings' && highlightWarningsOnTabSwitch && !showGasPlan);
   // Severity takes visual precedence over the depth gradient when both apply.
   const effectiveDepthGradient = showDepthGradient && !effectiveIssueSeverity;
   // Gate the survey-layer rebuild on issue-severity coloring. `warnings` changes
@@ -1792,6 +1831,13 @@ function MapCanvas() {
     setDistanceGradientOrigin(null);
   }, [project?.created_at, setDistanceGradientOrigin]);
 
+  // Same project-switch reset for the gas origin (#38): drop the picked origin (and
+  // its cached field) so the new project's reachable overlay re-seeds from its
+  // entrance. Keyed on created_at alone, like the distance reset.
+  useEffect(() => {
+    useGasPlanStore.getState().setOrigin(null);
+  }, [project?.created_at]);
+
   // Reset the ruler on a switch too, but keyed on file_path + created_at so opening
   // a distinct file that happens to share created_at — e.g. a duplicated project —
   // still clears stale ruler state (#26, Codex). (Save As also clears the ruler,
@@ -1838,6 +1884,31 @@ function MapCanvas() {
     return () => { cancelled = true; };
   }, [showDistanceGradient, distanceGradientOrigin, project?.modified_at, setDistanceField]);
 
+  // Gas reachable-frontier overlay (#38): fetch the reachability field when the
+  // sub-mode is on and any input (origin / diver / cylinders / config) or the
+  // project data changes. Like distances it uses MEASURED geometry, so the display
+  // geometryMode / closure config don't affect it. No debounce: the compute is
+  // ms-fast and the inputs are discrete (number fields / presets), not continuous
+  // sliders. `origin` null = the entrance (zero-datum) default; the command
+  // returns null when no project is open (Ok(None)) or throws on invalid input.
+  useEffect(() => {
+    if (!showGasPlan) return undefined;
+    let cancelled = false;
+    invokeIpc<GasReachField | null>(
+      'compute_gas_reach_field',
+      {
+        origin: gasOrigin ?? null,
+        diver: gasDiver,
+        cylinders: gasCylinders,
+        gasConfig: gasPlanConfig,
+      },
+      { purpose: 'gas reachable-frontier field', fields: { origin: gasOrigin ?? 'entrance' } }
+    )
+      .then((field) => { if (!cancelled) setGasReachField(field); })
+      .catch((e) => console.warn('[gas-plan] field fetch failed', e));
+    return () => { cancelled = true; };
+  }, [showGasPlan, gasOrigin, gasDiver, gasCylinders, gasPlanConfig, project?.modified_at, setGasReachField]);
+
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
   useEffect(() => {
@@ -1850,6 +1921,18 @@ function MapCanvas() {
       surveyLayerRef.current.setDistanceGradient(false, null);
     }
   }, [showDistanceGradient, effectiveIssueSeverity, distanceField, project, mapLoaded, surveyLayerRef]);
+
+  // Apply the gas field to the layer (feature-state + paint swap). Separate from
+  // the fetch so re-rooting / re-computing never triggers a feature rebuild.
+  useEffect(() => {
+    if (!surveyLayerRef.current || !mapLoaded) return;
+    if (showGasPlan && gasReachField && project) {
+      const state = buildGasReachFeatureState(project.sections, gasReachField);
+      surveyLayerRef.current.setGasReach(true, state);
+    } else {
+      surveyLayerRef.current.setGasReach(false, null);
+    }
+  }, [showGasPlan, gasReachField, project, mapLoaded, surveyLayerRef]);
 
   // Tint the measured along-line path's shots AND stations (#26) in the
   // user-configured color. Keyed on the along-line result so it applies when the
@@ -1908,6 +1991,123 @@ function MapCanvas() {
     };
   }, [showDistanceGradient, effectiveIssueSeverity, distanceGradientOrigin, activeStations, gpsOrigin, mapLoaded]);
 
+  // Gas-plan origin marker (#38): a teal ring on the chosen origin (mirrors the
+  // distance origin marker; teal to distinguish "start" from the gold→purple
+  // reachable ramp). Only for a *picked* origin — the entrance default is the
+  // zero datum(s), already starred.
+  useEffect(() => {
+    gasOriginMarkerRef.current?.remove();
+    gasOriginMarkerRef.current = null;
+    if (!map.current || !mapLoaded || !showGasPlan || !gasOrigin) return undefined;
+    const originStation = activeStations.find(
+      (s) =>
+        s.station_ref.section_id === gasOrigin.section_id &&
+        s.station_ref.station_index === gasOrigin.station_index
+    );
+    if (!originStation) return undefined;
+    const lngLat = metersToMapCoords(
+      originStation.coordinates.x,
+      originStation.coordinates.y,
+      gpsOrigin
+    ) as [number, number];
+    const el = document.createElement('div');
+    el.setAttribute('data-testid', 'gas-origin-marker');
+    el.style.cssText =
+      'width:18px;height:18px;border-radius:50%;border:3px solid #16a085;' +
+      'box-shadow:0 0 0 2px #ffffff,0 0 4px rgba(0,0,0,0.6);' +
+      'background:rgba(255,255,255,0.15);pointer-events:none;';
+    gasOriginMarkerRef.current = new maplibregl.Marker({ element: el })
+      .setLngLat(lngLat)
+      .addTo(map.current);
+    return () => {
+      gasOriginMarkerRef.current?.remove();
+      gasOriginMarkerRef.current = null;
+    };
+  }, [showGasPlan, gasOrigin, activeStations, gpsOrigin, mapLoaded]);
+
+  // Gas turn-frontier markers (#38): a red dot on each reachable station that
+  // borders an unreachable one — "this is where you turn". Rebuilt whenever the
+  // field changes; bounded by the frontier size (a handful of leads in practice).
+  useEffect(() => {
+    for (const m of gasTurnMarkersRef.current) m.remove();
+    gasTurnMarkersRef.current = [];
+    if (!map.current || !mapLoaded || !showGasPlan || !gasReachField) return undefined;
+    for (const ref of gasReachField.turn_frontier) {
+      const st = activeStations.find(
+        (s) =>
+          s.station_ref.section_id === ref.section_id &&
+          s.station_ref.station_index === ref.station_index
+      );
+      if (!st) continue;
+      const lngLat = metersToMapCoords(
+        st.coordinates.x,
+        st.coordinates.y,
+        gpsOrigin
+      ) as [number, number];
+      const el = document.createElement('div');
+      el.setAttribute('data-testid', 'gas-turn-marker');
+      el.style.cssText =
+        'width:14px;height:14px;border-radius:50%;border:2px solid #ffffff;' +
+        'background:#c0392b;box-shadow:0 0 3px rgba(0,0,0,0.7);pointer-events:none;';
+      gasTurnMarkersRef.current.push(
+        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map.current)
+      );
+    }
+    return () => {
+      for (const m of gasTurnMarkersRef.current) m.remove();
+      gasTurnMarkersRef.current = [];
+    };
+  }, [showGasPlan, gasReachField, activeStations, gpsOrigin, mapLoaded]);
+
+  // Zero-datum star markers (#38): a black star (white outline) on each zero-datum
+  // station while planning. The gas solve's "Entrance" default already starts from the
+  // zero datum(s); this marks them so the user can SEE where they are and click one to
+  // pick it explicitly as the origin. Plan mode only; bounded by the datum count (≈1).
+  useEffect(() => {
+    for (const m of gasZeroDatumMarkersRef.current) m.remove();
+    gasZeroDatumMarkersRef.current = [];
+    if (!map.current || !mapLoaded || !showGasPlan) return undefined;
+    for (const st of activeStations) {
+      if (!st.is_zero_datum) continue;
+      const lngLat = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin) as [
+        number,
+        number,
+      ];
+      const el = document.createElement('div');
+      el.setAttribute('data-testid', 'gas-zero-datum-marker');
+      el.setAttribute('role', 'button');
+      // Keyboard-operable, not just clickable (it carries role="button"): focusable +
+      // Enter/Space activation, so keyboard / AT users can pick the datum origin too.
+      el.setAttribute('tabindex', '0');
+      el.setAttribute('aria-label', t('gasPanel.origin.datumAria'));
+      el.title = t('gasPanel.origin.datumTooltip');
+      el.style.cssText = 'cursor:pointer;line-height:0;filter:drop-shadow(0 0 1px rgba(0,0,0,0.6));';
+      el.innerHTML =
+        '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">' +
+        '<path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" ' +
+        'fill="#000000" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+      const ref = st.station_ref;
+      const pick = () => setGasOrigin(ref);
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pick();
+      });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          pick();
+        }
+      });
+      gasZeroDatumMarkersRef.current.push(
+        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map.current)
+      );
+    }
+    return () => {
+      for (const m of gasZeroDatumMarkersRef.current) m.remove();
+      gasZeroDatumMarkersRef.current = [];
+    };
+  }, [showGasPlan, activeStations, gpsOrigin, mapLoaded, setGasOrigin, t]);
+
   // Lazily fetch closure-adjusted geometry when the adjusted view is active and
   // we don't have it yet (first switch, or after an edit invalidated it). The
   // store action guards against concurrent/duplicate fetches. `adjustedLoading`
@@ -1936,12 +2136,15 @@ function MapCanvas() {
     }
   }, [geometryMode, project, setGeometryMode]);
 
-  // The adjusted view is read-only: drop any geometry-mutating tool back to select.
+  // The adjusted view is read-only — and so is the whole map in Plan/Export, even on a
+  // project with no closures where the display falls back to measured geometry. Drop any
+  // geometry-mutating tool back to select in either case (appMode is the robust authority;
+  // geometryMode only drives which coords are drawn).
   useEffect(() => {
-    if (geometryMode === 'closureAdjusted' && isMutatingTool(activeTool)) {
+    if ((geometryMode === 'closureAdjusted' || appMode !== 'survey') && isMutatingTool(activeTool)) {
       setActiveTool('select');
     }
-  }, [geometryMode, activeTool, setActiveTool]);
+  }, [geometryMode, appMode, activeTool, setActiveTool]);
 
   // Update callbacks when they change
   useEffect(() => {
@@ -3416,6 +3619,29 @@ function MapCanvas() {
           }}
         >
           {t('map.distanceLegend.computing')}
+        </div>
+      )}
+
+      {/* Gas reachable-frontier legend (#38) — gold→purple, 0 → turn budget. */}
+      {showGasPlan && gasReachField && (
+        <GasLegend field={gasReachField} units={gasPlanConfig.units} visible={showGasPlan} />
+      )}
+      {showGasPlan && !gasReachField && (
+        <div
+          data-testid="gas-legend-loading"
+          style={{
+            position: 'absolute',
+            bottom: 50,
+            left: 10,
+            background: 'var(--cc-text-halo-alt)',
+            color: 'var(--cc-depth-text)',
+            borderRadius: 4,
+            padding: 8,
+            zIndex: 1,
+            fontSize: 11,
+          }}
+        >
+          {t('map.gasLegend.computing')}
         </div>
       )}
 

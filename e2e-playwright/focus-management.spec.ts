@@ -339,10 +339,11 @@ test.describe('Focus Management', () => {
       const unitsTab = page.getByTestId('settings-tab-units');
       await expect(unitsTab).toBeFocused({ timeout: 1000 });
 
-      // Arrow Down again to Display
+      // Arrow Down again to Gas (the Gas-planning category sits between Units and
+      // Display in the sidebar, #38).
       await page.keyboard.press('ArrowDown');
-      const displayTab = page.getByTestId('settings-tab-display');
-      await expect(displayTab).toBeFocused({ timeout: 1000 });
+      const gasTab = page.getByTestId('settings-tab-gas');
+      await expect(gasTab).toBeFocused({ timeout: 1000 });
 
       // Arrow Up back to Units
       await page.keyboard.press('ArrowUp');

@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import type { MapMouseEvent } from 'maplibre-gl';
 import { useUIStore, type Selection, type MeasureEndpoint } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
+import { useGasPlanStore } from '../store/gasPlanStore';
 import { useShallow } from 'zustand/react/shallow';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { useActiveStations } from './useActiveStations';
@@ -100,11 +101,15 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     showToast,
     showDistanceGradient,
     setDistanceGradientOrigin,
+    appMode,
     // measureSnapShot is excluded too: it's rewritten on every mousemove over a
     // shot (the live `t`), and is only ever read via getState() at click time — so
     // subscribing here would re-render MapCanvas ~60×/s for nothing (#26).
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
   } = useUIStore(useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest));
+
+  // Gas origin-pick on map click belongs to the Plan workspace mode (former showGasPlan).
+  const showGasPlan = appMode === 'plan';
 
   const { stations, project, checkMergeConnectivity } = useProjectStore();
   // Coordinate lookups for read-only inspection (the measure tool) follow the
@@ -366,6 +371,12 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           if (showDistanceGradient && !mouseEvent.shiftKey && !mouseEvent.ctrlKey && !mouseEvent.metaKey) {
             setDistanceGradientOrigin(ref);
           }
+          // Gas planning (#38): a plain select-click re-roots the reachable overlay
+          // to the clicked station, mirroring the distance gradient (additive —
+          // selection still happens). Mutually exclusive with the distance overlay.
+          if (showGasPlan && !mouseEvent.shiftKey && !mouseEvent.ctrlKey && !mouseEvent.metaKey) {
+            useGasPlanStore.getState().setOrigin(ref);
+          }
           break;
         }
 
@@ -503,6 +514,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       toggleSelection,
       showDistanceGradient,
       setDistanceGradientOrigin,
+      showGasPlan,
     ]
   );
 
@@ -536,7 +548,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           // can't click a station, so re-root to the shot's lower-numbered
           // endpoint station (section_id, shotIndex).
           if (
-            showDistanceGradient &&
+            (showDistanceGradient || showGasPlan) &&
             !mouseEvent.shiftKey &&
             !mouseEvent.ctrlKey &&
             !mouseEvent.metaKey
@@ -544,7 +556,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             const section = project?.sections.find((s) => s.id === sectionId);
             const shotIndex = section?.shots.findIndex((s) => s.id === shotId) ?? -1;
             if (shotIndex !== -1) {
-              setDistanceGradientOrigin({ section_id: sectionId, station_index: shotIndex });
+              const ref = { section_id: sectionId, station_index: shotIndex };
+              // Mutually exclusive overlays — re-root whichever is active.
+              if (showDistanceGradient) setDistanceGradientOrigin(ref);
+              if (showGasPlan) useGasPlanStore.getState().setOrigin(ref);
             }
           }
           break;
@@ -671,7 +686,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
       }
     },
-    [activeTool, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin]
+    [activeTool, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin, showGasPlan]
   );
 
   // Handle empty click (no feature) - but use snapped station if available

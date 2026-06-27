@@ -36,6 +36,7 @@ describe('defaultConfig structure', () => {
       expect(defaultConfig).toHaveProperty('cache');
       expect(defaultConfig).toHaveProperty('debug');
       expect(defaultConfig).toHaveProperty('appearance');
+      expect(defaultConfig).toHaveProperty('gas');
     });
   });
 
@@ -183,6 +184,24 @@ describe('defaultConfig structure', () => {
     it('theme is a valid ThemeMode', () => {
       const theme: ThemeMode = defaultConfig.appearance.theme;
       expect(['dark', 'light', 'auto']).toContain(theme);
+    });
+  });
+
+  describe('gas config', () => {
+    // Pins the hand-maintained TS defaultConfig.gas values (mirrors GasConfig::default() in
+    // src-tauri/src/config/gas.rs). NOTE: this guards TS-internal consistency only — it does
+    // NOT read the Rust default, so on its own it can't catch TS↔Rust drift (a golden-fixtured
+    // Rust default would be the real cross-language guard — follow-up). It does fail loudly if
+    // a TS default value here is changed unintentionally.
+    it('has correct gas defaults', () => {
+      expect(defaultConfig.gas.units).toBe('metric');
+      expect(defaultConfig.gas.default_reserve).toBe('all_thirds');
+      expect(defaultConfig.gas.swim_speed_m_per_min).toBe(10);
+      expect(defaultConfig.gas.survey_speed_m_per_min).toBeNull();
+      expect(defaultConfig.gas.survey_rmv_multiplier).toBe(1);
+      expect(defaultConfig.gas.stressed_rmv_multiplier).toBe(1.5);
+      expect(defaultConfig.gas.conservative_tank_gas).toBe(true);
+      expect(defaultConfig.gas.dpv).toBeNull();
     });
   });
 });

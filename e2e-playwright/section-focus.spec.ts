@@ -92,7 +92,7 @@ test.describe('Section focus mode', () => {
     // Toolbar swaps the project name for the focused section name.
     const focusName = page.getByTestId('status-focused-section');
     await expect(focusName).toContainText(SECTION_NAME);
-    await expect(page.getByTestId('toolbar-active-tool')).toBeVisible();
+    await expect(page.getByTestId('mode-carousel')).toBeVisible();
 
     // Both side panels collapse (their closed-state opener tabs appear and the
     // panel bodies unmount); the data table opens (its body mounts, no opener tab).
@@ -155,7 +155,7 @@ test.describe('Section focus mode', () => {
     const focusName = page.getByTestId('status-focused-section');
     await expect(focusName).toBeVisible();
     await expect(focusName).toContainText(SECTION_NAME);
-    await expect(page.getByTestId('toolbar-active-tool')).toBeVisible();
+    await expect(page.getByTestId('mode-carousel')).toBeVisible();
     // Side panels collapse to their opener tabs (bodies unmount); the table opens.
     await expect(page.getByTestId('panel-tab-sections')).toBeVisible();
     await expect(page.getByTestId('sections-panel')).toHaveCount(0);

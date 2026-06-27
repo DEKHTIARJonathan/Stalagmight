@@ -6,9 +6,10 @@ use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 
 use crate::cache::TileCache;
-use crate::config::{ClosureAdjustmentConfig, Config};
+use crate::config::{ClosureAdjustmentConfig, Config, GasConfig};
 use crate::models::{
-    AlongLineResult, DistanceField, Project, RulerEndpoint, Station, StationAnchor, StationRef,
+    AlongLineResult, Cylinder, DistanceField, Diver, GasReachField, Project, RulerEndpoint,
+    Station, StationAnchor, StationRef,
 };
 use crate::persistence::Database;
 use crate::tilemap_cache::TilemapCache;
@@ -375,6 +376,21 @@ impl AppState {
         // coordinate-dependent). Closure-solve perf is tracked separately (#81).
         let stations = project.compute_station_coordinates();
         Some(project.distance_field_from(&stations, from))
+    }
+
+    /// Single-diver open-circuit gas reachability field (#38). Like [`distance_field`], the
+    /// engine consumes the instant MEASURED geometry (reachability is coordinate-independent —
+    /// never the slow closure-adjusted solve). `None` when no project is open. The diver /
+    /// cylinders are assumed already validated and `gas_config` normalized by the command.
+    pub fn gas_reach_field(
+        &self,
+        origin: Option<&StationRef>,
+        diver: &Diver,
+        cylinders: &[Cylinder],
+        gas_config: &GasConfig,
+    ) -> Option<GasReachField> {
+        let project = self.get_project_state()?;
+        Some(project.compute_gas_reach_field(origin, diver, cylinders, gas_config))
     }
 
     /// Shortest along-cave-line distance + traversed shots between two ruler

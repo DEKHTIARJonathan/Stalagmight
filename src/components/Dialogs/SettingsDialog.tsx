@@ -13,6 +13,7 @@ import {
 } from './SettingsSidebar';
 import { GeneralSettings } from './settings/GeneralSettings';
 import { UnitsSettings } from './settings/UnitsSettings';
+import { GasSettings } from './settings/GasSettings';
 import { DisplaySettings } from './settings/DisplaySettings';
 import { MapSettings } from './settings/MapSettings';
 import { ValidationSettings } from './settings/ValidationSettings';
@@ -79,6 +80,8 @@ function getCategoryDefaults(category: SettingsCategory, resolvedTheme: Resolved
       return { general: { ...defaultConfig.general } };
     case 'units':
       return { units: { ...defaultConfig.units } };
+    case 'gas':
+      return { gas: { ...defaultConfig.gas } };
     case 'display':
       return {
         display: getThemedDisplayDefaults(resolvedTheme),
@@ -221,6 +224,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
       ...(base.syntactic_highlighting ?? defaultConfig.syntactic_highlighting),
       overrides: { ...(base.syntactic_highlighting ?? defaultConfig.syntactic_highlighting).overrides },
     },
+    gas: { ...(base.gas ?? defaultConfig.gas) },
     speleodb: { ...(base.speleodb ?? defaultConfig.speleodb) },
   };
 
@@ -307,6 +311,9 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   }
   if (updates.syntactic_highlighting) {
     result.syntactic_highlighting = { ...result.syntactic_highlighting, ...updates.syntactic_highlighting };
+  }
+  if (updates.gas) {
+    result.gas = { ...result.gas, ...updates.gas };
   }
 
   return result;
@@ -556,6 +563,8 @@ export default function SettingsDialog() {
         return <GeneralSettings {...commonProps} />;
       case 'units':
         return <UnitsSettings {...commonProps} />;
+      case 'gas':
+        return <GasSettings {...commonProps} />;
       case 'display':
         return <DisplaySettings {...commonProps} />;
       case 'map':

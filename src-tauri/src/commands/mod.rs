@@ -2,6 +2,7 @@ pub mod cache;
 pub mod collab;
 pub mod config;
 pub mod export;
+pub mod gas;
 pub mod history;
 pub mod import;
 pub mod logging;

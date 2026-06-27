@@ -47,6 +47,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.check_section_hashes",
     "command.clear_tile_cache",
     "command.close_project",
+    "command.compute_gas_reach_field",
     "command.create_loop_closure",
     "command.create_project",
     "command.create_project_full",
@@ -547,17 +548,11 @@ mod tests {
     #[test]
     fn event_count() {
         // 401 on the pre-feature master
-        //   + 8 walls-import events (#223):
-        //       command.parse_walls, command.execute_walls_import,
-        //       undo-after.execute_walls_import, undo-after.execute_compass_import,
-        //       action.dialog.walls-import, dialog-cancel.walls-import,
-        //       dwell.dialog.walls-import, active-dwell.dialog.walls-import
-        //   + 9 SpeleoDB events (#183):
-        //       command.speleodb_{login,list_projects,open_project,logout,session},
-        //       action.dialog.speleodb-spike, dialog-cancel.speleodb-spike,
-        //       dwell.dialog.speleodb-spike, active-dwell.dialog.speleodb-spike
-        //   = 418.
-        assert_eq!(EVENT_NAMES.len(), 418);
+        //   + 8 walls-import events (#223)
+        //   + 9 SpeleoDB events (#183)        = 418
+        //   + 1 gas event (#38):
+        //       command.compute_gas_reach_field = 419.
+        assert_eq!(EVENT_NAMES.len(), 419);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

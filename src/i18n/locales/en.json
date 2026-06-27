@@ -64,6 +64,7 @@
       "general": "General",
       "appearance": "Appearance",
       "units": "Units",
+      "gas": "Gas planning",
       "display": "Display",
       "map": "Map",
       "validation": "Validation",
@@ -296,6 +297,22 @@
         "merge": "Merge tool",
         "pan": "Pan tool",
         "zoom": "Zoom tool"
+      }
+    },
+    "gas": {
+      "title": "Gas planning",
+      "sections": {
+        "planning": "Route planning"
+      },
+      "swimSpeed": {
+        "label": "Swim speed (m/min)",
+        "help": "Default exit-leg swim speed used to estimate gas along the route. 10 m/min is typical.",
+        "aria": "Swim speed in meters per minute"
+      },
+      "jumpMultiplier": {
+        "label": "Jump RMV multiplier",
+        "help": "Extra breathing-rate factor on jump/reference legs (tying in a jump is more work). 1.0 = no bump; 1.5 is a useful value. Never below 1.0.",
+        "aria": "Jump RMV multiplier"
       }
     },
     "units": {
@@ -1844,6 +1861,13 @@
       "fromStation": "from {{id}}",
       "computing": "Distance: computing…"
     },
+    "gasLegend": {
+      "title": "Gas reach",
+      "aria": "Gas-to-reach scale from {{min}} (near) to {{max}} (turn budget)",
+      "fromEntrance": "from entrance",
+      "fromStation": "from {{id}}",
+      "computing": "Gas reach: computing…"
+    },
     "placement": {
       "title": "Placement",
       "instructions": "Click to place section. Esc for more placement options and metadata changes.",
@@ -2034,8 +2058,95 @@
       "saveError": "Auto-save didn't run — not saved"
     }
   },
+  "gasPanel": {
+    "title": "Gas & route planning",
+    "subtitle": "Reachable extent and turn point for your gas. Open-circuit, single diver.",
+    "origin": {
+      "label": "Origin",
+      "entrance": "Entrance",
+      "reset": "Reset",
+      "hint": "Click a station to set the origin, or the ★ to start from a zero datum.",
+      "datumAria": "Start the plan from this zero datum",
+      "datumTooltip": "Zero datum — click to start the plan here"
+    },
+    "diver": {
+      "rmvLabel": "RMV (surface air consumption)",
+      "rmvUnit": "L/min",
+      "rmvUnitImperial": "cu ft/min"
+    },
+    "reserve": {
+      "label": "Reserve",
+      "all_thirds": "All thirds",
+      "one_stage": "1-stage",
+      "two_stage": "2-stage"
+    },
+    "tanks": {
+      "label": "Tanks",
+      "bar": "bar",
+      "psi": "psi",
+      "fillAria": "Fill pressure for {{tank}}",
+      "removeAria": "Remove {{tank}}",
+      "addPlaceholder": "Add tank…",
+      "conservative": "Conservative gas (call-it-an-80 derate)",
+      "notCounted": "This role isn't counted toward the open-circuit penetration budget.",
+      "colTank": "Tank",
+      "colWater": "Water vol",
+      "colFillBar": "Fill (bar)",
+      "colFillPsi": "Fill (psi)",
+      "colRole": "Role",
+      "editHint": "Edit your cylinders in the Cylinders tab below."
+    },
+    "roles": {
+      "back_gas": "Back gas",
+      "stage": "Stage",
+      "dil_out": "Dil-out",
+      "bailout": "Bailout",
+      "deco": "Deco"
+    },
+    "units": {
+      "label": "Units",
+      "metric": "Metric",
+      "imperial": "Imperial"
+    },
+    "readout": {
+      "label": "Plan",
+      "turnPressure": "Turn pressure",
+      "budget": "Turn budget",
+      "maxPenetration": "Max penetration gas",
+      "turnPoints": "Turn points",
+      "computing": "Computing…"
+    }
+  },
+  "modeCarousel": {
+    "aria": "Workspace mode",
+    "survey": "Survey",
+    "plan": "Plan",
+    "export": "Export"
+  },
+  "planTables": {
+    "tabs": {
+      "cylinders": "Cylinders",
+      "profile": "Profile"
+    },
+    "profile": {
+      "title": "Anticipated dive profile",
+      "subtitle": "Depth · time · gas along the planned route",
+      "comingSoon": "Export to Subsurface — coming soon"
+    }
+  },
+  "exportPanel": {
+    "title": "Export",
+    "subtitle": "Export the closure map for sharing or print.",
+    "description": "Export the current closure map as a vector or image file.",
+    "svg": "Export SVG",
+    "jpg": "Export JPG",
+    "comingSoon": "Export is coming soon."
+  },
   "toolbar": {
     "groupAria": "{{group}} tools",
+    "gasPlan": {
+      "tooltip": "Gas & route planning"
+    },
     "groups": {
       "move": "Move",
       "comment": "Comment",

@@ -20,6 +20,7 @@ use super::placement_suggest;
 mod closure;
 mod coordinates;
 mod distance;
+mod gas;
 mod lsq;
 mod pathfinding;
 
@@ -39,6 +40,7 @@ mod offsets;
 mod relationships;
 mod stats;
 
+pub use gas::{CylRole, Cylinder, Diver, GasReachField, PlanMode, TankMaterial, Team};
 pub use integrity::{IntegrityViolation, ViolationSeverity};
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).
