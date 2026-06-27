@@ -108,6 +108,5 @@ stalagmight/
 │   ├── releasing.md              # Release process
 │   └── style-guide.md            # UI style guide
 │
-├── CLAUDE.md                     # Agent instructions (minimal)
-└── TODO.md                       # Unimplemented features
+└── CLAUDE.md                     # Agent instructions (minimal)
 ```
