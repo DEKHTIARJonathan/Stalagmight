@@ -12,9 +12,17 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        // Read-only edit gate (#191, D-B6): you cannot mutate a read-only remote
+        // project even to revert. Gated unconditionally.
+        if let Err(f) = self.guard_mutation("Undo") {
+            return f;
+        }
         self.invalidate_adjusted_cache();
         let result = self.undo_inner();
         if result.success {
+            // Dirty-bit flip (#191, D-B16): a successful undo is an edit of a
+            // remote project. Set-only; no-op for local-only.
+            self.mark_remote_dirty();
             // Reconcile derived offsets after the restore. For snapshot-restore
             // undos (Merge/Move/Delete/Repair) the restored `before` is already a
             // valid aligned state, so realign_merges early-returns (no-op) — EXCEPT
@@ -444,9 +452,16 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        // Read-only edit gate (#191, D-B6): gated unconditionally (see undo()).
+        if let Err(f) = self.guard_mutation("Redo") {
+            return f;
+        }
         self.invalidate_adjusted_cache();
         let result = self.redo_inner();
         if result.success {
+            // Dirty-bit flip (#191, D-B16): a successful redo is an edit of a
+            // remote project. Set-only; no-op for local-only.
+            self.mark_remote_dirty();
             self.reconcile_geometry();
         }
         result
@@ -793,6 +808,10 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        // Read-only edit gate (#191, D-B6): gated unconditionally (see undo()).
+        if let Err(f) = self.guard_mutation("Undo") {
+            return f;
+        }
 
         // Validate index first
         {
@@ -822,6 +841,9 @@ impl AppState {
             }
         }
 
+        // Dirty-bit flip (#191, D-B16): undo_to ran one or more undos. Set-only;
+        // no-op for local-only.
+        self.mark_remote_dirty();
         tracing::info!(index = index, count = count, "Undo to index completed");
         CommandResult::success()
     }
@@ -833,6 +855,10 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        // Read-only edit gate (#191, D-B6): gated unconditionally (see undo()).
+        if let Err(f) = self.guard_mutation("Redo") {
+            return f;
+        }
 
         // Validate index first
         {
@@ -862,6 +888,9 @@ impl AppState {
             }
         }
 
+        // Dirty-bit flip (#191, D-B16): redo_to ran one or more redos. Set-only;
+        // no-op for local-only.
+        self.mark_remote_dirty();
         tracing::info!(index = index, count = count, "Redo to index completed");
         CommandResult::success()
     }

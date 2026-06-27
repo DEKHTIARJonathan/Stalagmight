@@ -177,6 +177,11 @@ impl AppState {
             }
         };
 
+        // [Track B] (#191) Read-only edit gate: remote ⇒ edit disabled,
+        // local-only ⇒ enabled (see do_load_project_full). Read before `db` moves.
+        let is_remote = matches!(db.load_speleo_link(), Ok(Some(_)));
+        self.set_edit_enabled(!is_remote);
+
         if let Ok(mut database) = self.database.lock() {
             *database = Some(db);
         }
@@ -519,6 +524,14 @@ impl AppState {
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
+
+        // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one
+        // carrying a speleo_link row) opened WITHOUT a write lock is read-only.
+        // There is no lock-acquire path yet (#191), so the rule is simply: remote
+        // ⇒ edit disabled; local-only ⇒ edit enabled (default-true; the gate is a
+        // no-op off-SpeleoDB). Read before `db` is moved into the handle slot.
+        let is_remote = matches!(db.load_speleo_link(), Ok(Some(_)));
+        self.set_edit_enabled(!is_remote);
 
         // Commit 2: Database handle mutation
         *self

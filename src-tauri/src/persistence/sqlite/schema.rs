@@ -5,6 +5,24 @@ use crate::models::FEATURE_ID_STRIDE;
 
 use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
 
+/// Columns of `speleo_link` that MUST survive every future SCHEMA_VERSION bump
+/// unchanged (name, declared type, null-ness). The carry-forward fence (#190)
+/// asserts this with `pragma_table_info` so no later migration silently rewrites
+/// the SpeleoDB hand-off identity or drops the dirty bit. `(name, decl_type,
+/// notnull)`.
+pub(super) const PRESERVED_SPELEOLINK_COLUMNS: &[(&str, &str, bool)] = &[
+    // `id INTEGER PRIMARY KEY` is a rowid alias: SQLite reports notnull=0 for it
+    // in pragma_table_info even though a rowid PK can never be NULL. The fence
+    // asserts the column as the schema actually reports it, so notnull is `false`
+    // here (the PK + CHECK(id=1) still enforce single-row identity).
+    ("id", "INTEGER", false),
+    ("endpoint", "TEXT", true),
+    ("project_id", "TEXT", true),
+    ("project_name", "TEXT", true),
+    ("base_commit_sha", "TEXT", false), // nullable = empty-repo BASE
+    ("has_unpushed_edits", "INTEGER", true),
+];
+
 impl Database {
     /// Run lightweight schema migrations for tables added after initial release
     fn migrate_schema(&self) -> Result<()> {
@@ -233,6 +251,24 @@ impl Database {
             "CREATE TABLE IF NOT EXISTS collab_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 state_json TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        // Ensure speleo_link table exists (schema v9: SpeleoDB hand-off identity
+        // + dirty bit, #189). This CREATE IF NOT EXISTS is what makes the table
+        // appear on open_existing() of a legacy v8 file (mirrors the collab_state
+        // pattern, not the shot_uuid ALTER pattern). No ALTER, no backfill. The
+        // DDL is byte-identical to init_schema's so the carry-forward fence
+        // (PRESERVED_SPELEOLINK_COLUMNS) holds on either open shape.
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS speleo_link (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                endpoint TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                project_name TEXT NOT NULL,
+                base_commit_sha TEXT,
+                has_unpushed_edits INTEGER NOT NULL DEFAULT 0
             )",
             [],
         )?;
@@ -630,6 +666,19 @@ impl Database {
             CREATE TABLE IF NOT EXISTS collab_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 state_json TEXT NOT NULL
+            );
+
+            -- SpeleoDB single-writer hand-off link (schema v9). Single row id=1.
+            -- base_commit_sha NULL = empty-repo BASE (never coerced to ''). is_remote is
+            -- DERIVED from EXISTS(this table), never stored. ADDITIVE: no future migration
+            -- rewrites this table (see PRESERVED_SPELEOLINK_COLUMNS / carry-forward fence).
+            CREATE TABLE IF NOT EXISTS speleo_link (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                endpoint TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                project_name TEXT NOT NULL,
+                base_commit_sha TEXT,
+                has_unpushed_edits INTEGER NOT NULL DEFAULT 0
             );
 
             -- Undo/redo stack (BLOB columns hold gzip-compressed JSON)

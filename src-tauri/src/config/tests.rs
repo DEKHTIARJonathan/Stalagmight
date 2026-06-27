@@ -2415,3 +2415,69 @@ fn test_panels_config_deserializes_legacy_table_without_reveal_fields() {
     assert_eq!(p.detail_panel_mode, "pin");
     assert_eq!(p.data_table_mode, "pin");
 }
+
+// ========================================================================
+// [Track C] (#188) SpeleoDbConfig: token_fallback + insecure_http
+// ========================================================================
+
+#[test]
+fn token_fallback_unknown_normalizes_to_session_only() {
+    // An unrecognized TOML value parses to the #[serde(other)] sentinel, then
+    // normalize() coerces it back to the safe default (mirrors ThemeMode).
+    let sdb: SpeleoDbConfig = toml::from_str("token_fallback = \"definitely_not_a_real_value\"")
+        .expect("unknown value must not block loading");
+    assert_eq!(sdb.token_fallback, TokenFallback::Unknown);
+
+    // The coercion is reachable through the top-level Config::normalize too.
+    let mut config = Config::default();
+    config.speleodb.token_fallback = TokenFallback::Unknown;
+    config.normalize();
+    assert_eq!(config.speleodb.token_fallback, TokenFallback::SessionOnly);
+}
+
+#[test]
+fn speleodb_config_defaults_are_safe() {
+    // Defaults: session-only fallback and the insecure-http override OFF.
+    let config = SpeleoDbConfig::default();
+    assert_eq!(config.token_fallback, TokenFallback::SessionOnly);
+    assert!(!config.insecure_http);
+    // An empty [speleodb] table (no fields) loads the same safe defaults, since
+    // both new fields are #[serde(default)] — existing configs load unchanged.
+    let sdb: SpeleoDbConfig = toml::from_str("").expect("empty table loads");
+    assert_eq!(sdb.token_fallback, TokenFallback::SessionOnly);
+    assert!(!sdb.insecure_http);
+    // Only the legacy endpoint/email present (pre-Track-C config) still defaults
+    // the new fields safely.
+    let sdb: SpeleoDbConfig =
+        toml::from_str("endpoint = \"https://x\"\nemail = \"u@x\"").expect("legacy table loads");
+    assert_eq!(sdb.token_fallback, TokenFallback::SessionOnly);
+    assert!(!sdb.insecure_http);
+}
+
+#[test]
+fn speleodb_config_round_trips_new_fields() {
+    let mut config = Config::default();
+    config.speleodb.token_fallback = TokenFallback::Plaintext;
+    config.speleodb.insecure_http = true;
+    config.speleodb.endpoint = Some("http://10.10.0.220:8000".to_string());
+    config.speleodb.email = Some("u@x".to_string());
+
+    let serialized = toml::to_string_pretty(&config).expect("Config should serialize");
+    let deserialized: Config = toml::from_str(&serialized).expect("round-trip parse");
+    assert_eq!(
+        deserialized.speleodb.token_fallback,
+        TokenFallback::Plaintext
+    );
+    assert!(deserialized.speleodb.insecure_http);
+    assert_eq!(
+        deserialized.speleodb.endpoint.as_deref(),
+        Some("http://10.10.0.220:8000")
+    );
+    assert_eq!(deserialized.speleodb.email.as_deref(), Some("u@x"));
+
+    // Snake-case wire form: token_fallback serializes as "plaintext".
+    assert!(
+        serialized.contains("token_fallback = \"plaintext\""),
+        "expected snake_case token_fallback in:\n{serialized}"
+    );
+}

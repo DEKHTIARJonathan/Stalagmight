@@ -24,6 +24,11 @@ impl Database {
         };
 
         // Clear existing data (delete children before parents for foreign key compliance)
+        // NOTE: speleo_link is intentionally NOT cleared here (see save_speleo_link
+        // / D-B13c). save_project wipes-and-rewrites every table it owns; if
+        // speleo_link were in that set, a local autosave would clear
+        // has_unpushed_edits on every write. The link is mutated ONLY through
+        // save_speleo_link (stamp on pull) and the dirty-bit setter (#191).
         tx.execute_batch(
             r"
             DELETE FROM shots;

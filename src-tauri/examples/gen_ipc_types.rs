@@ -22,7 +22,7 @@ use stalagmight_lib::config::{
     OverlapMode, PanelsConfig, PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset,
     SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
     StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
-    ThemeMode, UnitsConfig, ValidationConfig,
+    ThemeMode, TokenFallback, UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, IntegrityCheckResult, IntegrityRepairResult, ValidationWarning,
@@ -49,8 +49,8 @@ use stalagmight_lib::models::{
     GpsBounds, GpsCoordinates, ImportPlacement, ImportSectionConfig, LoopClosureWire, PathShot,
     PlanMode, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind,
     RulerEndpoint, Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
-    ShotBaselineEntry, ShotData, ShotUpdates, Station, StationMergeWire, StationPair, StationRef,
-    SurveyDirection, TankMaterial, Team, ZeroDatumWire,
+    ShotBaselineEntry, ShotData, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair,
+    StationRef, SurveyDirection, TankMaterial, Team, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -64,7 +64,8 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    Permission, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus,
+    Permission, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
+    SpeleoProjectSummary, SpeleoSessionStatus,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -110,6 +111,8 @@ fn main() {
     export::<CollabWarning>(&out_dir);
     export::<MatchQuality>(&out_dir);
     export::<ProjectMetadata>(&out_dir);
+    // [Track B] SpeleoDB hand-off link (#189)
+    export::<SpeleoLink>(&out_dir);
     export::<ProjectStats>(&out_dir);
     export::<DistanceField>(&out_dir);
     // Gas planning (#38)
@@ -282,12 +285,15 @@ fn main() {
     export::<ThemeMode>(&out_dir);
     export::<ColorTheme>(&out_dir);
     export::<SpeleoDbConfig>(&out_dir);
-    // SpeleoDB IPC DTOs (#183)
+    export::<TokenFallback>(&out_dir);
+    // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
     export::<SpeleoLoginResult>(&out_dir);
     export::<SpeleoOpenResult>(&out_dir);
     export::<SpeleoSessionStatus>(&out_dir);
+    export::<SpeleoDbAction>(&out_dir);
+    export::<SpeleoErrorDto>(&out_dir);
 
     let export_list = [
         "CommandResult",
@@ -455,11 +461,14 @@ fn main() {
         "ThemeMode",
         "ColorTheme",
         "SpeleoDbConfig",
+        "TokenFallback",
         "Permission",
         "SpeleoProjectSummary",
         "SpeleoLoginResult",
         "SpeleoOpenResult",
         "SpeleoSessionStatus",
+        "SpeleoDbAction",
+        "SpeleoErrorDto",
     ];
 
     let mut generated =

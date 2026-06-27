@@ -361,6 +361,10 @@ pub struct ProjectMetadata {
     /// Whether Ariane collaboration mode is enabled for this project. Lets the
     /// recent-projects panel show/toggle the state without opening the project.
     pub collab_enabled: bool,
+    // [Track B] (#189, D-B14) Whether this `.stalx` is a pulled SpeleoDB project.
+    // DERIVED from EXISTS(speleo_link) in load_metadata, never a stored column;
+    // tolerant of a missing table on a read-only metadata open.
+    pub is_remote: bool,
 }
 
 /// Per-station along-cave distance field from a chosen origin (or the zero-datum

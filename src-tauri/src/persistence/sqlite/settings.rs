@@ -34,6 +34,58 @@ impl Database {
         Ok(())
     }
 
+    /// Upsert or clear the SpeleoDB hand-off link (`speleo_link`, schema v9)
+    /// without rewriting the whole project (mirrors
+    /// [`save_collab_state`](Self::save_collab_state)). `Some(link)` upserts the
+    /// single row id=1; `None` deletes it. `base_commit_sha` binds as
+    /// `Option<String>` so `None` becomes SQL NULL — **never** `""` (NULL is the
+    /// empty-repo BASE sentinel).
+    ///
+    /// FRESHNESS-FOLD SEAM (D-B1): #185's get_project/list_projects return the
+    /// authoritative Project on every call. The persistence fold (cache the
+    /// freshness verdict + reset last_verify_at) is a DOCUMENTED NO-OP until the
+    /// #202 piggyback path consumes it. base_commit_sha is captured ONCE on pull
+    /// and NEVER mutated by #189 (a later Sync/Release issue re-stamps it).
+    pub fn save_speleo_link(&self, link: Option<&crate::models::SpeleoLink>) -> Result<()> {
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS speleo_link (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                endpoint TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                project_name TEXT NOT NULL,
+                base_commit_sha TEXT,
+                has_unpushed_edits INTEGER NOT NULL DEFAULT 0
+            )",
+            [],
+        )?;
+        match link {
+            Some(link) => {
+                self.conn.execute(
+                    "INSERT INTO speleo_link
+                        (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits)
+                     VALUES (1, ?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(id) DO UPDATE SET
+                        endpoint = excluded.endpoint,
+                        project_id = excluded.project_id,
+                        project_name = excluded.project_name,
+                        base_commit_sha = excluded.base_commit_sha,
+                        has_unpushed_edits = excluded.has_unpushed_edits",
+                    params![
+                        link.endpoint,
+                        link.project_id,
+                        link.project_name,
+                        link.base_commit_sha, // Option<String> → SQL NULL when None
+                        i64::from(link.has_unpushed_edits),
+                    ],
+                )?;
+            }
+            None => {
+                self.conn.execute("DELETE FROM speleo_link", [])?;
+            }
+        }
+        Ok(())
+    }
+
     /// Rename the project's display name without rewriting the whole project.
     /// A targeted `UPDATE` on the single `project` row (mirrors
     /// [`save_collab_state`](Self::save_collab_state)); leaves `modified_at`

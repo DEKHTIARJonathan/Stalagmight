@@ -14,6 +14,9 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+// [Track A] #186/D-B2: the typed action carried on the IPC error DTO.
+use super::contract::SpeleoDbAction;
+
 /// Project permission level.
 ///
 /// The server serializes the **label string** (e.g. `"READ_AND_WRITE"`), not the
@@ -69,6 +72,16 @@ pub(crate) struct Project {
     /// new server types. The dump classifier is the authoritative openability check.
     #[serde(default, rename = "type")]
     pub(crate) kind: String,
+    // [Track A] #185/D-A-methods: the server's GeoJSON-export toggle. Parsed (not
+    // ignored) so the full v2 payload round-trips; defaults false when omitted.
+    // Read by the tests; no production reader yet (the freshness fold that would
+    // consume it is #202), so it is dead in the non-test lib build for now.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "exclude_geojson consumer is #202")
+    )]
+    #[serde(default)]
+    pub(crate) exclude_geojson: bool,
 }
 
 /// IPC-facing summary of a project for the spike dialog's list. Derived from
@@ -130,12 +143,28 @@ pub struct SpeleoSessionStatus {
     pub keychain_backed: bool,
 }
 
+/// [Track A] #186/D-B2: the structured error the SpeleoDB IPC commands return.
+///
+/// Replaces the spike's `String`-flattened error at the IPC boundary so the
+/// frontend branches on the typed [`SpeleoDbAction`] (`action`) instead of
+/// scraping message text. `message` is DISPLAY-only (from
+/// `client::parse_error_message` / the error's `Display`); `status` is the HTTP
+/// code for a `Status` error and `None` for transport / local errors. Carries no
+/// token (the no-token-leak guard pins this).
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct SpeleoErrorDto {
+    pub message: String,
+    pub action: SpeleoDbAction,
+    pub status: Option<u16>,
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        Permission, Project, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
-        SpeleoSessionStatus,
+        Permission, Project, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
+        SpeleoProjectSummary, SpeleoSessionStatus,
     };
 
     #[test]
@@ -167,8 +196,18 @@ mod tests {
             local_path: "/cache/project.stalx".to_owned(),
         })
         .expect("serialize open result");
+        // [Track A] #186/D-B2: the structured error DTO must also never carry a
+        // token. (The message deliberately avoids the substring "token" so the
+        // guard checks the field SHAPE, not an incidental word in the display
+        // text — the real invariant is that no field name/value is the token.)
+        let error = serde_json::to_string(&SpeleoErrorDto {
+            message: "SpeleoDB returned HTTP 401: not authenticated".to_owned(),
+            action: SpeleoDbAction::ReLogin,
+            status: Some(401),
+        })
+        .expect("serialize error dto");
 
-        for json in [&login, &status, &summary, &open] {
+        for json in [&login, &status, &summary, &open, &error] {
             assert!(
                 !json.to_ascii_lowercase().contains("token"),
                 "IPC DTO must not expose a token field: {json}"
@@ -178,8 +217,8 @@ mod tests {
 
     #[test]
     fn project_parses_full_v2_payload() {
-        // Extra server fields (creation_date, message, exclude_geojson) must be
-        // ignored — the DTO models only what the spike consumes.
+        // Extra server fields (creation_date, message) are ignored; the modelled
+        // fields — including exclude_geojson (#185/D-A-methods) — parse.
         let json = r#"{
             "id": "11111111-1111-1111-1111-111111111111",
             "name": "Test Cave",
@@ -187,12 +226,14 @@ mod tests {
             "active_mutex": {"user": "holder@example.com", "creation_date": "2026-01-01T00:00:00Z"},
             "latest_commit": {"id": "0123456789abcdef0123456789abcdef01234567", "message": "init"},
             "type": "ariane",
-            "exclude_geojson": false
+            "exclude_geojson": true
         }"#;
         let p: Project = serde_json::from_str(json).expect("valid project JSON");
         assert_eq!(p.id, "11111111-1111-1111-1111-111111111111");
         assert_eq!(p.name, "Test Cave");
         assert_eq!(p.permission, Some(Permission::ReadAndWrite));
+        // [Track A] #185: exclude_geojson is now PARSED (not ignored).
+        assert!(p.exclude_geojson);
         assert_eq!(
             p.active_mutex.as_ref().map(|m| m.user.as_str()),
             Some("holder@example.com")
@@ -223,6 +264,8 @@ mod tests {
         assert!(omitted.active_mutex.is_none());
         assert!(omitted.latest_commit.is_none());
         assert_eq!(omitted.kind, "");
+        // [Track A] #185: exclude_geojson defaults to false when the server omits it.
+        assert!(!omitted.exclude_geojson);
 
         // Explicit nulls deserialize to None just like absence.
         let nulled: Project = serde_json::from_str(

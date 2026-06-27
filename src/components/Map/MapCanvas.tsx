@@ -1579,13 +1579,16 @@ function MapCanvas() {
         // Move all co-located stations (merged/closured at same coordinates)
         const colocated = stationDragColocatedRefsRef.current;
         stationDragColocatedRefsRef.current = [];
-        if (colocated.length > 1) {
-          await executeBatch(
-            colocated.map(ref => ({ type: 'move_station' as const, station_ref: ref, offset }))
-          );
-        } else {
-          await moveStation(moveDrag.stationRef, offset);
-        }
+        const res = colocated.length > 1
+          ? await executeBatch(
+              colocated.map(ref => ({ type: 'move_station' as const, station_ref: ref, offset }))
+            )
+          : await moveStation(moveDrag.stationRef, offset);
+        // If the move was rejected (e.g. the #191 read-only edit gate), the
+        // scheduled endDragPreview only fires on the next layer update after a
+        // successful refresh — which never comes — so the committed preview would
+        // leave the dragged features hidden ("shots vanish"). Restore them now.
+        if (!res.success) surveyLayerRef.current?.endDragPreview();
         setMoveDrag(null);
         return;
       } else if (moveDrag.type === 'segment' && moveDrag.sectionId !== undefined) {
@@ -1593,7 +1596,9 @@ function MapCanvas() {
         surveyLayerRef.current?.onNextUpdate(() => {
           surveyLayerRef.current?.endDragPreview();
         });
-        await moveSegment(moveDrag.sectionId, offset);
+        const res = await moveSegment(moveDrag.sectionId, offset);
+        // Rejected move (read-only gate): restore now — see the station branch.
+        if (!res.success) surveyLayerRef.current?.endDragPreview();
         setMoveDrag(null);
         return;
       } else if (moveDrag.type === 'shot' && moveDrag.sectionId !== undefined && moveDrag.shotIndex !== undefined) {
@@ -1607,9 +1612,12 @@ function MapCanvas() {
         // Move all co-located stations (includes both shot endpoints + merged/closured)
         const colocated = stationDragColocatedRefsRef.current;
         stationDragColocatedRefsRef.current = [];
-        await executeBatch(
+        const res = await executeBatch(
           colocated.map(ref => ({ type: 'move_station' as const, station_ref: ref, offset }))
         );
+        // Rejected move (read-only gate): restore the hidden features now, since
+        // the success-only refresh that would fire endDragPreview never runs.
+        if (!res.success) surveyLayerRef.current?.endDragPreview();
         setMoveDrag(null);
         return;
       }

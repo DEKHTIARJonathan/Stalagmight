@@ -3307,3 +3307,342 @@ fn test_format_blob_placeholder_units() {
         "<blob 2.0 GB>"
     );
 }
+
+// ===========================================================================
+// SpeleoDB hand-off link (speleo_link, schema v9) — #189 round-trip + is_remote
+// and #190 carry-forward fence. No telemetry (these live in persistence tests,
+// avoiding the 418 EVENT_NAMES bump). See PRESERVED_SPELEOLINK_COLUMNS.
+// ===========================================================================
+
+use super::schema::PRESERVED_SPELEOLINK_COLUMNS;
+use crate::models::SpeleoLink;
+
+/// A SpeleoLink fixture with the given base SHA + dirty bit.
+fn sample_speleo_link(base_commit_sha: Option<&str>, dirty: bool) -> SpeleoLink {
+    SpeleoLink {
+        endpoint: "http://10.10.0.220:8000/".to_string(),
+        project_id: "11111111-1111-1111-1111-111111111111".to_string(),
+        project_name: "Test Cave".to_string(),
+        base_commit_sha: base_commit_sha.map(str::to_owned),
+        has_unpushed_edits: dirty,
+    }
+}
+
+// --- #189 ---
+
+#[test]
+fn speleo_link_roundtrips_through_save_and_load() {
+    let db = Database::in_memory().unwrap();
+    assert!(db.load_speleo_link().unwrap().is_none(), "no row initially");
+
+    let link = sample_speleo_link(Some("abc123"), true);
+    db.save_speleo_link(Some(&link)).unwrap();
+
+    let loaded = db.load_speleo_link().unwrap().expect("row present");
+    assert_eq!(loaded, link);
+
+    // Upsert (id=1) overwrites rather than inserting a second row.
+    let link2 = sample_speleo_link(Some("def456"), false);
+    db.save_speleo_link(Some(&link2)).unwrap();
+    assert_eq!(db.load_speleo_link().unwrap().unwrap(), link2);
+    let count: i64 = db
+        .conn
+        .query_row("SELECT COUNT(*) FROM speleo_link", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1, "upsert keeps a single row");
+}
+
+#[test]
+fn speleo_link_null_base_sha_stays_none() {
+    let db = Database::in_memory().unwrap();
+    // Empty-repo BASE: base_commit_sha is None.
+    db.save_speleo_link(Some(&sample_speleo_link(None, false)))
+        .unwrap();
+
+    // Typed API: None stays None.
+    let loaded = db.load_speleo_link().unwrap().unwrap();
+    assert_eq!(loaded.base_commit_sha, None);
+
+    // On-disk: the column is SQL NULL, never the empty string.
+    let is_null: i64 = db
+        .conn
+        .query_row(
+            "SELECT base_commit_sha IS NULL FROM speleo_link WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(is_null, 1, "base_commit_sha is SQL NULL, not ''");
+}
+
+#[test]
+fn speleo_link_clear_removes_row() {
+    let db = Database::in_memory().unwrap();
+    db.save_speleo_link(Some(&sample_speleo_link(Some("abc"), true)))
+        .unwrap();
+    assert!(db.load_speleo_link().unwrap().is_some());
+
+    db.save_speleo_link(None).unwrap();
+    assert!(db.load_speleo_link().unwrap().is_none(), "row deleted");
+    let count: i64 = db
+        .conn
+        .query_row("SELECT COUNT(*) FROM speleo_link", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn init_schema_creates_speleo_link_v9() {
+    // A freshly-created file (open() → init_schema, no migrate chain) has the v9
+    // table immediately.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("fresh.stalx");
+    let db = Database::open(&path).unwrap();
+    let exists: i64 = db
+        .conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='speleo_link'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(exists, 1, "init_schema created speleo_link");
+    assert_eq!(db.get_user_version().unwrap(), 9, "stamped at v9");
+}
+
+#[test]
+fn migrate_creates_speleo_link_on_legacy_v8() {
+    // Simulate a legacy v8 .stalx: create a normal file, then DROP the v9 table
+    // and stamp user_version back to 8. open_existing() must migrate it (running
+    // migrate_schema), recreating speleo_link via CREATE IF NOT EXISTS.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("legacy_v8.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Legacy".to_string(), None))
+            .unwrap();
+        db.conn.execute("DROP TABLE speleo_link", []).unwrap();
+        db.set_user_version(8).unwrap();
+    }
+
+    // Confirm the table is genuinely absent before reopening.
+    {
+        let db = Database::open_for_metadata(&path).unwrap();
+        let exists: i64 = db
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='speleo_link'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 0, "v8 file has no speleo_link");
+    }
+
+    // open_existing runs ensure_schema_version → migrate_schema, gaining it.
+    let db = Database::open_existing(&path).unwrap();
+    let exists: i64 = db
+        .conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='speleo_link'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(exists, 1, "migrate_schema recreated speleo_link");
+    assert_eq!(db.get_user_version().unwrap(), 9, "bumped to v9");
+}
+
+#[test]
+fn is_remote_true_when_link_present_false_when_absent() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("remote.stalx");
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&Project::new("Remote".to_string(), None))
+        .unwrap();
+
+    // No link yet → is_remote false.
+    assert!(!db.load_metadata(path.clone()).unwrap().is_remote);
+
+    // Stamp a link → is_remote true.
+    db.save_speleo_link(Some(&sample_speleo_link(Some("abc"), false)))
+        .unwrap();
+    assert!(db.load_metadata(path.clone()).unwrap().is_remote);
+
+    // Clear the link → is_remote false again.
+    db.save_speleo_link(None).unwrap();
+    assert!(!db.load_metadata(path).unwrap().is_remote);
+}
+
+#[test]
+fn is_remote_false_on_metadata_open_of_pre_v9_file() {
+    // open_for_metadata uses SQLITE_OPEN_READ_ONLY and runs no migration, so a
+    // pre-v9 file has no speleo_link table. The EXISTS probe must tolerate that
+    // (.ok().unwrap_or(false)) and report is_remote == false, not error.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("pre_v9.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("PreV9".to_string(), None))
+            .unwrap();
+        db.conn.execute("DROP TABLE speleo_link", []).unwrap();
+    }
+    let db = Database::open_for_metadata(&path).unwrap();
+    let meta = db.load_metadata(path).unwrap();
+    assert!(!meta.is_remote, "missing table → is_remote false, no error");
+}
+
+#[test]
+fn save_project_does_not_clear_speleo_link() {
+    // D-B13c: save_project wipes/rewrites its owned tables, but speleo_link is
+    // intentionally excluded so a local autosave never clears the dirty bit.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("dirty.stalx");
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&Project::new("Dirty".to_string(), None))
+        .unwrap();
+    db.save_speleo_link(Some(&sample_speleo_link(Some("abc"), true)))
+        .unwrap();
+
+    // A subsequent save_project (the autosave path) must leave the link + dirty
+    // bit untouched.
+    db.save_project(&Project::new("Dirty Renamed".to_string(), None))
+        .unwrap();
+
+    let link = db.load_speleo_link().unwrap().expect("link survives save");
+    assert!(link.has_unpushed_edits, "dirty bit NOT cleared by save");
+    assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
+}
+
+// --- #190 carry-forward fence ---
+
+/// pragma_table_info row for a single column: (name, decl_type, notnull).
+fn speleo_link_column_info(db: &Database) -> Vec<(String, String, bool)> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT name, type, \"notnull\" FROM pragma_table_info('speleo_link')")
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)? != 0,
+            ))
+        })
+        .unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+#[test]
+fn carry_forward_four_cell_raw_sql_null_stays_null() {
+    // Raw-SQL on-disk: INSERT NULL base + dirty=1, force migrate_schema (drop the
+    // table + stamp v8 so open_existing migrates), assert NULL stays NULL and the
+    // dirty bit stays 1 — never coerced to '' / 0.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("raw_fence.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Raw".to_string(), None))
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO speleo_link
+                    (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits)
+                 VALUES (1, 'http://x', 'pid', 'pname', NULL, 1)",
+                [],
+            )
+            .unwrap();
+        // Force the migrate path on next open.
+        db.set_user_version(8).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let (is_null, dirty): (i64, i64) = db
+        .conn
+        .query_row(
+            "SELECT base_commit_sha IS NULL, has_unpushed_edits FROM speleo_link WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(is_null, 1, "NULL base survives migrate (not '')");
+    assert_eq!(dirty, 1, "dirty bit survives migrate");
+}
+
+#[test]
+fn carry_forward_four_cell_typed_api() {
+    // Typed model API: round-trip None + true through reopen, plus a Some(..) case.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("typed_fence.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Typed".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&sample_speleo_link(None, true)))
+            .unwrap();
+    }
+    {
+        let db = Database::open_existing(&path).unwrap();
+        let link = db.load_speleo_link().unwrap().unwrap();
+        assert_eq!(link.base_commit_sha, None);
+        assert!(link.has_unpushed_edits);
+
+        // Second case: Some("abc123") + dirty=false.
+        db.save_speleo_link(Some(&sample_speleo_link(Some("abc123"), false)))
+            .unwrap();
+    }
+    let db = Database::open_existing(&path).unwrap();
+    let link = db.load_speleo_link().unwrap().unwrap();
+    assert_eq!(link.base_commit_sha.as_deref(), Some("abc123"));
+    assert!(!link.has_unpushed_edits);
+}
+
+#[test]
+fn preserved_speleolink_columns_match_head_schema() {
+    // Structural HEAD-schema guard: every (name, decl_type, notnull) in
+    // PRESERVED_SPELEOLINK_COLUMNS must match the live table exactly. Fails the
+    // moment a future bump rewrites the hand-off identity or drops the dirty bit.
+    let db = Database::in_memory().unwrap();
+    let live = speleo_link_column_info(&db);
+    assert_eq!(
+        live.len(),
+        PRESERVED_SPELEOLINK_COLUMNS.len(),
+        "column count drift: {live:?} vs {PRESERVED_SPELEOLINK_COLUMNS:?}"
+    );
+    for (name, decl_type, notnull) in PRESERVED_SPELEOLINK_COLUMNS {
+        let found = live
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .unwrap_or_else(|| panic!("column {name} missing from live speleo_link"));
+        assert_eq!(&found.1, decl_type, "decl type drift for {name}");
+        assert_eq!(&found.2, notnull, "null-ness drift for {name}");
+    }
+}
+
+#[test]
+fn speleo_link_survives_open_then_fast_path_reopen() {
+    // Both open shapes (D-B13): a file created via open() has the v9 table; a
+    // second open_existing() hits the ensure_schema_version fast path (already
+    // current) and the table + row are intact.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("reopen.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Reopen".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&sample_speleo_link(Some("abc"), true)))
+            .unwrap();
+    }
+    // First open_existing: already at HEAD, fast-path early return.
+    {
+        let db = Database::open_existing(&path).unwrap();
+        assert_eq!(db.get_user_version().unwrap(), 9);
+        assert!(db.load_speleo_link().unwrap().is_some());
+    }
+    // Second reopen: still intact, dirty bit preserved.
+    let db = Database::open_existing(&path).unwrap();
+    let link = db.load_speleo_link().unwrap().unwrap();
+    assert!(link.has_unpushed_edits);
+    assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
+}
