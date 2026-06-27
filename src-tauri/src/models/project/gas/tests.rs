@@ -428,7 +428,7 @@ fn gas_reach_field_huge_budget_reaches_everything_no_frontier() {
     )
     .unwrap();
     let field =
-        project.compute_gas_reach_field(Some(&origin), &diver, &[big], &GasConfig::default());
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[big], &GasConfig::default());
     assert_eq!(field.station_refs.len(), 4); // 3 shots → 4 stations
     assert!(field.reachable.iter().all(|&r| r));
     assert!(field.gas_to_reach.iter().all(Option::is_some));
@@ -449,8 +449,13 @@ fn gas_reach_field_tiny_budget_only_origin_is_the_frontier() {
         None,
     )
     .unwrap();
-    let field =
-        project.compute_gas_reach_field(Some(&origin), &diver, &[tiny], &GasConfig::default());
+    let field = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        &[tiny],
+        &GasConfig::default(),
+    );
     let origin_idx = field
         .station_refs
         .iter()
@@ -493,20 +498,12 @@ fn gas_reach_field_one_stage_route_drop_and_final_turn() {
         default_reserve: ReservePreset::OneStage,
         ..GasConfig::default()
     };
-    let field = project.compute_gas_reach_field(Some(&origin), &diver, &[bg, stage], &cfg);
+    let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg, stage], &cfg);
 
     let sec = origin.section_id;
     assert!((field.budget_litres - 800.0).abs() < 1e-6);
-    // Route origin → deepest in-budget station (index 2).
-    assert_eq!(
-        field.route_refs,
-        vec![
-            StationRef::new(sec, 0),
-            StationRef::new(sec, 1),
-            StationRef::new(sec, 2),
-        ]
-    );
-    // Stage drops where cumulative in-gas first reaches stage_in (300 L) = station 1.
+    // Stage drops where cumulative in-gas first reaches stage_in (300 L) = station 1; the route runs
+    // origin → deepest in-budget station (index 2) = the final turn.
     assert_eq!(field.stage_drop_refs, vec![StationRef::new(sec, 1)]);
     assert_eq!(field.final_turn_ref, Some(StationRef::new(sec, 2)));
 }
@@ -545,7 +542,7 @@ fn gas_reach_field_two_stage_places_two_drops_in_order() {
         ..GasConfig::default()
     };
     let field =
-        project.compute_gas_reach_field(Some(&origin), &diver, &[bg, stage(), stage()], &cfg);
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg, stage(), stage()], &cfg);
 
     let sec = origin.section_id;
     assert!((field.budget_litres - 1500.0).abs() < 1e-6);
@@ -572,11 +569,255 @@ fn gas_reach_field_all_thirds_has_no_route_or_drops() {
     )
     .unwrap();
     let field =
-        project.compute_gas_reach_field(Some(&origin), &diver, &[bg], &GasConfig::default());
-    assert!(field.route_refs.is_empty());
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg], &GasConfig::default());
     assert!(field.stage_drop_refs.is_empty());
     assert_eq!(field.final_turn_ref, None);
     assert!(field.reachable.iter().any(|&r| r));
+}
+
+#[test]
+fn gas_reach_field_gauges_use_effective_strategy_and_conservative_cap() {
+    // The engine computes the readout gauges (single source of truth). They must honour the
+    // conservative cap AND the stage-count fallback, so the UI can display them without drifting.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    // Matched twin back gas (fill 90, Z=1) + one OVERFILLED stage (fill 230 on a 207-rated AL).
+    let bg = || {
+        Cylinder::new(
+            12.0,
+            232.0,
+            90.0,
+            TankMaterial::Steel,
+            CylRole::BackGas,
+            None,
+        )
+        .unwrap()
+    };
+    let stage = Cylinder::new(
+        11.0,
+        207.0,
+        230.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+
+    // OneStage with the stage present → effective OneStage (back-gas frac ¼).
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    let f = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        &[bg(), bg(), stage.clone()],
+        &cfg,
+    );
+    // avg start 90 × (1 − ¼) = 67.5 (Z=1 so usable=90·24; drop = ¼·90·24/24 = 22.5 → 90−22.5).
+    assert!((f.backgas_turn_bar.unwrap() - 67.5).abs() < 1e-6);
+    // Stage drop uses the CONSERVATIVE-capped basis min(230,207)=207 → (207+30)/2 = 118.5 (NOT
+    // (230+30)/2=130 from the raw overfill) — pins that the gauge matches the engine's drop.
+    assert_eq!(f.stage_drop_bars.len(), 1);
+    assert!((f.stage_drop_bars[0] - 118.5).abs() < 1e-6);
+
+    // TwoStage REQUESTED with only ONE stage → effective falls back to AllThirds: back-gas frac ⅓,
+    // and NO stage-drop gauges (mirrors the budget/route fallback).
+    let cfg2 = GasConfig {
+        default_reserve: ReservePreset::TwoStage,
+        ..GasConfig::default()
+    };
+    let f2 =
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg(), bg(), stage], &cfg2);
+    assert!((f2.backgas_turn_bar.unwrap() - 90.0 * (2.0 / 3.0)).abs() < 1e-6);
+    assert!(f2.stage_drop_bars.is_empty());
+}
+
+#[test]
+fn gas_reach_field_backgas_turn_none_without_back_gas() {
+    // A stage-only rig has no back-gas gauge (None), but the stage still has a drop gauge.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let stage = Cylinder::new(
+        11.0,
+        207.0,
+        90.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[stage], &cfg);
+    assert_eq!(field.backgas_turn_bar, None);
+    assert_eq!(field.stage_drop_bars.len(), 1);
+}
+
+#[test]
+fn gas_reach_field_staged_with_no_stages_is_empty_route_and_falls_back() {
+    // OneStage REQUESTED but the rig carries ZERO stages → effective AllThirds: empty route/drops,
+    // empty stage-drop gauges, and the back-gas gauge uses the ⅓ fraction.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        25.0,
+        232.0,
+        80.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg], &cfg);
+    assert!(field.stage_drop_refs.is_empty());
+    assert_eq!(field.final_turn_ref, None);
+    assert!(field.stage_drop_bars.is_empty());
+    assert!((field.backgas_turn_bar.unwrap() - 80.0 * (2.0 / 3.0)).abs() < 1e-6);
+}
+
+#[test]
+fn gas_reach_field_endpoint_selects_the_route_for_drops() {
+    // Two branches from a shared origin (section A merged to B at station 0); flat shots ⇒ gas =
+    // 2×length. A: a1 300, a2 500 (deepest). B: b1 200, b2 400.
+    let mut project = Project::new("Gas".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![make_shot(150.0, 0.0, 0.0), make_shot(100.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![make_shot(100.0, 0.0, 0.0), make_shot(100.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    let origin = StationRef::new(a, 0);
+    let diver = Diver::new(20.0, None).unwrap();
+    // OneStage: stage_in 300 (fill 90, w 10, reserve 30); ¼ back gas 200 (fill 80, w 10 = 800) →
+    // budget 500 reaches a2 (500) and b2 (400). deepest = a2.
+    let bg = Cylinder::new(
+        10.0,
+        232.0,
+        80.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = Cylinder::new(
+        10.0,
+        207.0,
+        90.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let cyls = [bg, stage];
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+
+    // No endpoint → route to the deepest (a2); drop where gas ≥ 300 = a1.
+    let d = project.compute_gas_reach_field(Some(&origin), None, &diver, &cyls, &cfg);
+    assert_eq!(d.final_turn_ref, Some(StationRef::new(a, 2)));
+    assert_eq!(d.stage_drop_refs, vec![StationRef::new(a, 1)]);
+
+    // Endpoint = b2 → route follows B instead; drop where gas ≥ 300 = b2, final turn b2.
+    let e = project.compute_gas_reach_field(
+        Some(&origin),
+        Some(&StationRef::new(b, 2)),
+        &diver,
+        &cyls,
+        &cfg,
+    );
+    assert_eq!(e.final_turn_ref, Some(StationRef::new(b, 2)));
+    assert_eq!(e.stage_drop_refs, vec![StationRef::new(b, 2)]);
+}
+
+#[test]
+fn gas_reach_field_threshold_past_deepest_yields_fewer_drops() {
+    // TwoStage whose budget only reaches the FIRST drop threshold → one ▼, not two (the
+    // staged_route filter_map drops a threshold beyond the deepest reachable station).
+    let (project, origin) = linear_descent_project(); // gas 0/300/800/1500
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        10.0,
+        232.0,
+        60.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = || {
+        Cylinder::new(
+            10.0,
+            207.0,
+            70.0,
+            TankMaterial::Aluminium,
+            CylRole::Stage,
+            None,
+        )
+        .unwrap()
+    };
+    // stage_in = (70−30)/2 × 10 = 200; thresholds 200, 400. ⅙ back gas = 600/6 = 100. budget = 500
+    // → reaches station 1 (300), not station 2 (800). drop1 at station 1 (≥200); drop2 (≥400) is
+    // past the deepest reachable gas (300) → no second drop.
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::TwoStage,
+        ..GasConfig::default()
+    };
+    let field =
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg, stage(), stage()], &cfg);
+    let sec = origin.section_id;
+    assert!((field.budget_litres - 500.0).abs() < 1e-6);
+    assert_eq!(field.final_turn_ref, Some(StationRef::new(sec, 1)));
+    assert_eq!(field.stage_drop_refs, vec![StationRef::new(sec, 1)]);
+}
+
+#[test]
+fn penetration_budget_reserve_at_or_above_fill_zeroes_stage() {
+    // reserve == fill ⇒ drop = (fill+reserve)/2 = fill = full ⇒ stage contributes 0 IN gas; the
+    // budget collapses to the bare back-gas fraction (no negative / NaN leak).
+    let bg = Cylinder::new(
+        24.0,
+        232.0,
+        90.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = Cylinder::new(
+        10.0,
+        207.0,
+        90.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let rig = [bg, stage];
+    let high = ReserveProfile {
+        stage_reserve_bar: 90.0,
+        ..ReserveProfile::default()
+    };
+    let b = penetration_budget(&rig, ReservePreset::OneStage, &high, false);
+    assert!((b - 0.25 * 90.0 * 24.0).abs() < 1e-6); // ¼ back gas only
 }
 
 #[test]
@@ -607,7 +848,7 @@ fn gas_reach_field_monotonic_and_disconnected_is_none() {
     )
     .unwrap();
     let field =
-        project.compute_gas_reach_field(Some(&origin), &diver, &[big], &GasConfig::default());
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[big], &GasConfig::default());
 
     // Same-section stations: gas_to_reach is monotonically non-decreasing along the line.
     let g0 = field_gas(&field, StationRef::new(sec, 0));
@@ -663,7 +904,7 @@ fn gas_reach_field_reaches_across_a_station_merge() {
     )
     .unwrap();
     let field =
-        project.compute_gas_reach_field(Some(&origin), &diver, &[big], &GasConfig::default());
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[big], &GasConfig::default());
 
     // B's far station is reachable across the merge (a separate component would be None).
     let bidx = field
@@ -705,7 +946,7 @@ fn gas_reach_field_pins_in_leg_gas_values() {
     )
     .unwrap();
     let field =
-        project.compute_gas_reach_field(Some(&origin), &diver, &[big], &GasConfig::default());
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[big], &GasConfig::default());
     assert!((field_gas(&field, StationRef::new(sec, 1)) - 300.0).abs() < 1e-6);
     assert!((field_gas(&field, StationRef::new(sec, 2)) - 800.0).abs() < 1e-6);
     assert!((field_gas(&field, StationRef::new(sec, 3)) - 1500.0).abs() < 1e-6);
@@ -732,7 +973,7 @@ fn gas_reach_field_honors_survey_speed_and_multiplier() {
         survey_rmv_multiplier: 1.3,
         ..GasConfig::default()
     };
-    let field = project.compute_gas_reach_field(Some(&origin), &diver, &[big], &config);
+    let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[big], &config);
     assert!((field_gas(&field, StationRef::new(sec, 1)) - 780.0).abs() < 1e-6);
 }
 
@@ -785,6 +1026,7 @@ fn gas_reach_field_jump_multiplier_raises_only_jump_legs() {
     };
     let base = project.compute_gas_reach_field(
         Some(&origin),
+        None,
         &diver,
         std::slice::from_ref(&big),
         &unbumped,
@@ -796,7 +1038,7 @@ fn gas_reach_field_jump_multiplier_raises_only_jump_legs() {
         jump_rmv_multiplier: 1.5,
         ..GasConfig::default()
     };
-    let field = project.compute_gas_reach_field(Some(&origin), &diver, &[big], &bumped);
+    let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[big], &bumped);
     assert!((field_gas(&field, StationRef::new(sec, 1)) - 300.0).abs() < 1e-6);
     assert!((field_gas(&field, StationRef::new(sec, 2)) - 1050.0).abs() < 1e-6);
 }
@@ -820,7 +1062,7 @@ fn gas_reach_field_partial_frontier_between_interior_stations() {
     )
     .unwrap();
     let field =
-        project.compute_gas_reach_field(Some(&origin), &diver, &[cyl], &GasConfig::default());
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[cyl], &GasConfig::default());
     assert!((field.budget_litres - 929.9).abs() < 1.0);
     assert_eq!(field.reachable.iter().filter(|&&r| r).count(), 3); // stations 0,1,2
     let idx = |sr| field.station_refs.iter().position(|r| *r == sr).unwrap();
@@ -870,6 +1112,7 @@ fn gas_reach_field_unnormalized_config_bails_to_all_unreachable() {
     ] {
         let field = project.compute_gas_reach_field(
             Some(&origin),
+            None,
             &diver,
             std::slice::from_ref(&cyl),
             &cfg,
@@ -908,7 +1151,7 @@ fn gas_reach_field_none_origin_seeds_from_zero_datums() {
     )
     .unwrap();
     // None origin → seeds from the zero datum (the entrance station).
-    let field = project.compute_gas_reach_field(None, &diver, &[big], &GasConfig::default());
+    let field = project.compute_gas_reach_field(None, None, &diver, &[big], &GasConfig::default());
     assert!(field_gas(&field, origin).abs() < EPS); // gas to reach the seed datum is 0
     assert!(field.reachable.iter().all(|&r| r)); // huge budget → all reachable from the datum
 }

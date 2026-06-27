@@ -26,10 +26,12 @@ impl Project {
     ///
     /// Seeds a gas-weighted Dijkstra from `origin` (or the zero datums when `None`) over the
     /// survey graph, weighting each shot by the **in-leg** gas it costs
-    /// (`edge_gas(rmv·survey_mult, in_speed, length, avg_depth)`), then marks every station
-    /// whose one-way gas-to-reach is within the **turn budget** — `reserve_fraction × usable
-    /// open-circuit gas` (strict-thirds default; the diver holds the rest for the exit). The
-    /// turn frontier is the reachable stations bordering an unreachable one.
+    /// (`edge_gas(rmv·survey_mult, in_speed, length, avg_depth)`), then marks every station whose
+    /// one-way gas-to-reach is within the **turn budget** ([`penetration_budget`] for the active
+    /// strategy; the diver holds the rest for the exit). The turn frontier is the reachable
+    /// stations bordering an unreachable one. Under a staged (Half-Minus) strategy it also walks
+    /// the route to `endpoint` (else the deepest in-budget station) to place per-stage drop points,
+    /// and computes the readout gauges; All-thirds leaves those empty.
     ///
     /// Contract: `gas_config` is assumed normalized (`GasConfig::normalize` — finite/positive
     /// speeds); a non-positive in-speed defensively yields an all-unreachable field rather
@@ -37,6 +39,7 @@ impl Project {
     pub(crate) fn compute_gas_reach_field(
         &self,
         origin: Option<&StationRef>,
+        endpoint: Option<&StationRef>,
         diver: &Diver,
         cylinders: &[Cylinder],
         gas_config: &GasConfig,
@@ -105,23 +108,40 @@ impl Project {
             &gas_config.reserve_profile,
             gas_config.conservative_tank_gas,
         );
+        // A pathological-but-valid cylinder (huge finite fill × volume) can overflow deliverable_gas
+        // to a non-finite budget; treat that as all-unreachable (0.0) rather than leaking NaN/Inf to
+        // the gauge readout. The staged paths already `.max(0.0)`-guard; this mirrors them.
+        let budget_litres = if budget_litres.is_finite() {
+            budget_litres
+        } else {
+            0.0
+        };
 
         let reachable: Vec<bool> = gas_in
             .iter()
             .map(|&g| g.is_finite() && g <= budget_litres)
             .collect();
 
+        // `max_reachable_gas` (reported) is the largest in-budget gas-to-reach, floored at 0.
+        // `deepest` (the route fallback target) tracks the same arg-max but seeds at -∞ so a
+        // degenerate all-at-0 reachable set (only a root in budget) still yields a target.
         let mut max_reachable_gas = 0.0_f64;
         let mut deepest: Option<usize> = None;
+        let mut deepest_gas = f64::NEG_INFINITY;
         let gas_to_reach: Vec<Option<f64>> = gas_in
             .iter()
             .zip(&reachable)
             .enumerate()
             .map(|(i, (&g, &ok))| {
                 if g.is_finite() {
-                    if ok && g > max_reachable_gas {
-                        max_reachable_gas = g;
-                        deepest = Some(i);
+                    if ok {
+                        if g > max_reachable_gas {
+                            max_reachable_gas = g;
+                        }
+                        if g > deepest_gas {
+                            deepest_gas = g;
+                            deepest = Some(i);
+                        }
                     }
                     Some(g)
                 } else {
@@ -139,20 +159,47 @@ impl Project {
             .map(|u| station_refs[u])
             .collect();
 
-        // Deepest-penetration route + per-stage drop points (staged Half-Minus strategies only).
-        // For All-thirds the thresholds are empty and these stay empty/None — the plain field
-        // above is the whole answer; All-thirds behaviour is unchanged.
+        // Route target: the user-selected endpoint when it resolves to an in-budget station, else
+        // the deepest in-budget station. (An out-of-budget endpoint falls back to deepest — the
+        // chosen lead isn't reachable on this gas; the UI still marks the pick.)
+        let route_target = endpoint
+            .and_then(|r| {
+                let key: StationKey = (*r).into();
+                self.resolve_key(&key)
+                    .and_then(|sr| station_index.get(&sr).copied())
+            })
+            .filter(|&i| reachable[i])
+            .or(deepest);
+
+        // Planned route + per-stage drop points (staged Half-Minus strategies only). For All-thirds
+        // the thresholds are empty and these stay empty/None — the plain field above is the whole
+        // answer; All-thirds behaviour is unchanged.
         let thresholds = stage_drop_thresholds(
             cylinders,
             gas_config.default_reserve,
             &gas_config.reserve_profile,
             gas_config.conservative_tank_gas,
         );
-        let (route_refs, stage_drop_refs, final_turn_ref) = if thresholds.is_empty() {
-            (Vec::new(), Vec::new(), None)
+        let (stage_drop_refs, final_turn_ref) = if thresholds.is_empty() {
+            (Vec::new(), None)
         } else {
-            staged_route(deepest, &pred, &gas_in, &station_refs, &thresholds)
+            staged_route(route_target, &pred, &gas_in, &station_refs, &thresholds)
         };
+
+        // Readout gauges — computed here so the UI never re-derives the budget math. Both honour the
+        // conservative cap + normalized reserve + stage-count fallback (the effective strategy).
+        let effective = effective_preset(cylinders, gas_config.default_reserve);
+        let backgas_turn_bar = backgas_turn_pressure(
+            cylinders,
+            backgas_fraction(effective),
+            gas_config.conservative_tank_gas,
+        );
+        let stage_drop_bars = stage_drop_pressures(
+            cylinders,
+            effective,
+            gas_config.reserve_profile.stage_reserve_bar,
+            gas_config.conservative_tank_gas,
+        );
 
         GasReachField {
             station_refs,
@@ -161,32 +208,32 @@ impl Project {
             turn_frontier,
             max_reachable_gas,
             budget_litres,
-            route_refs,
             stage_drop_refs,
             final_turn_ref,
+            backgas_turn_bar,
+            stage_drop_bars,
         }
     }
 }
 
-/// Reconstruct the deepest-penetration route and place the per-stage drop points on it.
-/// Walks the predecessor tree from the deepest in-budget station back to its root, reverses to
-/// give the route origin→deepest, then for each cumulative stage threshold (litres) finds the
-/// first route station whose gas-to-reach reaches it (the diver's likely drop point). A threshold
-/// past the deepest reachable point — cave shorter than the staged gas — simply yields no drop.
-/// Returns `(route_refs, stage_drop_refs, final_turn_ref)`; all empty/None when there is no
-/// reachable deepest station.
+/// Place the per-stage drop points on the route to `target`. Walks the predecessor tree from the
+/// route target (the user-selected endpoint, else the deepest in-budget station) back to its root,
+/// reverses to give the route origin→target, then for each cumulative stage threshold (litres)
+/// finds the first route station whose gas-to-reach reaches it (the diver's likely drop point). A
+/// threshold past the target — cave shorter than the staged gas — simply yields no drop. Returns
+/// `(stage_drop_refs, final_turn_ref)`; empty/None when there is no reachable target.
 fn staged_route(
-    deepest: Option<usize>,
+    target: Option<usize>,
     pred: &[usize],
     gas_in: &[f64],
     station_refs: &[StationRef],
     thresholds: &[f64],
-) -> (Vec<StationRef>, Vec<StationRef>, Option<StationRef>) {
-    let Some(deepest) = deepest else {
-        return (Vec::new(), Vec::new(), None);
+) -> (Vec<StationRef>, Option<StationRef>) {
+    let Some(target) = target else {
+        return (Vec::new(), None);
     };
-    let mut chain = vec![deepest];
-    let mut cur = deepest;
+    let mut chain = vec![target];
+    let mut cur = target;
     while pred[cur] != usize::MAX {
         cur = pred[cur];
         chain.push(cur);
@@ -198,8 +245,7 @@ fn staged_route(
     }
     chain.reverse();
 
-    let route_refs: Vec<StationRef> = chain.iter().map(|&i| station_refs[i]).collect();
-    // gas-to-reach increases monotonically root→deepest along the tree path, so the first station
+    // gas-to-reach increases monotonically root→target along the tree path, so the first station
     // at/after a threshold is the drop point.
     let stage_drop_refs: Vec<StationRef> = thresholds
         .iter()
@@ -210,7 +256,7 @@ fn staged_route(
                 .map(|&i| station_refs[i])
         })
         .collect();
-    (route_refs, stage_drop_refs, Some(station_refs[deepest]))
+    (stage_drop_refs, Some(station_refs[target]))
 }
 
 /// Number of `Stage` cylinders a preset requires in the rig. The pushy presets are valid
@@ -223,6 +269,97 @@ fn required_stages(preset: ReservePreset) -> usize {
         ReservePreset::OneStage => 1,
         ReservePreset::TwoStage => 2,
     }
+}
+
+/// The strategy actually applied: the requested preset when the rig carries enough `Stage`
+/// cylinders, else All-thirds (the fallback `penetration_budget` already takes). The gauges key off
+/// this so a stage-short staged request shows All-thirds numbers, matching the budget + map.
+fn effective_preset(cylinders: &[Cylinder], preset: ReservePreset) -> ReservePreset {
+    let stages = cylinders
+        .iter()
+        .filter(|c| matches!(c.role, CylRole::Stage))
+        .count();
+    if stages < required_stages(preset) {
+        ReservePreset::AllThirds
+    } else {
+        preset
+    }
+}
+
+/// Fraction of usable back gas spent on the way in, per strategy (PRD §5.1): thirds / quarters /
+/// sixths as the stages carry more of the penetration.
+fn backgas_fraction(preset: ReservePreset) -> f64 {
+    match preset {
+        ReservePreset::AllThirds => 1.0 / 3.0,
+        ReservePreset::OneStage => 0.25,
+        ReservePreset::TwoStage => 1.0 / 6.0,
+    }
+}
+
+/// Back-gas turn pressure gauge (bar): the volume-weighted average back-gas start gauge minus the
+/// `frac` of usable back gas expressed as a common-gauge drop (`frac · Σdeliverable ÷ Σwater-vol`).
+/// `None` when the rig carries no back gas. Z-derated (and conservative-capped) via
+/// [`deliverable_gas`], so it tracks the reachable overlay's budget rather than the raw fill.
+fn backgas_turn_pressure(cylinders: &[Cylinder], frac: f64, conservative: bool) -> Option<f64> {
+    let back: Vec<&Cylinder> = cylinders
+        .iter()
+        .filter(|c| matches!(c.role, CylRole::BackGas))
+        .collect();
+    let sum_wv: f64 = back.iter().map(|c| c.water_volume_l).sum();
+    if sum_wv <= 0.0 {
+        return None;
+    }
+    let avg_start = back
+        .iter()
+        .map(|c| c.fill_bar * c.water_volume_l)
+        .sum::<f64>()
+        / sum_wv;
+    let usable: f64 = back
+        .iter()
+        .map(|c| {
+            deliverable_gas(
+                c.fill_bar,
+                c.water_volume_l,
+                c.rated_pressure_bar,
+                conservative,
+            )
+        })
+        .sum();
+    Some((avg_start - frac * usable / sum_wv).max(0.0))
+}
+
+/// Per-stage Half-Minus drop pressure gauge (bar), one per counted stage of `preset` (in rig order).
+/// `drop = (basis + reserve)/2` with `basis` the conservative-capped fill — mirrors `stage_in_gas`
+/// so the gauge matches where the engine drops the stage. Empty when `preset` counts no stages
+/// (All-thirds) or the rig is stage-short (the caller passes the effective preset).
+fn stage_drop_pressures(
+    cylinders: &[Cylinder],
+    preset: ReservePreset,
+    reserve_bar: f64,
+    conservative: bool,
+) -> Vec<f64> {
+    let needed = required_stages(preset);
+    if needed == 0 {
+        return Vec::new();
+    }
+    let stages: Vec<&Cylinder> = cylinders
+        .iter()
+        .filter(|c| matches!(c.role, CylRole::Stage))
+        .collect();
+    if stages.len() < needed {
+        return Vec::new();
+    }
+    stages[..needed]
+        .iter()
+        .map(|c| {
+            let basis = if conservative {
+                c.fill_bar.min(c.rated_pressure_bar)
+            } else {
+                c.fill_bar
+            };
+            (0.5 * (basis + reserve_bar)).clamp(0.0, basis)
+        })
+        .collect()
 }
 
 /// One-way IN penetration budget (litres), PRD §5.1 — the gas a diver may consume on the way

@@ -15,6 +15,7 @@ use crate::models::{Cylinder, Diver, GasReachField, StationRef};
 pub async fn compute_gas_reach_field(
     app_handle: tauri::AppHandle,
     origin: Option<StationRef>,
+    endpoint: Option<StationRef>,
     diver: Diver,
     cylinders: Vec<Cylinder>,
     gas_config: GasConfig,
@@ -40,9 +41,13 @@ pub async fn compute_gas_reach_field(
 
     let field = tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
-        state
-            .inner()
-            .gas_reach_field(origin.as_ref(), &diver, &cylinders, &gas_config)
+        state.inner().gas_reach_field(
+            origin.as_ref(),
+            endpoint.as_ref(),
+            &diver,
+            &cylinders,
+            &gas_config,
+        )
     })
     .await
     // A JoinError (engine panic / cancellation) is a real backend bug, so surface it as

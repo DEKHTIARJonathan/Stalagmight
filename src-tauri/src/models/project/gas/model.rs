@@ -164,11 +164,18 @@ pub struct Team {
 /// `gas_to_reach` is `None` for graph-unreachable stations (JSON-safe ∞); `station_refs` echo
 /// the input order so the field is self-describing.
 ///
-/// The `route_refs` / `stage_drop_refs` / `final_turn_ref` describe the **deepest-penetration
-/// route** under a staged (Half-Minus) strategy — the ordered stations from the origin to the
-/// farthest in-budget point, the station where each stage's IN gas runs out (its drop point), and
-/// the final turn. They are **empty / `None` for All-thirds** (and for any rig that falls back to
-/// it): All-thirds keeps the plain reachable field + turn frontier with no per-stage drops.
+/// The `stage_drop_refs` / `final_turn_ref` describe the **planned route** under a staged
+/// (Half-Minus) strategy — the station where each stage's IN gas runs out (its drop point, along
+/// the route to the user-selected endpoint, else the farthest in-budget point), and the final
+/// turn. They are **empty / `None` for All-thirds** (and for any rig that falls back to it):
+/// All-thirds keeps the plain reachable field + turn frontier with no per-stage drops.
+///
+/// `backgas_turn_bar` and `stage_drop_bars` are the **readout gauges**, computed here (the single
+/// source of truth) so the UI never re-derives the budget math and drifts from the reachable
+/// overlay: the back-gas turn pressure under the effective strategy's fraction, and each counted
+/// stage's Half-Minus drop pressure. Both honour the conservative cap + normalized reserve +
+/// stage-count fallback. `backgas_turn_bar` is `None` when the rig has no back gas;
+/// `stage_drop_bars` is empty for All-thirds / a fell-back staged strategy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct GasReachField {
     pub station_refs: Vec<StationRef>,
@@ -177,10 +184,12 @@ pub struct GasReachField {
     pub turn_frontier: Vec<StationRef>,
     pub max_reachable_gas: f64,
     pub budget_litres: f64,
-    /// Ordered stations origin→deepest in-budget point (staged strategies only; else empty).
-    pub route_refs: Vec<StationRef>,
     /// Station where each stage's IN gas is exhausted, in stage order (staged strategies only).
     pub stage_drop_refs: Vec<StationRef>,
-    /// The final turn — deepest in-budget station on the route (staged strategies only; else None).
+    /// The final turn — the route target station (staged strategies only; else None).
     pub final_turn_ref: Option<StationRef>,
+    /// Back-gas turn pressure gauge (bar); `None` when the rig has no back gas.
+    pub backgas_turn_bar: Option<f64>,
+    /// Per-stage Half-Minus drop pressure gauge (bar), one per counted stage; empty for All-thirds.
+    pub stage_drop_bars: Vec<f64>,
 }
