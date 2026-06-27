@@ -1,11 +1,50 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use std::path::Path;
 
 use super::{BackupInfo, Database, SalvagedData, SalvagedSection};
 
 impl Database {
+    /// Write a self-contained snapshot of an on-disk `.stalx` to `dest` using
+    /// `VACUUM INTO` (#195).
+    ///
+    /// `VACUUM INTO` produces a single, fully-checkpointed database file in
+    /// rollback (DELETE) journal mode with NO `-wal`/`-journal`/`-shm` sidecar,
+    /// so the snapshot can be uploaded as one blob and reopened with
+    /// [`Database::open_existing`]. It reads the source on its own connection and
+    /// NEVER mutates it (the live project file is left untouched), and it folds in
+    /// any committed WAL frames so the snapshot reflects the source's current
+    /// committed state under either journal mode.
+    ///
+    /// The SpeleoDB push pipeline saves the live project first, then snapshots
+    /// here; the caller clears `has_unpushed_edits` in the snapshot copy before
+    /// upload so the dirty bit never rides to the server.
+    ///
+    /// `dest`'s parent directory is created if missing, and any stale file at
+    /// `dest` is removed first (`VACUUM INTO` refuses to overwrite an existing
+    /// target).
+    pub fn vacuum_snapshot(src: &Path, dest: &Path) -> Result<()> {
+        if !src.exists() {
+            anyhow::bail!("source .stalx does not exist: {}", src.display());
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create snapshot dir {}", parent.display()))?;
+        }
+        // VACUUM INTO fails outright if the target file already exists.
+        if dest.exists() {
+            std::fs::remove_file(dest)
+                .with_context(|| format!("remove stale snapshot {}", dest.display()))?;
+        }
+        let conn = Connection::open(src).context("open source .stalx for snapshot")?;
+        // The destination filename is a bound parameter (supported by VACUUM INTO
+        // since SQLite 3.27); this avoids any path-quoting pitfalls.
+        conn.execute("VACUUM INTO ?1", params![dest.to_string_lossy()])
+            .context("VACUUM INTO snapshot failed")?;
+        Ok(())
+    }
+
     /// Open a database for recovery purposes, skipping integrity checks.
     /// This allows reading whatever data is still accessible from a corrupt file.
     pub fn open_for_recovery(path: &Path) -> Result<Self> {

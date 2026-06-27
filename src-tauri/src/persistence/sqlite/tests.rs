@@ -3753,3 +3753,152 @@ fn speleo_link_survives_open_then_fast_path_reopen() {
     assert!(link.has_unpushed_edits);
     assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
 }
+
+// --- #195 VACUUM INTO snapshot ---
+
+/// Seed a `.stalx` at `path` with one section + one shot, then close it (so a
+/// DELETE-mode file is fully flushed to disk).
+fn seed_snapshot_source(path: &Path) {
+    let mut db = Database::open(path).unwrap();
+    let mut project = Project::new("Snap Cave".to_string(), Some("Loc".to_string()));
+    project.add_section(SectionData {
+        name: Some("Line".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![ShotData {
+            azimuth_in: 10.0,
+            azimuth_out: 190.0,
+            length: 5.0,
+            depth_in: 1.0,
+            depth_out: 2.0,
+            ..Default::default()
+        }],
+    });
+    db.save_project(&project).unwrap();
+}
+
+/// Assert no `-wal`/`-journal`/`-shm` sidecar sits next to `dest`.
+fn assert_no_sqlite_sidecars(dest: &Path) {
+    let dest_str = dest.to_string_lossy();
+    for suffix in ["-wal", "-journal", "-shm"] {
+        let sidecar = std::path::PathBuf::from(format!("{dest_str}{suffix}"));
+        assert!(
+            !sidecar.exists(),
+            "snapshot must be self-contained: {sidecar:?} should not exist"
+        );
+    }
+}
+
+#[test]
+fn vacuum_snapshot_self_contained_delete_mode() {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src.stalx");
+    let dest = temp.path().join("snap/out.stalx");
+    seed_snapshot_source(&src);
+
+    Database::vacuum_snapshot(&src, &dest).unwrap();
+
+    assert!(dest.exists(), "snapshot written");
+    assert_no_sqlite_sidecars(&dest);
+
+    // Reopens as a normal project with the data intact.
+    let db = Database::open_existing(&dest).unwrap();
+    let loaded = db.load_project().unwrap();
+    assert_eq!(loaded.name, "Snap Cave");
+    assert_eq!(loaded.sections.len(), 1);
+    assert_eq!(loaded.sections[0].shots.len(), 1);
+}
+
+#[test]
+fn vacuum_snapshot_under_wal_mode() {
+    // The live file may be in WAL mode with un-checkpointed committed frames.
+    // VACUUM INTO (on its own connection) must fold them in and still emit a
+    // self-contained DELETE-mode snapshot.
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("wal.stalx");
+    let dest = temp.path().join("wal_snap.stalx");
+
+    let mut db = Database::open(&src).unwrap();
+    db.conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+    let mut project = Project::new("WAL Cave".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("WL".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#abcdef".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![ShotData {
+            azimuth_in: 1.0,
+            azimuth_out: 181.0,
+            length: 3.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
+            ..Default::default()
+        }],
+    });
+    db.save_project(&project).unwrap();
+
+    // Snapshot while `db` is still open (the WAL is NOT checkpointed yet).
+    Database::vacuum_snapshot(&src, &dest).unwrap();
+    assert_no_sqlite_sidecars(&dest);
+
+    let snap = Database::open_existing(&dest).unwrap();
+    let loaded = snap.load_project().unwrap();
+    assert_eq!(loaded.name, "WAL Cave");
+    assert_eq!(loaded.sections.len(), 1, "committed WAL data captured");
+    assert_eq!(loaded.sections[0].shots.len(), 1);
+}
+
+#[test]
+fn vacuum_snapshot_removes_stale_dest() {
+    // VACUUM INTO refuses to overwrite; the helper clears a stale target first.
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src.stalx");
+    let dest = temp.path().join("stale.stalx");
+    seed_snapshot_source(&src);
+    std::fs::write(&dest, b"not a database").unwrap();
+
+    Database::vacuum_snapshot(&src, &dest).unwrap();
+
+    let db = Database::open_existing(&dest).unwrap();
+    assert_eq!(db.load_project().unwrap().name, "Snap Cave");
+}
+
+#[test]
+fn vacuum_snapshot_carries_speleo_link_for_caller_to_clear() {
+    // The snapshot preserves the speleo_link row (incl. the dirty bit) so the
+    // push pipeline can clear has_unpushed_edits in the COPY before upload.
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("linked.stalx");
+    let dest = temp.path().join("linked_snap.stalx");
+    {
+        let mut db = Database::open(&src).unwrap();
+        db.save_project(&Project::new("Linked".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&sample_speleo_link(Some("abc"), true)))
+            .unwrap();
+    }
+
+    Database::vacuum_snapshot(&src, &dest).unwrap();
+
+    let snap = Database::open_existing(&dest).unwrap();
+    let link = snap.load_speleo_link().unwrap().expect("link in snapshot");
+    assert!(
+        link.has_unpushed_edits,
+        "dirty bit present for caller to clear"
+    );
+    assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
+}
+
+#[test]
+fn vacuum_snapshot_missing_source_errors() {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("nope.stalx");
+    let dest = temp.path().join("out.stalx");
+    assert!(Database::vacuum_snapshot(&src, &dest).is_err());
+    assert!(!dest.exists(), "no snapshot written on error");
+}
