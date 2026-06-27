@@ -5,6 +5,7 @@ import { trackCommand, setSource, peekProjectActionSource, clearProjectActionSou
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import { isPermissionError } from '../utils/saveErrors';
+import { isEditDisabledError, READ_ONLY_EDIT_NOTICE } from '../utils/editErrors';
 import { hasEligibleClosures } from '../utils/closures';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
@@ -411,6 +412,21 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // so without this the banner/dialog can keep showing an already-fixed issue
       // until a manual save or reload.
       await get().checkProjectIntegrity();
+    } else {
+      // executeCommand used to be SILENT on a rejected CommandResult (no refresh,
+      // no feedback). That left optimistic UI desynced from backend truth — the
+      // #191 read-only edit gate's "shots vanish on drag" bug: a committed drag
+      // preview stayed rendered because the success-only refresh never fired.
+      // ALWAYS re-sync the view to backend truth, discarding the phantom edit.
+      await get().refreshProjectState();
+      // Surface a read-only rejection (EDIT_DISABLED) as a single friendly notice
+      // across ALL edit paths (drag, dialogs, shortcuts) — a blocked drag was
+      // otherwise a silent no-op. Other failures keep their existing handling
+      // (dialogs show an inline error), so validation errors aren't double-toasted.
+      // Full edit-state UX (suppress this, offer "Start editing") is owned by #204.
+      if (isEditDisabledError(result.error)) {
+        useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled');
+      }
     }
     return result;
   };
