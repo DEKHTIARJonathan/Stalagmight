@@ -119,11 +119,14 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.set_shot_reference",
     "command.set_station_comment",
     "command.set_zero_datum",
+    "command.speleodb_done",
     "command.speleodb_list_projects",
     "command.speleodb_login",
     "command.speleodb_logout",
     "command.speleodb_open_project",
     "command.speleodb_session",
+    "command.speleodb_start_editing",
+    "command.speleodb_update",
     "command.suggest_all_import_placements",
     "command.suggest_import_placement",
     "command.suggest_orphan_placements",
@@ -551,8 +554,10 @@ mod tests {
         //   + 8 walls-import events (#223)
         //   + 9 SpeleoDB events (#183)        = 418
         //   + 1 gas event (#38):
-        //       command.compute_gas_reach_field = 419.
-        assert_eq!(EVENT_NAMES.len(), 419);
+        //       command.compute_gas_reach_field = 419
+        //   + 3 SpeleoDB sync events (#194/#197):
+        //       speleodb_{start_editing,done,update} = 422.
+        assert_eq!(EVENT_NAMES.len(), 422);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

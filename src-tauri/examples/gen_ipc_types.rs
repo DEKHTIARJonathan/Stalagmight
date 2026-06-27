@@ -64,8 +64,8 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    Permission, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoProjectSummary, SpeleoSessionStatus,
+    DoneResult, Permission, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
+    SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult, UpdateResult,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -296,6 +296,10 @@ fn main() {
     export::<SpeleoSessionStatus>(&out_dir);
     export::<SpeleoDbAction>(&out_dir);
     export::<SpeleoErrorDto>(&out_dir);
+    // SpeleoDB single-writer hand-off DTOs (#194/#197)
+    export::<StartEditingResult>(&out_dir);
+    export::<DoneResult>(&out_dir);
+    export::<UpdateResult>(&out_dir);
 
     let export_list = [
         "CommandResult",
@@ -473,6 +477,9 @@ fn main() {
         "SpeleoSessionStatus",
         "SpeleoDbAction",
         "SpeleoErrorDto",
+        "StartEditingResult",
+        "DoneResult",
+        "UpdateResult",
     ];
 
     let mut generated =

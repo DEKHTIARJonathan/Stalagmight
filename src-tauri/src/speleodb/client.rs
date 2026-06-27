@@ -254,10 +254,7 @@ pub(crate) fn get_project(
 /// (#193). Used by guardrail-7 ancestry recovery to decide, after a push whose
 /// confirmation was lost, whether our edit actually landed on the server. The
 /// caller validates `project_id` (UUID) first. A GET, so it is retry-safe.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "ancestry-recovery caller is #194/#197 (Unit 4/6)")
-)]
+/// Consumed by #197 done (ancestry recovery).
 pub(crate) fn get_revisions(
     base: &str,
     token: &str,
@@ -419,13 +416,6 @@ fn build_upload_parts(
 /// an explicit MIME (D-A-multipart / D-A-mime). The caller must hold the project
 /// mutex. `idempotent = false` → runs at most once (a commit must not
 /// double-submit on a mid-response failure).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "upload orchestration caller is #185 step 12 / #194"
-    )
-)]
 pub(crate) fn upload_auto(
     base: &str,
     token: &str,

@@ -16,11 +16,11 @@ use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
 use crate::speleodb::models::SpeleoProjectSummary;
-use crate::speleodb::sync::{self, FenceOutcome};
+use crate::speleodb::sync::{self, AncestryOutcome, FenceOutcome};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
-    SpeleoDbError, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult, SpeleoSessionStatus,
-    StartEditingResult,
+    DoneResult, SpeleoDbError, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
+    SpeleoSessionStatus, StartEditingResult, UpdateResult,
 };
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
@@ -202,6 +202,45 @@ impl SpeleoDbSession {
         // the token is cached + the active tier set; on a miss the session stays
         // seeded-but-unauthenticated and the next call surfaces NotAuthenticated.
         let _ = self.token_store.load(&endpoint, &email);
+    }
+}
+
+/// Internal verdict of the push half of `speleodb_done`.
+enum PushOutcome {
+    /// The push landed (200 → BASE advanced; or 304 → already at the tip): the
+    /// dirty bit was cleared. Safe to release the lock.
+    Confirmed,
+    /// A stranger commit sits between our BASE and the server tip — never pushed.
+    /// Stay locked + dirty for the user to reconcile (#198).
+    Diverged,
+    /// The push outcome was ambiguous (transport drop / retried-then-exhausted
+    /// 5xx): we don't know whether it landed. Stay locked + dirty; the next
+    /// attempt recovers via ancestry (#193).
+    Unconfirmed,
+}
+
+/// Clear the dirty bit in a push SNAPSHOT copy so the `.stalx` uploaded to the
+/// server never carries `has_unpushed_edits` (the next puller would otherwise see
+/// a dirty file). Best-effort — a failure only means the pushed file keeps a stale
+/// flag, which the puller re-stamps anyway.
+fn clear_snapshot_dirty(snapshot: &Path) {
+    match crate::persistence::Database::open_existing(snapshot) {
+        Ok(db) => match db.load_speleo_link() {
+            Ok(Some(mut link)) => {
+                link.has_unpushed_edits = false;
+                link.last_edit_at = None;
+                if let Err(e) = db.save_speleo_link(Some(&link)) {
+                    tracing::warn!(error = %e, "clear_snapshot_dirty: failed to clear flag in snapshot");
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "clear_snapshot_dirty: failed to read snapshot link");
+            }
+        },
+        Err(e) => {
+            tracing::warn!(error = %e, "clear_snapshot_dirty: failed to open snapshot");
+        }
     }
 }
 
@@ -613,10 +652,6 @@ impl AppState {
     /// `set_edit_enabled(true)` happens ONLY on a clean reconcile (UpToDate /
     /// FastForward), and for FastForward it happens AFTER the in-place reload (the
     /// reload re-derives the gate from `is_remote` and would otherwise re-disable).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "IPC command wired in #197 (Unit 6)")
-    )]
     pub(crate) fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
         let link = self.speleodb_open_link().map_err(local_dto)?;
         validate_project_id(&link.project_id).map_err(local_dto)?;
@@ -805,10 +840,6 @@ impl AppState {
     /// `.tml` carries. Renders via `export_tml` DIRECTLY (never the collab sibling
     /// `export_tml_with_baseline`), discarding the baseline — the `.tml` is a
     /// throwaway render sidecar, not the collab round-trip file.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "render-on-push caller is #197 (Unit 6)")
-    )]
     fn speleodb_render_tml(&self, dest: &Path) -> Result<(), SpeleoDbError> {
         // Snapshot the in-memory project so the UUID-persist + render run without
         // holding the project lock across the database lock.
@@ -844,6 +875,300 @@ impl AppState {
         }
         crate::export::tml::export_tml(&project, dest)
             .map_err(|e| SpeleoDbError::Io(format!("render .tml failed: {e}")))?;
+        Ok(())
+    }
+
+    /// Push the open project's edits (if any) and release the write lock,
+    /// returning to read-only (#197). On a confirmed push (or nothing to push) the
+    /// lock is released and the edit gate dropped; on divergence or an ambiguous
+    /// push, the lock + dirty bit are retained so no edits are lost. `message` is
+    /// the commit message (a generic default is used when blank).
+    pub(crate) fn speleodb_done(
+        &self,
+        message: Option<String>,
+    ) -> Result<DoneResult, SpeleoErrorDto> {
+        let link = self.speleodb_open_link().map_err(local_dto)?;
+        validate_project_id(&link.project_id).map_err(local_dto)?;
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+
+        // Dirty-bit gate: only push when there are un-pushed edits.
+        let outcome = if link.has_unpushed_edits {
+            self.speleodb_push(&endpoint, &token, insecure_http, &link, message)?
+        } else {
+            PushOutcome::Confirmed
+        };
+
+        match outcome {
+            PushOutcome::Confirmed => {
+                // Edits are safely on the server; release the lock and go
+                // read-only. Drop the edit gate only after a confirmed release —
+                // if release fails the lock is still held, so a retry of Done
+                // (now a no-op push, dirty already cleared) re-attempts it.
+                self.speleodb_handle_auth(
+                    Endpoint::Release,
+                    client::release_lock(&endpoint, &token, insecure_http, &link.project_id),
+                )
+                .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
+                self.set_edit_enabled(false);
+                Ok(DoneResult::Released)
+            }
+            // Stay locked + dirty so the user can reconcile / a retry can recover.
+            PushOutcome::Diverged => Ok(DoneResult::DivergenceNeeded),
+            PushOutcome::Unconfirmed => Ok(DoneResult::PushUnconfirmed),
+        }
+    }
+
+    /// Read-only refresh of the open project against the server (#197): no lock is
+    /// taken. UpToDate / FastForward (re-pull + reload) / DivergenceNeeded.
+    pub(crate) fn speleodb_update(&self) -> Result<UpdateResult, SpeleoErrorDto> {
+        let link = self.speleodb_open_link().map_err(local_dto)?;
+        validate_project_id(&link.project_id).map_err(local_dto)?;
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+
+        let project = self
+            .speleodb_handle_auth(
+                Endpoint::GetProject,
+                client::get_project(&endpoint, &token, insecure_http, &link.project_id),
+            )
+            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        let tip = project.latest_commit.as_ref().map(|c| c.id.clone());
+
+        match sync::fence(
+            link.base_commit_sha.as_deref(),
+            tip.as_deref(),
+            link.has_unpushed_edits,
+        ) {
+            FenceOutcome::UpToDate => Ok(UpdateResult::UpToDate),
+            FenceOutcome::FastForward => {
+                let local_path = self
+                    .speleodb_fast_forward(&endpoint, &token, insecure_http, &link, tip.as_deref())
+                    .map_err(local_dto)?;
+                Ok(UpdateResult::FastForwarded { local_path })
+            }
+            FenceOutcome::Diverged => Ok(UpdateResult::DivergenceNeeded),
+            FenceOutcome::FailClosed => Err(local_dto(SpeleoDbError::Sync(
+                "the server reports no commits for a project with a recorded base".to_owned(),
+            ))),
+        }
+    }
+
+    /// The push half of [`Self::speleodb_done`]: fence BASE vs the server tip,
+    /// recover via ancestry (#193) if the tip moved under our lock, then upload the
+    /// snapshot + render.
+    fn speleodb_push(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        link: &crate::models::SpeleoLink,
+        message: Option<String>,
+    ) -> Result<PushOutcome, SpeleoErrorDto> {
+        let project_id = &link.project_id;
+
+        // Authoritative server tip.
+        let project = self
+            .speleodb_handle_auth(
+                Endpoint::GetProject,
+                client::get_project(endpoint, token, insecure_http, project_id),
+            )
+            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        let tip = project.latest_commit.as_ref().map(|c| c.id.clone());
+
+        match sync::fence(link.base_commit_sha.as_deref(), tip.as_deref(), true) {
+            // base == tip: push our edits directly.
+            FenceOutcome::UpToDate => {}
+            // We hold the lock, so a moved tip is (almost always) our own prior
+            // ambiguous push. Disambiguate with ancestry recovery (#193).
+            FenceOutcome::Diverged => {
+                let my_email = self
+                    .speleodb_my_email()
+                    .ok_or_else(|| local_dto(SpeleoDbError::NotAuthenticated))?;
+                let revisions = self
+                    .speleodb_handle_auth(
+                        Endpoint::GetProject,
+                        client::get_revisions(endpoint, token, insecure_http, project_id),
+                    )
+                    .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+                match sync::classify_ancestry(
+                    link.base_commit_sha.as_deref(),
+                    tip.as_deref(),
+                    &revisions.commits,
+                    &my_email,
+                    link.last_edit_at.as_deref(),
+                    // push-start is not persisted, so g7 stays conservative
+                    // (clear_dirty == false) and we always re-push below — a no-op
+                    // 304 if nothing changed since the landed commit.
+                    None,
+                ) {
+                    AncestryOutcome::Landed { clear_dirty } => {
+                        let new_base = tip.clone();
+                        if clear_dirty {
+                            // Forward-compatible only (unreachable while push-start
+                            // is unpersisted): the prior push landed and no edit
+                            // followed it, so adopt the tip and clear dirty without
+                            // a redundant re-push.
+                            self.speleodb_mutate_link(|l| {
+                                l.base_commit_sha = new_base;
+                                l.has_unpushed_edits = false;
+                                l.last_edit_at = None;
+                            })
+                            .map_err(local_dto)?;
+                            return Ok(PushOutcome::Confirmed);
+                        }
+                        // Adopt the landed tip as our BASE, then push the current
+                        // state on top (a 304 if nothing changed since).
+                        self.speleodb_mutate_link(|l| l.base_commit_sha = new_base)
+                            .map_err(local_dto)?;
+                    }
+                    AncestryOutcome::Diverged | AncestryOutcome::NotLanded => {
+                        return Ok(PushOutcome::Diverged);
+                    }
+                    AncestryOutcome::FailClosed => {
+                        return Err(local_dto(SpeleoDbError::Sync(
+                            "could not verify whether the previous push landed".to_owned(),
+                        )));
+                    }
+                }
+            }
+            // Unreachable for dirty == true (the fence never fast-forwards a dirty
+            // copy), but treat defensively as divergence rather than overwrite.
+            FenceOutcome::FastForward => return Ok(PushOutcome::Diverged),
+            FenceOutcome::FailClosed => {
+                return Err(local_dto(SpeleoDbError::Sync(
+                    "the server reports no commits for a project with a recorded base".to_owned(),
+                )));
+            }
+        }
+
+        self.speleodb_upload(endpoint, token, insecure_http, link, message)
+    }
+
+    /// Build the upload (VACUUM snapshot with the dirty bit cleared in the copy +
+    /// the `.tml` render) and push it as one commit, then reconcile the dirty bit
+    /// from the result.
+    fn speleodb_upload(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        link: &crate::models::SpeleoLink,
+        message: Option<String>,
+    ) -> Result<PushOutcome, SpeleoErrorDto> {
+        let project_id = &link.project_id;
+        let commit_message = message
+            .map(|m| m.trim().to_owned())
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| "Updated in Stalagmight".to_owned());
+
+        // The live on-disk `.stalx` (the open project's cache file) and the scratch
+        // snapshot / render paths beside it.
+        let live = self.speleodb_cache_path(project_id).map_err(local_dto)?;
+        let dir = live
+            .parent()
+            .ok_or_else(|| local_dto(SpeleoDbError::Io("cache path has no parent".to_owned())))?;
+        let snapshot = dir.join("snapshot.stalx");
+        let tml = dir.join("ariane.tml");
+
+        // Render the `.tml` from the in-memory project (#196), then flush in-memory
+        // state to the live `.stalx` so the snapshot below reflects every edit.
+        self.speleodb_render_tml(&tml).map_err(local_dto)?;
+        if !self.save_project(None, true).success {
+            return Err(local_dto(SpeleoDbError::Io(
+                "failed to flush project before push".to_owned(),
+            )));
+        }
+
+        // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in
+        // the COPY so it never rides to the server.
+        crate::persistence::Database::vacuum_snapshot(&live, &snapshot)
+            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        clear_snapshot_dirty(&snapshot);
+
+        let result = self.speleodb_handle_auth(
+            Endpoint::UploadAuto,
+            client::upload_auto(
+                endpoint,
+                token,
+                insecure_http,
+                project_id,
+                &snapshot,
+                &tml,
+                &commit_message,
+            ),
+        );
+        match result {
+            // 200: BASE advances to the adopted hexsha; dirty cleared.
+            Ok(pushed) => {
+                let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
+                self.speleodb_mutate_link(|l| {
+                    l.base_commit_sha = new_base;
+                    l.has_unpushed_edits = false;
+                    l.last_edit_at = None;
+                })
+                .map_err(local_dto)?;
+                Ok(PushOutcome::Confirmed)
+            }
+            Err(e) => {
+                // 304: the remote tree already matches — clear dirty, BASE unchanged.
+                if matches!(&e, SpeleoDbError::Status { status: 304, .. }) {
+                    self.speleodb_mutate_link(|l| {
+                        l.has_unpushed_edits = false;
+                        l.last_edit_at = None;
+                    })
+                    .map_err(local_dto)?;
+                    return Ok(PushOutcome::Confirmed);
+                }
+                // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
+                // don't know whether it landed — stay dirty, recover via ancestry
+                // on the next attempt.
+                let ambiguous = match &e {
+                    SpeleoDbError::Status { status, .. } => {
+                        map_status(Endpoint::UploadAuto, *status) == SpeleoDbAction::StayDirty
+                    }
+                    SpeleoDbError::Transport(_) => true,
+                    _ => false,
+                };
+                if ambiguous {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "preserve un-pushed edits after an ambiguous push",
+                        "speleodb push: ambiguous result; staying dirty for ancestry recovery"
+                    );
+                    return Ok(PushOutcome::Unconfirmed);
+                }
+                // A hard rejection (403 fence, 4xx, parse): surface it.
+                Err(dto_for_error(Endpoint::UploadAuto, &e))
+            }
+        }
+    }
+
+    /// The authenticated user's email (for ancestry authorship checks), if any.
+    fn speleodb_my_email(&self) -> Option<String> {
+        self.speleodb_session_lock()
+            .ok()
+            .and_then(|s| s.email.clone())
+    }
+
+    /// Load the open project's `speleo_link`, apply `f`, and persist it. Errors if
+    /// no remote project is open.
+    fn speleodb_mutate_link(
+        &self,
+        f: impl FnOnce(&mut crate::models::SpeleoLink),
+    ) -> Result<(), SpeleoDbError> {
+        let db_guard = self
+            .database
+            .lock()
+            .map_err(|_| SpeleoDbError::Io("database lock poisoned".to_owned()))?;
+        let db = db_guard.as_ref().ok_or(SpeleoDbError::NoRemoteProject)?;
+        let mut link = db
+            .load_speleo_link()
+            .map_err(|e| SpeleoDbError::Io(e.to_string()))?
+            .ok_or(SpeleoDbError::NoRemoteProject)?;
+        f(&mut link);
+        db.save_speleo_link(Some(&link))
+            .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
         Ok(())
     }
 }

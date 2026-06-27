@@ -68,10 +68,6 @@ pub(crate) struct RevisionCommit {
 /// commit list. The sibling `project` object the server also returns is ignored.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct RevisionHistory {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "revisions consumer is #194/#197 (Unit 4/6)")
-    )]
     #[serde(default)]
     pub(crate) commits: Vec<RevisionCommit>,
 }
@@ -181,6 +177,40 @@ pub enum StartEditingResult {
     DivergenceNeeded,
     /// Someone else holds the write lock; `email` is the holder when known.
     LockedBy { email: Option<String> },
+}
+
+/// Outcome of `speleodb_done` (#197): push the open project's edits, then release
+/// the lock and return to read-only.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DoneResult {
+    /// Edits pushed (or there was nothing to push); the lock was released and the
+    /// project is read-only again.
+    Released,
+    /// The server diverged (a stranger commit between our base and the tip):
+    /// nothing was pushed, the lock + dirty bit are retained for the user to
+    /// reconcile (#198).
+    DivergenceNeeded,
+    /// The push outcome was ambiguous (no confirmed server commit): the dirty bit
+    /// AND the lock are retained so a later retry recovers via ancestry (#193) —
+    /// no edits are lost.
+    PushUnconfirmed,
+}
+
+/// Outcome of `speleodb_update` (#197): a read-only refresh of the open project
+/// against the server (no lock taken).
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UpdateResult {
+    /// Already at the server tip — nothing to do.
+    UpToDate,
+    /// Fast-forwarded to the server tip (re-pulled + reloaded the project).
+    FastForwarded { local_path: String },
+    /// The server diverged from our base AND we hold un-pushed local edits — the
+    /// refresh cannot proceed without reconciliation (#198/#199, next batch).
+    DivergenceNeeded,
 }
 
 /// Current backend session status, so the dialog can restore its view when

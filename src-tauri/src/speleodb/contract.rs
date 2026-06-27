@@ -58,23 +58,14 @@ pub(crate) enum Endpoint {
     // GetProject/Acquire/Release/UploadAuto/CreateProject are constructed by the
     // not-yet-wired orchestration callers (#202/#194/#207) and by the unit tests;
     // they are dead in the non-test lib build until those callers land.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by #202 get_project caller")
-    )]
+    // [P1] #197 maps get_project / get_revisions errors via GetProject.
     GetProject,
     DownloadDump,
     // [P1] #194 start_editing constructs Acquire (auth handler + dto_for_error).
     Acquire,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by #197 release caller")
-    )]
+    // [P1] #197 done maps release errors via Release.
     Release,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by #185/#194 upload caller")
-    )]
+    // [P1] #197 done maps upload errors via UploadAuto.
     UploadAuto,
     #[cfg_attr(
         not(test),

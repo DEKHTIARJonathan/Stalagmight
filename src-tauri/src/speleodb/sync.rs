@@ -113,10 +113,6 @@ pub(crate) enum AncestryOutcome {
 /// - `my_email` — the authenticated user's email.
 /// - `last_edit_at` / `push_start_at` — RFC-3339 UTC timestamps gating whether
 ///   the landed push captured all our edits (see [`AncestryOutcome::Landed`]).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "ancestry-recovery caller is #194/#197 (Unit 4/6)")
-)]
 pub(crate) fn classify_ancestry(
     base: Option<&str>,
     tip: Option<&str>,
