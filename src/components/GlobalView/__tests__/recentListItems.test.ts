@@ -25,7 +25,7 @@ function project(partial: Partial<ProjectMetadata> & { file_path: string }): Pro
 
 describe('fileNameFromPath', () => {
   it('returns the last path segment', () => {
-    expect(fileNameFromPath('/home/dan/caves/spring.stalx')).toBe('spring.stalx');
+    expect(fileNameFromPath('/home/user/caves/spring.stalx')).toBe('spring.stalx');
     expect(fileNameFromPath('C:\\caves\\spring.stalx')).toBe('spring.stalx');
     expect(fileNameFromPath('spring.stalx')).toBe('spring.stalx');
   });

@@ -36,7 +36,7 @@ export type ViewType = 'global' | 'single';
 export type GeometryMode = 'measured' | 'closureAdjusted';
 
 /**
- * Top-level workspace mode (#38 follow-up, Daniel's reframe). Selected from the
+ * Top-level workspace mode (#38 follow-up, the workspace-mode reframe). Selected from the
  * top-middle carousel when a project is open:
  *  - `survey` — the editable survey workspace (everything as it was).
  *  - `plan`   — the gas planner: read-only closure map + gas overlay, Plan-setup
@@ -1147,7 +1147,7 @@ export const useUIStore = create<UIStore>((set) => ({
   toggleDistanceGradient: () => {
     const on = !useUIStore.getState().showDistanceGradient;
     // Distance and depth gradients are mutually exclusive — both paint the shots
-    // layer, so enabling one suppresses the other (#34, Daniel's report of mixed
+    // layer, so enabling one suppresses the other (#34, report of mixed
     // depth-colored shots + distance-colored stations). We flip only depth's
     // *runtime* flag, not its persisted setting, so distance acts as a transient
     // overlay and the depth preference returns next session (distance is always

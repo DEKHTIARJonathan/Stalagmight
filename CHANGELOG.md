@@ -113,7 +113,7 @@ Update this file every time a new version is tagged.
 - Dual-segment preview in fromExisting import mode with auto-close orphan dialog
 - 23 custom tool icons with hover flyout labels
 - Placement suggestion heuristic constants exposed in Advanced Settings
-- macOS build support via Scaleway Apple Silicon with build scripts and cross-platform test runners
+- macOS build support via remote Apple Silicon with build scripts and cross-platform test runners
 
 ### Fixed
 - DMP parser now correctly sign-extends int16 values for negative pitch readings

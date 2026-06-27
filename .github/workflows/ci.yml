@@ -21,33 +21,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Pick the runner: the self-hosted NUC when it's online AND idle, else fall
-  # back to a GitHub-hosted ubuntu-latest. A single ephemeral NUC serializes
-  # jobs, so routing every check there would queue them behind each other (and
-  # behind the nightly E2E) — the picker spills to hosted whenever the NUC is
-  # busy or down. (#134 / #135)
+  # Pick the runner: an optional self-hosted runner when it's online AND idle,
+  # else fall back to a GitHub-hosted ubuntu-latest. A single ephemeral
+  # self-hosted runner serializes jobs, so routing every check there would queue
+  # them behind each other (and behind the nightly E2E) — the picker spills to
+  # hosted whenever the self-hosted runner is busy or down. (#134 / #135)
   #
-  # The default GITHUB_TOKEN can't read org runner status, so this uses a PAT:
-  #   NUC_RUNNER_READ_PAT = fine-grained PAT, org "Self-hosted runners: Read".
+  # The default GITHUB_TOKEN can't read org runner status, so this uses a
+  # fine-grained PAT secret (org permission "Self-hosted runners: Read").
   # If that secret is absent/empty (or the API call fails — e.g. a fork PR with
   # no secret access), pick defaults to HOSTED. So this is inert (always-hosted,
-  # same as before) until the secret is added, then NUC routing turns on.
+  # same as before) until the secret is added, then self-hosted routing turns on.
   pick:
     runs-on: ubuntu-latest
     outputs:
       runs_on: ${{ steps.pick.outputs.runs_on }}
     steps:
-      - name: Choose runner — NUC when online & idle, else hosted
+      - name: Choose runner — self-hosted when online & idle, else hosted
         id: pick
         env:
           GH_TOKEN: ${{ secrets.NUC_RUNNER_READ_PAT }}
         run: |
-          # Default to hosted; only route to the NUC if we can POSITIVELY
-          # confirm a runner named i5-nuc-runner is online AND idle. Any
-          # uncertainty — no token, API error, malformed response, runner
-          # missing/busy, or a DUPLICATE stale registration with the same name
-          # — sanitizes to 0 and stays on hosted. (Counting matches, not
-          # string-comparing one line, keeps a leftover offline dup harmless.)
+          # Default to hosted; only route to the self-hosted runner if we can
+          # POSITIVELY confirm it is online AND idle. Any uncertainty — no token,
+          # API error, malformed response, runner missing/busy, or a DUPLICATE
+          # stale registration with the same name — sanitizes to 0 and stays on
+          # hosted. (Counting matches, not string-comparing one line, keeps a
+          # leftover offline dup harmless.)
           runs_on='["ubuntu-latest"]'
           idle=0
           if [ -n "$GH_TOKEN" ]; then
@@ -55,7 +55,6 @@ jobs:
             # non-zero — so DON'T `|| echo 0` (that appends 0 to the blob).
             # `|| true` shields the assignment from the default bash -e (else
             # pick aborts and check is skipped); then sanitize to a clean int.
-            # (Per Daniel's review.)
             idle=$(gh api 'orgs/Stalagmight/actions/runners?per_page=100' \
               --jq '[.runners[] | select(.name=="i5-nuc-runner" and .status=="online" and .busy==false)] | length' \
               2>/dev/null) || true
@@ -65,12 +64,12 @@ jobs:
             fi
           fi
           echo "runs_on=$runs_on" >> "$GITHUB_OUTPUT"
-          echo "Routed to $runs_on (idle i5-nuc-runner count: $idle)"
+          echo "Routed to $runs_on (idle self-hosted runner count: $idle)"
           # Surface the routing on the run's summary page — no log-digging.
           if [ "$runs_on" = '["self-hosted","ubuntu-latest-local"]' ]; then
-            echo "🖥️ \`check\` → **self-hosted NUC** (i5-nuc-runner idle)" >> "$GITHUB_STEP_SUMMARY"
+            echo "🖥️ \`check\` → **self-hosted runner** (idle)" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "☁️ \`check\` → **github-hosted** (NUC busy/unavailable; idle count: $idle)" >> "$GITHUB_STEP_SUMMARY"
+            echo "☁️ \`check\` → **github-hosted** (self-hosted runner busy/unavailable; idle count: $idle)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
   check:
@@ -78,17 +77,17 @@ jobs:
     # Default-guard the expression: if pick somehow emits no output, fall back
     # to hosted rather than crash the run with a fromJSON("") error.
     runs-on: ${{ fromJSON(needs.pick.outputs.runs_on || '["ubuntu-latest"]') }}
-    # NUC cold ≈ 7m, warm ≈ 4m; hosted ≈ 3m. Generous headroom either way.
+    # Self-hosted cold ≈ 7m, warm ≈ 4m; hosted ≈ 3m. Generous headroom either way.
     timeout-minutes: 30
     env:
-      # Required for sccache to cache on the NUC; harmless on hosted (rust-cache
-      # sets it too).
+      # Required for sccache to cache on the self-hosted runner; harmless on
+      # hosted (rust-cache sets it too).
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
 
-      # tauri/gtk build deps. Hosted installs them; the NUC image bakes them
-      # (see ~/tools/nuc-i5/Dockerfile), so skip the apt-get there.
+      # tauri/gtk build deps. Hosted installs them; the self-hosted runner
+      # image bakes them, so skip the apt-get there.
       - name: Install tauri apt deps (hosted only)
         if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
@@ -105,7 +104,7 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
       # Hosted: actions/cache-backed rust-cache restores a prebuilt target/.
-      # NUC: that's useless on an ephemeral (--rm) runner — it uses the
+      # Self-hosted: that's useless on an ephemeral (--rm) runner — it uses the
       # persistent sccache Docker volume instead (RUSTC_WRAPPER=sccache is set
       # in the container env). 100% warm hit-rate measured in #134.
       - name: Rust cache (hosted only)
@@ -132,13 +131,13 @@ jobs:
       # (CI=true) and runs once instead of watching.
       - run: pnpm test
       # Zero sccache counters so the post-step reports THIS run's hit-rate, not
-      # lifetime totals. NUC only — no sccache on hosted. `|| true`: an
+      # lifetime totals. Self-hosted only — no sccache on hosted. `|| true`: an
       # observability step must never be able to fail the merge gate. (Likely
       # redundant — each ephemeral --rm container starts a fresh per-container
       # sccache server, so stats are already isolated + zero — but this
       # guarantees per-run numbers, and a single runner = one job at a time so
       # there's no cross-job zero-stats race.)
-      - name: sccache zero-stats (NUC only)
+      - name: sccache zero-stats (self-hosted only)
         if: runner.environment == 'self-hosted'
         run: sccache --zero-stats || true
       - run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
@@ -153,11 +152,11 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets
         env:
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
-      # sccache health on the NUC path (the cache that replaces rust-cache on the
-      # ephemeral runner). Skipped on hosted. !cancelled() (not always()): still
-      # report on cargo FAILURE, but skip on a superseded/cancelled run. Hit-rate
-      # is also echoed to the run summary page.
-      - name: sccache stats (NUC only)
+      # sccache health on the self-hosted path (the cache that replaces rust-cache
+      # on the ephemeral runner). Skipped on hosted. !cancelled() (not always()):
+      # still report on cargo FAILURE, but skip on a superseded/cancelled run.
+      # Hit-rate is also echoed to the run summary page.
+      - name: sccache stats (self-hosted only)
         if: ${{ !cancelled() && runner.environment == 'self-hosted' }}
         run: |
           stats=$(sccache --show-stats 2>&1) || true

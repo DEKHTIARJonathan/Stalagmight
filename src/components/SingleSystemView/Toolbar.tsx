@@ -248,7 +248,7 @@ export default function Toolbar({
         </UndoHistoryDropdown>
       </div>
 
-      {/* Center - the Survey/Plan/Export workspace carousel (#38, Daniel's reframe).
+      {/* Center - the Survey/Plan/Export workspace carousel (#38, the workspace-mode reframe).
           The active map *tool* is already shown by the highlighted toolbar button on
           the right, so the center is free for the mode switch. Fullscreen table mode
           (a survey sub-state) shows the table's title instead. */}

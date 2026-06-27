@@ -75,7 +75,7 @@ export default function SingleSystemView() {
     ? 'linear-gradient(to left, rgba(248, 113, 113, 0.30), transparent 18%)'
     : undefined;
   const placementModeActive = useUIStore((s) => s.placementMode !== null);
-  // Top-level workspace mode (#38, Daniel's reframe). Survey shows the editable data
+  // Top-level workspace mode (#38, the workspace-mode reframe). Survey shows the editable data
   // table + detail panel; Plan swaps the right Dock for the gas setup sidebar and the
   // bottom Dock for the tabbed plan tables; Export swaps the right Dock for the export
   // stub and hides the bottom table. The carousel owns enter/exit; setView()/setColorMode

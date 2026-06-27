@@ -10,12 +10,12 @@
  *   3. if still too long, middle-truncate with `…`, dropping interior folders
  *      while keeping the filename whole
  *
- * Example for `/home/daniel/surveys/orda/main-line/spring.stalx`:
- *   /home/daniel/surveys/orda/main-line/spring.stalx
- *   /h/daniel/surveys/orda/main-line/spring.stalx
+ * Example for `/home/user/surveys/orda/main-line/spring.stalx`:
+ *   /home/user/surveys/orda/main-line/spring.stalx
+ *   /h/user/surveys/orda/main-line/spring.stalx
  *   …
- *   /h/d/s/o/m/spring.stalx
- *   /h/d/s/o/…/spring.stalx
+ *   /h/u/s/o/m/spring.stalx
+ *   /h/u/s/o/…/spring.stalx
  *   …
  *   /…/spring.stalx
  */
