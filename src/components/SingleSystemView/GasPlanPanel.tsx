@@ -83,8 +83,10 @@ export function GasPlanPanel() {
   useEffect(() => {
     const cfg = useProjectStore.getState().config;
     const masterImperial = cfg?.units?.length === 'feet';
+    // Deep-clone the seed so editing the working config never mutates the live persisted
+    // config (or the compiled default) through a shared nested reference (reserve_profile / dpv).
     setGasConfig({
-      ...(cfg?.gas ?? defaultConfig.gas),
+      ...structuredClone(cfg?.gas ?? defaultConfig.gas),
       units: masterImperial ? 'imperial' : 'metric',
     });
   }, [setGasConfig]);
@@ -109,8 +111,14 @@ export function GasPlanPanel() {
   };
   const confirmPushy = () => {
     if (!pendingPushy) return;
-    setPushyAck(true);
-    setGasConfig({ ...gasConfig, default_reserve: pendingPushy });
+    // Re-check: the rig may have lost stages while the ack panel was open (the Cylinders tab is
+    // visible alongside it). Only apply if the rig still satisfies the preset — otherwise we'd
+    // show a staged preset selected on a stage-short rig while the backend falls back to
+    // All-thirds (broken UI/backend parity). Insufficient → dismiss without applying.
+    if (stageCount >= REQUIRED_STAGES[pendingPushy]) {
+      setPushyAck(true);
+      setGasConfig({ ...gasConfig, default_reserve: pendingPushy });
+    }
     setPendingPushy(null);
   };
 

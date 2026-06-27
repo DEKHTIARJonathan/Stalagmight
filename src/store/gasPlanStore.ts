@@ -59,8 +59,9 @@ const initialState = (): Pick<
   origin: null,
   diver: DEFAULT_DIVER,
   cylinders: defaultCylinders(),
-  // Shallow-copy so editing the working config never mutates the shared default.
-  gasConfig: { ...defaultConfig.gas },
+  // Deep-clone so editing the working config (incl. nested reserve_profile / dpv) never
+  // mutates the shared compiled default through an aliased object reference.
+  gasConfig: structuredClone(defaultConfig.gas),
   reachField: null,
   pushyAck: false,
 });
