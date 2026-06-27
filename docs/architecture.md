@@ -109,8 +109,8 @@ ratchets against `src-tauri/file-size-baseline.json`. It **fails** if a file at/
 1500 production LOC grows past its recorded baseline, if a *new* file is introduced
 at/above 1500 prod LOC, or if a new/grown file crosses the 2000-prod-LOC hard cap.
 Files below 1500 grow freely (ordinary edits don't need a rebaseline). Keep modules
-focused; a file approaching ~1000 prod LOC should split at an API boundary — the worked
-plan + per-file proposals are tracked on #157 (the doc `docs/refactor.md` lands via #158).
+focused; a file approaching ~1000 prod LOC should split at an API boundary (the
+module-split effort is tracked on #157).
 The baseline is a high-water mark: a legitimate growth bumps it, and a split lowers it,
 **in the same PR** (`pnpm lint:rust-file-size --update`) so the change is visible in review
 (shrinks aren't auto-captured). Metric = code LOC minus comments/blanks and `#[cfg(test)]`

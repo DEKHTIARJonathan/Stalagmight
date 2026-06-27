@@ -90,7 +90,6 @@ stalagmight/
 │   └── ...                       # 60+ additional spec files
 │
 ├── docs/                         # Documentation
-│   ├── plans/                    # Implementation plans
 │   ├── SPEC.md                   # Full specification document
 │   ├── TESTING.md                # Testing guide
 │   ├── architecture.md           # System design
@@ -108,11 +107,6 @@ stalagmight/
 │   ├── move-tools.md             # Move station/segment tools
 │   ├── releasing.md              # Release process
 │   └── style-guide.md            # UI style guide
-│
-├── prd/                          # PRD markdown files for v1.0 tasks
-│   ├── 01-lrud-fields.md
-│   ├── 02-pitch-fields.md
-│   └── ...
 │
 ├── CLAUDE.md                     # Agent instructions (minimal)
 └── TODO.md                       # Unimplemented features

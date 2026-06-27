@@ -136,10 +136,6 @@ Make small, frequent commits as you work. Don't accumulate large uncommitted cha
 
 Update `CHANGELOG.md` every time a new version is tagged.
 
-## Plans
-
-Implementation plans are stored in `docs/plans/`.
-
 ## Documentation
 
 | Document | Contents |
@@ -159,4 +155,4 @@ Implementation plans are stored in `docs/plans/`.
 | [IPC Type Generation](docs/ipc-typegen.md) | How IPC TS types are generated and updated |
 | [Performance](docs/performance.md) | Algorithm choices, profiling guide, optimization history |
 | [Debug Gates](docs/debug-gates.md) | Where dev-only logs / asserts / profile harnesses live, and how to turn them on |
-| [macOS Build](docs/macos-build.md) | macOS build scripts, Scaleway remote builds, known issues |
+| [macOS Build](docs/macos-build.md) | macOS build scripts and known issues |

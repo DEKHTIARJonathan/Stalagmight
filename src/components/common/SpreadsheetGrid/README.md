@@ -7,7 +7,7 @@ A self-contained, **library-free**, Excel-like editing grid for issue #61.
 > library source was read or referenced.
 
 It is **not yet wired into the app** — it's a standalone, reusable element to be
-integrated into `DataTable` later (see `docs/plans/issue-61-spreadsheet-editing.md`).
+integrated into `DataTable` later.
 
 ## Features
 
