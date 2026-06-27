@@ -47,21 +47,23 @@ pub(crate) fn sac_to_rmv(sac_bar_per_min: f64, ref_cyl_water_volume_l: f64) -> f
 }
 
 /// Ideal free-gas volume (litres) a cylinder holds at `fill_bar`: `fill × water_volume`.
-/// Ideal-gas relation — at high fill (230+ bar) real compressibility (Z) over-states this
-/// by ~3–5% (the unsafe direction). This is the raw ideal primitive; the usable-gas paths
-/// use [`deliverable_gas`] instead, which divides by [`air_z_factor`].
+/// Ideal-gas relation — at typical 200–232 bar fills real compressibility (Z) over-states this
+/// by ~4–6%, rising to ~12% at 300 bar (the unsafe direction). This is the raw ideal primitive;
+/// the usable-gas paths use [`deliverable_gas`] instead, which divides by [`air_z_factor`].
 pub(crate) fn cylinder_gas_volume(fill_bar: f64, water_volume_l: f64) -> f64 {
     fill_bar * water_volume_l
 }
 
 /// Real-gas compressibility factor Z for air/nitrox at `fill_bar` (bar). A quadratic fit
-/// matched to tabulated air Z — `Z(207)≈1.037`, `Z(300)≈1.10` — and **clamped to ≥ 1.0**:
-/// real air dips ~0.4% below 1 around 50 bar, but crediting *more* than ideal there is the
-/// unsafe (over-stating) direction, so we never let the derate become a credit. Monotone
-/// non-decreasing after the clamp. Deliverable free gas = `fill × water_volume / Z(fill)`.
+/// anchored to the **conservative (upper) end** of tabulated air Z at cool cave temps —
+/// `Z(207)≈1.045`, `Z(300)≈1.12` (cf. NIST/US-Navy air tables, ~1.04–1.06 @ 200–232 bar,
+/// ~1.10–1.13 @ 300 bar) — so `deliverable = fill·vol / Z` never over-states real gas. **Clamped
+/// to ≥ 1.0**: real air dips ~0.5% below 1 near 50 bar, but crediting *more* than ideal there is
+/// the unsafe direction, so the derate can never become a credit. Monotone non-decreasing after
+/// the clamp over the working range (the parabola turns down only well past any real fill).
 pub(crate) fn air_z_factor(fill_bar: f64) -> f64 {
     let p = fill_bar.max(0.0);
-    (1.0 - 1.65e-4 * p + 1.66e-6 * p * p).max(1.0)
+    (1.0 - 1.89e-4 * p + 1.96e-6 * p * p).max(1.0)
 }
 
 /// Real deliverable free-gas volume (litres) — **always** Z-corrected (never ideal):

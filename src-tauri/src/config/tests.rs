@@ -163,8 +163,7 @@ fn test_gas_config_normalize_drops_backwards_survey_speed() {
 
 #[test]
 fn test_gas_config_normalize_clamps_reserve_profile() {
-    // A non-finite / negative reserve constant resets to its default (a negative turn buffer
-    // would hold LESS gas — the unsafe direction); valid values are preserved.
+    // Non-finite / negative reserve constants reset to their defaults; valid values preserved.
     let mut config = GasConfig {
         reserve_profile: ReserveProfile {
             turn_buffer_bar: -5.0,
@@ -177,6 +176,48 @@ fn test_gas_config_normalize_clamps_reserve_profile() {
     assert_eq!(config.reserve_profile.turn_buffer_bar, 15.0);
     assert_eq!(config.reserve_profile.recalc_hold_stage2_bar, 100.0);
     assert_eq!(config.reserve_profile.recalc_hold_stage1_bar, 80.0);
+}
+
+#[test]
+fn test_gas_config_normalize_rejects_oversized_turn_buffer() {
+    // The genuinely UNSAFE direction: a huge positive turn buffer drives the stage turn
+    // pressure (½·fill − buffer) toward 0, crediting the whole stage as in-gas → over-stated
+    // reach. normalize must clamp it back to the safe default, not preserve it.
+    let mut config = GasConfig {
+        reserve_profile: ReserveProfile {
+            turn_buffer_bar: 9999.0,
+            ..ReserveProfile::default()
+        },
+        ..GasConfig::default()
+    };
+    config.normalize();
+    assert_eq!(config.reserve_profile.turn_buffer_bar, 15.0);
+
+    // A plausible small buffer is preserved.
+    let mut ok = GasConfig {
+        reserve_profile: ReserveProfile {
+            turn_buffer_bar: 20.0,
+            ..ReserveProfile::default()
+        },
+        ..GasConfig::default()
+    };
+    ok.normalize();
+    assert_eq!(ok.reserve_profile.turn_buffer_bar, 20.0);
+}
+
+#[test]
+fn test_gas_config_deserializes_with_reserve_profile_missing() {
+    // Migration tolerance: an old config whose [gas] block predates reserve_profile (or omits
+    // some members) must still load, defaulting the missing pieces — not error.
+    let missing: GasConfig =
+        toml::from_str("units = \"metric\"\n").expect("gas config without reserve_profile loads");
+    assert_eq!(missing.reserve_profile, ReserveProfile::default());
+
+    let partial: GasConfig =
+        toml::from_str("units = \"metric\"\n[reserve_profile]\nturn_buffer_bar = 20.0\n")
+            .expect("partial reserve_profile loads");
+    assert_eq!(partial.reserve_profile.turn_buffer_bar, 20.0);
+    assert_eq!(partial.reserve_profile.recalc_hold_stage2_bar, 100.0); // missing member defaults
 }
 
 #[test]

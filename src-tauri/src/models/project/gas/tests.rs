@@ -165,9 +165,14 @@ fn required_stages_matches_presets() {
 
 #[test]
 fn air_z_factor_matches_tabulated_air_and_never_credits() {
+    // Anchored to the conservative (upper) end of tabulated air Z at cool cave temps
+    // (NIST / US-Navy air tables: ~1.04–1.06 @ 200–232 bar, ~1.10–1.13 @ 300 bar). The fit is
+    // derived from the 207 and 300 anchors; 232 bar is an INDEPENDENT interpolation check
+    // against the table (not a derivation point), so a wrong coefficient is caught, not hidden.
     assert!((air_z_factor(0.0) - 1.0).abs() < EPS); // surface ≈ ideal
-    assert!((air_z_factor(207.0) - 1.037).abs() < 0.005); // ~3.7% derate at a 207-bar fill
-    assert!((air_z_factor(300.0) - 1.10).abs() < 0.01); // ~10% at 300 bar
+    assert!((air_z_factor(207.0) - 1.045).abs() < 0.008); // ~4.5% derate at a 207-bar fill
+    assert!((air_z_factor(232.0) - 1.06).abs() < 0.01); // independent check vs tabulated air
+    assert!((air_z_factor(300.0) - 1.12).abs() < 0.01); // ~12% at 300 bar (HP-steel fills)
                                                         // Clamped ≥ 1.0 everywhere — the derate can only ever REDUCE gas, never credit more than
                                                         // ideal (the safe direction), even where real air dips slightly below 1 (~50 bar).
     let mut prev = 0.0;
@@ -214,16 +219,19 @@ fn penetration_budget_all_thirds_is_usable_over_three() {
 
 #[test]
 fn penetration_budget_presets_net_to_total_thirds_under_gauge_rule() {
-    // The §5.2 audit ask: prove the quarters/sixths back gas + the (½·fill − 15) stage turns
-    // net to total-thirds. Derivation (ideal gas): 1-stage budget = B/4 + (½·f + 15)·w_s and
-    // 2-stage = B/6 + 2·(½·f + 15)·w_s; each equals ⅓(B + ΣS) iff B = 2S + 180·w_s (180 = 12·15,
-    // the LCD of {3,4,6,2} times the buffer). We build that rig EXACTLY. Pressures are kept
-    // BELOW ~100 bar so air_z_factor clamps to 1.0 (ideal) and the Z correction can't perturb
-    // the arithmetic identity — Z is exercised separately above.
+    // The §5.2 audit ask: prove the quarters/sixths back gas + the (½·fill − buffer) stage turns
+    // net to total-thirds. Derivation (ideal gas): 1-stage budget = B/4 + (½·f + buffer)·w_s and
+    // 2-stage = B/6 + 2·(½·f + buffer)·w_s; each equals ⅓(B + ΣS) iff B = 2S + 12·buffer·w_s
+    // (12 = LCD of {3,4,6,2}). We build that rig EXACTLY, deriving B from the ACTUAL default
+    // buffer so the identity stays valid if the default changes. Pressures are kept BELOW ~100
+    // bar so air_z_factor clamps to 1.0 (ideal) and Z can't perturb the arithmetic identity — Z
+    // is exercised separately above.
+    let prof = ReserveProfile::default();
+    let buf = prof.turn_buffer_bar;
     let w_s = 11.0;
     let f = 90.0; // < 100 bar ⇒ Z == 1
     let stage_vol = f * w_s; // S
-    let back_water = (2.0 * stage_vol + 180.0 * w_s) / f; // B = 2S + 180·w_s, as a water volume @ f
+    let back_water = (2.0 * stage_vol + 12.0 * buf * w_s) / f; // B = 2S + 12·buffer·w_s, as water vol @ f
     let bg = Cylinder::new(
         back_water,
         f,
@@ -234,7 +242,6 @@ fn penetration_budget_presets_net_to_total_thirds_under_gauge_rule() {
     )
     .unwrap();
     let s = || Cylinder::new(w_s, f, f, TankMaterial::Aluminium, CylRole::Stage, None).unwrap();
-    let prof = ReserveProfile::default();
 
     let one = [bg.clone(), s()];
     let b1 = penetration_budget(&one, ReservePreset::OneStage, &prof, false);
@@ -309,10 +316,34 @@ fn penetration_budget_falls_back_to_all_thirds_without_stages() {
         None,
     )
     .unwrap();
-    let rig = [bg.clone(), bg];
+    let rig = [bg.clone(), bg.clone()];
     let thirds = penetration_budget(&rig, ReservePreset::AllThirds, &prof, true);
     assert!((penetration_budget(&rig, ReservePreset::OneStage, &prof, true) - thirds).abs() < EPS);
     assert!((penetration_budget(&rig, ReservePreset::TwoStage, &prof, true) - thirds).abs() < EPS);
+
+    // Adversarial boundary: TwoStage with EXACTLY ONE stage (1 < 2) must fall back BEFORE the
+    // `stages[..2]` slice would panic — guards the count-gate's off-by-one. OneStage with that
+    // same single stage does NOT fall back (1 >= 1), so its budget differs from all-thirds.
+    let stage = Cylinder::new(
+        11.1,
+        207.0,
+        207.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let one_stage_rig = [bg.clone(), bg, stage];
+    let thirds_1 = penetration_budget(&one_stage_rig, ReservePreset::AllThirds, &prof, true);
+    assert!(
+        (penetration_budget(&one_stage_rig, ReservePreset::TwoStage, &prof, true) - thirds_1).abs()
+            < EPS,
+        "TwoStage with 1 stage falls back to all-thirds (no slice panic)"
+    );
+    assert!(
+        penetration_budget(&one_stage_rig, ReservePreset::OneStage, &prof, true) != thirds_1,
+        "OneStage with 1 stage uses the stage path, not the fallback"
+    );
 }
 
 #[test]
@@ -658,10 +689,10 @@ fn gas_reach_field_jump_multiplier_raises_only_jump_legs() {
 
 #[test]
 fn gas_reach_field_partial_frontier_between_interior_stations() {
-    // AllThirds budget = deliverable(250 bar, 12 L)/3 ≈ 941 L (Z-derated), between
-    // gas_in(station 2)=800 and gas_in(station 3)=1500 → reach {0,1,2}, turn at station 2. Pins
-    // the preset→budget wiring and the frontier detection at an interior station (not just the
-    // origin). The budget assertion is computed via deliverable_gas to stay Z-consistent.
+    // AllThirds budget = deliverable(250 bar, 12 L)/3 = 3000 / Z(250)≈1.0753 / 3 ≈ 929.9 L
+    // (Z-derated thirds), which sits between gas_in(station 2)=800 and gas_in(station 3)=1500 →
+    // reach {0,1,2}, turn at station 2. The budget is pinned to an INDEPENDENT hand-computed
+    // literal (catches a wrong /3, a dropped Z, or a bad fit), not re-derived from the function.
     let (project, origin) = linear_descent_project();
     let sec = origin.section_id;
     let diver = Diver::new(20.0, None).unwrap();
@@ -676,7 +707,7 @@ fn gas_reach_field_partial_frontier_between_interior_stations() {
     .unwrap();
     let field =
         project.compute_gas_reach_field(Some(&origin), &diver, &[cyl], &GasConfig::default());
-    assert!((field.budget_litres - deliverable_gas(250.0, 12.0, 250.0, true) / 3.0).abs() < 1e-6);
+    assert!((field.budget_litres - 929.9).abs() < 1.0);
     assert_eq!(field.reachable.iter().filter(|&&r| r).count(), 3); // stations 0,1,2
     let idx = |sr| field.station_refs.iter().position(|r| *r == sr).unwrap();
     assert!(field.reachable[idx(StationRef::new(sec, 2))]);

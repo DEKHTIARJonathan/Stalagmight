@@ -1407,6 +1407,13 @@ export const useUIStore = create<UIStore>((set) => ({
     // module var outlives the project that set it). Clearing it + forcing survey here
     // makes that restore a no-op (appMode already 'survey').
     prePlanGeometryMode = null;
+    // The gas/Plan store is per-dive, runtime-only state (origin, diver, cylinders, the
+    // staged-reserve `pushyAck` safety acknowledgment). It is normally cleared on sub-mode
+    // exit, but a DIRECT project switch sets appMode='survey' here, so the later
+    // setView()→exitGasPlan() short-circuits and never reaches reset(). Reset it explicitly on
+    // load so a previous project's plan — and especially its advanced-preset ack — can't leak
+    // into the next (mirrors the showDevStats/showIssueSeverity per-load resets below).
+    useGasPlanStore.getState().reset();
     // Apply display settings from backend, merging with existing state.
     // Uses ?? to only apply fields that are defined, preserving current state for undefined fields.
     // EXACT 11 fields matching uiStore - NO showShots, NO colorBy (those aren't persisted).

@@ -171,6 +171,10 @@ fn required_stages(preset: ReservePreset) -> usize {
 /// If the rig lacks the required stages it falls back to the All-thirds budget. Z-derated
 /// throughout (back-gas AND stage term) via [`deliverable_gas`] so the real-gas over-state can't
 /// leak back in via the stage path. The `−15` buffer is the editable [`ReserveProfile`] knob.
+///
+/// "Stage 1"/"the first two stages" = the first `Stage`-role cylinder(s) by rig (vec) order —
+/// v1 has no per-stage drop-order field. With ≥3 stages on `TwoStage` only the first two count
+/// (the ≥3-stage case is deferred — PRD §5.1); excluding the extra only shrinks the budget (safe).
 fn penetration_budget(
     cylinders: &[Cylinder],
     preset: ReservePreset,
@@ -203,14 +207,16 @@ fn penetration_budget(
             * frac
     };
     // Gas breathed off a stage on the way in: full down to its `(½·fill − 15)` turn pressure.
+    // The turn point keys off the SAME (conservative-capped) basis as `full`, so an overfilled
+    // stage's start and turn pressures stay on one consistent scale.
     let stage_in = |c: &Cylinder| -> f64 {
-        let full = deliverable_gas(
-            c.fill_bar,
-            c.water_volume_l,
-            c.rated_pressure_bar,
-            conservative,
-        );
-        let turn = (0.5 * c.fill_bar - profile.turn_buffer_bar).max(0.0);
+        let basis = if conservative {
+            c.fill_bar.min(c.rated_pressure_bar)
+        } else {
+            c.fill_bar
+        };
+        let full = deliverable_gas(basis, c.water_volume_l, c.rated_pressure_bar, conservative);
+        let turn = (0.5 * basis - profile.turn_buffer_bar).max(0.0);
         let held = deliverable_gas(turn, c.water_volume_l, c.rated_pressure_bar, conservative);
         (full - held).max(0.0)
     };

@@ -31,6 +31,12 @@ fn default_turn_buffer_bar() -> f64 {
     15.0
 }
 
+/// Upper bound on the stage turn buffer. Above this a config could drive a typical stage's
+/// turn pressure (`½·fill − buffer`) toward zero — crediting the whole stage as in-gas and
+/// over-stating reach — so `normalize` rejects it. A buffer this large is already far more
+/// aggressive than any real "turn the stage at half, less a margin" rule.
+const MAX_TURN_BUFFER_BAR: f64 = 50.0;
+
 fn default_recalc_hold_stage2_bar() -> f64 {
     100.0
 }
@@ -193,11 +199,17 @@ impl GasConfig {
         if !self.jump_rmv_multiplier.is_finite() || self.jump_rmv_multiplier < 1.0 {
             self.jump_rmv_multiplier = default_jump_rmv_multiplier();
         }
-        // Reserve-profile constants: a non-finite / negative buffer would mis-place the stage
-        // turn (a negative buffer holds LESS gas — the unsafe direction), so clamp each back to
-        // its default. The recalc holds are carried for Phase 2 but guarded now.
+        // Reserve-profile constants. The turn buffer is `(½·fill − buffer)`: a LARGE positive
+        // buffer drives the stage turn pressure toward 0, so the whole stage counts as in-gas →
+        // the budget OVER-states reach (the unsafe direction, §6). A small/zero buffer is the
+        // safe side. So clamp non-finite, negative, or implausibly large (> MAX) back to the
+        // default — bounding the genuinely unsafe high side, not just the harmless low one. The
+        // recalc holds are carried for Phase 2 but guarded now.
         let p = &mut self.reserve_profile;
-        if !p.turn_buffer_bar.is_finite() || p.turn_buffer_bar < 0.0 {
+        if !p.turn_buffer_bar.is_finite()
+            || p.turn_buffer_bar < 0.0
+            || p.turn_buffer_bar > MAX_TURN_BUFFER_BAR
+        {
             p.turn_buffer_bar = default_turn_buffer_bar();
         }
         if !p.recalc_hold_stage2_bar.is_finite() || p.recalc_hold_stage2_bar < 0.0 {

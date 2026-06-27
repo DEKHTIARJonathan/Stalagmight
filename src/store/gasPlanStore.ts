@@ -38,7 +38,8 @@ interface GasPlanState {
   /** Latest reachability field from the backend (null until fetched / after any input change). */
   reachField: GasReachField | null;
   /** Session-only: the user accepted the advanced (staged) reserve presets. Cleared by
-   *  `reset()` (on sub-mode exit), so re-entering Plan mode re-prompts. Not persisted. */
+   *  `reset()` — on Plan sub-mode exit AND on every project load (`applyDisplaySettings`) — so
+   *  a fresh project (or a re-entry) re-prompts. Never persisted. */
   pushyAck: boolean;
 
   setOrigin: (origin: StationRef | null) => void;

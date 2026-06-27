@@ -188,6 +188,32 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Gas to farthest point');
   });
 
+  test('adding a stage enables a pushy preset behind the advanced acknowledgment @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
+
+    // Default twin-AL80 rig has no stages → 1-stage is greyed and selecting it is impossible.
+    await expect(page.locator('[data-testid="gas-reserve-one_stage"]')).toBeDisabled();
+
+    // Add a cylinder and set its role to Stage → the rig now carries one stage.
+    await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
+    await page.locator('[data-testid="gas-cylinder-role"]').last().selectOption('stage');
+
+    // 1-stage is now selectable, but clicking it raises the advanced-acknowledgment gate
+    // (it must NOT apply until acknowledged).
+    const oneStage = page.locator('[data-testid="gas-reserve-one_stage"]');
+    await expect(oneStage).toBeEnabled();
+    await oneStage.click();
+    await expect(page.locator('[data-testid="gas-pushy-ack"]')).toBeVisible();
+
+    // Confirming applies the preset (selected ring) and dismisses the gate.
+    await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
+    await expect(page.locator('[data-testid="gas-pushy-ack"]')).toHaveCount(0);
+    await expect(oneStage).toHaveClass(/ring-accent/);
+  });
+
   test('carousel switches Survey/Plan/Export; Plan is read-only; Export is a stub @smoke', async ({
     page,
   }) => {
