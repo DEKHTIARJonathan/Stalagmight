@@ -3,18 +3,18 @@ import { pathElisionCandidates } from '../pathElision';
 
 describe('pathElisionCandidates', () => {
   it('returns the full path first', () => {
-    const path = '/home/daniel/surveys/orda/main-line/spring.stalx';
+    const path = '/home/user/surveys/orda/main-line/spring.stalx';
     expect(pathElisionCandidates(path)[0]).toBe(path);
   });
 
   it('abbreviates leading folders left to right, keeping the filename whole', () => {
-    const path = '/home/daniel/surveys/orda/main-line/spring.stalx';
+    const path = '/home/user/surveys/orda/main-line/spring.stalx';
     const candidates = pathElisionCandidates(path);
 
     // First abbreviation only touches the leftmost folder.
-    expect(candidates[1]).toBe('/h/daniel/surveys/orda/main-line/spring.stalx');
+    expect(candidates[1]).toBe('/h/user/surveys/orda/main-line/spring.stalx');
     // All folders abbreviated appears before any middle-truncation.
-    expect(candidates).toContain('/h/d/s/o/m/spring.stalx');
+    expect(candidates).toContain('/h/u/s/o/m/spring.stalx');
     // The filename is never abbreviated.
     for (const c of candidates) {
       expect(c.endsWith('spring.stalx')).toBe(true);
@@ -22,10 +22,10 @@ describe('pathElisionCandidates', () => {
   });
 
   it('middle-truncates with an ellipsis once all folders are abbreviated', () => {
-    const path = '/home/daniel/surveys/orda/main-line/spring.stalx';
+    const path = '/home/user/surveys/orda/main-line/spring.stalx';
     const candidates = pathElisionCandidates(path);
 
-    expect(candidates).toContain('/h/d/s/o/…/spring.stalx');
+    expect(candidates).toContain('/h/u/s/o/…/spring.stalx');
     expect(candidates).toContain('/…/spring.stalx');
     // The most-elided candidate is last and shortest.
     expect(candidates[candidates.length - 1]).toBe('/…/spring.stalx');
@@ -61,8 +61,8 @@ describe('pathElisionCandidates', () => {
   });
 
   it('handles Windows-style backslash paths', () => {
-    const candidates = pathElisionCandidates('C:\\Users\\dan\\spring.stalx');
-    expect(candidates[0]).toBe('C:\\Users\\dan\\spring.stalx');
+    const candidates = pathElisionCandidates('C:\\Users\\user\\spring.stalx');
+    expect(candidates[0]).toBe('C:\\Users\\user\\spring.stalx');
     // Backslash is preserved as the separator throughout.
     for (const c of candidates) {
       expect(c.includes('/')).toBe(false);

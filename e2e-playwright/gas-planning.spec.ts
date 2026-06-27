@@ -4,7 +4,7 @@ import { seedProjectWithSections, type SectionSeed } from './helpers/app';
 
 /**
  * E2E for the gas reachable-frontier overlay, now the Plan workspace mode (#38,
- * Daniel's reframe). Plan is entered from the top-middle Survey/Plan/Export carousel
+ * the workspace-mode reframe). Plan is entered from the top-middle Survey/Plan/Export carousel
  * (not the old toolbar toggle); it forces the read-only closure map, swaps the right
  * Dock for the gas setup sidebar, and the bottom Dock for the tabbed plan tables.
  *

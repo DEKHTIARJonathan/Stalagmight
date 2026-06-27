@@ -5,6 +5,7 @@ import { trackCommand, setSource, peekProjectActionSource, clearProjectActionSou
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import { isPermissionError } from '../utils/saveErrors';
+import { isEditDisabledError, READ_ONLY_EDIT_NOTICE } from '../utils/editErrors';
 import { hasEligibleClosures } from '../utils/closures';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
@@ -163,7 +164,7 @@ interface ProjectStore {
    * data (shots + stations). Lives alongside `project` and `stations`
    * during the Phase-A migration; once consumers are migrated this
    * becomes the primary representation and `project.sections[].shots`
-   * + `stations` go away. See docs/plans/memory-soa-and-mvt.md.
+   * + `stations` go away.
    */
   surveyData: SurveyData | null;
   /**
@@ -400,19 +401,45 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     args: Record<string, unknown> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown> }
   ): Promise<CommandResult> => {
-    const result = await invokeIpc<CommandResult>(command, args, meta);
-    if (result.success) {
+    try {
+      const result = await invokeIpc<CommandResult>(command, args, meta);
+      if (result.success) {
+        await get().refreshProjectState();
+        set({ isDirty: true });
+        // A command can RESOLVE (or surface) an integrity issue — e.g. removing a
+        // drifted loop closure clears its banner entry — so re-check, mirroring
+        // executeUndoRedo. refreshProjectState doesn't re-check, and the next save
+        // may be an autosave (which skips its own post-save re-check to avoid churn),
+        // so without this the banner/dialog can keep showing an already-fixed issue
+        // until a manual save or reload.
+        await get().checkProjectIntegrity();
+      } else {
+        // executeCommand used to be SILENT on a rejected CommandResult (no refresh,
+        // no feedback). That left optimistic UI desynced from backend truth — the
+        // #191 read-only edit gate's "shots vanish on drag" bug: a committed drag
+        // preview stayed rendered because the success-only refresh never fired.
+        // ALWAYS re-sync the view to backend truth, discarding the phantom edit.
+        await get().refreshProjectState();
+        // Surface a read-only rejection (EDIT_DISABLED) as a single friendly notice
+        // across ALL edit paths (drag, dialogs, shortcuts) — a blocked drag was
+        // otherwise a silent no-op. Other failures keep their existing handling
+        // (dialogs show an inline error), so validation errors aren't double-toasted.
+        // Full edit-state UX (suppress this, offer "Start editing") is owned by #204.
+        if (isEditDisabledError(result.error)) {
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled');
+        }
+      }
+      return result;
+    } catch (e) {
+      // A genuine IPC/transport rejection (rare — distinct from a returned
+      // {success:false}) would otherwise skip the re-sync above and strand an
+      // optimistic edit (a committed drag preview) hidden forever — the same
+      // "vanishing shots" failure. Re-sync the view first (the re-render drains
+      // the scheduled drag-preview restore), THEN re-throw so every caller's
+      // existing error handling (dialog catch blocks, etc.) is unchanged.
       await get().refreshProjectState();
-      set({ isDirty: true });
-      // A command can RESOLVE (or surface) an integrity issue — e.g. removing a
-      // drifted loop closure clears its banner entry — so re-check, mirroring
-      // executeUndoRedo. refreshProjectState doesn't re-check, and the next save
-      // may be an autosave (which skips its own post-save re-check to avoid churn),
-      // so without this the banner/dialog can keep showing an already-fixed issue
-      // until a manual save or reload.
-      await get().checkProjectIntegrity();
+      throw e;
     }
-    return result;
   };
 
   /** Shared helper for undo/redo operations: invoke, toast on failure, always refresh. */
@@ -432,7 +459,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (checkPartialFailure && isPartialMultiStepFailure(result.error)) {
           set({ isDirty: true });
         }
-        useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId);
+        // A read-only rejection (EDIT_DISABLED) gets the same friendly notice +
+        // dedup key as executeCommand, not the raw coded string — mashing Ctrl+Z
+        // on a read-only remote project shows one tidy toast, not "EDIT_DISABLED:…".
+        if (isEditDisabledError(result.error)) {
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled');
+        } else {
+          useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId);
+        }
       }
     } catch (e) {
       result = emptyCommandResult(false, String(e));

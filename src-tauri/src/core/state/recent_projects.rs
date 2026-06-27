@@ -187,19 +187,50 @@ impl AppState {
             Ok(db) => db,
             Err(e) => return CommandResult::failure(format!("Failed to open project: {e}")),
         };
+
+        // Read-only edit gate (#191, D-B6): like `set_collab_enabled_for_path`,
+        // this renames a `.stalx` BY PATH — usually NOT the open AppState project
+        // — so the transient `edit_enabled` flag (which describes the *open*
+        // project) can only speak for it when the path IS the currently open
+        // project. Compute the open-project identity FIRST, BEFORE the disk write,
+        // and gate only on a match so `guard_mutation` aborts a rename of the
+        // read-only open project before ANY mutation. The project name is remote
+        // content (it is pushed to SpeleoDB), so a rename of a locked remote
+        // project is a real edit. A *closed* remote file is not gated here
+        // (deferred to the issue that owns closed-file remote state).
+        let is_open_project = {
+            let guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            guard
+                .as_ref()
+                .is_some_and(|open| open.file_path.as_deref() == Some(path.as_path()))
+        };
+        if is_open_project {
+            if let Err(f) = self.guard_mutation("Rename project") {
+                return f;
+            }
+        }
+
         if let Err(e) = db.save_project_name(trimmed) {
             return CommandResult::failure(format!("Failed to rename project: {e}"));
         }
 
         // Keep the open project's in-memory state consistent if it's the same file.
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
-        };
-        if let Some(open) = guard.as_mut() {
-            if open.file_path.as_deref() == Some(path.as_path()) {
-                open.name = trimmed.to_string();
+        if is_open_project {
+            let mut guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            if let Some(open) = guard.as_mut() {
+                if open.file_path.as_deref() == Some(path.as_path()) {
+                    open.name = trimmed.to_string();
+                }
             }
+            // Dirty-bit flip (#191, D-B16): the gated open project was mutated.
+            // Set-only; no-op for local-only (no speleo_link).
+            self.mark_remote_dirty();
         }
 
         tracing::info!(path = ?path, "Renamed project");

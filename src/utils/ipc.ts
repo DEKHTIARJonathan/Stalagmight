@@ -78,5 +78,11 @@ export const invokeIpc: InvokeIpc = IPC_TRACE ? invokeWithTrace : invokeNoTrace;
 export function getErrorMessage(e: unknown, fallback?: string): string {
   if (e instanceof Error) return e.message;
   if (typeof e === 'string') return e;
+  // [Track A] #186/D-B2: structured IPC errors (e.g. SpeleoErrorDto) reject with
+  // an object carrying a `message` string — surface it instead of "[object
+  // Object]". The typed `action` field is branched on separately (#204).
+  if (e && typeof e === 'object' && 'message' in e && typeof e.message === 'string') {
+    return e.message;
+  }
   return fallback ?? String(e);
 }

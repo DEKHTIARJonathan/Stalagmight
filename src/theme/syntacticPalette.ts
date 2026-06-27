@@ -4,8 +4,8 @@
  * the tool→role mapping, and a resolver that layers user overrides on a preset.
  *
  * Object color encodes WHAT (segment/section/shot/station/comment); a shared
- * modifier encodes the ACTION (delete = red, move = slate). See
- * `~/Downloads/Cave Survey Icons.html` for the design spec.
+ * modifier encodes the ACTION (delete = red, move = slate). See the
+ * project's Cave Survey icon design spec.
  *
  * Base preset colors live here (NOT in persisted config). The config stores only
  * sparse per-preset overrides; the resolved color for a role is

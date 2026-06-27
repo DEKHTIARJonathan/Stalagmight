@@ -36,6 +36,47 @@ impl AppState {
     /// separate allow/deny lists — where a miss fails open: a skipped rollback
     /// snapshot commits corruption, a missing reconcile leaves merges drifted, and
     /// a missing orphan-closure conversion leaves a phantom loop closure.
+    /// Whether a command is a lifecycle pass-through that the read-only edit gate
+    /// (#191, D-B6/D-B16) must NOT block: Save/Open/Close/Create/MergeProjects.
+    /// Autosave (a `SaveProject`) must keep working on a read-only remote project,
+    /// and opening/closing/creating/merging are not "edits of the open project".
+    /// An exhaustive `match` (like `command_integrity`) forces a deliberate choice
+    /// for every new `Command` variant — anti-fail-open: a new mutating variant
+    /// defaults to gated.
+    fn is_lifecycle_passthrough(cmd: &Command) -> bool {
+        use Command::*;
+        match cmd {
+            CreateProject { .. }
+            | OpenProject { .. }
+            | SaveProject { .. }
+            | CloseProject
+            | MergeProjects { .. } => true,
+            CreateSection { .. }
+            | DeleteSection { .. }
+            | UpdateSectionMetadata { .. }
+            | CreateShot { .. }
+            | UpdateShot { .. }
+            | DeleteShot { .. }
+            | SetShotReference { .. }
+            | MergeStations { .. }
+            | UnmergeStations { .. }
+            | UnmergeStationPair { .. }
+            | CreateLoopClosure { .. }
+            | RemoveLoopClosure { .. }
+            | SetZeroDatum { .. }
+            | RemoveZeroDatum { .. }
+            | SetStationComment { .. }
+            | MoveSection { .. }
+            | MoveSegment { .. }
+            | MoveStation { .. }
+            | MoveComment { .. }
+            | Batch { .. }
+            | ApplyCollabChanges
+            | RepairIntegrity
+            | UpdateProjectSettings => false,
+        }
+    }
+
     fn command_integrity(cmd: &Command) -> CommandIntegrity {
         use Command::*;
         // Named profiles keep the table readable; every variant maps to exactly one.
@@ -292,6 +333,25 @@ impl AppState {
                 changed: false,
             };
         };
+        // Read-only edit gate (#191, D-B5): Repair mutates the project, so it is
+        // gated on a read-only remote project. It returns IntegrityRepairResult
+        // (not CommandResult), so it can't carry the EDIT_DISABLED code; instead
+        // return `changed: false` and log — the FE treats changed:false as
+        // "nothing happened" (it dirties only on changed). The coded-failure
+        // surface for repair is #204's; #191 just refuses to mutate. (The
+        // integrity banner stays dismissable for non-blocking corruption — see
+        // OPEN-3/D-B5.)
+        if self.guard_mutation("Repair integrity").is_err() {
+            tracing::info!(
+                purpose = "read-only remote project",
+                "repair_open_project_integrity rejected: edit disabled (no-op)"
+            );
+            return IntegrityRepairResult {
+                fixed: 0,
+                remaining: 0,
+                changed: false,
+            };
+        }
         // Count over the full violation set before repairing. Locks the project
         // internally, so it must run with no project guard held.
         let before = self.integrity_violation_messages().len();
@@ -344,6 +404,8 @@ impl AppState {
                 if before_json != after_json {
                     changed = true;
                     self.push_snapshot_undo(Command::RepairIntegrity, before_json, after_json);
+                    // Dirty-bit flip (#191, D-B16): repair mutated a remote project.
+                    self.mark_remote_dirty();
                 }
             }
         }
@@ -360,6 +422,18 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        // Read-only edit gate (#191, D-B6): reject mutations on a remote project
+        // opened read-only, BUT lifecycle commands (Save/Open/Close/Create/
+        // MergeProjects) always pass through (autosave must not be blocked).
+        // `execute_move_comment` and `apply_collab_changes` are reached via this
+        // `execute()` (early `return self.execute_move_comment(..)` and the
+        // `ApplyCollabChanges` arm), so they inherit this guard — see the
+        // chokepoint enumeration test (`gate_rejects_every_mutation_entrypoint`).
+        if !Self::is_lifecycle_passthrough(&cmd) {
+            if let Err(f) = self.guard_mutation(&cmd.description()) {
+                return f;
+            }
+        }
         // Any mutation invalidates the derived closure-adjusted view.
         self.invalidate_adjusted_cache();
         tracing::info!(
@@ -552,6 +626,14 @@ impl AppState {
             if let Ok(mut undo_stack) = self.undo_stack.lock() {
                 undo_stack.push_with_data(cmd.clone(), final_undo_data);
             }
+            // Dirty-bit flip (#191, D-B16): a successful, undo-pushed edit of a
+            // remote project marks it has_unpushed_edits. Set-only; no-op for
+            // local-only (load_speleo_link → None). Lifecycle pass-throughs
+            // (notably autosave/SaveProject) must NOT mark dirty. Batch pushes its
+            // own undo inside execute_batch and flips there.
+            if !Self::is_lifecycle_passthrough(&cmd) {
+                self.mark_remote_dirty();
+            }
         }
 
         result
@@ -679,6 +761,10 @@ impl AppState {
 
             // Push undo entry directly (bypasses finalize_undo_data which is a no-op for Batch)
             self.push_snapshot_undo(Command::Batch { commands }, before_snapshot, after_snapshot);
+            // Dirty-bit flip (#191, D-B16): a batch is always a set of mutations
+            // (never a lifecycle command), so mark the remote project dirty after
+            // its undo entry is pushed. Set-only; no-op for local-only.
+            self.mark_remote_dirty();
         }
 
         let result = if section_ids.is_empty() {

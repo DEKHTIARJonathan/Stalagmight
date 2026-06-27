@@ -169,7 +169,7 @@ test.describe('Distance Gradient', () => {
     await expect(page.locator('[data-testid="distance-legend"]')).toBeVisible({ timeout: 3000 });
 
     // Depth and distance both paint the shots layer, so they're mutually exclusive
-    // (#34, Daniel's report of mixed depth-colored shots + distance-colored
+    // (#34, report of mixed depth-colored shots + distance-colored
     // stations). Enabling depth turns the distance overlay off.
     await toggleDisplayOption(page, 'showDepthGradient');
 

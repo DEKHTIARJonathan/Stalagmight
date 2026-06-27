@@ -1,0 +1,303 @@
+//! TLS / private-network transport policy for the SpeleoDB client (#187).
+//!
+//! The `http://` scheme is a plaintext-credential hazard, so it is **blocked
+//! unless every resolved address is loopback / private / link-local** — the
+//! dev-box case (`http://10.10.0.220:8000`) is allowed, a public `http://` host
+//! is refused before any byte is dialed. `https://` short-circuits before any
+//! resolution (TLS protects the credentials regardless of the peer address). A
+//! missing or unknown scheme is rejected outright (D-B19: require explicit
+//! http/https, never silently rewrite).
+//!
+//! `insecure_http` (the persisted override, D-B10, owned by Track C config but
+//! consumed here) relaxes **only** the public-http scheme block — it never
+//! disables TLS certificate verification, so self-signed / internal-CA `https://`
+//! endpoints stay rejected by ureq's TLS stack.
+//!
+//! [`enforce`] is called once per request at the top of `client::with_retry`
+//! (#185 step 5), so a new client method physically cannot forget the check.
+//!
+//! NOTE (#187/D-187, risk 2): this is a guard against accidental
+//! plaintext-to-public misconfiguration, NOT an adversarial SSRF / DNS-rebinding
+//! defense. The address set is resolved + classified at check-time; a hostname
+//! that resolves private at check-time and public at connect-time (TOCTOU /
+//! DNS rebinding) is explicitly accepted as out of scope.
+
+use std::net::{IpAddr, ToSocketAddrs};
+use std::str::FromStr;
+
+use http::Uri;
+use ureq::unversioned::resolver::DefaultResolver;
+
+use super::SpeleoDbError;
+
+/// Classification of a single resolved IP address for the http policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AddrClass {
+    Loopback,
+    Private,
+    LinkLocal,
+    Public,
+}
+
+/// `true` for the three classes that are safe to reach over plaintext `http://`
+/// (a private network the user already trusts); `false` for `Public`.
+fn is_private(class: AddrClass) -> bool {
+    !matches!(class, AddrClass::Public)
+}
+
+/// Classify an IP address into the #187 policy buckets. Pure — this is the
+/// unit-test seam (D-T-unit): the literal ranges are exercised directly without
+/// any DNS or socket I/O.
+///
+/// IPv4: `127.0.0.0/8`→Loopback; `10/8`,`172.16/12`,`192.168/16`→Private;
+/// `169.254/16`→LinkLocal; everything else→Public.
+/// IPv6: `::1`→Loopback; `fc00::/7`→Private; `fe80::/10`→LinkLocal; else Public.
+/// An IPv4-mapped IPv6 address is unwrapped to its v4 form first, closing the
+/// `::ffff:8.8.8.8` bypass.
+fn classify_addr(ip: IpAddr) -> AddrClass {
+    match ip {
+        IpAddr::V4(v4) => classify_v4(v4.octets()),
+        IpAddr::V6(v6) => {
+            // IPv4-mapped (`::ffff:a.b.c.d`) must be classified by its v4 range,
+            // not treated as an opaque public v6 address.
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                classify_v4(mapped.octets())
+            } else {
+                classify_v6(v6.segments())
+            }
+        }
+    }
+}
+
+fn classify_v4(o: [u8; 4]) -> AddrClass {
+    match o {
+        // 127.0.0.0/8
+        [127, ..] => AddrClass::Loopback,
+        // 10.0.0.0/8
+        [10, ..] => AddrClass::Private,
+        // 172.16.0.0/12  (172.16 – 172.31)
+        [172, b, ..] if (16..=31).contains(&b) => AddrClass::Private,
+        // 192.168.0.0/16
+        [192, 168, ..] => AddrClass::Private,
+        // 169.254.0.0/16
+        [169, 254, ..] => AddrClass::LinkLocal,
+        _ => AddrClass::Public,
+    }
+}
+
+fn classify_v6(seg: [u16; 8]) -> AddrClass {
+    // ::1
+    if seg == [0, 0, 0, 0, 0, 0, 0, 1] {
+        return AddrClass::Loopback;
+    }
+    let first = seg[0];
+    // fc00::/7  (first 7 bits == 1111110x → 0xFC00..=0xFDFF)
+    if (first & 0xFE00) == 0xFC00 {
+        return AddrClass::Private;
+    }
+    // fe80::/10 (first 10 bits == 1111111010 → 0xFE80..=0xFEBF)
+    if (first & 0xFFC0) == 0xFE80 {
+        return AddrClass::LinkLocal;
+    }
+    AddrClass::Public
+}
+
+/// Resolve the URI's authority to the address set the agent will dial.
+///
+/// Uses [`DefaultResolver::host_and_port`] to assemble the exact `host:port`
+/// ureq dials, then `ToSocketAddrs` to resolve it (the D-187-permitted fallback
+/// — wiring the full `&Config`/`NextTimeout` resolver path is awkward and buys
+/// nothing for a check that only needs the IP set). Returns an `InsecureEndpoint`
+/// error on a missing authority or a resolution failure (fail closed).
+fn resolve_addrs(uri: &Uri) -> Result<Vec<IpAddr>, SpeleoDbError> {
+    let endpoint = uri.to_string();
+    let (Some(scheme), Some(authority)) = (uri.scheme(), uri.authority()) else {
+        return Err(SpeleoDbError::InsecureEndpoint { endpoint });
+    };
+    let host_and_port = DefaultResolver::host_and_port(scheme, authority).ok_or_else(|| {
+        SpeleoDbError::InsecureEndpoint {
+            endpoint: endpoint.clone(),
+        }
+    })?;
+    let addrs = host_and_port
+        .to_socket_addrs()
+        .map_err(|_| SpeleoDbError::InsecureEndpoint { endpoint })?;
+    Ok(addrs.map(|sa| sa.ip()).collect())
+}
+
+/// `true` for `localhost` and any `*.localhost` label (case-insensitive). These
+/// resolve to loopback by convention; special-casing them keeps the box-less
+/// localhost dev path working without depending on a hosts-file entry.
+fn is_localhost(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    host == "localhost" || host.ends_with(".localhost")
+}
+
+/// Enforce the http/https transport policy for `endpoint`. See the module docs.
+///
+/// - `https://` → `Ok(())` immediately (no resolution).
+/// - `http://` → allowed only if every resolved address is private/loopback/
+///   link-local (or `insecure_http` is set, which lifts the scheme block only).
+/// - missing / unknown scheme → `Err(InsecureEndpoint)`.
+pub(crate) fn enforce(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoDbError> {
+    let uri = Uri::from_str(endpoint).map_err(|_| SpeleoDbError::InsecureEndpoint {
+        endpoint: endpoint.to_owned(),
+    })?;
+
+    match uri.scheme_str() {
+        // TLS protects the credentials regardless of peer address; never resolve.
+        Some("https") => Ok(()),
+        Some("http") => {
+            // The persisted override lifts ONLY the public-http scheme block
+            // (D-B10) — TLS cert verification on https is untouched.
+            if insecure_http {
+                return Ok(());
+            }
+            // localhost / *.localhost are loopback by convention — allow without DNS.
+            if let Some(host) = uri.host() {
+                if is_localhost(host) {
+                    return Ok(());
+                }
+            }
+            let addrs = resolve_addrs(&uri)?;
+            // Empty resolution or any public address fails closed (D-187).
+            if !addrs.is_empty()
+                && addrs
+                    .iter()
+                    .copied()
+                    .all(|ip| is_private(classify_addr(ip)))
+            {
+                Ok(())
+            } else {
+                Err(SpeleoDbError::InsecureEndpoint {
+                    endpoint: endpoint.to_owned(),
+                })
+            }
+        }
+        // D-B19: require an explicit, known scheme — never silently rewrite.
+        _ => Err(SpeleoDbError::InsecureEndpoint {
+            endpoint: endpoint.to_owned(),
+        }),
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used, reason = "unit test fixtures")]
+mod tests {
+    use std::net::IpAddr;
+    use std::str::FromStr;
+
+    use super::{classify_addr, enforce, AddrClass};
+    use crate::speleodb::SpeleoDbError;
+
+    fn ip(s: &str) -> IpAddr {
+        IpAddr::from_str(s).expect("test IP literal")
+    }
+
+    #[test]
+    fn classify_addr_private_v4_ranges() {
+        assert_eq!(classify_addr(ip("10.10.0.220")), AddrClass::Private);
+        assert_eq!(classify_addr(ip("127.0.0.1")), AddrClass::Loopback);
+        assert_eq!(classify_addr(ip("10.0.0.1")), AddrClass::Private);
+        assert_eq!(classify_addr(ip("172.16.5.4")), AddrClass::Private);
+        assert_eq!(classify_addr(ip("172.31.255.255")), AddrClass::Private);
+        assert_eq!(classify_addr(ip("192.168.1.1")), AddrClass::Private);
+        assert_eq!(classify_addr(ip("169.254.10.10")), AddrClass::LinkLocal);
+    }
+
+    #[test]
+    fn classify_addr_public_v4_blocks() {
+        assert_eq!(classify_addr(ip("8.8.8.8")), AddrClass::Public);
+        // 172.32.0.1 is just past the 172.16/12 private block.
+        assert_eq!(classify_addr(ip("172.32.0.1")), AddrClass::Public);
+        assert_eq!(classify_addr(ip("172.15.0.1")), AddrClass::Public);
+        assert_eq!(classify_addr(ip("1.1.1.1")), AddrClass::Public);
+        // 192.169 is NOT 192.168.
+        assert_eq!(classify_addr(ip("192.169.0.1")), AddrClass::Public);
+    }
+
+    #[test]
+    fn classify_addr_v6() {
+        assert_eq!(classify_addr(ip("::1")), AddrClass::Loopback);
+        assert_eq!(classify_addr(ip("fc00::1")), AddrClass::Private);
+        assert_eq!(classify_addr(ip("fd12:3456::1")), AddrClass::Private);
+        assert_eq!(classify_addr(ip("fe80::1")), AddrClass::LinkLocal);
+        assert_eq!(classify_addr(ip("2001:db8::1")), AddrClass::Public);
+    }
+
+    #[test]
+    fn classify_addr_v4_mapped_stripped() {
+        // ::ffff:8.8.8.8 must classify as the public v4 8.8.8.8, not as an
+        // opaque public v6 (the result is the same here, but the mapped path is
+        // what closes the ::ffff:10.0.0.1 → "looks public" bypass).
+        assert_eq!(classify_addr(ip("::ffff:8.8.8.8")), AddrClass::Public);
+        assert_eq!(classify_addr(ip("::ffff:10.0.0.1")), AddrClass::Private);
+        assert_eq!(classify_addr(ip("::ffff:127.0.0.1")), AddrClass::Loopback);
+    }
+
+    #[test]
+    fn enforce_https_short_circuits() {
+        // A public https host is fine — TLS protects the credentials; enforce
+        // must not resolve or block it.
+        assert!(enforce("https://example.com", false).is_ok());
+        assert!(enforce("https://8.8.8.8", false).is_ok());
+    }
+
+    #[test]
+    fn enforce_http_public_blocked() {
+        let err = enforce("http://8.8.8.8", false).expect_err("public http must be blocked");
+        assert!(matches!(err, SpeleoDbError::InsecureEndpoint { .. }));
+    }
+
+    #[test]
+    fn enforce_http_private_allowed() {
+        // A literal private IP resolves to itself — no DNS needed.
+        assert!(enforce("http://10.10.0.220:8000", false).is_ok());
+        assert!(enforce("http://127.0.0.1:8000", false).is_ok());
+        assert!(enforce("http://192.168.1.50", false).is_ok());
+    }
+
+    #[test]
+    fn enforce_localhost_resolution_branch() {
+        // localhost / *.localhost are loopback by convention (no DNS).
+        assert!(enforce("http://localhost:8000", false).is_ok());
+        assert!(enforce("http://LOCALHOST:8000", false).is_ok());
+        assert!(enforce("http://foo.localhost", false).is_ok());
+        // And the classifier agrees the loopback literal is Loopback distinctly.
+        assert_eq!(classify_addr(ip("127.0.0.1")), AddrClass::Loopback);
+    }
+
+    #[test]
+    fn enforce_missing_scheme_rejected() {
+        // No scheme: refuse rather than guess http/https (D-B19).
+        let err = enforce("10.10.0.220:8000", false).expect_err("missing scheme must be rejected");
+        assert!(matches!(err, SpeleoDbError::InsecureEndpoint { .. }));
+        // An unknown scheme is likewise rejected.
+        assert!(matches!(
+            enforce("ftp://10.10.0.220", false),
+            Err(SpeleoDbError::InsecureEndpoint { .. })
+        ));
+    }
+
+    #[test]
+    fn enforce_empty_resolution_fails_closed() {
+        // A host that cannot resolve to any address fails closed with
+        // InsecureEndpoint (never silently allowed).
+        let err = enforce("http://this-host-does-not-exist.invalid", false)
+            .expect_err("unresolvable http host must fail closed");
+        assert!(matches!(err, SpeleoDbError::InsecureEndpoint { .. }));
+    }
+
+    #[test]
+    fn enforce_insecure_http_bypasses_public_block() {
+        // With the override set, a public http host is allowed (scheme block
+        // lifted) — but a missing scheme is STILL rejected (the override only
+        // relaxes the http policy, not the require-explicit-scheme rule).
+        assert!(enforce("http://8.8.8.8", true).is_ok());
+        assert!(enforce("http://example.com", true).is_ok());
+        assert!(matches!(
+            enforce("10.10.0.220:8000", true),
+            Err(SpeleoDbError::InsecureEndpoint { .. })
+        ));
+    }
+}

@@ -17,6 +17,10 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
+        if let Err(f) = self.guard_mutation("Delete shot and split section") {
+            return f;
+        }
         tracing::info!(
             section_id,
             shot_id,
@@ -226,6 +230,9 @@ impl AppState {
         };
 
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
+        // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
+        // Set-only; no-op for local-only.
+        self.mark_remote_dirty();
 
         tracing::info!(
             section_id,
@@ -257,6 +264,10 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
+        if let Err(f) = self.guard_mutation("Delete shot range and split section") {
+            return f;
+        }
         tracing::info!(
             section_id,
             start_shot_id,
@@ -463,6 +474,9 @@ impl AppState {
             ],
         };
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
+        // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
+        // Set-only; no-op for local-only.
+        self.mark_remote_dirty();
 
         tracing::info!(
             section_id,
@@ -490,6 +504,10 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
+        if let Err(f) = self.guard_mutation("Delete shot range and shift") {
+            return f;
+        }
         tracing::info!(
             section_id,
             start_shot_id,
@@ -629,6 +647,9 @@ impl AppState {
             ],
         };
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
+        // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
+        // Set-only; no-op for local-only.
+        self.mark_remote_dirty();
 
         tracing::info!(
             section_id,
@@ -651,6 +672,10 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        // Read-only edit gate (#191, D-B6): gated on a read-only remote project.
+        if let Err(f) = self.guard_mutation("Delete last shot and section") {
+            return f;
+        }
         tracing::info!(
             section_id,
             shot_id,
@@ -798,6 +823,9 @@ impl AppState {
         };
 
         self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
+        // Dirty-bit flip (#191, D-B16): a delete/split mutated a remote project.
+        // Set-only; no-op for local-only.
+        self.mark_remote_dirty();
 
         CommandResult::success()
     }

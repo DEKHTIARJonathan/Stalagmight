@@ -154,6 +154,20 @@ impl Database {
             .map(|v| v != 0)
             .unwrap_or(false);
 
+        // Derived SpeleoDB-remote flag (#189, D-B14): true iff a speleo_link row
+        // exists. Probed like collab_enabled above but as EXISTS, NOT a stored
+        // column. `.ok().unwrap_or(false)` tolerates a missing table on a
+        // read-only metadata open (open_for_metadata; SQLITE_OPEN_READ_ONLY runs
+        // no migration, so a pre-v9 file simply has no table here).
+        let is_remote: bool = self
+            .conn
+            .query_row("SELECT EXISTS(SELECT 1 FROM speleo_link)", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .map(|c| c != 0)
+            .ok()
+            .unwrap_or(false);
+
         Ok(ProjectMetadata {
             name,
             location,
@@ -165,6 +179,7 @@ impl Database {
             gps_center,
             gps_bounds,
             collab_enabled,
+            is_remote,
         })
     }
 
@@ -818,6 +833,51 @@ impl Database {
                 serde_json::from_str(&j).context("Failed to deserialize collab state")?,
             )),
             None => Ok(None),
+        }
+    }
+
+    /// Load the SpeleoDB hand-off link from the single-row `speleo_link` table
+    /// (schema v9, #189). Returns `None` for pre-v9 projects (table absent) or
+    /// when no row is present.
+    ///
+    /// Deliberately `pub` (unlike the private `load_collab_state`): it is called
+    /// cross-module from `core/state/speleodb.rs` (stamp-on-pull readback) and
+    /// the #190/#191 tests. `base_commit_sha` is read as `Option<String>` so an
+    /// on-disk NULL stays `None` (never coerced to `""`).
+    pub fn load_speleo_link(&self) -> Result<Option<crate::models::SpeleoLink>> {
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='speleo_link'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !table_exists {
+            return Ok(None);
+        }
+
+        let row = self.conn.query_row(
+            "SELECT endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits
+             FROM speleo_link WHERE id = 1",
+            [],
+            |row| {
+                Ok(crate::models::SpeleoLink {
+                    endpoint: row.get::<_, String>(0)?,
+                    project_id: row.get::<_, String>(1)?,
+                    project_name: row.get::<_, String>(2)?,
+                    base_commit_sha: row.get::<_, Option<String>>(3)?,
+                    has_unpushed_edits: row.get::<_, i64>(4)? != 0,
+                })
+            },
+        );
+
+        match row {
+            Ok(link) => Ok(Some(link)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
         }
     }
 

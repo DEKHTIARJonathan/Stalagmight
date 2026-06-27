@@ -1126,8 +1126,8 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
         // (`Database::open` returns "Failed to create save file"). NB a directory
         // squatting the *exact* reserved path does NOT fail — the first implicit save
         // auto-renames around a collision (`next_available_project_path`) and
-        // succeeds; and a read-only dir wouldn't fail under the root-in-container NUC
-        // CI. A missing parent fails the create regardless of uid. (This drives the
+        // succeeds; and a read-only dir wouldn't fail under the root-in-container CI
+        // runner. A missing parent fails the create regardless of uid. (This drives the
         // GENERIC save-failure branch; the permission-denied humanization in
         // `finalize_deferred_import` needs `dir_present && EACCES`, which isn't
         // root-safe to induce here — that sub-branch is covered by the

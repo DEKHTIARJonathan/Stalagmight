@@ -24,8 +24,6 @@
  * mechanical: anywhere a consumer reads `shot.azimuth_in`, after the
  * migration it reads `data.shotAzimuthIn[i]` directly, or — if it
  * needs an object — calls `getShot(data, i)`.
- *
- * See docs/plans/memory-soa-and-mvt.md for the migration plan.
  */
 
 import type { Shot } from './ipc/Shot';

@@ -4,6 +4,8 @@ version = "0.2.0"
 description = "Cave Survey Processing Application"
 authors = ["Stalagmight Team"]
 edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/Stalagmight/Stalagmight"
 default-run = "stalagmight"
 
 [features]
