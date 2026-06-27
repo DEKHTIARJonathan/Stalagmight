@@ -1177,11 +1177,53 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        auth_error_drops_token, classify_dump_entry, resolve_endpoint, validate_project_id,
-        whoami_indicates_dead_token, Endpoint, SpeleoDbSession,
+        auth_error_drops_token, classify_dump_entry, clear_snapshot_dirty, resolve_endpoint,
+        validate_project_id, whoami_indicates_dead_token, Endpoint, SpeleoDbSession,
     };
+    use crate::models::{Project, SpeleoLink};
+    use crate::persistence::Database;
     use crate::speleodb::auth::{InMemoryStore, SecretStore, TokenStore};
     use crate::speleodb::SpeleoDbError;
+    use tempfile::TempDir;
+
+    #[test]
+    fn clear_snapshot_dirty_clears_the_flag_in_the_copy() {
+        // #197 guardrail: the push snapshot must never carry has_unpushed_edits to
+        // the server — clear_snapshot_dirty wipes the dirty bit (and last_edit_at)
+        // in the COPY while preserving the hand-off identity.
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("snap.stalx");
+        {
+            let mut db = Database::open(&path).expect("open snapshot");
+            db.save_project(&Project::new("Snap".to_owned(), None))
+                .expect("save project");
+            db.save_speleo_link(Some(&SpeleoLink {
+                endpoint: "http://x".to_owned(),
+                project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+                project_name: "Snap".to_owned(),
+                base_commit_sha: Some("abc".to_owned()),
+                has_unpushed_edits: true,
+                last_edit_at: Some("2026-06-27T10:00:00+00:00".to_owned()),
+            }))
+            .expect("stamp dirty link");
+        }
+
+        clear_snapshot_dirty(&path);
+
+        let db = Database::open_existing(&path).expect("reopen snapshot");
+        let link = db
+            .load_speleo_link()
+            .expect("load link")
+            .expect("link present");
+        assert!(
+            !link.has_unpushed_edits,
+            "dirty bit cleared in the snapshot copy"
+        );
+        assert_eq!(link.last_edit_at, None, "last_edit_at cleared too");
+        // Identity is preserved — only the dirty bit / timestamp change.
+        assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
+        assert_eq!(link.project_id, "11111111-1111-1111-1111-111111111111");
+    }
 
     /// A session seeded with an in-memory token (no real keychain). Marked
     /// already-rehydrated so it behaves like a live, established session.

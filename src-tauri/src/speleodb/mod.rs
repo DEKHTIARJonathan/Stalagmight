@@ -847,6 +847,74 @@ mod live_tests {
         }
     }
 
+    /// #193: after an upload, `get_revisions` returns the project's LINEAR commit
+    /// history — at least our commit, authored by us, with the tip matching the
+    /// adopted hexsha and no merges. Validates the new `get_revisions` client + the
+    /// linear-history contract the ancestry classifier (g7) assumes.
+    #[test]
+    #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
+    #[expect(
+        clippy::expect_used,
+        clippy::print_stderr,
+        reason = "ignored live integration test"
+    )]
+    fn live_get_revisions_returns_linear_authored_history() {
+        let Some((url, email, password)) = live_env() else {
+            eprintln!("skipping live_get_revisions: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let my_email = client::fetch_user_email(&url, &token, false).expect("whoami");
+        let (cleanup, fixture, tml_dir) = seed_and_acquire(&url, &token);
+        let tml_sidecar = tml_dir.path().join("ariane.tml");
+        std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
+
+        let pushed = client::upload_auto(
+            &url,
+            &token,
+            false,
+            &cleanup.id,
+            &fixture,
+            &tml_sidecar,
+            "live get_revisions test",
+        )
+        .expect("upload/auto should be 200");
+        let tip = pushed
+            .latest_commit
+            .as_ref()
+            .expect("200 carries latest_commit")
+            .id
+            .clone();
+
+        let history =
+            client::get_revisions(&url, &token, false, &cleanup.id).expect("get_revisions");
+        assert!(
+            !history.commits.is_empty(),
+            "history must carry at least our commit"
+        );
+        for c in &history.commits {
+            assert!(
+                c.parent_ids.len() <= 1,
+                "history must be linear (no merges): {:?}",
+                c.parent_ids
+            );
+        }
+        let tip_commit = history
+            .commits
+            .iter()
+            .find(|c| c.id == tip)
+            .expect("the uploaded tip must appear in the revision history");
+        assert!(
+            tip_commit.author_email.eq_ignore_ascii_case(&my_email),
+            "the tip commit must be authored by us: {} vs {my_email}",
+            tip_commit.author_email
+        );
+
+        if let Err(e) = client::release_lock(&url, &token, false, &cleanup.id) {
+            eprintln!("cleanup: failed to release lock: {e:?}");
+        }
+    }
+
     /// L13: re-uploading the **identical** tree (no change since the last commit)
     /// returns **304** — the benign "remote already at this state" outcome
     /// `map_status(UploadAuto, 304) == UpToDate` models. A 304 is a non-2xx, so the
