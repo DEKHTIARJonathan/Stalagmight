@@ -22,6 +22,10 @@ on:
   pull_request:
     branches: [master]
 
+# Least privilege: the job only reads the checked-out tree (no API, no token use).
+permissions:
+  contents: read
+
 concurrency:
   group: leak-scan-${{ github.ref }}
   cancel-in-progress: true

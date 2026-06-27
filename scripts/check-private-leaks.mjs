@@ -9,15 +9,14 @@
 //
 // It scans every git-TRACKED text file (`git ls-files` — exactly the set that
 // gets published) for a small set of high-signal markers:
-//   - maintainer names / handles (exempted in the attribution files below, where
-//     public credit is legitimate — README, CONTRIBUTING, AUTHORS, LICENSE, …).
-//     Because these are word-bounded, they ALSO catch a personal home path like
-//     /home/daniel or /Users/ndh — the form #229 actually had to scrub. (A generic
-//     /home/<anything> rule was tried and dropped: it false-fired on benign example
-//     paths like /home/v1.0 in unit tests.)
+//   - maintainer names / handles. These also catch a name-bearing personal path
+//     (`/home/daniel`, `/Users/ndh`). Suppressed only in ROOT attribution files
+//     (README, CONTRIBUTING, AUTHORS, LICENSE, CHANGELOG, SECURITY, …), where
+//     public credit is legitimate — NOT in nested code-adjacent READMEs.
 //   - the private cloud-build provider + its env-var prefix + the SSH-key alias
-//   - the private planning/coordination doc + tool filenames
-//   - the private issue-tracker references
+//     + the private build host's rsync target.
+//   - the private planning/coordination doc + tool filenames.
+//   - the private issue-tracker references.
 //
 // WHERE IT RUNS — its own workflow (.github/workflows/leak-scan.yml) with NO
 // path filter. This is load-bearing: the `check` job and the `smoke` job BOTH
@@ -28,10 +27,22 @@
 // ignores e2e-playwright/**).
 //
 // This is a heuristic tripwire for the common, accidental re-introduction — not a
-// secret scanner or a guarantee. Accepted gaps: it matches literal markers, so a
-// novel paraphrase ("the maintainer in Prague") slips through; it skips binary
-// files and the vendored upstream crate; and it cannot judge intent. Block on a
-// hit, allow-list a verified-benign match with a written reason.
+// secret scanner or a guarantee. DELIBERATE coverage choices / accepted gaps:
+//   - It targets maintainer-NAME-bearing paths, not generic build-box paths
+//     (`/home/ubuntu`, `/home/runner`): those carry no identity and appear all
+//     over CI docs, so a generic `/home/<x>` rule was tried and dropped (it
+//     false-fired on `/home/v1.0` in a unit test).
+//   - A name adjacent to letters (`Danielle`, `unicode`) does NOT fire, but a
+//     name adjacent to `_`/`/`/digits (`daniel_saska`, `/home/daniel`) does. The
+//     short `dan` nickname is intentionally NOT a marker (too false-positive
+//     prone); `daniel` covers the full form.
+//   - The doc/tool markers substring-match on purpose (to catch them inside
+//     paths like `~/personaldocs/x`); they are distinctive enough that this is
+//     safe.
+//   - It matches literal markers, so a novel paraphrase ("the maintainer in
+//     Prague") slips; it skips binary + oversized files and the vendored crate;
+//     and it cannot judge intent.
+// Block on a hit; allow-list a verified-benign match with a written reason.
 //
 // Usage:  node scripts/check-private-leaks.mjs   (or: pnpm lint:private-leaks)
 
@@ -42,9 +53,10 @@ import { fileURLToPath } from 'url';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-// Files where naming a maintainer is legitimate public attribution, so the
-// `name` rule is suppressed there (every OTHER rule still applies). Matched by
-// basename, case-insensitively, so docs/AUTHORS.md is covered too.
+// Files at the REPO ROOT where naming a maintainer is legitimate public
+// attribution, so the `maintainer-name` rule is suppressed there (every OTHER
+// rule still applies). Root-only on purpose: a nested code-adjacent README
+// (src/.../README.md) is NOT an attribution file and stays fully scanned.
 const ATTRIBUTION_BASENAMES = new Set([
   'readme.md', 'contributing.md', 'security.md', 'code_of_conduct.md',
   'authors', 'authors.md', 'contributors', 'contributors.md',
@@ -53,29 +65,35 @@ const ATTRIBUTION_BASENAMES = new Set([
 ]);
 
 // One rule per marker. `re` MUST carry the `g` flag (scanned with exec-in-loop).
-// `accept(match)` exempts a benign sub-match (e.g. a placeholder username).
-// `exemptAttribution` suppresses the rule in the attribution files above.
+// `exemptAttribution` suppresses the rule in the root attribution files above.
 export const RULES = [
   {
     id: 'maintainer-name',
-    // Word-bounded, so `daniel` matches `/home/daniel/…` too but NOT `ndhailey`
-    // (the longer alternative claims that) or `Danielle`. `ndh` = the maintainer's
-    // actual home-dir/account name (catches `/Users/ndh`).
-    re: /\b(nico|daniel|saska|ndhailey|ndh)\b/gi,
+    // Long names use letter-lookaround (not `\b`), so `_`/digit-adjacent forms
+    // (`daniel_saska`, `nico2`) and path forms (`/home/daniel`) fire, while a
+    // letter-adjacent lookalike (`Danielle`, `unicode`→`nico`) does NOT. `ndhailey`
+    // (the longer alt) claims that token before the short `ndh` branch can. `ndh`
+    // (the maintainer's home-dir name) is path-anchored — `/Users/ndh` fires, a
+    // standalone `ndh` token does not — to avoid false-firing on an incidental
+    // 3-char token.
+    re: /(?<![A-Za-z])(nico|daniel|saska|ndhailey)(?![A-Za-z])|(?<=[/\\])ndh(?![A-Za-z0-9])/gi,
     exemptAttribution: true,
     why: 'maintainer name/handle in a non-attribution file — internal-coordination leak. '
       + 'Use role-neutral phrasing or an issue link; public credit belongs in AUTHORS/README/CHANGELOG.',
   },
   {
     id: 'private-cloud-infra',
-    // The private cloud-build provider, its env-var prefix, and the SSH-key alias.
-    re: /\bscaleway\b|\bSCW_[A-Za-z]|\banzu\b/gi,
-    why: 'private cloud-build infra reference (provider / SCW_ env var / SSH-key alias) — '
+    // The private cloud-build provider, its env-var prefix (any trailing char,
+    // incl. digit-led names), the SSH-key alias, and the build host's rsync
+    // target (`cog:~/…` / `cog:/…`).
+    re: /\bscaleway\b|\bSCW_|\banzu\b|\bcog:[~/]/gi,
+    why: 'private cloud-build infra reference (provider / SCW_ env var / SSH-key alias / build-host rsync target) — '
       + 'these live in the maintainer-only private repo, not the public tree.',
   },
   {
     id: 'private-doc-or-tool',
     // Filenames of the private coordination/planning docs and personal tool dirs.
+    // Substring-matched on purpose (catches them inside paths); each is distinctive.
     re: /personaldocs|workingnotes|stalagmight-inflight|stalagmight-project-notes|coord_board|ns-CLAUDE|stag-private|nico_sm_prioritized|\bnuc-i5\b/gi,
     why: 'reference to a private/personal coordination doc or tool path — never published.',
   },
@@ -94,6 +112,11 @@ export const RULES = [
 // test pins that. Add a row here only for a real, justified exception.
 export const ALLOW = [];
 
+// Skip a file larger than this without scanning (logged). Bounds scan time and the
+// violations array against an adversarial multi-MB single-line file on a fork PR;
+// no tracked text file legitimately approaches this.
+const MAX_SCAN_BYTES = 5 * 1024 * 1024;
+
 // Whole files excluded from the scan.
 const EXCLUDE_EXACT = new Set([
   'src/types/ipc.generated.ts', // generated IPC types
@@ -104,11 +127,15 @@ const EXCLUDE_PREFIXES = [
   'src-tauri/vendor/', // vendored upstream crate — left verbatim (its own author/license)
   'src/types/ipc/', // generated IPC types
 ];
+// Genuinely-binary extensions (skipped before reading). NOTE: text formats that
+// can carry a leak — `.svg` (title/desc/comments), `.snap` (serialized DOM/paths)
+// — are deliberately NOT here, so they get scanned; the null-byte `looksBinary`
+// guard + MAX_SCAN_BYTES still protect against a real binary or a huge file.
 const BINARY_EXT = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'ico', 'icns', 'pdf', 'svg', 'webp',
+  'png', 'jpg', 'jpeg', 'gif', 'ico', 'icns', 'pdf', 'webp',
   'woff', 'woff2', 'ttf', 'otf', 'eot', 'zip', 'gz', 'tgz', 'bz2', 'xz', '7z',
   'wasm', 'dmp', 'stalx', 'db', 'sqlite', 'sqlite3', 'bin', 'keystore', 'jks',
-  'p12', 'der', 'class', 'jar', 'mp4', 'mov', 'webm', 'snap',
+  'p12', 'der', 'class', 'jar', 'mp4', 'mov', 'webm',
 ]);
 
 export function isExcluded(rel) {
@@ -119,12 +146,16 @@ export function isExcluded(rel) {
   return BINARY_EXT.has(ext);
 }
 
+// Attribution exemption applies only to ROOT-level files (no path separator), so a
+// nested code-adjacent README is still fully scanned for maintainer names.
 export function isAttributionFile(rel) {
-  const base = rel.slice(rel.lastIndexOf('/') + 1).toLowerCase();
-  return ATTRIBUTION_BASENAMES.has(base);
+  if (rel.includes('/')) return false;
+  return ATTRIBUTION_BASENAMES.has(rel.toLowerCase());
 }
 
-// Scan one file's text. Returns [{ruleId, lineNo, snippet, why, match}].
+// Scan one file's text. Returns [{ruleId, lineNo, why, match}]. Note: the matched
+// substring (`match`) is the MARKER itself (e.g. "SCW_", "daniel") — never the
+// whole line — so printing it to a public CI log can't publish an adjacent secret.
 export function findLeaks(text, rel) {
   const attribution = isAttributionFile(rel);
   const out = [];
@@ -137,14 +168,7 @@ export function findLeaks(text, rel) {
       let m;
       while ((m = rule.re.exec(line)) !== null) {
         if (m.index === rule.re.lastIndex) rule.re.lastIndex++; // guard zero-width
-        if (rule.accept && rule.accept(m)) continue;
-        out.push({
-          ruleId: rule.id,
-          lineNo: i + 1,
-          snippet: line.trim().slice(0, 200),
-          why: rule.why,
-          match: m[0],
-        });
+        out.push({ ruleId: rule.id, lineNo: i + 1, why: rule.why, match: m[0] });
       }
     }
   }
@@ -179,6 +203,7 @@ function main() {
   }
 
   const violations = [];
+  const skipped = []; // {rel, reason} — surfaced so a silent coverage loss is visible
   let scanned = 0;
   for (const rel of files.sort()) {
     if (isExcluded(rel)) continue;
@@ -186,10 +211,17 @@ function main() {
     let buf;
     try {
       buf = fs.readFileSync(full);
-    } catch {
-      continue; // staged-but-absent / submodule pointer / race — nothing to scan
+    } catch (e) {
+      // staged-but-absent / submodule pointer / permission / race. Don't drop it
+      // silently — a leak-containing file that fails to read must not pass as clean.
+      skipped.push({ rel, reason: `unreadable (${e.code || e.message})` });
+      continue;
     }
-    if (looksBinary(buf)) continue;
+    if (buf.length > MAX_SCAN_BYTES) {
+      skipped.push({ rel, reason: `${(buf.length / 1048576).toFixed(1)} MB > ${MAX_SCAN_BYTES / 1048576} MB cap` });
+      continue;
+    }
+    if (looksBinary(buf)) continue; // expected/normal — not surfaced
     scanned++;
     for (const v of findLeaks(buf.toString('utf8'), rel)) {
       if (isAllowed(rel, v.ruleId)) continue;
@@ -197,15 +229,23 @@ function main() {
     }
   }
 
+  // Surface skipped (unreadable/oversized) files: not fatal on their own, but a
+  // reviewer must know coverage was incomplete rather than read a clean ✓.
+  for (const s of skipped) console.warn(`  ⚠ skipped ${s.rel} — ${s.reason} (NOT scanned)`);
+
   if (violations.length === 0) {
-    console.log(`✓ private-leak scan: ${scanned} tracked text files, no internal/personal references.`);
+    console.log(
+      `✓ private-leak scan: ${scanned} tracked text files, no internal/personal references.`
+      + (skipped.length ? ` (${skipped.length} file(s) skipped — see warnings above)` : ''),
+    );
     return 0;
   }
 
   console.error(`\n✗ private-leak scan failed — ${violations.length} reference(s) that should not be public:\n`);
   for (const v of violations) {
+    // Print the MARKER and location only — never the surrounding line (a public CI
+    // log on a public repo must not echo a secret that sits beside the marker).
     console.error(`  [${v.ruleId}] ${v.rel}:${v.lineNo}  (matched "${v.match}")`);
-    console.error(`      ${v.snippet}`);
     console.error(`      ${v.why}\n`);
   }
   console.error(
