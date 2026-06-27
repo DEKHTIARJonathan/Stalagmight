@@ -2078,7 +2078,12 @@
       "label": "Reserve",
       "all_thirds": "All thirds",
       "one_stage": "1-stage",
-      "two_stage": "2-stage"
+      "two_stage": "2-stage",
+      "needsStages": "Add {{count}} stage cylinder(s) to your rig to use this preset.",
+      "advancedTitle": "Advanced reserve preset",
+      "advancedBody": "Staged presets push past strict thirds and require multi-cylinder gas management. Use only if you're trained to balance gas across back gas and stages.",
+      "advancedConfirm": "I understand",
+      "advancedCancel": "Cancel"
     },
     "tanks": {
       "label": "Tanks",
@@ -2087,7 +2092,7 @@
       "fillAria": "Fill pressure for {{tank}}",
       "removeAria": "Remove {{tank}}",
       "addPlaceholder": "Add tank…",
-      "conservative": "Conservative gas (call-it-an-80 derate)",
+      "conservative": "Conservative gas (cap overfills to rated)",
       "notCounted": "This role isn't counted toward the open-circuit penetration budget.",
       "colTank": "Tank",
       "colWater": "Water vol",
@@ -2112,7 +2117,8 @@
       "label": "Plan",
       "turnPressure": "Turn pressure",
       "budget": "Turn budget",
-      "maxPenetration": "Max penetration gas",
+      "maxPenetration": "Gas to farthest point",
+      "maxPenetrationHint": "Gas consumed to reach the deepest in-budget station (a volume, not a distance).",
       "turnPoints": "Turn points",
       "computing": "Computing…"
     }

@@ -24,7 +24,25 @@ fn default_stressed_rmv_multiplier() -> f64 {
 }
 
 fn default_jump_rmv_multiplier() -> f64 {
-    1.0
+    1.5
+}
+
+fn default_turn_buffer_bar() -> f64 {
+    15.0
+}
+
+/// Upper bound on the stage turn buffer. Above this a config could drive a typical stage's
+/// turn pressure (`½·fill − buffer`) toward zero — crediting the whole stage as in-gas and
+/// over-stating reach — so `normalize` rejects it. A buffer this large is already far more
+/// aggressive than any real "turn the stage at half, less a margin" rule.
+const MAX_TURN_BUFFER_BAR: f64 = 50.0;
+
+fn default_recalc_hold_stage2_bar() -> f64 {
+    100.0
+}
+
+fn default_recalc_hold_stage1_bar() -> f64 {
+    70.0
 }
 
 /// Display units for gas: metric (bar / litres) or imperial (psi / cuft).
@@ -49,6 +67,32 @@ pub enum ReservePreset {
     TwoStage,
 }
 
+/// Editable reserve constants (PRD §5.1) — kept out of the engine as named, tunable values
+/// rather than magic literals. `turn_buffer_bar` is the `−15` bar buffer subtracted from a
+/// stage's `½·fill` turn point (so its IN gas = full → `½·fill − turn_buffer`). The two
+/// `recalc_hold_*` constants are the back-gas held pressures (100 / 70 bar) for the Phase-2
+/// return-leg recalc — carried now so the config shape is stable across phases; that compute
+/// path is not implemented yet.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
+pub struct ReserveProfile {
+    #[serde(default = "default_turn_buffer_bar")]
+    pub turn_buffer_bar: f64,
+    #[serde(default = "default_recalc_hold_stage2_bar")]
+    pub recalc_hold_stage2_bar: f64,
+    #[serde(default = "default_recalc_hold_stage1_bar")]
+    pub recalc_hold_stage1_bar: f64,
+}
+
+impl Default for ReserveProfile {
+    fn default() -> Self {
+        Self {
+            turn_buffer_bar: default_turn_buffer_bar(),
+            recalc_hold_stage2_bar: default_recalc_hold_stage2_bar(),
+            recalc_hold_stage1_bar: default_recalc_hold_stage1_bar(),
+        }
+    }
+}
+
 /// DPV (scooter) profile — speed plus range / burn-time for the dead-scooter contingency.
 /// Phase 4; same RMV as swimming (no reduced-RMV credit, PRD §10).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default, TS)]
@@ -70,6 +114,9 @@ pub struct GasConfig {
     /// Default reserve preset for a new plan (PRD §5.1).
     #[serde(default)]
     pub default_reserve: ReservePreset,
+    /// Editable reserve constants (the −15 stage-turn buffer + the Phase-2 recalc holds), §5.1.
+    #[serde(default)]
+    pub reserve_profile: ReserveProfile,
     /// Exit-leg swim speed (m/min). Default 10 (no DPV).
     #[serde(default = "default_swim_speed")]
     pub swim_speed_m_per_min: f64,
@@ -85,8 +132,12 @@ pub struct GasConfig {
     pub stressed_rmv_multiplier: f64,
     /// Per-jump RMV multiplier applied to *reference/jump* legs only (not permanent shots).
     /// Tying in a jump is extra task-loading that raises the breathing rate, so its gas burns
-    /// at a higher RMV. Default 1.0 (no bump); 1.5 is a useful "putting in a jump" value. Always
-    /// ≥1.0 after `normalize`, so it can only ever *raise* gas (the conservative direction, §6).
+    /// at a higher RMV. **Default 1.5** ("putting in a jump is work"). Always ≥1.0 after
+    /// `normalize`, so it can only ever *raise* gas (the conservative direction, §6).
+    /// ⚠ **Stacks MULTIPLICATIVELY** with `survey_rmv_multiplier` on `is_reference` legs:
+    /// the engine uses `edge_rmv = rmv · survey_rmv_multiplier · jump_rmv_multiplier`. With the
+    /// default `survey_rmv_multiplier = 1.0` there is no stacking (jumps burn `rmv · 1.5`);
+    /// raising both compounds (e.g. 1.5 × 1.5 = 2.25×).
     /// Today this covers all `is_reference` shots — a non-swimmable backsight is also a reference
     /// (the #77 jump-vs-reference distinction is still future work), and bumping its RMV is safe.
     #[serde(default = "default_jump_rmv_multiplier")]
@@ -105,6 +156,7 @@ impl Default for GasConfig {
         Self {
             units: GasUnits::default(),
             default_reserve: ReservePreset::default(),
+            reserve_profile: ReserveProfile::default(),
             swim_speed_m_per_min: default_swim_speed(),
             survey_speed_m_per_min: None,
             survey_rmv_multiplier: default_survey_rmv_multiplier(),
@@ -146,6 +198,25 @@ impl GasConfig {
         // 1.0 default (stricter than the `<= 0.0` siblings above — a jump is never less work).
         if !self.jump_rmv_multiplier.is_finite() || self.jump_rmv_multiplier < 1.0 {
             self.jump_rmv_multiplier = default_jump_rmv_multiplier();
+        }
+        // Reserve-profile constants. The turn buffer is `(½·fill − buffer)`: a LARGE positive
+        // buffer drives the stage turn pressure toward 0, so the whole stage counts as in-gas →
+        // the budget OVER-states reach (the unsafe direction, §6). A small/zero buffer is the
+        // safe side. So clamp non-finite, negative, or implausibly large (> MAX) back to the
+        // default — bounding the genuinely unsafe high side, not just the harmless low one. The
+        // recalc holds are carried for Phase 2 but guarded now.
+        let p = &mut self.reserve_profile;
+        if !p.turn_buffer_bar.is_finite()
+            || p.turn_buffer_bar < 0.0
+            || p.turn_buffer_bar > MAX_TURN_BUFFER_BAR
+        {
+            p.turn_buffer_bar = default_turn_buffer_bar();
+        }
+        if !p.recalc_hold_stage2_bar.is_finite() || p.recalc_hold_stage2_bar < 0.0 {
+            p.recalc_hold_stage2_bar = default_recalc_hold_stage2_bar();
+        }
+        if !p.recalc_hold_stage1_bar.is_finite() || p.recalc_hold_stage1_bar < 0.0 {
+            p.recalc_hold_stage1_bar = default_recalc_hold_stage1_bar();
         }
         if let Some(dpv) = self.dpv {
             if !dpv.speed_m_per_min.is_finite() || dpv.speed_m_per_min <= 0.0 {

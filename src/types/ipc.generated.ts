@@ -158,6 +158,7 @@ export * from './ipc/AngleUnit';
 export * from './ipc/GasConfig';
 export * from './ipc/GasUnits';
 export * from './ipc/ReservePreset';
+export * from './ipc/ReserveProfile';
 export * from './ipc/DpvProfile';
 export * from './ipc/ShortcutFeedback';
 export * from './ipc/ThemeMode';

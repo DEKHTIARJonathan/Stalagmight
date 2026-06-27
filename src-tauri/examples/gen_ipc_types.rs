@@ -20,9 +20,9 @@ use stalagmight_lib::config::{
     GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit,
     LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig,
     OverlapMode, PanelsConfig, PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset,
-    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, SpeleoDbConfig,
-    StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset, SyntacticHighlightingConfig,
-    ThemeMode, TokenFallback, UnitsConfig, ValidationConfig,
+    ReserveProfile, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
+    SpeleoDbConfig, StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset,
+    SyntacticHighlightingConfig, ThemeMode, TokenFallback, UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, IntegrityCheckResult, IntegrityRepairResult, ValidationWarning,
@@ -249,6 +249,7 @@ fn main() {
     export::<GasConfig>(&out_dir);
     export::<GasUnits>(&out_dir);
     export::<ReservePreset>(&out_dir);
+    export::<ReserveProfile>(&out_dir);
     export::<DpvProfile>(&out_dir);
     export::<DisplayConfig>(&out_dir);
     export::<DepthGradientConfig>(&out_dir);
@@ -456,6 +457,7 @@ fn main() {
         "GasConfig",
         "GasUnits",
         "ReservePreset",
+        "ReserveProfile",
         "DpvProfile",
         "ShortcutFeedback",
         "ThemeMode",

@@ -37,26 +37,33 @@ interface GasPlanState {
   gasConfig: GasConfig;
   /** Latest reachability field from the backend (null until fetched / after any input change). */
   reachField: GasReachField | null;
+  /** Session-only: the user accepted the advanced (staged) reserve presets. Cleared by
+   *  `reset()` — on Plan sub-mode exit AND on every project load (`applyDisplaySettings`) — so
+   *  a fresh project (or a re-entry) re-prompts. Never persisted. */
+  pushyAck: boolean;
 
   setOrigin: (origin: StationRef | null) => void;
   setDiver: (diver: Diver) => void;
   setCylinders: (cylinders: Cylinder[]) => void;
   setGasConfig: (gasConfig: GasConfig) => void;
   setReachField: (reachField: GasReachField | null) => void;
+  setPushyAck: (ack: boolean) => void;
   /** Restore defaults (called from uiStore.exitGasPlan on sub-mode exit). */
   reset: () => void;
 }
 
 const initialState = (): Pick<
   GasPlanState,
-  'origin' | 'diver' | 'cylinders' | 'gasConfig' | 'reachField'
+  'origin' | 'diver' | 'cylinders' | 'gasConfig' | 'reachField' | 'pushyAck'
 > => ({
   origin: null,
   diver: DEFAULT_DIVER,
   cylinders: defaultCylinders(),
-  // Shallow-copy so editing the working config never mutates the shared default.
-  gasConfig: { ...defaultConfig.gas },
+  // Deep-clone so editing the working config (incl. nested reserve_profile / dpv) never
+  // mutates the shared compiled default through an aliased object reference.
+  gasConfig: structuredClone(defaultConfig.gas),
   reachField: null,
+  pushyAck: false,
 });
 
 export const useGasPlanStore = create<GasPlanState>((set) => ({
@@ -70,6 +77,7 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   setCylinders: (cylinders) => set({ cylinders, reachField: null }),
   setGasConfig: (gasConfig) => set({ gasConfig, reachField: null }),
   setReachField: (reachField) => set({ reachField }),
+  setPushyAck: (pushyAck) => set({ pushyAck }),
 
   reset: () => set(initialState()),
 }));
