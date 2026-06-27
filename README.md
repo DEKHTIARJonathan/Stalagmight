@@ -32,8 +32,8 @@ replacement for, cave survey training.
 
 ## What it does
 
-- **Import** — Ariane `.dmp` (raw survey, versions 2–5) and `.tml`, and Compass
-  `.mak`/`.dat` projects.
+- **Import** — Ariane `.dmp` (raw survey, versions 2–5) and `.tml`, Compass
+  `.mak`/`.dat` projects, and Walls (experimental).
 - **Export** — map images (`.svg`, `.png`, `.pdf`) plus `.tml`, `.csv`, `.json`
 - **Map** — survey lines and stations rendered with [MapLibre](https://maplibre.org/)
   over satellite imagery, with snapping, measurement, a distance-gradient overlay,
