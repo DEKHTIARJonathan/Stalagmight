@@ -27,15 +27,16 @@ fn default_jump_rmv_multiplier() -> f64 {
     1.5
 }
 
-fn default_turn_buffer_bar() -> f64 {
-    15.0
+fn default_stage_reserve_bar() -> f64 {
+    30.0
 }
 
-/// Upper bound on the stage turn buffer. Above this a config could drive a typical stage's
-/// turn pressure (`½·fill − buffer`) toward zero — crediting the whole stage as in-gas and
-/// over-stating reach — so `normalize` rejects it. A buffer this large is already far more
-/// aggressive than any real "turn the stage at half, less a margin" rule.
-const MAX_TURN_BUFFER_BAR: f64 = 50.0;
+/// Upper bound on the per-stage reserve. A LARGER reserve only shrinks a stage's usable IN gas
+/// (`(fill − reserve)/2`) — the *safe* direction — so the high side is merely capped for sanity,
+/// not rejected; the genuinely unsafe direction is a *negative* reserve (it would drop the stage
+/// lower and over-state reach), which `normalize` resets. No real "half, less a reserve" rule
+/// holds back more than ~100 bar of a stage.
+const MAX_STAGE_RESERVE_BAR: f64 = 100.0;
 
 fn default_recalc_hold_stage2_bar() -> f64 {
     100.0
@@ -68,15 +69,16 @@ pub enum ReservePreset {
 }
 
 /// Editable reserve constants (PRD §5.1) — kept out of the engine as named, tunable values
-/// rather than magic literals. `turn_buffer_bar` is the `−15` bar buffer subtracted from a
-/// stage's `½·fill` turn point (so its IN gas = full → `½·fill − turn_buffer`). The two
-/// `recalc_hold_*` constants are the back-gas held pressures (100 / 70 bar) for the Phase-2
-/// return-leg recalc — carried now so the config shape is stable across phases; that compute
-/// path is not implemented yet.
+/// rather than magic literals. `stage_reserve_bar` is the gas held back in each stage under the
+/// **Half Minus** strategy (default 30 bar): a stage is breathed from `fill` down to its drop
+/// pressure `(fill + reserve)/2`, contributing `(fill − reserve)/2` of IN gas (the other half is
+/// breathed back down to `reserve` on the picked-up exit). The two `recalc_hold_*` constants are
+/// the back-gas held pressures (100 / 70 bar) for the Phase-2 return-leg recalc — carried now so
+/// the config shape is stable across phases; that compute path is not implemented yet.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
 pub struct ReserveProfile {
-    #[serde(default = "default_turn_buffer_bar")]
-    pub turn_buffer_bar: f64,
+    #[serde(default = "default_stage_reserve_bar")]
+    pub stage_reserve_bar: f64,
     #[serde(default = "default_recalc_hold_stage2_bar")]
     pub recalc_hold_stage2_bar: f64,
     #[serde(default = "default_recalc_hold_stage1_bar")]
@@ -86,7 +88,7 @@ pub struct ReserveProfile {
 impl Default for ReserveProfile {
     fn default() -> Self {
         Self {
-            turn_buffer_bar: default_turn_buffer_bar(),
+            stage_reserve_bar: default_stage_reserve_bar(),
             recalc_hold_stage2_bar: default_recalc_hold_stage2_bar(),
             recalc_hold_stage1_bar: default_recalc_hold_stage1_bar(),
         }
@@ -114,7 +116,7 @@ pub struct GasConfig {
     /// Default reserve preset for a new plan (PRD §5.1).
     #[serde(default)]
     pub default_reserve: ReservePreset,
-    /// Editable reserve constants (the −15 stage-turn buffer + the Phase-2 recalc holds), §5.1.
+    /// Editable reserve constants (the Half-Minus per-stage reserve + the Phase-2 recalc holds), §5.1.
     #[serde(default)]
     pub reserve_profile: ReserveProfile,
     /// Exit-leg swim speed (m/min). Default 10 (no DPV).
@@ -199,18 +201,18 @@ impl GasConfig {
         if !self.jump_rmv_multiplier.is_finite() || self.jump_rmv_multiplier < 1.0 {
             self.jump_rmv_multiplier = default_jump_rmv_multiplier();
         }
-        // Reserve-profile constants. The turn buffer is `(½·fill − buffer)`: a LARGE positive
-        // buffer drives the stage turn pressure toward 0, so the whole stage counts as in-gas →
-        // the budget OVER-states reach (the unsafe direction, §6). A small/zero buffer is the
-        // safe side. So clamp non-finite, negative, or implausibly large (> MAX) back to the
-        // default — bounding the genuinely unsafe high side, not just the harmless low one. The
-        // recalc holds are carried for Phase 2 but guarded now.
+        // Reserve-profile constants. The per-stage reserve feeds the Half-Minus stage drop
+        // `(fill + reserve)/2` and IN gas `(fill − reserve)/2`: a NEGATIVE reserve drops the
+        // stage lower and credits more IN gas → the budget OVER-states reach (the unsafe
+        // direction, §6), so reset it to the default. A LARGE reserve only shrinks the IN gas
+        // (the safe side), so the high side is merely capped at MAX rather than reset (resetting
+        // it to the smaller default would be *less* conservative). The recalc holds are carried
+        // for Phase 2 but guarded now.
         let p = &mut self.reserve_profile;
-        if !p.turn_buffer_bar.is_finite()
-            || p.turn_buffer_bar < 0.0
-            || p.turn_buffer_bar > MAX_TURN_BUFFER_BAR
-        {
-            p.turn_buffer_bar = default_turn_buffer_bar();
+        if !p.stage_reserve_bar.is_finite() || p.stage_reserve_bar < 0.0 {
+            p.stage_reserve_bar = default_stage_reserve_bar();
+        } else if p.stage_reserve_bar > MAX_STAGE_RESERVE_BAR {
+            p.stage_reserve_bar = MAX_STAGE_RESERVE_BAR;
         }
         if !p.recalc_hold_stage2_bar.is_finite() || p.recalc_hold_stage2_bar < 0.0 {
             p.recalc_hold_stage2_bar = default_recalc_hold_stage2_bar();

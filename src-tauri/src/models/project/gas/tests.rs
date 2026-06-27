@@ -218,88 +218,85 @@ fn penetration_budget_all_thirds_is_usable_over_three() {
 }
 
 #[test]
-fn penetration_budget_presets_net_to_total_thirds_under_gauge_rule() {
-    // The §5.2 audit ask: prove the quarters/sixths back gas + the (½·fill − buffer) stage turns
-    // net to total-thirds. Derivation (ideal gas): 1-stage budget = B/4 + (½·f + buffer)·w_s and
-    // 2-stage = B/6 + 2·(½·f + buffer)·w_s; each equals ⅓(B + ΣS) iff B = 2S + 12·buffer·w_s
-    // (12 = LCD of {3,4,6,2}). We build that rig EXACTLY, deriving B from the ACTUAL default
-    // buffer so the identity stays valid if the default changes. Pressures are kept BELOW ~100
-    // bar so air_z_factor clamps to 1.0 (ideal) and Z can't perturb the arithmetic identity — Z
-    // is exercised separately above.
-    let prof = ReserveProfile::default();
-    let buf = prof.turn_buffer_bar;
-    let w_s = 11.0;
-    let f = 90.0; // < 100 bar ⇒ Z == 1
-    let stage_vol = f * w_s; // S
-    let back_water = (2.0 * stage_vol + 12.0 * buf * w_s) / f; // B = 2S + 12·buffer·w_s, as water vol @ f
+fn penetration_budget_half_minus_pins() {
+    // Half-Minus, hand-computed at Z == 1 (all pressures < 100 bar ⇒ air_z_factor clamps to 1.0,
+    // so deliverable == pressure × water-volume). Default stage reserve = 30 bar. A stage's IN gas
+    // = full − deliverable((fill + reserve)/2) = (fill − reserve)/2 × w_s (drop @ (fill+reserve)/2).
+    let prof = ReserveProfile::default(); // stage_reserve_bar = 30
     let bg = Cylinder::new(
-        back_water,
-        f,
-        f,
+        24.0,
+        232.0,
+        90.0,
         TankMaterial::Steel,
         CylRole::BackGas,
         None,
     )
     .unwrap();
-    let s = || Cylinder::new(w_s, f, f, TankMaterial::Aluminium, CylRole::Stage, None).unwrap();
-
-    let one = [bg.clone(), s()];
-    let b1 = penetration_budget(&one, ReservePreset::OneStage, &prof, false);
-    assert!(
-        (b1 - usable_oc_gas(&one, false) / 3.0).abs() < 1e-6,
-        "1-stage nets to total-thirds"
-    );
-
-    let two = [bg, s(), s()];
-    let b2 = penetration_budget(&two, ReservePreset::TwoStage, &prof, false);
-    assert!(
-        (b2 - usable_oc_gas(&two, false) / 3.0).abs() < 1e-6,
-        "2-stage nets to total-thirds"
-    );
-}
-
-#[test]
-fn penetration_budget_presets_push_farther_than_thirds_for_typical_rig() {
-    // A realistic rig (twin LP back gas bigger than 2S + 180·w_s, AL80 stages) makes the pushy
-    // presets reach FARTHER than strict thirds — the corrected direction. The old
-    // `reserve_fraction` (¼/⅙ of total) made them turn NEARER, which this guards against.
-    let prof = ReserveProfile::default();
-    let bg = || {
-        Cylinder::new(
-            12.0,
-            232.0,
-            210.0,
-            TankMaterial::Steel,
-            CylRole::BackGas,
-            None,
-        )
-        .unwrap()
-    };
     let stage = || {
         Cylinder::new(
-            11.1,
+            11.0,
             207.0,
-            207.0,
+            90.0,
             TankMaterial::Aluminium,
             CylRole::Stage,
             None,
         )
         .unwrap()
     };
+    // back gas deliverable = 90 × 24 = 2160 L; per stage IN = (90 − 30)/2 × 11 = 330 L (drop @ 60).
 
-    let one_rig = [bg(), bg(), stage()];
-    let one = penetration_budget(&one_rig, ReservePreset::OneStage, &prof, true);
+    let one = [bg.clone(), stage()];
+    let b1 = penetration_budget(&one, ReservePreset::OneStage, &prof, false);
     assert!(
-        one > usable_oc_gas(&one_rig, true) / 3.0,
-        "1-stage reaches farther than thirds"
+        (b1 - (0.25 * 2160.0 + 330.0)).abs() < 1e-6, // ¼·backgas + 1 stage = 540 + 330 = 870
+        "1-stage = ¼ back gas + one stage's Half-Minus in-gas"
     );
 
-    let two_rig = [bg(), bg(), stage(), stage()];
-    let two = penetration_budget(&two_rig, ReservePreset::TwoStage, &prof, true);
+    let two = [bg, stage(), stage()];
+    let b2 = penetration_budget(&two, ReservePreset::TwoStage, &prof, false);
     assert!(
-        two > usable_oc_gas(&two_rig, true) / 3.0,
-        "2-stage reaches farther than thirds"
+        (b2 - (2160.0 / 6.0 + 2.0 * 330.0)).abs() < 1e-6, // ⅙·backgas + 2 stages = 360 + 660 = 1020
+        "2-stage = ⅙ back gas + two stages' Half-Minus in-gas"
     );
+}
+
+#[test]
+fn penetration_budget_stage_reserve_lowers_budget() {
+    // A larger per-stage reserve holds back more of the stage, so the staged budget shrinks
+    // monotonically. Hand-computed at Z == 1 (fill 90 bar).
+    let bg = Cylinder::new(
+        24.0,
+        232.0,
+        90.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = Cylinder::new(
+        11.0,
+        207.0,
+        90.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let rig = [bg, stage];
+    let small = ReserveProfile {
+        stage_reserve_bar: 10.0,
+        ..ReserveProfile::default()
+    };
+    let big = ReserveProfile {
+        stage_reserve_bar: 50.0,
+        ..ReserveProfile::default()
+    };
+    let b_small = penetration_budget(&rig, ReservePreset::OneStage, &small, false);
+    let b_big = penetration_budget(&rig, ReservePreset::OneStage, &big, false);
+    // in(reserve=10) = (90−10)/2 × 11 = 440 → 540 + 440 = 980; in(reserve=50) = 220 → 760.
+    assert!((b_small - 980.0).abs() < 1e-6);
+    assert!((b_big - 760.0).abs() < 1e-6);
+    assert!(b_big < b_small, "more reserve → smaller penetration budget");
 }
 
 #[test]
@@ -463,6 +460,123 @@ fn gas_reach_field_tiny_budget_only_origin_is_the_frontier() {
     assert_eq!(field.reachable.iter().filter(|&&r| r).count(), 1); // only the origin
     assert_eq!(field.turn_frontier, vec![origin]);
     assert_eq!(field.gas_to_reach[origin_idx], Some(0.0)); // gas to reach the origin is 0
+}
+
+#[test]
+fn gas_reach_field_one_stage_route_drop_and_final_turn() {
+    // Staged Half-Minus places a drop on the deepest-penetration route + a final turn.
+    // gas-to-reach along the descent: station 0/1/2/3 = 0/300/800/1500 L (Z==1 at these depths).
+    // OneStage budget = ¼·backgas + stage_in. Back gas 80 bar × 25 L = 2000 L ⇒ ¼ = 500; stage
+    // 90 bar × 10 L water, reserve 30 ⇒ stage_in = (90−30)/2 × 10 = 300 L (drop @ 60 bar). Budget
+    // = 800 → reaches the 800 L station (index 2); index 3 (1500 L) is out of budget.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        25.0,
+        232.0,
+        80.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = Cylinder::new(
+        10.0,
+        207.0,
+        90.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field(Some(&origin), &diver, &[bg, stage], &cfg);
+
+    let sec = origin.section_id;
+    assert!((field.budget_litres - 800.0).abs() < 1e-6);
+    // Route origin → deepest in-budget station (index 2).
+    assert_eq!(
+        field.route_refs,
+        vec![
+            StationRef::new(sec, 0),
+            StationRef::new(sec, 1),
+            StationRef::new(sec, 2),
+        ]
+    );
+    // Stage drops where cumulative in-gas first reaches stage_in (300 L) = station 1.
+    assert_eq!(field.stage_drop_refs, vec![StationRef::new(sec, 1)]);
+    assert_eq!(field.final_turn_ref, Some(StationRef::new(sec, 2)));
+}
+
+#[test]
+fn gas_reach_field_two_stage_places_two_drops_in_order() {
+    // TwoStage: two drops at the two cumulative stage thresholds, then the back-gas leg.
+    // budget = ⅙·backgas + 2·stage_in. Back gas 80 bar × 82.5 L = 6600 L ⇒ ⅙ = 1100; each stage
+    // 70 bar × 10 L water, reserve 30 ⇒ stage_in = (70−30)/2 × 10 = 200 L. Budget = 1100 + 400 =
+    // 1500 → reaches station 3 (1500 L). Thresholds: 200 → first station ≥200 = station 1 (300 L);
+    // 400 → first ≥400 = station 2 (800 L).
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        82.5,
+        232.0,
+        80.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = || {
+        Cylinder::new(
+            10.0,
+            207.0,
+            70.0,
+            TankMaterial::Aluminium,
+            CylRole::Stage,
+            None,
+        )
+        .unwrap()
+    };
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::TwoStage,
+        ..GasConfig::default()
+    };
+    let field =
+        project.compute_gas_reach_field(Some(&origin), &diver, &[bg, stage(), stage()], &cfg);
+
+    let sec = origin.section_id;
+    assert!((field.budget_litres - 1500.0).abs() < 1e-6);
+    assert_eq!(
+        field.stage_drop_refs,
+        vec![StationRef::new(sec, 1), StationRef::new(sec, 2)]
+    );
+    assert_eq!(field.final_turn_ref, Some(StationRef::new(sec, 3)));
+}
+
+#[test]
+fn gas_reach_field_all_thirds_has_no_route_or_drops() {
+    // All-thirds keeps the plain field — no staged route/drops/final-turn (those are staged-only),
+    // but the reachable field itself is still populated.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        25.0,
+        232.0,
+        80.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field =
+        project.compute_gas_reach_field(Some(&origin), &diver, &[bg], &GasConfig::default());
+    assert!(field.route_refs.is_empty());
+    assert!(field.stage_drop_refs.is_empty());
+    assert_eq!(field.final_turn_ref, None);
+    assert!(field.reachable.iter().any(|&r| r));
 }
 
 #[test]

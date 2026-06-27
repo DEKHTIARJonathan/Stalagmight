@@ -667,10 +667,25 @@ impl Project {
     /// Multi-source Dijkstra over `adj` from the given `roots` (node indices,
     /// each seeded at distance 0). Returns the shortest-path distance to every
     /// node; unreachable nodes — and every node when `roots` is empty — stay
-    /// `f64::INFINITY`.
+    /// `f64::INFINITY`. Thin wrapper over [`dijkstra_with_preds`](Self::dijkstra_with_preds)
+    /// that drops the predecessor tree (the `dist` half is identical).
     pub(super) fn dijkstra(adj: &[Vec<(usize, f64)>], roots: &[usize]) -> Vec<f64> {
+        Self::dijkstra_with_preds(adj, roots).0
+    }
+
+    /// Multi-source Dijkstra that also returns the **predecessor tree**: `pred[v]` is the node
+    /// `v` was last relaxed from on its shortest path, or `usize::MAX` for a root or an
+    /// unreachable node. Strict `<` relaxation means the first/least-cost path wins and equal-cost
+    /// ties never overwrite, so `pred` always corresponds to the path that set `dist[v]` (and
+    /// `dist` is identical to [`dijkstra`](Self::dijkstra)). Walk `pred` back from any node until
+    /// `usize::MAX` to reconstruct its entry path to the nearest root.
+    pub(super) fn dijkstra_with_preds(
+        adj: &[Vec<(usize, f64)>],
+        roots: &[usize],
+    ) -> (Vec<f64>, Vec<usize>) {
         let n = adj.len();
         let mut dist = vec![f64::INFINITY; n];
+        let mut pred = vec![usize::MAX; n];
 
         #[derive(Copy, Clone, PartialEq)]
         struct Node(f64, usize);
@@ -706,11 +721,12 @@ impl Project {
                 let nd = d + w;
                 if nd < dist[v] {
                     dist[v] = nd;
+                    pred[v] = u;
                     heap.push(std::cmp::Reverse(Node(nd, v)));
                 }
             }
         }
-        dist
+        (dist, pred)
     }
 
     /// Resolve the project's zero-datum stations to their indices in `stations`.

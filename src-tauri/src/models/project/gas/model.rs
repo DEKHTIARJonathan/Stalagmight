@@ -163,6 +163,12 @@ pub struct Team {
 /// reserve budget, and the turn frontier (reachable stations with an unreachable neighbour).
 /// `gas_to_reach` is `None` for graph-unreachable stations (JSON-safe ∞); `station_refs` echo
 /// the input order so the field is self-describing.
+///
+/// The `route_refs` / `stage_drop_refs` / `final_turn_ref` describe the **deepest-penetration
+/// route** under a staged (Half-Minus) strategy — the ordered stations from the origin to the
+/// farthest in-budget point, the station where each stage's IN gas runs out (its drop point), and
+/// the final turn. They are **empty / `None` for All-thirds** (and for any rig that falls back to
+/// it): All-thirds keeps the plain reachable field + turn frontier with no per-stage drops.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct GasReachField {
     pub station_refs: Vec<StationRef>,
@@ -171,4 +177,10 @@ pub struct GasReachField {
     pub turn_frontier: Vec<StationRef>,
     pub max_reachable_gas: f64,
     pub budget_litres: f64,
+    /// Ordered stations origin→deepest in-budget point (staged strategies only; else empty).
+    pub route_refs: Vec<StationRef>,
+    /// Station where each stage's IN gas is exhausted, in stage order (staged strategies only).
+    pub stage_drop_refs: Vec<StationRef>,
+    /// The final turn — deepest in-budget station on the route (staged strategies only; else None).
+    pub final_turn_ref: Option<StationRef>,
 }

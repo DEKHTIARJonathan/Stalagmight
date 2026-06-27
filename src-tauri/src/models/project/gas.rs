@@ -69,14 +69,15 @@ impl Project {
         // Defensive: a non-positive / non-finite in-speed OR in-rmv (e.g. an un-normalized
         // 0 survey_rmv_multiplier) would zero every edge cost and make the whole cave falsely
         // reachable — the unsafe over-stating direction (§6) — so bail to all-unreachable.
-        let gas_in = if n == 0
+        // `pred` is the shortest-path predecessor tree (for the staged drop route below).
+        let (gas_in, pred) = if n == 0
             || roots.is_empty()
             || in_speed <= 0.0
             || !in_speed.is_finite()
             || in_rmv <= 0.0
             || !in_rmv.is_finite()
         {
-            vec![f64::INFINITY; n]
+            (vec![f64::INFINITY; n], vec![usize::MAX; n])
         } else {
             let adj = self.build_survey_graph_weighted(n, &station_index, |shot, fi, ti| {
                 // Jump/reference legs burn gas at a higher RMV: tying in a jump is extra
@@ -95,7 +96,7 @@ impl Project {
                     coords_ref[ti].z,
                 )
             });
-            Self::dijkstra(&adj, &roots)
+            Self::dijkstra_with_preds(&adj, &roots)
         };
 
         let budget_litres = penetration_budget(
@@ -111,13 +112,16 @@ impl Project {
             .collect();
 
         let mut max_reachable_gas = 0.0_f64;
+        let mut deepest: Option<usize> = None;
         let gas_to_reach: Vec<Option<f64>> = gas_in
             .iter()
             .zip(&reachable)
-            .map(|(&g, &ok)| {
+            .enumerate()
+            .map(|(i, (&g, &ok))| {
                 if g.is_finite() {
                     if ok && g > max_reachable_gas {
                         max_reachable_gas = g;
+                        deepest = Some(i);
                     }
                     Some(g)
                 } else {
@@ -135,6 +139,21 @@ impl Project {
             .map(|u| station_refs[u])
             .collect();
 
+        // Deepest-penetration route + per-stage drop points (staged Half-Minus strategies only).
+        // For All-thirds the thresholds are empty and these stay empty/None — the plain field
+        // above is the whole answer; All-thirds behaviour is unchanged.
+        let thresholds = stage_drop_thresholds(
+            cylinders,
+            gas_config.default_reserve,
+            &gas_config.reserve_profile,
+            gas_config.conservative_tank_gas,
+        );
+        let (route_refs, stage_drop_refs, final_turn_ref) = if thresholds.is_empty() {
+            (Vec::new(), Vec::new(), None)
+        } else {
+            staged_route(deepest, &pred, &gas_in, &station_refs, &thresholds)
+        };
+
         GasReachField {
             station_refs,
             gas_to_reach,
@@ -142,8 +161,56 @@ impl Project {
             turn_frontier,
             max_reachable_gas,
             budget_litres,
+            route_refs,
+            stage_drop_refs,
+            final_turn_ref,
         }
     }
+}
+
+/// Reconstruct the deepest-penetration route and place the per-stage drop points on it.
+/// Walks the predecessor tree from the deepest in-budget station back to its root, reverses to
+/// give the route origin→deepest, then for each cumulative stage threshold (litres) finds the
+/// first route station whose gas-to-reach reaches it (the diver's likely drop point). A threshold
+/// past the deepest reachable point — cave shorter than the staged gas — simply yields no drop.
+/// Returns `(route_refs, stage_drop_refs, final_turn_ref)`; all empty/None when there is no
+/// reachable deepest station.
+fn staged_route(
+    deepest: Option<usize>,
+    pred: &[usize],
+    gas_in: &[f64],
+    station_refs: &[StationRef],
+    thresholds: &[f64],
+) -> (Vec<StationRef>, Vec<StationRef>, Option<StationRef>) {
+    let Some(deepest) = deepest else {
+        return (Vec::new(), Vec::new(), None);
+    };
+    let mut chain = vec![deepest];
+    let mut cur = deepest;
+    while pred[cur] != usize::MAX {
+        cur = pred[cur];
+        chain.push(cur);
+        // Defensive: pred is a tree (no cycles), but cap the walk at the node count so a corrupt
+        // map can never hang the compute.
+        if chain.len() > pred.len() {
+            break;
+        }
+    }
+    chain.reverse();
+
+    let route_refs: Vec<StationRef> = chain.iter().map(|&i| station_refs[i]).collect();
+    // gas-to-reach increases monotonically root→deepest along the tree path, so the first station
+    // at/after a threshold is the drop point.
+    let stage_drop_refs: Vec<StationRef> = thresholds
+        .iter()
+        .filter_map(|&t| {
+            chain
+                .iter()
+                .find(|&&i| gas_in[i] >= t)
+                .map(|&i| station_refs[i])
+        })
+        .collect();
+    (route_refs, stage_drop_refs, Some(station_refs[deepest]))
 }
 
 /// Number of `Stage` cylinders a preset requires in the rig. The pushy presets are valid
@@ -159,18 +226,18 @@ fn required_stages(preset: ReservePreset) -> usize {
 }
 
 /// One-way IN penetration budget (litres), PRD §5.1 — the gas a diver may consume on the way
-/// in before turning. Replaces the old single `reserve_fraction × total` (which made the pushy
-/// presets turn *nearer* than thirds — the inverted interim). The presets are *thirds-preserving*
-/// gauge rules (§5.2): each cylinder contributes a specific portion.
+/// in before turning. The strategies:
 /// - **All-thirds**: ⅓ of every back-gas + stage cylinder's deliverable gas (= ⅓ of total).
-/// - **1-stage**: ¼ of back gas + the gas in stage 1 between full and its `(½·fill − 15)` turn.
-/// - **2-stage**: ⅙ of back gas + that stage term for the first two stages.
+/// - **Half Minus, 1-stage**: ¼ of back gas + stage 1's IN gas.
+/// - **Half Minus, 2-stage**: ⅙ of back gas + that IN gas for the first two stages.
 ///
-/// For typical matched gear these net to ≈ total-thirds (exact iff `B = 2S + 180·w_s`; proved in
-/// the test) while reaching slightly farther than strict thirds — the intended "pushy" behaviour.
-/// If the rig lacks the required stages it falls back to the All-thirds budget. Z-derated
-/// throughout (back-gas AND stage term) via [`deliverable_gas`] so the real-gas over-state can't
-/// leak back in via the stage path. The `−15` buffer is the editable [`ReserveProfile`] knob.
+/// Under **Half Minus** a stage is breathed from full down to its drop pressure `(fill + reserve)/2`,
+/// contributing `(fill − reserve)/2` of IN gas; the other half is breathed back down to `reserve` on
+/// the picked-up exit. With the stages carrying the penetration the diver dips less of the back gas
+/// (¼ / ⅙ instead of ⅓) without breaking thirds. If the rig lacks the required stages it falls back
+/// to the All-thirds budget (never invents stage gas — the safe direction, §6). Z-derated throughout
+/// (back-gas AND stage term) via [`deliverable_gas`]. The reserve is the editable
+/// [`ReserveProfile::stage_reserve_bar`] (default 30 bar).
 ///
 /// "Stage 1"/"the first two stages" = the first `Stage`-role cylinder(s) by rig (vec) order —
 /// v1 has no per-stage drop-order field. With ≥3 stages on `TwoStage` only the first two count
@@ -206,20 +273,7 @@ fn penetration_budget(
             .sum::<f64>()
             * frac
     };
-    // Gas breathed off a stage on the way in: full down to its `(½·fill − 15)` turn pressure.
-    // The turn point keys off the SAME (conservative-capped) basis as `full`, so an overfilled
-    // stage's start and turn pressures stay on one consistent scale.
-    let stage_in = |c: &Cylinder| -> f64 {
-        let basis = if conservative {
-            c.fill_bar.min(c.rated_pressure_bar)
-        } else {
-            c.fill_bar
-        };
-        let full = deliverable_gas(basis, c.water_volume_l, c.rated_pressure_bar, conservative);
-        let turn = (0.5 * basis - profile.turn_buffer_bar).max(0.0);
-        let held = deliverable_gas(turn, c.water_volume_l, c.rated_pressure_bar, conservative);
-        (full - held).max(0.0)
-    };
+    let stage_in = |c: &Cylinder| stage_in_gas(c, profile.stage_reserve_bar, conservative);
 
     match preset {
         ReservePreset::AllThirds => all_thirds(),
@@ -228,6 +282,56 @@ fn penetration_budget(
             back_gas(1.0 / 6.0) + stages[..2].iter().map(|&c| stage_in(c)).sum::<f64>()
         }
     }
+}
+
+/// Gas breathed off one stage on the way IN under the **Half-Minus** strategy (litres): from
+/// `full` down to its drop pressure `(fill + reserve)/2`, i.e. `(fill − reserve)/2` of pressure.
+/// The drop keys off the SAME (conservative-capped) basis as `full`, so an overfilled stage's
+/// start and drop pressures stay on one consistent scale. The other half is breathed back down to
+/// `reserve` on the picked-up exit; only this IN half is penetration gas. Z-derated via
+/// [`deliverable_gas`].
+fn stage_in_gas(c: &Cylinder, reserve_bar: f64, conservative: bool) -> f64 {
+    let basis = if conservative {
+        c.fill_bar.min(c.rated_pressure_bar)
+    } else {
+        c.fill_bar
+    };
+    let full = deliverable_gas(basis, c.water_volume_l, c.rated_pressure_bar, conservative);
+    let drop = (0.5 * (basis + reserve_bar)).clamp(0.0, basis);
+    let held = deliverable_gas(drop, c.water_volume_l, c.rated_pressure_bar, conservative);
+    (full - held).max(0.0)
+}
+
+/// Cumulative stage IN-gas thresholds (litres) along the penetration route for a **staged**
+/// (Half-Minus) strategy: element `k` = the total IN gas consumed by the time stage `k` is
+/// dropped (Σ of `stage_in_gas` over stages `0..=k`, rig/vec order). The diver drops stage `k`
+/// where cumulative gas-to-reach first reaches `thresholds[k]`. Empty for All-thirds and for any
+/// rig that lacks the required stages (falls back to All-thirds — no staged drops).
+fn stage_drop_thresholds(
+    cylinders: &[Cylinder],
+    preset: ReservePreset,
+    profile: &ReserveProfile,
+    conservative: bool,
+) -> Vec<f64> {
+    let needed = required_stages(preset);
+    if needed == 0 {
+        return Vec::new();
+    }
+    let stages: Vec<&Cylinder> = cylinders
+        .iter()
+        .filter(|c| matches!(c.role, CylRole::Stage))
+        .collect();
+    if stages.len() < needed {
+        return Vec::new();
+    }
+    let mut acc = 0.0;
+    stages[..needed]
+        .iter()
+        .map(|&c| {
+            acc += stage_in_gas(c, profile.stage_reserve_bar, conservative);
+            acc
+        })
+        .collect()
 }
 
 /// Total usable **open-circuit** breathing gas (litres) across the diver's back-gas + stage
