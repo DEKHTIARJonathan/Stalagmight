@@ -1485,6 +1485,61 @@ mod tests {
     }
 
     #[test]
+    fn export_tml_is_byte_stable_across_calls() {
+        // #196 render-on-push: two renders of the same project must be
+        // byte-identical so re-pushing unchanged content is a server no-op (304).
+        // Modern shots (via add_section → Shot::new) already carry stable UUIDs.
+        let project = simple_project();
+        let dir = tempfile::TempDir::new().unwrap();
+        let a = dir.path().join("a.tml");
+        let b = dir.path().join("b.tml");
+        export_tml(&project, &a).unwrap();
+        export_tml(&project, &b).unwrap();
+        assert_eq!(
+            std::fs::read(&a).unwrap(),
+            std::fs::read(&b).unwrap(),
+            "two renders of the same project must be byte-identical"
+        );
+    }
+
+    #[test]
+    fn ensure_shot_uuids_makes_legacy_render_byte_stable() {
+        // #196 guard: a legacy project whose shots have NO UUID would otherwise
+        // get a fresh ephemeral UUID minted per export (pick_uuid's last resort),
+        // making renders differ. ensure_shot_uuids() mints stable UUIDs up front.
+        let mut project = simple_project();
+        for section in &mut project.sections {
+            for shot in &mut section.shots {
+                shot.uuid = None;
+            }
+        }
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // Without the guard: ephemeral per-call UUIDs → renders differ.
+        let n1 = dir.path().join("n1.tml");
+        let n2 = dir.path().join("n2.tml");
+        export_tml(&project, &n1).unwrap();
+        export_tml(&project, &n2).unwrap();
+        assert_ne!(
+            std::fs::read(&n1).unwrap(),
+            std::fs::read(&n2).unwrap(),
+            "legacy None-uuid shots mint ephemeral UUIDs → renders differ without the guard"
+        );
+
+        // With the guard: stable UUIDs → identical renders.
+        project.ensure_shot_uuids();
+        let g1 = dir.path().join("g1.tml");
+        let g2 = dir.path().join("g2.tml");
+        export_tml(&project, &g1).unwrap();
+        export_tml(&project, &g2).unwrap();
+        assert_eq!(
+            std::fs::read(&g1).unwrap(),
+            std::fs::read(&g2).unwrap(),
+            "ensure_shot_uuids() restores byte-stability for legacy projects"
+        );
+    }
+
+    #[test]
     fn test_uuid_roundtrips_through_parse() {
         let project = simple_project();
         let dir = tempfile::TempDir::new().unwrap();

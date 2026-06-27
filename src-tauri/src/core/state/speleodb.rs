@@ -5,7 +5,7 @@
 //! Everything here is read-only against the server (login / list / pull); no
 //! lock, push, or persistence — those are later issues (#182 epic).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::AppState;
 use crate::speleodb::auth::TokenStore;
@@ -796,6 +796,55 @@ impl AppState {
         self.do_load_project_full(dest)
             .map_err(|e| SpeleoDbError::Io(format!("reload after fast-forward failed: {e}")))?;
         Ok(local_path)
+    }
+
+    /// Render the open remote project to a scratch `ariane.tml` at `dest` for
+    /// co-push (#196). Mints a stable UUID for any shot still missing one — a
+    /// no-op for modern files; for legacy pre-v6 shots it mints AND persists so
+    /// the canonical `.stalx` (hence its push snapshot) shares the identity the
+    /// `.tml` carries. Renders via `export_tml` DIRECTLY (never the collab sibling
+    /// `export_tml_with_baseline`), discarding the baseline — the `.tml` is a
+    /// throwaway render sidecar, not the collab round-trip file.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "render-on-push caller is #197 (Unit 6)")
+    )]
+    fn speleodb_render_tml(&self, dest: &Path) -> Result<(), SpeleoDbError> {
+        // Snapshot the in-memory project so the UUID-persist + render run without
+        // holding the project lock across the database lock.
+        let (project, minted) = {
+            let mut proj_guard = self
+                .project
+                .lock()
+                .map_err(|_| SpeleoDbError::Io("project lock poisoned".to_owned()))?;
+            let project = proj_guard.as_mut().ok_or(SpeleoDbError::NoRemoteProject)?;
+            let minted = project.sections.iter().any(|s| {
+                s.shots
+                    .iter()
+                    .any(|sh| sh.uuid.as_deref().map_or(true, str::is_empty))
+            });
+            project.ensure_shot_uuids();
+            (project.clone(), minted)
+        };
+        // Persist freshly-minted UUIDs so the snapshot .stalx matches the .tml.
+        // save_project does NOT clear the SpeleoDB dirty bit (speleo_link is
+        // excluded), so this is safe to call inside the push pipeline.
+        if minted {
+            if let Ok(mut db_guard) = self.database.lock() {
+                if let Some(db) = db_guard.as_mut() {
+                    if let Err(e) = db.save_project(&project) {
+                        tracing::warn!(
+                            error = %e,
+                            purpose = "persist freshly-minted shot UUIDs before push",
+                            "speleodb_render_tml: failed to persist minted UUIDs"
+                        );
+                    }
+                }
+            }
+        }
+        crate::export::tml::export_tml(&project, dest)
+            .map_err(|e| SpeleoDbError::Io(format!("render .tml failed: {e}")))?;
+        Ok(())
     }
 }
 
