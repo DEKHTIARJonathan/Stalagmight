@@ -200,8 +200,14 @@ describe('defaultConfig structure', () => {
       expect(defaultConfig.gas.survey_speed_m_per_min).toBeNull();
       expect(defaultConfig.gas.survey_rmv_multiplier).toBe(1);
       expect(defaultConfig.gas.stressed_rmv_multiplier).toBe(1.5);
+      expect(defaultConfig.gas.jump_rmv_multiplier).toBe(1.5);
       expect(defaultConfig.gas.conservative_tank_gas).toBe(true);
       expect(defaultConfig.gas.dpv).toBeNull();
+      expect(defaultConfig.gas.reserve_profile).toEqual({
+        turn_buffer_bar: 15,
+        recalc_hold_stage2_bar: 100,
+        recalc_hold_stage1_bar: 70,
+      });
     });
   });
 });

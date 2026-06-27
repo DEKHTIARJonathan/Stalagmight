@@ -4,9 +4,12 @@
 )]
 
 use super::model::{CylRole, Cylinder, Diver, GasReachField, PlanMode, TankMaterial, Team};
-use super::physics::{ata, avg_depth, cylinder_gas_volume, edge_gas, gas_rate, sac_to_rmv};
-use super::{reserve_fraction, usable_oc_gas};
-use crate::config::{GasConfig, ReservePreset};
+use super::physics::{
+    air_z_factor, ata, avg_depth, cylinder_gas_volume, deliverable_gas, edge_gas, gas_rate,
+    sac_to_rmv,
+};
+use super::{penetration_budget, required_stages, usable_oc_gas};
+use crate::config::{GasConfig, ReservePreset, ReserveProfile};
 use crate::models::{GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum};
 
 const EPS: f64 = 1e-9;
@@ -154,10 +157,162 @@ fn field_gas(field: &GasReachField, sr: StationRef) -> f64 {
 }
 
 #[test]
-fn reserve_fraction_matches_presets() {
-    assert!((reserve_fraction(ReservePreset::AllThirds) - 1.0 / 3.0).abs() < EPS);
-    assert!((reserve_fraction(ReservePreset::OneStage) - 0.25).abs() < EPS);
-    assert!((reserve_fraction(ReservePreset::TwoStage) - 1.0 / 6.0).abs() < EPS);
+fn required_stages_matches_presets() {
+    assert_eq!(required_stages(ReservePreset::AllThirds), 0);
+    assert_eq!(required_stages(ReservePreset::OneStage), 1);
+    assert_eq!(required_stages(ReservePreset::TwoStage), 2);
+}
+
+#[test]
+fn air_z_factor_matches_tabulated_air_and_never_credits() {
+    assert!((air_z_factor(0.0) - 1.0).abs() < EPS); // surface ≈ ideal
+    assert!((air_z_factor(207.0) - 1.037).abs() < 0.005); // ~3.7% derate at a 207-bar fill
+    assert!((air_z_factor(300.0) - 1.10).abs() < 0.01); // ~10% at 300 bar
+                                                        // Clamped ≥ 1.0 everywhere — the derate can only ever REDUCE gas, never credit more than
+                                                        // ideal (the safe direction), even where real air dips slightly below 1 (~50 bar).
+    let mut prev = 0.0;
+    for p in [0.0, 30.0, 50.0, 100.0, 150.0, 200.0, 250.0, 300.0] {
+        let z = air_z_factor(p);
+        assert!(z >= 1.0 - EPS, "z >= 1 at {p} bar");
+        assert!(z >= prev - EPS, "monotone non-decreasing at {p} bar");
+        prev = z;
+    }
+}
+
+#[test]
+fn deliverable_gas_always_below_ideal_and_conservative_caps_overfill() {
+    // At rated (no overfill) the only derate is the Z correction, so deliverable < ideal.
+    assert!(deliverable_gas(207.0, 11.1, 207.0, false) < cylinder_gas_volume(207.0, 11.1));
+    // Overfilled LP steel: conservative caps to rated THEN applies Z; non-conservative only Z.
+    let cons = deliverable_gas(230.0, 12.0, 179.0, true);
+    let prec = deliverable_gas(230.0, 12.0, 179.0, false);
+    assert!(cons < prec, "conservative rated-cap bites on an overfill");
+    assert!((cons - 179.0 * 12.0 / air_z_factor(179.0)).abs() < 1e-6);
+    assert!((prec - 230.0 * 12.0 / air_z_factor(230.0)).abs() < 1e-6);
+}
+
+#[test]
+fn penetration_budget_all_thirds_is_usable_over_three() {
+    let bg = Cylinder::new(
+        11.1,
+        207.0,
+        207.0,
+        TankMaterial::Aluminium,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let cyls = [bg];
+    let budget = penetration_budget(
+        &cyls,
+        ReservePreset::AllThirds,
+        &ReserveProfile::default(),
+        true,
+    );
+    assert!((budget - usable_oc_gas(&cyls, true) / 3.0).abs() < 1e-6);
+}
+
+#[test]
+fn penetration_budget_presets_net_to_total_thirds_under_gauge_rule() {
+    // The §5.2 audit ask: prove the quarters/sixths back gas + the (½·fill − 15) stage turns
+    // net to total-thirds. Derivation (ideal gas): 1-stage budget = B/4 + (½·f + 15)·w_s and
+    // 2-stage = B/6 + 2·(½·f + 15)·w_s; each equals ⅓(B + ΣS) iff B = 2S + 180·w_s (180 = 12·15,
+    // the LCD of {3,4,6,2} times the buffer). We build that rig EXACTLY. Pressures are kept
+    // BELOW ~100 bar so air_z_factor clamps to 1.0 (ideal) and the Z correction can't perturb
+    // the arithmetic identity — Z is exercised separately above.
+    let w_s = 11.0;
+    let f = 90.0; // < 100 bar ⇒ Z == 1
+    let stage_vol = f * w_s; // S
+    let back_water = (2.0 * stage_vol + 180.0 * w_s) / f; // B = 2S + 180·w_s, as a water volume @ f
+    let bg = Cylinder::new(
+        back_water,
+        f,
+        f,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let s = || Cylinder::new(w_s, f, f, TankMaterial::Aluminium, CylRole::Stage, None).unwrap();
+    let prof = ReserveProfile::default();
+
+    let one = [bg.clone(), s()];
+    let b1 = penetration_budget(&one, ReservePreset::OneStage, &prof, false);
+    assert!(
+        (b1 - usable_oc_gas(&one, false) / 3.0).abs() < 1e-6,
+        "1-stage nets to total-thirds"
+    );
+
+    let two = [bg, s(), s()];
+    let b2 = penetration_budget(&two, ReservePreset::TwoStage, &prof, false);
+    assert!(
+        (b2 - usable_oc_gas(&two, false) / 3.0).abs() < 1e-6,
+        "2-stage nets to total-thirds"
+    );
+}
+
+#[test]
+fn penetration_budget_presets_push_farther_than_thirds_for_typical_rig() {
+    // A realistic rig (twin LP back gas bigger than 2S + 180·w_s, AL80 stages) makes the pushy
+    // presets reach FARTHER than strict thirds — the corrected direction. The old
+    // `reserve_fraction` (¼/⅙ of total) made them turn NEARER, which this guards against.
+    let prof = ReserveProfile::default();
+    let bg = || {
+        Cylinder::new(
+            12.0,
+            232.0,
+            210.0,
+            TankMaterial::Steel,
+            CylRole::BackGas,
+            None,
+        )
+        .unwrap()
+    };
+    let stage = || {
+        Cylinder::new(
+            11.1,
+            207.0,
+            207.0,
+            TankMaterial::Aluminium,
+            CylRole::Stage,
+            None,
+        )
+        .unwrap()
+    };
+
+    let one_rig = [bg(), bg(), stage()];
+    let one = penetration_budget(&one_rig, ReservePreset::OneStage, &prof, true);
+    assert!(
+        one > usable_oc_gas(&one_rig, true) / 3.0,
+        "1-stage reaches farther than thirds"
+    );
+
+    let two_rig = [bg(), bg(), stage(), stage()];
+    let two = penetration_budget(&two_rig, ReservePreset::TwoStage, &prof, true);
+    assert!(
+        two > usable_oc_gas(&two_rig, true) / 3.0,
+        "2-stage reaches farther than thirds"
+    );
+}
+
+#[test]
+fn penetration_budget_falls_back_to_all_thirds_without_stages() {
+    // Default twin-AL80 rig carries ZERO stages → the pushy presets must fall back to the
+    // AllThirds budget (never fabricate stage gas the diver isn't carrying — the safe gate).
+    let prof = ReserveProfile::default();
+    let bg = Cylinder::new(
+        11.1,
+        207.0,
+        207.0,
+        TankMaterial::Aluminium,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let rig = [bg.clone(), bg];
+    let thirds = penetration_budget(&rig, ReservePreset::AllThirds, &prof, true);
+    assert!((penetration_budget(&rig, ReservePreset::OneStage, &prof, true) - thirds).abs() < EPS);
+    assert!((penetration_budget(&rig, ReservePreset::TwoStage, &prof, true) - thirds).abs() < EPS);
 }
 
 #[test]
@@ -199,10 +354,17 @@ fn usable_oc_gas_counts_backgas_stage_excludes_others_and_derates() {
     )
     .unwrap();
     let cyls = [bg, stage, deco, dilout];
-    // Non-conservative (actual fill): backgas 12×200 + stage 11×207; deco/dilout excluded.
-    assert!((usable_oc_gas(&cyls, false) - (2400.0 + 2277.0)).abs() < 1e-6);
+    // Counts back gas + stage (deco/dilout excluded), each Z-derated via deliverable_gas.
+    assert!(
+        (usable_oc_gas(&cyls, false)
+            - (deliverable_gas(200.0, 12.0, 200.0, false)
+                + deliverable_gas(207.0, 11.0, 207.0, false)))
+        .abs()
+            < 1e-6
+    );
 
-    // Overfilled backgas derates to rated under the conservative "call-it-an-80" convention.
+    // Overfilled backgas: conservative caps to rated (the "call-it-an-80" convention) then Z;
+    // non-conservative applies only Z to the actual fill.
     let over = Cylinder::new(
         12.0,
         179.0,
@@ -212,8 +374,15 @@ fn usable_oc_gas_counts_backgas_stage_excludes_others_and_derates() {
         None,
     )
     .unwrap();
-    assert!((usable_oc_gas(std::slice::from_ref(&over), true) - 179.0 * 12.0).abs() < 1e-6);
-    assert!((usable_oc_gas(&[over], false) - 230.0 * 12.0).abs() < 1e-6);
+    assert!(
+        (usable_oc_gas(std::slice::from_ref(&over), true)
+            - deliverable_gas(230.0, 12.0, 179.0, true))
+        .abs()
+            < 1e-6
+    );
+    assert!(
+        (usable_oc_gas(&[over], false) - deliverable_gas(230.0, 12.0, 179.0, false)).abs() < 1e-6
+    );
 }
 
 #[test]
@@ -463,11 +632,17 @@ fn gas_reach_field_jump_multiplier_raises_only_jump_legs() {
     )
     .unwrap();
 
+    // Explicit 1.0 base — the DEFAULT jump_rmv_multiplier is now 1.5, so a plain
+    // `GasConfig::default()` base would already bump the jump leg and collapse the contrast.
+    let unbumped = GasConfig {
+        jump_rmv_multiplier: 1.0,
+        ..GasConfig::default()
+    };
     let base = project.compute_gas_reach_field(
         Some(&origin),
         &diver,
         std::slice::from_ref(&big),
-        &GasConfig::default(),
+        &unbumped,
     );
     assert!((field_gas(&base, StationRef::new(sec, 1)) - 300.0).abs() < 1e-6);
     assert!((field_gas(&base, StationRef::new(sec, 2)) - 800.0).abs() < 1e-6);
@@ -483,9 +658,10 @@ fn gas_reach_field_jump_multiplier_raises_only_jump_legs() {
 
 #[test]
 fn gas_reach_field_partial_frontier_between_interior_stations() {
-    // usable = 12·250 = 3000 → AllThirds budget = 1000 L, between gas_in(station 2)=800 and
-    // gas_in(station 3)=1500 → reach {0,1,2}, turn at station 2. Pins the preset→fraction→budget
-    // wiring and the frontier detection at an interior station (not just the origin).
+    // AllThirds budget = deliverable(250 bar, 12 L)/3 ≈ 941 L (Z-derated), between
+    // gas_in(station 2)=800 and gas_in(station 3)=1500 → reach {0,1,2}, turn at station 2. Pins
+    // the preset→budget wiring and the frontier detection at an interior station (not just the
+    // origin). The budget assertion is computed via deliverable_gas to stay Z-consistent.
     let (project, origin) = linear_descent_project();
     let sec = origin.section_id;
     let diver = Diver::new(20.0, None).unwrap();
@@ -500,7 +676,7 @@ fn gas_reach_field_partial_frontier_between_interior_stations() {
     .unwrap();
     let field =
         project.compute_gas_reach_field(Some(&origin), &diver, &[cyl], &GasConfig::default());
-    assert!((field.budget_litres - 1000.0).abs() < 1e-6);
+    assert!((field.budget_litres - deliverable_gas(250.0, 12.0, 250.0, true) / 3.0).abs() < 1e-6);
     assert_eq!(field.reachable.iter().filter(|&&r| r).count(), 3); // stations 0,1,2
     let idx = |sr| field.station_refs.iter().position(|r| *r == sr).unwrap();
     assert!(field.reachable[idx(StationRef::new(sec, 2))]);

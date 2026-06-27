@@ -2,5 +2,6 @@
 import type { DpvProfile } from "./DpvProfile";
 import type { GasUnits } from "./GasUnits";
 import type { ReservePreset } from "./ReservePreset";
+import type { ReserveProfile } from "./ReserveProfile";
 
-export interface GasConfig { units: GasUnits, default_reserve: ReservePreset, swim_speed_m_per_min: number, survey_speed_m_per_min: number | null, survey_rmv_multiplier: number, stressed_rmv_multiplier: number, jump_rmv_multiplier: number, conservative_tank_gas: boolean, dpv: DpvProfile | null, }
+export interface GasConfig { units: GasUnits, default_reserve: ReservePreset, reserve_profile: ReserveProfile, swim_speed_m_per_min: number, survey_speed_m_per_min: number | null, survey_rmv_multiplier: number, stressed_rmv_multiplier: number, jump_rmv_multiplier: number, conservative_tank_gas: boolean, dpv: DpvProfile | null, }

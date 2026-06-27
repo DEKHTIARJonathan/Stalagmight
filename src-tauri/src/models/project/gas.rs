@@ -14,12 +14,12 @@ mod physics;
 #[cfg(test)]
 mod tests;
 
-use crate::config::{GasConfig, ReservePreset};
+use crate::config::{GasConfig, ReservePreset, ReserveProfile};
 use crate::models::{Coordinates, StationKey, StationRef};
 
 use super::Project;
 pub use model::{CylRole, Cylinder, Diver, GasReachField, PlanMode, TankMaterial, Team};
-use physics::edge_gas;
+use physics::{deliverable_gas, edge_gas};
 
 impl Project {
     /// Single-diver open-circuit reachability field (PRD §4/§5.1, the Phase-1 headline).
@@ -98,8 +98,12 @@ impl Project {
             Self::dijkstra(&adj, &roots)
         };
 
-        let usable = usable_oc_gas(cylinders, gas_config.conservative_tank_gas);
-        let budget_litres = usable * reserve_fraction(gas_config.default_reserve);
+        let budget_litres = penetration_budget(
+            cylinders,
+            gas_config.default_reserve,
+            &gas_config.reserve_profile,
+            gas_config.conservative_tank_gas,
+        );
 
         let reachable: Vec<bool> = gas_in
             .iter()
@@ -142,38 +146,100 @@ impl Project {
     }
 }
 
-/// Reserve turn-fraction for the preset (PRD §5.1): turn when this fraction of usable gas is
-/// consumed on the way in. All-thirds = ⅓; the pushy presets use their back-gas turn fraction
-/// (¼ / ⅙) — the full per-stage drop/recalc is Phase 2.
-///
-/// ⚠ Phase-1 interim: applying ¼/⅙ to TOTAL (back + stage) usable makes OneStage/TwoStage turn
-/// EARLIER than AllThirds (a NEARER frontier) — conservative (safe, §6), but the OPPOSITE of
-/// their "push farther" intent. Do **not** surface these as "pushier" in the UI until the
-/// per-stage drop + total-thirds netting (PRD §5.1/§5.2) lands in Phase 2.
-fn reserve_fraction(preset: ReservePreset) -> f64 {
+/// Number of `Stage` cylinders a preset requires in the rig. The pushy presets are valid
+/// only when the diver actually carries that many stages: the engine falls back to All-thirds
+/// otherwise (never invents stage gas — the safe direction, §6) and the UI greys the preset
+/// (the §5.1 "advanced gate").
+fn required_stages(preset: ReservePreset) -> usize {
     match preset {
-        ReservePreset::AllThirds => 1.0 / 3.0,
-        ReservePreset::OneStage => 1.0 / 4.0,
-        ReservePreset::TwoStage => 1.0 / 6.0,
+        ReservePreset::AllThirds => 0,
+        ReservePreset::OneStage => 1,
+        ReservePreset::TwoStage => 2,
+    }
+}
+
+/// One-way IN penetration budget (litres), PRD §5.1 — the gas a diver may consume on the way
+/// in before turning. Replaces the old single `reserve_fraction × total` (which made the pushy
+/// presets turn *nearer* than thirds — the inverted interim). The presets are *thirds-preserving*
+/// gauge rules (§5.2): each cylinder contributes a specific portion.
+/// - **All-thirds**: ⅓ of every back-gas + stage cylinder's deliverable gas (= ⅓ of total).
+/// - **1-stage**: ¼ of back gas + the gas in stage 1 between full and its `(½·fill − 15)` turn.
+/// - **2-stage**: ⅙ of back gas + that stage term for the first two stages.
+///
+/// For typical matched gear these net to ≈ total-thirds (exact iff `B = 2S + 180·w_s`; proved in
+/// the test) while reaching slightly farther than strict thirds — the intended "pushy" behaviour.
+/// If the rig lacks the required stages it falls back to the All-thirds budget. Z-derated
+/// throughout (back-gas AND stage term) via [`deliverable_gas`] so the real-gas over-state can't
+/// leak back in via the stage path. The `−15` buffer is the editable [`ReserveProfile`] knob.
+fn penetration_budget(
+    cylinders: &[Cylinder],
+    preset: ReservePreset,
+    profile: &ReserveProfile,
+    conservative: bool,
+) -> f64 {
+    let all_thirds = || usable_oc_gas(cylinders, conservative) / 3.0;
+
+    let stages: Vec<&Cylinder> = cylinders
+        .iter()
+        .filter(|c| matches!(c.role, CylRole::Stage))
+        .collect();
+    if stages.len() < required_stages(preset) {
+        return all_thirds();
+    }
+
+    let back_gas = |frac: f64| -> f64 {
+        cylinders
+            .iter()
+            .filter(|c| matches!(c.role, CylRole::BackGas))
+            .map(|c| {
+                deliverable_gas(
+                    c.fill_bar,
+                    c.water_volume_l,
+                    c.rated_pressure_bar,
+                    conservative,
+                )
+            })
+            .sum::<f64>()
+            * frac
+    };
+    // Gas breathed off a stage on the way in: full down to its `(½·fill − 15)` turn pressure.
+    let stage_in = |c: &Cylinder| -> f64 {
+        let full = deliverable_gas(
+            c.fill_bar,
+            c.water_volume_l,
+            c.rated_pressure_bar,
+            conservative,
+        );
+        let turn = (0.5 * c.fill_bar - profile.turn_buffer_bar).max(0.0);
+        let held = deliverable_gas(turn, c.water_volume_l, c.rated_pressure_bar, conservative);
+        (full - held).max(0.0)
+    };
+
+    match preset {
+        ReservePreset::AllThirds => all_thirds(),
+        ReservePreset::OneStage => back_gas(0.25) + stage_in(stages[0]),
+        ReservePreset::TwoStage => {
+            back_gas(1.0 / 6.0) + stages[..2].iter().map(|&c| stage_in(c)).sum::<f64>()
+        }
     }
 }
 
 /// Total usable **open-circuit** breathing gas (litres) across the diver's back-gas + stage
 /// cylinders. Dil-out / bailout / deco roles are excluded (CCR / deco, not OC penetration gas
-/// — §5.3/§5.5). `conservative` applies the "call-it-an-80" derate — the rated capacity when a
-/// tank is overfilled (`min(fill, rated)`), the safe community convention (§5.3); otherwise the
-/// actual fill (ideal gas; the real-gas Z correction is deferred).
+/// — §5.3/§5.5). Every cylinder is Z-derated via [`deliverable_gas`] (real-gas correction is
+/// always applied); `conservative` additionally caps an overfilled tank to its rated capacity
+/// (the "call-it-an-80" community convention, §5.3).
 fn usable_oc_gas(cylinders: &[Cylinder], conservative: bool) -> f64 {
     cylinders
         .iter()
         .filter(|c| matches!(c.role, CylRole::BackGas | CylRole::Stage))
         .map(|c| {
-            let pressure = if conservative {
-                c.fill_bar.min(c.rated_pressure_bar)
-            } else {
-                c.fill_bar
-            };
-            pressure * c.water_volume_l
+            deliverable_gas(
+                c.fill_bar,
+                c.water_volume_l,
+                c.rated_pressure_bar,
+                conservative,
+            )
         })
         .sum()
 }

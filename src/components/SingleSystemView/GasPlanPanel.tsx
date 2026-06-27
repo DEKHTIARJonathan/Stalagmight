@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useGasPlanStore } from '../../store/gasPlanStore';
@@ -12,6 +12,14 @@ import type { Cylinder, GasUnits, ReservePreset } from '../../types/ipc.generate
 
 const RESERVE_PRESETS: readonly ReservePreset[] = ['all_thirds', 'one_stage', 'two_stage'];
 const UNIT_OPTIONS: readonly GasUnits[] = ['metric', 'imperial'];
+
+/** Stage cylinders a preset requires in the rig — mirrors the Rust `required_stages`
+ *  (gas.rs). The pushy presets are greyed until the diver carries that many stages. */
+const REQUIRED_STAGES: Record<ReservePreset, number> = {
+  all_thirds: 0,
+  one_stage: 1,
+  two_stage: 2,
+};
 
 /**
  * The diver's gauge pressure (bar) at the turn point — the number divers actually
@@ -38,19 +46,33 @@ export function turnPressureBar(cylinders: Cylinder[], budgetLitres: number): nu
  */
 export function GasPlanPanel() {
   const { t } = useTranslation();
-  const { origin, diver, cylinders, gasConfig, reachField, setOrigin, setDiver, setGasConfig } =
-    useGasPlanStore(
-      useShallow((s) => ({
-        origin: s.origin,
-        diver: s.diver,
-        cylinders: s.cylinders,
-        gasConfig: s.gasConfig,
-        reachField: s.reachField,
-        setOrigin: s.setOrigin,
-        setDiver: s.setDiver,
-        setGasConfig: s.setGasConfig,
-      }))
-    );
+  const {
+    origin,
+    diver,
+    cylinders,
+    gasConfig,
+    reachField,
+    pushyAck,
+    setOrigin,
+    setDiver,
+    setGasConfig,
+    setPushyAck,
+  } = useGasPlanStore(
+    useShallow((s) => ({
+      origin: s.origin,
+      diver: s.diver,
+      cylinders: s.cylinders,
+      gasConfig: s.gasConfig,
+      reachField: s.reachField,
+      pushyAck: s.pushyAck,
+      setOrigin: s.setOrigin,
+      setDiver: s.setDiver,
+      setGasConfig: s.setGasConfig,
+      setPushyAck: s.setPushyAck,
+    }))
+  );
+  // A pushy preset the user selected but hasn't yet acknowledged (inline advanced gate).
+  const [pendingPushy, setPendingPushy] = useState<ReservePreset | null>(null);
 
   // Seed the working gas config from the live PERSISTED app config when Plan mode
   // opens (this panel mounts on entry), falling back to the compiled defaults when no
@@ -74,6 +96,23 @@ export function GasPlanPanel() {
 
   const turnCount = reachField ? reachField.turn_frontier.length : null;
   const turnBar = reachField ? turnPressureBar(cylinders, reachField.budget_litres) : null;
+  const stageCount = cylinders.filter((c) => c.role === 'stage').length;
+
+  // Selecting a staged (pushy) preset routes through an inline advanced acknowledgment the
+  // first time per session; All-thirds and an already-acked preset apply immediately.
+  const selectPreset = (preset: ReservePreset) => {
+    if (REQUIRED_STAGES[preset] > 0 && !pushyAck) {
+      setPendingPushy(preset);
+      return;
+    }
+    setGasConfig({ ...gasConfig, default_reserve: preset });
+  };
+  const confirmPushy = () => {
+    if (!pendingPushy) return;
+    setPushyAck(true);
+    setGasConfig({ ...gasConfig, default_reserve: pendingPushy });
+    setPendingPushy(null);
+  };
 
   return (
     <div
@@ -128,22 +167,57 @@ export function GasPlanPanel() {
         <section className="space-y-1">
           <SectionLabel>{t('gasPanel.reserve.label')}</SectionLabel>
           <div className="flex gap-1">
-            {RESERVE_PRESETS.map((preset) => (
-              <button
-                key={preset}
-                type="button"
-                className={`text-xs px-2 py-1 rounded border ${
-                  gasConfig.default_reserve === preset
-                    ? 'border-accent ring-1 ring-accent'
-                    : 'border-border hover:bg-border'
-                }`}
-                onClick={() => setGasConfig({ ...gasConfig, default_reserve: preset })}
-                data-testid={`gas-reserve-${preset}`}
-              >
-                {t(`gasPanel.reserve.${preset}`)}
-              </button>
-            ))}
+            {RESERVE_PRESETS.map((preset) => {
+              const needs = REQUIRED_STAGES[preset];
+              const disabled = stageCount < needs;
+              return (
+                <button
+                  key={preset}
+                  type="button"
+                  disabled={disabled}
+                  title={
+                    disabled ? t('gasPanel.reserve.needsStages', { count: needs }) : undefined
+                  }
+                  className={`text-xs px-2 py-1 rounded border disabled:opacity-40 disabled:cursor-not-allowed ${
+                    gasConfig.default_reserve === preset
+                      ? 'border-accent ring-1 ring-accent'
+                      : 'border-border hover:bg-border'
+                  }`}
+                  onClick={() => selectPreset(preset)}
+                  data-testid={`gas-reserve-${preset}`}
+                >
+                  {t(`gasPanel.reserve.${preset}`)}
+                </button>
+              );
+            })}
           </div>
+          {pendingPushy && (
+            <div
+              className="mt-1 p-2 rounded border border-accent text-xs space-y-1"
+              data-testid="gas-pushy-ack"
+            >
+              <p className="font-semibold">{t('gasPanel.reserve.advancedTitle')}</p>
+              <p className="opacity-80">{t('gasPanel.reserve.advancedBody')}</p>
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  className="px-2 py-0.5 rounded border border-accent hover:bg-border"
+                  onClick={confirmPushy}
+                  data-testid="gas-pushy-ack-confirm"
+                >
+                  {t('gasPanel.reserve.advancedConfirm')}
+                </button>
+                <button
+                  type="button"
+                  className="px-2 py-0.5 rounded border border-border hover:bg-border"
+                  onClick={() => setPendingPushy(null)}
+                  data-testid="gas-pushy-ack-cancel"
+                >
+                  {t('gasPanel.reserve.advancedCancel')}
+                </button>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Units */}
@@ -180,8 +254,14 @@ export function GasPlanPanel() {
               <dd data-testid="gas-readout-budget" className="text-right font-mono">
                 {formatVolume(reachField.budget_litres, units)}
               </dd>
-              <dt className="opacity-70">{t('gasPanel.readout.maxPenetration')}</dt>
-              <dd data-testid="gas-readout-max" className="text-right font-mono">
+              <dt className="opacity-70" title={t('gasPanel.readout.maxPenetrationHint')}>
+                {t('gasPanel.readout.maxPenetration')}
+              </dt>
+              <dd
+                data-testid="gas-readout-max"
+                className="text-right font-mono"
+                title={t('gasPanel.readout.maxPenetrationHint')}
+              >
                 {formatVolume(reachField.max_reachable_gas, units)}
               </dd>
               <dt className="opacity-70">{t('gasPanel.readout.turnPoints')}</dt>

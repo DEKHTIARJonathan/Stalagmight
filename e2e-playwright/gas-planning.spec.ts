@@ -170,6 +170,24 @@ test.describe('Gas planning', () => {
     await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).not.toContain('gasReach');
   });
 
+  test('Plan gates the staged reserve presets to a stage-carrying rig; readout reads as gas @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    expect(await appMode(page)).toBe('plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+
+    // Default rig is twin-AL80 back gas (ZERO stages) → the pushy presets are greyed (the
+    // advanced gate); All-thirds stays available.
+    await expect(page.locator('[data-testid="gas-reserve-all_thirds"]')).toBeEnabled();
+    await expect(page.locator('[data-testid="gas-reserve-one_stage"]')).toBeDisabled();
+    await expect(page.locator('[data-testid="gas-reserve-two_stage"]')).toBeDisabled();
+
+    // The "max" readout is labelled as a gas volume, not a penetration distance.
+    await expect(page.locator('[data-testid="gas-readout-max"]')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Gas to farthest point');
+  });
+
   test('carousel switches Survey/Plan/Export; Plan is read-only; Export is a stub @smoke', async ({
     page,
   }) => {

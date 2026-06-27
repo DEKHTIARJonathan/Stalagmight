@@ -53,4 +53,12 @@ describe('gasPlanStore', () => {
     expect(s.origin).toBeNull();
     expect(s.cylinders).toHaveLength(2);
   });
+
+  it('pushyAck defaults false and is cleared by reset (re-prompt each Plan session)', () => {
+    expect(useGasPlanStore.getState().pushyAck).toBe(false);
+    useGasPlanStore.getState().setPushyAck(true);
+    expect(useGasPlanStore.getState().pushyAck).toBe(true);
+    useGasPlanStore.getState().reset();
+    expect(useGasPlanStore.getState().pushyAck).toBe(false);
+  });
 });
