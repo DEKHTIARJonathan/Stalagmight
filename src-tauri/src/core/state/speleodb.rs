@@ -734,9 +734,27 @@ impl AppState {
                     &commits,
                 ) =>
             {
-                let local_path = self
-                    .speleodb_fast_forward(&endpoint, &token, insecure_http, &link, tip.as_deref())
-                    .map_err(local_dto)?;
+                // A failure here (e.g. a corrupt re-pulled dump) leaves us holding
+                // the lock with a closed project — release it before surfacing the
+                // error so it isn't stranded (mirrors the other no-edit arms).
+                let local_path = match self.speleodb_fast_forward(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &link,
+                    tip.as_deref(),
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.speleodb_release_best_effort(
+                            &endpoint,
+                            &token,
+                            insecure_http,
+                            &link.project_id,
+                        );
+                        return Err(local_dto(e));
+                    }
+                };
                 self.set_edit_enabled(true);
                 Ok(StartEditingResult::FastForwarded { local_path })
             }
@@ -1146,14 +1164,19 @@ impl AppState {
         let snapshot = dir.join("snapshot.stalx");
         let tml = dir.join("ariane.tml");
 
-        // Render the `.tml` from the in-memory project (#196), then flush in-memory
-        // state to the live `.stalx` so the snapshot below reflects every edit.
-        self.speleodb_render_tml(&tml).map_err(local_dto)?;
+        // Flush in-memory state to the live `.stalx` FIRST, THEN render the `.tml`.
+        // save_project heals the in-memory project (mints + DEDUPS shot UUIDs and
+        // sanitizes non-finite geometry); rendering the `.tml` after that heal is
+        // what guarantees the co-pushed `.tml` and the `.stalx` snapshot agree on
+        // shot identity + geometry. Rendering first would ship a `.tml` built from
+        // the un-healed project for a legacy file carrying within-section duplicate
+        // UUIDs or non-finite values (#196).
         if !self.save_project(None, true).success {
             return Err(local_dto(SpeleoDbError::Io(
                 "failed to flush project before push".to_owned(),
             )));
         }
+        self.speleodb_render_tml(&tml).map_err(local_dto)?;
 
         // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in
         // the COPY so it never rides to the server.
