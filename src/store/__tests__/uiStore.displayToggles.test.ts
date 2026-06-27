@@ -241,7 +241,7 @@ describe('Display Toggle State', () => {
   // Depth and distance gradients both paint the shots layer; showing both at once
   // produced mixed coloring (depth-colored shots, distance-colored stations after
   // a Shots toggle). They are mutually exclusive — enabling one disables the other
-  // — so the conflicting state is unreachable (#34, Daniel's report).
+  // — so the conflicting state is unreachable (#34).
   describe('Distance/Depth Gradient Mutual Exclusion (#34)', () => {
     beforeEach(() => {
       useUIStore.setState(getCleanTestState());

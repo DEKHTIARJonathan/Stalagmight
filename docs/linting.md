@@ -14,7 +14,7 @@ Run `cargo fmt` and `cargo clippy` locally before pushing (they're in the
 
 ## Why this exists: the rot lesson
 
-The strict policy was added in **Feb 2026 (`17dc4feb`)** by Daniel, explicitly to
+The strict policy was added in **Feb 2026 (`17dc4feb`)**, explicitly to
 guardrail AI-written Rust — its comments call out the patterns directly: *"AI loves
 .unwrap()"*, *"Clone-spam — AI appeases the borrow checker with .clone()"*, *"String
 nonsense AI generates"*, *"Prevent AI from silencing lints"*.

@@ -1,7 +1,7 @@
 import type { Cylinder, CylRole, TankMaterial } from '../types/ipc.generated';
 
 /**
- * Representative cave-cylinder presets (#38, PRD §5.3 — specs supplied by Nico,
+ * Representative cave-cylinder presets (#38, PRD §5.3 — domain specs,
  * 2026-06-24). `water_volume_l` is the canonical property (the "80/100/120" name
  * is just nominal cuft at rating). These are GENERAL/representative — confirm per
  * actual cylinder; NOT a comprehensive third-party DB. `fill_bar` defaults to the

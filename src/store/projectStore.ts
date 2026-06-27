@@ -164,7 +164,7 @@ interface ProjectStore {
    * data (shots + stations). Lives alongside `project` and `stations`
    * during the Phase-A migration; once consumers are migrated this
    * becomes the primary representation and `project.sections[].shots`
-   * + `stations` go away. See docs/plans/memory-soa-and-mvt.md.
+   * + `stations` go away.
    */
   surveyData: SurveyData | null;
   /**

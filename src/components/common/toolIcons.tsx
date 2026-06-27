@@ -2,7 +2,7 @@
  * Duotone tool icons for the toolbar — a soft accent-fill silhouette plus a
  * solid accent line, where the object color encodes WHAT the tool acts on and
  * a shared modifier (slate move-compass) encodes the move action. Ported from
- * the Cave Survey icon spec (`~/Downloads/Cave Survey Icons.html`).
+ * the project's Cave Survey icon spec.
  *
  * Each glyph is rendered inside a `.duotone` SVG whose `--o` custom property is
  * set to the tool's role color (`var(--sh-<role>)`). The duotone CSS classes

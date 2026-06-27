@@ -3852,7 +3852,7 @@ export default function DmpNewImportDialog({
 
               {/* Section Settings */}
               {/* #61 embedding slot: section-name + SectionMetadataForm + ShotTableEditor.
-                  Consumed as-is here; Daniel's reusable focus-mode section-edit surface
+                  Consumed as-is here; the reusable focus-mode section-edit surface
                   (fields-right / table-bottom) drops in here later. Do not refactor. */}
               {editState && (
                 <>
