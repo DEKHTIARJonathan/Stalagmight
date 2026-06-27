@@ -1,0 +1,44 @@
+name: Leak Scan
+
+# Private-reference leak guard for the public tree (issue #226).
+#
+# Fails the build if a tracked file re-introduces an internal/personal reference
+# the de-internalization sweep (#229) removed: maintainer names in non-attribution
+# files, the private cloud-build infra, personal home paths, internal
+# planning/coordination doc + tool filenames, or the private issue tracker. See
+# scripts/check-private-leaks.mjs for the rules and rationale.
+#
+# IMPORTANT — this workflow runs with NO `paths-ignore`, unlike `ci.yml` (`check`)
+# and `e2e-smoke.yml` (`smoke`), which BOTH ignore `**/*.md` and `docs/**`. A leak
+# most often lands in exactly those files (e.g. a new `docs/plans/*.md`), so a
+# docs-only change runs neither of those jobs — the gate must run on EVERYTHING.
+#
+# Pure-Node, no dependencies (only `git ls-files` + the stdlib), no secrets — so
+# it runs on fork PRs too. Sub-second. Safe to block on because `master` is
+# unprotected (no required-check deadlock, per #122).
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: leak-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  leak-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # Pin the rules with the fixture test first (proves each rule still fires on
+      # its target and that the functional CI-picker tokens do NOT), then scan the
+      # tracked tree.
+      - name: Private-leak rules — fixture test
+        run: node scripts/check-private-leaks.test.mjs
+      - name: Private-leak scan
+        run: node scripts/check-private-leaks.mjs

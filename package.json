@@ -24,6 +24,8 @@
     "lint:e2e-parallel": "node scripts/check-e2e-parallel-safe.mjs",
     "lint:rust-file-size": "node scripts/check-rust-file-size.mjs",
     "lint:rust-file-size:test": "node scripts/check-rust-file-size.test.mjs",
+    "lint:private-leaks": "node scripts/check-private-leaks.mjs",
+    "lint:private-leaks:test": "node scripts/check-private-leaks.test.mjs",
     "coverage:ui": "E2E_COVERAGE=1 VITE_COVERAGE=1 pnpm test:ui",
     "coverage:e2e": "E2E_COVERAGE=1 VITE_COVERAGE=1 pnpm test:e2e",
     "coverage:merge": "node scripts/merge-coverage.mjs",

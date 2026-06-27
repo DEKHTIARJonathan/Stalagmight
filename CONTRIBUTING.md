@@ -101,6 +101,7 @@ pnpm tsc --noEmit                                                  # TypeScript
 CI=true pnpm test                                                 # vitest unit + component (CI=true runs once, not watch)
 pnpm test:ui                                                       # Playwright (needs a display)
 pnpm lint:rust-file-size                                           # file-size ratchet (a CI gate)
+pnpm lint:private-leaks                                            # no internal/personal refs in the public tree (a CI gate)
 cargo fmt --manifest-path src-tauri/Cargo.toml --check             # Rust formatting
 TELEMETRY_ENDPOINT=http://localhost/dummy \
   cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets   # deny-level lints
