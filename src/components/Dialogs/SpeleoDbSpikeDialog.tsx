@@ -23,7 +23,12 @@ export default function SpeleoDbSpikeDialog() {
   // loadProject (not the deprecated openProject) drives the LoadingState progress UI.
   const loadProject = useProjectStore((s) => s.loadProject);
 
-  const [phase, setPhase] = useState<'login' | 'list'>('login');
+  // Start in 'checking' (not 'login') so the session-rehydration probe below can
+  // settle BEFORE the first real view paints. Defaulting to 'login' made React
+  // paint the login form on first render, then flip to 'list' once the async
+  // probe resolved — a visible login-screen flash on every reopen of an already
+  // logged-in session.
+  const [phase, setPhase] = useState<'checking' | 'login' | 'list'>('checking');
   const [endpoint, setEndpoint] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -52,13 +57,20 @@ export default function SpeleoDbSpikeDialog() {
     void (async () => {
       try {
         const status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
-        if (cancelled || !status.logged_in) return;
+        if (cancelled) return;
+        if (!status.logged_in) {
+          // No live session → drop the 'checking' spinner and show the login form.
+          setPhase('login');
+          return;
+        }
         setUserEmail(status.user_email ?? '');
         setKeychainBacked(status.keychain_backed);
         await refreshProjects(() => cancelled);
         if (!cancelled) setPhase('list');
       } catch {
-        // No session (or it failed) → stay on the login form.
+        // Probe failed → fall back to the login form (never stay stuck on the
+        // spinner).
+        if (!cancelled) setPhase('login');
       }
     })();
     return () => {
@@ -168,7 +180,15 @@ export default function SpeleoDbSpikeDialog() {
           </div>
         )}
 
-        {phase === 'login' ? (
+        {phase === 'checking' ? (
+          <div
+            data-testid="speleodb-checking"
+            className="flex flex-col items-center justify-center gap-2 py-10"
+          >
+            <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+            <span className="text-xs text-text-secondary">Checking session…</span>
+          </div>
+        ) : phase === 'login' ? (
           <>
             <p className="text-sm text-text-secondary">
               Dev spike (#183). Leave the endpoint blank to use <code>DEV_SPELEODB_URL</code>.
