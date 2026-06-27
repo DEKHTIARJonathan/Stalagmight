@@ -3325,6 +3325,7 @@ fn sample_speleo_link(base_commit_sha: Option<&str>, dirty: bool) -> SpeleoLink 
         project_name: "Test Cave".to_string(),
         base_commit_sha: base_commit_sha.map(str::to_owned),
         has_unpushed_edits: dirty,
+        last_edit_at: None,
     }
 }
 
@@ -3392,8 +3393,8 @@ fn speleo_link_clear_removes_row() {
 }
 
 #[test]
-fn init_schema_creates_speleo_link_v9() {
-    // A freshly-created file (open() → init_schema, no migrate chain) has the v9
+fn init_schema_creates_speleo_link_v10() {
+    // A freshly-created file (open() → init_schema, no migrate chain) has the v10
     // table immediately.
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("fresh.stalx");
@@ -3407,7 +3408,7 @@ fn init_schema_creates_speleo_link_v9() {
         )
         .unwrap();
     assert_eq!(exists, 1, "init_schema created speleo_link");
-    assert_eq!(db.get_user_version().unwrap(), 9, "stamped at v9");
+    assert_eq!(db.get_user_version().unwrap(), 10, "stamped at v10");
 }
 
 #[test]
@@ -3450,7 +3451,7 @@ fn migrate_creates_speleo_link_on_legacy_v8() {
         )
         .unwrap();
     assert_eq!(exists, 1, "migrate_schema recreated speleo_link");
-    assert_eq!(db.get_user_version().unwrap(), 9, "bumped to v9");
+    assert_eq!(db.get_user_version().unwrap(), 10, "bumped to v10");
 }
 
 #[test]
@@ -3598,6 +3599,112 @@ fn carry_forward_four_cell_typed_api() {
     assert!(!link.has_unpushed_edits);
 }
 
+// --- v10 last_edit_at ---
+
+#[test]
+fn last_edit_at_round_trips_and_survives_migration() {
+    // Typed Some + None round-trip through save/load, and the value is carried
+    // forward verbatim across a forced SCHEMA_VERSION migration (never reset).
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("last_edit_at.stalx");
+    let stamp = "2026-06-27T12:34:56+00:00".to_string();
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Edited".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&SpeleoLink {
+            endpoint: "http://x".to_string(),
+            project_id: "pid".to_string(),
+            project_name: "pname".to_string(),
+            base_commit_sha: Some("abc".to_string()),
+            has_unpushed_edits: true,
+            last_edit_at: Some(stamp.clone()),
+        }))
+        .unwrap();
+        db.set_user_version(8).unwrap(); // force migrate on next open
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let loaded = db.load_speleo_link().unwrap().unwrap();
+    assert_eq!(
+        loaded.last_edit_at.as_deref(),
+        Some(stamp.as_str()),
+        "last_edit_at survives migration verbatim"
+    );
+    assert!(loaded.has_unpushed_edits);
+
+    // None also round-trips and is SQL NULL on disk (never coerced to "").
+    db.save_speleo_link(Some(&SpeleoLink {
+        last_edit_at: None,
+        ..loaded
+    }))
+    .unwrap();
+    assert_eq!(db.load_speleo_link().unwrap().unwrap().last_edit_at, None);
+    let is_null: i64 = db
+        .conn
+        .query_row(
+            "SELECT last_edit_at IS NULL FROM speleo_link WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(is_null, 1, "last_edit_at None is SQL NULL, not ''");
+}
+
+#[test]
+fn migrate_v9_speleo_link_gains_last_edit_at_column() {
+    // A genuine v9-shaped speleo_link (no last_edit_at) gains the column via the
+    // v9→v10 ALTER on open_existing, with the existing row preserved (the new
+    // column defaults to NULL).
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("v9_speleo_link.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("V9".to_string(), None))
+            .unwrap();
+        // Re-create the table in its pre-v10 shape and stamp the version back.
+        db.conn.execute("DROP TABLE speleo_link", []).unwrap();
+        db.conn
+            .execute(
+                "CREATE TABLE speleo_link (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    endpoint TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    project_name TEXT NOT NULL,
+                    base_commit_sha TEXT,
+                    has_unpushed_edits INTEGER NOT NULL DEFAULT 0
+                )",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO speleo_link
+                    (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits)
+                 VALUES (1, 'http://x', 'pid', 'pname', 'abc', 1)",
+                [],
+            )
+            .unwrap();
+        db.set_user_version(9).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let has_col: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('speleo_link') WHERE name='last_edit_at'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_col, 1, "v9→v10 ALTER added last_edit_at");
+    let link = db.load_speleo_link().unwrap().unwrap();
+    assert_eq!(link.last_edit_at, None, "new column defaults to NULL");
+    assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
+    assert!(link.has_unpushed_edits, "existing row preserved");
+    assert_eq!(db.get_user_version().unwrap(), 10);
+}
+
 #[test]
 fn preserved_speleolink_columns_match_head_schema() {
     // Structural HEAD-schema guard: every (name, decl_type, notnull) in
@@ -3637,7 +3744,7 @@ fn speleo_link_survives_open_then_fast_path_reopen() {
     // First open_existing: already at HEAD, fast-path early return.
     {
         let db = Database::open_existing(&path).unwrap();
-        assert_eq!(db.get_user_version().unwrap(), 9);
+        assert_eq!(db.get_user_version().unwrap(), 10);
         assert!(db.load_speleo_link().unwrap().is_some());
     }
     // Second reopen: still intact, dirty bit preserved.

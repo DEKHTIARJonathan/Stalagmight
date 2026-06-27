@@ -290,10 +290,13 @@ impl AppState {
         )))
     }
 
-    /// Flip `has_unpushed_edits` `false → true` on a successful edit of a remote
-    /// project (#191, D-B16). Idempotent (no-op once true). No-op for local-only
-    /// (`load_speleo_link → None`). SET-ONLY in #191: local save/autosave NEVER
-    /// clears it; only a successful server push (later: Sync/Release) does.
+    /// Flip `has_unpushed_edits` `false → true` AND refresh `last_edit_at` on a
+    /// successful edit of a remote project (#191, D-B16; v10 last_edit_at). No-op
+    /// for local-only (`load_speleo_link → None`). The dirty bit is SET-ONLY in
+    /// #191 — local save/autosave NEVER clears it; only a successful server push
+    /// (Sync/Release) does. `last_edit_at` is refreshed on EVERY accepted
+    /// mutation (not idempotent) because guardrail-7 compares it to push-start to
+    /// decide whether a landed-by-ancestry push may clear the dirty bit.
     pub(super) fn mark_remote_dirty(&self) {
         let Ok(db_guard) = self.database.lock() else {
             return;
@@ -303,10 +306,11 @@ impl AppState {
         };
         match db.load_speleo_link() {
             Ok(Some(mut link)) => {
-                if link.has_unpushed_edits {
-                    return; // idempotent: already dirty
-                }
+                // Refresh last_edit_at every time (g7 push-start comparison), and
+                // set the dirty bit. We always re-save so a later edit's timestamp
+                // is recorded even when the bit was already true.
                 link.has_unpushed_edits = true;
+                link.last_edit_at = Some(chrono::Utc::now().to_rfc3339());
                 if let Err(e) = db.save_speleo_link(Some(&link)) {
                     tracing::warn!(
                         error = %e,

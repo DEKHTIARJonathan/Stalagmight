@@ -35,7 +35,12 @@ use std::path::Path;
 /// `open_existing`. `is_remote` is DERIVED from `EXISTS(speleo_link)`, never
 /// stored. See `PRESERVED_SPELEOLINK_COLUMNS` (the carry-forward fence) for the
 /// columns every future bump must preserve.
-const SCHEMA_VERSION: i32 = 9;
+///
+/// v10 adds the additive `speleo_link.last_edit_at` column (RFC-3339 UTC of the
+/// most recent accepted edit; #193 guardrail-7 push-start comparison). Added in
+/// BOTH `init_schema` and `migrate_schema` (a conditional `ALTER` for existing v9
+/// tables, mirroring the shot-uuid pattern); carried forward by the fence.
+const SCHEMA_VERSION: i32 = 10;
 
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///

@@ -553,6 +553,7 @@ impl AppState {
                     project_name,
                     base_commit_sha: latest_commit_sha,
                     has_unpushed_edits: false,
+                    last_edit_at: None, // freshly pulled: no local edits yet
                 };
                 if let Err(e) = db.save_speleo_link(Some(&link)) {
                     // Non-fatal: the pull succeeded and the file is openable; the

@@ -18734,6 +18734,7 @@ fn fixture_speleo_link() -> SpeleoLink {
         project_name: "Remote Cave".to_string(),
         base_commit_sha: Some("abc123".to_string()),
         has_unpushed_edits: false,
+        last_edit_at: None,
     }
 }
 

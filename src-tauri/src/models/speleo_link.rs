@@ -26,4 +26,12 @@ pub struct SpeleoLink {
     /// edit); cleared only by a later successful server push (Sync/Release),
     /// never by local save/autosave.
     pub has_unpushed_edits: bool,
+    /// RFC-3339 UTC timestamp of the most recent accepted edit on this linked
+    /// project (refreshed in `mark_remote_dirty`), or `None` if never edited
+    /// since pull. Persisted (schema v10) so the guardrail-7 ancestry recovery
+    /// can decide — across a crash/restart — whether a landed-by-ancestry push
+    /// may clear the dirty bit (only when `last_edit_at <= push-start`).
+    #[serde(default)]
+    #[ts(optional)]
+    pub last_edit_at: Option<String>,
 }
