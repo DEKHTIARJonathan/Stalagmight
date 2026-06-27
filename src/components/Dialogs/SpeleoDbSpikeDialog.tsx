@@ -5,10 +5,13 @@ import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type {
+  DoneResult,
   SpeleoLoginResult,
   SpeleoOpenResult,
   SpeleoProjectSummary,
   SpeleoSessionStatus,
+  StartEditingResult,
+  UpdateResult,
 } from '../../types/ipc.generated';
 
 /**
@@ -40,6 +43,9 @@ export default function SpeleoDbSpikeDialog() {
   const [keychainBacked, setKeychainBacked] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Dev sync trigger (#194/#197): the JSON outcome of the last sync action, shown
+  // so the backend hand-off can be driven + verified by hand. Throwaway (#204).
+  const [syncResult, setSyncResult] = useState<string | null>(null);
 
   const refreshProjects = async (isCancelled: () => boolean = () => false) => {
     const list = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
@@ -165,6 +171,29 @@ export default function SpeleoDbSpikeDialog() {
       setBusy(false);
     }
   };
+
+  // --- Dev sync trigger (#194/#197): act on the currently-open project ---
+  // These drive the single-writer hand-off by hand. Open a remote project first
+  // (the Open button closes this dialog), then reopen it to use these.
+  const runSync = async (label: string, op: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    setSyncResult(null);
+    try {
+      setSyncResult(`${label}: ${JSON.stringify(await op())}`);
+    } catch (e) {
+      setError(getErrorMessage(e, `${label} failed`));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleStartEditing = () =>
+    runSync('start_editing', () => invokeIpc<StartEditingResult>('speleodb_start_editing'));
+  const handleDone = () =>
+    runSync('done', () => invokeIpc<DoneResult>('speleodb_done', { message: null }));
+  const handleUpdate = () =>
+    runSync('update', () => invokeIpc<UpdateResult>('speleodb_update'));
 
   return (
     <DialogWrapper
@@ -306,6 +335,47 @@ export default function SpeleoDbSpikeDialog() {
                 ))}
               </ul>
             )}
+
+            <div
+              className="space-y-2 pt-4 border-t border-border"
+              data-testid="speleodb-sync-actions"
+            >
+              <p className="text-xs text-text-secondary">
+                Sync (dev) — acts on the currently-open project. Open a project (this
+                dialog closes), then reopen it and use these.
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => void handleStartEditing()}
+                  disabled={busy}
+                  data-testid="speleodb-start-editing-button"
+                >
+                  Start editing
+                </Button>
+                <Button
+                  onClick={() => void handleDone()}
+                  disabled={busy}
+                  data-testid="speleodb-done-button"
+                >
+                  Done
+                </Button>
+                <Button
+                  onClick={() => void handleUpdate()}
+                  disabled={busy}
+                  data-testid="speleodb-update-button"
+                >
+                  Update
+                </Button>
+              </div>
+              {syncResult && (
+                <pre
+                  className="text-xs text-text-secondary whitespace-pre-wrap break-all"
+                  data-testid="speleodb-sync-result"
+                >
+                  {syncResult}
+                </pre>
+              )}
+            </div>
 
             <div className="flex justify-end gap-2 pt-4 border-t border-border">
               <Button onClick={() => void handleRefresh()} disabled={busy}>
