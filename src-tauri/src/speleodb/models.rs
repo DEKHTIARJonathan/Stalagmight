@@ -247,8 +247,9 @@ pub struct SpeleoErrorDto {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        Permission, Project, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
-        SpeleoProjectSummary, SpeleoSessionStatus,
+        DoneResult, Permission, Project, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult,
+        SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult,
+        UpdateResult,
     };
 
     #[test]
@@ -290,8 +291,25 @@ mod tests {
             status: Some(401),
         })
         .expect("serialize error dto");
+        // The single-writer hand-off DTOs (#194/#197) must also never carry a token
+        // — serialize the field-bearing variants so a future field is caught.
+        let start = serde_json::to_string(&StartEditingResult::FastForwarded {
+            local_path: "/cache/project.stalx".to_owned(),
+        })
+        .expect("serialize start-editing result");
+        let locked = serde_json::to_string(&StartEditingResult::LockedBy {
+            email: Some("holder@example.com".to_owned()),
+        })
+        .expect("serialize locked-by result");
+        let done = serde_json::to_string(&DoneResult::Released).expect("serialize done result");
+        let update = serde_json::to_string(&UpdateResult::FastForwarded {
+            local_path: "/cache/project.stalx".to_owned(),
+        })
+        .expect("serialize update result");
 
-        for json in [&login, &status, &summary, &open, &error] {
+        for json in [
+            &login, &status, &summary, &open, &error, &start, &locked, &done, &update,
+        ] {
             assert!(
                 !json.to_ascii_lowercase().contains("token"),
                 "IPC DTO must not expose a token field: {json}"
