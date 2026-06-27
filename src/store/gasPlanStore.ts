@@ -31,6 +31,8 @@ function defaultCylinders(): Cylinder[] {
 interface GasPlanState {
   /** Penetration origin; `null` = the zero-datum entrance default. */
   origin: StationRef | null;
+  /** Chosen route endpoint (the lead being planned); `null` = the deepest in-budget point. */
+  endpoint: StationRef | null;
   diver: Diver;
   cylinders: Cylinder[];
   /** Working gas config; seeded from `Config.gas`, edited in-mode (units/speeds/reserve). */
@@ -43,6 +45,7 @@ interface GasPlanState {
   pushyAck: boolean;
 
   setOrigin: (origin: StationRef | null) => void;
+  setEndpoint: (endpoint: StationRef | null) => void;
   setDiver: (diver: Diver) => void;
   setCylinders: (cylinders: Cylinder[]) => void;
   setGasConfig: (gasConfig: GasConfig) => void;
@@ -54,9 +57,10 @@ interface GasPlanState {
 
 const initialState = (): Pick<
   GasPlanState,
-  'origin' | 'diver' | 'cylinders' | 'gasConfig' | 'reachField' | 'pushyAck'
+  'origin' | 'endpoint' | 'diver' | 'cylinders' | 'gasConfig' | 'reachField' | 'pushyAck'
 > => ({
   origin: null,
+  endpoint: null,
   diver: DEFAULT_DIVER,
   cylinders: defaultCylinders(),
   // Deep-clone so editing the working config (incl. nested reserve_profile / dpv) never
@@ -73,6 +77,7 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   // shown under the new inputs' legend while the refetch is in flight (mirrors
   // setDistanceGradientOrigin).
   setOrigin: (origin) => set({ origin, reachField: null }),
+  setEndpoint: (endpoint) => set({ endpoint, reachField: null }),
   setDiver: (diver) => set({ diver, reachField: null }),
   setCylinders: (cylinders) => set({ cylinders, reachField: null }),
   setGasConfig: (gasConfig) => set({ gasConfig, reachField: null }),

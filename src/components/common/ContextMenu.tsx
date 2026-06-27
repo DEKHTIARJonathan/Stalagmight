@@ -3,6 +3,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
+import { useGasPlanStore } from '../../store/gasPlanStore';
 import type { StationRef, SectionId, ShotId } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
@@ -527,18 +528,48 @@ export default function ContextMenu() {
     }
   };
 
-  // Read-only: disable every mutation item (all except read-only navigation like
-  // "Zoom to Section"). Both the closure-adjusted view AND Plan/Export are read-only —
-  // and Plan/Export can sit on geometryMode 'measured' (no-closures fallback), so the
-  // appMode check is load-bearing, not redundant. Edits are made in the survey view.
-  const geometryReadOnly = geometryMode === 'closureAdjusted' || appMode !== 'survey';
-  const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Section']);
-  const items = buildMenuItems().map((item) => {
-    const withIcon = item.separator ? item : { ...item, icon: iconForLabel(item.label) };
-    return geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)
-      ? { ...withIcon, disabled: true }
-      : withIcon;
-  });
+  // Plan / Export are READ-ONLY: the survey mutation menu must not appear at all (not merely
+  // disabled). In Plan, a right-clicked station instead offers the gas route picks; everything
+  // else (Export, or a non-station target in Plan) gets no menu. Survey keeps the full menu, with
+  // the closure-adjusted (read-only) view disabling mutations as before.
+  let items: ContextMenuItem[];
+  if (appMode !== 'survey') {
+    items =
+      appMode === 'plan' && target?.type === 'station'
+        ? (() => {
+            const ref = target.ref;
+            return [
+              {
+                label: 'Set as origin',
+                action: () => {
+                  useGasPlanStore.getState().setOrigin(ref);
+                  closeDialog();
+                },
+                icon: iconForLabel('Set as origin'),
+              },
+              {
+                label: 'Set as endpoint',
+                action: () => {
+                  useGasPlanStore.getState().setEndpoint(ref);
+                  closeDialog();
+                },
+                icon: iconForLabel('Set as endpoint'),
+              },
+            ];
+          })()
+        : [];
+  } else {
+    // Survey view: closure-adjusted geometry is read-only — disable mutations (all except
+    // read-only navigation like "Zoom to Section"). Edits are made on the measured view.
+    const geometryReadOnly = geometryMode === 'closureAdjusted';
+    const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Section']);
+    items = buildMenuItems().map((item) => {
+      const withIcon = item.separator ? item : { ...item, icon: iconForLabel(item.label) };
+      return geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)
+        ? { ...withIcon, disabled: true }
+        : withIcon;
+    });
+  }
 
   if (!target || !position || items.length === 0) {
     return null;

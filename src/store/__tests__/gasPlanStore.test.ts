@@ -10,9 +10,10 @@ const fakeField = (): GasReachField => ({
   turn_frontier: [],
   max_reachable_gas: 0,
   budget_litres: 0,
-  route_refs: [],
   stage_drop_refs: [],
   final_turn_ref: null,
+  backgas_turn_bar: null,
+  stage_drop_bars: [],
 });
 
 describe('gasPlanStore', () => {
@@ -36,6 +37,7 @@ describe('gasPlanStore', () => {
 
   it.each([
     ['setOrigin', () => useGasPlanStore.getState().setOrigin({ section_id: 1, station_index: 0 })],
+    ['setEndpoint', () => useGasPlanStore.getState().setEndpoint({ section_id: 1, station_index: 2 })],
     ['setDiver', () => useGasPlanStore.getState().setDiver({ rmv_l_per_min: 18, label: null })],
     ['setCylinders', () => useGasPlanStore.getState().setCylinders([])],
     ['setGasConfig', () => useGasPlanStore.getState().setGasConfig({ ...defaultConfig.gas })],
@@ -55,6 +57,14 @@ describe('gasPlanStore', () => {
     expect(s.reachField).toBeNull();
     expect(s.origin).toBeNull();
     expect(s.cylinders).toHaveLength(2);
+  });
+
+  it('endpoint defaults null and is cleared by reset (no leak across plan sessions)', () => {
+    expect(useGasPlanStore.getState().endpoint).toBeNull();
+    useGasPlanStore.getState().setEndpoint({ section_id: 2, station_index: 4 });
+    expect(useGasPlanStore.getState().endpoint).toEqual({ section_id: 2, station_index: 4 });
+    useGasPlanStore.getState().reset();
+    expect(useGasPlanStore.getState().endpoint).toBeNull();
   });
 
   it('pushyAck defaults false and is cleared by reset (re-prompt each Plan session)', () => {

@@ -230,6 +230,49 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toBeVisible();
   });
 
+  test('Plan right-click offers gas route picks, not the survey menu; Set as endpoint stores it @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+
+    // Open the station context menu programmatically (the right-click hit-test itself is covered by
+    // survey-mode specs). In Plan it must REPLACE the survey mutation menu with the gas route picks.
+    await page.evaluate(() => {
+      const e2e = (
+        window as unknown as {
+          __E2E_TEST__: {
+            projectStore: { getState: () => { project: { sections: Array<{ id: number }> } } };
+            uiStore: { getState: () => { openDialog: (d: string, data: unknown) => void } };
+          };
+        }
+      ).__E2E_TEST__;
+      const sec = e2e.projectStore.getState().project.sections[0];
+      e2e.uiStore.getState().openDialog('context-menu', {
+        target: { type: 'station', ref: { section_id: sec.id, station_index: 1 } },
+        position: { x: 220, y: 220 },
+      });
+    });
+
+    await expect(page.getByText('Set as endpoint')).toBeVisible();
+    await expect(page.getByText('Set as origin')).toBeVisible();
+    // The survey mutation menu must NOT appear (the read-only bug): no "Edit Station".
+    await expect(page.getByText('Edit Station')).toHaveCount(0);
+
+    // Picking the endpoint stores it in the gas plan store and closes the menu.
+    await page.getByText('Set as endpoint').click();
+    await expect(page.getByText('Set as endpoint')).toHaveCount(0);
+    const endpoint = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __E2E_TEST__: { gasPlanStore: { getState: () => { endpoint: unknown } } };
+          }
+        ).__E2E_TEST__.gasPlanStore.getState().endpoint,
+    );
+    expect(endpoint).not.toBeNull();
+  });
+
   test('carousel switches Survey/Plan/Export; Plan is read-only; Export is a stub @smoke', async ({
     page,
   }) => {

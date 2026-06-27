@@ -14,7 +14,7 @@ import {
   rmvToDisplay,
 } from '../../utils/formatGas';
 import { PositiveNumberField } from '../common/PositiveNumberField';
-import type { Cylinder, GasUnits, ReservePreset } from '../../types/ipc.generated';
+import type { GasUnits, ReservePreset } from '../../types/ipc.generated';
 
 const RESERVE_PRESETS: readonly ReservePreset[] = ['all_thirds', 'one_stage', 'two_stage'];
 const UNIT_OPTIONS: readonly GasUnits[] = ['metric', 'imperial'];
@@ -26,36 +26,6 @@ const REQUIRED_STAGES: Record<ReservePreset, number> = {
   one_stage: 1,
   two_stage: 2,
 };
-
-/** Fraction of usable back gas spent on the way in, per strategy (PRD §5.1): thirds for
- *  All-thirds, quarters with one stage, sixths with two (the stages carry the penetration). */
-const BACKGAS_FRAC: Record<ReservePreset, number> = {
-  all_thirds: 1 / 3,
-  one_stage: 1 / 4,
-  two_stage: 1 / 6,
-};
-
-/**
- * Back-gas turn pressure (bar): the gauge a diver watches on the way in — the volume-weighted
- * average back-gas start gauge scaled by `1 − frac` (turn when `frac` of the back gas is used).
- * Back gas is treated as one matched unit (a common gauge). `null` when the rig has no back gas.
- */
-export function backgasTurnPressureBar(cylinders: Cylinder[], frac: number): number | null {
-  const back = cylinders.filter((c) => c.role === 'back_gas');
-  const sumVol = back.reduce((s, c) => s + c.water_volume_l, 0);
-  if (sumVol <= 0) return null;
-  const avgStart = back.reduce((s, c) => s + c.fill_bar * c.water_volume_l, 0) / sumVol;
-  return Math.max(0, avgStart * (1 - frac));
-}
-
-/**
- * Half-Minus stage drop pressure (bar): a stage is breathed from `fill` down to `(fill +
- * reserve)/2` going in (then the other half back to `reserve` on the picked-up exit). Mirrors the
- * Rust `stage_in_gas` drop point. Clamped to `fill` so a reserve above the fill never reads high.
- */
-export function stageDropPressureBar(fillBar: number, reserveBar: number): number {
-  return Math.min(fillBar, 0.5 * (fillBar + Math.max(0, reserveBar)));
-}
 
 /**
  * Gas & route-planning setup sidebar (#38). The right Dock slot while in Plan mode:
@@ -122,16 +92,14 @@ export function GasPlanPanel() {
   const strategy = gasConfig.default_reserve;
   const isStaged = strategy === 'one_stage' || strategy === 'two_stage';
   const reserveBar = gasConfig.reserve_profile.stage_reserve_bar;
-  const stages = cylinders.filter((c) => c.role === 'stage');
 
   // Three non-additive gauges, each relative to its own cylinder's start (back gas = one unit).
-  const backgasTurn = backgasTurnPressureBar(cylinders, BACKGAS_FRAC[strategy]);
-  const stage1Drop =
-    isStaged && stages[0] ? stageDropPressureBar(stages[0].fill_bar, reserveBar) : null;
-  const stage2Drop =
-    strategy === 'two_stage' && stages[1]
-      ? stageDropPressureBar(stages[1].fill_bar, reserveBar)
-      : null;
+  // They come from the BACKEND (single source of truth): it already applies the conservative cap,
+  // the normalized reserve, and the stage-count fallback, so the panel can't drift from the
+  // reachable overlay. `stage_drop_bars` has one entry per counted stage of the effective strategy.
+  const backgasTurn = reachField ? reachField.backgas_turn_bar : null;
+  const stage1Drop = reachField?.stage_drop_bars[0] ?? null;
+  const stage2Drop = reachField?.stage_drop_bars[1] ?? null;
 
   // Selecting a staged strategy routes through an inline advanced acknowledgment the first time
   // per session; All-thirds and an already-acked strategy apply immediately.

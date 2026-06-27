@@ -442,6 +442,7 @@ function MapCanvas() {
   // diver/cylinders/config doesn't re-render via the big uiStore subscription.
   const {
     origin: gasOrigin,
+    endpoint: gasEndpoint,
     diver: gasDiver,
     cylinders: gasCylinders,
     gasConfig: gasPlanConfig,
@@ -451,6 +452,7 @@ function MapCanvas() {
   } = useGasPlanStore(
     useShallow((s) => ({
       origin: s.origin,
+      endpoint: s.endpoint,
       diver: s.diver,
       cylinders: s.cylinders,
       gasConfig: s.gasConfig,
@@ -1908,6 +1910,7 @@ function MapCanvas() {
       'compute_gas_reach_field',
       {
         origin: gasOrigin ?? null,
+        endpoint: gasEndpoint ?? null,
         diver: gasDiver,
         cylinders: gasCylinders,
         gasConfig: gasPlanConfig,
@@ -1917,7 +1920,7 @@ function MapCanvas() {
       .then((field) => { if (!cancelled) setGasReachField(field); })
       .catch((e) => console.warn('[gas-plan] field fetch failed', e));
     return () => { cancelled = true; };
-  }, [showGasPlan, gasOrigin, gasDiver, gasCylinders, gasPlanConfig, project?.modified_at, setGasReachField]);
+  }, [showGasPlan, gasOrigin, gasEndpoint, gasDiver, gasCylinders, gasPlanConfig, project?.modified_at, setGasReachField]);
 
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
