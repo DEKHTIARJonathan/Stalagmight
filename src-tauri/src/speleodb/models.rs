@@ -45,6 +45,37 @@ pub(crate) struct Commit {
     pub(crate) id: String,
 }
 
+/// One commit in a project's **linear** revision history
+/// (`GET /api/v2/projects/{id}/revisions/`). Only the fields the ancestry
+/// classifier (#193) needs are modelled — the server also sends `author_name`,
+/// `authored_date`, and `message`, which serde ignores.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct RevisionCommit {
+    /// 40-hex git commit SHA.
+    pub(crate) id: String,
+    /// Parent SHAs. Empty for the root commit; exactly one for a linear commit;
+    /// more than one only for a merge (which the classifier treats as
+    /// non-linear → fail closed).
+    #[serde(default)]
+    pub(crate) parent_ids: Vec<String>,
+    /// Commit author's email — compared against our own to tell "my push
+    /// landed" from "someone else pushed".
+    #[serde(default)]
+    pub(crate) author_email: String,
+}
+
+/// Response of `GET /api/v2/projects/{id}/revisions/` — the project's linear
+/// commit list. The sibling `project` object the server also returns is ignored.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct RevisionHistory {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "revisions consumer is #194/#197 (Unit 4/6)")
+    )]
+    #[serde(default)]
+    pub(crate) commits: Vec<RevisionCommit>,
+}
+
 /// The active lock ("mutex") on a project, when one is held.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ActiveMutex {

@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use super::models::Project;
+use super::models::{Project, RevisionHistory};
 use super::SpeleoDbError;
 
 /// Global per-request timeout for reads. Larger than the tile timeout because a
@@ -251,6 +251,36 @@ pub(crate) fn get_project(
     // FRESHNESS FOLD (#189/#191): authoritative Project available here; cache +
     // reset last_verify_at lands later (D-B1, #202).
     serde_json::from_slice(&body).map_err(|e| SpeleoDbError::Parse(format!("project detail: {e}")))
+}
+
+/// `GET /api/v2/projects/{id}/revisions/` — the project's linear commit history
+/// (#193). Used by guardrail-7 ancestry recovery to decide, after a push whose
+/// confirmation was lost, whether our edit actually landed on the server. The
+/// caller validates `project_id` (UUID) first. A GET, so it is retry-safe.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "ancestry-recovery caller is #194/#197 (Unit 4/6)")
+)]
+pub(crate) fn get_revisions(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+) -> Result<RevisionHistory, SpeleoDbError> {
+    let url = api_url(base, &format!("projects/{project_id}/revisions/"));
+    let auth = bearer(token);
+
+    let (status, body) = with_retry(base, insecure_http, true, || {
+        let resp = agent()
+            .get(&url)
+            .header("Authorization", auth.as_str())
+            .call()?;
+        read_status_body(resp)
+    })?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    serde_json::from_slice(&body).map_err(|e| SpeleoDbError::Parse(format!("revisions: {e}")))
 }
 
 /// The authenticated user's profile (`GET /api/v2/user/`), parsed to the one
