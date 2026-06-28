@@ -11,7 +11,7 @@
 // Run: node scripts/check-private-leaks.test.mjs  (also a CI leak-scan step).
 
 import assert from 'node:assert/strict';
-import { findLeaks, isExcluded, isAttributionFile, RULES } from './check-private-leaks.mjs';
+import { findLeaks, isExcluded, isAttributionFile, RULES, gateFails } from './check-private-leaks.mjs';
 
 let passed = 0;
 const failures = [];
@@ -164,6 +164,16 @@ test('isExcluded does NOT skip text formats that can carry a leak', () => {
   assert.ok(!isExcluded('Makefile')); // extensionless — scanned
   assert.ok(!isExcluded('src/store/uiStore.ts'));
   assert.ok(!isExcluded('docs/roadmap.md'));
+});
+
+// --- fail closed on an unscannable file (Copilot review, #232) ----------------
+
+test('gateFails: clean only with zero violations AND zero skips', () => {
+  assert.equal(gateFails([], []), false);
+  // An unscanned (oversized/unreadable) file fails the gate even with no markers —
+  // else a marker could be smuggled inside a file the scanner declines to read.
+  assert.equal(gateFails([], [{ rel: 'big.md', reason: '9.0 MB > 5 MB cap' }]), true);
+  assert.equal(gateFails([{ ruleId: 'maintainer-name' }], []), true);
 });
 
 // --- rule hygiene -------------------------------------------------------------

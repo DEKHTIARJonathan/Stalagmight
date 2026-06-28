@@ -40,8 +40,10 @@
 //     paths like `~/personaldocs/x`); they are distinctive enough that this is
 //     safe.
 //   - It matches literal markers, so a novel paraphrase ("the maintainer in
-//     Prague") slips; it skips binary + oversized files and the vendored crate;
-//     and it cannot judge intent.
+//     Prague") slips; it skips binary files and the vendored crate; and it cannot
+//     judge intent. A file it CANNOT read, or that exceeds the size cap, is NOT a
+//     silent skip — it FAILS the gate (fail-closed), so a marker can't be smuggled
+//     past the scan inside a file the scanner declines to read (#232, Copilot).
 // Block on a hit; allow-list a verified-benign match with a written reason.
 //
 // Usage:  node scripts/check-private-leaks.mjs   (or: pnpm lint:private-leaks)
@@ -179,6 +181,14 @@ function isAllowed(rel, ruleId) {
   return ALLOW.some((a) => a.file === rel && a.ruleId === ruleId);
 }
 
+// The gate fails if any marker fired OR any tracked file could not be scanned. A
+// skip (oversized/unreadable) is a FAILURE, not a warning — otherwise a marker
+// could be smuggled past the scan inside a file the scanner declines to read
+// (Copilot review on #232).
+export function gateFails(violations, skipped) {
+  return violations.length > 0 || skipped.length > 0;
+}
+
 function gitTrackedFiles() {
   const out = execFileSync('git', ['ls-files', '-z'], {
     cwd: REPO_ROOT,
@@ -203,7 +213,7 @@ function main() {
   }
 
   const violations = [];
-  const skipped = []; // {rel, reason} — surfaced so a silent coverage loss is visible
+  const skipped = []; // {rel, reason} — oversized/unreadable; each FAILS the gate (fail-closed, #232)
   let scanned = 0;
   for (const rel of files.sort()) {
     if (isExcluded(rel)) continue;
@@ -229,28 +239,27 @@ function main() {
     }
   }
 
-  // Surface skipped (unreadable/oversized) files: not fatal on their own, but a
-  // reviewer must know coverage was incomplete rather than read a clean ✓.
-  for (const s of skipped) console.warn(`  ⚠ skipped ${s.rel} — ${s.reason} (NOT scanned)`);
-
-  if (violations.length === 0) {
-    console.log(
-      `✓ private-leak scan: ${scanned} tracked text files, no internal/personal references.`
-      + (skipped.length ? ` (${skipped.length} file(s) skipped — see warnings above)` : ''),
-    );
+  if (!gateFails(violations, skipped)) {
+    console.log(`✓ private-leak scan: ${scanned} tracked text files, no internal/personal references.`);
     return 0;
   }
 
-  console.error(`\n✗ private-leak scan failed — ${violations.length} reference(s) that should not be public:\n`);
+  console.error('\n✗ private-leak scan failed:\n');
   for (const v of violations) {
     // Print the MARKER and location only — never the surrounding line (a public CI
     // log on a public repo must not echo a secret that sits beside the marker).
     console.error(`  [${v.ruleId}] ${v.rel}:${v.lineNo}  (matched "${v.match}")`);
     console.error(`      ${v.why}\n`);
   }
+  // Fail closed on a skip: a file the scanner can't read (or that exceeds the size
+  // cap) must not pass as clean — else a marker could be smuggled inside it (#232).
+  for (const s of skipped) {
+    console.error(`  [unscanned] ${s.rel} — ${s.reason}`);
+    console.error('      could not scan this file; failing closed (shrink it, or exclude it deliberately).\n');
+  }
   console.error(
-    'Remove the reference (move it to the maintainer-only private repo), rephrase it\n' +
-      'role-neutrally, or — if it is genuinely benign — add an ALLOW row with a reason in\n' +
+    'Remove the reference (move it to the maintainer-only private repo) or shrink/exclude\n' +
+      'the unscanned file. If a match is genuinely benign, add an ALLOW row with a reason in\n' +
       'scripts/check-private-leaks.mjs. See the file header for the rationale.\n',
   );
   return 1;
