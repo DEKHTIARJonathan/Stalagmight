@@ -62,6 +62,8 @@ All must pass before pushing:
 ```bash
 pnpm tsc --noEmit
 pnpm test:ui
+pnpm lint:rust-file-size                                  # file-size ratchet (CI check-job gate)
+pnpm lint:private-leaks                                   # no internal/personal refs in the public tree (CI leak-scan gate)
 cargo fmt --manifest-path src-tauri/Cargo.toml --check   # exactly what CI's check job runs (run without --check to fix)
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets   # deny-level lint gate
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
