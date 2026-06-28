@@ -291,6 +291,20 @@ impl Database {
         if !has_last_edit_at_column {
             self.conn
                 .execute("ALTER TABLE speleo_link ADD COLUMN last_edit_at TEXT", [])?;
+            // Backfill (#197 review): a row already dirtied under v9 has
+            // has_unpushed_edits=1 but no last_edit_at. Without a timestamp,
+            // edits_captured_by_push(None, push_start) is false, so a confirmed push
+            // could NEVER clear that legacy dirty bit — the project would show
+            // un-pushed edits forever and re-push a no-op on every Done. The edit
+            // demonstrably predates any future push, so stamp the Unix epoch
+            // (guaranteed <= any push-start) and let the next confirmed push clear it.
+            // Fresh v10 rows stamp last_edit_at at edit time, so this only ever
+            // touches a pre-existing dirty row during the one-time v9→v10 migration.
+            self.conn.execute(
+                "UPDATE speleo_link SET last_edit_at = '1970-01-01T00:00:00+00:00' \
+                 WHERE has_unpushed_edits = 1 AND last_edit_at IS NULL",
+                [],
+            )?;
             tracing::info!("Added last_edit_at column to speleo_link table (schema v10)");
         }
 

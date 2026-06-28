@@ -3652,10 +3652,12 @@ fn last_edit_at_round_trips_and_survives_migration() {
 }
 
 #[test]
-fn migrate_v9_speleo_link_gains_last_edit_at_column() {
+fn migrate_v9_dirty_speleo_link_backfills_last_edit_at() {
     // A genuine v9-shaped speleo_link (no last_edit_at) gains the column via the
-    // v9→v10 ALTER on open_existing, with the existing row preserved (the new
-    // column defaults to NULL).
+    // v9→v10 ALTER on open_existing. A row that was already DIRTY under v9
+    // (has_unpushed_edits=1) is backfilled to the epoch so a later confirmed push
+    // can clear it — WITHOUT the backfill, edits_captured_by_push(None, push_start)
+    // is false and the dirty bit would stick forever (#197 review).
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("v9_speleo_link.stalx");
     {
@@ -3699,10 +3701,59 @@ fn migrate_v9_speleo_link_gains_last_edit_at_column() {
         .unwrap();
     assert_eq!(has_col, 1, "v9→v10 ALTER added last_edit_at");
     let link = db.load_speleo_link().unwrap().unwrap();
-    assert_eq!(link.last_edit_at, None, "new column defaults to NULL");
+    assert_eq!(
+        link.last_edit_at.as_deref(),
+        Some("1970-01-01T00:00:00+00:00"),
+        "a dirty v9 row is backfilled to the epoch so a confirmed push can clear it"
+    );
     assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
     assert!(link.has_unpushed_edits, "existing row preserved");
     assert_eq!(db.get_user_version().unwrap(), 10);
+}
+
+#[test]
+fn migrate_v9_clean_speleo_link_keeps_null_last_edit_at() {
+    // The v9→v10 backfill only touches DIRTY rows. A clean v9 row
+    // (has_unpushed_edits=0) keeps last_edit_at NULL — there is no un-pushed edit to
+    // preserve, and a fresh edit will stamp it at edit time.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("v9_clean.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("V9c".to_string(), None))
+            .unwrap();
+        db.conn.execute("DROP TABLE speleo_link", []).unwrap();
+        db.conn
+            .execute(
+                "CREATE TABLE speleo_link (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    endpoint TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    project_name TEXT NOT NULL,
+                    base_commit_sha TEXT,
+                    has_unpushed_edits INTEGER NOT NULL DEFAULT 0
+                )",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO speleo_link
+                    (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits)
+                 VALUES (1, 'http://x', 'pid', 'pname', 'abc', 0)",
+                [],
+            )
+            .unwrap();
+        db.set_user_version(9).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let link = db.load_speleo_link().unwrap().unwrap();
+    assert_eq!(
+        link.last_edit_at, None,
+        "a clean v9 row keeps last_edit_at NULL (only dirty rows are backfilled)"
+    );
+    assert!(!link.has_unpushed_edits, "clean row stays clean");
 }
 
 #[test]

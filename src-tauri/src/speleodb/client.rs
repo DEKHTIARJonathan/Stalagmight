@@ -470,15 +470,29 @@ pub(crate) fn upload_auto(
     // (the service-account root creation commit) immediately after a push — so we
     // adopt `hexsha`, not the nested pointer, and overwrite `latest_commit` with
     // it so every caller's `latest_commit.id` is the commit just created (#197).
+    parse_upload_auto_response(&body)
+}
+
+/// Parse the `upload/auto/` success envelope into the adopted [`Project`]. The
+/// top-level `hexsha` is the SHA of the commit THIS push created; prefer it and
+/// overwrite `latest_commit` so callers adopt the right BASE. If a deployment
+/// omits the top-level `hexsha`, fall back to the nested `project.latest_commit`
+/// rather than failing an ACCEPTED (200) push as a Parse/Fatal error — that would
+/// strand the dirty bit forever (#197 review); a slightly-stale BASE self-heals via
+/// the ancestry fence on the next Sync.
+fn parse_upload_auto_response(body: &[u8]) -> Result<Project, SpeleoDbError> {
     #[derive(serde::Deserialize)]
     struct UploadAutoResponse {
-        hexsha: String,
+        #[serde(default)]
+        hexsha: Option<String>,
         project: Project,
     }
-    let parsed: UploadAutoResponse = serde_json::from_slice(&body)
+    let parsed: UploadAutoResponse = serde_json::from_slice(body)
         .map_err(|e| SpeleoDbError::Parse(format!("upload auto response: {e}")))?;
     let mut project = parsed.project;
-    project.latest_commit = Some(Commit { id: parsed.hexsha });
+    if let Some(hexsha) = parsed.hexsha.filter(|h| !h.is_empty()) {
+        project.latest_commit = Some(Commit { id: hexsha });
+    }
     Ok(project)
 }
 
@@ -651,9 +665,44 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        api_url, bearer, build_upload_parts, mime_for, parse_error_message, with_retry, UserInfo,
+        api_url, bearer, build_upload_parts, mime_for, parse_error_message,
+        parse_upload_auto_response, with_retry, UserInfo,
     };
     use crate::speleodb::SpeleoDbError;
+
+    #[test]
+    fn upload_auto_response_prefers_hexsha_then_falls_back_to_nested() {
+        // #197 review: a top-level hexsha is the commit THIS push created → adopt it.
+        // But a 200 envelope WITHOUT a top-level hexsha must NOT fail as Parse/Fatal
+        // (which would strand the dirty bit) — fall back to the nested latest_commit.
+        let proj = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Up","latest_commit":{"id":"nested-prior"}}"#;
+
+        let with = format!("{{\"hexsha\":\"top-new\",\"project\":{proj}}}");
+        let adopted = parse_upload_auto_response(with.as_bytes()).expect("parse with hexsha");
+        assert_eq!(
+            adopted.latest_commit.as_ref().map(|c| c.id.as_str()),
+            Some("top-new"),
+            "a present top-level hexsha is adopted as the new BASE"
+        );
+
+        let without = format!("{{\"project\":{proj}}}");
+        let fallback =
+            parse_upload_auto_response(without.as_bytes()).expect("missing hexsha must not error");
+        assert_eq!(
+            fallback.latest_commit.as_ref().map(|c| c.id.as_str()),
+            Some("nested-prior"),
+            "a 200 lacking hexsha falls back to the nested latest_commit, not a Parse error"
+        );
+
+        // An empty-string hexsha is treated as absent (same fallback).
+        let empty = format!("{{\"hexsha\":\"\",\"project\":{proj}}}");
+        let empty_fb =
+            parse_upload_auto_response(empty.as_bytes()).expect("empty hexsha must not error");
+        assert_eq!(
+            empty_fb.latest_commit.as_ref().map(|c| c.id.as_str()),
+            Some("nested-prior")
+        );
+    }
 
     #[test]
     fn user_info_parses_email_and_ignores_extra_fields() {
