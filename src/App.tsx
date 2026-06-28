@@ -478,6 +478,22 @@ function App() {
         <SingleSystemView />
       )}
 
+      {/* Dev-only entry to the SpeleoDB sync spike (#197) while a project is
+          OPEN — the GlobalView trigger is hidden in the project view, but the
+          Start editing / Done / Update actions operate on the open project.
+          Throwaway; removed when the #204 action shell lands. */}
+      {import.meta.env.DEV && project && (
+        <button
+          type="button"
+          onClick={() => openDialog('speleodb-spike')}
+          className="fixed bottom-2 left-2 z-50 rounded bg-panel px-2 py-1 text-xs text-text-secondary shadow-lg hover:opacity-80"
+          data-testid="speleodb-spike-button-project"
+          title="SpeleoDB sync (spike) — Start editing / Done / Update on the open project"
+        >
+          SpeleoDB (spike)
+        </button>
+      )}
+
       <MemoryProbe />
 
       {/* Dialogs */}

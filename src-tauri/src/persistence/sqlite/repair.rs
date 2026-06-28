@@ -45,20 +45,21 @@ impl Database {
         Ok(())
     }
 
-    /// Sanitize a push SNAPSHOT in place (#197) so the `.stalx` uploaded to the
-    /// server carries only shared survey data + project config — never local,
-    /// per-machine, per-session, or advisory state:
+    /// Sanitize a push SNAPSHOT in place (#197) before upload:
     ///
-    /// - clears `speleo_link.has_unpushed_edits` / `last_edit_at` (the dirty bit
-    ///   must not ride to the server; the next puller re-stamps it anyway);
-    /// - empties `display_settings` (per-machine view toggles), the
-    ///   `imported_file_hashes` / `imported_section_hashes` import-dedup bookkeeping
-    ///   (re-derived locally), and `resolved_warnings` (advisory; a read-only
-    ///   viewer can resolve warnings without the edit lock, and those resolutions
-    ///   must not propagate to collaborators — see #197 / the carry-forward note).
+    /// - clears `speleo_link.has_unpushed_edits` / `last_edit_at` — the dirty bit is
+    ///   local hand-off state, never server state (the next puller re-stamps it);
+    /// - empties `display_settings` — per-machine VIEW toggles (grid, layer/feature
+    ///   visibility, color mode, grid spacing); a collaborator pulls their own/default
+    ///   view rather than inheriting the last editor's.
     ///
-    /// `project_settings` is deliberately KEPT: it is the shared validation config
-    /// (#57), is edit-gated, and is meant to travel with the project.
+    /// Everything else PROLIFERATES with the project, by design: survey data,
+    /// `project_settings` (shared validation config #57), AND the durable
+    /// project-data tables `imported_file_hashes` / `imported_section_hashes`
+    /// (project-wide import-dedup — collaborators must not re-import the same file)
+    /// and `resolved_warnings` (a resolved warning stays resolved for everyone, like
+    /// a comment). These are NOT stripped — only a writer holding the lock can push,
+    /// so anything in the snapshot is a legitimate editor's change.
     ///
     /// Operates on a SNAPSHOT copy via its own connection; the live project file is
     /// never touched. Statements run independently so a missing table (an older
@@ -71,20 +72,12 @@ impl Database {
             [],
         )
         .context("clear dirty bit in push snapshot")?;
-        // Local / advisory tables stripped so they don't carry forward to the server.
-        for table in [
-            "display_settings",
-            "imported_file_hashes",
-            "imported_section_hashes",
-            "resolved_warnings",
-        ] {
-            if let Err(e) = conn.execute(&format!("DELETE FROM {table}"), []) {
-                tracing::warn!(
-                    error = %e,
-                    table,
-                    "sanitize_push_snapshot: failed to strip local table from snapshot"
-                );
-            }
+        // Per-machine view toggles don't carry forward; everything else proliferates.
+        if let Err(e) = conn.execute("DELETE FROM display_settings", []) {
+            tracing::warn!(
+                error = %e,
+                "sanitize_push_snapshot: failed to strip display_settings from snapshot"
+            );
         }
         Ok(())
     }

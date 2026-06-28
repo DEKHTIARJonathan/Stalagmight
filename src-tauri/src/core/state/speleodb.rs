@@ -219,10 +219,11 @@ enum PushOutcome {
     Unconfirmed,
 }
 
-/// Sanitize a push SNAPSHOT copy before upload: clear the dirty bit and strip
-/// local / per-machine / advisory tables so only shared survey data + project
-/// config ride to the server (#197). Best-effort — a failure only means the
-/// pushed file keeps some local state, which the next puller re-derives anyway.
+/// Sanitize a push SNAPSHOT copy before upload: clear the dirty bit and strip the
+/// per-machine view toggles (`display_settings`) so they don't ride to the server
+/// (#197). All durable project data — survey, config, import-dedup,
+/// resolved-warnings — proliferates with the project. Best-effort — a failure only
+/// means the pushed file keeps a stale dirty bit, which the next puller re-stamps.
 /// See [`crate::persistence::Database::sanitize_push_snapshot`] for the exact set.
 fn clear_snapshot_dirty(snapshot: &Path) {
     if let Err(e) = crate::persistence::Database::sanitize_push_snapshot(snapshot) {
