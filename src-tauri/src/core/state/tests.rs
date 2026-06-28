@@ -18861,6 +18861,31 @@ fn logout_leaves_local_project_editable() {
     );
 }
 
+#[test]
+fn done_without_edit_session_is_noop_not_a_release() {
+    // #197 review: Done on a remote project opened READ-ONLY (never Started editing →
+    // edit_enabled false, no lock held this session) must NOT POST /release/ for a
+    // mutex it never acquired. It short-circuits to Released with no server call — the
+    // offline fixture has no live endpoint, so reaching active_token/release would
+    // error; the Ok(Released) proves the guard fired before any network work.
+    let (state, _sid, _shid, _temp) = remote_fixture();
+    assert!(
+        !state.edit_enabled(),
+        "precondition: remote read-only, no lock held"
+    );
+    let done = state
+        .speleodb_done(None)
+        .expect("non-dirty no-session Done is a no-op, not an error");
+    assert!(
+        matches!(done, crate::speleodb::models::DoneResult::Released),
+        "Done without an edit session reports Released (already read-only), got {done:?}"
+    );
+    assert!(
+        !state.edit_enabled(),
+        "still read-only after the no-op Done"
+    );
+}
+
 /// The chokepoint enumeration tripwire (D-B6): every SURVEY-CONTENT mutation entry
 /// listed in MUTATION_ENTRYPOINTS must reject on a read-only remote project with the
 /// EDIT_DISABLED code (or, for repair, changed == false).

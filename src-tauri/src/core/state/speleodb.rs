@@ -406,7 +406,15 @@ impl AppState {
     /// auto-drop sink; `Session::forget` is left untouched so the login
     /// switch-account path does not spuriously close the gate.)
     fn speleodb_forget(&self) {
-        self.set_edit_enabled(false);
+        // Drop the transient edit gate ONLY for a remote edit session. A dead token
+        // surfaces as a 401 on ANY SpeleoDB call (e.g. a background list_projects /
+        // refresh), and this is the auto-drop sink for all of them — so an
+        // unconditional drop would silently turn an open LOCAL project read-only.
+        // speleodb_open_link is Ok only when a remote hand-off link is open; mirror
+        // speleodb_logout's remote-gated drop.
+        if self.edit_enabled() && self.speleodb_open_link().is_ok() {
+            self.set_edit_enabled(false);
+        }
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.forget();
         }
@@ -1041,6 +1049,17 @@ impl AppState {
     ) -> Result<DoneResult, SpeleoErrorDto> {
         let link = self.speleodb_open_link().map_err(local_dto)?;
         validate_project_id(&link.project_id).map_err(local_dto)?;
+
+        // Edit-session gate: Done acts only on an ACTIVE edit session. The edit gate
+        // is set true only by Start editing (after acquiring the lock) / its FF arm,
+        // so `!edit_enabled` means we hold no lock — opened read-only, or already
+        // finished. Releasing here would POST /release/ for a mutex this session
+        // never acquired (a confusing Fence error, or a 401 that auto-drops the
+        // token). We are already read-only, so report Released without a server call.
+        if !self.edit_enabled() {
+            return Ok(DoneResult::Released);
+        }
+
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -1631,6 +1650,52 @@ mod tests {
         assert!(
             !prod.contains("write_collab_sibling"),
             "the push must never write the Ariane-collab sibling .tml (#196 b5)"
+        );
+    }
+
+    #[test]
+    fn forget_keeps_local_project_editable() {
+        // #197 review: speleodb_forget is the dead-token auto-drop sink — it runs on a
+        // 401 from ANY SpeleoDB call (e.g. a background list_projects/refresh). It must
+        // NOT turn an open LOCAL project read-only; only a remote edit session loses
+        // the gate. (No remote link open here → open_link Err → gate untouched.)
+        let state = AppState::new().expect("state");
+        assert!(state.edit_enabled(), "local default-true");
+        state.speleodb_forget();
+        assert!(
+            state.edit_enabled(),
+            "a 401 auto-drop must not disable editing on a local-only project"
+        );
+    }
+
+    #[test]
+    fn forget_drops_gate_on_remote_edit_session() {
+        // ...but a remote edit session (gate on + an open hand-off link) DOES lose the
+        // gate, so a token-less session can't keep mutating a project it can't push.
+        let temp = TempDir::new().expect("temp");
+        let path = temp.path().join("remote.stalx");
+        let mut db = Database::open(&path).expect("open db");
+        db.save_project(&Project::new("Remote".to_owned(), None))
+            .expect("save project");
+        db.save_speleo_link(Some(&SpeleoLink {
+            endpoint: "http://x/".to_owned(),
+            project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+            project_name: "Remote".to_owned(),
+            base_commit_sha: Some("abc123".to_owned()),
+            has_unpushed_edits: false,
+            last_edit_at: None,
+        }))
+        .expect("save link");
+        drop(db);
+
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(path).success, "open remote fixture");
+        assert!(!state.edit_enabled(), "remote opens read-only");
+        state.set_edit_enabled(true); // simulate Start editing acquiring the lock
+        state.speleodb_forget();
+        assert!(
+            !state.edit_enabled(),
+            "forget must drop the edit gate on a remote edit session"
         );
     }
 
