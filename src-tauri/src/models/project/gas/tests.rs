@@ -8,7 +8,7 @@ use super::physics::{
     air_z_factor, ata, avg_depth, cylinder_gas_volume, deliverable_gas, edge_gas, gas_rate,
     sac_to_rmv,
 };
-use super::{penetration_budget, required_stages, route_metrics, usable_oc_gas};
+use super::{is_swim_leg, penetration_budget, required_stages, route_metrics, usable_oc_gas};
 use crate::config::{GasConfig, ReservePreset, ReserveProfile};
 use crate::models::{
     Coordinates, GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum,
@@ -796,61 +796,51 @@ fn gas_reach_field_threshold_past_deepest_yields_fewer_drops() {
 }
 
 #[test]
+fn is_swim_leg_distinguishes_shots_from_ties() {
+    // Adjacent stations within a section = a swum shot (incl. a reference/jump).
+    assert!(is_swim_leg(&StationRef::new(1, 0), &StationRef::new(1, 1)));
+    assert!(is_swim_leg(&StationRef::new(1, 2), &StationRef::new(1, 1)));
+    // Cross-section (a merge / closure tie) = NOT a swum leg.
+    assert!(!is_swim_leg(&StationRef::new(1, 0), &StationRef::new(2, 0)));
+    // Same section but non-adjacent (a closure within one section) = NOT a swum leg.
+    assert!(!is_swim_leg(&StationRef::new(1, 0), &StationRef::new(1, 2)));
+}
+
+#[test]
 fn route_metrics_pure_line_length_and_depths() {
+    let pt = |x: f64, y: f64, z: f64| Coordinates { x, y, z };
     // Pure helper: 3-D polyline length + deepest point + distance-weighted average depth.
     // Degenerate cases first: empty route, single station.
-    assert_eq!(route_metrics(&[]), (0.0, None, None));
-    let one = [Coordinates {
-        x: 5.0,
-        y: 5.0,
-        z: 12.0,
-    }];
-    assert_eq!(route_metrics(&one), (0.0, Some(12.0), Some(12.0)));
-    // Vertical descent 0→10→30 m: segments 10 + 20 = 30 m; deepest 30; depth-weighted average =
-    // (10·mid5 + 20·mid20) / 30 = (50 + 400) / 30 = 15.
-    let descent = [
-        Coordinates {
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-        },
-        Coordinates {
-            x: 0.0,
-            y: 0.0,
-            z: 10.0,
-        },
-        Coordinates {
-            x: 0.0,
-            y: 0.0,
-            z: 30.0,
-        },
-    ];
-    let (len, maxd, avgd) = route_metrics(&descent);
+    assert_eq!(route_metrics(&[], &[]), (0.0, None, None));
+    assert_eq!(
+        route_metrics(&[pt(5.0, 5.0, 12.0)], &[]),
+        (0.0, Some(12.0), Some(12.0))
+    );
+    // Vertical descent 0→10→30 m (both legs swum): segments 10 + 20 = 30 m; deepest 30;
+    // depth-weighted average = (10·mid5 + 20·mid20) / 30 = (50 + 400) / 30 = 15.
+    let descent = [pt(0.0, 0.0, 0.0), pt(0.0, 0.0, 10.0), pt(0.0, 0.0, 30.0)];
+    let (len, maxd, avgd) = route_metrics(&descent, &[true, true]);
     assert!((len - 30.0).abs() < EPS);
     assert_eq!(maxd, Some(30.0));
     assert!((avgd.unwrap() - 15.0).abs() < EPS);
     // True 3-D legs (east+north, then a pure depth drop): (0,0,0)→(3,4,0) = 5 m, →(3,4,12) = 12 m
     // ⇒ 17 m total, deepest 12.
-    let three_d = [
-        Coordinates {
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-        },
-        Coordinates {
-            x: 3.0,
-            y: 4.0,
-            z: 0.0,
-        },
-        Coordinates {
-            x: 3.0,
-            y: 4.0,
-            z: 12.0,
-        },
-    ];
-    let (len2, maxd2, _) = route_metrics(&three_d);
+    let three_d = [pt(0.0, 0.0, 0.0), pt(3.0, 4.0, 0.0), pt(3.0, 4.0, 12.0)];
+    let (len2, maxd2, _) = route_metrics(&three_d, &[true, true]);
     assert!((len2 - 17.0).abs() < EPS);
     assert_eq!(maxd2, Some(12.0));
+    // Deepest point at an INTERIOR station (descend then rise): max depth must be the interior 30,
+    // not the 10 m terminal — a regression that returned the last station's depth would fail here.
+    let dome = [pt(0.0, 0.0, 0.0), pt(0.0, 0.0, 30.0), pt(0.0, 0.0, 10.0)];
+    let (_, maxd3, _) = route_metrics(&dome, &[true, true]);
+    assert_eq!(maxd3, Some(30.0));
+    // A TIE leg (swim=false) with a large coord gap — the loop-closure misclosure case — is
+    // excluded from length AND the depth-weighted average: only the first (swum) 10 m leg counts.
+    let with_tie = [pt(0.0, 0.0, 0.0), pt(0.0, 0.0, 10.0), pt(100.0, 0.0, 10.0)];
+    let (len4, maxd4, avgd4) = route_metrics(&with_tie, &[true, false]);
+    assert!((len4 - 10.0).abs() < EPS); // the 90 m tie gap is NOT counted
+    assert_eq!(maxd4, Some(10.0));
+    assert!((avgd4.unwrap() - 5.0).abs() < EPS); // only the 0→10 m leg, mid-depth 5
 }
 
 #[test]

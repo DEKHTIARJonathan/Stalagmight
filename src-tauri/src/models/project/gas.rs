@@ -184,13 +184,22 @@ impl Project {
             staged_route(route_target, &pred, &gas_in, &station_refs, &thresholds);
         let route = self.route_legs(&route_refs);
 
-        // Physical route metrics (line length + depths) from the ordered route's measured coords —
-        // the same coords the highlight is drawn from, so the reported distance matches the line.
+        // Physical route metrics from the route's measured coordinates: the one-way swum line length
+        // (a 3-D slope distance summed over real shot legs only — see `is_swim_leg`), the deepest
+        // point, and the distance-weighted average depth. This is the *swum* distance, NOT the
+        // on-screen highlight length (a 2-D plan-view projection, and closure-adjusted in Plan) —
+        // the two intentionally differ. `route_swim` excludes zero-distance merge/closure ties so a
+        // loop closure's misclosure gap (never swum) doesn't inflate the distance or skew the depth.
         let route_pts: Vec<Coordinates> = route_refs
             .iter()
             .filter_map(|r| station_index.get(r).map(|&i| coords[i]))
             .collect();
-        let (route_line_length_m, route_max_depth_m, route_avg_depth_m) = route_metrics(&route_pts);
+        let route_swim: Vec<bool> = route_refs
+            .windows(2)
+            .map(|w| is_swim_leg(&w[0], &w[1]))
+            .collect();
+        let (route_line_length_m, route_max_depth_m, route_avg_depth_m) =
+            route_metrics(&route_pts, &route_swim);
 
         // Readout gauges — computed here so the UI never re-derives the budget math. Both honour the
         // conservative cap + normalized reserve + stage-count fallback (the effective strategy).
@@ -233,8 +242,7 @@ impl Project {
             .windows(2)
             .map(|w| {
                 let (from, to) = (w[0], w[1]);
-                let is_jump = from.section_id == to.section_id
-                    && from.station_index.abs_diff(to.station_index) == 1
+                let is_jump = is_swim_leg(&from, &to)
                     && self
                         .sections
                         .iter()
@@ -295,19 +303,34 @@ fn staged_route(
     (route_refs, stage_drop_refs, Some(station_refs[target]))
 }
 
-/// Physical metrics of the planned route from its ordered station coordinates: the swum line length
-/// (sum of 3-D segment lengths between consecutive route stations — the one-way penetration
-/// distance, matching the drawn route), the deepest point, and the distance-weighted average depth.
-/// `z` is depth in metres (positive below surface, `station.rs`), so the deepest point is `max z`.
-/// An empty route → `(0.0, None, None)`; a single station → zero length with that point's depth.
-fn route_metrics(pts: &[Coordinates]) -> (f64, Option<f64>, Option<f64>) {
+/// A route leg is a real **swum** leg — a shot (including a reference/jump shot the diver swims) —
+/// iff it joins two adjacent stations within one section. A station merge / loop-closure tie is a
+/// zero-distance graph edge between non-adjacent or cross-section stations whose endpoints are the
+/// *same* surveyed point; the measured-coord gap there (a closure's misclosure) was never swum, so
+/// it must not count toward route distance or depth.
+fn is_swim_leg(a: &StationRef, b: &StationRef) -> bool {
+    a.section_id == b.section_id && a.station_index.abs_diff(b.station_index) == 1
+}
+
+/// Physical metrics of the planned route from its ordered station coordinates and a per-leg swim
+/// mask (`swim[i]` = the leg `pts[i]→pts[i+1]` is a real swum shot, not a tie): the one-way swum
+/// line length (sum of 3-D segment lengths over swum legs only), the deepest point, and the
+/// distance-weighted average depth over the swum legs. `z` is depth in metres (positive below
+/// surface, `station.rs`), so the deepest point is `max z` over *all* route stations. An empty
+/// route → `(0.0, None, None)`; a single station (or all-tie route) → zero length with the depth at
+/// the first point. A missing mask entry conservatively counts the leg.
+fn route_metrics(pts: &[Coordinates], swim: &[bool]) -> (f64, Option<f64>, Option<f64>) {
     let Some(first) = pts.first() else {
         return (0.0, None, None);
     };
     let max_depth = pts.iter().map(|c| c.z).fold(f64::NEG_INFINITY, f64::max);
     let mut length = 0.0;
     let mut depth_len_sum = 0.0;
-    for w in pts.windows(2) {
+    for (i, w) in pts.windows(2).enumerate() {
+        // Skip zero-distance ties (merges / loop closures): their measured-coord gap was not swum.
+        if !swim.get(i).copied().unwrap_or(true) {
+            continue;
+        }
         let (a, b) = (w[0], w[1]);
         let seg = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2) + (b.z - a.z).powi(2)).sqrt();
         length += seg;

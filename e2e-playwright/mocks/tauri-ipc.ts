@@ -1329,21 +1329,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     .map((from, i) => ({ from, to: reachableRefs[i + 1], is_jump: false }))
                 : [];
 
-            // Route physical metrics (#236) over the route's stations — mirrors the backend, from
-            // the mock coordinates: one-way line length + deepest point + distance-weighted average
-            // depth. Plausible, shape-correct values for the UI wiring (exact math is Rust-tested).
+            // Route physical metrics (#236) over the route's stations, in order (origin→turnaround),
+            // derived from the route legs the mock returns — so it mirrors the backend's route_refs
+            // CHAIN, not the full reachable set. NOTE: the seeded e2e cave is a single linear section
+            // with no merge/closure ties, so this is an approximation for the linear seed, not a
+            // re-implementation of the backend's tie-aware shortest path (exact math is Rust-tested).
             const coordByRef = new Map(
               stations.map((s) => [
                 `${s.station_ref.section_id}:${s.station_ref.station_index}`,
                 s.coordinates,
               ]),
             );
-            const routePts =
-              targetRef != null
-                ? reachableRefs
-                    .map((r) => coordByRef.get(`${r.section_id}:${r.station_index}`))
-                    .filter((c): c is { x: number; y: number; z: number } => c != null)
-                : [];
+            const routeRefsOrdered =
+              route.length > 0
+                ? [route[0].from, ...route.map((leg) => leg.to)]
+                : targetRef != null
+                  ? [targetRef]
+                  : [];
+            const routePts = routeRefsOrdered
+              .map((r) => coordByRef.get(`${r.section_id}:${r.station_index}`))
+              .filter((c): c is { x: number; y: number; z: number } => c != null);
             let route_line_length_m = 0;
             let route_max_depth_m: number | null = null;
             let route_avg_depth_m: number | null = null;

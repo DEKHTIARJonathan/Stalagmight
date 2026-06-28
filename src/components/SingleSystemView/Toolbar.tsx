@@ -265,7 +265,8 @@ export default function Toolbar({
       ) : (
         /* Absolutely centered so the carousel stays put as modes cycle — otherwise
            justify-between would drift it when the right cluster's width changes
-           (mutating tools + DisplayMenu drop out in Plan/Export). */
+           (the mutating tools are filtered to the read-only set in Plan/Export;
+           DisplayMenu itself stays in every mode). */
         <div className="absolute left-1/2 -translate-x-1/2">
           <ModeCarousel disabled={placementModeActive} />
         </div>

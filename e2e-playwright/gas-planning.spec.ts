@@ -31,12 +31,14 @@ const sectionSeeds: SectionSeed[] = [
   {
     name: 'Gas A',
     direction: 'in',
+    // Positive depths (z = depth, positive below surface — the real convention), so the route
+    // depth readouts show physically-sensible values a regression would visibly break.
     shots: Array.from({ length: 10 }, (_, i) => ({
       azimuth_in: 90,
       azimuth_out: 270,
       length: 10,
-      depth_in: -i,
-      depth_out: -(i + 1),
+      depth_in: i,
+      depth_out: i + 1,
     })),
   },
 ];
@@ -205,6 +207,10 @@ test.describe('Gas planning', () => {
     await expect(distance).toBeVisible({ timeout: 3000 });
     await expect(distance).toContainText('m');
     await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Distance to turnaround');
+    // The Max/Average depth rows render once a route is known. This asserts the WIRING only — the
+    // mock's synthetic coordinates don't carry the seed's per-station depths, so the values here are
+    // illustrative; the exact distance/depth math (incl. the deepest-point-at-an-interior-station
+    // and depth-sign cases) is pinned in the Rust unit tests (gas/tests.rs).
     await expect(page.locator('[data-testid="gas-readout-max-depth"]')).toBeVisible();
     await expect(page.locator('[data-testid="gas-readout-avg-depth"]')).toBeVisible();
   });

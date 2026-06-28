@@ -206,9 +206,11 @@ pub struct GasReachField {
     pub backgas_turn_bar: Option<f64>,
     /// Per-stage Half-Minus drop pressure gauge (bar), one per counted stage; empty for All-thirds.
     pub stage_drop_bars: Vec<f64>,
-    /// Swum line length of the planned route (metres): the sum of the 3-D segment lengths between
-    /// consecutive route stations (origin→turnaround) — the one-way penetration distance, matching
-    /// the drawn route. `0.0` when nothing is reachable. (Not straight-line; not round-trip.)
+    /// Swum line length of the planned route (metres): the one-way penetration distance, summed as
+    /// 3-D slope segments over the route's real shot legs (zero-distance merge/closure ties
+    /// excluded), origin→turnaround. This is the *swum* distance, not the on-screen highlight length
+    /// (a 2-D, closure-adjusted projection). `0.0` when nothing is reachable. (Not straight-line;
+    /// not round-trip.)
     pub route_line_length_m: f64,
     /// Deepest point on the route (metres, positive = below surface); `None` when no route.
     pub route_max_depth_m: Option<f64>,
