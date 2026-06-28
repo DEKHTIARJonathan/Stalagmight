@@ -1645,14 +1645,16 @@ mod tests {
             render.contains("export::tml::export_tml("),
             "the push must render the .tml via the pure export_tml"
         );
+        // Match the CALL syntax ("name(") rather than the bare symbol, so a future
+        // doc/comment mentioning these fns can't flip the assertion (#197 review).
         assert!(
-            !render.contains("export_tml_with_baseline"),
-            "the push render must NOT use the baseline/collab export (the baseline is discarded)"
+            !render.contains("export_tml_with_baseline("),
+            "the push render must NOT call the baseline/collab export (the baseline is discarded)"
         );
-        // Nothing in the push ever writes the Ariane-collab sibling .tml.
+        // Nothing in the push ever CALLS the Ariane-collab sibling writer.
         assert!(
-            !prod.contains("write_collab_sibling"),
-            "the push must never write the Ariane-collab sibling .tml (#196 b5)"
+            !prod.contains("write_collab_sibling("),
+            "the push must never call write_collab_sibling — sibling-.tml stays untouched (#196 b5)"
         );
     }
 
