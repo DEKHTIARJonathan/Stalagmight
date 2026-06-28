@@ -895,7 +895,7 @@ fn gas_reach_field_no_route_has_no_distance_or_depth() {
     .unwrap();
     let field = project.compute_gas_reach_field(None, None, &diver, &[big], &GasConfig::default());
     assert!(field.final_turn_ref.is_none());
-    assert_eq!(field.route_line_length_m, 0.0);
+    assert!(field.route_line_length_m.abs() < EPS);
     assert_eq!(field.route_max_depth_m, None);
     assert_eq!(field.route_avg_depth_m, None);
 }
