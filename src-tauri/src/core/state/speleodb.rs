@@ -1597,6 +1597,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn push_renders_via_pure_export_tml_not_the_collab_pipeline() {
+        // #196 b1 + b5: the push renders the .tml through the PURE export_tml and
+        // never routes through the Ariane-collab pipeline — export_tml_with_baseline
+        // (whose baseline would be discarded) is not called, and nothing in the push
+        // writes the collab sibling, so CollabState / reconcile.rs / sibling-.tml stay
+        // untouched. Pin it structurally (like the BASE-advance + quiescent tripwires)
+        // since "not called" can't be observed at runtime.
+        let src = include_str!("speleodb.rs");
+        let prod = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production region precedes the test module");
+
+        // The render fn body renders via the pure export_tml (the doc comment that
+        // mentions export_tml_with_baseline precedes the fn, so a body scan excludes it).
+        let render = prod
+            .split_once("fn speleodb_render_tml")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .expect("render fn body precedes the next method");
+        assert!(
+            render.contains("export::tml::export_tml("),
+            "the push must render the .tml via the pure export_tml"
+        );
+        assert!(
+            !render.contains("export_tml_with_baseline"),
+            "the push render must NOT use the baseline/collab export (the baseline is discarded)"
+        );
+        // Nothing in the push ever writes the Ariane-collab sibling .tml.
+        assert!(
+            !prod.contains("write_collab_sibling"),
+            "the push must never write the Ariane-collab sibling .tml (#196 b5)"
+        );
+    }
+
     /// A session seeded with an in-memory token (no real keychain). Marked
     /// already-rehydrated so it behaves like a live, established session.
     fn authed_session() -> SpeleoDbSession {
@@ -2551,6 +2587,17 @@ mod tests {
         assert_eq!(
             stalx_count, 1,
             "the server dump must hold exactly one .stalx, got {entries:?}"
+        );
+        // (#196 b2/b3/b5) the .tml is co-pushed, lands as `ariane.tml`, and is the
+        // ONLY .tml — no Ariane-collab sibling rode along.
+        assert!(
+            entries.iter().any(|e| e.ends_with("ariane.tml")),
+            "the render must be co-pushed as ariane.tml, got {entries:?}"
+        );
+        let tml_count = entries.iter().filter(|e| e.ends_with(".tml")).count();
+        assert_eq!(
+            tml_count, 1,
+            "exactly one .tml (ariane.tml) — no collab sibling rode along, got {entries:?}"
         );
 
         // (1/2) it extracts + opens as a SELF-CONTAINED DB carrying the pushed edit.
