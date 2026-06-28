@@ -651,13 +651,16 @@ impl AppState {
         // the first Start editing would needlessly fast-forward. Best-effort: fall
         // back to the caller-supplied SHA if the history can't be fetched (Start
         // editing then fast-forwards to reconcile).
-        let base_sha = match self.speleodb_server_head(
-            &endpoint,
-            &token,
-            insecure_http,
-            &project_id,
-        ) {
-            Ok((tip, _commits)) => tip.or(latest_commit_sha),
+        // Fetch the revision history DIRECTLY here (NOT via speleodb_handle_auth) so
+        // a transient/spurious 401 on this best-effort BASE-stamp cannot auto-drop the
+        // whole session mid-open: the dump download above already authenticated with
+        // this token, and the fence simply falls back to latest_commit_sha. Start
+        // editing / Done DO route revisions through the auto-drop (a dead token there
+        // must force re-login). (#197 review.)
+        let base_sha = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
+            Ok(history) => sync::tip_of(&history.commits)
+                .map(str::to_owned)
+                .or(latest_commit_sha),
             Err(e) => {
                 tracing::warn!(
                     error = %e,
