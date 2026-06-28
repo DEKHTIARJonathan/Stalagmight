@@ -314,7 +314,9 @@ test.describe('Gas planning', () => {
     });
 
     await expect(page.getByText('Set as endpoint')).toBeVisible();
-    await expect(page.getByText('Set as origin')).toBeVisible();
+    // "Set as origin" was removed from the right-click menu — origin is set by single-click / the
+    // datum star, and the menu is reserved for the endpoint pick + future recalc affordances.
+    await expect(page.getByText('Set as origin')).toHaveCount(0);
     // The survey mutation menu must NOT appear (the read-only bug): no "Edit Station".
     await expect(page.getByText('Edit Station')).toHaveCount(0);
 

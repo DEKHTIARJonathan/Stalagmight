@@ -876,7 +876,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       // gas → no turn-frontier dots), still opens the route menu instead of silently doing nothing.
       // Match in metres against the click's map coords; restrict to reachable stations (when the
       // field is loaded) so the pick is meaningful — an unreachable endpoint would fall back to the
-      // deepest point in the engine. The ContextMenu Plan branch turns it into Set as origin/endpoint. (#236)
+      // deepest point in the engine. The ContextMenu Plan branch turns it into Set as endpoint. (#236)
       if (showGasPlan && target?.type !== 'station') {
         const reachField = useGasPlanStore.getState().reachField;
         const clickM = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
