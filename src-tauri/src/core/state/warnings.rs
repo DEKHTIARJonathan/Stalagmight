@@ -266,6 +266,46 @@ impl AppState {
         db.delete_resolved_warning(section_id, shot_id, warning_code, shot_uuid)
     }
 
+    /// User-facing **resolve** (the `resolve_warning` command's persistence step):
+    /// the gated + dirtying counterpart of [`Self::save_resolved_warning`]. A resolved
+    /// warning PROLIFERATES to the server (`resolved_warnings` is NOT stripped from the
+    /// push snapshot — #197), so it is a real remote-dirtying edit, not local-only view
+    /// state: a read-only remote project must reject it (`guard_mutation`), and a
+    /// successful resolve in an edit session must mark the project dirty so `Done`
+    /// pushes it — otherwise it is silently dropped on the next pull. The low-level
+    /// [`Self::save_resolved_warning`] accessor stays ungated for the load-time backfill
+    /// and tests.
+    pub(crate) fn save_resolved_warning_gated(
+        &self,
+        warning: &crate::persistence::ResolvedWarning,
+    ) -> Result<(), String> {
+        self.guard_mutation("Resolve warning")
+            .map_err(|f| f.error.unwrap_or_default())?;
+        self.save_resolved_warning(warning)
+            .map_err(|e| e.to_string())?;
+        // Dirty-bit flip (#191/#197): set-only; no-op for local-only (no speleo_link).
+        self.mark_remote_dirty();
+        Ok(())
+    }
+
+    /// User-facing **unresolve** (the `unresolve_warning` command's persistence step):
+    /// the gated + dirtying counterpart of [`Self::delete_resolved_warning`], for the
+    /// same reason as [`Self::save_resolved_warning_gated`].
+    pub(crate) fn delete_resolved_warning_gated(
+        &self,
+        section_id: u32,
+        shot_id: u32,
+        warning_code: &str,
+        shot_uuid: Option<&str>,
+    ) -> Result<(), String> {
+        self.guard_mutation("Unresolve warning")
+            .map_err(|f| f.error.unwrap_or_default())?;
+        self.delete_resolved_warning(section_id, shot_id, warning_code, shot_uuid)
+            .map_err(|e| e.to_string())?;
+        self.mark_remote_dirty();
+        Ok(())
+    }
+
     /// Look up a shot's stable UUID by its `(section_id, shot_id)` identity in
     /// the open project. Used by the resolve/unresolve commands to key an
     /// "Ignore" by UUID (issue #57). After `do_load_project_full` every shot

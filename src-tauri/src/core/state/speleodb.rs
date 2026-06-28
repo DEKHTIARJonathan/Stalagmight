@@ -209,8 +209,9 @@ impl SpeleoDbSession {
 /// Internal verdict of the push half of `speleodb_done`.
 #[derive(Debug)]
 enum PushOutcome {
-    /// The push landed (200 → BASE advanced; or 304 → already at the tip): the
-    /// dirty bit was cleared. Safe to release the lock.
+    /// The push landed (200 → BASE advanced; or 304 → already at the tip). The dirty
+    /// bit was cleared UNLESS an edit landed after push_start (then it is retained for
+    /// the next push), so the caller must re-check it before releasing the lock.
     Confirmed,
     /// A stranger commit sits between our BASE and the server tip — never pushed.
     /// Stay locked + dirty for the user to reconcile (#198).
@@ -1120,6 +1121,19 @@ impl AppState {
 
         match outcome {
             PushOutcome::Confirmed => {
+                // A 200 push advances BASE but RETAINS the dirty bit when an edit
+                // landed after push_start (edits_captured_by_push == false): that edit
+                // is not on the server yet. Re-read the link and, if it is still dirty,
+                // keep the lock + editability and report PushUnconfirmed so a retry of
+                // Done re-pushes the late edit — releasing now would strand it
+                // read-only until a fresh Start editing. Only release once clean.
+                let still_dirty = self
+                    .speleodb_open_link()
+                    .map_err(local_dto)?
+                    .has_unpushed_edits;
+                if still_dirty {
+                    return Ok(DoneResult::PushUnconfirmed);
+                }
                 // Edits are safely on the server; release the lock and go
                 // read-only. Drop the edit gate only after a confirmed release —
                 // if release fails the lock is still held, so a retry of Done

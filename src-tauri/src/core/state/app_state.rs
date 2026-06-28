@@ -271,14 +271,24 @@ impl AppState {
     /// the open project is a remote SpeleoDB project opened read-only. No-op (`Ok`)
     /// for local-only (default-true `edit_enabled`) projects and non-mutating reads.
     ///
-    /// NOT YET GATED (intentionally, for now): a handful of LOCAL-ONLY project-DB
-    /// writes that are not survey content and are overwritten on the next pull —
-    /// `save_display_setting` (view prefs), `resolve_warning`/`unresolve_warning`
-    /// (local annotations), and the `track_imported_file`/`track_section_hashes`
-    /// import-dedup bookkeeping. They reach the `.stalx` but never the server (this
-    /// PR has no push path). Gate them — or consciously confirm the exemption — when
-    /// the release/push flow (#197) lands, since carry-forward would then ship them.
-    /// `MUTATION_ENTRYPOINTS` (tests.rs) enumerates only the gated set above.
+    /// Non-survey project-DB writes are handled deliberately (the exemption the
+    /// push/release flow #197 had to revisit):
+    /// - `resolve_warning`/`unresolve_warning` ARE gated as of #197 (via
+    ///   `save_resolved_warning_gated`/`delete_resolved_warning_gated`): a resolved
+    ///   warning PROLIFERATES to the server (it is NOT stripped from the push
+    ///   snapshot), so it is a real remote-dirtying edit — gate it AND
+    ///   `mark_remote_dirty` so a read-only project rejects it and an edit-session
+    ///   resolve is pushed by `Done` rather than silently dropped on the next pull.
+    /// - `save_display_setting` (view prefs) stays UNGATED and that is correct:
+    ///   `display_settings` is stripped from the push snapshot and re-applied locally
+    ///   across pull/FF — purely local view state that never proliferates, never lost.
+    /// - `track_imported_file`/`track_section_hashes` import-dedup bookkeeping stays
+    ///   UNGATED for now: the in-import path gates + dirties, but the standalone
+    ///   `track_imported_file` command does not — a deferred follow-up, lower-impact
+    ///   than a lost annotation (re-import is the worst case, not silent data loss).
+    ///
+    /// `MUTATION_ENTRYPOINTS` (tests.rs) enumerates the gated set (incl. the two
+    /// warning verbs).
     pub(super) fn guard_mutation(&self, what: &str) -> Result<(), CommandResult> {
         if self.edit_enabled() {
             return Ok(());

@@ -18897,7 +18897,8 @@ fn done_without_edit_session_is_noop_not_a_release() {
 /// for new `Command` *variants*; a source-scan test asserting every gated method body
 /// contains `guard_mutation` would close it for new *methods* (follow-up). And note
 /// the deliberately-ungated local-only writes documented on `guard_mutation`
-/// (display settings, warning resolve/unresolve, import-dedup) are NOT in this list.
+/// (display settings, import-dedup) are NOT in this list — but warning
+/// resolve/unresolve ARE gated (#197) and appear at the end.
 const MUTATION_ENTRYPOINTS: &[&str] = &[
     // execute() + a representative spread of non-lifecycle Command variants. The
     // guard runs BEFORE the variant match, so one code path gates them all — but
@@ -18930,6 +18931,10 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "set_collab_enabled",
     "set_collab_enabled_for_path",
     "set_project_name_for_path",
+    // warning resolve/unresolve (#197): gated because resolved_warnings proliferates
+    // to the server (NOT stripped from the push snapshot).
+    "save_resolved_warning_gated",
+    "delete_resolved_warning_gated",
 ];
 
 #[test]
@@ -18938,7 +18943,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call below.
     assert_eq!(
         MUTATION_ENTRYPOINTS.len(),
-        22,
+        24,
         "update both the routing and this list when adding a mutation entry"
     );
 
@@ -19111,6 +19116,41 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             &state.set_project_name_for_path(open_path, "Renamed Remote".to_string()),
         );
     }
+
+    // --- warning resolve/unresolve (#197) ---
+    // These return Result<(), String> (not CommandResult); the EDIT_DISABLED code is
+    // carried as the String error prefix, exactly as the frontend's read-only handler
+    // pattern-matches it.
+    {
+        let (state, sid, shid, _temp) = remote_fixture();
+        let warning = crate::persistence::ResolvedWarning {
+            section_id: sid,
+            shot_id: shid,
+            warning_code: "SHORT_SHOT".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: None,
+        };
+        let resolve_err = state
+            .save_resolved_warning_gated(&warning)
+            .expect_err("resolve must be rejected when edit disabled");
+        assert!(
+            resolve_err.starts_with(EDIT_DISABLED_CODE),
+            "save_resolved_warning_gated must carry the EDIT_DISABLED code, got: {resolve_err:?}"
+        );
+        let unresolve_err = state
+            .delete_resolved_warning_gated(sid, shid, "SHORT_SHOT", None)
+            .expect_err("unresolve must be rejected when edit disabled");
+        assert!(
+            unresolve_err.starts_with(EDIT_DISABLED_CODE),
+            "delete_resolved_warning_gated must carry the EDIT_DISABLED code, got: {unresolve_err:?}"
+        );
+        // The gate fires BEFORE any DB write, so the dirty bit must NOT have flipped.
+        assert!(
+            !dirty_bit(&state),
+            "a rejected resolve/unresolve must not dirty the project"
+        );
+    }
 }
 
 #[test]
@@ -19132,6 +19172,59 @@ fn lifecycle_commands_pass_through_gate() {
 
     // Close passes through (and resets the gate).
     assert!(state.close_project().success);
+}
+
+#[test]
+fn warning_resolve_unresolve_in_edit_session_dirty_for_push() {
+    // #197 data-safety: resolved_warnings PROLIFERATES to the server (it is NOT in
+    // PUSH_SNAPSHOT_LOCAL_TABLES), so a resolve/unresolve made during an edit session
+    // MUST mark the project dirty — otherwise Done (gated on the dirty bit) skips the
+    // push and the change is silently dropped on the next pull. This guards the
+    // `mark_remote_dirty()` calls in the gated wrappers against a future drop. (The
+    // read-only REJECTION path is covered by
+    // gate_rejects_every_mutation_entrypoint_with_edit_disabled_code.)
+    let make_warning = |sid, shid| crate::persistence::ResolvedWarning {
+        section_id: sid,
+        shot_id: shid,
+        warning_code: "SHORT_SHOT".to_string(),
+        resolved_at: chrono::Utc::now(),
+        resolved_comment: None,
+        shot_uuid: None,
+    };
+
+    // resolve in an edit session → dirty
+    {
+        let (state, sid, shid, _temp) = remote_fixture_editable();
+        assert!(!dirty_bit(&state), "fixture starts clean");
+        state
+            .save_resolved_warning_gated(&make_warning(sid, shid))
+            .expect("resolve allowed in an edit session");
+        assert!(
+            dirty_bit(&state),
+            "an edit-session resolve must dirty the project so Done pushes it"
+        );
+    }
+
+    // unresolve in an edit session → dirty; and the low-level accessor stays UNGATED
+    {
+        let (state, sid, shid, _temp) = remote_fixture_editable();
+        // Seed via the low-level accessor — it must NOT dirty (only the gated wrapper
+        // does), which also pins that the backfill/test path is exempt by design.
+        state
+            .save_resolved_warning(&make_warning(sid, shid))
+            .expect("seed a resolved row");
+        assert!(
+            !dirty_bit(&state),
+            "the ungated low-level save_resolved_warning must not dirty the project"
+        );
+        state
+            .delete_resolved_warning_gated(sid, shid, "SHORT_SHOT", None)
+            .expect("unresolve allowed in an edit session");
+        assert!(
+            dirty_bit(&state),
+            "an edit-session unresolve must dirty the project so Done pushes it"
+        );
+    }
 }
 
 #[test]
