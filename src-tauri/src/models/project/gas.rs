@@ -184,6 +184,14 @@ impl Project {
             staged_route(route_target, &pred, &gas_in, &station_refs, &thresholds);
         let route = self.route_legs(&route_refs);
 
+        // Physical route metrics (line length + depths) from the ordered route's measured coords —
+        // the same coords the highlight is drawn from, so the reported distance matches the line.
+        let route_pts: Vec<Coordinates> = route_refs
+            .iter()
+            .filter_map(|r| station_index.get(r).map(|&i| coords[i]))
+            .collect();
+        let (route_line_length_m, route_max_depth_m, route_avg_depth_m) = route_metrics(&route_pts);
+
         // Readout gauges — computed here so the UI never re-derives the budget math. Both honour the
         // conservative cap + normalized reserve + stage-count fallback (the effective strategy).
         let effective = effective_preset(cylinders, gas_config.default_reserve);
@@ -211,6 +219,9 @@ impl Project {
             final_turn_ref,
             backgas_turn_bar,
             stage_drop_bars,
+            route_line_length_m,
+            route_max_depth_m,
+            route_avg_depth_m,
         }
     }
 
@@ -282,6 +293,33 @@ fn staged_route(
         })
         .collect();
     (route_refs, stage_drop_refs, Some(station_refs[target]))
+}
+
+/// Physical metrics of the planned route from its ordered station coordinates: the swum line length
+/// (sum of 3-D segment lengths between consecutive route stations — the one-way penetration
+/// distance, matching the drawn route), the deepest point, and the distance-weighted average depth.
+/// `z` is depth in metres (positive below surface, `station.rs`), so the deepest point is `max z`.
+/// An empty route → `(0.0, None, None)`; a single station → zero length with that point's depth.
+fn route_metrics(pts: &[Coordinates]) -> (f64, Option<f64>, Option<f64>) {
+    let Some(first) = pts.first() else {
+        return (0.0, None, None);
+    };
+    let max_depth = pts.iter().map(|c| c.z).fold(f64::NEG_INFINITY, f64::max);
+    let mut length = 0.0;
+    let mut depth_len_sum = 0.0;
+    for w in pts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let seg = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2) + (b.z - a.z).powi(2)).sqrt();
+        length += seg;
+        // Weight each segment's mean depth by its length → the depth-along-distance average.
+        depth_len_sum += seg * 0.5 * (a.z + b.z);
+    }
+    let avg_depth = if length > 0.0 {
+        depth_len_sum / length
+    } else {
+        first.z
+    };
+    (length, Some(max_depth), Some(avg_depth))
 }
 
 /// Number of `Stage` cylinders a preset requires in the rig. The pushy presets are valid
