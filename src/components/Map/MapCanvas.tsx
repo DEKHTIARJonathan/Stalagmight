@@ -2039,12 +2039,15 @@ function MapCanvas() {
   }, [showGasPlan, gasOrigin, activeStations, gpsOrigin, mapLoaded]);
 
   // Gas turn-frontier markers (#38): a red dot on each reachable station that
-  // borders an unreachable one — "this is where you turn". Rebuilt whenever the
-  // field changes; bounded by the frontier size (a handful of leads in practice).
+  // borders an unreachable one — "this is where you turn", and the candidate end points.
+  // Right-click one to open the Plan menu (Set as endpoint / origin) — these stay visible
+  // even when survey stations are hidden, so they're the reliable route-pick target.
+  // Rebuilt whenever the field changes; bounded by the frontier size (a handful of leads).
   useEffect(() => {
     for (const m of gasTurnMarkersRef.current) m.remove();
     gasTurnMarkersRef.current = [];
     if (!map.current || !mapLoaded || !showGasPlan || !gasReachField) return undefined;
+    const mapInst = map.current;
     for (const ref of gasReachField.turn_frontier) {
       const st = activeStations.find(
         (s) =>
@@ -2059,18 +2062,28 @@ function MapCanvas() {
       ) as [number, number];
       const el = document.createElement('div');
       el.setAttribute('data-testid', 'gas-turn-marker');
+      el.title = t('gasPanel.map.turnMarkerTooltip');
       el.style.cssText =
         'width:14px;height:14px;border-radius:50%;border:2px solid #ffffff;' +
-        'background:#c0392b;box-shadow:0 0 3px rgba(0,0,0,0.7);pointer-events:none;';
+        'background:#c0392b;box-shadow:0 0 3px rgba(0,0,0,0.7);cursor:context-menu;';
+      // Right-click a candidate end point → the Plan context menu for that station.
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        useUIStore.getState().openDialog('context-menu', {
+          target: { type: 'station', ref },
+          position: { x: e.clientX, y: e.clientY },
+        });
+      });
       gasTurnMarkersRef.current.push(
-        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map.current)
+        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(mapInst)
       );
     }
     return () => {
       for (const m of gasTurnMarkersRef.current) m.remove();
       gasTurnMarkersRef.current = [];
     };
-  }, [showGasPlan, gasReachField, activeStations, gpsOrigin, mapLoaded]);
+  }, [showGasPlan, gasReachField, activeStations, gpsOrigin, mapLoaded, t]);
 
   // Zero-datum star markers (#38): a black star (white outline) on each zero-datum
   // station while planning. The gas solve's "Entrance" default already starts from the

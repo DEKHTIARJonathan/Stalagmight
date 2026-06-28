@@ -157,6 +157,8 @@ test.describe('Gas planning', () => {
     // Legend appears with the entrance origin.
     await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible({ timeout: 3000 });
     await expect(page.locator('[data-testid="gas-legend-origin"]')).toContainText('entrance');
+    // The symbol key explains the markers (turn/end point always present in Plan).
+    await expect(page.locator('[data-testid="gas-legend-key"]')).toContainText('Turn / end point');
     // Paint swapped to the gas feature-state interpolate.
     await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).toContain('gasReach');
     // A station carries a numeric `gasReach` feature-state.
@@ -262,6 +264,29 @@ test.describe('Gas planning', () => {
     // Picking the endpoint stores it in the gas plan store and closes the menu.
     await page.getByText('Set as endpoint').click();
     await expect(page.getByText('Set as endpoint')).toHaveCount(0);
+    const endpoint = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __E2E_TEST__: { gasPlanStore: { getState: () => { endpoint: unknown } } };
+          }
+        ).__E2E_TEST__.gasPlanStore.getState().endpoint,
+    );
+    expect(endpoint).not.toBeNull();
+  });
+
+  test('right-clicking a turn-frontier dot opens the Plan menu and sets the endpoint @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    // The red turn-frontier dots are the candidate end points; they render even with survey
+    // stations hidden, so they are the route-pick target (a station right-click needs stations on).
+    await expect
+      .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
+      .toBeGreaterThan(0);
+    await page.locator('[data-testid="gas-turn-marker"]').first().click({ button: 'right' });
+    await expect(page.getByText('Set as endpoint')).toBeVisible();
+    await page.getByText('Set as endpoint').click();
     const endpoint = await page.evaluate(
       () =>
         (

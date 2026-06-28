@@ -1866,7 +1866,12 @@
       "aria": "Gas-to-reach scale from {{min}} (near) to {{max}} (turn budget)",
       "fromEntrance": "from entrance",
       "fromStation": "from {{id}}",
-      "computing": "Gas reach: computing…"
+      "computing": "Gas reach: computing…",
+      "key": {
+        "turnPoint": "Turn / end point",
+        "stageDrop": "Stage drop",
+        "finalTurn": "Final turn"
+      }
     },
     "placement": {
       "title": "Placement",
@@ -2127,7 +2132,8 @@
     },
     "map": {
       "dropTooltip": "Drop stage {{n}} here",
-      "finalTurnTooltip": "Turn around here"
+      "finalTurnTooltip": "Turn around here",
+      "turnMarkerTooltip": "Right-click to set as endpoint"
     }
   },
   "modeCarousel": {
