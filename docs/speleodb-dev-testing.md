@@ -139,6 +139,30 @@ Checked against `~/src/cave/SpeleoDB`; these override the stale issue text:
 - **Upload requires the mutex** — `PUT /projects/{id}/upload/auto/` is gated by
   `UserOwnsProjectMutex`, so seed via `acquire_lock` first, then `release_lock`.
 
+## Concurrency model — one same-account session at a time (#193)
+
+The single-writer lock (mutex) is the only concurrency control; the server itself
+is last-writer-wins. The ambiguous-push self-heal (guardrail 7, `sync::classify_ancestry`)
+recovers a lost push confirmation by asking *"is the commit now on top of BASE
+authored by me?"* — it identifies our own landed commits **purely** by
+`author_email == my_email`.
+
+**Constraint:** edit a given project from **one session per account at a time.**
+A *second* session under the **same account** editing the same project
+concurrently is unsupported: its commit also reads as `author_email == me`, so the
+self-heal could mistake it for our own landed push and wrongly clear the dirty bit
+(dropping un-pushed edits). The single-writer lock makes this rare in practice, but
+nothing stops a determined user from running two app instances logged in as the
+same account.
+
+**Mitigation (the notice):** `speleodb_open_project` checks the project's
+`active_mutex` at open time; if the lock is already held by **our own** account, a
+concurrent same-account session is live, and the open result carries
+`concurrent_session = true` (`sync::concurrent_session_notice`) so the UI warns the
+user. A lock held by a *different* account is an ordinary contended-lock case, not
+this notice. (Detection is verified by the `live_orch_open_flags_concurrent_*`
+tests; the pure predicate by `concurrent_session_flagged_only_for_a_same_account_lock_hold`.)
+
 ## Render-compat verification (#184 — the P0.5 gate)
 
 The premise of the whole `.tml` render sidecar is that SpeleoDB's `openspeleo_lib`

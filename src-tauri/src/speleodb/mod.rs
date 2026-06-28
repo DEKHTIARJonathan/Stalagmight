@@ -86,11 +86,6 @@ pub(crate) enum SpeleoDbError {
     /// update require one). Fails closed (Fatal).
     #[error("no open SpeleoDB project")]
     NoRemoteProject,
-    /// [P1] A sync-engine invariant could not be satisfied safely (e.g. the
-    /// base-SHA fence or ancestry recovery saw an anomalous server state). Fails
-    /// closed (Fatal) — never an invitation to overwrite.
-    #[error("SpeleoDB sync error: {0}")]
-    Sync(String),
 }
 
 #[cfg(test)]
@@ -128,10 +123,6 @@ mod tests {
         assert_eq!(
             SpeleoDbError::NoRemoteProject.to_string(),
             "no open SpeleoDB project"
-        );
-        assert_eq!(
-            SpeleoDbError::Sync("base vanished".to_owned()).to_string(),
-            "SpeleoDB sync error: base vanished"
         );
         assert_eq!(
             SpeleoDbError::MissingCredentials.to_string(),

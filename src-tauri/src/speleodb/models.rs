@@ -154,6 +154,11 @@ pub struct SpeleoLoginResult {
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct SpeleoOpenResult {
     pub local_path: String,
+    /// #193 b8: the server reports a write lock held by THIS account at open time,
+    /// i.e. a second same-account session is editing the project. The frontend
+    /// surfaces a notice (the ancestry self-heal assumes a single same-account
+    /// session — a concurrent one would misattribute its commits as ours).
+    pub concurrent_session: bool,
 }
 
 /// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write
@@ -279,6 +284,7 @@ mod tests {
         .expect("serialize project summary");
         let open = serde_json::to_string(&SpeleoOpenResult {
             local_path: "/cache/project.stalx".to_owned(),
+            concurrent_session: false,
         })
         .expect("serialize open result");
         // [Track A] #186/D-B2: the structured error DTO must also never carry a

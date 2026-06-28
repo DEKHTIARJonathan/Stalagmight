@@ -292,11 +292,122 @@ pub(crate) fn edits_captured_by_push(
     }
 }
 
+/// Verdict for the read-side reconcile paths (Start editing / Update): how our
+/// local copy stands against the server tip, collapsing the fence + the
+/// fast-forward ancestry guard into the three outcomes those callers act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReconcileVerdict {
+    /// BASE == tip: nothing remote to reconcile.
+    UpToDate,
+    /// Tip moved forward of a clean BASE AND BASE is a genuine ancestor of it —
+    /// safe to pull + re-stamp.
+    FastForward,
+    /// Anything we must NOT auto-resolve: a real fork, a fast-forward target BASE
+    /// is not an ancestor of (the eventually-consistent `latest_commit`), OR a
+    /// server inconsistency (non-linear / multi-root / a recorded BASE with no
+    /// tip). All route to the divergence PROMPT — never a hard error, never an
+    /// overwrite (#193 b2: "fail closed to the divergence prompt").
+    Diverged,
+}
+
+/// Read-side reconcile decision for Start editing / Update (#192, #193 b2). Pure
+/// over the already-fetched tip + history so every branch is unit-tested offline.
+/// FailClosed folds into `Diverged` here precisely so non-linear / multi-root /
+/// empty-with-base histories surface the divergence prompt instead of erroring.
+#[must_use]
+pub(crate) fn reconcile_verdict(
+    base: Option<&str>,
+    tip: Option<&str>,
+    dirty: bool,
+    commits: &[RevisionCommit],
+) -> ReconcileVerdict {
+    match fence(base, tip, dirty) {
+        FenceOutcome::UpToDate => ReconcileVerdict::UpToDate,
+        FenceOutcome::FastForward
+            if base_is_ancestor_of_tip(base, tip.unwrap_or_default(), commits) =>
+        {
+            ReconcileVerdict::FastForward
+        }
+        // FastForward-but-not-ancestor, Diverged, and FailClosed all fail closed to
+        // the divergence prompt rather than overwriting or surfacing a hard error.
+        FenceOutcome::FastForward | FenceOutcome::Diverged | FenceOutcome::FailClosed => {
+            ReconcileVerdict::Diverged
+        }
+    }
+}
+
+/// What a Done push should do, after fencing BASE against the server tip and (on a
+/// moved tip we hold the lock over) classifying the BASE..tip gap by authorship.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PushPlan {
+    /// BASE == tip: upload our edits directly.
+    Upload,
+    /// Our prior (ambiguous) push landed but an edit followed it: adopt the landed
+    /// tip as BASE, then re-push the current state on top (a no-op 304 if nothing
+    /// changed since the landed commit).
+    AdoptThenUpload,
+    /// Our prior push landed and nothing was edited after it: adopt the tip as BASE
+    /// and clear the dirty bit WITHOUT a redundant re-push (the push is confirmed).
+    AdoptConfirmed,
+    /// A stranger's commit, OR a server inconsistency (non-linear / multi-root /
+    /// recorded BASE with no tip): route to the divergence prompt. Never overwrite,
+    /// never guess (#193 b2 + b5).
+    Diverged,
+}
+
+/// Pure Done-push decision (#192/#193): fence BASE against the tip, and on a moved
+/// tip (we hold the lock, so it is almost always our own ambiguous push) classify
+/// the gap by authorship. Every fail-closed branch routes to the divergence prompt
+/// rather than a hard error or a blind re-push.
+#[must_use]
+pub(crate) fn plan_push(
+    base: Option<&str>,
+    tip: Option<&str>,
+    commits: &[RevisionCommit],
+    my_email: &str,
+    last_edit_at: Option<&str>,
+    push_start_at: Option<&str>,
+) -> PushPlan {
+    match fence(base, tip, true) {
+        FenceOutcome::UpToDate => PushPlan::Upload,
+        FenceOutcome::Diverged => {
+            match classify_ancestry(base, tip, commits, my_email, last_edit_at, push_start_at) {
+                AncestryOutcome::Landed { clear_dirty: true } => PushPlan::AdoptConfirmed,
+                AncestryOutcome::Landed { clear_dirty: false } => PushPlan::AdoptThenUpload,
+                // Stranger commit, a non-linear/multi-root inconsistency, or (not
+                // reachable on a moved tip) a not-landed push — never overwrite or
+                // guess, route to the divergence prompt.
+                AncestryOutcome::Diverged
+                | AncestryOutcome::NotLanded
+                | AncestryOutcome::FailClosed => PushPlan::Diverged,
+            }
+        }
+        // A dirty copy never fast-forwards (the fence returns Diverged for a dirty
+        // moved tip); a recorded BASE with no tip is a server inconsistency. Both
+        // fail closed to the divergence prompt.
+        FenceOutcome::FastForward | FenceOutcome::FailClosed => PushPlan::Diverged,
+    }
+}
+
+/// Whether opening a remote project should warn about a concurrent SAME-ACCOUNT
+/// session (#193 b8). [`classify_ancestry`] treats `author_email == my_email` as
+/// "this session's push"; a second session under the same account editing the same
+/// project breaks that proxy (its commit reads as "mine" and could wrongly clear
+/// the dirty bit). The single-writer lock makes this rare, but if the server
+/// already reports a lock held by our OWN account when we open, a second session is
+/// live — surface a notice. Case-insensitive (the server may normalise email case);
+/// a lock held by a DIFFERENT account is an ordinary contended-lock case, not this.
+#[must_use]
+pub(crate) fn concurrent_session_notice(active_mutex_user: Option<&str>, my_email: &str) -> bool {
+    active_mutex_user.is_some_and(|holder| holder.eq_ignore_ascii_case(my_email))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        base_is_ancestor_of_tip, classify_ancestry, fence, tip_of, AncestryOutcome, FenceOutcome,
-        RevisionCommit,
+        base_is_ancestor_of_tip, classify_ancestry, concurrent_session_notice,
+        edits_captured_by_push, fence, plan_push, reconcile_verdict, tip_of, AncestryOutcome,
+        FenceOutcome, PushPlan, ReconcileVerdict, RevisionCommit,
     };
 
     /// Build a revision-history commit with the given parents and author.
@@ -573,6 +684,208 @@ mod tests {
         assert_eq!(
             classify_ancestry(Some("b"), None, &[], ME, Some(T1), Some(T2)),
             AncestryOutcome::FailClosed
+        );
+    }
+
+    // ---- reconcile_verdict (Start editing / Update routing, #193 b2) ----
+    // A linear chain root -> a -> b authored by ME, used by the routing tests.
+    fn linear_history() -> Vec<RevisionCommit> {
+        vec![
+            commit("root", &[], ME),
+            commit("a", &["root"], ME),
+            commit("b", &["a"], ME),
+        ]
+    }
+
+    #[test]
+    fn reconcile_up_to_date_when_base_equals_tip() {
+        assert_eq!(
+            reconcile_verdict(Some("b"), Some("b"), false, &linear_history()),
+            ReconcileVerdict::UpToDate
+        );
+        // None == None (empty repo) is up to date too.
+        assert_eq!(
+            reconcile_verdict(None, None, false, &[]),
+            ReconcileVerdict::UpToDate
+        );
+    }
+
+    #[test]
+    fn reconcile_fast_forward_only_for_clean_genuine_descendant() {
+        // Clean, tip is a real descendant of BASE -> fast-forward.
+        assert_eq!(
+            reconcile_verdict(Some("a"), Some("b"), false, &linear_history()),
+            ReconcileVerdict::FastForward
+        );
+        // Dirty over a moved tip is a divergence, never a fast-forward.
+        assert_eq!(
+            reconcile_verdict(Some("a"), Some("b"), true, &linear_history()),
+            ReconcileVerdict::Diverged
+        );
+    }
+
+    #[test]
+    fn reconcile_diverges_when_tip_not_a_descendant_of_base() {
+        // Tip moved but BASE is NOT an ancestor (stale latest_commit / fork): the
+        // ancestor guard refuses the fast-forward and we route to the prompt.
+        assert_eq!(
+            reconcile_verdict(Some("b"), Some("a"), false, &linear_history()),
+            ReconcileVerdict::Diverged
+        );
+    }
+
+    #[test]
+    fn reconcile_non_linear_history_routes_to_divergence_not_error() {
+        // A merge commit (two parents) is non-linear -> the ancestor guard fails
+        // -> divergence prompt (#193 b2), NOT a hard error.
+        let merge = vec![
+            commit("root", &[], ME),
+            commit("a", &["root"], ME),
+            commit("m", &["a", "root"], ME), // merge: two parents
+        ];
+        assert_eq!(
+            reconcile_verdict(Some("a"), Some("m"), false, &merge),
+            ReconcileVerdict::Diverged
+        );
+    }
+
+    #[test]
+    fn reconcile_empty_tip_with_recorded_base_routes_to_divergence() {
+        // FailClosed (recorded BASE, server reports no tip — incl. the multi-root
+        // case where tip_of() yields None) folds into the divergence prompt.
+        assert_eq!(
+            reconcile_verdict(Some("b"), None, false, &[]),
+            ReconcileVerdict::Diverged
+        );
+    }
+
+    // ---- plan_push (Done push routing, #193 b2 + b5) ----
+
+    #[test]
+    fn plan_push_uploads_directly_when_up_to_date() {
+        assert_eq!(
+            plan_push(
+                Some("b"),
+                Some("b"),
+                &linear_history(),
+                ME,
+                Some(T1),
+                Some(T2)
+            ),
+            PushPlan::Upload
+        );
+    }
+
+    #[test]
+    fn plan_push_adopts_and_confirms_when_my_push_landed_clean() {
+        // My commit b landed on top of BASE a, no edit after push-start -> adopt +
+        // confirm without a redundant re-push.
+        assert_eq!(
+            plan_push(
+                Some("a"),
+                Some("b"),
+                &linear_history(),
+                ME,
+                Some(T1),
+                Some(T2)
+            ),
+            PushPlan::AdoptConfirmed
+        );
+    }
+
+    #[test]
+    fn plan_push_adopts_then_reuploads_when_edited_after_push_start() {
+        // My push landed (b) but I edited again after push-start (T3 > T2) -> adopt
+        // the landed tip, then re-push the later edit on top.
+        assert_eq!(
+            plan_push(
+                Some("a"),
+                Some("b"),
+                &linear_history(),
+                ME,
+                Some(T3),
+                Some(T2)
+            ),
+            PushPlan::AdoptThenUpload
+        );
+    }
+
+    #[test]
+    fn plan_push_diverges_on_a_strangers_commit() {
+        let stolen = vec![
+            commit("root", &[], ME),
+            commit("a", &["root"], ME),
+            commit("b", &["a"], OTHER), // a stranger pushed into the gap (lock theft)
+        ];
+        assert_eq!(
+            plan_push(Some("a"), Some("b"), &stolen, ME, Some(T1), Some(T2)),
+            PushPlan::Diverged
+        );
+    }
+
+    #[test]
+    fn plan_push_diverges_on_non_linear_gap_instead_of_error() {
+        // A merge in the BASE..tip gap is an inconsistency -> divergence prompt
+        // (#193 b2), not a hard error and not a blind re-push.
+        let merge = vec![
+            commit("root", &[], ME),
+            commit("a", &["root"], ME),
+            commit("m", &["a", "root"], ME),
+        ];
+        assert_eq!(
+            plan_push(Some("a"), Some("m"), &merge, ME, Some(T1), Some(T2)),
+            PushPlan::Diverged
+        );
+    }
+
+    #[test]
+    fn plan_push_diverges_when_base_some_but_tip_none() {
+        assert_eq!(
+            plan_push(Some("a"), None, &[], ME, Some(T1), Some(T2)),
+            PushPlan::Diverged
+        );
+    }
+
+    // ---- concurrent_session_notice (#193 b8) ----
+
+    #[test]
+    fn concurrent_session_flagged_only_for_a_same_account_lock_hold() {
+        // Our own account already holds the lock -> a second session is live.
+        assert!(concurrent_session_notice(Some(ME), ME));
+        // Case-insensitive (the server may normalise email case).
+        assert!(concurrent_session_notice(
+            Some("ME@Example.com"),
+            "me@example.com"
+        ));
+        // A different account's lock is an ordinary contended lock, not this notice.
+        assert!(!concurrent_session_notice(Some(OTHER), ME));
+        // No lock held -> nothing to warn about.
+        assert!(!concurrent_session_notice(None, ME));
+    }
+
+    // ---- edits_captured_by_push (direct, #197 dirty-clear timing) ----
+
+    #[test]
+    fn edits_captured_only_when_last_edit_predates_push_start() {
+        assert!(
+            edits_captured_by_push(Some(T1), Some(T2)),
+            "edited before push"
+        );
+        assert!(
+            edits_captured_by_push(Some(T2), Some(T2)),
+            "edited at push start"
+        );
+        assert!(
+            !edits_captured_by_push(Some(T3), Some(T2)),
+            "edited after push -> keep dirty"
+        );
+        assert!(
+            !edits_captured_by_push(None, Some(T2)),
+            "unknown edit time -> keep dirty"
+        );
+        assert!(
+            !edits_captured_by_push(Some("not-a-date"), Some(T2)),
+            "unparseable -> keep dirty"
         );
     }
 }

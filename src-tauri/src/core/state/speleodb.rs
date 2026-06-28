@@ -17,7 +17,7 @@ use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
 use crate::speleodb::models::SpeleoProjectSummary;
-use crate::speleodb::sync::{self, AncestryOutcome, FenceOutcome};
+use crate::speleodb::sync::{self, PushPlan, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
     DoneResult, SpeleoDbError, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
@@ -660,6 +660,21 @@ impl AppState {
             }
         };
 
+        // Concurrent same-account session notice (#193 b8): if the server already
+        // reports a lock held by our OWN account, a second session is editing this
+        // project — the ancestry classifier's "author_email == me" proxy can't tell
+        // the two sessions apart (a second session's commit reads as "mine" and
+        // could wrongly clear the dirty bit), so surface a notice on open. Computed
+        // here, before `endpoint`/`token` are moved into the stamped link.
+        // Best-effort: a failed lookup (or no session email) never fails the open.
+        let concurrent_session = {
+            let holder = client::get_project(&endpoint, &token, insecure_http, &project_id)
+                .ok()
+                .and_then(|p| p.active_mutex.map(|m| m.user));
+            self.speleodb_my_email()
+                .is_some_and(|me| sync::concurrent_session_notice(holder.as_deref(), &me))
+        };
+
         // [Track B] (#189, D-B9) Stamp the SpeleoDB hand-off link into the pulled
         // `.stalx`. Opening via `open_existing` runs `ensure_schema_version`,
         // which creates the `speleo_link` table on the freshly-extracted file;
@@ -701,6 +716,7 @@ impl AppState {
 
         Ok(SpeleoOpenResult {
             local_path: dest.to_string_lossy().into_owned(),
+            concurrent_session,
         })
     }
 
@@ -797,25 +813,20 @@ impl AppState {
                 return Err(dto_for_error(Endpoint::GetProject, &e));
             }
         };
-        match sync::fence(
+        match sync::reconcile_verdict(
             link.base_commit_sha.as_deref(),
             tip.as_deref(),
             link.has_unpushed_edits,
+            &commits,
         ) {
-            FenceOutcome::UpToDate => {
+            ReconcileVerdict::UpToDate => {
                 self.set_edit_enabled(true);
                 Ok(StartEditingResult::Editing)
             }
-            FenceOutcome::FastForward
-                if sync::base_is_ancestor_of_tip(
-                    link.base_commit_sha.as_deref(),
-                    tip.as_deref().unwrap_or_default(),
-                    &commits,
-                ) =>
-            {
+            ReconcileVerdict::FastForward => {
                 // A failure here (e.g. a corrupt re-pulled dump) leaves us holding
                 // the lock with a closed project — release it before surfacing the
-                // error so it isn't stranded (mirrors the other no-edit arms).
+                // error so it isn't stranded (mirrors the divergence arm).
                 let local_path = match self.speleodb_fast_forward(
                     &endpoint,
                     &token,
@@ -837,9 +848,13 @@ impl AppState {
                 self.set_edit_enabled(true);
                 Ok(StartEditingResult::FastForwarded { local_path })
             }
-            // A moved-tip the BASE isn't an ancestor of: a genuine fork (not a
-            // forward move). Don't overwrite — reconcile, releasing the lock.
-            FenceOutcome::FastForward => {
+            // A fork, a moved tip our BASE isn't an ancestor of, OR a server
+            // inconsistency (non-linear / multi-root / a recorded BASE with no tip):
+            // can't edit a diverged/anomalous copy. Release the lock we just took so
+            // it isn't stranded while the user reconciles (#198, next batch) and
+            // surface the divergence prompt — never overwrite, never a hard error
+            // (#193 b2). The edit gate stays disabled.
+            ReconcileVerdict::Diverged => {
                 self.speleodb_release_best_effort(
                     &endpoint,
                     &token,
@@ -847,31 +862,6 @@ impl AppState {
                     &link.project_id,
                 );
                 Ok(StartEditingResult::DivergenceNeeded)
-            }
-            FenceOutcome::Diverged => {
-                // Can't edit a diverged copy. Release the lock we just took so it
-                // isn't stranded while the user reconciles (#198, next batch); the
-                // edit gate stays disabled.
-                self.speleodb_release_best_effort(
-                    &endpoint,
-                    &token,
-                    insecure_http,
-                    &link.project_id,
-                );
-                Ok(StartEditingResult::DivergenceNeeded)
-            }
-            FenceOutcome::FailClosed => {
-                self.speleodb_release_best_effort(
-                    &endpoint,
-                    &token,
-                    insecure_http,
-                    &link.project_id,
-                );
-                Err(local_dto(SpeleoDbError::Sync(
-                    "the server reports no commits for a project with a recorded base; \
-                     refusing to edit"
-                        .to_owned(),
-                )))
             }
         }
     }
@@ -1090,19 +1080,14 @@ impl AppState {
         })
         .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
 
-        match sync::fence(
+        match sync::reconcile_verdict(
             link.base_commit_sha.as_deref(),
             tip.as_deref(),
             link.has_unpushed_edits,
+            &commits,
         ) {
-            FenceOutcome::UpToDate => Ok(UpdateResult::UpToDate),
-            FenceOutcome::FastForward
-                if sync::base_is_ancestor_of_tip(
-                    link.base_commit_sha.as_deref(),
-                    tip.as_deref().unwrap_or_default(),
-                    &commits,
-                ) =>
-            {
+            ReconcileVerdict::UpToDate => Ok(UpdateResult::UpToDate),
+            ReconcileVerdict::FastForward => {
                 // speleodb_fast_forward reloads in place, which re-derives the edit
                 // gate from is_remote (= false for a remote project). If the caller
                 // was mid-edit-session (gate on, lock held — reachable if the lock
@@ -1120,12 +1105,10 @@ impl AppState {
                 }
                 Ok(UpdateResult::FastForwarded { local_path })
             }
-            // Moved tip the BASE isn't an ancestor of → a fork, not a forward move.
-            FenceOutcome::FastForward => Ok(UpdateResult::DivergenceNeeded),
-            FenceOutcome::Diverged => Ok(UpdateResult::DivergenceNeeded),
-            FenceOutcome::FailClosed => Err(local_dto(SpeleoDbError::Sync(
-                "the server reports no commits for a project with a recorded base".to_owned(),
-            ))),
+            // A fork, a moved tip our BASE isn't an ancestor of, OR a server
+            // inconsistency (non-linear / multi-root / a recorded BASE with no tip):
+            // surface the divergence prompt, never a hard error (#193 b2).
+            ReconcileVerdict::Diverged => Ok(UpdateResult::DivergenceNeeded),
         }
     }
 
@@ -1173,64 +1156,47 @@ impl AppState {
         })
         .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
 
-        match sync::fence(link.base_commit_sha.as_deref(), tip.as_deref(), true) {
+        // `my_email` identifies our own landed commits in the BASE..tip gap (#193).
+        // We are authenticated to be here; if it is somehow absent, plan_push can't
+        // match any commit as "mine" and safely routes to the divergence prompt
+        // rather than guessing.
+        let my_email = self.speleodb_my_email().unwrap_or_default();
+
+        // push-start is not persisted, so the ancestry timing stays conservative
+        // (clear_dirty == false → AdoptThenUpload, never AdoptConfirmed) and we
+        // re-push on top of any landed commit — a no-op 304 if nothing changed.
+        match sync::plan_push(
+            link.base_commit_sha.as_deref(),
+            tip.as_deref(),
+            &commits,
+            &my_email,
+            link.last_edit_at.as_deref(),
+            None,
+        ) {
             // base == tip: push our edits directly.
-            FenceOutcome::UpToDate => {}
-            // We hold the lock, so a moved tip is (almost always) our own prior
-            // ambiguous push. Disambiguate with ancestry recovery (#193).
-            FenceOutcome::Diverged => {
-                let my_email = self
-                    .speleodb_my_email()
-                    .ok_or_else(|| local_dto(SpeleoDbError::NotAuthenticated))?;
-                match sync::classify_ancestry(
-                    link.base_commit_sha.as_deref(),
-                    tip.as_deref(),
-                    &commits,
-                    &my_email,
-                    link.last_edit_at.as_deref(),
-                    // push-start is not persisted, so g7 stays conservative
-                    // (clear_dirty == false) and we always re-push below — a no-op
-                    // 304 if nothing changed since the landed commit.
-                    None,
-                ) {
-                    AncestryOutcome::Landed { clear_dirty } => {
-                        let new_base = tip.clone();
-                        if clear_dirty {
-                            // Forward-compatible only (unreachable while push-start
-                            // is unpersisted): the prior push landed and no edit
-                            // followed it, so adopt the tip and clear dirty without
-                            // a redundant re-push.
-                            self.speleodb_mutate_link(|l| {
-                                l.base_commit_sha = new_base;
-                                l.has_unpushed_edits = false;
-                                l.last_edit_at = None;
-                            })
-                            .map_err(local_dto)?;
-                            return Ok(PushOutcome::Confirmed);
-                        }
-                        // Adopt the landed tip as our BASE, then push the current
-                        // state on top (a 304 if nothing changed since).
-                        self.speleodb_mutate_link(|l| l.base_commit_sha = new_base)
-                            .map_err(local_dto)?;
-                    }
-                    AncestryOutcome::Diverged | AncestryOutcome::NotLanded => {
-                        return Ok(PushOutcome::Diverged);
-                    }
-                    AncestryOutcome::FailClosed => {
-                        return Err(local_dto(SpeleoDbError::Sync(
-                            "could not verify whether the previous push landed".to_owned(),
-                        )));
-                    }
-                }
+            PushPlan::Upload => {}
+            // Our prior (ambiguous) push landed; adopt the tip as BASE, then push the
+            // current state on top (a 304 if nothing changed since).
+            PushPlan::AdoptThenUpload => {
+                self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone())
+                    .map_err(local_dto)?;
             }
-            // Unreachable for dirty == true (the fence never fast-forwards a dirty
-            // copy), but treat defensively as divergence rather than overwrite.
-            FenceOutcome::FastForward => return Ok(PushOutcome::Diverged),
-            FenceOutcome::FailClosed => {
-                return Err(local_dto(SpeleoDbError::Sync(
-                    "the server reports no commits for a project with a recorded base".to_owned(),
-                )));
+            // Forward-compatible only (unreachable while push-start is unpersisted):
+            // the prior push landed and no edit followed, so adopt the tip and clear
+            // dirty without a redundant re-push.
+            PushPlan::AdoptConfirmed => {
+                self.speleodb_mutate_link(|l| {
+                    l.base_commit_sha = tip.clone();
+                    l.has_unpushed_edits = false;
+                    l.last_edit_at = None;
+                })
+                .map_err(local_dto)?;
+                return Ok(PushOutcome::Confirmed);
             }
+            // A stranger's commit, OR a server inconsistency (non-linear / multi-root
+            // / a recorded BASE with no tip): never overwrite or guess — surface the
+            // divergence prompt (#193 b2 + b5). Stays locked + dirty in speleodb_done.
+            PushPlan::Diverged => return Ok(PushOutcome::Diverged),
         }
 
         self.speleodb_upload(endpoint, token, insecure_http, link, message)
@@ -2262,6 +2228,88 @@ mod tests {
         assert!(
             orch_link(&state).has_unpushed_edits,
             "divergence keeps local edits (no blind overwrite)"
+        );
+    }
+
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
+    fn live_orch_open_flags_concurrent_same_account_lock() {
+        let Some((url, email, password)) = orch_env() else {
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let id = orch_seed(&url, &token, "orch-concurrent", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: token.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &email, &token);
+
+        // No lock held at open -> no concurrent-session notice (#193 b8).
+        let unlocked = state
+            .speleodb_open_project(id.clone(), "orch-concurrent".to_owned(), None)
+            .expect("open (unlocked)");
+        assert!(
+            !unlocked.concurrent_session,
+            "no lock held -> no concurrent-session notice"
+        );
+
+        // Our OWN account now holds the lock (a second same-account session): the
+        // next open must warn, because the ancestry self-heal can't tell that
+        // session's commits from ours.
+        client::acquire_lock(&url, &token, false, &id).expect("acquire as same account");
+        let locked = state
+            .speleodb_open_project(id.clone(), "orch-concurrent".to_owned(), None)
+            .expect("reopen (same-account lock held)");
+        assert!(
+            locked.concurrent_session,
+            "a same-account lock-hold at open must raise the notice"
+        );
+        client::release_lock(&url, &token, false, &id).expect("release");
+    }
+
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
+    fn live_orch_start_editing_diverges_on_unreconcilable_base() {
+        // The dev server's history is structurally linear, so it can't produce a
+        // merge / multi-root. A BASE that is not an ancestor of the tip drives the
+        // SAME "can't reconcile -> divergence" routing (#193 b2): Start editing must
+        // surface the divergence PROMPT (never a hard error) and release the lock it
+        // just took, not strand it.
+        let Some((url, email, password)) = orch_env() else {
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let id = orch_seed(&url, &token, "orch-se-diverge", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: token.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &email, &token);
+        orch_open(&state, &id, "orch-se-diverge");
+        // Forge an un-reconcilable BASE: a real-shaped SHA absent from history, so
+        // base_is_ancestor_of_tip() is false and the verdict is Diverged.
+        state
+            .speleodb_mutate_link(|l| l.base_commit_sha = Some("0".repeat(40)))
+            .expect("forge stale base");
+
+        let r = state.speleodb_start_editing().expect("start_editing");
+        assert!(
+            matches!(r, StartEditingResult::DivergenceNeeded),
+            "an unreconcilable base must route to the divergence prompt, got {r:?}"
+        );
+        assert!(!state.edit_enabled(), "divergence must not enable editing");
+        // The lock taken during Start editing must be released on divergence.
+        let holder = client::get_project(&url, &token, false, &id)
+            .ok()
+            .and_then(|p| p.active_mutex.map(|m| m.user));
+        assert!(
+            holder.is_none(),
+            "the freshly-taken lock must be released on divergence, still held by {holder:?}"
         );
     }
 }

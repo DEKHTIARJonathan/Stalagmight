@@ -23,6 +23,7 @@ import type {
  */
 export default function SpeleoDbSpikeDialog() {
   const closeDialog = useUIStore((s) => s.closeDialog);
+  const showToast = useUIStore((s) => s.showToast);
   // loadProject (not the deprecated openProject) drives the LoadingState progress UI.
   const loadProject = useProjectStore((s) => s.loadProject);
 
@@ -134,6 +135,17 @@ export default function SpeleoDbSpikeDialog() {
         latestCommitSha: project.latest_commit_sha ?? null,
       });
       localPath = result.local_path;
+      // #193 b8: a write lock held by THIS account at open time means a second
+      // same-account session is editing the project. Warn — the ancestry self-heal
+      // assumes a single same-account session, so a concurrent one risks dirty-bit
+      // misattribution. (keyed so repeat opens don't stack duplicate toasts.)
+      if (result.concurrent_session) {
+        showToast(
+          'This project is already locked by your account in another session. ' +
+            'Editing it from two sessions at once is unsupported and can lose edits.',
+          'speleodb-concurrent-session',
+        );
+      }
     } catch (e) {
       // The pull failed while the dialog is still mounted — surface it here.
       setError(getErrorMessage(e, 'Open failed'));
