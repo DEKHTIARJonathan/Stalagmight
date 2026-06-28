@@ -1991,4 +1991,277 @@ mod tests {
             Err(SpeleoDbError::AmbiguousDump(v)) if v.len() == 2
         ));
     }
+
+    // ===================== Live orchestration round-trips (#194/#197) =========
+    // AppState driven against the REAL dev box: the full wiring (acquire ->
+    // server_head -> fence -> edit gate / fast-forward / push / release) with real
+    // server responses — what the offline LoopbackStub cannot reproduce. Gated on
+    // DEV_SPELEODB_* + #[ignore]; run with `--ignored --test-threads=1`.
+
+    use crate::core::{AppState, Command};
+    use crate::models::ShotData;
+    use crate::speleodb::client;
+    use crate::speleodb::{DoneResult, StartEditingResult, UpdateResult};
+    use std::path::{Path, PathBuf};
+
+    const ORCH_SEED: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../e2e/fixtures/fractal_plant_iter2.stalx"
+    );
+    const ORCH_SEED_V2: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../e2e/fixtures/fractal_plant_iter3.stalx"
+    );
+    const ORCH_TML: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/test_simple.tml"
+    );
+
+    fn orch_env() -> Option<(String, String, String)> {
+        Some((
+            std::env::var("DEV_SPELEODB_URL").ok()?,
+            std::env::var("DEV_SPELEODB_EMAIL").ok()?,
+            std::env::var("DEV_SPELEODB_PASSWORD").ok()?,
+        ))
+    }
+
+    /// Deletes the per-test project on drop (even on panic), so live runs don't leak.
+    struct OrchCleanup {
+        url: String,
+        token: String,
+        id: String,
+    }
+    impl Drop for OrchCleanup {
+        fn drop(&mut self) {
+            let _ = client::delete_project(&self.url, &self.token, &self.id);
+        }
+    }
+
+    /// Create a fresh remote project seeded with `stalx` (lock released), returning
+    /// its id. The token owner is ADMIN on the new project.
+    fn orch_seed(url: &str, token: &str, name: &str, stalx: &str) -> String {
+        let id = client::create_project(url, token, false, name)
+            .expect("create project")
+            .id;
+        client::acquire_lock(url, token, false, &id).expect("acquire seed lock");
+        client::upload_auto(
+            url,
+            token,
+            false,
+            &id,
+            Path::new(stalx),
+            Path::new(ORCH_TML),
+            "seed",
+        )
+        .expect("seed upload");
+        client::release_lock(url, token, false, &id).expect("release seed lock");
+        id
+    }
+
+    /// Advance the remote tip with a DISTINCT upload (a different fixture → a new
+    /// commit), simulating another writer moving HEAD forward after our open.
+    fn orch_advance_tip(url: &str, token: &str, id: &str, stalx: &str) {
+        client::acquire_lock(url, token, false, id).expect("acquire advance lock");
+        client::upload_auto(
+            url,
+            token,
+            false,
+            id,
+            Path::new(stalx),
+            Path::new(ORCH_TML),
+            "advance tip",
+        )
+        .expect("advance upload");
+        client::release_lock(url, token, false, id).expect("release advance lock");
+    }
+
+    /// A fresh `AppState` whose SpeleoDB session carries a REAL dev-box token.
+    fn orch_state(url: &str, email: &str, token: &str) -> AppState {
+        // The pull/open path needs a resolved cache dir; without a Tauri runtime
+        // point it at a throwaway temp tree.
+        crate::app_dirs::init_for_test();
+        let state = AppState::new().expect("AppState::new");
+        *state.speleodb.lock().expect("session lock") = SpeleoDbSession {
+            endpoint: Some(url.to_owned()),
+            email: Some(email.to_owned()),
+            token_store: TokenStore::from_in_memory_token(token),
+            rehydrate_attempted: true,
+        };
+        state
+    }
+
+    /// Read the speleo_link straight from the open project DB.
+    fn orch_link(state: &AppState) -> SpeleoLink {
+        state
+            .database
+            .lock()
+            .expect("db lock")
+            .as_ref()
+            .expect("db open")
+            .load_speleo_link()
+            .expect("load link")
+            .expect("link present")
+    }
+
+    /// Open a remote project INTO this AppState: run the REAL download + BASE-stamp
+    /// pull (`speleodb_open_project`), then load the extracted `.stalx` into state.
+    /// The production load (`do_load_project_full`) needs a Wry `AppHandle` we can't
+    /// build headless, so we do its essential work directly — open the db + project
+    /// and drop the edit gate (a freshly pulled remote project is read-only until
+    /// Start editing). The push path reads the same `speleodb_cache_path`, so the
+    /// `file_path` we stamp here matches the live `.stalx` the upload snapshots.
+    fn orch_open(state: &AppState, id: &str, name: &str) {
+        let res = state
+            .speleodb_open_project(id.to_owned(), name.to_owned(), None)
+            .expect("pull + stamp");
+        let path = PathBuf::from(res.local_path);
+        let db = Database::open_existing(&path).expect("open extracted .stalx");
+        let mut project = db.load_project().expect("load pulled project");
+        project.file_path = Some(path);
+        *state.database.lock().expect("db lock") = Some(db);
+        *state.project.lock().expect("project lock") = Some(project);
+        state.set_edit_enabled(false);
+    }
+
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
+    fn live_orch_start_editing_edit_done_advances_base() {
+        let Some((url, email, password)) = orch_env() else {
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let id = orch_seed(&url, &token, "orch-roundtrip", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: token.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &email, &token);
+        orch_open(&state, &id, "orch-roundtrip");
+        assert!(
+            !state.edit_enabled(),
+            "a freshly pulled remote project is read-only until Start editing"
+        );
+        let base_before = orch_link(&state).base_commit_sha;
+
+        // Start editing: clean reconcile -> editable, lock held.
+        let started = state.speleodb_start_editing().expect("start_editing");
+        assert!(
+            matches!(started, StartEditingResult::Editing),
+            "clean reconcile should enable editing, got {started:?}"
+        );
+        assert!(
+            state.edit_enabled(),
+            "editing enabled after a clean Start editing"
+        );
+
+        // A real survey edit (new section) -> dirty bit set + content changed.
+        assert!(
+            state
+                .execute(Command::CreateSection {
+                    name: Some("orch-edit".to_owned()),
+                    surveyor: None,
+                    date: None,
+                    color: "#abcdef".to_owned(),
+                    direction: None,
+                    shots: vec![ShotData {
+                        length: 5.0,
+                        ..Default::default()
+                    }],
+                })
+                .success,
+            "edit succeeds while editing"
+        );
+        assert!(
+            orch_link(&state).has_unpushed_edits,
+            "edit marks the project dirty"
+        );
+
+        // Done: push (200, new content) + release -> base advances, dirty cleared,
+        // read-only again.
+        let done = state.speleodb_done(None).expect("done");
+        assert!(
+            matches!(done, DoneResult::Released),
+            "a confirmed push then release should report Released, got {done:?}"
+        );
+        assert!(!state.edit_enabled(), "read-only again after Done");
+        let after = orch_link(&state);
+        assert!(
+            !after.has_unpushed_edits,
+            "dirty cleared after a confirmed push"
+        );
+        assert!(
+            after.base_commit_sha.is_some(),
+            "BASE is the adopted hexsha"
+        );
+        assert_ne!(
+            after.base_commit_sha, base_before,
+            "BASE advanced to the new commit after a 200 push"
+        );
+    }
+
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
+    fn live_orch_update_up_to_date_on_fresh_open() {
+        let Some((url, email, password)) = orch_env() else {
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let id = orch_seed(&url, &token, "orch-update-utd", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: token.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &email, &token);
+        orch_open(&state, &id, "orch-update-utd");
+        // Freshly opened at the tip -> Update is a no-op.
+        let r = state.speleodb_update().expect("update");
+        assert!(
+            matches!(r, UpdateResult::UpToDate),
+            "a fresh open is up to date, got {r:?}"
+        );
+    }
+
+    // NOTE on fast-forward coverage: the FF *decision* (clean local + moved tip ->
+    // FastForward) is exhaustively unit-tested in `sync.rs` (fence/ancestry). Its
+    // *execution* re-pulls and reloads via `do_load_project_full`, which hard-requires
+    // a Wry `AppHandle` (progress events) that can't be built in a headless test —
+    // so a live FF orchestration test is intentionally omitted here rather than
+    // asserting a test-environment artifact.
+
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
+    fn live_orch_update_diverges_when_dirty_and_tip_moved() {
+        let Some((url, email, password)) = orch_env() else {
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let id = orch_seed(&url, &token, "orch-diverge", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: token.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &email, &token);
+        orch_open(&state, &id, "orch-diverge");
+        // Local un-pushed edits...
+        state.mark_remote_dirty();
+        // ...AND the tip moved underneath us -> a genuine fork, never an overwrite.
+        orch_advance_tip(&url, &token, &id, ORCH_SEED_V2);
+
+        let r = state.speleodb_update().expect("update");
+        assert!(
+            matches!(r, UpdateResult::DivergenceNeeded),
+            "dirty + moved tip must route to divergence, got {r:?}"
+        );
+        // Update never overwrites: the dirty bit is still set, awaiting resolution.
+        assert!(
+            orch_link(&state).has_unpushed_edits,
+            "divergence keeps local edits (no blind overwrite)"
+        );
+    }
 }

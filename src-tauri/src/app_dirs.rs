@@ -87,3 +87,21 @@ pub fn cache_dir() -> Option<&'static Path> {
 pub fn document_dir() -> Option<&'static Path> {
     DIRS.get().and_then(|d| d.document.as_deref())
 }
+
+/// Test-only: initialise [`DIRS`] pointing at a throwaway tree under the system
+/// temp dir, so the cache/config/data getters resolve without a Tauri runtime.
+/// Idempotent — the `OnceLock` ignores later calls (and any prior real `init`).
+/// Only the env-gated live SpeleoDB orchestration tests use this; the standard
+/// `cargo test` run never calls it, so `DIRS` stays `None` for every other test.
+#[cfg(test)]
+pub(crate) fn init_for_test() {
+    DIRS.get_or_init(|| {
+        let base = std::env::temp_dir().join("stalagmight-test-dirs");
+        Dirs {
+            data_local: base.join("data"),
+            config: base.join("config"),
+            cache: base.join("cache"),
+            document: Some(base.join("documents")),
+        }
+    });
+}
