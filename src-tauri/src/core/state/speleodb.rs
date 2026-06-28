@@ -2625,4 +2625,76 @@ mod tests {
             "the pushed edit must be present in the server's self-contained snapshot"
         );
     }
+
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
+    fn live_orch_pushed_tml_byte_stable_vs_rerender() {
+        // #196 b4 end-to-end: the ariane.tml the server STORED must be byte-identical
+        // to a fresh local re-render of the same (UUID-minted) project. The render is
+        // deterministic — the one-time shot-UUID pass ran on push — so re-pushing
+        // unchanged content never churns the .tml. (The offline byte-stability test
+        // proves export_tml is deterministic; this proves the bytes the server holds
+        // are exactly that deterministic render, intact through the round-trip.)
+        let Some((url, email, password)) = orch_env() else {
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let id = orch_seed(&url, &token, "orch-tmlstable", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: token.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &email, &token);
+        orch_open(&state, &id, "orch-tmlstable");
+        state.speleodb_start_editing().expect("start_editing");
+        assert!(
+            state
+                .execute(Command::CreateSection {
+                    name: Some("tml-edit".to_owned()),
+                    surveyor: None,
+                    date: None,
+                    color: "#abcdef".to_owned(),
+                    direction: None,
+                    shots: vec![ShotData {
+                        length: 5.0,
+                        ..Default::default()
+                    }],
+                })
+                .success,
+            "edit succeeds while editing"
+        );
+        state.speleodb_done(None).expect("done");
+
+        // Pull the ariane.tml the server now holds.
+        let zip = client::download_dump(&url, &token, false, &id).expect("download dump");
+        let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open server dump");
+        let entries = dump.entry_paths().expect("dump entry paths");
+        let tml_entry = entries
+            .iter()
+            .find(|e| e.ends_with("ariane.tml"))
+            .expect("ariane.tml present in the dump");
+        let temp = TempDir::new().expect("temp dir");
+        let server_tml = temp.path().join("server.tml");
+        dump.extract_entry_to(tml_entry, &server_tml)
+            .expect("extract server ariane.tml");
+
+        // Re-render the same in-memory project (UUIDs were minted + persisted on push).
+        let project = state
+            .project
+            .lock()
+            .expect("project lock")
+            .as_ref()
+            .expect("open project")
+            .clone();
+        let rerender = temp.path().join("rerender.tml");
+        crate::export::tml::export_tml(&project, &rerender).expect("re-render .tml");
+
+        assert_eq!(
+            std::fs::read(&server_tml).expect("read server ariane.tml"),
+            std::fs::read(&rerender).expect("read re-rendered .tml"),
+            "the stored ariane.tml must be byte-identical to a fresh re-render (#196 b4)"
+        );
+    }
 }
