@@ -2489,4 +2489,93 @@ mod tests {
         // Release the collaborator's lock so cleanup's delete isn't fighting it.
         let _ = client::release_lock(&url, &collab, false, &id);
     }
+
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
+    fn live_orch_pushed_dump_is_self_contained_without_sidecars() {
+        // #195 end-to-end against the real server: after a Done push, the dump the
+        // server STORED must be exactly the VACUUM snapshot — one self-contained
+        // `.stalx` (opens via open_existing with the pushed edit) co-pushed with the
+        // `ariane.tml`, and NO `-wal`/`-journal`/`-shm` sidecar ever rode along
+        // (bullets 1/2/3). The cache `.stalx` is default DELETE journal mode, so this
+        // also exercises the push pipeline under DELETE (bullet 4 DELETE); the WAL
+        // case is a client-local vacuum concern covered by vacuum_snapshot_under_wal_mode.
+        let Some((url, email, password)) = orch_env() else {
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let id = orch_seed(&url, &token, "orch-dump", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: token.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &email, &token);
+        orch_open(&state, &id, "orch-dump");
+        state.speleodb_start_editing().expect("start_editing");
+        assert!(
+            state
+                .execute(Command::CreateSection {
+                    name: Some("dump-edit".to_owned()),
+                    surveyor: None,
+                    date: None,
+                    color: "#abcdef".to_owned(),
+                    direction: None,
+                    shots: vec![ShotData {
+                        length: 5.0,
+                        ..Default::default()
+                    }],
+                })
+                .success,
+            "edit succeeds while editing"
+        );
+        state.speleodb_done(None).expect("done");
+
+        // Inspect the archive the server now holds.
+        let zip = client::download_dump(&url, &token, false, &id).expect("download dump");
+        let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open server dump");
+        let entries = dump.entry_paths().expect("dump entry paths");
+
+        // (3) no SQLite journal sidecar ever left the client.
+        for entry in &entries {
+            for suffix in ["-wal", "-journal", "-shm"] {
+                assert!(
+                    !entry.ends_with(suffix),
+                    "no sqlite sidecar may ride to the server: {entry} in {entries:?}"
+                );
+            }
+        }
+        // Exactly one `.stalx` (the snapshot) — never the ambiguous multi-.stalx shape.
+        let stalx_count = entries.iter().filter(|e| e.ends_with(".stalx")).count();
+        assert_eq!(
+            stalx_count, 1,
+            "the server dump must hold exactly one .stalx, got {entries:?}"
+        );
+
+        // (1/2) it extracts + opens as a SELF-CONTAINED DB carrying the pushed edit.
+        let entry = classify_dump_entry(&entries).expect("classify the dump");
+        let temp = TempDir::new().expect("temp dir");
+        let out = temp.path().join("server_snap.stalx");
+        dump.extract_entry_to(&entry, &out).expect("extract .stalx");
+        for suffix in ["-wal", "-journal", "-shm"] {
+            let sidecar = PathBuf::from(format!("{}{suffix}", out.to_string_lossy()));
+            assert!(
+                !sidecar.exists(),
+                "the extracted snapshot must be self-contained: {sidecar:?} must not exist"
+            );
+        }
+        let server_db =
+            Database::open_existing(&out).expect("server snapshot opens self-contained");
+        let project = server_db
+            .load_project()
+            .expect("load project from server snapshot");
+        assert!(
+            project
+                .sections
+                .iter()
+                .any(|s| s.name.as_deref() == Some("dump-edit")),
+            "the pushed edit must be present in the server's self-contained snapshot"
+        );
+    }
 }
