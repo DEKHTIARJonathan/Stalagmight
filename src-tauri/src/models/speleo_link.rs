@@ -31,7 +31,7 @@ pub struct SpeleoLink {
     /// since pull. Persisted (schema v10) so the guardrail-7 ancestry recovery
     /// can decide — across a crash/restart — whether a landed-by-ancestry push
     /// may clear the dirty bit (only when `last_edit_at <= push-start`).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub last_edit_at: Option<String>,
 }

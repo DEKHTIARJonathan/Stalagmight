@@ -280,9 +280,14 @@ where
     >,
 {
     let first = fetch()?;
-    if base.is_some() && first.0.is_none() {
-        // Recorded BASE but no tip — re-fetch exactly once, then trust the result
-        // (a still-empty second read lets the fence fail closed).
+    // Key the retry on the TRUE transient signal — an EMPTY commit list — not on
+    // `tip.is_none()`: tip_of also returns None for a multi-leaf FORK, which is not
+    // transient and must fail closed immediately rather than waste a second GET
+    // (#197 review). A recorded BASE meeting an empty history is the momentary
+    // empty-read case (replication lag / a race right after project creation).
+    if base.is_some() && first.1.is_empty() {
+        // Re-fetch exactly once, then trust the result (a still-empty second read
+        // lets the fence fail closed).
         return fetch();
     }
     Ok(first)
@@ -680,9 +685,7 @@ impl AppState {
         // here, before `endpoint`/`token` are moved into the stamped link.
         // Best-effort: a failed lookup (or no session email) never fails the open.
         let concurrent_session = {
-            let holder = client::get_project(&endpoint, &token, insecure_http, &project_id)
-                .ok()
-                .and_then(|p| p.active_mutex.map(|m| m.user));
+            let holder = self.speleodb_lock_holder(&endpoint, &token, insecure_http, &project_id);
             self.speleodb_my_email()
                 .is_some_and(|me| sync::concurrent_session_notice(holder.as_deref(), &me))
         };
@@ -744,17 +747,30 @@ impl AppState {
         // and drop the gate — independent of whether the token still resolves, a
         // logged-out session must not keep editing a project it can never push.
         if self.edit_enabled() {
-            if let Ok(link) = self.speleodb_open_link() {
-                if let Ok((endpoint, token)) = self.speleodb_active_token() {
-                    let insecure_http = self.speleodb_insecure_http();
-                    self.speleodb_release_best_effort(
-                        &endpoint,
-                        &token,
-                        insecure_http,
-                        &link.project_id,
-                    );
+            match self.speleodb_open_link() {
+                // Remote edit session: best-effort RELEASE the lock (needs the token,
+                // so before `forget`), then drop the gate.
+                Ok(link) => {
+                    if let Ok((endpoint, token)) = self.speleodb_active_token() {
+                        let insecure_http = self.speleodb_insecure_http();
+                        self.speleodb_release_best_effort(
+                            &endpoint,
+                            &token,
+                            insecure_http,
+                            &link.project_id,
+                        );
+                    }
+                    self.set_edit_enabled(false);
                 }
-                self.set_edit_enabled(false);
+                // Local-only project (no hand-off link): no lock, nothing to push —
+                // keep it editable.
+                Err(SpeleoDbError::NoRemoteProject) => {}
+                // Couldn't determine locality (e.g. a poisoned database Mutex): the
+                // gate-drop is a SAFETY action, so it must not be skipped just because
+                // the link load failed — a logged-out session must not keep editing a
+                // project it may be unable to push. Fail safe to read-only. (#197
+                // review; no project_id available here, so no lock release.)
+                Err(_) => self.set_edit_enabled(false),
             }
         }
         self.speleodb_session_lock().map_err(local_dto)?.forget();
@@ -891,6 +907,24 @@ impl AppState {
             .ok_or(SpeleoDbError::NoRemoteProject)
     }
 
+    /// Best-effort: re-GET the project and return who holds its mutex (the active
+    /// lock's user email), or `None` if unlocked / the lookup fails. Deliberately NOT
+    /// routed through [`Self::speleodb_handle_auth`] — these are best-effort
+    /// lock-holder probes (the concurrent-session notice on open, the contended-lock
+    /// report), so a transient 401 must fall through rather than auto-drop the whole
+    /// session (#197 review). Shared by both probe sites so they can't diverge.
+    fn speleodb_lock_holder(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        project_id: &str,
+    ) -> Option<String> {
+        client::get_project(endpoint, token, insecure_http, project_id)
+            .ok()
+            .and_then(|p| p.active_mutex.map(|m| m.user))
+    }
+
     /// Re-GET the project to report who holds the contended lock. Best-effort: a
     /// failed GET (or a lock that has since cleared) reports the holder as unknown.
     fn speleodb_locked_by(
@@ -900,9 +934,7 @@ impl AppState {
         insecure_http: bool,
         project_id: &str,
     ) -> StartEditingResult {
-        let email = client::get_project(endpoint, token, insecure_http, project_id)
-            .ok()
-            .and_then(|p| p.active_mutex.map(|m| m.user));
+        let email = self.speleodb_lock_holder(endpoint, token, insecure_http, project_id);
         StartEditingResult::LockedBy { email }
     }
 
@@ -1702,6 +1734,53 @@ mod tests {
             !state.edit_enabled(),
             "forget must drop the edit gate on a remote edit session"
         );
+    }
+
+    #[test]
+    fn head_with_empty_retry_refetches_only_on_empty_history() {
+        use crate::speleodb::models::RevisionCommit;
+        let commit = |id: &str, parents: &[&str]| RevisionCommit {
+            id: id.to_owned(),
+            parent_ids: parents.iter().map(|s| (*s).to_owned()).collect(),
+            author_email: "me@x".to_owned(),
+        };
+
+        // Recorded BASE + EMPTY history → transient empty read → re-fetch once.
+        let calls = std::cell::Cell::new(0_u32);
+        let r = head_with_empty_retry(Some("base"), || {
+            calls.set(calls.get() + 1);
+            Ok((None, vec![]))
+        })
+        .expect("retry path");
+        assert_eq!(
+            calls.get(),
+            2,
+            "an empty history with a recorded BASE re-fetches"
+        );
+        assert!(r.0.is_none());
+
+        // Recorded BASE + a FORK (commits present, tip None) → NOT transient → no
+        // wasted second GET (this is the #197-review fix: keyed on commits, not tip).
+        let calls = std::cell::Cell::new(0_u32);
+        let fork = vec![commit("a", &[]), commit("b", &[])]; // two roots → tip_of None
+        let r = head_with_empty_retry(Some("base"), || {
+            calls.set(calls.get() + 1);
+            Ok((None, fork.clone()))
+        })
+        .expect("fork path");
+        assert_eq!(calls.get(), 1, "a fork must fail closed without a re-fetch");
+        assert!(r.0.is_none());
+        assert_eq!(r.1.len(), 2);
+
+        // A resolved tip → no retry.
+        let calls = std::cell::Cell::new(0_u32);
+        let r = head_with_empty_retry(Some("base"), || {
+            calls.set(calls.get() + 1);
+            Ok((Some("tip".to_owned()), vec![commit("tip", &["base"])]))
+        })
+        .expect("tip path");
+        assert_eq!(calls.get(), 1);
+        assert_eq!(r.0.as_deref(), Some("tip"));
     }
 
     /// A session seeded with an in-memory token (no real keychain). Marked

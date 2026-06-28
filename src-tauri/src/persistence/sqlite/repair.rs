@@ -87,17 +87,14 @@ impl Database {
     /// snapshot shape) is logged, not fatal.
     pub fn sanitize_push_snapshot(snapshot: &Path) -> Result<()> {
         let conn = Connection::open(snapshot).context("open snapshot to sanitize for push")?;
-        // The dirty bit / edit timestamp are local hand-off state, never server state.
-        conn.execute(
-            "UPDATE speleo_link SET has_unpushed_edits = 0, last_edit_at = NULL",
-            [],
-        )
-        .context("clear dirty bit in push snapshot")?;
-        // Per-machine / per-session local tables never proliferate. Each DELETE is
-        // independent + non-fatal so a missing table (older snapshot shape) is
-        // logged, not aborted — AND so a strip failure never skips the dirty-bit
-        // clear above (which must always run before upload). The table names are
-        // compile-time literals (no injection surface).
+        // Every statement below runs INDEPENDENTLY + best-effort: a failure of one
+        // (e.g. a missing table on an older snapshot shape) is logged, never aborts,
+        // and — crucially — never skips the others. The undo/redo strip is FIRST
+        // because it is the data-CORRUPTION vector on adopt (#194 b3): it must run
+        // even if the dirty-bit clear below were to fail, which the old ordering
+        // (fatal dirty-clear first) did not guarantee (#197 review). Per-machine /
+        // per-session local tables never proliferate; the names are compile-time
+        // literals (no injection surface).
         for table in Self::PUSH_SNAPSHOT_LOCAL_TABLES {
             if let Err(e) = conn.execute(&format!("DELETE FROM {table}"), []) {
                 tracing::warn!(
@@ -106,6 +103,16 @@ impl Database {
                     "sanitize_push_snapshot: failed to strip local-only table from snapshot"
                 );
             }
+        }
+        // The dirty bit / edit timestamp are local hand-off state, never server state.
+        if let Err(e) = conn.execute(
+            "UPDATE speleo_link SET has_unpushed_edits = 0, last_edit_at = NULL",
+            [],
+        ) {
+            tracing::warn!(
+                error = %e,
+                "sanitize_push_snapshot: failed to clear the dirty bit in the push snapshot"
+            );
         }
         Ok(())
     }
