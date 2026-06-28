@@ -666,9 +666,52 @@ mod tests {
 
     use super::{
         api_url, bearer, build_upload_parts, mime_for, parse_error_message,
-        parse_upload_auto_response, with_retry, UserInfo,
+        parse_upload_auto_response, with_retry, RevisionHistory, UserInfo,
     };
     use crate::speleodb::SpeleoDbError;
+
+    #[test]
+    fn revisions_payload_decodes_verified_v2_field_names() {
+        // The whole sync engine keys off the /revisions/ field names `parent_ids` and
+        // `author_email`, both #[serde(default)] — so a RENAMED server key would
+        // SILENTLY default (parent_ids=[] → every commit reads as a root → tip None →
+        // fail closed; author_email="" → stranger → Diverged) with no parse error. The
+        // only other decode of a real payload is the #[ignore] live test, so this
+        // recorded fixture (the verified v2 contract, incl. the extra fields serde
+        // ignores) locks the names in CI. (#197 review)
+        let payload = r#"{
+            "project": {"id": "11111111-1111-1111-1111-111111111111", "name": "X"},
+            "commits": [
+                {"id": "root0", "parent_ids": [], "author_email": "svc@speleodb.org",
+                 "author_name": "Service", "authored_date": "2026-06-01T00:00:00Z", "message": "init"},
+                {"id": "childA", "parent_ids": ["root0"], "author_email": "Me@Example.COM",
+                 "author_name": "Me", "authored_date": "2026-06-02T00:00:00Z", "message": "edit"}
+            ]
+        }"#;
+        let history: RevisionHistory = serde_json::from_slice(payload.as_bytes())
+            .expect("verified v2 revisions payload decodes");
+        assert_eq!(history.commits.len(), 2, "both commits decode");
+        let child = history
+            .commits
+            .iter()
+            .find(|c| c.id == "childA")
+            .expect("childA present");
+        assert_eq!(
+            child.parent_ids,
+            vec!["root0".to_owned()],
+            "parent_ids MUST populate from the `parent_ids` key (a rename would silently default to [])"
+        );
+        assert_eq!(
+            child.author_email, "Me@Example.COM",
+            "author_email MUST populate from the `author_email` key (a rename would default to \"\")"
+        );
+        // parent_ids actually drives the topology leaf the fence trusts.
+        assert_eq!(
+            crate::speleodb::sync::tip_of(&history.commits),
+            Some("childA"),
+            "tip_of resolves the leaf via parent_ids"
+        );
+    }
 
     #[test]
     fn upload_auto_response_prefers_hexsha_then_falls_back_to_nested() {
