@@ -193,16 +193,28 @@ export function GasPlanPanel() {
           </div>
         </section>
 
-        {/* Swim speed — the diver's pace; feeds the in-leg gas-to-reach computation. Nulls the
-            cached field via setGasConfig so the overlay + route refetch on change. */}
+        {/* Swim speed — the diver's pace; feeds the in-leg gas-to-reach computation. Unlike the
+            panel's other (per-session) inputs, swim speed PERSISTS: a commit updates the working
+            copy (so the overlay/route refetch immediately) AND writes the value back to the saved
+            config — the same gas.swim_speed_m_per_min that Settings ▸ Gas edits — so a speed set
+            while planning sticks across Plan exit / restart and stays in sync with Settings (#236).
+            Only this field is written back; reserve / units / diver stay per-session. */}
         <section className="space-y-1">
           <SectionLabel>{t('gasPanel.swimSpeed.label')}</SectionLabel>
           <div className="flex items-center gap-2">
             <PositiveNumberField
               value={speedToDisplay(gasConfig.swim_speed_m_per_min, units)}
-              onCommit={(n) =>
-                setGasConfig({ ...gasConfig, swim_speed_m_per_min: speedFromDisplay(n, units) })
-              }
+              onCommit={(n) => {
+                const v = speedFromDisplay(n, units);
+                setGasConfig({ ...gasConfig, swim_speed_m_per_min: v });
+                const saved = useProjectStore.getState().config;
+                if (saved) {
+                  void useProjectStore.getState().updateConfig({
+                    ...saved,
+                    gas: { ...saved.gas, swim_speed_m_per_min: v },
+                  });
+                }
+              }}
               step={units === 'imperial' ? 1 : 0.5}
               displayPrecision={1}
               className="w-24 bg-transparent border border-border rounded px-2 py-1"

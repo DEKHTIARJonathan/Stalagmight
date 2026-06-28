@@ -222,6 +222,32 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-readout-avg-depth"]')).toBeVisible();
   });
 
+  test('Plan swim speed persists to the saved config @smoke', async ({ page }) => {
+    await enterMode(page, 'plan');
+    const swim = page.locator('[data-testid="gas-swim-speed-input"]');
+    await expect(swim).toBeVisible({ timeout: 3000 });
+    // Editing swim speed writes back to the saved config (#236) — unlike the panel's other
+    // per-session inputs — so it sticks across Plan exit / restart and stays in sync with Settings.
+    await swim.fill('14');
+    await swim.blur();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __E2E_TEST__: {
+                  projectStore: {
+                    getState: () => { config: { gas: { swim_speed_m_per_min: number } } | null };
+                  };
+                };
+              }
+            ).__E2E_TEST__.projectStore.getState().config?.gas.swim_speed_m_per_min,
+        ),
+      )
+      .toBe(14);
+  });
+
   test('Display menu is available in Plan and Export, without the survey-only geometry toggle @smoke', async ({
     page,
   }) => {
