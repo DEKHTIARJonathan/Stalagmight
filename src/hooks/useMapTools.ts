@@ -73,6 +73,37 @@ interface MapToolsOptions {
     | null;
 }
 
+/**
+ * Pick the nearest reachable station to a point (in metres) — the Plan-mode "set a turnaround
+ * anywhere" resolver (#236). Restricts to `reachable` station keys when provided, so the pick stays
+ * meaningful (an unreachable endpoint would fall back to the deepest point in the engine); with no
+ * field loaded yet (`reachable === null`) any station is eligible. Returns null when none match.
+ */
+export function nearestReachableStationRef(
+  point: { x: number; y: number },
+  stations: ReadonlyArray<{ station_ref: StationRef; coordinates: { x: number; y: number } }>,
+  reachable: ReadonlySet<string> | null
+): StationRef | null {
+  let best: StationRef | null = null;
+  let bestDist = Infinity;
+  for (const st of stations) {
+    if (
+      reachable &&
+      !reachable.has(`${st.station_ref.section_id}:${st.station_ref.station_index}`)
+    ) {
+      continue;
+    }
+    const dx = st.coordinates.x - point.x;
+    const dy = st.coordinates.y - point.y;
+    const d = dx * dx + dy * dy;
+    if (d < bestDist) {
+      bestDist = d;
+      best = st.station_ref;
+    }
+  }
+  return best;
+}
+
 export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks {
   // Performance: exclude hover values from subscription — this hook is called
   // from MapCanvas and would cause full re-renders on every mousemove.
@@ -830,7 +861,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   const handleContextMenu = useCallback(
     (
       target: { type: 'station'; ref: StationRef } | { type: 'shot'; sectionId: SectionId; shotId: ShotId } | null,
-      event: { originalEvent: MouseEvent }
+      event: MapMouseEvent
     ) => {
       // ALWAYS prevent native context menu
       event.originalEvent.preventDefault();
@@ -852,9 +883,35 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           target,
           position: { x: event.originalEvent.clientX, y: event.originalEvent.clientY },
         });
+      } else if (showGasPlan) {
+        // Plan mode: a right-click on empty map (or with stations hidden) snaps to the nearest
+        // reachable station and offers it as a route pick — so a turnaround can be set ANYWHERE,
+        // notably when the whole cave is reachable (low RMV / lots of gas → no turn-frontier dots)
+        // or stations aren't displayed (#236). Match in metres against the click's map coords;
+        // restrict to reachable stations (when the field is loaded) so the pick is meaningful — an
+        // unreachable endpoint would fall back to the deepest point in the engine. The ContextMenu
+        // Plan branch turns the chosen station into Set as origin / Set as endpoint.
+        const reachField = useGasPlanStore.getState().reachField;
+        const clickM = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
+        const reachable = reachField
+          ? new Set(
+              reachField.station_refs
+                .filter((_r, i) => reachField.reachable[i])
+                .map((r) => `${r.section_id}:${r.station_index}`)
+            )
+          : null;
+        const best = nearestReachableStationRef(clickM, activeStations, reachable);
+        if (best) {
+          setSource('map');
+          setSelection({ type: 'station', stationRef: best });
+          openDialog('context-menu', {
+            target: { type: 'station', ref: best },
+            position: { x: event.originalEvent.clientX, y: event.originalEvent.clientY },
+          });
+        }
       }
     },
-    [activeTool, openDialog, setSelection]
+    [activeTool, openDialog, setSelection, showGasPlan, activeStations, options.gpsOrigin]
   );
 
   return {
