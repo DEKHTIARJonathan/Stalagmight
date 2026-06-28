@@ -26,6 +26,23 @@ export const UNREACHABLE_GAS = -1;
 export const GAS_NEAR = '#f4d03f'; // gold — little gas spent
 export const GAS_FAR = '#7d3c98'; // purple — at the turn budget
 
+/**
+ * The set of `${section_id}:${station_index}` keys for stations reachable on the current gas plan.
+ * Centralizes the "what counts as reachable" rule + the key format so the reach overlay and the
+ * Plan-mode nearest-turnaround pick (`nearestReachableStationRef`) can't drift (#236). `station_refs`
+ * and `reachable` are parallel arrays from the backend `GasReachField`.
+ */
+export function reachableStationKeySet(field: GasReachField): Set<string> {
+  const keys = new Set<string>();
+  for (let i = 0; i < field.station_refs.length; i++) {
+    if (field.reachable[i]) {
+      const r = field.station_refs[i]!;
+      keys.add(`${r.section_id}:${r.station_index}`);
+    }
+  }
+  return keys;
+}
+
 export interface GasReachFeatureState {
   /** featureId → litres-to-reach (avg of the shot's two endpoints; -1 if either unreachable). */
   shots: Map<number, number>;

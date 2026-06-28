@@ -10,6 +10,7 @@ import { getErrorMessage, invokeIpc } from '../utils/ipc';
 import type { SectionId, ShotId, StationRef, Coordinates, RulerEndpoint, AlongLineResult } from '../types/project';
 import type { GpsOrigin } from '../types/config';
 import { distance, mapCoordsToMeters } from '../utils/coordinates';
+import { reachableStationKeySet } from '../utils/gasReach';
 import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
@@ -880,13 +881,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       if (showGasPlan && target?.type !== 'station') {
         const reachField = useGasPlanStore.getState().reachField;
         const clickM = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
-        const reachable = reachField
-          ? new Set(
-              reachField.station_refs
-                .filter((_r, i) => reachField.reachable[i])
-                .map((r) => `${r.section_id}:${r.station_index}`)
-            )
-          : null;
+        const reachable = reachField ? reachableStationKeySet(reachField) : null;
         const best = nearestReachableStationRef(clickM, activeStations, reachable);
         if (best) {
           setSource('map');

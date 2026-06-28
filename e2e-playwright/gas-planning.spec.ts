@@ -213,10 +213,11 @@ test.describe('Gas planning', () => {
     await expect(distance).toBeVisible({ timeout: 3000 });
     await expect(distance).toContainText('m');
     await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Distance to turnaround');
-    // The Max/Average depth rows render once a route is known. This asserts the WIRING only — the
-    // mock's synthetic coordinates don't carry the seed's per-station depths, so the values here are
-    // illustrative; the exact distance/depth math (incl. the deepest-point-at-an-interior-station
-    // and depth-sign cases) is pinned in the Rust unit tests (gas/tests.rs).
+    // The Max / Average depth rows render once a route is known. This asserts the WIRING only: the
+    // e2e mock's get_project_state hardcodes station z = 0 (it doesn't derive depth from shot data),
+    // so these readouts show "0.0 m" here regardless of the seed — there's no meaningful depth value
+    // to assert at the mock level. The exact distance/depth math (tie-exclusion, deepest-point, sign)
+    // is pinned in the Rust unit tests (gas/tests.rs).
     await expect(page.locator('[data-testid="gas-readout-max-depth"]')).toBeVisible();
     await expect(page.locator('[data-testid="gas-readout-avg-depth"]')).toBeVisible();
   });

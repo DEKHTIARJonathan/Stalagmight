@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import {
-  formatLength,
+  formatGasLength,
   formatPressure,
   formatRmv,
   formatVolume,
@@ -71,20 +71,20 @@ describe('formatGas', () => {
     });
   });
 
-  describe('formatLength', () => {
+  describe('formatGasLength', () => {
     it('formats metres (metric, 0 dp default)', () => {
-      expect(formatLength(300, 'metric')).toBe('300 m');
+      expect(formatGasLength(300, 'metric')).toBe('300 m');
     });
     it('converts metres → feet (imperial)', () => {
       // 100 m × 3.2808399 = 328.08 → "328 ft" (0 dp)
-      expect(formatLength(100, 'imperial')).toBe('328 ft');
+      expect(formatGasLength(100, 'imperial')).toBe('328 ft');
     });
     it('respects an explicit precision (depth shown to 1 dp)', () => {
-      expect(formatLength(30, 'metric', 1)).toBe('30.0 m');
+      expect(formatGasLength(30, 'metric', 1)).toBe('30.0 m');
     });
     it('renders "--" for non-finite', () => {
-      expect(formatLength(NaN, 'metric')).toBe('--');
-      expect(formatLength(Infinity, 'imperial')).toBe('--');
+      expect(formatGasLength(NaN, 'metric')).toBe('--');
+      expect(formatGasLength(Infinity, 'imperial')).toBe('--');
     });
   });
 

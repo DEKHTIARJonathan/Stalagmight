@@ -198,6 +198,16 @@ impl Project {
             .windows(2)
             .map(|w| is_swim_leg(&w[0], &w[1]))
             .collect();
+        // route_pts (one coord per ref) and route_swim (one flag per leg) must stay aligned, or
+        // route_metrics would apply a leg's flag to the wrong segment. The filter_map above can only
+        // drop a ref absent from station_index — impossible today (route_refs come from station_refs,
+        // which are station_index's keys) — so assert it loudly rather than silently mis-weighting if
+        // a future graph change ever introduces a ref that isn't in the index.
+        debug_assert_eq!(
+            route_pts.len(),
+            route_refs.len(),
+            "route_pts dropped a route ref — the swim mask would misalign"
+        );
         let (route_line_length_m, route_max_depth_m, route_avg_depth_m) =
             route_metrics(&route_pts, &route_swim);
 
@@ -316,9 +326,12 @@ fn is_swim_leg(a: &StationRef, b: &StationRef) -> bool {
 /// mask (`swim[i]` = the leg `pts[i]→pts[i+1]` is a real swum shot, not a tie): the one-way swum
 /// line length (sum of 3-D segment lengths over swum legs only), the deepest point, and the
 /// distance-weighted average depth over the swum legs. `z` is depth in metres (positive below
-/// surface, `station.rs`), so the deepest point is `max z` over *all* route stations. An empty
-/// route → `(0.0, None, None)`; a single station (or all-tie route) → zero length with the depth at
-/// the first point. A missing mask entry conservatively counts the leg.
+/// surface, `station.rs`), so the deepest point is `max z` over *all* route stations. Max-depth is
+/// deliberately over all stations, not just swum legs: both ends of a tie are real surveyed stations
+/// the route passes through, so the deeper one is a genuine depth the diver reaches — only the
+/// un-swum tie *distance* (and its depth-weight) is excluded, from length/avg. An empty route →
+/// `(0.0, None, None)`; a single station (or all-tie route) → zero length with the depth at the
+/// first point. A missing mask entry conservatively counts the leg.
 fn route_metrics(pts: &[Coordinates], swim: &[bool]) -> (f64, Option<f64>, Option<f64>) {
     let Some(first) = pts.first() else {
         return (0.0, None, None);

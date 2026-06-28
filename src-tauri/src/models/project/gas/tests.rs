@@ -1025,6 +1025,21 @@ fn gas_reach_field_reaches_across_a_station_merge() {
         (ga1 - gb0).abs() < EPS,
         "merged stations share gas_to_reach (0-cost join)"
     );
+
+    // Route metrics across the merge TIE (#236): the route is A:0→A:1→[merge tie]→B:0→B:1. The two
+    // SWUM shots are 100 m each; the 0-cost merge tie (A:1→B:0, cross-section) must NOT be counted in
+    // the line length — is_swim_leg excludes it — so the distance is ~200 m end-to-end. This pins the
+    // integration wiring (route_refs → is_swim_leg mask → route_metrics); a regression that dropped
+    // the mask would count the tie's measured-coord gap and inflate the length. Deepest station is
+    // B:1 (20 m); the swum-leg depth-weighted average is (100·5 + 100·15)/200 = 10 m.
+    assert_eq!(field.final_turn_ref, Some(StationRef::new(b, 1)));
+    assert!(
+        (field.route_line_length_m - 200.0).abs() < 1.0,
+        "route_line_length_m should be ~200 m (two swum shots; merge tie excluded), got {}",
+        field.route_line_length_m
+    );
+    assert_eq!(field.route_max_depth_m, Some(20.0));
+    assert!((field.route_avg_depth_m.unwrap() - 10.0).abs() < 1e-6);
 }
 
 #[test]

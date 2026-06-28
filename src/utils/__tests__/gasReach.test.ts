@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildGasReachFeatureState,
   gasReachColorExpression,
+  reachableStationKeySet,
   UNREACHABLE_GAS,
 } from '../gasReach';
 import { encodeFeatureId } from '../ids';
@@ -92,5 +93,29 @@ describe('gasReachColorExpression', () => {
     const s = JSON.stringify(gasReachColorExpression('#aaaaaa', '#bbbbbb', 0, '#888888'));
     // safeMax falls back to 1 (no throw, valid expression).
     expect(s).toContain('interpolate');
+  });
+});
+
+describe('reachableStationKeySet', () => {
+  const field = {
+    station_refs: [
+      { section_id: 1, station_index: 0 },
+      { section_id: 1, station_index: 1 },
+      { section_id: 1, station_index: 2 },
+      { section_id: 2, station_index: 0 },
+    ],
+    reachable: [true, false, true, true],
+    // remaining GasReachField fields are unused by this helper
+  } as unknown as GasReachField;
+
+  it('keys only the reachable stations, by section_id:station_index', () => {
+    const keys = reachableStationKeySet(field);
+    expect(keys).toEqual(new Set(['1:0', '1:2', '2:0']));
+    expect(keys.has('1:1')).toBe(false); // unreachable is excluded
+  });
+
+  it('returns an empty set when nothing is reachable', () => {
+    const none = { ...field, reachable: [false, false, false, false] } as unknown as GasReachField;
+    expect(reachableStationKeySet(none).size).toBe(0);
   });
 });

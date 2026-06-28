@@ -6,7 +6,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
 import { formatStationId } from '../../utils/formatters';
 import {
-  formatLength,
+  formatGasLength,
   formatPressure,
   formatVolume,
   pressureFromDisplay,
@@ -108,12 +108,12 @@ export function GasPlanPanel() {
   const stage1Drop = reachField?.stage_drop_bars[0] ?? null;
   const stage2Drop = reachField?.stage_drop_bars[1] ?? null;
 
-  // Route metrics (backend single source of truth), shown once a route is known — i.e. a turnaround
-  // has resolved (the chosen endpoint, else the farthest in-budget point). The distance is the
-  // one-way swum line length to the turnaround; depths are the route's deepest point + the
-  // distance-weighted average depth.
-  const hasRoute = reachField?.final_turn_ref != null;
-  const routeDistance = reachField?.route_line_length_m ?? null;
+  // Route metrics (backend single source of truth), shown once a real route is known. Gate on the
+  // route having at least one LEG — not just final_turn_ref — so a degenerate single-station route
+  // (origin == turnaround when only the origin is in budget) doesn't render a meaningless
+  // "Distance to turnaround: 0 m". The distance is the one-way swum line length to the turnaround;
+  // depths are the route's deepest point + the distance-weighted average depth.
+  const hasRoute = (reachField?.route.length ?? 0) > 0;
   const routeMaxDepth = reachField?.route_max_depth_m ?? null;
   const routeAvgDepth = reachField?.route_avg_depth_m ?? null;
 
@@ -361,13 +361,13 @@ export function GasPlanPanel() {
                     className="text-right font-mono"
                     title={t('gasPanel.readout.routeDistanceHint')}
                   >
-                    {routeDistance != null ? formatLength(routeDistance, units) : '--'}
+                    {formatGasLength(reachField.route_line_length_m, units)}
                   </dd>
                   {routeMaxDepth != null && (
                     <>
                       <dt className="opacity-70">{t('gasPanel.readout.maxDepth')}</dt>
                       <dd data-testid="gas-readout-max-depth" className="text-right font-mono">
-                        {formatLength(routeMaxDepth, units, 1)}
+                        {formatGasLength(routeMaxDepth, units, 1)}
                       </dd>
                     </>
                   )}
@@ -375,7 +375,7 @@ export function GasPlanPanel() {
                     <>
                       <dt className="opacity-70">{t('gasPanel.readout.avgDepth')}</dt>
                       <dd data-testid="gas-readout-avg-depth" className="text-right font-mono">
-                        {formatLength(routeAvgDepth, units, 1)}
+                        {formatGasLength(routeAvgDepth, units, 1)}
                       </dd>
                     </>
                   )}
