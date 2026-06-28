@@ -3956,6 +3956,29 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
                 [],
             )
             .unwrap();
+        // Per-session LOCAL state that MUST be stripped (#194 b3 + collab leak):
+        // undo/redo edit history (a data-corruption vector if a collaborator
+        // inherited + replayed it) and the local Ariane-collab wiring.
+        db.conn
+            .execute(
+                "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) \
+                 VALUES (1, X'00', X'00', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO redo_stack (sequence, command_json, undo_data_json, executed_at) \
+                 VALUES (1, X'00', X'00', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO collab_state (id, state_json) VALUES (1, '{}')",
+                [],
+            )
+            .unwrap();
     }
 
     Database::sanitize_push_snapshot(&path).unwrap();
@@ -3971,6 +3994,25 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
         count("display_settings"),
         0,
         "display_settings (view toggles) must be stripped from the push snapshot"
+    );
+    // Per-session edit history stripped (#194 b3): a collaborator adopting the
+    // pushed snapshot must start with a clean undo/redo slate, never inherit (and
+    // risk replaying) the pusher's history.
+    assert_eq!(
+        count("undo_stack"),
+        0,
+        "undo_stack must be stripped from the push snapshot (#194 b3)"
+    );
+    assert_eq!(
+        count("redo_stack"),
+        0,
+        "redo_stack must be stripped from the push snapshot (#194 b3)"
+    );
+    // Local Ariane-collab wiring (sibling .tml path / per-machine toggle) stripped.
+    assert_eq!(
+        count("collab_state"),
+        0,
+        "collab_state (local Ariane-collab wiring) must not ride to collaborators"
     );
     // Durable project data proliferates — NOT stripped.
     assert_eq!(

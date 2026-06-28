@@ -973,7 +973,10 @@ impl AppState {
 
         // Reload from the refreshed cache file. close_project clears the in-memory
         // project so do_load_project_full's "already open" guard won't reject the
-        // same path; do_load_project_full re-opens it and resets undo/redo.
+        // same path; do_load_project_full re-opens it. The pulled snapshot carries
+        // NO undo/redo history (stripped on push by sanitize_push_snapshot, #194 b3),
+        // so the reload starts the in-memory stacks empty — i.e. adopt-remote resets
+        // undo/redo, never inheriting the pusher's edit history.
         let local_path = dest.to_string_lossy().into_owned();
         self.close_project();
         self.do_load_project_full(dest)
@@ -1991,6 +1994,17 @@ mod tests {
         ))
     }
 
+    /// The second pre-provisioned collaborator account (email + password). `None`
+    /// when `DEV_SPELEODB_EMAIL2`/`_PASSWORD2` are unset — the two-account tests
+    /// skip rather than fail. (That account can't be created over HTTP; see
+    /// docs/speleodb-dev-testing.md.)
+    fn orch_env2() -> Option<(String, String)> {
+        Some((
+            std::env::var("DEV_SPELEODB_EMAIL2").ok()?,
+            std::env::var("DEV_SPELEODB_PASSWORD2").ok()?,
+        ))
+    }
+
     /// Deletes the per-test project on drop (even on panic), so live runs don't leak.
     struct OrchCleanup {
         url: String,
@@ -2120,6 +2134,13 @@ mod tests {
         assert!(
             state.edit_enabled(),
             "editing enabled after a clean Start editing"
+        );
+        // #194 b1: acquire takes the mutex only; a clean (UpToDate) reconcile must
+        // NOT move BASE. Only a confirmed push (below) advances it.
+        assert_eq!(
+            orch_link(&state).base_commit_sha,
+            base_before,
+            "acquire + clean reconcile must not move BASE"
         );
 
         // A real survey edit (new section) -> dirty bit set + content changed.
@@ -2311,5 +2332,128 @@ mod tests {
             holder.is_none(),
             "the freshly-taken lock must be released on divergence, still held by {holder:?}"
         );
+    }
+
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
+    fn live_orch_pushed_snapshot_carries_no_undo_history() {
+        // #194 b3: an edit builds local undo history; after Done (push), the copy
+        // the SERVER stores must carry NO undo/redo — so any collaborator adopting
+        // it starts with a clean slate (never inheriting + replaying the pusher's
+        // edit history, a data-corruption vector).
+        let Some((url, email, password)) = orch_env() else {
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let id = orch_seed(&url, &token, "orch-undo", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: token.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &email, &token);
+        orch_open(&state, &id, "orch-undo");
+        let live_path = state
+            .project
+            .lock()
+            .expect("project lock")
+            .as_ref()
+            .and_then(|p| p.file_path.clone())
+            .expect("open project has a file path");
+
+        state.speleodb_start_editing().expect("start_editing");
+        assert!(
+            state
+                .execute(Command::CreateSection {
+                    name: Some("undo-edit".to_owned()),
+                    surveyor: None,
+                    date: None,
+                    color: "#abcdef".to_owned(),
+                    direction: None,
+                    shots: vec![ShotData {
+                        length: 5.0,
+                        ..Default::default()
+                    }],
+                })
+                .success,
+            "edit succeeds while editing"
+        );
+        state.speleodb_done(None).expect("done");
+
+        // Sanity: the LOCAL file kept the editor's undo (only the uploaded snapshot
+        // is sanitized, never the live file).
+        let live_undo = Database::open_existing(&live_path)
+            .expect("open live")
+            .load_undo_stack_with_timestamps()
+            .expect("load live undo");
+        assert!(
+            !live_undo.is_empty(),
+            "sanity: the editor accumulated undo history locally"
+        );
+
+        // Re-download the SERVER's copy: it must carry NO undo/redo (the strip).
+        let server = state
+            .speleodb_open_project(id.clone(), "orch-undo".to_owned(), None)
+            .expect("re-download server copy");
+        let server_db =
+            Database::open_existing(Path::new(&server.local_path)).expect("open server copy");
+        assert!(
+            server_db
+                .load_undo_stack_with_timestamps()
+                .expect("load server undo")
+                .is_empty(),
+            "the pushed snapshot must carry no undo history (#194 b3)"
+        );
+        assert!(
+            server_db
+                .load_redo_stack_with_timestamps()
+                .expect("load server redo")
+                .is_empty(),
+            "the pushed snapshot must carry no redo history (#194 b3)"
+        );
+    }
+
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* + _EMAIL2/_PASSWORD2 (run with --ignored --test-threads=1)"]
+    fn live_orch_start_editing_reports_locked_by_other_account() {
+        // #194 b5: a contended acquire (HTTP 400 — lock held by someone else) maps
+        // to StartEditingResult::LockedBy{email}, surfacing WHO holds it, not an
+        // error. Needs the second collaborator account.
+        let (Some((url, owner_email, owner_pw)), Some((email2, pw2))) = (orch_env(), orch_env2())
+        else {
+            return;
+        };
+        let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
+        let id = orch_seed(&url, &owner, "orch-lockedby", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: owner.clone(),
+            id: id.clone(),
+        };
+        client::grant_permission(&url, &owner, &id, &email2, "READ_AND_WRITE")
+            .expect("grant collaborator write access");
+
+        // The owner opens the project read-only...
+        let state = orch_state(&url, &owner_email, &owner);
+        orch_open(&state, &id, "orch-lockedby");
+
+        // ...meanwhile the OTHER account takes the lock.
+        let collab = client::login(&url, false, &email2, &pw2).expect("collaborator login");
+        client::acquire_lock(&url, &collab, false, &id).expect("collaborator acquires the mutex");
+
+        // The owner's Start editing now contends -> LockedBy{the collaborator}.
+        let r = state.speleodb_start_editing().expect("start_editing");
+        assert!(
+            matches!(&r, StartEditingResult::LockedBy { email } if email.as_deref() == Some(email2.as_str())),
+            "expected LockedBy{{{email2}}}, got {r:?}"
+        );
+        assert!(
+            !state.edit_enabled(),
+            "a contended Start editing must not enable editing"
+        );
+
+        // Release the collaborator's lock so cleanup's delete isn't fighting it.
+        let _ = client::release_lock(&url, &collab, false, &id);
     }
 }

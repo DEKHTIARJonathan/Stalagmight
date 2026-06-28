@@ -45,13 +45,34 @@ impl Database {
         Ok(())
     }
 
-    /// Sanitize a push SNAPSHOT in place (#197) before upload:
+    /// The per-session / per-machine LOCAL tables stripped from a push snapshot:
+    /// none of these are shared project data, so none may ride to collaborators.
+    ///
+    /// - `display_settings` — per-machine VIEW toggles (grid, layer/feature
+    ///   visibility, color mode, grid spacing); a collaborator pulls their own view.
+    /// - `undo_stack` / `redo_stack` — the editor's local edit-session history
+    ///   (#194 b3). NOT shared state, and a *data-corruption* vector if it rode: an
+    ///   adopting collaborator pressing Ctrl-Z would replay the pusher's command
+    ///   (and its `undo_data_json` prior-state payload) against a now-different tree,
+    ///   silently wiping pitch/LRUD/comment/marker/temperature — the same hazard
+    ///   `drop_legacy_undo_history` guards against. Stripping here is what makes
+    ///   every adopt-remote path (`do_load_project_full`) start with a clean slate.
+    /// - `collab_state` — the LOCAL Ariane-collab wiring (sibling `.tml` filesystem
+    ///   path, baseline, per-machine autosave toggle). Meaningless to a remote
+    ///   collaborator and never theirs to inherit.
+    const PUSH_SNAPSHOT_LOCAL_TABLES: &[&str] = &[
+        "display_settings",
+        "undo_stack",
+        "redo_stack",
+        "collab_state",
+    ];
+
+    /// Sanitize a push SNAPSHOT in place (#197/#194) before upload:
     ///
     /// - clears `speleo_link.has_unpushed_edits` / `last_edit_at` — the dirty bit is
     ///   local hand-off state, never server state (the next puller re-stamps it);
-    /// - empties `display_settings` — per-machine VIEW toggles (grid, layer/feature
-    ///   visibility, color mode, grid spacing); a collaborator pulls their own/default
-    ///   view rather than inheriting the last editor's.
+    /// - empties every table in [`Self::PUSH_SNAPSHOT_LOCAL_TABLES`] — per-machine /
+    ///   per-session local state that must not proliferate.
     ///
     /// Everything else PROLIFERATES with the project, by design: survey data,
     /// `project_settings` (shared validation config #57), AND the durable
@@ -72,12 +93,19 @@ impl Database {
             [],
         )
         .context("clear dirty bit in push snapshot")?;
-        // Per-machine view toggles don't carry forward; everything else proliferates.
-        if let Err(e) = conn.execute("DELETE FROM display_settings", []) {
-            tracing::warn!(
-                error = %e,
-                "sanitize_push_snapshot: failed to strip display_settings from snapshot"
-            );
+        // Per-machine / per-session local tables never proliferate. Each DELETE is
+        // independent + non-fatal so a missing table (older snapshot shape) is
+        // logged, not aborted — AND so a strip failure never skips the dirty-bit
+        // clear above (which must always run before upload). The table names are
+        // compile-time literals (no injection surface).
+        for table in Self::PUSH_SNAPSHOT_LOCAL_TABLES {
+            if let Err(e) = conn.execute(&format!("DELETE FROM {table}"), []) {
+                tracing::warn!(
+                    error = %e,
+                    table = %table,
+                    "sanitize_push_snapshot: failed to strip local-only table from snapshot"
+                );
+            }
         }
         Ok(())
     }
