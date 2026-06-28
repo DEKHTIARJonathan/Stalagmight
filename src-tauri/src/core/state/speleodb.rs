@@ -5,6 +5,7 @@
 //! Everything here is read-only against the server (login / list / pull); no
 //! lock, push, or persistence — those are later issues (#182 epic).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::AppState;
@@ -228,6 +229,35 @@ enum PushOutcome {
 fn clear_snapshot_dirty(snapshot: &Path) {
     if let Err(e) = crate::persistence::Database::sanitize_push_snapshot(snapshot) {
         tracing::warn!(error = %e, "clear_snapshot_dirty: failed to sanitize push snapshot");
+    }
+}
+
+/// Snapshot the local per-machine `display_settings` from an existing cache file
+/// BEFORE a download-replace overwrites it. View toggles are stripped from the
+/// server copy on push (#197), so without re-applying them a fast-forward / re-open
+/// — which replaces the whole local `.stalx` with the server's — would reset the
+/// user's view to defaults. Empty when the file is absent or unreadable (a first
+/// open → defaults, which is correct). Pairs with [`restore_display_settings`].
+fn preserved_display_settings(dest: &Path) -> HashMap<String, String> {
+    if !dest.exists() {
+        return HashMap::new();
+    }
+    crate::persistence::Database::open_existing(dest)
+        .and_then(|db| db.load_display_settings())
+        .unwrap_or_default()
+}
+
+/// Re-apply preserved local `display_settings` into a freshly-downloaded cache file
+/// (companion to [`preserved_display_settings`]). Best-effort per key — a failed
+/// restore only means that one view toggle falls back to its default.
+fn restore_display_settings(
+    db: &crate::persistence::Database,
+    preserved: &HashMap<String, String>,
+) {
+    for (key, value) in preserved {
+        if let Err(e) = db.save_display_setting(key, value) {
+            tracing::warn!(error = %e, key = %key, "failed to restore local display setting after download-replace");
+        }
     }
 }
 
@@ -573,6 +603,10 @@ impl AppState {
             classify_dump_entry(&dump.entry_paths().map_err(local_dto)?).map_err(local_dto)?;
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
+        // Carry the user's local view toggles across the download-replace (a re-open
+        // of a previously-customized remote project shouldn't reset their view —
+        // display_settings are stripped from the server copy). Empty on first open.
+        let preserved_view = preserved_display_settings(&dest);
         dump.extract_entry_to(&entry, &dest).map_err(local_dto)?;
 
         // Stamp BASE = the server's TRUE HEAD (the revision-topology leaf), NOT the
@@ -607,6 +641,7 @@ impl AppState {
         // true and the dirty bit (`has_unpushed_edits`) starts false.
         match crate::persistence::Database::open_existing(&dest) {
             Ok(db) => {
+                restore_display_settings(&db, &preserved_view);
                 let link = crate::models::SpeleoLink {
                     endpoint,
                     project_id: project_id.clone(),
@@ -881,12 +916,17 @@ impl AppState {
         let mut dump = dump::Dump::open(&zip)?;
         let entry = classify_dump_entry(&dump.entry_paths()?)?;
         let dest = self.speleodb_cache_path(project_id)?;
+        // Capture the user's local view toggles BEFORE the download replaces the
+        // file — they're stripped from the server copy, so they'd otherwise reset
+        // to defaults on every fast-forward.
+        let preserved_view = preserved_display_settings(&dest);
         dump.extract_entry_to(&entry, &dest)?;
 
         // Re-stamp the hand-off link onto the refreshed file: BASE advances to the
         // server tip, the dirty bit clears, last_edit_at resets (clean checkout).
         match crate::persistence::Database::open_existing(&dest) {
             Ok(db) => {
+                restore_display_settings(&db, &preserved_view);
                 let new_link = crate::models::SpeleoLink {
                     endpoint: endpoint.to_owned(),
                     project_id: project_id.clone(),
@@ -1325,7 +1365,8 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        auth_error_drops_token, classify_dump_entry, clear_snapshot_dirty, resolve_endpoint,
+        auth_error_drops_token, classify_dump_entry, clear_snapshot_dirty,
+        preserved_display_settings, resolve_endpoint, restore_display_settings,
         validate_project_id, whoami_indicates_dead_token, Endpoint, SpeleoDbSession,
     };
     use crate::models::{Project, SpeleoLink};
@@ -1371,6 +1412,58 @@ mod tests {
         // Identity is preserved — only the dirty bit / timestamp change.
         assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
         assert_eq!(link.project_id, "11111111-1111-1111-1111-111111111111");
+    }
+
+    #[test]
+    fn local_display_settings_survive_a_download_replace() {
+        // #197: view toggles are stripped from the server copy, so a fast-forward /
+        // re-open (which replaces the whole local .stalx with the server's) must
+        // carry the user's local display_settings across the overwrite — otherwise
+        // their view resets to defaults on every sync.
+        let temp = TempDir::new().expect("temp dir");
+        let dest = temp.path().join("cache.stalx");
+
+        // The user's local file with their view prefs (a project row is present, as
+        // in any real pulled .stalx, so open_existing's validation passes).
+        {
+            let mut db = Database::open(&dest).expect("open local cache");
+            db.save_project(&Project::new("Cache".to_owned(), None))
+                .expect("save project");
+            db.save_display_setting("grid", "off").expect("save grid");
+            db.save_display_setting("color_mode", "depth")
+                .expect("save color_mode");
+        }
+
+        // Snapshot the prefs, then simulate the server dump landing (a fresh file
+        // with NO display_settings, as stripped on push).
+        let preserved = preserved_display_settings(&dest);
+        assert_eq!(preserved.len(), 2, "both local prefs captured");
+        std::fs::remove_file(&dest).expect("remove old file");
+        {
+            let mut db = Database::open(&dest).expect("open replaced file");
+            db.save_project(&Project::new("Cache".to_owned(), None))
+                .expect("save project");
+            assert!(
+                db.load_display_settings().expect("load").is_empty(),
+                "server copy carries no view prefs"
+            );
+            restore_display_settings(&db, &preserved);
+        }
+
+        // The user's view survived the replace.
+        let after = Database::open_existing(&dest)
+            .expect("reopen")
+            .load_display_settings()
+            .expect("load restored");
+        assert_eq!(after.get("grid").map(String::as_str), Some("off"));
+        assert_eq!(after.get("color_mode").map(String::as_str), Some("depth"));
+
+        // A first open (no prior local file) has nothing to preserve → defaults.
+        let fresh = temp.path().join("fresh.stalx");
+        assert!(
+            preserved_display_settings(&fresh).is_empty(),
+            "first open preserves nothing"
+        );
     }
 
     /// A session seeded with an in-memory token (no real keychain). Marked
