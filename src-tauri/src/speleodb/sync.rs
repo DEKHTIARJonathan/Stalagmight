@@ -175,8 +175,21 @@ pub(crate) fn classify_ancestry(
     if new_commits.is_empty() {
         return AncestryOutcome::FailClosed; // defensive (unreachable for base != tip)
     }
-    // Any commit not authored by us means someone else pushed.
-    if new_commits.iter().any(|c| c.author_email != my_email) {
+    // We must be able to identify our OWN commits to claim the gap as our landed
+    // push. An empty `my_email` (absent session email → unwrap_or_default) matches
+    // nothing, and a server-omitted author deserializes to "" (#[serde(default)]):
+    // without this guard `"" == ""` would mis-classify a stranger's commit as ours
+    // and adopt+overwrite it. Fail closed to the divergence prompt instead.
+    if my_email.trim().is_empty() {
+        return AncestryOutcome::Diverged;
+    }
+    // Any commit not authored by us means someone else pushed. Compare case-
+    // INSENSITIVELY: the server may normalise email case (mirrors
+    // `concurrent_session_notice`; the live revision test asserts the same).
+    if new_commits
+        .iter()
+        .any(|c| !c.author_email.eq_ignore_ascii_case(my_email))
+    {
         return AncestryOutcome::Diverged;
     }
     // All new commits are ours and linear back to BASE/root → our push landed.
@@ -637,6 +650,39 @@ mod tests {
         assert_eq!(
             classify_ancestry(Some("b"), Some("c"), &commits, ME, Some(T1), Some(T2)),
             AncestryOutcome::Diverged
+        );
+    }
+
+    #[test]
+    fn ancestry_diverged_on_empty_my_email() {
+        // #197 review: an absent session email (unwrap_or_default → "") must NOT let
+        // a server-omitted author (serde default → "") match as "ours" and get
+        // adopted+overwritten. With my_email empty we cannot identify our own commit,
+        // so the gap is foreign → divergence prompt, never a silent adopt.
+        let commits = [commit("c", &["b"], "")];
+        assert_eq!(
+            classify_ancestry(Some("b"), Some("c"), &commits, "", Some(T1), Some(T2)),
+            AncestryOutcome::Diverged,
+            "empty my_email must fail closed, not classify a stranger's commit as ours"
+        );
+        // Even when our email IS known, a "" author is still a stranger.
+        let anon = [commit("c", &["b"], "")];
+        assert_eq!(
+            classify_ancestry(Some("b"), Some("c"), &anon, ME, Some(T1), Some(T2)),
+            AncestryOutcome::Diverged
+        );
+    }
+
+    #[test]
+    fn ancestry_landed_matches_author_case_insensitively() {
+        // #197 review: the server may normalise email case. Our own landed commit
+        // authored as "Me@Example.COM" must still classify as ours (Landed), not a
+        // stranger, mirroring concurrent_session_notice's case-insensitive match.
+        let commits = [commit("c", &["b"], "Me@Example.COM")];
+        assert_eq!(
+            classify_ancestry(Some("b"), Some("c"), &commits, ME, Some(T1), Some(T2)),
+            AncestryOutcome::Landed { clear_dirty: true },
+            "a case-variant of our own email must not read as a stranger"
         );
     }
 
