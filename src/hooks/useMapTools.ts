@@ -869,28 +869,15 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       // GUARD: No context menu for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) return;
 
-      if (target) {
-        setSource('map');
-        // Select the target first
-        if (target.type === 'station') {
-          setSelection({ type: 'station', stationRef: target.ref });
-        } else {
-          setSelection({ type: 'shot', sectionId: target.sectionId, shotId: target.shotId });
-        }
-
-        // Open context menu
-        openDialog('context-menu', {
-          target,
-          position: { x: event.originalEvent.clientX, y: event.originalEvent.clientY },
-        });
-      } else if (showGasPlan) {
-        // Plan mode: a right-click on empty map (or with stations hidden) snaps to the nearest
-        // reachable station and offers it as a route pick — so a turnaround can be set ANYWHERE,
-        // notably when the whole cave is reachable (low RMV / lots of gas → no turn-frontier dots)
-        // or stations aren't displayed (#236). Match in metres against the click's map coords;
-        // restrict to reachable stations (when the field is loaded) so the pick is meaningful — an
-        // unreachable endpoint would fall back to the deepest point in the engine. The ContextMenu
-        // Plan branch turns the chosen station into Set as origin / Set as endpoint.
+      // Plan (gas) mode: the only context action is picking a route point. A station target uses
+      // that station (handled below); a SHOT target or an empty click snaps to the nearest reachable
+      // station — so right-clicking the prominent gas-coloured shot lines (very likely, since
+      // stations are often hidden), or empty cave when the whole map is reachable (low RMV / lots of
+      // gas → no turn-frontier dots), still opens the route menu instead of silently doing nothing.
+      // Match in metres against the click's map coords; restrict to reachable stations (when the
+      // field is loaded) so the pick is meaningful — an unreachable endpoint would fall back to the
+      // deepest point in the engine. The ContextMenu Plan branch turns it into Set as origin/endpoint. (#236)
+      if (showGasPlan && target?.type !== 'station') {
         const reachField = useGasPlanStore.getState().reachField;
         const clickM = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
         const reachable = reachField
@@ -909,6 +896,23 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             position: { x: event.originalEvent.clientX, y: event.originalEvent.clientY },
           });
         }
+        return;
+      }
+
+      if (target) {
+        setSource('map');
+        // Select the target first
+        if (target.type === 'station') {
+          setSelection({ type: 'station', stationRef: target.ref });
+        } else {
+          setSelection({ type: 'shot', sectionId: target.sectionId, shotId: target.shotId });
+        }
+
+        // Open context menu
+        openDialog('context-menu', {
+          target,
+          position: { x: event.originalEvent.clientX, y: event.originalEvent.clientY },
+        });
       }
     },
     [activeTool, openDialog, setSelection, showGasPlan, activeStations, options.gpsOrigin]
