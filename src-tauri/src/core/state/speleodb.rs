@@ -261,6 +261,32 @@ fn restore_display_settings(
     }
 }
 
+/// Resolve the server head, re-fetching ONCE when a recorded BASE meets an empty
+/// tip (#192). `(base Some, tip None)` is the fence's fail-closed trigger — but a
+/// momentary empty read (replication lag, or a race right after project creation)
+/// must not be mistaken for "the history is gone," so re-fetch a single time
+/// before letting the caller fail closed. `(base None, tip None)` is the valid
+/// empty-repo state and never retries. Generic over the injected `fetch` so the
+/// retry is unit-tested without HTTP.
+fn head_with_empty_retry<F>(
+    base: Option<&str>,
+    mut fetch: F,
+) -> Result<(Option<String>, Vec<crate::speleodb::models::RevisionCommit>), SpeleoDbError>
+where
+    F: FnMut() -> Result<
+        (Option<String>, Vec<crate::speleodb::models::RevisionCommit>),
+        SpeleoDbError,
+    >,
+{
+    let first = fetch()?;
+    if base.is_some() && first.0.is_none() {
+        // Recorded BASE but no tip — re-fetch exactly once, then trust the result
+        // (a still-empty second read lets the fence fail closed).
+        return fetch();
+    }
+    Ok(first)
+}
+
 impl AppState {
     /// Resolve the effective endpoint. Precedence: explicit dialog override →
     /// `DEV_SPELEODB_URL` env (dev default) → persisted `config.speleodb.endpoint`.
@@ -756,20 +782,21 @@ impl AppState {
         }
 
         // We hold the lock. Resolve the true HEAD from the revision topology and
-        // fence our BASE against it.
-        let (tip, commits) =
-            match self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id) {
-                Ok(v) => v,
-                Err(e) => {
-                    self.speleodb_release_best_effort(
-                        &endpoint,
-                        &token,
-                        insecure_http,
-                        &link.project_id,
-                    );
-                    return Err(dto_for_error(Endpoint::GetProject, &e));
-                }
-            };
+        // fence our BASE against it (re-fetch once on a transient empty tip).
+        let (tip, commits) = match head_with_empty_retry(link.base_commit_sha.as_deref(), || {
+            self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
+        }) {
+            Ok(v) => v,
+            Err(e) => {
+                self.speleodb_release_best_effort(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &link.project_id,
+                );
+                return Err(dto_for_error(Endpoint::GetProject, &e));
+            }
+        };
         match sync::fence(
             link.base_commit_sha.as_deref(),
             tip.as_deref(),
@@ -1058,9 +1085,10 @@ impl AppState {
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
-        let (tip, commits) = self
-            .speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
-            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        let (tip, commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
+            self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
+        })
+        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
 
         match sync::fence(
             link.base_commit_sha.as_deref(),
@@ -1140,9 +1168,10 @@ impl AppState {
         // Authoritative server tip — the revision topology, NOT the unreliable
         // latest_commit field (see speleodb_server_head). The fetched history is
         // reused for ancestry recovery below, so this is the only revisions GET.
-        let (tip, commits) = self
-            .speleodb_server_head(endpoint, token, insecure_http, project_id)
-            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        let (tip, commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
+            self.speleodb_server_head(endpoint, token, insecure_http, project_id)
+        })
+        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
 
         match sync::fence(link.base_commit_sha.as_deref(), tip.as_deref(), true) {
             // base == tip: push our edits directly.
@@ -1365,7 +1394,7 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        auth_error_drops_token, classify_dump_entry, clear_snapshot_dirty,
+        auth_error_drops_token, classify_dump_entry, clear_snapshot_dirty, head_with_empty_retry,
         preserved_display_settings, resolve_endpoint, restore_display_settings,
         validate_project_id, whoami_indicates_dead_token, Endpoint, SpeleoDbSession,
     };
@@ -1463,6 +1492,106 @@ mod tests {
         assert!(
             preserved_display_settings(&fresh).is_empty(),
             "first open preserves nothing"
+        );
+    }
+
+    // --- head_with_empty_retry (#192 re-fetch-once on a transient empty tip) ---
+
+    #[test]
+    fn head_retries_once_then_succeeds_on_transient_empty() {
+        let calls = std::cell::Cell::new(0u32);
+        let (tip, _) = head_with_empty_retry(Some("base-sha"), || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                Ok((None, Vec::new())) // transient empty read
+            } else {
+                Ok((Some("tip-sha".to_owned()), Vec::new()))
+            }
+        })
+        .expect("ok");
+        assert_eq!(
+            calls.get(),
+            2,
+            "re-fetched exactly once on (base Some, tip None)"
+        );
+        assert_eq!(
+            tip.as_deref(),
+            Some("tip-sha"),
+            "the second read's tip wins"
+        );
+    }
+
+    #[test]
+    fn head_fails_closed_after_single_retry_when_still_empty() {
+        let calls = std::cell::Cell::new(0u32);
+        let (tip, _) = head_with_empty_retry(Some("base-sha"), || {
+            calls.set(calls.get() + 1);
+            Ok((None, Vec::new()))
+        })
+        .expect("ok");
+        assert_eq!(calls.get(), 2, "exactly one retry, never loops");
+        assert!(
+            tip.is_none(),
+            "still empty -> the caller fences fail-closed"
+        );
+    }
+
+    #[test]
+    fn head_no_retry_for_empty_repo_when_base_none() {
+        let calls = std::cell::Cell::new(0u32);
+        let (tip, _) = head_with_empty_retry(None, || {
+            calls.set(calls.get() + 1);
+            Ok((None, Vec::new()))
+        })
+        .expect("ok");
+        assert_eq!(
+            calls.get(),
+            1,
+            "(base None, tip None) is the valid empty repo -> no retry"
+        );
+        assert!(tip.is_none());
+    }
+
+    #[test]
+    fn head_no_retry_when_tip_present() {
+        let calls = std::cell::Cell::new(0u32);
+        let (tip, _) = head_with_empty_retry(Some("base-sha"), || {
+            calls.set(calls.get() + 1);
+            Ok((Some("tip-sha".to_owned()), Vec::new()))
+        })
+        .expect("ok");
+        assert_eq!(calls.get(), 1, "tip present -> no retry");
+        assert_eq!(tip.as_deref(), Some("tip-sha"));
+    }
+
+    #[test]
+    fn base_commit_sha_advances_only_at_sanctioned_sites() {
+        // Tripwire (mirrors the MUTATION_ENTRYPOINTS guard): BASE may change ONLY
+        // via the sanctioned triggers. If a count below changes, a base write was
+        // added/removed — confirm the new site is a legitimate trigger before
+        // updating it. (#192/#193/#197)
+        //
+        //   mutate `l.base_commit_sha =` (inside speleodb_mutate_link closures):
+        //     1. push 200 confirmed — advance to the adopted hexsha
+        //     2. push ancestry Landed — advance BASE to tip
+        //     3. push ancestry Landed — already-up-to-date sub-case
+        //   struct-init `base_commit_sha:` (a fresh SpeleoLink for the pulled file):
+        //     1. speleodb_open_project — stamp BASE on pull
+        //     2. speleodb_fast_forward — re-stamp BASE = tip after a clean FF
+        let src = include_str!("speleodb.rs");
+        let prod = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production region precedes the test module");
+        assert_eq!(
+            prod.matches("base_commit_sha =").count(),
+            3,
+            "unexpected BASE mutate-advance count (sanctioned: push-200, ancestry-landed x2)"
+        );
+        assert_eq!(
+            prod.matches("base_commit_sha:").count(),
+            2,
+            "unexpected BASE stamp count (sanctioned: open-on-pull, fast-forward restamp)"
         );
     }
 
