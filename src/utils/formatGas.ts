@@ -14,6 +14,8 @@ import { clamp } from './clamp';
 const PSI_PER_BAR = 14.5037738;
 /** Conversion factor: litres → cubic feet. */
 const CUFT_PER_LITRE = 0.0353146667;
+/** Conversion factor: metres → feet. */
+const FEET_PER_METRE = 3.2808399;
 
 /** Maximum decimal precision (matches the Rust/back-end formatters). */
 const MAX_DECIMAL_PRECISION = 6;
@@ -61,6 +63,27 @@ export function formatVolume(litres: number, units: GasUnits, precision: number 
 }
 
 /**
+ * Format a length given in metres (canonical) as m or ft — used for route distance and depth in
+ * the Plan readout, so they follow the same metric/imperial toggle (and "value unit" spacing) as
+ * the gas figures. Distinct from `formatStats.formatLength` (which takes a `LengthUnit` and renders
+ * without a space, e.g. "42.3m") — this one is the GasUnits-keyed, spaced sibling of formatPressure
+ * / formatVolume, kept here so the Plan readouts stay visually consistent.
+ *
+ * @param metres - Length in metres
+ * @param units - 'metric' (m) or 'imperial' (ft)
+ * @param precision - Decimal places (default 0)
+ */
+export function formatGasLength(metres: number, units: GasUnits, precision: number = 0): string {
+  if (!isFiniteNumber(metres)) {
+    return '--';
+  }
+  const imperial = units === 'imperial';
+  const value = imperial ? metres * FEET_PER_METRE : metres;
+  const suffix = imperial ? 'ft' : 'm';
+  return `${formatFixed(value, undefined, clampPrecision(precision))} ${suffix}`;
+}
+
+/**
  * Format an RMV given in L/min (canonical) as L/min or cuft/min. Imperial RMVs are
  * fractional, so the default precision is higher there (2 vs 1).
  *
@@ -87,6 +110,16 @@ export function rmvToDisplay(lPerMin: number, units: GasUnits): number {
 /** An RMV typed in the selected unit (L/min or cuft/min) → canonical L/min for the store. */
 export function rmvFromDisplay(value: number, units: GasUnits): number {
   return units === 'imperial' ? value / CUFT_PER_LITRE : value;
+}
+
+/** Canonical speed (m/min) → the number shown in the selected unit (m/min or ft/min). */
+export function speedToDisplay(mPerMin: number, units: GasUnits): number {
+  return units === 'imperial' ? mPerMin * FEET_PER_METRE : mPerMin;
+}
+
+/** A speed typed in the selected unit (m/min or ft/min) → canonical m/min for the store. */
+export function speedFromDisplay(value: number, units: GasUnits): number {
+  return units === 'imperial' ? value / FEET_PER_METRE : value;
 }
 
 /** Canonical pressure (bar) → the number shown in the selected unit (bar or psi). */

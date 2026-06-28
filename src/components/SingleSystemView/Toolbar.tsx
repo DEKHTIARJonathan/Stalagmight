@@ -265,7 +265,8 @@ export default function Toolbar({
       ) : (
         /* Absolutely centered so the carousel stays put as modes cycle — otherwise
            justify-between would drift it when the right cluster's width changes
-           (mutating tools + DisplayMenu drop out in Plan/Export). */
+           (the mutating tools are filtered to the read-only set in Plan/Export;
+           DisplayMenu itself stays in every mode). */
         <div className="absolute left-1/2 -translate-x-1/2">
           <ModeCarousel disabled={placementModeActive} />
         </div>
@@ -313,10 +314,12 @@ export default function Toolbar({
                 );
               })}
             </div>
-            {/* DisplayMenu (color overlays + the geometry measured/adjusted toggle) is
-                a survey concern — Plan/Export are read-only focused modes that force the
-                closure map, so it's hidden there (and the geometry toggle stays locked). */}
-            {appMode === 'survey' && <DisplayMenu />}
+            {/* DisplayMenu is available in every mode (#236) so users can control what's drawn
+                while planning/exporting (stations, labels, grid, satellite, …). The component
+                keeps the survey-only concerns out of Plan/Export internally: the geometry
+                measured/adjusted toggle (those modes force the closure map) and the color
+                overlays in Plan (the gas reachability gradient owns the coloring there). */}
+            <DisplayMenu />
           </>
         )}
       </div>

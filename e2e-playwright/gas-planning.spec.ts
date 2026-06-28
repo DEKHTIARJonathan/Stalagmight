@@ -31,12 +31,14 @@ const sectionSeeds: SectionSeed[] = [
   {
     name: 'Gas A',
     direction: 'in',
+    // Positive depths (z = depth, positive below surface — the real convention), so the route
+    // depth readouts show physically-sensible values a regression would visibly break.
     shots: Array.from({ length: 10 }, (_, i) => ({
       azimuth_in: 90,
       azimuth_out: 270,
       length: 10,
-      depth_in: -i,
-      depth_out: -(i + 1),
+      depth_in: i,
+      depth_out: i + 1,
     })),
   },
 ];
@@ -179,6 +181,12 @@ test.describe('Gas planning', () => {
     expect(await appMode(page)).toBe('plan');
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
 
+    // Swim speed input is present, populated with the 10 m/min default (#236).
+    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Swim speed');
+    const swim = page.locator('[data-testid="gas-swim-speed-input"]');
+    await expect(swim).toBeVisible();
+    await expect(swim).toHaveValue(/^10(\.0)?$/);
+
     // Default rig is twin-AL80 back gas (ZERO stages) → the pushy presets are greyed (the
     // advanced gate); All-thirds stays available.
     await expect(page.locator('[data-testid="gas-reserve-all_thirds"]')).toBeEnabled();
@@ -192,6 +200,88 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Gas strategy');
     await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Backgas turn pressure');
     await expect(page.locator('[data-testid="gas-readout-backgas-turn"]')).toBeVisible();
+  });
+
+  test('Plan readout shows the route distance + max/avg depth once a route resolves @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    expect(await appMode(page)).toBe('plan');
+    // Entering Plan resolves a route to the deepest reachable station, so the distance + depth
+    // rows appear, formatted with a length unit (#236). Values come straight from the backend.
+    const distance = page.locator('[data-testid="gas-readout-route-distance"]');
+    await expect(distance).toBeVisible({ timeout: 3000 });
+    await expect(distance).toContainText('m');
+    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Distance to turnaround');
+    // The Max / Average depth rows render once a route is known. This asserts the WIRING only: the
+    // e2e mock's get_project_state hardcodes station z = 0 (it doesn't derive depth from shot data),
+    // so these readouts show "0.0 m" here regardless of the seed — there's no meaningful depth value
+    // to assert at the mock level. The exact distance/depth math (tie-exclusion, deepest-point, sign)
+    // is pinned in the Rust unit tests (gas/tests.rs).
+    await expect(page.locator('[data-testid="gas-readout-max-depth"]')).toBeVisible();
+    await expect(page.locator('[data-testid="gas-readout-avg-depth"]')).toBeVisible();
+  });
+
+  test('Plan swim speed persists to the saved config @smoke', async ({ page }) => {
+    await enterMode(page, 'plan');
+    const swim = page.locator('[data-testid="gas-swim-speed-input"]');
+    await expect(swim).toBeVisible({ timeout: 3000 });
+    // Editing swim speed writes back to the saved config (#236) — unlike the panel's other
+    // per-session inputs — so it sticks across Plan exit / restart and stays in sync with Settings.
+    await swim.fill('14');
+    await swim.blur();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __E2E_TEST__: {
+                  projectStore: {
+                    getState: () => { config: { gas: { swim_speed_m_per_min: number } } | null };
+                  };
+                };
+              }
+            ).__E2E_TEST__.projectStore.getState().config?.gas.swim_speed_m_per_min,
+        ),
+      )
+      .toBe(14);
+  });
+
+  test('Display menu is available in Plan and Export, without the survey-only geometry toggle @smoke', async ({
+    page,
+  }) => {
+    const openMenu = async () => {
+      await page.locator('[data-testid="display-menu-button"]').click();
+      await expect(page.locator('[data-testid="display-menu"]')).toBeVisible();
+    };
+    const closeMenu = async () => {
+      await page.locator('[data-testid="display-menu-button"]').click();
+      await expect(page.locator('[data-testid="display-menu"]')).toHaveCount(0);
+    };
+
+    // Survey: the full menu — visibility toggles + the geometry toggle + the color overlays.
+    await openMenu();
+    await expect(page.locator('[data-testid="display-toggle-showStations"]')).toBeVisible();
+    await expect(page.locator('[data-testid="geometry-mode-measured"]')).toBeVisible();
+    await expect(page.locator('[data-testid="display-color-section"]')).toBeVisible();
+    await closeMenu();
+
+    // Plan: the visibility toggles remain, but the geometry toggle (closure map is forced) and the
+    // color overlays (the gas gradient owns the coloring) are gone.
+    await enterMode(page, 'plan');
+    await openMenu();
+    await expect(page.locator('[data-testid="display-toggle-showStations"]')).toBeVisible();
+    await expect(page.locator('[data-testid="geometry-mode-measured"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="display-color-section"]')).toHaveCount(0);
+    await closeMenu();
+
+    // Export: visibility toggles + color overlays (no gas gradient here), still no geometry toggle.
+    await enterMode(page, 'export');
+    await openMenu();
+    await expect(page.locator('[data-testid="display-toggle-showStations"]')).toBeVisible();
+    await expect(page.locator('[data-testid="display-color-section"]')).toBeVisible();
+    await expect(page.locator('[data-testid="geometry-mode-measured"]')).toHaveCount(0);
   });
 
   test('adding a stage enables a pushy preset behind the advanced acknowledgment @smoke', async ({
@@ -257,7 +347,9 @@ test.describe('Gas planning', () => {
     });
 
     await expect(page.getByText('Set as endpoint')).toBeVisible();
-    await expect(page.getByText('Set as origin')).toBeVisible();
+    // "Set as origin" was removed from the right-click menu — origin is set by single-click / the
+    // datum star, and the menu is reserved for the endpoint pick + future recalc affordances.
+    await expect(page.getByText('Set as origin')).toHaveCount(0);
     // The survey mutation menu must NOT appear (the read-only bug): no "Edit Station".
     await expect(page.getByText('Edit Station')).toHaveCount(0);
 

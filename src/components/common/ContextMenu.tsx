@@ -529,9 +529,10 @@ export default function ContextMenu() {
   };
 
   // Plan / Export are READ-ONLY: the survey mutation menu must not appear at all (not merely
-  // disabled). In Plan, a right-clicked station instead offers the gas route picks; everything
-  // else (Export, or a non-station target in Plan) gets no menu. Survey keeps the full menu, with
-  // the closure-adjusted (read-only) view disabling mutations as before.
+  // disabled). In Plan, a right-click offers the turnaround pick (Set as endpoint) — the origin is
+  // set by single-click / the datum star, so "Set as origin" was dropped here, leaving room for
+  // future recalc affordances. Export, or a non-station target in Plan, gets no menu. Survey keeps
+  // the full menu, with the closure-adjusted (read-only) view disabling mutations as before.
   let items: ContextMenuItem[];
   if (appMode !== 'survey') {
     items =
@@ -539,14 +540,6 @@ export default function ContextMenu() {
         ? (() => {
             const ref = target.ref;
             return [
-              {
-                label: 'Set as origin',
-                action: () => {
-                  useGasPlanStore.getState().setOrigin(ref);
-                  closeDialog();
-                },
-                icon: iconForLabel('Set as origin'),
-              },
               {
                 label: 'Set as endpoint',
                 action: () => {

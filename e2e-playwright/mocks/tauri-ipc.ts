@@ -1329,6 +1329,43 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     .map((from, i) => ({ from, to: reachableRefs[i + 1], is_jump: false }))
                 : [];
 
+            // Route physical metrics (#236) over the route's stations, in order (origin→turnaround),
+            // derived from the route legs the mock returns — so it mirrors the backend's route_refs
+            // CHAIN, not the full reachable set. NOTE: the seeded e2e cave is a single linear section
+            // with no merge/closure ties, so this is an approximation for the linear seed, not a
+            // re-implementation of the backend's tie-aware shortest path (exact math is Rust-tested).
+            const coordByRef = new Map(
+              stations.map((s) => [
+                `${s.station_ref.section_id}:${s.station_ref.station_index}`,
+                s.coordinates,
+              ]),
+            );
+            const routeRefsOrdered =
+              route.length > 0
+                ? [route[0].from, ...route.map((leg) => leg.to)]
+                : targetRef != null
+                  ? [targetRef]
+                  : [];
+            const routePts = routeRefsOrdered
+              .map((r) => coordByRef.get(`${r.section_id}:${r.station_index}`))
+              .filter((c): c is { x: number; y: number; z: number } => c != null);
+            let route_line_length_m = 0;
+            let route_max_depth_m: number | null = null;
+            let route_avg_depth_m: number | null = null;
+            if (routePts.length > 0) {
+              route_max_depth_m = Math.max(...routePts.map((c) => c.z));
+              let depthLenSum = 0;
+              for (let i = 1; i < routePts.length; i += 1) {
+                const a = routePts[i - 1];
+                const b = routePts[i];
+                const seg = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+                route_line_length_m += seg;
+                depthLenSum += seg * 0.5 * (a.z + b.z);
+              }
+              route_avg_depth_m =
+                route_line_length_m > 0 ? depthLenSum / route_line_length_m : routePts[0].z;
+            }
+
             const backCyls = cylinders.filter((c) => c.role === 'back_gas');
             const sumWv = backCyls.reduce((s, c) => s + (c.water_volume_l ?? 0), 0);
             const frac = effective === 'two_stage' ? 1 / 6 : effective === 'one_stage' ? 1 / 4 : 1 / 3;
@@ -1363,6 +1400,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               final_turn_ref,
               backgas_turn_bar,
               stage_drop_bars,
+              route_line_length_m,
+              route_max_depth_m,
+              route_avg_depth_m,
             };
           }
 

@@ -10,6 +10,7 @@ import { getErrorMessage, invokeIpc } from '../utils/ipc';
 import type { SectionId, ShotId, StationRef, Coordinates, RulerEndpoint, AlongLineResult } from '../types/project';
 import type { GpsOrigin } from '../types/config';
 import { distance, mapCoordsToMeters } from '../utils/coordinates';
+import { reachableStationKeySet } from '../utils/gasReach';
 import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
@@ -71,6 +72,37 @@ interface MapToolsOptions {
     | { kind: 'station'; station: StationRef }
     | { kind: 'shot'; section_id: SectionId; shot_id: ShotId; t: number }
     | null;
+}
+
+/**
+ * Pick the nearest reachable station to a point (in metres) — the Plan-mode "set a turnaround
+ * anywhere" resolver (#236). Restricts to `reachable` station keys when provided, so the pick stays
+ * meaningful (an unreachable endpoint would fall back to the deepest point in the engine); with no
+ * field loaded yet (`reachable === null`) any station is eligible. Returns null when none match.
+ */
+export function nearestReachableStationRef(
+  point: { x: number; y: number },
+  stations: ReadonlyArray<{ station_ref: StationRef; coordinates: { x: number; y: number } }>,
+  reachable: ReadonlySet<string> | null
+): StationRef | null {
+  let best: StationRef | null = null;
+  let bestDist = Infinity;
+  for (const st of stations) {
+    if (
+      reachable &&
+      !reachable.has(`${st.station_ref.section_id}:${st.station_ref.station_index}`)
+    ) {
+      continue;
+    }
+    const dx = st.coordinates.x - point.x;
+    const dy = st.coordinates.y - point.y;
+    const d = dx * dx + dy * dy;
+    if (d < bestDist) {
+      bestDist = d;
+      best = st.station_ref;
+    }
+  }
+  return best;
 }
 
 export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks {
@@ -830,13 +862,37 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   const handleContextMenu = useCallback(
     (
       target: { type: 'station'; ref: StationRef } | { type: 'shot'; sectionId: SectionId; shotId: ShotId } | null,
-      event: { originalEvent: MouseEvent }
+      event: MapMouseEvent
     ) => {
       // ALWAYS prevent native context menu
       event.originalEvent.preventDefault();
 
       // GUARD: No context menu for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) return;
+
+      // Plan (gas) mode: the only context action is picking a route point. A station target uses
+      // that station (handled below); a SHOT target or an empty click snaps to the nearest reachable
+      // station — so right-clicking the prominent gas-coloured shot lines (very likely, since
+      // stations are often hidden), or empty cave when the whole map is reachable (low RMV / lots of
+      // gas → no turn-frontier dots), still opens the route menu instead of silently doing nothing.
+      // Match in metres against the click's map coords; restrict to reachable stations (when the
+      // field is loaded) so the pick is meaningful — an unreachable endpoint would fall back to the
+      // deepest point in the engine. The ContextMenu Plan branch turns it into Set as endpoint. (#236)
+      if (showGasPlan && target?.type !== 'station') {
+        const reachField = useGasPlanStore.getState().reachField;
+        const clickM = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
+        const reachable = reachField ? reachableStationKeySet(reachField) : null;
+        const best = nearestReachableStationRef(clickM, activeStations, reachable);
+        if (best) {
+          setSource('map');
+          setSelection({ type: 'station', stationRef: best });
+          openDialog('context-menu', {
+            target: { type: 'station', ref: best },
+            position: { x: event.originalEvent.clientX, y: event.originalEvent.clientY },
+          });
+        }
+        return;
+      }
 
       if (target) {
         setSource('map');
@@ -854,7 +910,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         });
       }
     },
-    [activeTool, openDialog, setSelection]
+    [activeTool, openDialog, setSelection, showGasPlan, activeStations, options.gpsOrigin]
   );
 
   return {

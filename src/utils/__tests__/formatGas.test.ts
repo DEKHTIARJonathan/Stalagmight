@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+  formatGasLength,
   formatPressure,
   formatRmv,
   formatVolume,
+  speedFromDisplay,
+  speedToDisplay,
   pressureFromDisplay,
   pressureToDisplay,
   rmvFromDisplay,
@@ -53,6 +56,35 @@ describe('formatGas', () => {
     });
     it('renders "--" for non-finite', () => {
       expect(formatRmv(NaN, 'metric')).toBe('--');
+    });
+  });
+
+  describe('speedToDisplay / speedFromDisplay', () => {
+    it('passes m/min through unchanged in metric', () => {
+      expect(speedToDisplay(10, 'metric')).toBe(10);
+      expect(speedFromDisplay(10, 'metric')).toBe(10);
+    });
+    it('converts m/min ↔ ft/min in imperial and round-trips', () => {
+      // 10 m/min × 3.2808399 = 32.808 ft/min
+      expect(speedToDisplay(10, 'imperial')).toBeCloseTo(32.808399, 4);
+      expect(speedFromDisplay(speedToDisplay(10, 'imperial'), 'imperial')).toBeCloseTo(10, 9);
+    });
+  });
+
+  describe('formatGasLength', () => {
+    it('formats metres (metric, 0 dp default)', () => {
+      expect(formatGasLength(300, 'metric')).toBe('300 m');
+    });
+    it('converts metres → feet (imperial)', () => {
+      // 100 m × 3.2808399 = 328.08 → "328 ft" (0 dp)
+      expect(formatGasLength(100, 'imperial')).toBe('328 ft');
+    });
+    it('respects an explicit precision (depth shown to 1 dp)', () => {
+      expect(formatGasLength(30, 'metric', 1)).toBe('30.0 m');
+    });
+    it('renders "--" for non-finite', () => {
+      expect(formatGasLength(NaN, 'metric')).toBe('--');
+      expect(formatGasLength(Infinity, 'imperial')).toBe('--');
     });
   });
 

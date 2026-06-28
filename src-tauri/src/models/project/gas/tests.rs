@@ -8,9 +8,11 @@ use super::physics::{
     air_z_factor, ata, avg_depth, cylinder_gas_volume, deliverable_gas, edge_gas, gas_rate,
     sac_to_rmv,
 };
-use super::{penetration_budget, required_stages, usable_oc_gas};
+use super::{is_swim_leg, penetration_budget, required_stages, route_metrics, usable_oc_gas};
 use crate::config::{GasConfig, ReservePreset, ReserveProfile};
-use crate::models::{GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum};
+use crate::models::{
+    Coordinates, GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum,
+};
 
 const EPS: f64 = 1e-9;
 
@@ -794,6 +796,101 @@ fn gas_reach_field_threshold_past_deepest_yields_fewer_drops() {
 }
 
 #[test]
+fn is_swim_leg_distinguishes_shots_from_ties() {
+    // Adjacent stations within a section = a swum shot (incl. a reference/jump).
+    assert!(is_swim_leg(&StationRef::new(1, 0), &StationRef::new(1, 1)));
+    assert!(is_swim_leg(&StationRef::new(1, 2), &StationRef::new(1, 1)));
+    // Cross-section (a merge / closure tie) = NOT a swum leg.
+    assert!(!is_swim_leg(&StationRef::new(1, 0), &StationRef::new(2, 0)));
+    // Same section but non-adjacent (a closure within one section) = NOT a swum leg.
+    assert!(!is_swim_leg(&StationRef::new(1, 0), &StationRef::new(1, 2)));
+}
+
+#[test]
+fn route_metrics_pure_line_length_and_depths() {
+    let pt = |x: f64, y: f64, z: f64| Coordinates { x, y, z };
+    // Pure helper: 3-D polyline length + deepest point + distance-weighted average depth.
+    // Degenerate cases first: empty route, single station.
+    assert_eq!(route_metrics(&[], &[]), (0.0, None, None));
+    assert_eq!(
+        route_metrics(&[pt(5.0, 5.0, 12.0)], &[]),
+        (0.0, Some(12.0), Some(12.0))
+    );
+    // Vertical descent 0→10→30 m (both legs swum): segments 10 + 20 = 30 m; deepest 30;
+    // depth-weighted average = (10·mid5 + 20·mid20) / 30 = (50 + 400) / 30 = 15.
+    let descent = [pt(0.0, 0.0, 0.0), pt(0.0, 0.0, 10.0), pt(0.0, 0.0, 30.0)];
+    let (len, maxd, avgd) = route_metrics(&descent, &[true, true]);
+    assert!((len - 30.0).abs() < EPS);
+    assert_eq!(maxd, Some(30.0));
+    assert!((avgd.unwrap() - 15.0).abs() < EPS);
+    // True 3-D legs (east+north, then a pure depth drop): (0,0,0)→(3,4,0) = 5 m, →(3,4,12) = 12 m
+    // ⇒ 17 m total, deepest 12.
+    let three_d = [pt(0.0, 0.0, 0.0), pt(3.0, 4.0, 0.0), pt(3.0, 4.0, 12.0)];
+    let (len2, maxd2, _) = route_metrics(&three_d, &[true, true]);
+    assert!((len2 - 17.0).abs() < EPS);
+    assert_eq!(maxd2, Some(12.0));
+    // Deepest point at an INTERIOR station (descend then rise): max depth must be the interior 30,
+    // not the 10 m terminal — a regression that returned the last station's depth would fail here.
+    let dome = [pt(0.0, 0.0, 0.0), pt(0.0, 0.0, 30.0), pt(0.0, 0.0, 10.0)];
+    let (_, maxd3, _) = route_metrics(&dome, &[true, true]);
+    assert_eq!(maxd3, Some(30.0));
+    // A TIE leg (swim=false) with a large coord gap — the loop-closure misclosure case — is
+    // excluded from length AND the depth-weighted average: only the first (swum) 10 m leg counts.
+    let with_tie = [pt(0.0, 0.0, 0.0), pt(0.0, 0.0, 10.0), pt(100.0, 0.0, 10.0)];
+    let (len4, maxd4, avgd4) = route_metrics(&with_tie, &[true, false]);
+    assert!((len4 - 10.0).abs() < EPS); // the 90 m tie gap is NOT counted
+    assert_eq!(maxd4, Some(10.0));
+    assert!((avgd4.unwrap() - 5.0).abs() < EPS); // only the 0→10 m leg, mid-depth 5
+}
+
+#[test]
+fn gas_reach_field_reports_route_distance_and_depths() {
+    // linear_descent (3×100 m shots, 0→10→20→30 m). A huge back-gas rig reaches the deepest
+    // station, so the route is the whole descent: line length 3×100 = 300 m, deepest 30 m, and the
+    // depth-weighted average over the three equal-length legs (mids 5/15/25 m) = 15 m.
+    let (project, origin) = linear_descent_project();
+    let sec = origin.section_id;
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field =
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[big], &GasConfig::default());
+    assert_eq!(field.final_turn_ref, Some(StationRef::new(sec, 3)));
+    // Placement preserves tape length for a constant-azimuth descent ⇒ 3×100 m.
+    assert!((field.route_line_length_m - 300.0).abs() < 1e-3);
+    assert_eq!(field.route_max_depth_m, Some(30.0));
+    assert!((field.route_avg_depth_m.unwrap() - 15.0).abs() < 1e-6);
+}
+
+#[test]
+fn gas_reach_field_no_route_has_no_distance_or_depth() {
+    // An empty project has nothing reachable ⇒ no route ⇒ zero length and no depths (not 0-depth).
+    let project = Project::new("Gas".to_string(), None);
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field = project.compute_gas_reach_field(None, None, &diver, &[big], &GasConfig::default());
+    assert!(field.final_turn_ref.is_none());
+    assert!(field.route_line_length_m.abs() < EPS);
+    assert_eq!(field.route_max_depth_m, None);
+    assert_eq!(field.route_avg_depth_m, None);
+}
+
+#[test]
 fn penetration_budget_reserve_at_or_above_fill_zeroes_stage() {
     // reserve == fill ⇒ drop = (fill+reserve)/2 = fill = full ⇒ stage contributes 0 IN gas; the
     // budget collapses to the bare back-gas fraction (no negative / NaN leak).
@@ -928,6 +1025,21 @@ fn gas_reach_field_reaches_across_a_station_merge() {
         (ga1 - gb0).abs() < EPS,
         "merged stations share gas_to_reach (0-cost join)"
     );
+
+    // Route metrics across the merge TIE (#236): the route is A:0→A:1→[merge tie]→B:0→B:1. The two
+    // SWUM shots are 100 m each; the 0-cost merge tie (A:1→B:0, cross-section) must NOT be counted in
+    // the line length — is_swim_leg excludes it — so the distance is ~200 m end-to-end. This pins the
+    // integration wiring (route_refs → is_swim_leg mask → route_metrics); a regression that dropped
+    // the mask would count the tie's measured-coord gap and inflate the length. Deepest station is
+    // B:1 (20 m); the swum-leg depth-weighted average is (100·5 + 100·15)/200 = 10 m.
+    assert_eq!(field.final_turn_ref, Some(StationRef::new(b, 1)));
+    assert!(
+        (field.route_line_length_m - 200.0).abs() < 1.0,
+        "route_line_length_m should be ~200 m (two swum shots; merge tie excluded), got {}",
+        field.route_line_length_m
+    );
+    assert_eq!(field.route_max_depth_m, Some(20.0));
+    assert!((field.route_avg_depth_m.unwrap() - 10.0).abs() < 1e-6);
 }
 
 #[test]

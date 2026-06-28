@@ -2079,6 +2079,11 @@
       "rmvUnit": "L/min",
       "rmvUnitImperial": "cu ft/min"
     },
+    "swimSpeed": {
+      "label": "Swim speed",
+      "unit": "m/min",
+      "unitImperial": "ft/min"
+    },
     "reserve": {
       "label": "Gas strategy",
       "all_thirds": "All thirds",
@@ -2127,6 +2132,10 @@
       "budget": "Turn budget",
       "maxPenetration": "Gas to farthest point",
       "maxPenetrationHint": "Gas consumed to reach the deepest in-budget station (a volume, not a distance).",
+      "routeDistance": "Distance to turnaround",
+      "routeDistanceHint": "One-way swum line distance from the origin to the turnaround (the sum of the route's legs).",
+      "maxDepth": "Max depth",
+      "avgDepth": "Average depth",
       "turnPoints": "Turn points",
       "computing": "Computing…"
     },

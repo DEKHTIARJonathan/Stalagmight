@@ -6,12 +6,15 @@ import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
 import { formatStationId } from '../../utils/formatters';
 import {
+  formatGasLength,
   formatPressure,
   formatVolume,
   pressureFromDisplay,
   pressureToDisplay,
   rmvFromDisplay,
   rmvToDisplay,
+  speedFromDisplay,
+  speedToDisplay,
 } from '../../utils/formatGas';
 import { PositiveNumberField } from '../common/PositiveNumberField';
 import type { GasUnits, ReservePreset } from '../../types/ipc.generated';
@@ -105,6 +108,15 @@ export function GasPlanPanel() {
   const stage1Drop = reachField?.stage_drop_bars[0] ?? null;
   const stage2Drop = reachField?.stage_drop_bars[1] ?? null;
 
+  // Route metrics (backend single source of truth), shown once a real route is known. Gate on the
+  // route having at least one LEG — not just final_turn_ref — so a degenerate single-station route
+  // (origin == turnaround when only the origin is in budget) doesn't render a meaningless
+  // "Distance to turnaround: 0 m". The distance is the one-way swum line length to the turnaround;
+  // depths are the route's deepest point + the distance-weighted average depth.
+  const hasRoute = (reachField?.route.length ?? 0) > 0;
+  const routeMaxDepth = reachField?.route_max_depth_m ?? null;
+  const routeAvgDepth = reachField?.route_avg_depth_m ?? null;
+
   // Selecting a staged strategy routes through an inline advanced acknowledgment the first time
   // per session; All-thirds and an already-acked strategy apply immediately.
   const selectPreset = (preset: ReservePreset) => {
@@ -177,6 +189,43 @@ export function GasPlanPanel() {
             />
             <span className="text-xs opacity-70">
               {t(units === 'imperial' ? 'gasPanel.diver.rmvUnitImperial' : 'gasPanel.diver.rmvUnit')}
+            </span>
+          </div>
+        </section>
+
+        {/* Swim speed — the diver's pace; feeds the in-leg gas-to-reach computation. Unlike the
+            panel's other (per-session) inputs, swim speed PERSISTS: a commit updates the working
+            copy (so the overlay/route refetch immediately) AND writes the value back to the saved
+            config — the same gas.swim_speed_m_per_min that Settings ▸ Gas edits — so a speed set
+            while planning sticks across Plan exit / restart and stays in sync with Settings (#236).
+            Only this field is written back; reserve / units / diver stay per-session. */}
+        <section className="space-y-1">
+          <SectionLabel>{t('gasPanel.swimSpeed.label')}</SectionLabel>
+          <div className="flex items-center gap-2">
+            <PositiveNumberField
+              value={speedToDisplay(gasConfig.swim_speed_m_per_min, units)}
+              onCommit={(n) => {
+                const v = speedFromDisplay(n, units);
+                setGasConfig({ ...gasConfig, swim_speed_m_per_min: v });
+                const saved = useProjectStore.getState().config;
+                if (saved) {
+                  void useProjectStore.getState().updateConfig({
+                    ...saved,
+                    gas: { ...saved.gas, swim_speed_m_per_min: v },
+                  });
+                }
+              }}
+              step={units === 'imperial' ? 1 : 0.5}
+              displayPrecision={1}
+              className="w-24 bg-transparent border border-border rounded px-2 py-1"
+              testId="gas-swim-speed-input"
+            />
+            <span className="text-xs opacity-70">
+              {t(
+                units === 'imperial'
+                  ? 'gasPanel.swimSpeed.unitImperial'
+                  : 'gasPanel.swimSpeed.unit'
+              )}
             </span>
           </div>
         </section>
@@ -314,6 +363,36 @@ export function GasPlanPanel() {
               >
                 {formatVolume(reachField.max_reachable_gas, units)}
               </dd>
+              {hasRoute && (
+                <>
+                  <dt className="opacity-70" title={t('gasPanel.readout.routeDistanceHint')}>
+                    {t('gasPanel.readout.routeDistance')}
+                  </dt>
+                  <dd
+                    data-testid="gas-readout-route-distance"
+                    className="text-right font-mono"
+                    title={t('gasPanel.readout.routeDistanceHint')}
+                  >
+                    {formatGasLength(reachField.route_line_length_m, units)}
+                  </dd>
+                  {routeMaxDepth != null && (
+                    <>
+                      <dt className="opacity-70">{t('gasPanel.readout.maxDepth')}</dt>
+                      <dd data-testid="gas-readout-max-depth" className="text-right font-mono">
+                        {formatGasLength(routeMaxDepth, units, 1)}
+                      </dd>
+                    </>
+                  )}
+                  {routeAvgDepth != null && (
+                    <>
+                      <dt className="opacity-70">{t('gasPanel.readout.avgDepth')}</dt>
+                      <dd data-testid="gas-readout-avg-depth" className="text-right font-mono">
+                        {formatGasLength(routeAvgDepth, units, 1)}
+                      </dd>
+                    </>
+                  )}
+                </>
+              )}
               <dt className="opacity-70">{t('gasPanel.readout.turnPoints')}</dt>
               <dd data-testid="gas-readout-turns" className="text-right font-mono">
                 {turnCount}
