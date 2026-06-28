@@ -90,7 +90,11 @@ export function GasPlanPanel() {
   const turnCount = reachField ? reachField.turn_frontier.length : null;
   const stageCount = cylinders.filter((c) => c.role === 'stage').length;
   const strategy = gasConfig.default_reserve;
-  const isStaged = strategy === 'one_stage' || strategy === 'two_stage';
+  // Effective staged state: a staged strategy AND the rig actually carries enough stages. Mirrors
+  // the backend's stage-count fallback, so removing stages after selecting a staged strategy hides
+  // the staged-only reserve control instead of leaving it stale (UI/backend parity).
+  const isStaged =
+    (strategy === 'one_stage' || strategy === 'two_stage') && stageCount >= REQUIRED_STAGES[strategy];
   const reserveBar = gasConfig.reserve_profile.stage_reserve_bar;
 
   // Three non-additive gauges, each relative to its own cylinder's start (back gas = one unit).

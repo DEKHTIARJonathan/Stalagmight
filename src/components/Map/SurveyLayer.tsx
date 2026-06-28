@@ -1869,16 +1869,18 @@ export default class SurveyLayer {
     const source = this.map.getSource(this.sourceId + '-gas-route');
     if (!source || source.type !== 'geojson') return;
     const geojsonSource = source as maplibregl.GeoJSONSource;
-    const coordFor = (ref: StationRef): [number, number] | null => {
-      const st = this.cachedStations.find(
-        (s) =>
-          s.station_ref.section_id === ref.section_id &&
-          s.station_ref.station_index === ref.station_index,
+    // Index the stations once (keyed by section:index) so the per-leg endpoint lookups are O(1) —
+    // the route can be long and this re-runs after every setData() rebuild, so a linear scan per
+    // endpoint would be quadratic on large surveys.
+    const coordByRef = new Map<string, [number, number]>();
+    for (const s of this.cachedStations) {
+      coordByRef.set(
+        `${s.station_ref.section_id}:${s.station_ref.station_index}`,
+        metersToMapCoords(s.coordinates.x, s.coordinates.y, this.gpsOrigin) as [number, number],
       );
-      return st
-        ? (metersToMapCoords(st.coordinates.x, st.coordinates.y, this.gpsOrigin) as [number, number])
-        : null;
-    };
+    }
+    const coordFor = (ref: StationRef): [number, number] | null =>
+      coordByRef.get(`${ref.section_id}:${ref.station_index}`) ?? null;
     const features = this.gasRouteLegs.flatMap((leg) => {
       const from = coordFor(leg.from);
       const to = coordFor(leg.to);
