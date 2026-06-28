@@ -35,6 +35,9 @@ describe('buildGasReachFeatureState', () => {
     final_turn_ref: null,
     backgas_turn_bar: null,
     stage_drop_bars: [],
+    route_line_length_m: 0,
+    route_max_depth_m: null,
+    route_avg_depth_m: null,
   };
 
   it('maps each reachable station to its litres-to-reach, keyed by encodeFeatureId', () => {

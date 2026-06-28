@@ -313,10 +313,12 @@ export default function Toolbar({
                 );
               })}
             </div>
-            {/* DisplayMenu (color overlays + the geometry measured/adjusted toggle) is
-                a survey concern — Plan/Export are read-only focused modes that force the
-                closure map, so it's hidden there (and the geometry toggle stays locked). */}
-            {appMode === 'survey' && <DisplayMenu />}
+            {/* DisplayMenu is available in every mode (#236) so users can control what's drawn
+                while planning/exporting (stations, labels, grid, satellite, …). The component
+                keeps the survey-only concerns out of Plan/Export internally: the geometry
+                measured/adjusted toggle (those modes force the closure map) and the color
+                overlays in Plan (the gas reachability gradient owns the coloring there). */}
+            <DisplayMenu />
           </>
         )}
       </div>

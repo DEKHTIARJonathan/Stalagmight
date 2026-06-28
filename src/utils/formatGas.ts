@@ -14,6 +14,8 @@ import { clamp } from './clamp';
 const PSI_PER_BAR = 14.5037738;
 /** Conversion factor: litres → cubic feet. */
 const CUFT_PER_LITRE = 0.0353146667;
+/** Conversion factor: metres → feet. */
+const FEET_PER_METRE = 3.2808399;
 
 /** Maximum decimal precision (matches the Rust/back-end formatters). */
 const MAX_DECIMAL_PRECISION = 6;
@@ -57,6 +59,24 @@ export function formatVolume(litres: number, units: GasUnits, precision: number 
   const imperial = units === 'imperial';
   const value = imperial ? litres * CUFT_PER_LITRE : litres;
   const suffix = imperial ? 'cuft' : 'L';
+  return `${formatFixed(value, undefined, clampPrecision(precision))} ${suffix}`;
+}
+
+/**
+ * Format a length given in metres (canonical) as m or ft — used for route distance and depth in
+ * the Plan readout, so they follow the same metric/imperial toggle as the gas figures.
+ *
+ * @param metres - Length in metres
+ * @param units - 'metric' (m) or 'imperial' (ft)
+ * @param precision - Decimal places (default 0)
+ */
+export function formatLength(metres: number, units: GasUnits, precision: number = 0): string {
+  if (!isFiniteNumber(metres)) {
+    return '--';
+  }
+  const imperial = units === 'imperial';
+  const value = imperial ? metres * FEET_PER_METRE : metres;
+  const suffix = imperial ? 'ft' : 'm';
   return `${formatFixed(value, undefined, clampPrecision(precision))} ${suffix}`;
 }
 

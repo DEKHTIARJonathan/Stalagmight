@@ -176,6 +176,7 @@ export default function DisplayMenu() {
   const {
     gridSpacing,
     geometryMode,
+    appMode,
     syntacticLevel,
     toggleDisplay,
     setColorMode,
@@ -185,6 +186,7 @@ export default function DisplayMenu() {
   } = useUIStore(useShallow((s) => ({
     gridSpacing: s.gridSpacing,
     geometryMode: s.geometryMode,
+    appMode: s.appMode,
     syntacticLevel: s.syntacticLevel,
     toggleDisplay: s.toggleDisplay,
     setColorMode: s.setColorMode,
@@ -353,13 +355,17 @@ export default function DisplayMenu() {
           data-testid="display-menu"
         >
           <div className="grid grid-cols-2 gap-x-5 gap-y-4">
-            {/* Row 1: Color | Overlays */}
-            <Category label={t('displayMenu.groups.color')} icon={showIcons ? <SlidersIcon size={14} /> : undefined}>
-              <Pill label={t('displayMenu.items.section')} active={colorMode === 'section'} onClick={() => selectColorMode('section')} testId="display-color-section" />
-              <Pill label={t('displayMenu.items.depthGradient')} title={t('displayMenu.descriptions.depthGradient')} active={colorMode === 'depth'} onClick={() => selectColorMode('depth')} testId="display-toggle-showDepthGradient" />
-              <Pill label={t('displayMenu.items.distanceGradient')} title={t('displayMenu.descriptions.distanceGradient')} active={colorMode === 'distance'} onClick={() => selectColorMode('distance')} testId="display-toggle-showDistanceGradient" />
-              <Pill label={t('displayMenu.items.issueSeverity')} title={t('displayMenu.descriptions.issueSeverity')} active={colorMode === 'issues'} onClick={() => selectColorMode('issues')} testId="display-toggle-showIssueSeverity" />
-            </Category>
+            {/* Row 1: Color | Overlays. The Color overlays are hidden in Plan — the gas
+                reachability gradient owns the station/shot coloring there, so a color pill would
+                be a confusing no-op (it still shows in Survey + Export). */}
+            {appMode !== 'plan' && (
+              <Category label={t('displayMenu.groups.color')} icon={showIcons ? <SlidersIcon size={14} /> : undefined}>
+                <Pill label={t('displayMenu.items.section')} active={colorMode === 'section'} onClick={() => selectColorMode('section')} testId="display-color-section" />
+                <Pill label={t('displayMenu.items.depthGradient')} title={t('displayMenu.descriptions.depthGradient')} active={colorMode === 'depth'} onClick={() => selectColorMode('depth')} testId="display-toggle-showDepthGradient" />
+                <Pill label={t('displayMenu.items.distanceGradient')} title={t('displayMenu.descriptions.distanceGradient')} active={colorMode === 'distance'} onClick={() => selectColorMode('distance')} testId="display-toggle-showDistanceGradient" />
+                <Pill label={t('displayMenu.items.issueSeverity')} title={t('displayMenu.descriptions.issueSeverity')} active={colorMode === 'issues'} onClick={() => selectColorMode('issues')} testId="display-toggle-showIssueSeverity" />
+              </Category>
+            )}
 
             <Category label={t('displayMenu.groups.overlays')} icon={showIcons ? <LayersIcon size={14} /> : undefined}>
               {OVERLAYS.map(renderTogglePill)}
@@ -396,7 +402,9 @@ export default function DisplayMenu() {
               </Category>
             </div>
 
-            {/* Row 4: Geometry (single-select), full width */}
+            {/* Row 4: Geometry (single-select), full width. Survey-only — Plan/Export force the
+                read-only closure map, so flipping measured/adjusted there would fight the mode. */}
+            {appMode === 'survey' && (
             <div className="col-span-2 border-t border-border pt-3">
               <Category label={t('displayMenu.geometry.groupLabel')} icon={showIcons ? <RulerIcon size={14} /> : undefined}>
                 <Pill
@@ -420,6 +428,7 @@ export default function DisplayMenu() {
                   : t('displayMenu.geometry.measuredDescription')}
               </p>
             </div>
+            )}
           </div>
         </div>
       )}
