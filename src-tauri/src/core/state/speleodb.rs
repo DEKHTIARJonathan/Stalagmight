@@ -1564,6 +1564,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn push_flushes_to_disk_before_snapshotting() {
+        // #195 quiescent-point invariant: the push must flush in-memory edits to the
+        // live .stalx (save_project) BEFORE taking the VACUUM snapshot, or the
+        // uploaded snapshot would miss the last edit (data loss). The snapshot — NOT
+        // the live bytes — is then what upload_auto streams. The ordering can't be
+        // observed without a client seam, so pin it structurally (like the
+        // BASE-advance tripwire); the live round-trips prove the behaviour itself.
+        let src = include_str!("speleodb.rs");
+        let upload = src
+            .split_once("fn speleodb_upload")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .expect("speleodb_upload body precedes the next method");
+        let save = upload
+            .find("self.save_project(")
+            .expect("push flushes via save_project");
+        let vacuum = upload
+            .find("vacuum_snapshot(")
+            .expect("push snapshots via vacuum_snapshot");
+        let upload_call = upload
+            .find("upload_auto(")
+            .expect("push streams via upload_auto");
+        assert!(
+            save < vacuum,
+            "save_project (flush) must precede vacuum_snapshot — the snapshot must be quiescent (#195)"
+        );
+        assert!(
+            vacuum < upload_call,
+            "the VACUUM snapshot must be taken before upload_auto streams it (#195)"
+        );
+    }
+
     /// A session seeded with an in-memory token (no real keychain). Marked
     /// already-rehydrated so it behaves like a live, established session.
     fn authed_session() -> SpeleoDbSession {
