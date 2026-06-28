@@ -5,6 +5,8 @@ import {
   formatPressure,
   formatRmv,
   formatVolume,
+  speedFromDisplay,
+  speedToDisplay,
   pressureFromDisplay,
   pressureToDisplay,
   rmvFromDisplay,
@@ -54,6 +56,18 @@ describe('formatGas', () => {
     });
     it('renders "--" for non-finite', () => {
       expect(formatRmv(NaN, 'metric')).toBe('--');
+    });
+  });
+
+  describe('speedToDisplay / speedFromDisplay', () => {
+    it('passes m/min through unchanged in metric', () => {
+      expect(speedToDisplay(10, 'metric')).toBe(10);
+      expect(speedFromDisplay(10, 'metric')).toBe(10);
+    });
+    it('converts m/min ↔ ft/min in imperial and round-trips', () => {
+      // 10 m/min × 3.2808399 = 32.808 ft/min
+      expect(speedToDisplay(10, 'imperial')).toBeCloseTo(32.808399, 4);
+      expect(speedFromDisplay(speedToDisplay(10, 'imperial'), 'imperial')).toBeCloseTo(10, 9);
     });
   });
 

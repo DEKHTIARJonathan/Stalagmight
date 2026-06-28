@@ -181,6 +181,12 @@ test.describe('Gas planning', () => {
     expect(await appMode(page)).toBe('plan');
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
 
+    // Swim speed input is present, populated with the 10 m/min default (#236).
+    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Swim speed');
+    const swim = page.locator('[data-testid="gas-swim-speed-input"]');
+    await expect(swim).toBeVisible();
+    await expect(swim).toHaveValue(/^10(\.0)?$/);
+
     // Default rig is twin-AL80 back gas (ZERO stages) → the pushy presets are greyed (the
     // advanced gate); All-thirds stays available.
     await expect(page.locator('[data-testid="gas-reserve-all_thirds"]')).toBeEnabled();

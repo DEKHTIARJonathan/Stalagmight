@@ -13,6 +13,8 @@ import {
   pressureToDisplay,
   rmvFromDisplay,
   rmvToDisplay,
+  speedFromDisplay,
+  speedToDisplay,
 } from '../../utils/formatGas';
 import { PositiveNumberField } from '../common/PositiveNumberField';
 import type { GasUnits, ReservePreset } from '../../types/ipc.generated';
@@ -187,6 +189,31 @@ export function GasPlanPanel() {
             />
             <span className="text-xs opacity-70">
               {t(units === 'imperial' ? 'gasPanel.diver.rmvUnitImperial' : 'gasPanel.diver.rmvUnit')}
+            </span>
+          </div>
+        </section>
+
+        {/* Swim speed — the diver's pace; feeds the in-leg gas-to-reach computation. Nulls the
+            cached field via setGasConfig so the overlay + route refetch on change. */}
+        <section className="space-y-1">
+          <SectionLabel>{t('gasPanel.swimSpeed.label')}</SectionLabel>
+          <div className="flex items-center gap-2">
+            <PositiveNumberField
+              value={speedToDisplay(gasConfig.swim_speed_m_per_min, units)}
+              onCommit={(n) =>
+                setGasConfig({ ...gasConfig, swim_speed_m_per_min: speedFromDisplay(n, units) })
+              }
+              step={units === 'imperial' ? 1 : 0.5}
+              displayPrecision={1}
+              className="w-24 bg-transparent border border-border rounded px-2 py-1"
+              testId="gas-swim-speed-input"
+            />
+            <span className="text-xs opacity-70">
+              {t(
+                units === 'imperial'
+                  ? 'gasPanel.swimSpeed.unitImperial'
+                  : 'gasPanel.swimSpeed.unit'
+              )}
             </span>
           </div>
         </section>

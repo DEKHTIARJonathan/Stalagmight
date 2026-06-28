@@ -109,6 +109,16 @@ export function rmvFromDisplay(value: number, units: GasUnits): number {
   return units === 'imperial' ? value / CUFT_PER_LITRE : value;
 }
 
+/** Canonical speed (m/min) → the number shown in the selected unit (m/min or ft/min). */
+export function speedToDisplay(mPerMin: number, units: GasUnits): number {
+  return units === 'imperial' ? mPerMin * FEET_PER_METRE : mPerMin;
+}
+
+/** A speed typed in the selected unit (m/min or ft/min) → canonical m/min for the store. */
+export function speedFromDisplay(value: number, units: GasUnits): number {
+  return units === 'imperial' ? value / FEET_PER_METRE : value;
+}
+
 /** Canonical pressure (bar) → the number shown in the selected unit (bar or psi). */
 export function pressureToDisplay(bar: number, units: GasUnits): number {
   return units === 'imperial' ? bar * PSI_PER_BAR : bar;
