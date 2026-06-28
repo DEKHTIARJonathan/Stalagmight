@@ -390,15 +390,17 @@ fn build_upload_parts(
             "a non-empty commit message is required to upload".to_owned(),
         ));
     }
-    let part = |src: &Path, default_name: &str| UploadPart {
+    let part = |src: &Path, wire_name: &str| UploadPart {
         // Both parts are named "artifact" (repeated), NEVER "artifact[]" — the
         // server expects repeated same-named parts, not bracket-indexed ones.
         name: "artifact",
-        file_name: src
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(default_name)
-            .to_owned(),
+        // The multipart filename is the CANONICAL server-side name, decoupled from
+        // the local source path's basename. The server's upload/auto/ is additive
+        // (it `git add`s each uploaded file by its name onto ToT), so the `.stalx`
+        // MUST always land as `project.stalx` — else a push from the scratch
+        // `snapshot.stalx` would commit a SECOND `.stalx` beside the canonical one,
+        // and the next download_dump would be an ambiguous multi-`.stalx` repo.
+        file_name: wire_name.to_owned(),
         mime: mime_for(src),
         src: src.to_path_buf(),
     };
@@ -708,9 +710,15 @@ mod tests {
 
     #[test]
     fn upload_parts_both_named_artifact_never_bracketed() {
+        // The `.stalx` source is the scratch SNAPSHOT path (its real basename in the
+        // push pipeline) — the wire filename MUST still be the canonical
+        // `project.stalx`, NOT the source basename. The server is additive, so a
+        // `snapshot.stalx` wire name would commit a second `.stalx` and corrupt the
+        // repo into an ambiguous multi-`.stalx` dump. (Regression: this test used to
+        // pass a `project.stalx` source, masking exactly that bug.)
         let parts = build_upload_parts(
-            Path::new("/x/project.stalx"),
-            Path::new("/x/ariane.tml"),
+            Path::new("/cache/snapshot.stalx"),
+            Path::new("/cache/ariane.tml"),
             "msg",
         )
         .expect("descriptor builds");
@@ -723,8 +731,13 @@ mod tests {
             assert_ne!(p.name, "artifact[]", "never the bracketed form");
         }
         assert_eq!(parts.message, "msg");
-        assert_eq!(parts.parts[0].file_name, "project.stalx");
+        assert_eq!(
+            parts.parts[0].file_name, "project.stalx",
+            "the .stalx uploads under the canonical name, not the scratch basename"
+        );
         assert_eq!(parts.parts[1].file_name, "ariane.tml");
+        // The source path is still the snapshot (that's what gets read + streamed).
+        assert_eq!(parts.parts[0].src, Path::new("/cache/snapshot.stalx"));
     }
 
     #[test]
