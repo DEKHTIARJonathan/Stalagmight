@@ -298,6 +298,31 @@ test.describe('Gas planning', () => {
     expect(endpoint).not.toBeNull();
   });
 
+  test('the planned route renders as a highlighted overlay @smoke', async ({ page }) => {
+    await enterMode(page, 'plan');
+    // The default route (origin → deepest reachable) draws the solid route line over the survey.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const map = (
+              window as unknown as {
+                __stalagmight_map__?: {
+                  queryRenderedFeatures: (o: { layers: string[] }) => unknown[];
+                };
+              }
+            ).__stalagmight_map__;
+            try {
+              return map?.queryRenderedFeatures({ layers: ['survey-gas-route-solid'] }).length ?? 0;
+            } catch {
+              return 0;
+            }
+          }),
+        { timeout: 4000 },
+      )
+      .toBeGreaterThan(0);
+  });
+
   test('carousel switches Survey/Plan/Export; Plan is read-only; Export is a stub @smoke', async ({
     page,
   }) => {

@@ -30,6 +30,7 @@ describe('buildGasReachFeatureState', () => {
     turn_frontier: [{ section_id: 1, station_index: 1 }],
     max_reachable_gas: 300,
     budget_litres: 1000,
+    route: [],
     stage_drop_refs: [],
     final_turn_ref: null,
     backgas_turn_bar: null,

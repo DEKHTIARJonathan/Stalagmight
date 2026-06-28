@@ -18,7 +18,7 @@ use crate::config::{GasConfig, ReservePreset, ReserveProfile};
 use crate::models::{Coordinates, StationKey, StationRef};
 
 use super::Project;
-pub use model::{CylRole, Cylinder, Diver, GasReachField, PlanMode, TankMaterial, Team};
+pub use model::{CylRole, Cylinder, Diver, GasReachField, PlanMode, RouteLeg, TankMaterial, Team};
 use physics::{deliverable_gas, edge_gas};
 
 impl Project {
@@ -171,20 +171,18 @@ impl Project {
             .filter(|&i| reachable[i])
             .or(deepest);
 
-        // Planned route + per-stage drop points (staged Half-Minus strategies only). For All-thirds
-        // the thresholds are empty and these stay empty/None — the plain field above is the whole
-        // answer; All-thirds behaviour is unchanged.
+        // Planned route to the target (for the highlight + final turn) — populated for ANY strategy
+        // when something is reachable. Per-stage drop points are placed on it only for a staged
+        // strategy (`thresholds` is empty for All-thirds / a fell-back staged rig → no drops).
         let thresholds = stage_drop_thresholds(
             cylinders,
             gas_config.default_reserve,
             &gas_config.reserve_profile,
             gas_config.conservative_tank_gas,
         );
-        let (stage_drop_refs, final_turn_ref) = if thresholds.is_empty() {
-            (Vec::new(), None)
-        } else {
-            staged_route(route_target, &pred, &gas_in, &station_refs, &thresholds)
-        };
+        let (route_refs, stage_drop_refs, final_turn_ref) =
+            staged_route(route_target, &pred, &gas_in, &station_refs, &thresholds);
+        let route = self.route_legs(&route_refs);
 
         // Readout gauges — computed here so the UI never re-derives the budget math. Both honour the
         // conservative cap + normalized reserve + stage-count fallback (the effective strategy).
@@ -208,29 +206,55 @@ impl Project {
             turn_frontier,
             max_reachable_gas,
             budget_litres,
+            route,
             stage_drop_refs,
             final_turn_ref,
             backgas_turn_bar,
             stage_drop_bars,
         }
     }
+
+    /// Build the route-highlight legs from the ordered route stations, flagging each leg whose
+    /// connecting shot is a reference/jump (a normally-hidden swum shortcut) so the UI can dash it.
+    /// A cross-section tie (a merge / loop closure — coincident points) is not a jump.
+    fn route_legs(&self, route_refs: &[StationRef]) -> Vec<RouteLeg> {
+        route_refs
+            .windows(2)
+            .map(|w| {
+                let (from, to) = (w[0], w[1]);
+                let is_jump = from.section_id == to.section_id
+                    && from.station_index.abs_diff(to.station_index) == 1
+                    && self
+                        .sections
+                        .iter()
+                        .find(|s| s.id == from.section_id)
+                        .and_then(|s| {
+                            s.shots
+                                .get(from.station_index.min(to.station_index) as usize)
+                        })
+                        .is_some_and(|shot| shot.is_reference);
+                RouteLeg { from, to, is_jump }
+            })
+            .collect()
+    }
 }
 
-/// Place the per-stage drop points on the route to `target`. Walks the predecessor tree from the
-/// route target (the user-selected endpoint, else the deepest in-budget station) back to its root,
-/// reverses to give the route origin→target, then for each cumulative stage threshold (litres)
-/// finds the first route station whose gas-to-reach reaches it (the diver's likely drop point). A
-/// threshold past the target — cave shorter than the staged gas — simply yields no drop. Returns
-/// `(stage_drop_refs, final_turn_ref)`; empty/None when there is no reachable target.
+/// Reconstruct the route to `target` and place the per-stage drop points on it. Walks the
+/// predecessor tree from the route target (the user-selected endpoint, else the deepest in-budget
+/// station) back to its root, reverses to give the route origin→target, then for each cumulative
+/// stage threshold (litres) finds the first route station whose gas-to-reach reaches it (the
+/// diver's likely drop point). A threshold past the target — cave shorter than the staged gas —
+/// simply yields no drop. Returns `(route_refs, stage_drop_refs, final_turn_ref)`; all empty/None
+/// when there is no reachable target.
 fn staged_route(
     target: Option<usize>,
     pred: &[usize],
     gas_in: &[f64],
     station_refs: &[StationRef],
     thresholds: &[f64],
-) -> (Vec<StationRef>, Option<StationRef>) {
+) -> (Vec<StationRef>, Vec<StationRef>, Option<StationRef>) {
     let Some(target) = target else {
-        return (Vec::new(), None);
+        return (Vec::new(), Vec::new(), None);
     };
     let mut chain = vec![target];
     let mut cur = target;
@@ -245,6 +269,7 @@ fn staged_route(
     }
     chain.reverse();
 
+    let route_refs: Vec<StationRef> = chain.iter().map(|&i| station_refs[i]).collect();
     // gas-to-reach increases monotonically root→target along the tree path, so the first station
     // at/after a threshold is the drop point.
     let stage_drop_refs: Vec<StationRef> = thresholds
@@ -256,7 +281,7 @@ fn staged_route(
                 .map(|&i| station_refs[i])
         })
         .collect();
-    (stage_drop_refs, Some(station_refs[target]))
+    (route_refs, stage_drop_refs, Some(station_refs[target]))
 }
 
 /// Number of `Stage` cylinders a preset requires in the rig. The pushy presets are valid

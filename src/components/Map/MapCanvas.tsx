@@ -1947,6 +1947,16 @@ function MapCanvas() {
     }
   }, [showGasPlan, gasReachField, project, mapLoaded, surveyLayerRef]);
 
+  // Highlight the picked route over the survey (#233): solid swum legs + dashed jumps.
+  useEffect(() => {
+    if (!surveyLayerRef.current || !mapLoaded) return;
+    if (showGasPlan && gasReachField && project) {
+      surveyLayerRef.current.setGasRoute(gasReachField.route);
+    } else {
+      surveyLayerRef.current.setGasRoute([]);
+    }
+  }, [showGasPlan, gasReachField, project, mapLoaded, surveyLayerRef]);
+
   // Tint the measured along-line path's shots AND stations (#26) in the
   // user-configured color. Keyed on the along-line result so it applies when the
   // IPC resolves and clears on reset (clearMeasure nulls measureAlongLine).

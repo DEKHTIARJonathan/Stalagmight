@@ -9,6 +9,7 @@ import type {
   StationRef,
 } from '../../types/project';
 import type { Config, GpsOrigin, DecimalPrecision } from '../../types/config';
+import type { RouteLeg } from '../../types/ipc.generated';
 import { isNonInteractiveTool } from '../../utils/toolUtils';
 import type { ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -104,6 +105,10 @@ export default class SurveyLayer {
   // Hitbox layers for improved click detection
   private stationsHitboxLayerId = 'survey-stations-hitbox';
   private shotsHitboxLayerId = 'survey-shots-hitbox';
+  // Gas route highlight (#233): the picked penetration route drawn over the survey — solid for
+  // swum legs, dashed for jumps (a separate layer since line-dasharray can't be data-driven).
+  private gasRouteSolidLayerId = 'survey-gas-route-solid';
+  private gasRouteDashedLayerId = 'survey-gas-route-dashed';
 
   // Base zoom-density filters for label layers (set at init, restored when clearing reference filter)
   private shotLabelsBaseFilter: maplibregl.FilterSpecification | null = null;
@@ -260,6 +265,9 @@ export default class SurveyLayer {
   // the shots/stations color paint), enforced upstream in uiStore.
   private gasReachMode: boolean = false;
   private gasReachState: GasReachFeatureState | null = null;
+  // Gas route highlight (#233): the current picked-route legs. Re-applied after every setData()
+  // rebuild (its own GeoJSON source survives setData, but a feature rebuild re-pushes the data).
+  private gasRouteLegs: RouteLeg[] = [];
   // Measured along-line path (#26): the path's shots AND stations are tinted via
   // a `measured` feature-state + a paint `case` on shots line-color / stations
   // circle-color, in a user-configurable color. Re-applied after setData() (which
@@ -470,6 +478,15 @@ export default class SurveyLayer {
 
     // Loop closures line source
     this.map.addSource(this.sourceId + '-loop-closures', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    });
+
+    // Gas route highlight line source (#233): one LineString per route leg, `isJump` flagged.
+    this.map.addSource(this.sourceId + '-gas-route', {
       type: 'geojson',
       data: {
         type: 'FeatureCollection',
@@ -860,6 +877,32 @@ export default class SurveyLayer {
         // At zoom >= 18: show all
         true,
       ],
+    });
+
+    // Gas route highlight (#233): the picked route drawn over the survey. Two layers because
+    // `line-dasharray` can't be data-driven per feature — solid for swum legs, dashed for jumps.
+    this.map.addLayer({
+      id: this.gasRouteSolidLayerId,
+      type: 'line',
+      source: this.sourceId + '-gas-route',
+      filter: ['!=', ['get', 'isJump'], true],
+      paint: {
+        'line-color': '#22d3ee',
+        'line-width': 4,
+        'line-opacity': 0.9,
+      },
+    });
+    this.map.addLayer({
+      id: this.gasRouteDashedLayerId,
+      type: 'line',
+      source: this.sourceId + '-gas-route',
+      filter: ['==', ['get', 'isJump'], true],
+      paint: {
+        'line-color': '#22d3ee',
+        'line-width': 4,
+        'line-opacity': 0.9,
+        'line-dasharray': [2, 2],
+      },
     });
 
     // Section name labels layer - shows section name at first station
@@ -1807,6 +1850,48 @@ export default class SurveyLayer {
     if (!this.map || !hasLiveStyle(this.map)) return;
     this.applyOverlayPaint();
     this.applyGasReachFeatureState();
+  }
+
+  /**
+   * Apply the gas route highlight (#233): the picked penetration route drawn over the survey —
+   * swum legs solid, jump legs dashed. Has its own GeoJSON source (survives `setData()`); the legs
+   * are stored so `applyFeaturesToSources` re-pushes them after a feature rebuild. `[]` clears it.
+   */
+  setGasRoute(legs: RouteLeg[]): void {
+    this.gasRouteLegs = legs;
+    this.applyGasRoute();
+  }
+
+  /** Build one LineString per route leg (with `isJump` flagged) from `cachedStations` and push them
+   *  to the gas-route source. No-op without a live style or the source. */
+  private applyGasRoute(): void {
+    if (!this.map || !hasLiveStyle(this.map)) return;
+    const source = this.map.getSource(this.sourceId + '-gas-route');
+    if (!source || source.type !== 'geojson') return;
+    const geojsonSource = source as maplibregl.GeoJSONSource;
+    const coordFor = (ref: StationRef): [number, number] | null => {
+      const st = this.cachedStations.find(
+        (s) =>
+          s.station_ref.section_id === ref.section_id &&
+          s.station_ref.station_index === ref.station_index,
+      );
+      return st
+        ? (metersToMapCoords(st.coordinates.x, st.coordinates.y, this.gpsOrigin) as [number, number])
+        : null;
+    };
+    const features = this.gasRouteLegs.flatMap((leg) => {
+      const from = coordFor(leg.from);
+      const to = coordFor(leg.to);
+      if (!from || !to) return [];
+      return [
+        {
+          type: 'Feature' as const,
+          geometry: { type: 'LineString' as const, coordinates: [from, to] },
+          properties: { isJump: leg.is_jump },
+        },
+      ];
+    });
+    geojsonSource.setData({ type: 'FeatureCollection', features });
   }
 
   /** The distance-gradient color ramp, shared by the shots line-color and the
@@ -4117,6 +4202,11 @@ export default class SurveyLayer {
     // Likewise re-apply the measured along-line path tint (#26).
     if (this.measuredPathIds || this.measuredPathStationIds) {
       this.applyMeasuredPathFeatureState();
+    }
+    // Gas route highlight (#233): re-push the route LineStrings (coords come from cachedStations,
+    // which a rebuild may have refreshed).
+    if (this.gasRouteLegs.length > 0) {
+      this.applyGasRoute();
     }
 
     // Fire one-shot callback (used by drag commit to restore filters in the same

@@ -554,9 +554,9 @@ fn gas_reach_field_two_stage_places_two_drops_in_order() {
 }
 
 #[test]
-fn gas_reach_field_all_thirds_has_no_route_or_drops() {
-    // All-thirds keeps the plain field — no staged route/drops/final-turn (those are staged-only),
-    // but the reachable field itself is still populated.
+fn gas_reach_field_all_thirds_has_route_and_final_turn_but_no_drops() {
+    // All-thirds has the route highlight + final turn (to the deepest reachable station) like any
+    // strategy, but NO per-stage drops (those are staged-only).
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let bg = Cylinder::new(
@@ -571,7 +571,10 @@ fn gas_reach_field_all_thirds_has_no_route_or_drops() {
     let field =
         project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg], &GasConfig::default());
     assert!(field.stage_drop_refs.is_empty());
-    assert_eq!(field.final_turn_ref, None);
+    assert!(field.stage_drop_bars.is_empty());
+    // Route + final turn ARE populated (to the deepest reachable station).
+    assert!(!field.route.is_empty());
+    assert!(field.final_turn_ref.is_some());
     assert!(field.reachable.iter().any(|&r| r));
 }
 
@@ -658,9 +661,10 @@ fn gas_reach_field_backgas_turn_none_without_back_gas() {
 }
 
 #[test]
-fn gas_reach_field_staged_with_no_stages_is_empty_route_and_falls_back() {
-    // OneStage REQUESTED but the rig carries ZERO stages → effective AllThirds: empty route/drops,
-    // empty stage-drop gauges, and the back-gas gauge uses the ⅓ fraction.
+fn gas_reach_field_staged_with_no_stages_falls_back_to_all_thirds() {
+    // OneStage REQUESTED but the rig carries ZERO stages → effective AllThirds: NO per-stage drops,
+    // empty stage-drop gauges, and the back-gas gauge uses the ⅓ fraction (but the route + final
+    // turn are still populated, like any strategy).
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let bg = Cylinder::new(
@@ -678,8 +682,8 @@ fn gas_reach_field_staged_with_no_stages_is_empty_route_and_falls_back() {
     };
     let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg], &cfg);
     assert!(field.stage_drop_refs.is_empty());
-    assert_eq!(field.final_turn_ref, None);
     assert!(field.stage_drop_bars.is_empty());
+    assert!(field.final_turn_ref.is_some());
     assert!((field.backgas_turn_bar.unwrap() - 80.0 * (2.0 / 3.0)).abs() < 1e-6);
 }
 
@@ -996,6 +1000,31 @@ fn project_with_jump_second_leg() -> (Project, StationRef) {
         })
         .id;
     (project, StationRef::new(sec, 0))
+}
+
+#[test]
+fn gas_reach_field_route_legs_flag_jumps() {
+    // The route's reference (jump) leg is flagged `is_jump` so the UI can dash it (jumps are
+    // normally hidden). Route origin → station 2 (deepest): leg 0 (0→1) regular, leg 1 (1→2) jump.
+    let (project, origin) = project_with_jump_second_leg();
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field =
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[big], &GasConfig::default());
+    let sec = origin.section_id;
+    assert_eq!(field.route.len(), 2);
+    assert!(!field.route[0].is_jump);
+    assert!(field.route[1].is_jump);
+    assert_eq!(field.route[1].from, StationRef::new(sec, 1));
+    assert_eq!(field.route[1].to, StationRef::new(sec, 2));
 }
 
 #[test]

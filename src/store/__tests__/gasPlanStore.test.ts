@@ -10,6 +10,7 @@ const fakeField = (): GasReachField => ({
   turn_frontier: [],
   max_reachable_gas: 0,
   budget_litres: 0,
+  route: [],
   stage_drop_refs: [],
   final_turn_ref: null,
   backgas_turn_bar: null,

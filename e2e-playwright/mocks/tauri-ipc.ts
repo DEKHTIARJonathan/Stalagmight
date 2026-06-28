@@ -1318,8 +1318,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               : deepestIdx >= 0
                 ? stations[deepestIdx].station_ref
                 : null;
-            const final_turn_ref = dropCount > 0 ? targetRef : null;
+            const final_turn_ref = targetRef;
             const stage_drop_refs = dropCount > 0 ? reachableRefs.slice(1, 1 + dropCount) : [];
+            // Route legs to the target (consecutive reachable stations; the real graph path is
+            // exercised in Rust). is_jump stays false — the seeded e2e sections carry no jumps.
+            const route =
+              targetRef != null
+                ? reachableRefs
+                    .slice(0, -1)
+                    .map((from, i) => ({ from, to: reachableRefs[i + 1], is_jump: false }))
+                : [];
 
             const backCyls = cylinders.filter((c) => c.role === 'back_gas');
             const sumWv = backCyls.reduce((s, c) => s + (c.water_volume_l ?? 0), 0);
@@ -1350,6 +1358,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               turn_frontier,
               max_reachable_gas,
               budget_litres,
+              route,
               stage_drop_refs,
               final_turn_ref,
               backgas_turn_bar,
