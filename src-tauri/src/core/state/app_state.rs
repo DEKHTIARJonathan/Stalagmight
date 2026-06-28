@@ -304,29 +304,17 @@ impl AppState {
         let Some(db) = db_guard.as_ref() else {
             return; // no open database (e.g. unsaved project) — nothing to stamp
         };
-        match db.load_speleo_link() {
-            Ok(Some(mut link)) => {
-                // Refresh last_edit_at every time (g7 push-start comparison), and
-                // set the dirty bit. We always re-save so a later edit's timestamp
-                // is recorded even when the bit was already true.
-                link.has_unpushed_edits = true;
-                link.last_edit_at = Some(chrono::Utc::now().to_rfc3339());
-                if let Err(e) = db.save_speleo_link(Some(&link)) {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "flip SpeleoDB dirty bit after a remote edit",
-                        "mark_remote_dirty: failed to persist has_unpushed_edits"
-                    );
-                }
-            }
-            Ok(None) => {} // local-only project: no link, no-op
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "flip SpeleoDB dirty bit after a remote edit",
-                    "mark_remote_dirty: failed to load speleo_link"
-                );
-            }
+        // One targeted UPDATE: set the dirty bit + refresh last_edit_at (the g7
+        // push-start comparison needs the LATEST edit time, so this runs every edit,
+        // not idempotently). A local-only project has no link row → 0 rows → no-op,
+        // so this stays cheap on the hot edit path (no SELECT, no DDL, no full upsert).
+        let now = chrono::Utc::now().to_rfc3339();
+        if let Err(e) = db.touch_speleo_link_dirty(&now) {
+            tracing::warn!(
+                error = %e,
+                purpose = "flip SpeleoDB dirty bit after a remote edit",
+                "mark_remote_dirty: failed to persist has_unpushed_edits"
+            );
         }
     }
 

@@ -3757,6 +3757,65 @@ fn migrate_v9_clean_speleo_link_keeps_null_last_edit_at() {
 }
 
 #[test]
+fn touch_speleo_link_dirty_is_targeted_and_locality_aware() {
+    // #197 review: the hot-path dirty stamp is a single UPDATE — no row for a
+    // local-only project (no-op, false), and for a remote link it sets the bit +
+    // refreshes last_edit_at WITHOUT disturbing base_commit_sha / identity.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("touch.stalx");
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&Project::new("Touch".to_string(), None))
+        .unwrap();
+
+    // Local-only (no link row): no-op, returns false.
+    assert!(
+        !db.touch_speleo_link_dirty("2026-06-28T00:00:00+00:00")
+            .unwrap(),
+        "no link row → nothing to touch"
+    );
+    assert!(db.load_speleo_link().unwrap().is_none(), "still no link");
+
+    // Seed a CLEAN remote link, then touch it.
+    db.save_speleo_link(Some(&sample_speleo_link(Some("base-sha"), false)))
+        .unwrap();
+    assert!(
+        db.touch_speleo_link_dirty("2026-06-28T01:02:03+00:00")
+            .unwrap(),
+        "remote link row updated → true"
+    );
+    let link = db.load_speleo_link().unwrap().unwrap();
+    assert!(link.has_unpushed_edits, "dirty bit set");
+    assert_eq!(
+        link.last_edit_at.as_deref(),
+        Some("2026-06-28T01:02:03+00:00"),
+        "last_edit_at stamped"
+    );
+    assert_eq!(
+        link.base_commit_sha.as_deref(),
+        Some("base-sha"),
+        "BASE must NOT be disturbed by a dirty stamp"
+    );
+    assert_eq!(
+        link.project_id, "11111111-1111-1111-1111-111111111111",
+        "hand-off identity untouched"
+    );
+
+    // A second touch REFRESHES the timestamp (not idempotent — g7 needs the latest).
+    assert!(db
+        .touch_speleo_link_dirty("2026-06-28T09:09:09+00:00")
+        .unwrap());
+    assert_eq!(
+        db.load_speleo_link()
+            .unwrap()
+            .unwrap()
+            .last_edit_at
+            .as_deref(),
+        Some("2026-06-28T09:09:09+00:00"),
+        "last_edit_at refreshed on every touch"
+    );
+}
+
+#[test]
 fn preserved_speleolink_columns_match_head_schema() {
     // Structural HEAD-schema guard: every (name, decl_type, notnull) in
     // PRESERVED_SPELEOLINK_COLUMNS must match the live table exactly. Fails the
