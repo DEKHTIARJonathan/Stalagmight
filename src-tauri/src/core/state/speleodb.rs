@@ -411,14 +411,20 @@ impl AppState {
     /// auto-drop sink; `Session::forget` is left untouched so the login
     /// switch-account path does not spuriously close the gate.)
     fn speleodb_forget(&self) {
-        // Drop the transient edit gate ONLY for a remote edit session. A dead token
+        // Drop the transient edit gate for a remote edit session. A dead token
         // surfaces as a 401 on ANY SpeleoDB call (e.g. a background list_projects /
         // refresh), and this is the auto-drop sink for all of them — so an
         // unconditional drop would silently turn an open LOCAL project read-only.
-        // speleodb_open_link is Ok only when a remote hand-off link is open; mirror
-        // speleodb_logout's remote-gated drop.
-        if self.edit_enabled() && self.speleodb_open_link().is_ok() {
-            self.set_edit_enabled(false);
+        // Mirror speleodb_logout's remote-gated, fail-SAFE drop exactly (#197
+        // review): only a confirmed local-only project (NoRemoteProject) keeps the
+        // gate; an undeterminable load (e.g. a poisoned database Mutex) fails safe to
+        // read-only rather than leaving a token-less session able to edit.
+        if self.edit_enabled() {
+            match self.speleodb_open_link() {
+                Ok(_) => self.set_edit_enabled(false),
+                Err(SpeleoDbError::NoRemoteProject) => {}
+                Err(_) => self.set_edit_enabled(false),
+            }
         }
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.forget();
@@ -1530,19 +1536,27 @@ mod tests {
     #[test]
     fn head_retries_once_then_succeeds_on_transient_empty() {
         let calls = std::cell::Cell::new(0u32);
+        // The settled read returns a realistic shape: a resolved tip always rides a
+        // non-empty history (tip_of(&[]) is None), so the success case carries a
+        // commit — not the unreachable (Some, empty) pair (#197 review).
+        let settled = vec![crate::speleodb::models::RevisionCommit {
+            id: "tip-sha".to_owned(),
+            parent_ids: vec!["base-sha".to_owned()],
+            author_email: "me@x".to_owned(),
+        }];
         let (tip, _) = head_with_empty_retry(Some("base-sha"), || {
             calls.set(calls.get() + 1);
             if calls.get() == 1 {
                 Ok((None, Vec::new())) // transient empty read
             } else {
-                Ok((Some("tip-sha".to_owned()), Vec::new()))
+                Ok((Some("tip-sha".to_owned()), settled.clone()))
             }
         })
         .expect("ok");
         assert_eq!(
             calls.get(),
             2,
-            "re-fetched exactly once on (base Some, tip None)"
+            "re-fetched exactly once on (base Some, empty history)"
         );
         assert_eq!(
             tip.as_deref(),
