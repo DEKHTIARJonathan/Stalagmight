@@ -207,6 +207,7 @@ impl SpeleoDbSession {
 }
 
 /// Internal verdict of the push half of `speleodb_done`.
+#[derive(Debug)]
 enum PushOutcome {
     /// The push landed (200 → BASE advanced; or 304 → already at the tip): the
     /// dirty bit was cleared. Safe to release the lock.
@@ -1365,7 +1366,7 @@ mod tests {
     use super::{
         auth_error_drops_token, classify_dump_entry, clear_snapshot_dirty, head_with_empty_retry,
         preserved_display_settings, resolve_endpoint, restore_display_settings,
-        validate_project_id, whoami_indicates_dead_token, Endpoint, SpeleoDbSession,
+        validate_project_id, whoami_indicates_dead_token, Endpoint, PushOutcome, SpeleoDbSession,
     };
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
@@ -2695,6 +2696,123 @@ mod tests {
             std::fs::read(&server_tml).expect("read server ariane.tml"),
             std::fs::read(&rerender).expect("read re-rendered .tml"),
             "the stored ariane.tml must be byte-identical to a fresh re-render (#196 b4)"
+        );
+    }
+
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
+    fn live_orch_done_without_edits_skips_push_and_releases() {
+        // #197 b1: a non-dirty Done must push NOTHING (the dirty-bit gate skips the
+        // upload) yet still release the lock back to read-only — no empty commit.
+        let Some((url, email, password)) = orch_env() else {
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let id = orch_seed(&url, &token, "orch-noedit", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: token.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &email, &token);
+        orch_open(&state, &id, "orch-noedit");
+        let started = state.speleodb_start_editing().expect("start_editing");
+        assert!(
+            matches!(started, StartEditingResult::Editing),
+            "clean reconcile should enable editing, got {started:?}"
+        );
+        assert!(
+            !orch_link(&state).has_unpushed_edits,
+            "no edits made yet → the session is not dirty"
+        );
+        let base_before = orch_link(&state).base_commit_sha;
+
+        // Commit count BEFORE the no-op Done.
+        let (_, before) = state
+            .speleodb_server_head(&url, &token, false, &id)
+            .expect("revisions before Done");
+
+        let done = state.speleodb_done(None).expect("done");
+        assert!(
+            matches!(done, DoneResult::Released),
+            "a non-dirty Done releases (push skipped), got {done:?}"
+        );
+        assert!(!state.edit_enabled(), "read-only again after Done");
+        assert_eq!(
+            orch_link(&state).base_commit_sha,
+            base_before,
+            "a skipped push must not advance BASE"
+        );
+
+        // No commit was pushed.
+        let (_, after) = state
+            .speleodb_server_head(&url, &token, false, &id)
+            .expect("revisions after Done");
+        assert_eq!(
+            before.len(),
+            after.len(),
+            "a non-dirty Done must push no commit (got {} -> {})",
+            before.len(),
+            after.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
+    fn live_orch_ambiguous_upload_preserves_dirty_bit() {
+        // #197 b5: an ambiguous push (transport drop / exhausted 5xx — we never learn
+        // whether it landed) must NOT clear the dirty bit or advance BASE; the
+        // un-pushed edits survive for ancestry recovery (g7) on the next Done. Forced
+        // by pointing the UPLOAD at a dead port (connection refused -> Transport ->
+        // StayDirty) while reusing a live-opened project for the real flush/snapshot.
+        let Some((url, email, password)) = orch_env() else {
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let id = orch_seed(&url, &token, "orch-ambig", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: token.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &email, &token);
+        orch_open(&state, &id, "orch-ambig");
+
+        // Make the session dirty (simulate an un-pushed edit): mark_remote_dirty stamps
+        // the bit + last_edit_at together, exactly as a real edit would.
+        state
+            .speleodb_mutate_link(|l| {
+                l.has_unpushed_edits = true;
+                l.last_edit_at = Some("2020-01-01T00:00:00+00:00".to_owned());
+            })
+            .expect("mark dirty");
+        let link = orch_link(&state);
+        let base_before = link.base_commit_sha.clone();
+        assert!(
+            link.has_unpushed_edits,
+            "precondition: the session is dirty"
+        );
+
+        // Upload to a dead endpoint -> transport failure -> ambiguous outcome.
+        let outcome = state
+            .speleodb_upload("http://127.0.0.1:1/", &token, false, &link, None)
+            .expect("an ambiguous upload returns an outcome, not a hard error");
+        assert!(
+            matches!(outcome, PushOutcome::Unconfirmed),
+            "an ambiguous push must report Unconfirmed, got {outcome:?}"
+        );
+
+        // The dirty bit + BASE survive untouched, so the edits aren't dropped.
+        let after = orch_link(&state);
+        assert!(
+            after.has_unpushed_edits,
+            "an ambiguous push must leave the file dirty (#197 b5)"
+        );
+        assert_eq!(
+            after.base_commit_sha, base_before,
+            "an ambiguous push must not advance BASE (#197 b5)"
         );
     }
 }
