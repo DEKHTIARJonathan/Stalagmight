@@ -273,7 +273,7 @@ export const defaultConfig: Config = {
     units: 'metric',
     default_reserve: 'all_thirds',
     reserve_profile: {
-      turn_buffer_bar: 15,
+      stage_reserve_bar: 30,
       recalc_hold_stage2_bar: 100,
       recalc_hold_stage1_bar: 70,
     },

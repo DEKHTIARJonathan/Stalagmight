@@ -157,6 +157,8 @@ test.describe('Gas planning', () => {
     // Legend appears with the entrance origin.
     await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible({ timeout: 3000 });
     await expect(page.locator('[data-testid="gas-legend-origin"]')).toContainText('entrance');
+    // The symbol key explains the markers (turn/end point always present in Plan).
+    await expect(page.locator('[data-testid="gas-legend-key"]')).toContainText('Turn / end point');
     // Paint swapped to the gas feature-state interpolate.
     await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).toContain('gasReach');
     // A station carries a numeric `gasReach` feature-state.
@@ -186,6 +188,10 @@ test.describe('Gas planning', () => {
     // The "max" readout is labelled as a gas volume, not a penetration distance.
     await expect(page.locator('[data-testid="gas-readout-max"]')).toBeVisible({ timeout: 3000 });
     await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Gas to farthest point');
+    // The strategy is "Gas strategy" with the back-gas turn-pressure gauge (All-thirds default).
+    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Gas strategy');
+    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Backgas turn pressure');
+    await expect(page.locator('[data-testid="gas-readout-backgas-turn"]')).toBeVisible();
   });
 
   test('adding a stage enables a pushy preset behind the advanced acknowledgment @smoke', async ({
@@ -208,10 +214,113 @@ test.describe('Gas planning', () => {
     await oneStage.click();
     await expect(page.locator('[data-testid="gas-pushy-ack"]')).toBeVisible();
 
-    // Confirming applies the preset (selected ring) and dismisses the gate.
+    // Confirming applies the strategy (selected ring) and dismisses the gate.
     await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
     await expect(page.locator('[data-testid="gas-pushy-ack"]')).toHaveCount(0);
     await expect(oneStage).toHaveClass(/ring-accent/);
+
+    // The staged strategy refetches a field with a route → a ▼ drop marker + the ◉ final-turn
+    // marker render, and the readout gains the per-stage drop gauge.
+    await expect
+      .poll(() => page.locator('[data-testid="gas-drop-marker"]').count(), { timeout: 3000 })
+      .toBeGreaterThan(0);
+    await expect
+      .poll(() => page.locator('[data-testid="gas-final-turn-marker"]').count(), { timeout: 3000 })
+      .toBeGreaterThan(0);
+    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Stage 1 drop pressure');
+    // The per-stage reserve input appears for a staged strategy (default 30 bar).
+    await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toBeVisible();
+  });
+
+  test('Plan right-click offers gas route picks, not the survey menu; Set as endpoint stores it @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+
+    // Open the station context menu programmatically (the right-click hit-test itself is covered by
+    // survey-mode specs). In Plan it must REPLACE the survey mutation menu with the gas route picks.
+    await page.evaluate(() => {
+      const e2e = (
+        window as unknown as {
+          __E2E_TEST__: {
+            projectStore: { getState: () => { project: { sections: Array<{ id: number }> } } };
+            uiStore: { getState: () => { openDialog: (d: string, data: unknown) => void } };
+          };
+        }
+      ).__E2E_TEST__;
+      const sec = e2e.projectStore.getState().project.sections[0];
+      e2e.uiStore.getState().openDialog('context-menu', {
+        target: { type: 'station', ref: { section_id: sec.id, station_index: 1 } },
+        position: { x: 220, y: 220 },
+      });
+    });
+
+    await expect(page.getByText('Set as endpoint')).toBeVisible();
+    await expect(page.getByText('Set as origin')).toBeVisible();
+    // The survey mutation menu must NOT appear (the read-only bug): no "Edit Station".
+    await expect(page.getByText('Edit Station')).toHaveCount(0);
+
+    // Picking the endpoint stores it in the gas plan store and closes the menu.
+    await page.getByText('Set as endpoint').click();
+    await expect(page.getByText('Set as endpoint')).toHaveCount(0);
+    const endpoint = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __E2E_TEST__: { gasPlanStore: { getState: () => { endpoint: unknown } } };
+          }
+        ).__E2E_TEST__.gasPlanStore.getState().endpoint,
+    );
+    expect(endpoint).not.toBeNull();
+  });
+
+  test('right-clicking a turn-frontier dot opens the Plan menu and sets the endpoint @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    // The red turn-frontier dots are the candidate end points; they render even with survey
+    // stations hidden, so they are the route-pick target (a station right-click needs stations on).
+    await expect
+      .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
+      .toBeGreaterThan(0);
+    await page.locator('[data-testid="gas-turn-marker"]').first().click({ button: 'right' });
+    await expect(page.getByText('Set as endpoint')).toBeVisible();
+    await page.getByText('Set as endpoint').click();
+    const endpoint = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __E2E_TEST__: { gasPlanStore: { getState: () => { endpoint: unknown } } };
+          }
+        ).__E2E_TEST__.gasPlanStore.getState().endpoint,
+    );
+    expect(endpoint).not.toBeNull();
+  });
+
+  test('the planned route renders as a highlighted overlay @smoke', async ({ page }) => {
+    await enterMode(page, 'plan');
+    // The default route (origin → deepest reachable) draws the solid route line over the survey.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const map = (
+              window as unknown as {
+                __stalagmight_map__?: {
+                  queryRenderedFeatures: (o: { layers: string[] }) => unknown[];
+                };
+              }
+            ).__stalagmight_map__;
+            try {
+              return map?.queryRenderedFeatures({ layers: ['survey-gas-route-solid'] }).length ?? 0;
+            } catch {
+              return 0;
+            }
+          }),
+        { timeout: 4000 },
+      )
+      .toBeGreaterThan(0);
   });
 
   test('carousel switches Survey/Plan/Export; Plan is read-only; Export is a stub @smoke', async ({

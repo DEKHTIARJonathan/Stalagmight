@@ -163,6 +163,31 @@ pub struct Team {
 /// reserve budget, and the turn frontier (reachable stations with an unreachable neighbour).
 /// `gas_to_reach` is `None` for graph-unreachable stations (JSON-safe ∞); `station_refs` echo
 /// the input order so the field is self-describing.
+///
+/// One leg of the planned route — origin→target, station to station. `is_jump` marks a
+/// reference/jump shot (a swum shortcut normally hidden in the survey view), so the UI can draw it
+/// dashed and distinct from a regular swum leg. A merge / loop-closure tie (coincident points) is
+/// `is_jump = false` (zero-length, drawn solid).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct RouteLeg {
+    pub from: StationRef,
+    pub to: StationRef,
+    pub is_jump: bool,
+}
+
+/// The `route` / `stage_drop_refs` / `final_turn_ref` describe the **planned route** to the route
+/// target (the user-selected endpoint, else the farthest in-budget point): the ordered legs from
+/// the origin to the target (for the route highlight), the station where each stage's IN gas runs
+/// out (its drop point — staged strategies only), and the final turn. `route` + `final_turn_ref`
+/// are populated for **any** strategy when a target is reachable; `stage_drop_refs` is **empty for
+/// All-thirds** (and any rig that falls back to it — no per-stage drops).
+///
+/// `backgas_turn_bar` and `stage_drop_bars` are the **readout gauges**, computed here (the single
+/// source of truth) so the UI never re-derives the budget math and drifts from the reachable
+/// overlay: the back-gas turn pressure under the effective strategy's fraction, and each counted
+/// stage's Half-Minus drop pressure. Both honour the conservative cap + normalized reserve +
+/// stage-count fallback. `backgas_turn_bar` is `None` when the rig has no back gas;
+/// `stage_drop_bars` is empty for All-thirds / a fell-back staged strategy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct GasReachField {
     pub station_refs: Vec<StationRef>,
@@ -171,4 +196,14 @@ pub struct GasReachField {
     pub turn_frontier: Vec<StationRef>,
     pub max_reachable_gas: f64,
     pub budget_litres: f64,
+    /// Ordered legs origin→target (for the route highlight); empty when nothing is reachable.
+    pub route: Vec<RouteLeg>,
+    /// Station where each stage's IN gas is exhausted, in stage order (staged strategies only).
+    pub stage_drop_refs: Vec<StationRef>,
+    /// The final turn — the route target station; `None` when nothing is reachable.
+    pub final_turn_ref: Option<StationRef>,
+    /// Back-gas turn pressure gauge (bar); `None` when the rig has no back gas.
+    pub backgas_turn_bar: Option<f64>,
+    /// Per-stage Half-Minus drop pressure gauge (bar), one per counted stage; empty for All-thirds.
+    pub stage_drop_bars: Vec<f64>,
 }

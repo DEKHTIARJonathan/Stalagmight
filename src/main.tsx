@@ -12,6 +12,7 @@ import { initInputModalityTracking } from './utils/inputModality';
 import { useUIStore } from './store/uiStore';
 import { useProjectStore, type LoadingState } from './store/projectStore';
 import { useGlobalViewStore } from './store/globalViewStore';
+import { useGasPlanStore } from './store/gasPlanStore';
 
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
 installConsoleCapture();
@@ -32,6 +33,7 @@ declare global {
       uiStore?: typeof useUIStore;
       projectStore?: typeof useProjectStore;
       globalViewStore?: typeof useGlobalViewStore;
+      gasPlanStore?: typeof useGasPlanStore;
       // Loading progress E2E hooks
       getLoadingId?: () => number;
       getBackendLoadingId?: () => bigint;
@@ -50,6 +52,7 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
   testAPI.uiStore = useUIStore;
   testAPI.projectStore = useProjectStore;
   testAPI.globalViewStore = useGlobalViewStore;
+  testAPI.gasPlanStore = useGasPlanStore;
   window.__E2E_TEST__ = testAPI;
 }
 

@@ -47,7 +47,7 @@ use stalagmight_lib::models::{
     CollabState, ConnectivityResult, Coordinates, CylRole, Cylinder, DeleteShotImpact,
     DeleteShotRangeImpact, DistanceField, Diver, ExistingShotUpdate, FrozenShotRef, GasReachField,
     GpsBounds, GpsCoordinates, ImportPlacement, ImportSectionConfig, LoopClosureWire, PathShot,
-    PlanMode, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind,
+    PlanMode, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg,
     RulerEndpoint, Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
     ShotBaselineEntry, ShotData, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair,
     StationRef, SurveyDirection, TankMaterial, Team, ZeroDatumWire,
@@ -123,6 +123,7 @@ fn main() {
     export::<Cylinder>(&out_dir);
     export::<Team>(&out_dir);
     export::<GasReachField>(&out_dir);
+    export::<RouteLeg>(&out_dir);
     export::<RulerEndpoint>(&out_dir);
     export::<PathShot>(&out_dir);
     export::<AlongLineResult>(&out_dir);
@@ -331,6 +332,7 @@ fn main() {
         "Cylinder",
         "Team",
         "GasReachField",
+        "RouteLeg",
         "RulerEndpoint",
         "PathShot",
         "AlongLineResult",

@@ -193,6 +193,8 @@ function MapCanvas() {
   const gasOriginMarkerRef = useRef<maplibregl.Marker | null>(null);
   const gasTurnMarkersRef = useRef<maplibregl.Marker[]>([]);
   const gasZeroDatumMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const gasDropMarkersRef = useRef<maplibregl.Marker[]>([]);
+  const gasFinalTurnMarkerRef = useRef<maplibregl.Marker | null>(null);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
@@ -440,6 +442,7 @@ function MapCanvas() {
   // diver/cylinders/config doesn't re-render via the big uiStore subscription.
   const {
     origin: gasOrigin,
+    endpoint: gasEndpoint,
     diver: gasDiver,
     cylinders: gasCylinders,
     gasConfig: gasPlanConfig,
@@ -449,6 +452,7 @@ function MapCanvas() {
   } = useGasPlanStore(
     useShallow((s) => ({
       origin: s.origin,
+      endpoint: s.endpoint,
       diver: s.diver,
       cylinders: s.cylinders,
       gasConfig: s.gasConfig,
@@ -1906,6 +1910,7 @@ function MapCanvas() {
       'compute_gas_reach_field',
       {
         origin: gasOrigin ?? null,
+        endpoint: gasEndpoint ?? null,
         diver: gasDiver,
         cylinders: gasCylinders,
         gasConfig: gasPlanConfig,
@@ -1915,7 +1920,7 @@ function MapCanvas() {
       .then((field) => { if (!cancelled) setGasReachField(field); })
       .catch((e) => console.warn('[gas-plan] field fetch failed', e));
     return () => { cancelled = true; };
-  }, [showGasPlan, gasOrigin, gasDiver, gasCylinders, gasPlanConfig, project?.modified_at, setGasReachField]);
+  }, [showGasPlan, gasOrigin, gasEndpoint, gasDiver, gasCylinders, gasPlanConfig, project?.modified_at, setGasReachField]);
 
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
@@ -1939,6 +1944,16 @@ function MapCanvas() {
       surveyLayerRef.current.setGasReach(true, state);
     } else {
       surveyLayerRef.current.setGasReach(false, null);
+    }
+  }, [showGasPlan, gasReachField, project, mapLoaded, surveyLayerRef]);
+
+  // Highlight the picked route over the survey (#233): solid swum legs + dashed jumps.
+  useEffect(() => {
+    if (!surveyLayerRef.current || !mapLoaded) return;
+    if (showGasPlan && gasReachField && project) {
+      surveyLayerRef.current.setGasRoute(gasReachField.route);
+    } else {
+      surveyLayerRef.current.setGasRoute([]);
     }
   }, [showGasPlan, gasReachField, project, mapLoaded, surveyLayerRef]);
 
@@ -2034,12 +2049,15 @@ function MapCanvas() {
   }, [showGasPlan, gasOrigin, activeStations, gpsOrigin, mapLoaded]);
 
   // Gas turn-frontier markers (#38): a red dot on each reachable station that
-  // borders an unreachable one — "this is where you turn". Rebuilt whenever the
-  // field changes; bounded by the frontier size (a handful of leads in practice).
+  // borders an unreachable one — "this is where you turn", and the candidate end points.
+  // Right-click one to open the Plan menu (Set as endpoint / origin) — these stay visible
+  // even when survey stations are hidden, so they're the reliable route-pick target.
+  // Rebuilt whenever the field changes; bounded by the frontier size (a handful of leads).
   useEffect(() => {
     for (const m of gasTurnMarkersRef.current) m.remove();
     gasTurnMarkersRef.current = [];
     if (!map.current || !mapLoaded || !showGasPlan || !gasReachField) return undefined;
+    const mapInst = map.current;
     for (const ref of gasReachField.turn_frontier) {
       const st = activeStations.find(
         (s) =>
@@ -2054,18 +2072,28 @@ function MapCanvas() {
       ) as [number, number];
       const el = document.createElement('div');
       el.setAttribute('data-testid', 'gas-turn-marker');
+      el.title = t('gasPanel.map.turnMarkerTooltip');
       el.style.cssText =
         'width:14px;height:14px;border-radius:50%;border:2px solid #ffffff;' +
-        'background:#c0392b;box-shadow:0 0 3px rgba(0,0,0,0.7);pointer-events:none;';
+        'background:#c0392b;box-shadow:0 0 3px rgba(0,0,0,0.7);cursor:context-menu;';
+      // Right-click a candidate end point → the Plan context menu for that station.
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        useUIStore.getState().openDialog('context-menu', {
+          target: { type: 'station', ref },
+          position: { x: e.clientX, y: e.clientY },
+        });
+      });
       gasTurnMarkersRef.current.push(
-        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map.current)
+        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(mapInst)
       );
     }
     return () => {
       for (const m of gasTurnMarkersRef.current) m.remove();
       gasTurnMarkersRef.current = [];
     };
-  }, [showGasPlan, gasReachField, activeStations, gpsOrigin, mapLoaded]);
+  }, [showGasPlan, gasReachField, activeStations, gpsOrigin, mapLoaded, t]);
 
   // Zero-datum star markers (#38): a black star (white outline) on each zero-datum
   // station while planning. The gas solve's "Entrance" default already starts from the
@@ -2115,6 +2143,69 @@ function MapCanvas() {
       gasZeroDatumMarkersRef.current = [];
     };
   }, [showGasPlan, activeStations, gpsOrigin, mapLoaded, setGasOrigin, t]);
+
+  // Staged-strategy route markers (#233): a ▼ drop marker where each stage is dropped along the
+  // deepest-penetration route, plus a distinct final-turn marker where the back-gas leg runs out.
+  // The backend leaves `stage_drop_refs`/`final_turn_ref` empty for All-thirds, so these only
+  // appear for the Half-Minus strategies. Plan mode only; bounded by the stage count (≤2).
+  useEffect(() => {
+    for (const m of gasDropMarkersRef.current) m.remove();
+    gasDropMarkersRef.current = [];
+    gasFinalTurnMarkerRef.current?.remove();
+    gasFinalTurnMarkerRef.current = null;
+    if (!map.current || !mapLoaded || !showGasPlan || !gasReachField) return undefined;
+    const mapInst = map.current;
+    const lngLatFor = (ref: { section_id: number; station_index: number }) => {
+      const st = activeStations.find(
+        (s) =>
+          s.station_ref.section_id === ref.section_id &&
+          s.station_ref.station_index === ref.station_index
+      );
+      return st
+        ? (metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin) as [number, number])
+        : null;
+    };
+
+    gasReachField.stage_drop_refs.forEach((ref, i) => {
+      const lngLat = lngLatFor(ref);
+      if (!lngLat) return;
+      const el = document.createElement('div');
+      el.setAttribute('data-testid', 'gas-drop-marker');
+      el.title = t('gasPanel.map.dropTooltip', { n: i + 1 });
+      el.style.cssText = 'line-height:0;pointer-events:none;filter:drop-shadow(0 0 1px rgba(0,0,0,0.6));';
+      // Downward triangle = "drop the stage here".
+      el.innerHTML =
+        '<svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">' +
+        '<path d="M3 6h18L12 20z" fill="#e08a1e" stroke="#ffffff" stroke-width="1.5" ' +
+        'stroke-linejoin="round"/></svg>';
+      gasDropMarkersRef.current.push(
+        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(mapInst)
+      );
+    });
+
+    const finalRef = gasReachField.final_turn_ref;
+    if (finalRef) {
+      const lngLat = lngLatFor(finalRef);
+      if (lngLat) {
+        const el = document.createElement('div');
+        el.setAttribute('data-testid', 'gas-final-turn-marker');
+        el.title = t('gasPanel.map.finalTurnTooltip');
+        el.style.cssText =
+          'width:16px;height:16px;border-radius:50%;border:3px solid #ffffff;' +
+          'background:#7b2fbf;box-shadow:0 0 4px rgba(0,0,0,0.7);pointer-events:none;';
+        gasFinalTurnMarkerRef.current = new maplibregl.Marker({ element: el })
+          .setLngLat(lngLat)
+          .addTo(mapInst);
+      }
+    }
+
+    return () => {
+      for (const m of gasDropMarkersRef.current) m.remove();
+      gasDropMarkersRef.current = [];
+      gasFinalTurnMarkerRef.current?.remove();
+      gasFinalTurnMarkerRef.current = null;
+    };
+  }, [showGasPlan, gasReachField, activeStations, gpsOrigin, mapLoaded, t]);
 
   // Lazily fetch closure-adjusted geometry when the adjusted view is active and
   // we don't have it yet (first switch, or after an edit invalidated it). The

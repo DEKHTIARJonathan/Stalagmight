@@ -40,7 +40,7 @@ mod offsets;
 mod relationships;
 mod stats;
 
-pub use gas::{CylRole, Cylinder, Diver, GasReachField, PlanMode, TankMaterial, Team};
+pub use gas::{CylRole, Cylinder, Diver, GasReachField, PlanMode, RouteLeg, TankMaterial, Team};
 pub use integrity::{IntegrityViolation, ViolationSeverity};
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).

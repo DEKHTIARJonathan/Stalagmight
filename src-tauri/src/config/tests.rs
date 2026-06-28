@@ -163,46 +163,46 @@ fn test_gas_config_normalize_drops_backwards_survey_speed() {
 
 #[test]
 fn test_gas_config_normalize_clamps_reserve_profile() {
-    // Non-finite / negative reserve constants reset to their defaults; valid values preserved.
+    // A NEGATIVE stage reserve is the unsafe direction (it drops the stage lower → more in-gas),
+    // so it resets to the default; non-finite recalc holds reset too; valid values preserved.
     let mut config = GasConfig {
         reserve_profile: ReserveProfile {
-            turn_buffer_bar: -5.0,
+            stage_reserve_bar: -5.0,
             recalc_hold_stage2_bar: f64::NAN,
             recalc_hold_stage1_bar: 80.0, // valid → kept
         },
         ..GasConfig::default()
     };
     config.normalize();
-    assert_eq!(config.reserve_profile.turn_buffer_bar, 15.0);
+    assert_eq!(config.reserve_profile.stage_reserve_bar, 30.0);
     assert_eq!(config.reserve_profile.recalc_hold_stage2_bar, 100.0);
     assert_eq!(config.reserve_profile.recalc_hold_stage1_bar, 80.0);
 }
 
 #[test]
-fn test_gas_config_normalize_rejects_oversized_turn_buffer() {
-    // The genuinely UNSAFE direction: a huge positive turn buffer drives the stage turn
-    // pressure (½·fill − buffer) toward 0, crediting the whole stage as in-gas → over-stated
-    // reach. normalize must clamp it back to the safe default, not preserve it.
+fn test_gas_config_caps_oversized_stage_reserve() {
+    // A LARGE stage reserve only shrinks a stage's usable in-gas — the SAFE direction — so it is
+    // merely capped at the max (resetting it to the smaller default would be *less* conservative),
+    // unlike the negative case which resets. A plausible value is preserved.
     let mut config = GasConfig {
         reserve_profile: ReserveProfile {
-            turn_buffer_bar: 9999.0,
+            stage_reserve_bar: 9999.0,
             ..ReserveProfile::default()
         },
         ..GasConfig::default()
     };
     config.normalize();
-    assert_eq!(config.reserve_profile.turn_buffer_bar, 15.0);
+    assert_eq!(config.reserve_profile.stage_reserve_bar, 100.0);
 
-    // A plausible small buffer is preserved.
     let mut ok = GasConfig {
         reserve_profile: ReserveProfile {
-            turn_buffer_bar: 20.0,
+            stage_reserve_bar: 40.0,
             ..ReserveProfile::default()
         },
         ..GasConfig::default()
     };
     ok.normalize();
-    assert_eq!(ok.reserve_profile.turn_buffer_bar, 20.0);
+    assert_eq!(ok.reserve_profile.stage_reserve_bar, 40.0);
 }
 
 #[test]
@@ -213,10 +213,17 @@ fn test_gas_config_deserializes_with_reserve_profile_missing() {
         toml::from_str("units = \"metric\"\n").expect("gas config without reserve_profile loads");
     assert_eq!(missing.reserve_profile, ReserveProfile::default());
 
-    let partial: GasConfig =
+    // An old config carrying the RENAMED `turn_buffer_bar` key loads fine — the unknown key is
+    // ignored and stage_reserve_bar defaults (30). The new key is honoured when present.
+    let legacy: GasConfig =
         toml::from_str("units = \"metric\"\n[reserve_profile]\nturn_buffer_bar = 20.0\n")
+            .expect("legacy reserve_profile with the old key loads");
+    assert_eq!(legacy.reserve_profile.stage_reserve_bar, 30.0);
+
+    let partial: GasConfig =
+        toml::from_str("units = \"metric\"\n[reserve_profile]\nstage_reserve_bar = 40.0\n")
             .expect("partial reserve_profile loads");
-    assert_eq!(partial.reserve_profile.turn_buffer_bar, 20.0);
+    assert_eq!(partial.reserve_profile.stage_reserve_bar, 40.0);
     assert_eq!(partial.reserve_profile.recalc_hold_stage2_bar, 100.0); // missing member defaults
 }
 

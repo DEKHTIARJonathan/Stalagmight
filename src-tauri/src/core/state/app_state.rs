@@ -470,12 +470,13 @@ impl AppState {
     pub fn gas_reach_field(
         &self,
         origin: Option<&StationRef>,
+        endpoint: Option<&StationRef>,
         diver: &Diver,
         cylinders: &[Cylinder],
         gas_config: &GasConfig,
     ) -> Option<GasReachField> {
         let project = self.get_project_state()?;
-        Some(project.compute_gas_reach_field(origin, diver, cylinders, gas_config))
+        Some(project.compute_gas_reach_field(origin, endpoint, diver, cylinders, gas_config))
     }
 
     /// Shortest along-cave-line distance + traversed shots between two ruler

@@ -1269,6 +1269,88 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const turn_frontier = stations
               .filter((_s, i) => reachable[i] && i + 1 < stations.length && !reachable[i + 1])
               .map((s) => s.station_ref);
+            // Staged-strategy drops + the readout gauges (Half-Minus). Mirror the backend: only the
+            // staged strategies carry drops, and only when the rig actually has enough Stage
+            // cylinders (else it falls back to All-thirds). The endpoint, when given + reachable, is
+            // the route target (else the deepest reachable station). Exact math is unit-tested in
+            // Rust; the mock just produces plausible, shape-correct values for the UI wiring.
+            const gasConfig = (args?.gasConfig ?? {}) as {
+              default_reserve?: string;
+              reserve_profile?: { stage_reserve_bar?: number };
+              conservative_tank_gas?: boolean;
+            };
+            const cylinders = (args?.cylinders ?? []) as Array<{
+              role?: string;
+              fill_bar?: number;
+              water_volume_l?: number;
+              rated_pressure_bar?: number;
+            }>;
+            const requested = gasConfig.default_reserve ?? 'all_thirds';
+            const stageCyls = cylinders.filter((c) => c.role === 'stage');
+            const required = requested === 'two_stage' ? 2 : requested === 'one_stage' ? 1 : 0;
+            const effective = stageCyls.length >= required ? requested : 'all_thirds';
+            const dropCount = effective === 'two_stage' ? 2 : effective === 'one_stage' ? 1 : 0;
+            const reserve = gasConfig.reserve_profile?.stage_reserve_bar ?? 30;
+
+            const reachableRefs = stations
+              .filter((_s, i) => reachable[i])
+              .map((s) => s.station_ref);
+            let deepestIdx = -1;
+            let deepestGas = -1;
+            for (let i = 0; i < gas_to_reach.length; i += 1) {
+              if (reachable[i] && gas_to_reach[i] > deepestGas) {
+                deepestGas = gas_to_reach[i];
+                deepestIdx = i;
+              }
+            }
+            const endpoint = (args?.endpoint ?? null) as {
+              section_id: number;
+              station_index: number;
+            } | null;
+            const endpointReachable =
+              endpoint != null &&
+              reachableRefs.some(
+                (r) =>
+                  r.section_id === endpoint.section_id && r.station_index === endpoint.station_index,
+              );
+            const targetRef = endpointReachable
+              ? endpoint
+              : deepestIdx >= 0
+                ? stations[deepestIdx].station_ref
+                : null;
+            const final_turn_ref = targetRef;
+            const stage_drop_refs = dropCount > 0 ? reachableRefs.slice(1, 1 + dropCount) : [];
+            // Route legs to the target (consecutive reachable stations; the real graph path is
+            // exercised in Rust). is_jump stays false — the seeded e2e sections carry no jumps.
+            const route =
+              targetRef != null
+                ? reachableRefs
+                    .slice(0, -1)
+                    .map((from, i) => ({ from, to: reachableRefs[i + 1], is_jump: false }))
+                : [];
+
+            const backCyls = cylinders.filter((c) => c.role === 'back_gas');
+            const sumWv = backCyls.reduce((s, c) => s + (c.water_volume_l ?? 0), 0);
+            const frac = effective === 'two_stage' ? 1 / 6 : effective === 'one_stage' ? 1 / 4 : 1 / 3;
+            const backgas_turn_bar =
+              sumWv > 0
+                ? Math.max(
+                    0,
+                    (backCyls.reduce((s, c) => s + (c.fill_bar ?? 0) * (c.water_volume_l ?? 0), 0) /
+                      sumWv) *
+                      (1 - frac),
+                  )
+                : null;
+            const stage_drop_bars =
+              dropCount > 0
+                ? stageCyls.slice(0, dropCount).map((c) => {
+                    const fill = c.fill_bar ?? 0;
+                    const rated = c.rated_pressure_bar ?? fill;
+                    const basis =
+                      gasConfig.conservative_tank_gas !== false ? Math.min(fill, rated) : fill;
+                    return Math.min(basis, 0.5 * (basis + reserve));
+                  })
+                : [];
             return {
               station_refs: stations.map((s) => s.station_ref),
               gas_to_reach,
@@ -1276,6 +1358,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               turn_frontier,
               max_reachable_gas,
               budget_litres,
+              route,
+              stage_drop_refs,
+              final_turn_ref,
+              backgas_turn_bar,
+              stage_drop_bars,
             };
           }
 
@@ -2406,7 +2493,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 units: 'metric',
                 default_reserve: 'all_thirds',
                 reserve_profile: {
-                  turn_buffer_bar: 15,
+                  stage_reserve_bar: 30,
                   recalc_hold_stage2_bar: 100,
                   recalc_hold_stage1_bar: 70,
                 },
@@ -2651,7 +2738,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 units: 'metric',
                 default_reserve: 'all_thirds',
                 reserve_profile: {
-                  turn_buffer_bar: 15,
+                  stage_reserve_bar: 30,
                   recalc_hold_stage2_bar: 100,
                   recalc_hold_stage1_bar: 70,
                 },

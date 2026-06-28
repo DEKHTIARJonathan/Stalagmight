@@ -5,16 +5,22 @@ import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
 import { formatStationId } from '../../utils/formatters';
-import { formatPressure, formatVolume, rmvFromDisplay, rmvToDisplay } from '../../utils/formatGas';
-import { isBudgetRole } from '../../utils/gasRoles';
+import {
+  formatPressure,
+  formatVolume,
+  pressureFromDisplay,
+  pressureToDisplay,
+  rmvFromDisplay,
+  rmvToDisplay,
+} from '../../utils/formatGas';
 import { PositiveNumberField } from '../common/PositiveNumberField';
-import type { Cylinder, GasUnits, ReservePreset } from '../../types/ipc.generated';
+import type { GasUnits, ReservePreset } from '../../types/ipc.generated';
 
 const RESERVE_PRESETS: readonly ReservePreset[] = ['all_thirds', 'one_stage', 'two_stage'];
 const UNIT_OPTIONS: readonly GasUnits[] = ['metric', 'imperial'];
 
-/** Stage cylinders a preset requires in the rig — mirrors the Rust `required_stages`
- *  (gas.rs). The pushy presets are greyed until the diver carries that many stages. */
+/** Stage cylinders a strategy requires in the rig — mirrors the Rust `required_stages`
+ *  (gas.rs). The Half-Minus strategies are greyed until the diver carries that many stages. */
 const REQUIRED_STAGES: Record<ReservePreset, number> = {
   all_thirds: 0,
   one_stage: 1,
@@ -22,27 +28,12 @@ const REQUIRED_STAGES: Record<ReservePreset, number> = {
 };
 
 /**
- * The diver's gauge pressure (bar) at the turn point — the number divers actually
- * watch underwater. It's the volume-weighted average start gauge of the budget-role
- * cylinders minus the turn budget expressed as a common-gauge pressure drop
- * (`budget ÷ Σ water-volume`). Exact for a matched set (one gauge); a common-gauge
- * equivalent for mixed tanks. `null` when there's no penetration gas. (PRD §5.1.)
- */
-export function turnPressureBar(cylinders: Cylinder[], budgetLitres: number): number | null {
-  const budget = cylinders.filter((c) => isBudgetRole(c.role));
-  const sumWaterVol = budget.reduce((s, c) => s + c.water_volume_l, 0);
-  if (sumWaterVol <= 0) return null;
-  const avgStartBar = budget.reduce((s, c) => s + c.fill_bar * c.water_volume_l, 0) / sumWaterVol;
-  return Math.max(0, avgStartBar - budgetLitres / sumWaterVol);
-}
-
-/**
  * Gas & route-planning setup sidebar (#38). The right Dock slot while in Plan mode:
- * origin, diver RMV, reserve preset, units, and the plan readout. The cylinder rig
- * editor lives in the bottom panel's "Cylinders" tab (see PlanTablesPanel) — this
- * sidebar reads the cylinders only to compute the turn pressure. Every input nulls the
- * cached field via gasPlanStore, so MapCanvas refetches + repaints the reachable
- * overlay. Volumes follow the master units toggle; RMV flips L·min⁻¹ ↔ cuft·min⁻¹.
+ * origin, diver RMV, gas strategy + per-stage reserve, units, and the plan readout. The cylinder
+ * rig editor lives in the bottom panel's "Cylinders" tab (see PlanTablesPanel) — this sidebar
+ * reads the cylinders only to compute the turn / drop pressures. Every input nulls the cached
+ * field via gasPlanStore, so MapCanvas refetches + repaints the reachable overlay. Volumes follow
+ * the master units toggle; RMV flips L·min⁻¹ ↔ cuft·min⁻¹.
  */
 export function GasPlanPanel() {
   const { t } = useTranslation();
@@ -71,7 +62,7 @@ export function GasPlanPanel() {
       setPushyAck: s.setPushyAck,
     }))
   );
-  // A pushy preset the user selected but hasn't yet acknowledged (inline advanced gate).
+  // A staged strategy the user selected but hasn't yet acknowledged (inline advanced gate).
   const [pendingPushy, setPendingPushy] = useState<ReservePreset | null>(null);
 
   // Seed the working gas config from the live PERSISTED app config when Plan mode
@@ -97,11 +88,25 @@ export function GasPlanPanel() {
     : t('gasPanel.origin.entrance');
 
   const turnCount = reachField ? reachField.turn_frontier.length : null;
-  const turnBar = reachField ? turnPressureBar(cylinders, reachField.budget_litres) : null;
   const stageCount = cylinders.filter((c) => c.role === 'stage').length;
+  const strategy = gasConfig.default_reserve;
+  // Effective staged state: a staged strategy AND the rig actually carries enough stages. Mirrors
+  // the backend's stage-count fallback, so removing stages after selecting a staged strategy hides
+  // the staged-only reserve control instead of leaving it stale (UI/backend parity).
+  const isStaged =
+    (strategy === 'one_stage' || strategy === 'two_stage') && stageCount >= REQUIRED_STAGES[strategy];
+  const reserveBar = gasConfig.reserve_profile.stage_reserve_bar;
 
-  // Selecting a staged (pushy) preset routes through an inline advanced acknowledgment the
-  // first time per session; All-thirds and an already-acked preset apply immediately.
+  // Three non-additive gauges, each relative to its own cylinder's start (back gas = one unit).
+  // They come from the BACKEND (single source of truth): it already applies the conservative cap,
+  // the normalized reserve, and the stage-count fallback, so the panel can't drift from the
+  // reachable overlay. `stage_drop_bars` has one entry per counted stage of the effective strategy.
+  const backgasTurn = reachField ? reachField.backgas_turn_bar : null;
+  const stage1Drop = reachField?.stage_drop_bars[0] ?? null;
+  const stage2Drop = reachField?.stage_drop_bars[1] ?? null;
+
+  // Selecting a staged strategy routes through an inline advanced acknowledgment the first time
+  // per session; All-thirds and an already-acked strategy apply immediately.
   const selectPreset = (preset: ReservePreset) => {
     if (REQUIRED_STAGES[preset] > 0 && !pushyAck) {
       setPendingPushy(preset);
@@ -112,8 +117,8 @@ export function GasPlanPanel() {
   const confirmPushy = () => {
     if (!pendingPushy) return;
     // Re-check: the rig may have lost stages while the ack panel was open (the Cylinders tab is
-    // visible alongside it). Only apply if the rig still satisfies the preset — otherwise we'd
-    // show a staged preset selected on a stage-short rig while the backend falls back to
+    // visible alongside it). Only apply if the rig still satisfies the strategy — otherwise we'd
+    // show a staged strategy selected on a stage-short rig while the backend falls back to
     // All-thirds (broken UI/backend parity). Insufficient → dismiss without applying.
     if (stageCount >= REQUIRED_STAGES[pendingPushy]) {
       setPushyAck(true);
@@ -121,6 +126,11 @@ export function GasPlanPanel() {
     }
     setPendingPushy(null);
   };
+  const setReserveBar = (n: number) =>
+    setGasConfig({
+      ...gasConfig,
+      reserve_profile: { ...gasConfig.reserve_profile, stage_reserve_bar: n },
+    });
 
   return (
     <div
@@ -171,7 +181,7 @@ export function GasPlanPanel() {
           </div>
         </section>
 
-        {/* Reserve preset */}
+        {/* Gas strategy */}
         <section className="space-y-1">
           <SectionLabel>{t('gasPanel.reserve.label')}</SectionLabel>
           <div className="flex gap-1">
@@ -226,6 +236,22 @@ export function GasPlanPanel() {
               </div>
             </div>
           )}
+          {isStaged && (
+            <div className="flex items-center gap-2 pt-1">
+              <span className="text-xs opacity-70">{t('gasPanel.reserve.stageReserveLabel')}</span>
+              <PositiveNumberField
+                value={pressureToDisplay(reserveBar, units)}
+                onCommit={(n) => setReserveBar(pressureFromDisplay(n, units))}
+                step={units === 'imperial' ? 5 : 1}
+                displayPrecision={0}
+                className="w-20 bg-transparent border border-border rounded px-2 py-1"
+                testId="gas-stage-reserve-input"
+              />
+              <span className="text-xs opacity-70">
+                {t(units === 'imperial' ? 'gasPanel.tanks.psi' : 'gasPanel.tanks.bar')}
+              </span>
+            </div>
+          )}
         </section>
 
         {/* Units */}
@@ -254,10 +280,26 @@ export function GasPlanPanel() {
           <SectionLabel>{t('gasPanel.readout.label')}</SectionLabel>
           {reachField ? (
             <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
-              <dt className="opacity-70">{t('gasPanel.readout.turnPressure')}</dt>
-              <dd data-testid="gas-readout-turn-pressure" className="text-right font-mono">
-                {turnBar != null ? formatPressure(turnBar, units) : '--'}
+              <dt className="opacity-70">{t('gasPanel.readout.backgasTurnPressure')}</dt>
+              <dd data-testid="gas-readout-backgas-turn" className="text-right font-mono">
+                {backgasTurn != null ? formatPressure(backgasTurn, units) : '--'}
               </dd>
+              {stage1Drop != null && (
+                <>
+                  <dt className="opacity-70">{t('gasPanel.readout.stage1DropPressure')}</dt>
+                  <dd data-testid="gas-readout-stage1-drop" className="text-right font-mono">
+                    {formatPressure(stage1Drop, units)}
+                  </dd>
+                </>
+              )}
+              {stage2Drop != null && (
+                <>
+                  <dt className="opacity-70">{t('gasPanel.readout.stage2DropPressure')}</dt>
+                  <dd data-testid="gas-readout-stage2-drop" className="text-right font-mono">
+                    {formatPressure(stage2Drop, units)}
+                  </dd>
+                </>
+              )}
               <dt className="opacity-70">{t('gasPanel.readout.budget')}</dt>
               <dd data-testid="gas-readout-budget" className="text-right font-mono">
                 {formatVolume(reachField.budget_litres, units)}

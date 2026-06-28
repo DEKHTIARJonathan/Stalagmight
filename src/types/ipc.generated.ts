@@ -32,6 +32,7 @@ export * from './ipc/Diver';
 export * from './ipc/Cylinder';
 export * from './ipc/Team';
 export * from './ipc/GasReachField';
+export * from './ipc/RouteLeg';
 export * from './ipc/RulerEndpoint';
 export * from './ipc/PathShot';
 export * from './ipc/AlongLineResult';
