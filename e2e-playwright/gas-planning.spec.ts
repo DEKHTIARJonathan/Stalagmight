@@ -194,6 +194,57 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-readout-backgas-turn"]')).toBeVisible();
   });
 
+  test('Plan readout shows the route distance + max/avg depth once a route resolves @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    expect(await appMode(page)).toBe('plan');
+    // Entering Plan resolves a route to the deepest reachable station, so the distance + depth
+    // rows appear, formatted with a length unit (#236). Values come straight from the backend.
+    const distance = page.locator('[data-testid="gas-readout-route-distance"]');
+    await expect(distance).toBeVisible({ timeout: 3000 });
+    await expect(distance).toContainText('m');
+    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Distance to turnaround');
+    await expect(page.locator('[data-testid="gas-readout-max-depth"]')).toBeVisible();
+    await expect(page.locator('[data-testid="gas-readout-avg-depth"]')).toBeVisible();
+  });
+
+  test('Display menu is available in Plan and Export, without the survey-only geometry toggle @smoke', async ({
+    page,
+  }) => {
+    const openMenu = async () => {
+      await page.locator('[data-testid="display-menu-button"]').click();
+      await expect(page.locator('[data-testid="display-menu"]')).toBeVisible();
+    };
+    const closeMenu = async () => {
+      await page.locator('[data-testid="display-menu-button"]').click();
+      await expect(page.locator('[data-testid="display-menu"]')).toHaveCount(0);
+    };
+
+    // Survey: the full menu — visibility toggles + the geometry toggle + the color overlays.
+    await openMenu();
+    await expect(page.locator('[data-testid="display-toggle-showStations"]')).toBeVisible();
+    await expect(page.locator('[data-testid="geometry-mode-measured"]')).toBeVisible();
+    await expect(page.locator('[data-testid="display-color-section"]')).toBeVisible();
+    await closeMenu();
+
+    // Plan: the visibility toggles remain, but the geometry toggle (closure map is forced) and the
+    // color overlays (the gas gradient owns the coloring) are gone.
+    await enterMode(page, 'plan');
+    await openMenu();
+    await expect(page.locator('[data-testid="display-toggle-showStations"]')).toBeVisible();
+    await expect(page.locator('[data-testid="geometry-mode-measured"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="display-color-section"]')).toHaveCount(0);
+    await closeMenu();
+
+    // Export: visibility toggles + color overlays (no gas gradient here), still no geometry toggle.
+    await enterMode(page, 'export');
+    await openMenu();
+    await expect(page.locator('[data-testid="display-toggle-showStations"]')).toBeVisible();
+    await expect(page.locator('[data-testid="display-color-section"]')).toBeVisible();
+    await expect(page.locator('[data-testid="geometry-mode-measured"]')).toHaveCount(0);
+  });
+
   test('adding a stage enables a pushy preset behind the advanced acknowledgment @smoke', async ({
     page,
   }) => {
