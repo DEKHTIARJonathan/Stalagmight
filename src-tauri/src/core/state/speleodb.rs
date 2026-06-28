@@ -799,8 +799,7 @@ impl AppState {
     /// FastForward), and for FastForward it happens AFTER the in-place reload (the
     /// reload re-derives the gate from `is_remote` and would otherwise re-disable).
     pub(crate) fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
-        let link = self.speleodb_open_link().map_err(local_dto)?;
-        validate_project_id(&link.project_id).map_err(local_dto)?;
+        let link = self.speleodb_validated_link()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -892,6 +891,15 @@ impl AppState {
                 Ok(StartEditingResult::DivergenceNeeded)
             }
         }
+    }
+
+    /// The open project's hand-off link with its `project_id` validated (the
+    /// route-traversal guard). The shared preamble for every SpeleoDB edit verb
+    /// (start_editing / done / update) so no entry point can forget the validation.
+    fn speleodb_validated_link(&self) -> Result<crate::models::SpeleoLink, SpeleoErrorDto> {
+        let link = self.speleodb_open_link().map_err(local_dto)?;
+        validate_project_id(&link.project_id).map_err(local_dto)?;
+        Ok(link)
     }
 
     /// Read the open project's persisted SpeleoDB hand-off link, or
@@ -1082,8 +1090,7 @@ impl AppState {
         &self,
         message: Option<String>,
     ) -> Result<DoneResult, SpeleoErrorDto> {
-        let link = self.speleodb_open_link().map_err(local_dto)?;
-        validate_project_id(&link.project_id).map_err(local_dto)?;
+        let link = self.speleodb_validated_link()?;
 
         // Edit-session gate: Done acts only on an ACTIVE edit session. The edit gate
         // is set true only by Start editing (after acquiring the lock) / its FF arm,
@@ -1128,8 +1135,7 @@ impl AppState {
     /// Read-only refresh of the open project against the server (#197): no lock is
     /// taken. UpToDate / FastForward (re-pull + reload) / DivergenceNeeded.
     pub(crate) fn speleodb_update(&self) -> Result<UpdateResult, SpeleoErrorDto> {
-        let link = self.speleodb_open_link().map_err(local_dto)?;
-        validate_project_id(&link.project_id).map_err(local_dto)?;
+        let link = self.speleodb_validated_link()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -1578,14 +1584,49 @@ mod tests {
 
     #[test]
     fn head_no_retry_when_tip_present() {
+        // Realistic shape: a resolved tip always rides a non-empty history. The retry
+        // keys on the commit list, so a present history → no re-fetch.
         let calls = std::cell::Cell::new(0u32);
+        let history = vec![crate::speleodb::models::RevisionCommit {
+            id: "tip-sha".to_owned(),
+            parent_ids: vec!["base-sha".to_owned()],
+            author_email: "me@x".to_owned(),
+        }];
         let (tip, _) = head_with_empty_retry(Some("base-sha"), || {
             calls.set(calls.get() + 1);
-            Ok((Some("tip-sha".to_owned()), Vec::new()))
+            Ok((Some("tip-sha".to_owned()), history.clone()))
         })
         .expect("ok");
         assert_eq!(calls.get(), 1, "tip present -> no retry");
         assert_eq!(tip.as_deref(), Some("tip-sha"));
+    }
+
+    #[test]
+    fn head_no_retry_on_fork() {
+        // #197 review: a multi-leaf FORK also yields tip None, but it is NOT a
+        // transient empty read — it must fail closed immediately, never burning a
+        // second GET. Keyed on the (non-empty) commit list, not tip.is_none().
+        let calls = std::cell::Cell::new(0u32);
+        let fork = vec![
+            crate::speleodb::models::RevisionCommit {
+                id: "a".to_owned(),
+                parent_ids: vec![],
+                author_email: "me@x".to_owned(),
+            },
+            crate::speleodb::models::RevisionCommit {
+                id: "b".to_owned(),
+                parent_ids: vec![],
+                author_email: "me@x".to_owned(),
+            },
+        ];
+        let (tip, commits) = head_with_empty_retry(Some("base-sha"), || {
+            calls.set(calls.get() + 1);
+            Ok((None, fork.clone()))
+        })
+        .expect("ok");
+        assert_eq!(calls.get(), 1, "a fork must fail closed without a re-fetch");
+        assert!(tip.is_none());
+        assert_eq!(commits.len(), 2);
     }
 
     #[test]
@@ -1734,53 +1775,6 @@ mod tests {
             !state.edit_enabled(),
             "forget must drop the edit gate on a remote edit session"
         );
-    }
-
-    #[test]
-    fn head_with_empty_retry_refetches_only_on_empty_history() {
-        use crate::speleodb::models::RevisionCommit;
-        let commit = |id: &str, parents: &[&str]| RevisionCommit {
-            id: id.to_owned(),
-            parent_ids: parents.iter().map(|s| (*s).to_owned()).collect(),
-            author_email: "me@x".to_owned(),
-        };
-
-        // Recorded BASE + EMPTY history → transient empty read → re-fetch once.
-        let calls = std::cell::Cell::new(0_u32);
-        let r = head_with_empty_retry(Some("base"), || {
-            calls.set(calls.get() + 1);
-            Ok((None, vec![]))
-        })
-        .expect("retry path");
-        assert_eq!(
-            calls.get(),
-            2,
-            "an empty history with a recorded BASE re-fetches"
-        );
-        assert!(r.0.is_none());
-
-        // Recorded BASE + a FORK (commits present, tip None) → NOT transient → no
-        // wasted second GET (this is the #197-review fix: keyed on commits, not tip).
-        let calls = std::cell::Cell::new(0_u32);
-        let fork = vec![commit("a", &[]), commit("b", &[])]; // two roots → tip_of None
-        let r = head_with_empty_retry(Some("base"), || {
-            calls.set(calls.get() + 1);
-            Ok((None, fork.clone()))
-        })
-        .expect("fork path");
-        assert_eq!(calls.get(), 1, "a fork must fail closed without a re-fetch");
-        assert!(r.0.is_none());
-        assert_eq!(r.1.len(), 2);
-
-        // A resolved tip → no retry.
-        let calls = std::cell::Cell::new(0_u32);
-        let r = head_with_empty_retry(Some("base"), || {
-            calls.set(calls.get() + 1);
-            Ok((Some("tip".to_owned()), vec![commit("tip", &["base"])]))
-        })
-        .expect("tip path");
-        assert_eq!(calls.get(), 1);
-        assert_eq!(r.0.as_deref(), Some("tip"));
     }
 
     /// A session seeded with an in-memory token (no real keychain). Marked
