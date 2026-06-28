@@ -1258,6 +1258,10 @@ pub fn run() {
             commands::speleodb::speleodb_open_project,
             commands::speleodb::speleodb_logout,
             commands::speleodb::speleodb_session,
+            // SpeleoDB single-writer hand-off (#194/#197)
+            commands::speleodb::speleodb_start_editing,
+            commands::speleodb::speleodb_done,
+            commands::speleodb::speleodb_update,
             // Section commands
             commands::section::create_section,
             commands::section::update_section,

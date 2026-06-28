@@ -54,7 +54,8 @@ impl Database {
                 project_id TEXT NOT NULL,
                 project_name TEXT NOT NULL,
                 base_commit_sha TEXT,
-                has_unpushed_edits INTEGER NOT NULL DEFAULT 0
+                has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
+                last_edit_at TEXT
             )",
             [],
         )?;
@@ -62,20 +63,22 @@ impl Database {
             Some(link) => {
                 self.conn.execute(
                     "INSERT INTO speleo_link
-                        (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits)
-                     VALUES (1, ?1, ?2, ?3, ?4, ?5)
+                        (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, last_edit_at)
+                     VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
                      ON CONFLICT(id) DO UPDATE SET
                         endpoint = excluded.endpoint,
                         project_id = excluded.project_id,
                         project_name = excluded.project_name,
                         base_commit_sha = excluded.base_commit_sha,
-                        has_unpushed_edits = excluded.has_unpushed_edits",
+                        has_unpushed_edits = excluded.has_unpushed_edits,
+                        last_edit_at = excluded.last_edit_at",
                     params![
                         link.endpoint,
                         link.project_id,
                         link.project_name,
                         link.base_commit_sha, // Option<String> → SQL NULL when None
                         i64::from(link.has_unpushed_edits),
+                        link.last_edit_at, // Option<String> → SQL NULL when None
                     ],
                 )?;
             }
@@ -84,6 +87,23 @@ impl Database {
             }
         }
         Ok(())
+    }
+
+    /// Flip the SpeleoDB dirty bit and refresh `last_edit_at` in a SINGLE targeted
+    /// `UPDATE`, without loading + re-serialising the whole link. Returns `true` when
+    /// a remote-link row was updated (`false` = local-only project: no row → no-op).
+    ///
+    /// Hot path: called on EVERY accepted remote edit, so it avoids the per-edit
+    /// `SELECT` + `CREATE TABLE IF NOT EXISTS` + full upsert that load+save did (#197
+    /// review). The `speleo_link` table always exists post-open (schema init/migrate),
+    /// and this never touches `base_commit_sha`/`endpoint`/`project_id`, so it cannot
+    /// disturb the BASE-advance invariant or the immutable hand-off identity.
+    pub fn touch_speleo_link_dirty(&self, last_edit_at: &str) -> Result<bool> {
+        let rows = self.conn.execute(
+            "UPDATE speleo_link SET has_unpushed_edits = 1, last_edit_at = ?1 WHERE id = 1",
+            params![last_edit_at],
+        )?;
+        Ok(rows > 0)
     }
 
     /// Rename the project's display name without rewriting the whole project.

@@ -271,14 +271,24 @@ impl AppState {
     /// the open project is a remote SpeleoDB project opened read-only. No-op (`Ok`)
     /// for local-only (default-true `edit_enabled`) projects and non-mutating reads.
     ///
-    /// NOT YET GATED (intentionally, for now): a handful of LOCAL-ONLY project-DB
-    /// writes that are not survey content and are overwritten on the next pull —
-    /// `save_display_setting` (view prefs), `resolve_warning`/`unresolve_warning`
-    /// (local annotations), and the `track_imported_file`/`track_section_hashes`
-    /// import-dedup bookkeeping. They reach the `.stalx` but never the server (this
-    /// PR has no push path). Gate them — or consciously confirm the exemption — when
-    /// the release/push flow (#197) lands, since carry-forward would then ship them.
-    /// `MUTATION_ENTRYPOINTS` (tests.rs) enumerates only the gated set above.
+    /// Non-survey project-DB writes are handled deliberately (the exemption the
+    /// push/release flow #197 had to revisit):
+    /// - `resolve_warning`/`unresolve_warning` ARE gated as of #197 (via
+    ///   `save_resolved_warning_gated`/`delete_resolved_warning_gated`): a resolved
+    ///   warning PROLIFERATES to the server (it is NOT stripped from the push
+    ///   snapshot), so it is a real remote-dirtying edit — gate it AND
+    ///   `mark_remote_dirty` so a read-only project rejects it and an edit-session
+    ///   resolve is pushed by `Done` rather than silently dropped on the next pull.
+    /// - `save_display_setting` (view prefs) stays UNGATED and that is correct:
+    ///   `display_settings` is stripped from the push snapshot and re-applied locally
+    ///   across pull/FF — purely local view state that never proliferates, never lost.
+    /// - `track_imported_file`/`track_section_hashes` import-dedup bookkeeping stays
+    ///   UNGATED for now: the in-import path gates + dirties, but the standalone
+    ///   `track_imported_file` command does not — a deferred follow-up, lower-impact
+    ///   than a lost annotation (re-import is the worst case, not silent data loss).
+    ///
+    /// `MUTATION_ENTRYPOINTS` (tests.rs) enumerates the gated set (incl. the two
+    /// warning verbs).
     pub(super) fn guard_mutation(&self, what: &str) -> Result<(), CommandResult> {
         if self.edit_enabled() {
             return Ok(());
@@ -290,10 +300,13 @@ impl AppState {
         )))
     }
 
-    /// Flip `has_unpushed_edits` `false → true` on a successful edit of a remote
-    /// project (#191, D-B16). Idempotent (no-op once true). No-op for local-only
-    /// (`load_speleo_link → None`). SET-ONLY in #191: local save/autosave NEVER
-    /// clears it; only a successful server push (later: Sync/Release) does.
+    /// Flip `has_unpushed_edits` `false → true` AND refresh `last_edit_at` on a
+    /// successful edit of a remote project (#191, D-B16; v10 last_edit_at). No-op
+    /// for local-only (`load_speleo_link → None`). The dirty bit is SET-ONLY in
+    /// #191 — local save/autosave NEVER clears it; only a successful server push
+    /// (Sync/Release) does. `last_edit_at` is refreshed on EVERY accepted
+    /// mutation (not idempotent) because guardrail-7 compares it to push-start to
+    /// decide whether a landed-by-ancestry push may clear the dirty bit.
     pub(super) fn mark_remote_dirty(&self) {
         let Ok(db_guard) = self.database.lock() else {
             return;
@@ -301,28 +314,17 @@ impl AppState {
         let Some(db) = db_guard.as_ref() else {
             return; // no open database (e.g. unsaved project) — nothing to stamp
         };
-        match db.load_speleo_link() {
-            Ok(Some(mut link)) => {
-                if link.has_unpushed_edits {
-                    return; // idempotent: already dirty
-                }
-                link.has_unpushed_edits = true;
-                if let Err(e) = db.save_speleo_link(Some(&link)) {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "flip SpeleoDB dirty bit after a remote edit",
-                        "mark_remote_dirty: failed to persist has_unpushed_edits"
-                    );
-                }
-            }
-            Ok(None) => {} // local-only project: no link, no-op
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "flip SpeleoDB dirty bit after a remote edit",
-                    "mark_remote_dirty: failed to load speleo_link"
-                );
-            }
+        // One targeted UPDATE: set the dirty bit + refresh last_edit_at (the g7
+        // push-start comparison needs the LATEST edit time, so this runs every edit,
+        // not idempotently). A local-only project has no link row → 0 rows → no-op,
+        // so this stays cheap on the hot edit path (no SELECT, no DDL, no full upsert).
+        let now = chrono::Utc::now().to_rfc3339();
+        if let Err(e) = db.touch_speleo_link_dirty(&now) {
+            tracing::warn!(
+                error = %e,
+                purpose = "flip SpeleoDB dirty bit after a remote edit",
+                "mark_remote_dirty: failed to persist has_unpushed_edits"
+            );
         }
     }
 

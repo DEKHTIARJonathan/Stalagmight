@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use super::models::Project;
+use super::models::{Commit, Project, RevisionHistory};
 use super::SpeleoDbError;
 
 /// Global per-request timeout for reads. Larger than the tile timeout because a
@@ -224,11 +224,8 @@ pub(crate) fn list_projects(
 
 /// `GET /api/v2/projects/{id}/` — fetch a single project (D-B11, #185). A ~10-line
 /// mirror of [`list_projects`] parsing one bare [`Project`]. The caller validates
-/// `project_id` (UUID) before calling. #202 consumes this on the freshness-fold
-/// path.
-// Production primitive landed now (D-B11); its orchestration caller is #202, so
-// it is dead in the non-test lib build until then.
-#[cfg_attr(not(test), expect(dead_code, reason = "get_project caller is #202"))]
+/// `project_id` (UUID) before calling. Consumed by #194 start_editing (the
+/// lock-holder re-GET) and #202 (the freshness fold).
 pub(crate) fn get_project(
     base: &str,
     token: &str,
@@ -251,6 +248,33 @@ pub(crate) fn get_project(
     // FRESHNESS FOLD (#189/#191): authoritative Project available here; cache +
     // reset last_verify_at lands later (D-B1, #202).
     serde_json::from_slice(&body).map_err(|e| SpeleoDbError::Parse(format!("project detail: {e}")))
+}
+
+/// `GET /api/v2/projects/{id}/revisions/` — the project's linear commit history
+/// (#193). Used by guardrail-7 ancestry recovery to decide, after a push whose
+/// confirmation was lost, whether our edit actually landed on the server. The
+/// caller validates `project_id` (UUID) first. A GET, so it is retry-safe.
+/// Consumed by #197 done (ancestry recovery).
+pub(crate) fn get_revisions(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+) -> Result<RevisionHistory, SpeleoDbError> {
+    let url = api_url(base, &format!("projects/{project_id}/revisions/"));
+    let auth = bearer(token);
+
+    let (status, body) = with_retry(base, insecure_http, true, || {
+        let resp = agent()
+            .get(&url)
+            .header("Authorization", auth.as_str())
+            .call()?;
+        read_status_body(resp)
+    })?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    serde_json::from_slice(&body).map_err(|e| SpeleoDbError::Parse(format!("revisions: {e}")))
 }
 
 /// The authenticated user's profile (`GET /api/v2/user/`), parsed to the one
@@ -318,9 +342,13 @@ fn parse_project(body: &[u8], context: &str) -> Result<Project, SpeleoDbError> {
     serde_json::from_slice(body).map_err(|e| SpeleoDbError::Parse(format!("{context}: {e}")))
 }
 
-/// MIME type for an artifact part, by extension (D-A-mime). The server routes on
-/// extension via the AUTO catch-all; explicit MIME is robustness, not a hard
-/// requirement (OPEN-1, corrected).
+/// MIME type for an artifact part, by extension (D-A-mime). The server selects
+/// the processor by *extension* via the AUTO catch-all, but then validates the
+/// part's `Content-Type` against that processor's allow-list — so for `.tml` the
+/// explicit MIME is **REQUIRED, not just robustness**: `ArianeTMLFileProcessor`
+/// allows only `application/octet-stream` / `application/zip` (no `text/plain`),
+/// and a bare `.tml` part is rejected with HTTP 400 (OPEN-1, resolved live at
+/// #184: `live_open1_bare_tml_mime_outcome`; see `docs/speleodb-dev-testing.md`).
 fn mime_for(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
         Some("stalx") => "application/vnd.sqlite3",
@@ -362,15 +390,17 @@ fn build_upload_parts(
             "a non-empty commit message is required to upload".to_owned(),
         ));
     }
-    let part = |src: &Path, default_name: &str| UploadPart {
+    let part = |src: &Path, wire_name: &str| UploadPart {
         // Both parts are named "artifact" (repeated), NEVER "artifact[]" — the
         // server expects repeated same-named parts, not bracket-indexed ones.
         name: "artifact",
-        file_name: src
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(default_name)
-            .to_owned(),
+        // The multipart filename is the CANONICAL server-side name, decoupled from
+        // the local source path's basename. The server's upload/auto/ is additive
+        // (it `git add`s each uploaded file by its name onto ToT), so the `.stalx`
+        // MUST always land as `project.stalx` — else a push from the scratch
+        // `snapshot.stalx` would commit a SECOND `.stalx` beside the canonical one,
+        // and the next download_dump would be an ambiguous multi-`.stalx` repo.
+        file_name: wire_name.to_owned(),
         mime: mime_for(src),
         src: src.to_path_buf(),
     };
@@ -388,13 +418,6 @@ fn build_upload_parts(
 /// an explicit MIME (D-A-multipart / D-A-mime). The caller must hold the project
 /// mutex. `idempotent = false` → runs at most once (a commit must not
 /// double-submit on a mid-response failure).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "upload orchestration caller is #185 step 12 / #194"
-    )
-)]
 pub(crate) fn upload_auto(
     base: &str,
     token: &str,
@@ -432,34 +455,51 @@ pub(crate) fn upload_auto(
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
     }
-    // CONDITIONAL CLEAR (#191): the returned latest_commit.id is the adopted
-    // hexsha; the edit-epoch comparison that clears has_unpushed_edits is owned
-    // by #191 — do NOT clear the dirty bit unconditionally here.
+    // CONDITIONAL CLEAR (#191): the adopted hexsha is the edit-epoch the
+    // comparison that clears has_unpushed_edits is owned by #191 — do NOT clear
+    // the dirty bit unconditionally here.
     // FRESHNESS FOLD (#189/#191): authoritative Project available here; cache +
     // reset last_verify_at lands later (D-B1, #202).
     //
     // The upload/auto success body is an ENVELOPE — `{ files, message, hexsha,
-    // browser_url, project: {…} }` — with the authoritative Project NESTED under
-    // `project` (verified against the live server; a bare `parse_project` here
-    // failed with "missing field `id`"). Parse the nested project, not the
-    // envelope top level. `hexsha` / `browser_url` are surfaced later by #191/#197.
+    // browser_url, project: {…} }` — with the Project NESTED under `project`
+    // (verified live; a bare `parse_project` here failed with "missing field
+    // `id`"). The authoritative SHA of the commit THIS push created is the
+    // TOP-LEVEL `hexsha`. The nested `project.latest_commit` is
+    // eventually-consistent and was observed live still pointing at the PRIOR tip
+    // (the service-account root creation commit) immediately after a push — so we
+    // adopt `hexsha`, not the nested pointer, and overwrite `latest_commit` with
+    // it so every caller's `latest_commit.id` is the commit just created (#197).
+    parse_upload_auto_response(&body)
+}
+
+/// Parse the `upload/auto/` success envelope into the adopted [`Project`]. The
+/// top-level `hexsha` is the SHA of the commit THIS push created; prefer it and
+/// overwrite `latest_commit` so callers adopt the right BASE. If a deployment
+/// omits the top-level `hexsha`, fall back to the nested `project.latest_commit`
+/// rather than failing an ACCEPTED (200) push as a Parse/Fatal error — that would
+/// strand the dirty bit forever (#197 review); a slightly-stale BASE self-heals via
+/// the ancestry fence on the next Sync.
+fn parse_upload_auto_response(body: &[u8]) -> Result<Project, SpeleoDbError> {
     #[derive(serde::Deserialize)]
     struct UploadAutoResponse {
+        #[serde(default)]
+        hexsha: Option<String>,
         project: Project,
     }
-    let parsed: UploadAutoResponse = serde_json::from_slice(&body)
+    let parsed: UploadAutoResponse = serde_json::from_slice(body)
         .map_err(|e| SpeleoDbError::Parse(format!("upload auto response: {e}")))?;
-    Ok(parsed.project)
+    let mut project = parsed.project;
+    if let Some(hexsha) = parsed.hexsha.filter(|h| !h.is_empty()) {
+        project.latest_commit = Some(Commit { id: hexsha });
+    }
+    Ok(project)
 }
 
 /// `POST /api/v2/projects/{id}/acquire/` — take the project mutex, returning the
 /// updated [`Project`]. The upload endpoint requires the caller to hold the lock
-/// (`UserOwnsProjectMutex`). `idempotent = false`. The real acquire/reconcile
-/// orchestration is #194; this is the production primitive.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "lock orchestration caller is #194")
-)]
+/// (`UserOwnsProjectMutex`). `idempotent = false`. Consumed by #194
+/// `speleodb_start_editing`.
 pub(crate) fn acquire_lock(
     base: &str,
     token: &str,
@@ -476,11 +516,7 @@ pub(crate) fn acquire_lock(
 }
 
 /// `POST /api/v2/projects/{id}/release/` — release the project mutex, returning
-/// the updated [`Project`]. `idempotent = false`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "lock orchestration caller is #194")
-)]
+/// the updated [`Project`]. `idempotent = false`. Consumed by #194/#197.
 pub(crate) fn release_lock(
     base: &str,
     token: &str,
@@ -629,9 +665,87 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        api_url, bearer, build_upload_parts, mime_for, parse_error_message, with_retry, UserInfo,
+        api_url, bearer, build_upload_parts, mime_for, parse_error_message,
+        parse_upload_auto_response, with_retry, RevisionHistory, UserInfo,
     };
     use crate::speleodb::SpeleoDbError;
+
+    #[test]
+    fn revisions_payload_decodes_verified_v2_field_names() {
+        // The whole sync engine keys off the /revisions/ field names `parent_ids` and
+        // `author_email`, both #[serde(default)] — so a RENAMED server key would
+        // SILENTLY default (parent_ids=[] → every commit reads as a root → tip None →
+        // fail closed; author_email="" → stranger → Diverged) with no parse error. The
+        // only other decode of a real payload is the #[ignore] live test, so this
+        // recorded fixture (the verified v2 contract, incl. the extra fields serde
+        // ignores) locks the names in CI. (#197 review)
+        let payload = r#"{
+            "project": {"id": "11111111-1111-1111-1111-111111111111", "name": "X"},
+            "commits": [
+                {"id": "root0", "parent_ids": [], "author_email": "svc@speleodb.org",
+                 "author_name": "Service", "authored_date": "2026-06-01T00:00:00Z", "message": "init"},
+                {"id": "childA", "parent_ids": ["root0"], "author_email": "Me@Example.COM",
+                 "author_name": "Me", "authored_date": "2026-06-02T00:00:00Z", "message": "edit"}
+            ]
+        }"#;
+        let history: RevisionHistory = serde_json::from_slice(payload.as_bytes())
+            .expect("verified v2 revisions payload decodes");
+        assert_eq!(history.commits.len(), 2, "both commits decode");
+        let child = history
+            .commits
+            .iter()
+            .find(|c| c.id == "childA")
+            .expect("childA present");
+        assert_eq!(
+            child.parent_ids,
+            vec!["root0".to_owned()],
+            "parent_ids MUST populate from the `parent_ids` key (a rename would silently default to [])"
+        );
+        assert_eq!(
+            child.author_email, "Me@Example.COM",
+            "author_email MUST populate from the `author_email` key (a rename would default to \"\")"
+        );
+        // parent_ids actually drives the topology leaf the fence trusts.
+        assert_eq!(
+            crate::speleodb::sync::tip_of(&history.commits),
+            Some("childA"),
+            "tip_of resolves the leaf via parent_ids"
+        );
+    }
+
+    #[test]
+    fn upload_auto_response_prefers_hexsha_then_falls_back_to_nested() {
+        // #197 review: a top-level hexsha is the commit THIS push created → adopt it.
+        // But a 200 envelope WITHOUT a top-level hexsha must NOT fail as Parse/Fatal
+        // (which would strand the dirty bit) — fall back to the nested latest_commit.
+        let proj = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Up","latest_commit":{"id":"nested-prior"}}"#;
+
+        let with = format!("{{\"hexsha\":\"top-new\",\"project\":{proj}}}");
+        let adopted = parse_upload_auto_response(with.as_bytes()).expect("parse with hexsha");
+        assert_eq!(
+            adopted.latest_commit.as_ref().map(|c| c.id.as_str()),
+            Some("top-new"),
+            "a present top-level hexsha is adopted as the new BASE"
+        );
+
+        let without = format!("{{\"project\":{proj}}}");
+        let fallback =
+            parse_upload_auto_response(without.as_bytes()).expect("missing hexsha must not error");
+        assert_eq!(
+            fallback.latest_commit.as_ref().map(|c| c.id.as_str()),
+            Some("nested-prior"),
+            "a 200 lacking hexsha falls back to the nested latest_commit, not a Parse error"
+        );
+
+        // An empty-string hexsha is treated as absent (same fallback).
+        let empty = format!("{{\"hexsha\":\"\",\"project\":{proj}}}");
+        let empty_fb =
+            parse_upload_auto_response(empty.as_bytes()).expect("empty hexsha must not error");
+        assert_eq!(
+            empty_fb.latest_commit.as_ref().map(|c| c.id.as_str()),
+            Some("nested-prior")
+        );
+    }
 
     #[test]
     fn user_info_parses_email_and_ignores_extra_fields() {
@@ -688,9 +802,15 @@ mod tests {
 
     #[test]
     fn upload_parts_both_named_artifact_never_bracketed() {
+        // The `.stalx` source is the scratch SNAPSHOT path (its real basename in the
+        // push pipeline) — the wire filename MUST still be the canonical
+        // `project.stalx`, NOT the source basename. The server is additive, so a
+        // `snapshot.stalx` wire name would commit a second `.stalx` and corrupt the
+        // repo into an ambiguous multi-`.stalx` dump. (Regression: this test used to
+        // pass a `project.stalx` source, masking exactly that bug.)
         let parts = build_upload_parts(
-            Path::new("/x/project.stalx"),
-            Path::new("/x/ariane.tml"),
+            Path::new("/cache/snapshot.stalx"),
+            Path::new("/cache/ariane.tml"),
             "msg",
         )
         .expect("descriptor builds");
@@ -703,8 +823,13 @@ mod tests {
             assert_ne!(p.name, "artifact[]", "never the bracketed form");
         }
         assert_eq!(parts.message, "msg");
-        assert_eq!(parts.parts[0].file_name, "project.stalx");
+        assert_eq!(
+            parts.parts[0].file_name, "project.stalx",
+            "the .stalx uploads under the canonical name, not the scratch basename"
+        );
         assert_eq!(parts.parts[1].file_name, "ariane.tml");
+        // The source path is still the snapshot (that's what gets read + streamed).
+        assert_eq!(parts.parts[0].src, Path::new("/cache/snapshot.stalx"));
     }
 
     #[test]

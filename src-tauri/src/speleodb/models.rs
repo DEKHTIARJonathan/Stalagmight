@@ -45,6 +45,33 @@ pub(crate) struct Commit {
     pub(crate) id: String,
 }
 
+/// One commit in a project's **linear** revision history
+/// (`GET /api/v2/projects/{id}/revisions/`). Only the fields the ancestry
+/// classifier (#193) needs are modelled — the server also sends `author_name`,
+/// `authored_date`, and `message`, which serde ignores.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct RevisionCommit {
+    /// 40-hex git commit SHA.
+    pub(crate) id: String,
+    /// Parent SHAs. Empty for the root commit; exactly one for a linear commit;
+    /// more than one only for a merge (which the classifier treats as
+    /// non-linear → fail closed).
+    #[serde(default)]
+    pub(crate) parent_ids: Vec<String>,
+    /// Commit author's email — compared against our own to tell "my push
+    /// landed" from "someone else pushed".
+    #[serde(default)]
+    pub(crate) author_email: String,
+}
+
+/// Response of `GET /api/v2/projects/{id}/revisions/` — the project's linear
+/// commit list. The sibling `project` object the server also returns is ignored.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct RevisionHistory {
+    #[serde(default)]
+    pub(crate) commits: Vec<RevisionCommit>,
+}
+
 /// The active lock ("mutex") on a project, when one is held.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ActiveMutex {
@@ -127,6 +154,68 @@ pub struct SpeleoLoginResult {
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct SpeleoOpenResult {
     pub local_path: String,
+    /// #193 b8: the server reports a write lock held by THIS account at open time,
+    /// i.e. a second same-account session is editing the project. The frontend
+    /// surfaces a notice (the ancestry self-heal assumes a single same-account
+    /// session — a concurrent one would misattribute its commits as ours).
+    pub concurrent_session: bool,
+}
+
+/// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write
+/// lock and reconciling the open project against the server. A discriminated
+/// union (`kind`) the webview branches on. Errors (no permission, anomalies,
+/// network) surface through the `Err(SpeleoErrorDto)` channel instead.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StartEditingResult {
+    /// Lock acquired; the local copy already matched the server tip. Editing is
+    /// now enabled.
+    Editing,
+    /// Lock acquired; the server had advanced with no local edits, so we
+    /// fast-forwarded (re-pulled + reloaded the project) and enabled editing. The
+    /// webview should refresh its view from the reloaded `local_path`.
+    FastForwarded { local_path: String },
+    /// The server diverged from our base AND we hold un-pushed local edits:
+    /// editing is NOT enabled and the freshly-acquired lock was released. The
+    /// user must reconcile (the divergence prompt is #198, next batch).
+    DivergenceNeeded,
+    /// Someone else holds the write lock; `email` is the holder when known.
+    LockedBy { email: Option<String> },
+}
+
+/// Outcome of `speleodb_done` (#197): push the open project's edits, then release
+/// the lock and return to read-only.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DoneResult {
+    /// Edits pushed (or there was nothing to push); the lock was released and the
+    /// project is read-only again.
+    Released,
+    /// The server diverged (a stranger commit between our base and the tip):
+    /// nothing was pushed, the lock + dirty bit are retained for the user to
+    /// reconcile (#198).
+    DivergenceNeeded,
+    /// The push outcome was ambiguous (no confirmed server commit): the dirty bit
+    /// AND the lock are retained so a later retry recovers via ancestry (#193) —
+    /// no edits are lost.
+    PushUnconfirmed,
+}
+
+/// Outcome of `speleodb_update` (#197): a read-only refresh of the open project
+/// against the server (no lock taken).
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UpdateResult {
+    /// Already at the server tip — nothing to do.
+    UpToDate,
+    /// Fast-forwarded to the server tip (re-pulled + reloaded the project).
+    FastForwarded { local_path: String },
+    /// The server diverged from our base AND we hold un-pushed local edits — the
+    /// refresh cannot proceed without reconciliation (#198/#199, next batch).
+    DivergenceNeeded,
 }
 
 /// Current backend session status, so the dialog can restore its view when
@@ -163,8 +252,9 @@ pub struct SpeleoErrorDto {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        Permission, Project, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
-        SpeleoProjectSummary, SpeleoSessionStatus,
+        DoneResult, Permission, Project, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult,
+        SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult,
+        UpdateResult,
     };
 
     #[test]
@@ -194,6 +284,7 @@ mod tests {
         .expect("serialize project summary");
         let open = serde_json::to_string(&SpeleoOpenResult {
             local_path: "/cache/project.stalx".to_owned(),
+            concurrent_session: false,
         })
         .expect("serialize open result");
         // [Track A] #186/D-B2: the structured error DTO must also never carry a
@@ -206,8 +297,25 @@ mod tests {
             status: Some(401),
         })
         .expect("serialize error dto");
+        // The single-writer hand-off DTOs (#194/#197) must also never carry a token
+        // — serialize the field-bearing variants so a future field is caught.
+        let start = serde_json::to_string(&StartEditingResult::FastForwarded {
+            local_path: "/cache/project.stalx".to_owned(),
+        })
+        .expect("serialize start-editing result");
+        let locked = serde_json::to_string(&StartEditingResult::LockedBy {
+            email: Some("holder@example.com".to_owned()),
+        })
+        .expect("serialize locked-by result");
+        let done = serde_json::to_string(&DoneResult::Released).expect("serialize done result");
+        let update = serde_json::to_string(&UpdateResult::FastForwarded {
+            local_path: "/cache/project.stalx".to_owned(),
+        })
+        .expect("serialize update result");
 
-        for json in [&login, &status, &summary, &open, &error] {
+        for json in [
+            &login, &status, &summary, &open, &error, &start, &locked, &done, &update,
+        ] {
             assert!(
                 !json.to_ascii_lowercase().contains("token"),
                 "IPC DTO must not expose a token field: {json}"

@@ -3325,6 +3325,7 @@ fn sample_speleo_link(base_commit_sha: Option<&str>, dirty: bool) -> SpeleoLink 
         project_name: "Test Cave".to_string(),
         base_commit_sha: base_commit_sha.map(str::to_owned),
         has_unpushed_edits: dirty,
+        last_edit_at: None,
     }
 }
 
@@ -3392,8 +3393,8 @@ fn speleo_link_clear_removes_row() {
 }
 
 #[test]
-fn init_schema_creates_speleo_link_v9() {
-    // A freshly-created file (open() → init_schema, no migrate chain) has the v9
+fn init_schema_creates_speleo_link_v10() {
+    // A freshly-created file (open() → init_schema, no migrate chain) has the v10
     // table immediately.
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("fresh.stalx");
@@ -3407,7 +3408,7 @@ fn init_schema_creates_speleo_link_v9() {
         )
         .unwrap();
     assert_eq!(exists, 1, "init_schema created speleo_link");
-    assert_eq!(db.get_user_version().unwrap(), 9, "stamped at v9");
+    assert_eq!(db.get_user_version().unwrap(), 10, "stamped at v10");
 }
 
 #[test]
@@ -3450,7 +3451,7 @@ fn migrate_creates_speleo_link_on_legacy_v8() {
         )
         .unwrap();
     assert_eq!(exists, 1, "migrate_schema recreated speleo_link");
-    assert_eq!(db.get_user_version().unwrap(), 9, "bumped to v9");
+    assert_eq!(db.get_user_version().unwrap(), 10, "bumped to v10");
 }
 
 #[test]
@@ -3598,6 +3599,222 @@ fn carry_forward_four_cell_typed_api() {
     assert!(!link.has_unpushed_edits);
 }
 
+// --- v10 last_edit_at ---
+
+#[test]
+fn last_edit_at_round_trips_and_survives_migration() {
+    // Typed Some + None round-trip through save/load, and the value is carried
+    // forward verbatim across a forced SCHEMA_VERSION migration (never reset).
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("last_edit_at.stalx");
+    let stamp = "2026-06-27T12:34:56+00:00".to_string();
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Edited".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&SpeleoLink {
+            endpoint: "http://x".to_string(),
+            project_id: "pid".to_string(),
+            project_name: "pname".to_string(),
+            base_commit_sha: Some("abc".to_string()),
+            has_unpushed_edits: true,
+            last_edit_at: Some(stamp.clone()),
+        }))
+        .unwrap();
+        db.set_user_version(8).unwrap(); // force migrate on next open
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let loaded = db.load_speleo_link().unwrap().unwrap();
+    assert_eq!(
+        loaded.last_edit_at.as_deref(),
+        Some(stamp.as_str()),
+        "last_edit_at survives migration verbatim"
+    );
+    assert!(loaded.has_unpushed_edits);
+
+    // None also round-trips and is SQL NULL on disk (never coerced to "").
+    db.save_speleo_link(Some(&SpeleoLink {
+        last_edit_at: None,
+        ..loaded
+    }))
+    .unwrap();
+    assert_eq!(db.load_speleo_link().unwrap().unwrap().last_edit_at, None);
+    let is_null: i64 = db
+        .conn
+        .query_row(
+            "SELECT last_edit_at IS NULL FROM speleo_link WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(is_null, 1, "last_edit_at None is SQL NULL, not ''");
+}
+
+#[test]
+fn migrate_v9_dirty_speleo_link_backfills_last_edit_at() {
+    // A genuine v9-shaped speleo_link (no last_edit_at) gains the column via the
+    // v9→v10 ALTER on open_existing. A row that was already DIRTY under v9
+    // (has_unpushed_edits=1) is backfilled to the epoch so a later confirmed push
+    // can clear it — WITHOUT the backfill, edits_captured_by_push(None, push_start)
+    // is false and the dirty bit would stick forever (#197 review).
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("v9_speleo_link.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("V9".to_string(), None))
+            .unwrap();
+        // Re-create the table in its pre-v10 shape and stamp the version back.
+        db.conn.execute("DROP TABLE speleo_link", []).unwrap();
+        db.conn
+            .execute(
+                "CREATE TABLE speleo_link (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    endpoint TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    project_name TEXT NOT NULL,
+                    base_commit_sha TEXT,
+                    has_unpushed_edits INTEGER NOT NULL DEFAULT 0
+                )",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO speleo_link
+                    (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits)
+                 VALUES (1, 'http://x', 'pid', 'pname', 'abc', 1)",
+                [],
+            )
+            .unwrap();
+        db.set_user_version(9).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let has_col: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('speleo_link') WHERE name='last_edit_at'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_col, 1, "v9→v10 ALTER added last_edit_at");
+    let link = db.load_speleo_link().unwrap().unwrap();
+    assert_eq!(
+        link.last_edit_at.as_deref(),
+        Some("1970-01-01T00:00:00+00:00"),
+        "a dirty v9 row is backfilled to the epoch so a confirmed push can clear it"
+    );
+    assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
+    assert!(link.has_unpushed_edits, "existing row preserved");
+    assert_eq!(db.get_user_version().unwrap(), 10);
+}
+
+#[test]
+fn migrate_v9_clean_speleo_link_keeps_null_last_edit_at() {
+    // The v9→v10 backfill only touches DIRTY rows. A clean v9 row
+    // (has_unpushed_edits=0) keeps last_edit_at NULL — there is no un-pushed edit to
+    // preserve, and a fresh edit will stamp it at edit time.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("v9_clean.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("V9c".to_string(), None))
+            .unwrap();
+        db.conn.execute("DROP TABLE speleo_link", []).unwrap();
+        db.conn
+            .execute(
+                "CREATE TABLE speleo_link (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    endpoint TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    project_name TEXT NOT NULL,
+                    base_commit_sha TEXT,
+                    has_unpushed_edits INTEGER NOT NULL DEFAULT 0
+                )",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO speleo_link
+                    (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits)
+                 VALUES (1, 'http://x', 'pid', 'pname', 'abc', 0)",
+                [],
+            )
+            .unwrap();
+        db.set_user_version(9).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let link = db.load_speleo_link().unwrap().unwrap();
+    assert_eq!(
+        link.last_edit_at, None,
+        "a clean v9 row keeps last_edit_at NULL (only dirty rows are backfilled)"
+    );
+    assert!(!link.has_unpushed_edits, "clean row stays clean");
+}
+
+#[test]
+fn touch_speleo_link_dirty_is_targeted_and_locality_aware() {
+    // #197 review: the hot-path dirty stamp is a single UPDATE — no row for a
+    // local-only project (no-op, false), and for a remote link it sets the bit +
+    // refreshes last_edit_at WITHOUT disturbing base_commit_sha / identity.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("touch.stalx");
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&Project::new("Touch".to_string(), None))
+        .unwrap();
+
+    // Local-only (no link row): no-op, returns false.
+    assert!(
+        !db.touch_speleo_link_dirty("2026-06-28T00:00:00+00:00")
+            .unwrap(),
+        "no link row → nothing to touch"
+    );
+    assert!(db.load_speleo_link().unwrap().is_none(), "still no link");
+
+    // Seed a CLEAN remote link, then touch it.
+    db.save_speleo_link(Some(&sample_speleo_link(Some("base-sha"), false)))
+        .unwrap();
+    assert!(
+        db.touch_speleo_link_dirty("2026-06-28T01:02:03+00:00")
+            .unwrap(),
+        "remote link row updated → true"
+    );
+    let link = db.load_speleo_link().unwrap().unwrap();
+    assert!(link.has_unpushed_edits, "dirty bit set");
+    assert_eq!(
+        link.last_edit_at.as_deref(),
+        Some("2026-06-28T01:02:03+00:00"),
+        "last_edit_at stamped"
+    );
+    assert_eq!(
+        link.base_commit_sha.as_deref(),
+        Some("base-sha"),
+        "BASE must NOT be disturbed by a dirty stamp"
+    );
+    assert_eq!(
+        link.project_id, "11111111-1111-1111-1111-111111111111",
+        "hand-off identity untouched"
+    );
+
+    // A second touch REFRESHES the timestamp (not idempotent — g7 needs the latest).
+    assert!(db
+        .touch_speleo_link_dirty("2026-06-28T09:09:09+00:00")
+        .unwrap());
+    assert_eq!(
+        db.load_speleo_link()
+            .unwrap()
+            .unwrap()
+            .last_edit_at
+            .as_deref(),
+        Some("2026-06-28T09:09:09+00:00"),
+        "last_edit_at refreshed on every touch"
+    );
+}
+
 #[test]
 fn preserved_speleolink_columns_match_head_schema() {
     // Structural HEAD-schema guard: every (name, decl_type, notnull) in
@@ -3637,7 +3854,7 @@ fn speleo_link_survives_open_then_fast_path_reopen() {
     // First open_existing: already at HEAD, fast-path early return.
     {
         let db = Database::open_existing(&path).unwrap();
-        assert_eq!(db.get_user_version().unwrap(), 9);
+        assert_eq!(db.get_user_version().unwrap(), 10);
         assert!(db.load_speleo_link().unwrap().is_some());
     }
     // Second reopen: still intact, dirty bit preserved.
@@ -3645,4 +3862,300 @@ fn speleo_link_survives_open_then_fast_path_reopen() {
     let link = db.load_speleo_link().unwrap().unwrap();
     assert!(link.has_unpushed_edits);
     assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
+}
+
+// --- #195 VACUUM INTO snapshot ---
+
+/// Seed a `.stalx` at `path` with one section + one shot, then close it (so a
+/// DELETE-mode file is fully flushed to disk).
+fn seed_snapshot_source(path: &Path) {
+    let mut db = Database::open(path).unwrap();
+    let mut project = Project::new("Snap Cave".to_string(), Some("Loc".to_string()));
+    project.add_section(SectionData {
+        name: Some("Line".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![ShotData {
+            azimuth_in: 10.0,
+            azimuth_out: 190.0,
+            length: 5.0,
+            depth_in: 1.0,
+            depth_out: 2.0,
+            ..Default::default()
+        }],
+    });
+    db.save_project(&project).unwrap();
+}
+
+/// Assert no `-wal`/`-journal`/`-shm` sidecar sits next to `dest`.
+fn assert_no_sqlite_sidecars(dest: &Path) {
+    let dest_str = dest.to_string_lossy();
+    for suffix in ["-wal", "-journal", "-shm"] {
+        let sidecar = std::path::PathBuf::from(format!("{dest_str}{suffix}"));
+        assert!(
+            !sidecar.exists(),
+            "snapshot must be self-contained: {sidecar:?} should not exist"
+        );
+    }
+}
+
+#[test]
+fn vacuum_snapshot_self_contained_delete_mode() {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src.stalx");
+    let dest = temp.path().join("snap/out.stalx");
+    seed_snapshot_source(&src);
+
+    Database::vacuum_snapshot(&src, &dest).unwrap();
+
+    assert!(dest.exists(), "snapshot written");
+    assert_no_sqlite_sidecars(&dest);
+
+    // Reopens as a normal project with the data intact.
+    let db = Database::open_existing(&dest).unwrap();
+    let loaded = db.load_project().unwrap();
+    assert_eq!(loaded.name, "Snap Cave");
+    assert_eq!(loaded.sections.len(), 1);
+    assert_eq!(loaded.sections[0].shots.len(), 1);
+}
+
+#[test]
+fn vacuum_snapshot_under_wal_mode() {
+    // The live file may be in WAL mode with un-checkpointed committed frames.
+    // VACUUM INTO (on its own connection) must fold them in and still emit a
+    // self-contained DELETE-mode snapshot.
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("wal.stalx");
+    let dest = temp.path().join("wal_snap.stalx");
+
+    let mut db = Database::open(&src).unwrap();
+    db.conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+    let mut project = Project::new("WAL Cave".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("WL".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#abcdef".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![ShotData {
+            azimuth_in: 1.0,
+            azimuth_out: 181.0,
+            length: 3.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
+            ..Default::default()
+        }],
+    });
+    db.save_project(&project).unwrap();
+
+    // Snapshot while `db` is still open (the WAL is NOT checkpointed yet).
+    Database::vacuum_snapshot(&src, &dest).unwrap();
+    assert_no_sqlite_sidecars(&dest);
+
+    let snap = Database::open_existing(&dest).unwrap();
+    let loaded = snap.load_project().unwrap();
+    assert_eq!(loaded.name, "WAL Cave");
+    assert_eq!(loaded.sections.len(), 1, "committed WAL data captured");
+    assert_eq!(loaded.sections[0].shots.len(), 1);
+}
+
+#[test]
+fn vacuum_snapshot_removes_stale_dest() {
+    // VACUUM INTO refuses to overwrite; the helper clears a stale target first.
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src.stalx");
+    let dest = temp.path().join("stale.stalx");
+    seed_snapshot_source(&src);
+    std::fs::write(&dest, b"not a database").unwrap();
+
+    Database::vacuum_snapshot(&src, &dest).unwrap();
+
+    let db = Database::open_existing(&dest).unwrap();
+    assert_eq!(db.load_project().unwrap().name, "Snap Cave");
+}
+
+#[test]
+fn vacuum_snapshot_carries_speleo_link_for_caller_to_clear() {
+    // The snapshot preserves the speleo_link row (incl. the dirty bit) so the
+    // push pipeline can clear has_unpushed_edits in the COPY before upload.
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("linked.stalx");
+    let dest = temp.path().join("linked_snap.stalx");
+    {
+        let mut db = Database::open(&src).unwrap();
+        db.save_project(&Project::new("Linked".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&sample_speleo_link(Some("abc"), true)))
+            .unwrap();
+    }
+
+    Database::vacuum_snapshot(&src, &dest).unwrap();
+
+    let snap = Database::open_existing(&dest).unwrap();
+    let link = snap.load_speleo_link().unwrap().expect("link in snapshot");
+    assert!(
+        link.has_unpushed_edits,
+        "dirty bit present for caller to clear"
+    );
+    assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
+}
+
+#[test]
+fn vacuum_snapshot_missing_source_errors() {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("nope.stalx");
+    let dest = temp.path().join("out.stalx");
+    assert!(Database::vacuum_snapshot(&src, &dest).is_err());
+    assert!(!dest.exists(), "no snapshot written on error");
+}
+
+#[test]
+fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
+    // #197: the push snapshot clears ONLY the dirty bit + per-machine view toggles
+    // (display_settings). Durable project data — the import-dedup hashes and
+    // resolved_warnings — PROLIFERATES with the project (only a lock-holding editor
+    // can push, so anything in the snapshot is a legitimate change). The survey
+    // project row is preserved.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("push.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Push".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&sample_speleo_link(Some("abc"), true)))
+            .unwrap();
+        // A non-null edit timestamp so the dirty clear is observable; a view toggle
+        // that MUST be stripped; and project-data rows that MUST survive. A real
+        // section backs the resolved_warnings FK so Database::open_existing's
+        // integrity check passes after sanitize.
+        db.conn
+            .execute(
+                "UPDATE speleo_link SET last_edit_at = '2026-01-01T00:00:00+00:00'",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO sections (id, color, created_at) VALUES (1, '#abcdef', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO display_settings (key, value) VALUES ('zoom', '2')",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at) \
+                 VALUES (1, 1, 'X', '2026-01-01T00:00:00+00:00')",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute("INSERT INTO imported_file_hashes (hash) VALUES ('h1')", [])
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO imported_section_hashes (hash) VALUES ('h2')",
+                [],
+            )
+            .unwrap();
+        // Per-session LOCAL state that MUST be stripped (#194 b3 + collab leak):
+        // undo/redo edit history (a data-corruption vector if a collaborator
+        // inherited + replayed it) and the local Ariane-collab wiring.
+        db.conn
+            .execute(
+                "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) \
+                 VALUES (1, X'00', X'00', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO redo_stack (sequence, command_json, undo_data_json, executed_at) \
+                 VALUES (1, X'00', X'00', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO collab_state (id, state_json) VALUES (1, '{}')",
+                [],
+            )
+            .unwrap();
+    }
+
+    Database::sanitize_push_snapshot(&path).unwrap();
+
+    let snap = Database::open_existing(&path).unwrap();
+    let count = |table: &str| -> i64 {
+        snap.conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    };
+    // Per-machine view toggles stripped.
+    assert_eq!(
+        count("display_settings"),
+        0,
+        "display_settings (view toggles) must be stripped from the push snapshot"
+    );
+    // Per-session edit history stripped (#194 b3): a collaborator adopting the
+    // pushed snapshot must start with a clean undo/redo slate, never inherit (and
+    // risk replaying) the pusher's history.
+    assert_eq!(
+        count("undo_stack"),
+        0,
+        "undo_stack must be stripped from the push snapshot (#194 b3)"
+    );
+    assert_eq!(
+        count("redo_stack"),
+        0,
+        "redo_stack must be stripped from the push snapshot (#194 b3)"
+    );
+    // Local Ariane-collab wiring (sibling .tml path / per-machine toggle) stripped.
+    assert_eq!(
+        count("collab_state"),
+        0,
+        "collab_state (local Ariane-collab wiring) must not ride to collaborators"
+    );
+    // Durable project data proliferates — NOT stripped.
+    assert_eq!(
+        count("resolved_warnings"),
+        1,
+        "resolved_warnings must proliferate with the project"
+    );
+    assert_eq!(
+        count("imported_file_hashes"),
+        1,
+        "imported_file_hashes must proliferate with the project"
+    );
+    assert_eq!(
+        count("imported_section_hashes"),
+        1,
+        "imported_section_hashes must proliferate with the project"
+    );
+    // Dirty bit + edit timestamp cleared; the hand-off identity is preserved.
+    let link = snap.load_speleo_link().unwrap().expect("link kept");
+    assert!(
+        !link.has_unpushed_edits,
+        "dirty bit cleared in the push snapshot"
+    );
+    assert_eq!(link.last_edit_at, None, "edit timestamp cleared");
+    assert_eq!(
+        link.base_commit_sha.as_deref(),
+        Some("abc"),
+        "identity preserved"
+    );
+    // Survey data survives the sanitize.
+    assert_eq!(
+        snap.load_project().unwrap().name,
+        "Push",
+        "survey project preserved in the push snapshot"
+    );
 }

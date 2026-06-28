@@ -122,16 +122,20 @@ pub(crate) fn resolve_warning_impl(
         resolved_comment: comment,
         shot_uuid,
     };
-    state.save_resolved_warning(&warning).map_err(|e| {
-        tracing::error!(
-            section_id = warning.section_id,
-            shot_id = warning.shot_id,
-            warning_code = %warning.warning_code,
-            purpose = "acknowledge validation warning",
-            reason = %e,
-            "Failed to resolve warning"
-        );
-        e.to_string()
+    state.save_resolved_warning_gated(&warning).map_err(|e| {
+        // A read-only rejection (EDIT_DISABLED) is expected control flow on a remote
+        // project opened without the lock, not a persistence failure worth an error log.
+        if !e.starts_with(crate::core::command::EDIT_DISABLED_CODE) {
+            tracing::error!(
+                section_id = warning.section_id,
+                shot_id = warning.shot_id,
+                warning_code = %warning.warning_code,
+                purpose = "acknowledge validation warning",
+                reason = %e,
+                "Failed to resolve warning"
+            );
+        }
+        e
     })
 }
 
@@ -161,16 +165,20 @@ pub(crate) fn unresolve_warning_impl(
         "Unresolving warning"
     );
     state
-        .delete_resolved_warning(section_id, shot_id, &warning_code, shot_uuid.as_deref())
+        .delete_resolved_warning_gated(section_id, shot_id, &warning_code, shot_uuid.as_deref())
         .map_err(|e| {
-            tracing::error!(
-                section_id = section_id,
-                shot_id = shot_id,
-                warning_code = %warning_code,
-                purpose = "reopen validation warning",
-                reason = %e,
-                "Failed to unresolve warning"
-            );
-            e.to_string()
+            // A read-only rejection (EDIT_DISABLED) is expected control flow, not a
+            // persistence failure worth an error log.
+            if !e.starts_with(crate::core::command::EDIT_DISABLED_CODE) {
+                tracing::error!(
+                    section_id = section_id,
+                    shot_id = shot_id,
+                    warning_code = %warning_code,
+                    purpose = "reopen validation warning",
+                    reason = %e,
+                    "Failed to unresolve warning"
+                );
+            }
+            e
         })
 }

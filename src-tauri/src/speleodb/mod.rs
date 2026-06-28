@@ -20,14 +20,16 @@ pub(crate) mod client;
 pub(crate) mod contract;
 pub(crate) mod dump;
 pub mod models;
+// [P1] #192/#193 pure sync-engine logic: base-SHA fence + ancestry recovery.
+pub(crate) mod sync;
 // [Track A] #187 http/https private-network TLS policy (pure classify_addr + enforce).
 pub(crate) mod tls;
 
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::SpeleoDbAction;
 pub use models::{
-    Permission, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
-    SpeleoSessionStatus,
+    DoneResult, Permission, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
+    SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult, UpdateResult,
 };
 
 /// Errors from the SpeleoDB client and dump handling.
@@ -80,6 +82,10 @@ pub(crate) enum SpeleoDbError {
     // request attempt, so `with_retry` never loops on it.
     #[error("refusing to use an insecure SpeleoDB endpoint: {endpoint}")]
     InsecureEndpoint { endpoint: String },
+    /// [P1] No open remote SpeleoDB project to act on (start editing / done /
+    /// update require one). Fails closed (Fatal).
+    #[error("no open SpeleoDB project")]
+    NoRemoteProject,
 }
 
 #[cfg(test)]
@@ -113,6 +119,10 @@ mod tests {
         assert_eq!(
             SpeleoDbError::InvalidProjectId.to_string(),
             "invalid SpeleoDB project id"
+        );
+        assert_eq!(
+            SpeleoDbError::NoRemoteProject.to_string(),
+            "no open SpeleoDB project"
         );
         assert_eq!(
             SpeleoDbError::MissingCredentials.to_string(),
@@ -157,7 +167,10 @@ mod live_tests {
     //!   `live_fetch_user_email_matches_token_owner`,
     //!   `live_upload_200_returns_hexsha_and_project`, `live_upload_304_when_unchanged`,
     //!   `live_upload_malformed_returns_400`, `live_stalx_round_trips_through_auto`,
-    //!   `live_auto_rejects_unknown_extension_canary`, `live_http_to_private_box_allowed`.
+    //!   `live_auto_rejects_unknown_extension_canary`, `live_http_to_private_box_allowed`,
+    //!   `live_render_compat_georef_generates_geojson` (#184 P0.5 gate),
+    //!   `live_render_compat_no_anchor_records_geojson_state` (#184 / D2),
+    //!   `live_open1_bare_tml_mime_outcome` (#184 / OPEN-1).
     //! - **Two-account** (additionally needs `DEV_SPELEODB_EMAIL2` + `_PASSWORD2`,
     //!   via `live_env2()`): `live_collaborator_sees_read_only_label`,
     //!   `live_web_viewer_cannot_download`, `live_lock_holder_reflects_other_user`,
@@ -825,6 +838,82 @@ mod live_tests {
         }
     }
 
+    /// #193: after an upload, `get_revisions` returns the project's LINEAR commit
+    /// history — at least our commit, authored by us, with the tip matching the
+    /// adopted hexsha and no merges. Validates the new `get_revisions` client + the
+    /// linear-history contract the ancestry classifier (g7) assumes.
+    #[test]
+    #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
+    #[expect(
+        clippy::expect_used,
+        clippy::print_stderr,
+        reason = "ignored live integration test"
+    )]
+    fn live_get_revisions_returns_linear_authored_history() {
+        let Some((url, email, password)) = live_env() else {
+            eprintln!("skipping live_get_revisions: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD");
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let my_email = client::fetch_user_email(&url, &token, false).expect("whoami");
+        let (cleanup, fixture, tml_dir) = seed_and_acquire(&url, &token);
+        let tml_sidecar = tml_dir.path().join("ariane.tml");
+        std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
+
+        // upload_auto adopts the TOP-LEVEL `hexsha` (the commit this push created),
+        // not the nested `project.latest_commit` (which is max-authored-date and
+        // ties to the service-account root — see speleodb_server_head).
+        let hexsha = client::upload_auto(
+            &url,
+            &token,
+            false,
+            &cleanup.id,
+            &fixture,
+            &tml_sidecar,
+            "live get_revisions test",
+        )
+        .expect("upload/auto should be 200")
+        .latest_commit
+        .expect("200 carries the adopted hexsha")
+        .id;
+
+        let history =
+            client::get_revisions(&url, &token, false, &cleanup.id).expect("get_revisions");
+        assert!(
+            !history.commits.is_empty(),
+            "history must carry at least our commit"
+        );
+        for c in &history.commits {
+            assert!(
+                c.parent_ids.len() <= 1,
+                "history must be linear (no merges): {:?}",
+                c.parent_ids
+            );
+        }
+        // The TOPOLOGICAL leaf — the tip the fence trusts — must equal the commit
+        // upload_auto just created (NOT necessarily the server's latest_commit).
+        assert_eq!(
+            super::sync::tip_of(&history.commits),
+            Some(hexsha.as_str()),
+            "the revision-topology HEAD must equal the just-pushed hexsha"
+        );
+        // That HEAD commit is authored by us — the property g7 ancestry keys off.
+        let head = history
+            .commits
+            .iter()
+            .find(|c| c.id == hexsha)
+            .expect("the pushed commit must appear in the history");
+        assert!(
+            head.author_email.eq_ignore_ascii_case(&my_email),
+            "the HEAD commit must be authored by us: {} vs {my_email}",
+            head.author_email
+        );
+
+        if let Err(e) = client::release_lock(&url, &token, false, &cleanup.id) {
+            eprintln!("cleanup: failed to release lock: {e:?}");
+        }
+    }
+
     /// L13: re-uploading the **identical** tree (no change since the last commit)
     /// returns **304** — the benign "remote already at this state" outcome
     /// `map_status(UploadAuto, 304) == UpToDate` models. A 304 is a non-2xx, so the
@@ -1139,5 +1228,332 @@ mod live_tests {
             "live_http_to_private_box_allowed: listed {} project(s) over private http",
             projects.len()
         );
+    }
+
+    // ── #184: P0.5 render-compat gate (GATES P1 render/push) ────────────────
+    //
+    // Prove SpeleoDB's `openspeleo_lib` accepts OUR exporter's `.tml` and
+    // regenerates a `ProjectGeoJSON`. A 200 upload does NOT prove a render: the
+    // server generates the GeoJSON best-effort *after* the commit and silently
+    // `continue`s on `NoKnownAnchorError` / `EmptySurveyError` / any `Exception`
+    // (SpeleoDB `api/v2/views/file.py`), so the push still 200s with no render.
+    // The only honest proof is to read the render back via the OGC API - Features
+    // `items`:
+    //   GET /api/v2/gis-ogc/user/<token>/collections/<sha>_{points,lines}/items
+    // The user token authenticates via the URL path (`user_token` converter =
+    // 40-hex), so no Authorization header is sent; the endpoint 404s when no
+    // `ProjectGeoJSON` exists for that commit + geometry group.
+
+    /// Build an in-memory project with one section of two real shots. With
+    /// `anchor = Some((lat, lon))` it carries a georeferenced zero datum, so
+    /// [`export_tml`](crate::export::tml::export_tml) writes a real GPS anchor on
+    /// the exported START shot — the thing `openspeleo_lib` needs to emit a
+    /// `ProjectGeoJSON`. With `None` the exported `.tml` START is 0/0 (no anchor).
+    #[expect(clippy::expect_used, reason = "ignored live integration test helper")]
+    fn build_render_project(anchor: Option<(f64, f64)>) -> crate::models::Project {
+        use crate::models::{
+            GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum,
+        };
+        let mut project = Project::new("stalagmight-render-compat".to_owned(), None);
+        let section_id = project
+            .add_section(SectionData {
+                name: Some("Main".to_owned()),
+                surveyor: Some("Spike".to_owned()),
+                color: "#ff0000".to_owned(),
+                shots: vec![
+                    ShotData {
+                        azimuth_in: 45.0,
+                        azimuth_out: 225.0,
+                        length: 10.0,
+                        depth_in: 0.0,
+                        depth_out: 3.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        azimuth_in: 90.0,
+                        azimuth_out: 270.0,
+                        length: 8.0,
+                        depth_in: 3.0,
+                        depth_out: 5.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .id;
+        if let Some((lat, lon)) = anchor {
+            project.zero_datums.push(ZeroDatum {
+                station_ref: StationRef::new(section_id, 0).into(),
+                gps: GpsCoordinates::new(lat, lon, 0.0).expect("valid GPS anchor"),
+            });
+        }
+        project
+    }
+
+    /// GET the OGC API - Features `items` for `<commit_sha>_<group>` (group =
+    /// `"points"` | `"lines"`). Returns `(http_status, body_json)`; the body is a
+    /// bare `FeatureCollection` on 200 and `Value::Null` otherwise (e.g. 404 when
+    /// the server generated no render for that commit + geometry group).
+    #[expect(clippy::expect_used, reason = "ignored live integration test helper")]
+    fn fetch_ogc_items(
+        url: &str,
+        token: &str,
+        commit_sha: &str,
+        group: &str,
+    ) -> (u16, serde_json::Value) {
+        let items_url = api_url(
+            url,
+            &format!("gis-ogc/user/{token}/collections/{commit_sha}_{group}/items"),
+        );
+        let resp = raw_agent()
+            .get(&items_url)
+            .call()
+            .expect("OGC items request should reach the server (status branched below)");
+        let status = resp.status().as_u16();
+        let body = resp.into_body().read_to_vec().unwrap_or_default();
+        let json = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    /// The feature count of a bare OGC `items` FeatureCollection, or `None` when
+    /// the body is not a `FeatureCollection` (non-200 / unexpected shape).
+    fn feature_count(body: &serde_json::Value) -> Option<usize> {
+        if body.get("type").and_then(serde_json::Value::as_str) != Some("FeatureCollection") {
+            return None;
+        }
+        body.get("features")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len)
+    }
+
+    /// #184 (single-account): a Stalagmight-exported **georeferenced** `.tml`,
+    /// pushed via the production two-`artifact` `upload/auto`, makes SpeleoDB
+    /// regenerate a `ProjectGeoJSON` whose OGC layers carry features. THIS IS THE
+    /// GATE: if it fails, our exporter output is not accepted by `openspeleo_lib`
+    /// and the P1 render/push design must change (fix the exporter or fast-track
+    /// the #219 GeoJSON-acceptance ask) before building on it.
+    #[test]
+    #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
+    #[expect(
+        clippy::expect_used,
+        clippy::print_stderr,
+        reason = "ignored live integration test"
+    )]
+    fn live_render_compat_georef_generates_geojson() {
+        let Some((url, email, password)) = live_env() else {
+            eprintln!(
+                "skipping live_render_compat_georef: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
+            );
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let name = format!("stalagmight-render-{}", uuid::Uuid::new_v4());
+        let project_id = client::create_project(&url, &token, false, &name)
+            .expect("create project")
+            .id;
+        let cleanup = ProjectCleanup {
+            url: &url,
+            token: &token,
+            id: project_id,
+        };
+
+        // Export OUR georeferenced .tml (not a static fixture) — this is the
+        // exporter output whose render-compat we are gating.
+        let project = build_render_project(Some((20.25, -87.5)));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tml = dir.path().join("ariane.tml");
+        crate::export::tml::export_tml(&project, &tml).expect("export georeferenced .tml");
+
+        // The .stalx part is a stand-in (the render is driven entirely by the
+        // .tml); reuse the seed fixture, as the other upload tests do.
+        let stalx = std::path::Path::new(SEED_FIXTURE);
+        client::acquire_lock(&url, &token, false, &cleanup.id).expect("acquire mutex");
+        let uploaded = client::upload_auto(
+            &url,
+            &token,
+            false,
+            &cleanup.id,
+            stalx,
+            &tml,
+            "render-compat: georeferenced push",
+        )
+        .expect("georeferenced upload should be 200");
+        let hexsha = uploaded
+            .latest_commit
+            .as_ref()
+            .expect("200 upload must carry the new commit")
+            .id
+            .clone();
+        if let Err(e) = client::release_lock(&url, &token, false, &cleanup.id) {
+            eprintln!("cleanup: failed to release lock: {e:?}");
+        }
+
+        // Read the render back (a 200 push alone does not prove generation).
+        let (points_status, points_body) = fetch_ogc_items(&url, &token, &hexsha, "points");
+        let (lines_status, lines_body) = fetch_ogc_items(&url, &token, &hexsha, "lines");
+        let points = feature_count(&points_body);
+        let lines = feature_count(&lines_body);
+        eprintln!(
+            "render-compat georef: commit={hexsha} \
+             points(status={points_status}, count={points:?}) \
+             lines(status={lines_status}, count={lines:?})"
+        );
+
+        let points_ok = points_status == 200 && points.unwrap_or(0) > 0;
+        let lines_ok = lines_status == 200 && lines.unwrap_or(0) > 0;
+        assert!(
+            points_ok || lines_ok,
+            "RENDER-COMPAT GATE FAILED: our exported georeferenced .tml did not produce a \
+             ProjectGeoJSON for commit {hexsha} (points status={points_status}, lines \
+             status={lines_status}). SpeleoDB's openspeleo_lib did not accept our exporter \
+             output — fix the exporter or fast-track the #219 GeoJSON-acceptance ask before \
+             building P1 render/push on this path."
+        );
+    }
+
+    /// #184 (single-account): a push with **no** georeferenced anchor still
+    /// succeeds (the push is never blocked — the D2 "no-GPS-anchor" banner case)
+    /// but generates no new render for that commit. OBSERVATIONAL: the exact
+    /// no-anchor detection inside `openspeleo_lib` (does 0/0 count as "no known
+    /// anchor"?) is what this spike records; it asserts only the load-bearing
+    /// invariant (the push is not blocked) and prints the render statuses so the
+    /// D2 behavior is captured in the run log.
+    #[test]
+    #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
+    #[expect(
+        clippy::expect_used,
+        clippy::print_stderr,
+        reason = "ignored live integration test"
+    )]
+    fn live_render_compat_no_anchor_records_geojson_state() {
+        let Some((url, email, password)) = live_env() else {
+            eprintln!(
+                "skipping live_render_compat_no_anchor: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
+            );
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let name = format!("stalagmight-noanchor-{}", uuid::Uuid::new_v4());
+        let project_id = client::create_project(&url, &token, false, &name)
+            .expect("create project")
+            .id;
+        let cleanup = ProjectCleanup {
+            url: &url,
+            token: &token,
+            id: project_id,
+        };
+
+        let project = build_render_project(None); // no zero datum → 0/0 START
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tml = dir.path().join("ariane.tml");
+        crate::export::tml::export_tml(&project, &tml).expect("export un-georeferenced .tml");
+
+        let stalx = std::path::Path::new(SEED_FIXTURE);
+        client::acquire_lock(&url, &token, false, &cleanup.id).expect("acquire mutex");
+        let uploaded = client::upload_auto(
+            &url,
+            &token,
+            false,
+            &cleanup.id,
+            stalx,
+            &tml,
+            "render-compat: no-anchor push",
+        )
+        .expect("no-anchor upload must still succeed (push is never blocked, D2)");
+        let hexsha = uploaded
+            .latest_commit
+            .as_ref()
+            .expect("200 upload must carry the new commit")
+            .id
+            .clone();
+        if let Err(e) = client::release_lock(&url, &token, false, &cleanup.id) {
+            eprintln!("cleanup: failed to release lock: {e:?}");
+        }
+
+        let (points_status, _) = fetch_ogc_items(&url, &token, &hexsha, "points");
+        let (lines_status, _) = fetch_ogc_items(&url, &token, &hexsha, "lines");
+        eprintln!(
+            "render-compat no-anchor: commit={hexsha} points status={points_status} \
+             lines status={lines_status} (expect non-200 / 404 → no render → D2 banner path)"
+        );
+    }
+
+    /// #184 / OPEN-1 (single-account): does a bare `.tml` multipart part (no
+    /// explicit `Content-Type`) still upload, or does SpeleoDB reject it? The
+    /// server selects the processor by **extension** (`auto_selector.py`: `.tml`
+    /// → `ArianeTMLFileProcessor`) then validates the part's `Content-Type`
+    /// against `ALLOWED_MIMETYPES = ["application/octet-stream", "application/zip"]`
+    /// (`processors/_impl/ariane.py`; enforced in `processors/artifact.py`
+    /// `assert_valid`) — `text/plain` is NOT allowed. Our production `upload_auto`
+    /// always sends `application/octet-stream`, so this probe pushes the `.tml`
+    /// part WITHOUT an explicit MIME to discover what `ureq` defaults to and
+    /// whether that default is accepted. OBSERVATIONAL: it prints the verdict that
+    /// resolves OPEN-1 (whether the explicit per-part MIME in `client::mime_for`
+    /// is REQUIRED, not just defensive). Asserts only that a real HTTP response
+    /// came back.
+    #[test]
+    #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
+    #[expect(
+        clippy::expect_used,
+        clippy::print_stderr,
+        reason = "ignored live integration test"
+    )]
+    fn live_open1_bare_tml_mime_outcome() {
+        use ureq::unversioned::multipart::{Form, Part};
+
+        let Some((url, email, password)) = live_env() else {
+            eprintln!(
+                "skipping live_open1_bare_tml_mime: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
+            );
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let name = format!("stalagmight-open1-{}", uuid::Uuid::new_v4());
+        let project_id = client::create_project(&url, &token, false, &name)
+            .expect("create project")
+            .id;
+        let cleanup = ProjectCleanup {
+            url: &url,
+            token: &token,
+            id: project_id,
+        };
+        client::acquire_lock(&url, &token, false, &cleanup.id).expect("acquire mutex");
+
+        let project = build_render_project(Some((20.25, -87.5)));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tml = dir.path().join("ariane.tml");
+        crate::export::tml::export_tml(&project, &tml).expect("export georeferenced .tml");
+
+        // A single `.tml` artifact part with NO explicit `.mime_str(...)` — let
+        // ureq pick the Content-Type, then see whether the server accepts it.
+        let part = Part::file(&tml)
+            .expect("part from .tml file")
+            .file_name("ariane.tml");
+        let form = Form::new()
+            .part("artifact", part)
+            .text("message", "OPEN-1: bare .tml mime probe");
+        let upload_url = api_url(&url, &format!("projects/{}/upload/auto/", cleanup.id));
+        let resp = raw_agent()
+            .put(&upload_url)
+            .header("Authorization", &format!("Bearer {token}"))
+            .send(form)
+            .expect("request should reach the server (status branched below)");
+        let status = resp.status().as_u16();
+        eprintln!(
+            "OPEN-1 RESULT: bare .tml part (no explicit Content-Type) → upload HTTP {status}. \
+             Server allows only Content-Type in {{application/octet-stream, application/zip}} for \
+             .tml (ArianeTMLFileProcessor.ALLOWED_MIMETYPES). 400 => explicit per-part MIME is \
+             REQUIRED (the client.rs `mime_for` 'robustness, not a hard requirement' comment is \
+             wrong — correct it); 2xx => ureq's default part Content-Type is already accepted, so \
+             the explicit MIME is belt-and-suspenders."
+        );
+        assert!(
+            (200..500).contains(&status),
+            "expected a real HTTP response from upload/auto, got {status}"
+        );
+
+        if let Err(e) = client::release_lock(&url, &token, false, &cleanup.id) {
+            eprintln!("cleanup: failed to release lock: {e:?}");
+        }
     }
 }

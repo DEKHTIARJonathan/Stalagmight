@@ -860,7 +860,7 @@ impl Database {
         }
 
         let row = self.conn.query_row(
-            "SELECT endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits
+            "SELECT endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, last_edit_at
              FROM speleo_link WHERE id = 1",
             [],
             |row| {
@@ -870,6 +870,7 @@ impl Database {
                     project_name: row.get::<_, String>(2)?,
                     base_commit_sha: row.get::<_, Option<String>>(3)?,
                     has_unpushed_edits: row.get::<_, i64>(4)? != 0,
+                    last_edit_at: row.get::<_, Option<String>>(5)?,
                 })
             },
         );

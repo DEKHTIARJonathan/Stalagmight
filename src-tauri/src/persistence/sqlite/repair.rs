@@ -1,11 +1,122 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use std::path::Path;
 
 use super::{BackupInfo, Database, SalvagedData, SalvagedSection};
 
 impl Database {
+    /// Write a self-contained snapshot of an on-disk `.stalx` to `dest` using
+    /// `VACUUM INTO` (#195).
+    ///
+    /// `VACUUM INTO` produces a single, fully-checkpointed database file in
+    /// rollback (DELETE) journal mode with NO `-wal`/`-journal`/`-shm` sidecar,
+    /// so the snapshot can be uploaded as one blob and reopened with
+    /// [`Database::open_existing`]. It reads the source on its own connection and
+    /// NEVER mutates it (the live project file is left untouched), and it folds in
+    /// any committed WAL frames so the snapshot reflects the source's current
+    /// committed state under either journal mode.
+    ///
+    /// The SpeleoDB push pipeline saves the live project first, then snapshots
+    /// here; the caller clears `has_unpushed_edits` in the snapshot copy before
+    /// upload so the dirty bit never rides to the server.
+    ///
+    /// `dest`'s parent directory is created if missing, and any stale file at
+    /// `dest` is removed first (`VACUUM INTO` refuses to overwrite an existing
+    /// target).
+    pub fn vacuum_snapshot(src: &Path, dest: &Path) -> Result<()> {
+        if !src.exists() {
+            anyhow::bail!("source .stalx does not exist: {}", src.display());
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create snapshot dir {}", parent.display()))?;
+        }
+        // VACUUM INTO fails outright if the target file already exists.
+        if dest.exists() {
+            std::fs::remove_file(dest)
+                .with_context(|| format!("remove stale snapshot {}", dest.display()))?;
+        }
+        let conn = Connection::open(src).context("open source .stalx for snapshot")?;
+        // The destination filename is a bound parameter (supported by VACUUM INTO
+        // since SQLite 3.27); this avoids any path-quoting pitfalls.
+        conn.execute("VACUUM INTO ?1", params![dest.to_string_lossy()])
+            .context("VACUUM INTO snapshot failed")?;
+        Ok(())
+    }
+
+    /// The per-session / per-machine LOCAL tables stripped from a push snapshot:
+    /// none of these are shared project data, so none may ride to collaborators.
+    ///
+    /// - `display_settings` — per-machine VIEW toggles (grid, layer/feature
+    ///   visibility, color mode, grid spacing); a collaborator pulls their own view.
+    /// - `undo_stack` / `redo_stack` — the editor's local edit-session history
+    ///   (#194 b3). NOT shared state, and a *data-corruption* vector if it rode: an
+    ///   adopting collaborator pressing Ctrl-Z would replay the pusher's command
+    ///   (and its `undo_data_json` prior-state payload) against a now-different tree,
+    ///   silently wiping pitch/LRUD/comment/marker/temperature — the same hazard
+    ///   `drop_legacy_undo_history` guards against. Stripping here is what makes
+    ///   every adopt-remote path (`do_load_project_full`) start with a clean slate.
+    /// - `collab_state` — the LOCAL Ariane-collab wiring (sibling `.tml` filesystem
+    ///   path, baseline, per-machine autosave toggle). Meaningless to a remote
+    ///   collaborator and never theirs to inherit.
+    const PUSH_SNAPSHOT_LOCAL_TABLES: &[&str] = &[
+        "display_settings",
+        "undo_stack",
+        "redo_stack",
+        "collab_state",
+    ];
+
+    /// Sanitize a push SNAPSHOT in place (#197/#194) before upload:
+    ///
+    /// - clears `speleo_link.has_unpushed_edits` / `last_edit_at` — the dirty bit is
+    ///   local hand-off state, never server state (the next puller re-stamps it);
+    /// - empties every table in [`Self::PUSH_SNAPSHOT_LOCAL_TABLES`] — per-machine /
+    ///   per-session local state that must not proliferate.
+    ///
+    /// Everything else PROLIFERATES with the project, by design: survey data,
+    /// `project_settings` (shared validation config #57), AND the durable
+    /// project-data tables `imported_file_hashes` / `imported_section_hashes`
+    /// (project-wide import-dedup — collaborators must not re-import the same file)
+    /// and `resolved_warnings` (a resolved warning stays resolved for everyone, like
+    /// a comment). These are NOT stripped — only a writer holding the lock can push,
+    /// so anything in the snapshot is a legitimate editor's change.
+    ///
+    /// Operates on a SNAPSHOT copy via its own connection; the live project file is
+    /// never touched. Statements run independently so a missing table (an older
+    /// snapshot shape) is logged, not fatal.
+    pub fn sanitize_push_snapshot(snapshot: &Path) -> Result<()> {
+        let conn = Connection::open(snapshot).context("open snapshot to sanitize for push")?;
+        // Every statement below runs INDEPENDENTLY + best-effort: a failure of one
+        // (e.g. a missing table on an older snapshot shape) is logged, never aborts,
+        // and — crucially — never skips the others. The undo/redo strip is FIRST
+        // because it is the data-CORRUPTION vector on adopt (#194 b3): it must run
+        // even if the dirty-bit clear below were to fail, which the old ordering
+        // (fatal dirty-clear first) did not guarantee (#197 review). Per-machine /
+        // per-session local tables never proliferate; the names are compile-time
+        // literals (no injection surface).
+        for table in Self::PUSH_SNAPSHOT_LOCAL_TABLES {
+            if let Err(e) = conn.execute(&format!("DELETE FROM {table}"), []) {
+                tracing::warn!(
+                    error = %e,
+                    table = %table,
+                    "sanitize_push_snapshot: failed to strip local-only table from snapshot"
+                );
+            }
+        }
+        // The dirty bit / edit timestamp are local hand-off state, never server state.
+        if let Err(e) = conn.execute(
+            "UPDATE speleo_link SET has_unpushed_edits = 0, last_edit_at = NULL",
+            [],
+        ) {
+            tracing::warn!(
+                error = %e,
+                "sanitize_push_snapshot: failed to clear the dirty bit in the push snapshot"
+            );
+        }
+        Ok(())
+    }
+
     /// Open a database for recovery purposes, skipping integrity checks.
     /// This allows reading whatever data is still accessible from a corrupt file.
     pub fn open_for_recovery(path: &Path) -> Result<Self> {

@@ -21,6 +21,7 @@ pub(super) const PRESERVED_SPELEOLINK_COLUMNS: &[(&str, &str, bool)] = &[
     ("project_name", "TEXT", true),
     ("base_commit_sha", "TEXT", false), // nullable = empty-repo BASE
     ("has_unpushed_edits", "INTEGER", true),
+    ("last_edit_at", "TEXT", false), // v10; nullable = never edited since pull
 ];
 
 impl Database {
@@ -268,10 +269,44 @@ impl Database {
                 project_id TEXT NOT NULL,
                 project_name TEXT NOT NULL,
                 base_commit_sha TEXT,
-                has_unpushed_edits INTEGER NOT NULL DEFAULT 0
+                has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
+                last_edit_at TEXT
             )",
             [],
         )?;
+
+        // Add last_edit_at column to an EXISTING v9 speleo_link (schema v9→v10:
+        // guardrail-7 push-start comparison, #193). CREATE IF NOT EXISTS above is
+        // a no-op when the table already exists, so a pre-v10 table needs the
+        // column added explicitly — same idempotent ALTER pattern as shot uuid.
+        let has_last_edit_at_column: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('speleo_link') WHERE name='last_edit_at'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_last_edit_at_column {
+            self.conn
+                .execute("ALTER TABLE speleo_link ADD COLUMN last_edit_at TEXT", [])?;
+            // Backfill (#197 review): a row already dirtied under v9 has
+            // has_unpushed_edits=1 but no last_edit_at. Without a timestamp,
+            // edits_captured_by_push(None, push_start) is false, so a confirmed push
+            // could NEVER clear that legacy dirty bit — the project would show
+            // un-pushed edits forever and re-push a no-op on every Done. The edit
+            // demonstrably predates any future push, so stamp the Unix epoch
+            // (guaranteed <= any push-start) and let the next confirmed push clear it.
+            // Fresh v10 rows stamp last_edit_at at edit time, so this only ever
+            // touches a pre-existing dirty row during the one-time v9→v10 migration.
+            self.conn.execute(
+                "UPDATE speleo_link SET last_edit_at = '1970-01-01T00:00:00+00:00' \
+                 WHERE has_unpushed_edits = 1 AND last_edit_at IS NULL",
+                [],
+            )?;
+            tracing::info!("Added last_edit_at column to speleo_link table (schema v10)");
+        }
 
         // Add uuid column to shots table (schema v5→v6: per-shot UUIDs
         // for collaboration round-trip identity).  We don't backfill
@@ -678,7 +713,8 @@ impl Database {
                 project_id TEXT NOT NULL,
                 project_name TEXT NOT NULL,
                 base_commit_sha TEXT,
-                has_unpushed_edits INTEGER NOT NULL DEFAULT 0
+                has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
+                last_edit_at TEXT
             );
 
             -- Undo/redo stack (BLOB columns hold gzip-compressed JSON)

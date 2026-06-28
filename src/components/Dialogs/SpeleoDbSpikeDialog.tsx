@@ -1,14 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type {
+  DoneResult,
   SpeleoLoginResult,
   SpeleoOpenResult,
   SpeleoProjectSummary,
   SpeleoSessionStatus,
+  StartEditingResult,
+  UpdateResult,
 } from '../../types/ipc.generated';
 
 /**
@@ -20,6 +23,7 @@ import type {
  */
 export default function SpeleoDbSpikeDialog() {
   const closeDialog = useUIStore((s) => s.closeDialog);
+  const showToast = useUIStore((s) => s.showToast);
   // loadProject (not the deprecated openProject) drives the LoadingState progress UI.
   const loadProject = useProjectStore((s) => s.loadProject);
 
@@ -40,6 +44,15 @@ export default function SpeleoDbSpikeDialog() {
   const [keychainBacked, setKeychainBacked] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Dev sync trigger (#194/#197): the JSON outcome of the last sync action, shown
+  // so the backend hand-off can be driven + verified by hand. Throwaway (#204).
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+  // Tracks mount state so runSync's post-await setState is skipped after an
+  // Escape/backdrop close (which isn't gated by `busy`) tears the dialog down.
+  const mountedRef = useRef(true);
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
 
   const refreshProjects = async (isCancelled: () => boolean = () => false) => {
     const list = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
@@ -122,6 +135,17 @@ export default function SpeleoDbSpikeDialog() {
         latestCommitSha: project.latest_commit_sha ?? null,
       });
       localPath = result.local_path;
+      // #193 b8: a write lock held by THIS account at open time means a second
+      // same-account session is editing the project. Warn — the ancestry self-heal
+      // assumes a single same-account session, so a concurrent one risks dirty-bit
+      // misattribution. (keyed so repeat opens don't stack duplicate toasts.)
+      if (result.concurrent_session) {
+        showToast(
+          'This project is already locked by your account in another session. ' +
+            'Editing it from two sessions at once is unsupported and can lose edits.',
+          'speleodb-concurrent-session',
+        );
+      }
     } catch (e) {
       // The pull failed while the dialog is still mounted — surface it here.
       setError(getErrorMessage(e, 'Open failed'));
@@ -165,6 +189,50 @@ export default function SpeleoDbSpikeDialog() {
       setBusy(false);
     }
   };
+
+  // --- Dev sync trigger (#194/#197): act on the currently-open project ---
+  // These drive the single-writer hand-off by hand. Open a remote project first
+  // (the Open button closes this dialog), then reopen it to use these.
+
+  // A fast_forward reloads a DIFFERENT project tree backend-side (close_project +
+  // do_load_project_full), so the frontend store must re-load it or it would show
+  // the pre-FF project. start_editing/update can return this; done never does.
+  const fastForwardPath = (r: unknown): string | null =>
+    typeof r === 'object' && r !== null && (r as { kind?: unknown }).kind === 'fast_forwarded'
+      ? (r as { local_path: string }).local_path
+      : null;
+
+  const runSync = async (label: string, op: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    setSyncResult(null);
+    try {
+      const result = await op();
+      const ffPath = fastForwardPath(result);
+      if (ffPath) {
+        // Backend swapped the open project in place; hand off exactly like
+        // handleOpen so the store matches. closeDialog unmounts us — do not touch
+        // state after it.
+        closeDialog();
+        await loadProject(ffPath);
+        return;
+      }
+      // Escape/backdrop close isn't gated by `busy`, so skip the writes if the
+      // dialog was torn down mid-flight (these calls do network round-trips).
+      if (mountedRef.current) setSyncResult(`${label}: ${JSON.stringify(result)}`);
+    } catch (e) {
+      if (mountedRef.current) setError(getErrorMessage(e, `${label} failed`));
+    } finally {
+      if (mountedRef.current) setBusy(false);
+    }
+  };
+
+  const handleStartEditing = () =>
+    runSync('start_editing', () => invokeIpc<StartEditingResult>('speleodb_start_editing'));
+  const handleDone = () =>
+    runSync('done', () => invokeIpc<DoneResult>('speleodb_done', { message: null }));
+  const handleUpdate = () =>
+    runSync('update', () => invokeIpc<UpdateResult>('speleodb_update'));
 
   return (
     <DialogWrapper
@@ -306,6 +374,47 @@ export default function SpeleoDbSpikeDialog() {
                 ))}
               </ul>
             )}
+
+            <div
+              className="space-y-2 pt-4 border-t border-border"
+              data-testid="speleodb-sync-actions"
+            >
+              <p className="text-xs text-text-secondary">
+                Sync (dev) — acts on the currently-open project. Open a project (this
+                dialog closes), then reopen it and use these.
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => void handleStartEditing()}
+                  disabled={busy}
+                  data-testid="speleodb-start-editing-button"
+                >
+                  Start editing
+                </Button>
+                <Button
+                  onClick={() => void handleDone()}
+                  disabled={busy}
+                  data-testid="speleodb-done-button"
+                >
+                  Done
+                </Button>
+                <Button
+                  onClick={() => void handleUpdate()}
+                  disabled={busy}
+                  data-testid="speleodb-update-button"
+                >
+                  Update
+                </Button>
+              </div>
+              {syncResult && (
+                <pre
+                  className="text-xs text-text-secondary whitespace-pre-wrap break-all"
+                  data-testid="speleodb-sync-result"
+                >
+                  {syncResult}
+                </pre>
+              )}
+            </div>
 
             <div className="flex justify-end gap-2 pt-4 border-t border-border">
               <Button onClick={() => void handleRefresh()} disabled={busy}>

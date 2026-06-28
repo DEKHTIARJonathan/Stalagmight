@@ -21,8 +21,8 @@ use crate::core::AppState;
 // `err.action`. The orchestration `AppState::speleodb_*` methods build the DTO at
 // the call site where the endpoint is known.
 use crate::speleodb::{
-    SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
-    SpeleoSessionStatus,
+    DoneResult, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
+    SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -91,6 +91,32 @@ pub async fn speleodb_open_project(
 #[tauri::command]
 pub async fn speleodb_logout(app: AppHandle) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_logout).await
+}
+
+/// Acquire the write lock on the open remote project and reconcile it against the
+/// server (#194). Enables editing on a clean reconcile; reports divergence,
+/// contention (locked-by), or an error otherwise.
+#[tauri::command]
+pub async fn speleodb_start_editing(app: AppHandle) -> Result<StartEditingResult, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_start_editing).await
+}
+
+/// Push the open project's edits (if any) and release the lock, returning to
+/// read-only (#197). `message` is the commit message (a default is used when
+/// blank). On divergence / an ambiguous push the lock + dirty bit are retained.
+#[tauri::command]
+pub async fn speleodb_done(
+    app: AppHandle,
+    message: Option<String>,
+) -> Result<DoneResult, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_done(message)).await
+}
+
+/// Read-only refresh of the open project against the server (#197): no lock is
+/// taken (UpToDate / FastForward / DivergenceNeeded).
+#[tauri::command]
+pub async fn speleodb_update(app: AppHandle) -> Result<UpdateResult, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_update).await
 }
 
 /// Report whether the backend already holds a usable token (and for whom). The
