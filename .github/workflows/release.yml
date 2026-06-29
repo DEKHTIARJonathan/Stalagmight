@@ -1,8 +1,9 @@
 name: Release
 
 # Cross-platform release build (#226 P1). Produces installers for macOS
-# (universal .dmg/.app), Windows (.msi/.exe), and Linux (.deb/.rpm/.AppImage)
-# from one tag, via tauri-action's matrix.
+# (Apple Silicon / arm64 .dmg/.app), Windows (.msi/.exe), and Linux
+# (.deb/.rpm/.AppImage) from one tag, via tauri-action's matrix. Every job runs
+# on a stock GitHub-HOSTED runner — no self-hosted / third-party runner.
 #
 # Triggers:
 #   - push a `v*` tag  → build all platforms, create a DRAFT GitHub Release for
@@ -29,16 +30,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: macos-latest # universal: Apple Silicon + Intel in one .dmg
-            args: '--target universal-apple-darwin --features telemetry'
-            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
-          - platform: ubuntu-22.04 # 22.04 (not -latest/24.04) for broad glibc compatibility
-            args: '--features telemetry'
-            rust-targets: ''
-          - platform: windows-latest
-            args: '--features telemetry'
-            rust-targets: ''
+        # All GitHub-HOSTED runners. macos-latest is Apple Silicon (arm64), so the
+        # mac build is native arm64 — no self-hosted runner, no universal/lipo step.
+        # ubuntu-22.04 (not -latest/24.04) for broad AppImage glibc compatibility.
+        platform: [macos-latest, ubuntu-22.04, windows-latest]
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 60
     steps:
@@ -49,8 +44,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust-targets }}
 
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -95,7 +88,7 @@ jobs:
           releaseDraft: true # review + publish manually after smoke-testing
           prerelease: ${{ contains(github.ref_name, '-rc') }}
           tauriScript: pnpm tauri
-          args: ${{ matrix.args }}
+          args: --features telemetry
 
       # Dry run only: keep the built bundles as workflow artifacts so the matrix
       # can be validated without creating a release.
@@ -104,8 +97,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bundles-${{ matrix.platform }}
-          path: |
-            src-tauri/target/release/bundle/**
-            src-tauri/target/*/release/bundle/**
+          path: src-tauri/target/release/bundle/**
           if-no-files-found: error
           retention-days: 7
