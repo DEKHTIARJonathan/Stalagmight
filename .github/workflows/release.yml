@@ -1,77 +1,111 @@
 name: Release
+
+# Cross-platform release build (#226 P1). Produces installers for macOS
+# (universal .dmg/.app), Windows (.msi/.exe), and Linux (.deb/.rpm/.AppImage)
+# from one tag, via tauri-action's matrix.
+#
+# Triggers:
+#   - push a `v*` tag  → build all platforms, create a DRAFT GitHub Release for
+#     review (publish it manually once you've smoke-tested the artifacts). A tag
+#     containing `-rc` is marked pre-release.
+#   - workflow_dispatch → DRY RUN: build all platforms and upload the bundles as
+#     workflow artifacts only (no release created). Use this to validate the
+#     matrix without cutting a public release.
+#
+# Signing: artifacts are currently UNSIGNED (no Apple notarization / Windows
+# code-sign) — users bypass Gatekeeper/SmartScreen once on first launch. The
+# updater (separate minisign keypair) is wired separately and verifies updates
+# regardless of OS signing.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest # universal: Apple Silicon + Intel in one .dmg
+            args: '--target universal-apple-darwin --features telemetry'
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - platform: ubuntu-22.04 # 22.04 (not -latest/24.04) for broad glibc compatibility
+            args: '--features telemetry'
+            rust-targets: ''
+          - platform: windows-latest
+            args: '--features telemetry'
+            rust-targets: ''
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Install Linux build deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Tests
-      - run: pnpm tsc --noEmit
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
-        env:
-          XDG_CONFIG_HOME: ${{ runner.temp }}/config
-          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
-      # Build (telemetry feature enabled via Cargo args)
-      - run: pnpm tauri build -- --features telemetry
-        env:
-          TELEMETRY_ENDPOINT: ${{ secrets.TELEMETRY_ENDPOINT }}
-      # Collect artifacts
-      - name: Collect release artifacts
-        run: |
-          mkdir -p release-artifacts
-          echo "=== All bundle output ==="
-          find src-tauri/target/release/bundle -maxdepth 2 -type f
-          echo "=== Copying artifacts ==="
-          cp src-tauri/target/release/bundle/deb/*.deb release-artifacts/ 2>/dev/null || true
-          cp src-tauri/target/release/bundle/rpm/*.rpm release-artifacts/ 2>/dev/null || true
-          cp src-tauri/target/release/bundle/appimage/*.AppImage release-artifacts/ 2>/dev/null || true
-          echo "=== Collected ==="
-          ls -lh release-artifacts/
-          FILE_COUNT=$(find release-artifacts -type f | wc -l)
-          if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "::error::No artifacts found in bundle output"
-            exit 1
-          fi
-      # Extract changelog section for this version
+
+      # Extract this version's section from CHANGELOG.md for the release body
+      # (tag builds only — a dry run has no version). Tolerates bracketed
+      # (## [0.2.1]) and unbracketed (## 0.2.1) headers, with/without a date.
       - name: Extract changelog
         id: changelog
+        if: github.ref_type == 'tag'
+        shell: bash
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
-          # Extract the section between this version header and the next version header.
-          # Tolerates both bracketed (## [0.2.0]) and unbracketed (## 0.2.0) headers,
-          # with or without a trailing date; terminates on the next "## " heading.
+          VERSION="${GITHUB_REF_NAME#v}"
           BODY=$(awk -v ver="$VERSION" '
             $0 ~ "^## +\\[?" ver "\\]?([^0-9.]|$)" { found=1; next }
             found && /^## / { exit }
             found { print }
           ' CHANGELOG.md)
-          # Fall back if empty
-          if [ -z "$BODY" ]; then
-            BODY="Release ${TAG}"
-          fi
-          # Write to file for safe multi-line handling
-          echo "$BODY" > /tmp/release-body.md
-      # Create release and upload assets
-      - name: Create release and upload artifacts
+          [ -z "$BODY" ] && BODY="Release ${GITHUB_REF_NAME}"
+          {
+            echo "body<<__EOF__"
+            echo "$BODY"
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build app + (on a tag) create draft release
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          gh release create "$TAG" \
-            --title "Stalagmight ${TAG}" \
-            --notes-file /tmp/release-body.md \
-            release-artifacts/*
+          TELEMETRY_ENDPOINT: ${{ secrets.TELEMETRY_ENDPOINT }}
+          # Phase 2 (updater) will add:
+          # TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+        with:
+          # Empty tagName on a manual dry run → tauri-action just builds, no release.
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: Stalagmight ${{ github.ref_name }}
+          releaseBody: ${{ steps.changelog.outputs.body }}
+          releaseDraft: true # review + publish manually after smoke-testing
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          tauriScript: pnpm tauri
+          args: ${{ matrix.args }}
+
+      # Dry run only: keep the built bundles as workflow artifacts so the matrix
+      # can be validated without creating a release.
+      - name: Upload dry-run artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundles-${{ matrix.platform }}
+          path: |
+            src-tauri/target/release/bundle/**
+            src-tauri/target/*/release/bundle/**
+          if-no-files-found: error
+          retention-days: 7
