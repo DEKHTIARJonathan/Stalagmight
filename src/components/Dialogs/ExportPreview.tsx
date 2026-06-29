@@ -8,6 +8,9 @@ interface ExportPreviewProps {
    *  `preview_svg_export` is pixel-for-pixel what the backend will write
    *  for these options, so preview and export cannot drift. */
   options: ExportImageOptions;
+  /** When true, fill the parent container instead of the fixed preview box.
+   *  Used by the large WYSIWYG preview in the Export-mode map area. */
+  fill?: boolean;
 }
 
 /** Debounce delay in milliseconds */
@@ -21,7 +24,7 @@ const PREVIEW_SIZE = 300;
  * `preview_svg_export` command (debounced) so the preview is the *exact*
  * markup the export will write — no separate rendering pipeline.
  */
-export default function ExportPreview({ options }: ExportPreviewProps) {
+export default function ExportPreview({ options, fill = false }: ExportPreviewProps) {
   const project = useProjectStore((state) => state.project);
 
   const [svg, setSvg] = useState<string | null>(null);
@@ -56,10 +59,11 @@ export default function ExportPreview({ options }: ExportPreviewProps) {
 
     const seq = ++requestSeqRef.current;
     timeoutRef.current = setTimeout(() => {
-      // Always request SVG format for preview; user-selected format only
-      // affects the saved file (PNG/PDF are SVG-derived anyway).
-      const previewOptions: ExportImageOptions = { ...options, format: 'svg' };
-      invokeIpc<string>('preview_svg_export', { options: previewOptions }, {
+      // `preview_svg_export` always returns SVG markup regardless of `format`
+      // (PNG/PDF are SVG-derived), but the format DOES drive whether colors are
+      // emitted (SVG is always monochrome). Pass the real options through so the
+      // preview matches what the chosen format will actually write.
+      invokeIpc<string>('preview_svg_export', { options }, {
         purpose: 'render export preview',
       })
         .then((markup) => {
@@ -87,8 +91,10 @@ export default function ExportPreview({ options }: ExportPreviewProps) {
   return (
     <div
       data-testid="export-preview"
-      className="relative border border-border rounded overflow-hidden bg-white flex items-center justify-center"
-      style={{ width: PREVIEW_SIZE, height: PREVIEW_SIZE }}
+      className={`relative border border-border rounded overflow-hidden bg-white flex items-center justify-center ${
+        fill ? 'w-full h-full' : ''
+      }`}
+      style={fill ? undefined : { width: PREVIEW_SIZE, height: PREVIEW_SIZE }}
     >
       {/* Inline SVG — the backend output is `<?xml ...?><svg .../>`. The
           wrapper div constrains the size; the SVG carries its own viewBox

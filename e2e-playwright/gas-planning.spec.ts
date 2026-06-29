@@ -415,12 +415,12 @@ test.describe('Gas planning', () => {
       .toBeGreaterThan(0);
   });
 
-  test('carousel switches Survey/Plan/Export; Plan is read-only; Export is a stub @smoke', async ({
+  test('carousel switches Survey/Plan/Export; Plan is read-only; Export has controls @smoke', async ({
     page,
   }) => {
     await expect(page.locator('[data-testid="mode-carousel"]')).toBeVisible();
 
-    // Export directly from Survey: the right Dock must reveal the stub (it would stay
+    // Export directly from Survey: the right Dock must reveal the panel (it would stay
     // hidden in a closed dock if entry didn't reveal it).
     await enterMode(page, 'export');
     expect(await appMode(page)).toBe('export');
@@ -446,11 +446,13 @@ test.describe('Gas planning', () => {
     await page.locator('[data-testid="plan-tab-profile"]').click();
     await expect(page.locator('[data-testid="plan-profile-stub"]')).toBeVisible();
 
-    // Export: stub panel, no gas/plan tables.
+    // Export: panel hosts the real export controls (no longer a stub), no gas/plan tables.
     await enterMode(page, 'export');
     expect(await appMode(page)).toBe('export');
     await expect(page.locator('[data-testid="export-panel"]')).toBeVisible({ timeout: 3000 });
-    await expect(page.locator('[data-testid="export-svg-button"]')).toBeVisible();
+    await expect(
+      page.locator('[data-testid="export-panel"]').getByTestId('export-button'),
+    ).toBeVisible();
     await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="plan-tables-panel"]')).toHaveCount(0);
 
@@ -458,6 +460,35 @@ test.describe('Gas planning', () => {
     await enterMode(page, 'survey');
     expect(await appMode(page)).toBe('survey');
     await expect(page.locator('[data-testid="export-panel"]')).toHaveCount(0);
+  });
+
+  test('Export panel: inline controls, large WYSIWYG preview, colors are raster-only', async ({
+    page,
+  }) => {
+    await enterMode(page, 'export');
+    expect(await appMode(page)).toBe('export');
+
+    const panel = page.locator('[data-testid="export-panel"]');
+    await expect(panel).toBeVisible({ timeout: 3000 });
+
+    // Defaults to the image type → the large WYSIWYG preview overlays the map area.
+    await expect(page.locator('[data-testid="export-mode-preview"]')).toBeVisible();
+    await expect(panel.getByTestId('export-type-image')).toBeChecked();
+
+    // Customize toggles are present; colors are enabled for the default PNG.
+    await expect(panel.getByTestId('export-show-labels')).toBeVisible();
+    const colorToggle = panel.getByTestId('export-show-colors');
+    await expect(colorToggle).toBeEnabled();
+
+    // Switch the format to SVG → colors disable (SVG is always monochrome).
+    const formatSelect = panel.getByTestId('image-format-select');
+    await formatSelect.locator('button').first().click();
+    await page.getByRole('listbox').locator('[role="option"]:has-text("SVG")').click();
+    await expect(colorToggle).toBeDisabled();
+
+    // Switch to the data export type → the map preview overlay goes away.
+    await panel.getByTestId('export-type-data').click();
+    await expect(page.locator('[data-testid="export-mode-preview"]')).toHaveCount(0);
   });
 
   test('Plan map is read-only: Delete on a selection opens no confirm dialog @smoke', async ({

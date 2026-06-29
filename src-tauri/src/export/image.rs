@@ -57,11 +57,34 @@ pub enum ImageFormat {
     Pdf,
 }
 
+/// Serde default for [`ExportImageOptions::show_penetration_labels`]: labels
+/// are drawn unless a caller explicitly opts out, so an options blob that
+/// predates the field keeps the original behavior.
+fn default_true() -> bool {
+    true
+}
+
+/// Returns `color` when it is a safe CSS hex color (`#rgb` or `#rrggbb`),
+/// else `#000000`. Section colors are user data written verbatim into the
+/// SVG attribute, so they must be validated to avoid attribute injection.
+fn sanitize_hex_color(color: &str) -> &str {
+    let bytes = color.as_bytes();
+    if matches!(bytes.len(), 4 | 7)
+        && bytes[0] == b'#'
+        && bytes[1..].iter().all(u8::is_ascii_hexdigit)
+    {
+        color
+    } else {
+        "#000000"
+    }
+}
+
 /// Options for SVG / PNG / PDF map image export.
 ///
-/// The export is a minimal black-on-white stick map; the only knobs are the
-/// output format, the PNG DPI, and the branching-factor threshold that
-/// decides where to split between the two stroke widths.
+/// The export is a minimal black-on-white stick map; the knobs are the output
+/// format, the PNG DPI, the branching-factor threshold that decides where to
+/// split between the two stroke widths, and whether to draw the
+/// penetration-distance labels.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 pub struct ExportImageOptions {
     /// Image format (png, svg, pdf).
@@ -71,6 +94,16 @@ pub struct ExportImageOptions {
     /// Branching-factor threshold. Segments whose branching factor is
     /// `>= branching_threshold` are drawn thick; the rest are drawn thin.
     pub branching_threshold: u32,
+    /// Whether to draw the penetration-distance labels at each thick segment's
+    /// deepest reachable station. Defaults to `true` (the historical behavior).
+    #[serde(default = "default_true")]
+    pub show_penetration_labels: bool,
+    /// Whether to color shots by their section color. Opt-in (default `false`)
+    /// so the export stays a minimal black-on-white stick map unless asked.
+    /// **Raster-only**: ignored for SVG, which is always monochrome (see
+    /// [`generate_svg_string`]).
+    #[serde(default)]
+    pub show_colors: bool,
 }
 
 impl Default for ExportImageOptions {
@@ -79,6 +112,8 @@ impl Default for ExportImageOptions {
             format: ImageFormat::Png,
             dpi: 300,
             branching_threshold: 2,
+            show_penetration_labels: true,
+            show_colors: false,
         }
     }
 }
@@ -638,11 +673,17 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
     // Every shot in a single run shares the same segment_uf root (the run
     // is unioned by its own non-ref shots), so the run's stroke width is
     // well-defined by looking at any one shot's segment.
+    // Color shots by their section color only for raster output; SVG export is
+    // always a clean monochrome stick map regardless of the toggle.
+    let colored = options.show_colors && !matches!(options.format, ImageFormat::Svg);
     let _ = writeln!(
         svg,
         r##"<g class="shots" stroke="#000000" fill="none" stroke-linejoin="round" stroke-linecap="round">"##,
     );
     for section in &project.sections {
+        // Per-section stroke override (computed once); `None` inherits the
+        // group's black stroke for the monochrome path.
+        let section_stroke = colored.then(|| sanitize_hex_color(&section.color));
         let mut i = 0;
         while i < section.shots.len() {
             if section.shots[i].is_reference {
@@ -720,10 +761,20 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
                     }
                     let _ = write!(pts_str, "{x:.2},{y:.2}");
                 }
-                let _ = writeln!(
-                    svg,
-                    r#"<polyline points="{pts_str}" stroke-width="{stroke_width}"/>"#,
-                );
+                match section_stroke {
+                    Some(stroke) => {
+                        let _ = writeln!(
+                            svg,
+                            r#"<polyline points="{pts_str}" stroke="{stroke}" stroke-width="{stroke_width}"/>"#,
+                        );
+                    }
+                    None => {
+                        let _ = writeln!(
+                            svg,
+                            r#"<polyline points="{pts_str}" stroke-width="{stroke_width}"/>"#,
+                        );
+                    }
+                }
             }
             // Advance past the run, but never less than one — protects
             // against a station-lookup failure on the run's first shot
@@ -768,7 +819,7 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
         .filter(|(_, s)| s.is_zero_datum)
         .map(|(i, _)| i)
         .collect();
-    if !zero_datum_indices.is_empty() {
+    if options.show_penetration_labels && !zero_datum_indices.is_empty() {
         // Use the project's shared along-cave penetration computation —
         // same metric as `Project::calculate_penetration` (and therefore
         // the Survey overview panel), so the map labels and the panel
@@ -1201,6 +1252,8 @@ mod tests {
                 format: ImageFormat::Png,
                 dpi: 72,
                 branching_threshold: 2,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -1270,6 +1323,8 @@ mod tests {
             format: ImageFormat::Png,
             dpi: 72,
             branching_threshold: 2,
+            show_penetration_labels: true,
+            show_colors: false,
         };
         export_png(&project, &path, &options).unwrap();
         let contents = std::fs::read(&path).unwrap();
@@ -1297,6 +1352,8 @@ mod tests {
                     format: ImageFormat::Png,
                     dpi,
                     branching_threshold: 2,
+                    show_penetration_labels: true,
+                    show_colors: false,
                 },
             )
             .unwrap();
@@ -1354,6 +1411,8 @@ mod tests {
             format: ImageFormat::Png,
             dpi: 2000,
             branching_threshold: 2,
+            show_penetration_labels: true,
+            show_colors: false,
         };
         let err = export_png(&project, &path, &options)
             .unwrap_err()
@@ -1370,6 +1429,8 @@ mod tests {
             format: ImageFormat::Png,
             dpi: 0,
             branching_threshold: 2,
+            show_penetration_labels: true,
+            show_colors: false,
         };
         let err = export_png(&project, &path, &options)
             .unwrap_err()
@@ -1458,6 +1519,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 1,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -1567,6 +1630,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 3, // trunk thick, children thin
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -1674,6 +1739,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 3,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -1769,6 +1836,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 1,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -1786,6 +1855,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 2,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -1897,6 +1968,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 3,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -1974,6 +2047,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 1,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -1992,6 +2067,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 2,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -2067,6 +2144,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 2,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -2144,6 +2223,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 2,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -2204,6 +2285,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 1,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -2225,6 +2308,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 1,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -2257,6 +2342,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 0,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -2339,6 +2426,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 0,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -2420,6 +2509,8 @@ mod tests {
                 format: ImageFormat::Svg,
                 dpi: 72,
                 branching_threshold: 1,
+                show_penetration_labels: true,
+                show_colors: false,
             },
         )
         .unwrap();
@@ -2430,7 +2521,9 @@ mod tests {
     // ---- Removed features ARE gone ----------------------------------------
 
     #[test]
-    fn no_section_color_in_output() {
+    fn no_section_color_in_default_output() {
+        // Color is opt-in: with the default options (show_colors = false) the
+        // export stays a monochrome stick map.
         let mut project = Project::new("Colored".to_string(), None);
         project.add_section(SectionData {
             name: Some("Red".to_string()),
@@ -2441,8 +2534,100 @@ mod tests {
         let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
         assert!(
             !svg.contains("#ff0000"),
-            "section color must not bleed in: {svg}"
+            "section color must not bleed in by default: {svg}"
         );
+    }
+
+    #[test]
+    fn section_colors_only_for_raster_when_enabled() {
+        let mut project = Project::new("Colored".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Red".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![make_shot(10.0, 0.0, false)],
+            ..Default::default()
+        });
+
+        // Raster (PNG) + colors on → the shot is drawn in the section color.
+        let png = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Png,
+                show_colors: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            png.contains(r##"stroke="#ff0000""##),
+            "raster export with colors on should use the section color: {png}"
+        );
+
+        // SVG stays monochrome even with colors on (the raster-only invariant).
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                show_colors: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains("#ff0000"),
+            "SVG export must stay monochrome regardless of the colors toggle: {svg}"
+        );
+    }
+
+    #[test]
+    fn penetration_labels_toggle_off_suppresses_labels() {
+        let mut project = project_with_one_ref_separator();
+        let section_id = project.sections[0].id;
+        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
+        project
+            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .unwrap();
+
+        // Baseline: labels on → the pen-distance group is present.
+        let on = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                branching_threshold: 1,
+                show_penetration_labels: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(on.contains(r#"class="pen-distance""#), "{on}");
+
+        // Labels off → no pen-distance group and no text at all.
+        let off = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                branching_threshold: 1,
+                show_penetration_labels: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !off.contains("pen-distance"),
+            "labels off should suppress the pen-distance group: {off}"
+        );
+        assert!(
+            !off.contains("<text"),
+            "labels off should emit no text: {off}"
+        );
+    }
+
+    #[test]
+    fn sanitize_hex_color_rejects_non_hex() {
+        assert_eq!(sanitize_hex_color("#ff0000"), "#ff0000");
+        assert_eq!(sanitize_hex_color("#abc"), "#abc");
+        assert_eq!(sanitize_hex_color("red"), "#000000");
+        assert_eq!(sanitize_hex_color(r#""/><script>"#), "#000000");
+        assert_eq!(sanitize_hex_color("#ff00"), "#000000"); // wrong length
+        assert_eq!(sanitize_hex_color("#gggggg"), "#000000"); // non-hex digits
     }
 
     #[test]
