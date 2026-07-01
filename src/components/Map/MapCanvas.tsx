@@ -3766,20 +3766,32 @@ function MapCanvas() {
         />
       )}
 
-      {/* Fit-to-view button. In section-focus mode (#50) it doubles as the
-          exit-focus control: leaving focus re-fits the whole map anyway, so the
-          same top-left button returns you to the overview. */}
-      <button
-        onClick={() => (focusedSectionId !== null ? exitSectionFocus() : fitToBounds())}
-        className="absolute top-2 left-2 flex items-center gap-1.5 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
-        title={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
-        aria-label={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
-        data-testid="fit-to-view-button"
-      >
-        <FitToViewIcon size={16} />
-        {/* In focus mode the button also exits focus — label it so that's clear. */}
-        {focusedSectionId !== null && <span>{t('sections.focus.exitLabel')}</span>}
-      </button>
+      {/* Fit-to-view button (+ exit-focus, #50). The SpeleoDB read-only badge (T2b)
+          sits to its RIGHT in the same top-left flex row when a remote project is
+          open without the lock — the flex gap tracks the button's variable width
+          (it widens with the exit-focus label). */}
+      <div className="absolute top-2 left-2 flex items-center gap-2">
+        <button
+          onClick={() => (focusedSectionId !== null ? exitSectionFocus() : fitToBounds())}
+          className="flex items-center gap-1.5 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
+          title={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
+          aria-label={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
+          data-testid="fit-to-view-button"
+        >
+          <FitToViewIcon size={16} />
+          {/* In focus mode the button also exits focus — label it so that's clear. */}
+          {focusedSectionId !== null && <span>{t('sections.focus.exitLabel')}</span>}
+        </button>
+        {speleoReadOnly && !placementMode && (
+          <div
+            className="bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-1.5"
+            data-testid="speleodb-readonly-banner"
+          >
+            <LockIcon size={13} />
+            <span className="text-accent font-medium">{t('speleodb.map.readOnlyBadge')}</span>
+          </div>
+        )}
+      </div>
 
       {/* Placement mode indicator */}
       {placementMode && (
@@ -3868,20 +3880,6 @@ function MapCanvas() {
               {t('map.geometry.computing')}
             </span>
           )}
-        </div>
-      )}
-
-      {/* SpeleoDB read-only badge (T2b) — a remote project opened without the write
-          lock. Sits below the closure-adjusted badge / fit-to-view button so both
-          can show. The single logo button (right of the hamburger) drives the
-          lock; this badge is the passive read-only indicator. */}
-      {speleoReadOnly && !placementMode && (
-        <div
-          className="absolute top-12 left-2 bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-1.5"
-          data-testid="speleodb-readonly-banner"
-        >
-          <LockIcon size={13} />
-          <span className="text-accent font-medium">{t('speleodb.map.readOnlyBadge')}</span>
         </div>
       )}
 
