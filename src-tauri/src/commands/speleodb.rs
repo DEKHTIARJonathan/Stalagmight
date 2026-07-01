@@ -21,7 +21,7 @@ use crate::core::AppState;
 // `err.action`. The orchestration `AppState::speleodb_*` methods build the DTO at
 // the call site where the endpoint is known.
 use crate::speleodb::{
-    DoneResult, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
+    DoneResult, PushResult, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
     SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult, UpdateResult,
 };
 
@@ -117,6 +117,17 @@ pub async fn speleodb_done(
 #[tauri::command]
 pub async fn speleodb_update(app: AppHandle) -> Result<UpdateResult, SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_update).await
+}
+
+/// Push the open project's edits to SpeleoDB WITHOUT releasing the lock (T2d):
+/// like `speleodb_done` but the lock is retained so editing continues. `message`
+/// is the commit message (a default is used when blank).
+#[tauri::command]
+pub async fn speleodb_push(
+    app: AppHandle,
+    message: Option<String>,
+) -> Result<PushResult, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_push_only(message)).await
 }
 
 /// Report whether the backend already holds a usable token (and for whom). The

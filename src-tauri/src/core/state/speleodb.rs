@@ -20,8 +20,8 @@ use crate::speleodb::models::SpeleoProjectSummary;
 use crate::speleodb::sync::{self, PushPlan, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
-    DoneResult, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
-    SpeleoOpenResult, SpeleoSessionStatus, StartEditingResult, UpdateResult,
+    DoneResult, PushResult, RemoteState, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoSessionStatus, StartEditingResult, UpdateResult,
 };
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
@@ -401,6 +401,7 @@ impl AppState {
                     has_unpushed_edits: false,
                     permission: None,
                     lock_holder: None,
+                    remote_state: RemoteState::Unknown,
                 });
             }
             Err(e) => return Err(local_dto(e)),
@@ -409,23 +410,35 @@ impl AppState {
         let edit_enabled = self.edit_enabled();
         let has_unpushed_edits = link.has_unpushed_edits;
 
-        // Best-effort network enrichment. Guard the request URL with the same
-        // project-id validation as the edit verbs; on any miss (invalid id, no
-        // token, transport/HTTP error) both fields stay `None`.
-        let (permission, lock_holder) = if validate_project_id(&link.project_id).is_ok() {
-            match self.speleodb_active_token() {
-                Ok((endpoint, token)) => {
-                    let insecure_http = self.speleodb_insecure_http();
-                    match client::get_project(&endpoint, &token, insecure_http, &link.project_id) {
-                        Ok(p) => (p.permission, p.active_mutex.map(|m| m.user)),
-                        Err(_) => (None, None),
+        // Best-effort network enrichment: the user's permission tier + lock holder
+        // (get_project), and the remote-state reconcile verdict (revision topology,
+        // the #202 freshness fold). Guard the request URL with the same project-id
+        // validation as the edit verbs; on any miss (invalid id, no token,
+        // transport/HTTP error) the fields degrade to None / Unknown — the local
+        // truth still returns.
+        let (permission, lock_holder, remote_state) =
+            if validate_project_id(&link.project_id).is_ok() {
+                match self.speleodb_active_token() {
+                    Ok((endpoint, token)) => {
+                        let insecure_http = self.speleodb_insecure_http();
+                        let (permission, lock_holder) = match client::get_project(
+                            &endpoint,
+                            &token,
+                            insecure_http,
+                            &link.project_id,
+                        ) {
+                            Ok(p) => (p.permission, p.active_mutex.map(|m| m.user)),
+                            Err(_) => (None, None),
+                        };
+                        let remote_state =
+                            self.speleodb_remote_state(&endpoint, &token, insecure_http, &link);
+                        (permission, lock_holder, remote_state)
                     }
+                    Err(_) => (None, None, RemoteState::Unknown),
                 }
-                Err(_) => (None, None),
-            }
-        } else {
-            (None, None)
-        };
+            } else {
+                (None, None, RemoteState::Unknown)
+            };
 
         Ok(SpeleoLinkStatus {
             is_remote: true,
@@ -433,7 +446,37 @@ impl AppState {
             has_unpushed_edits,
             permission,
             lock_holder,
+            remote_state,
         })
+    }
+
+    /// Best-effort remote-state (freshness fold, #202): resolve the server tip from
+    /// the revision topology and project the reconcile verdict for the action
+    /// button (T2c). Any failure → `Unknown` — the passive poll must never surface
+    /// an error, and it is NOT routed through `handle_auth` (a transient 401 here
+    /// must not auto-drop the session, mirroring [`Self::speleodb_lock_holder`]).
+    fn speleodb_remote_state(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        link: &crate::models::SpeleoLink,
+    ) -> RemoteState {
+        match head_with_empty_retry(link.base_commit_sha.as_deref(), || {
+            self.speleodb_server_head(endpoint, token, insecure_http, &link.project_id)
+        }) {
+            Ok((tip, commits)) => match sync::reconcile_verdict(
+                link.base_commit_sha.as_deref(),
+                tip.as_deref(),
+                link.has_unpushed_edits,
+                &commits,
+            ) {
+                ReconcileVerdict::UpToDate => RemoteState::UpToDate,
+                ReconcileVerdict::FastForward => RemoteState::RemoteAhead,
+                ReconcileVerdict::Diverged => RemoteState::Conflict,
+            },
+            Err(_) => RemoteState::Unknown,
+        }
     }
 
     /// [Track C] (#188, C5): centralized session-level 401 auto-drop handler.
@@ -1208,6 +1251,46 @@ impl AppState {
             // Stay locked + dirty so the user can reconcile / a retry can recover.
             PushOutcome::Diverged => Ok(DoneResult::DivergenceNeeded),
             PushOutcome::Unconfirmed => Ok(DoneResult::PushUnconfirmed),
+        }
+    }
+
+    /// Push the open project's edits to the server **without** releasing the lock
+    /// (T2d "Push"): the same fence + ancestry-recovery + upload as
+    /// [`Self::speleodb_done`]'s push half, but the mutex is retained in every arm
+    /// so editing continues. A no-op (reports `Pushed`) when not in an edit session
+    /// or when there is nothing to push.
+    pub(crate) fn speleodb_push_only(
+        &self,
+        message: Option<String>,
+    ) -> Result<PushResult, SpeleoErrorDto> {
+        let link = self.speleodb_validated_link()?;
+
+        // Push acts only on an ACTIVE edit session (a held lock); without it there
+        // is no lock and nothing to push — no-op rather than a confusing 403 Fence.
+        if !self.edit_enabled() || !link.has_unpushed_edits {
+            return Ok(PushResult::Pushed);
+        }
+
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+
+        match self.speleodb_push(&endpoint, &token, insecure_http, &link, message)? {
+            PushOutcome::Confirmed => {
+                // A late edit after push_start leaves the dirty bit set (not yet on
+                // the server); report PushUnconfirmed so a retry re-pushes it. The
+                // lock is retained either way.
+                let still_dirty = self
+                    .speleodb_open_link()
+                    .map_err(local_dto)?
+                    .has_unpushed_edits;
+                if still_dirty {
+                    Ok(PushResult::PushUnconfirmed)
+                } else {
+                    Ok(PushResult::Pushed)
+                }
+            }
+            PushOutcome::Diverged => Ok(PushResult::DivergenceNeeded),
+            PushOutcome::Unconfirmed => Ok(PushResult::PushUnconfirmed),
         }
     }
 

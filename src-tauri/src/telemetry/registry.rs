@@ -125,6 +125,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_login",
     "command.speleodb_logout",
     "command.speleodb_open_project",
+    "command.speleodb_push",
     "command.speleodb_session",
     "command.speleodb_start_editing",
     "command.speleodb_update",
@@ -567,7 +568,8 @@ mod tests {
         //   + 4 open-from-speleodb dialog events (#203):
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .open-from-speleodb = 427.
-        assert_eq!(EVENT_NAMES.len(), 427);
+        //   + 1 SpeleoDB push event (T2d): command.speleodb_push = 428.
+        assert_eq!(EVENT_NAMES.len(), 428);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

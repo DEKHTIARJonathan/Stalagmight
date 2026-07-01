@@ -1264,6 +1264,7 @@ pub fn run() {
             commands::speleodb::speleodb_start_editing,
             commands::speleodb::speleodb_done,
             commands::speleodb::speleodb_update,
+            commands::speleodb::speleodb_push,
             // Section commands
             commands::section::create_section,
             commands::section::update_section,

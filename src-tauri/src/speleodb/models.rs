@@ -260,6 +260,43 @@ pub struct SpeleoLinkStatus {
     /// Email of the current lock holder, if any. Best-effort — `None` when
     /// unlocked / logged out / the lookup failed.
     pub lock_holder: Option<String>,
+    /// How the local copy relates to the server tip — drives the action button's
+    /// "remote has an update" / "conflict" states (T2c). Best-effort over the
+    /// revision topology; `Unknown` when logged out / offline / the lookup failed.
+    pub remote_state: RemoteState,
+}
+
+/// The local copy's relationship to the server tip (the reconcile verdict,
+/// projected for the UI). Drives the action button (T2c): `RemoteAhead` → pull,
+/// `Conflict` → resolve. Derived from [`super::sync::reconcile_verdict`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteState {
+    /// Local BASE == server tip (nothing to pull).
+    UpToDate,
+    /// The server advanced and we can fast-forward cleanly (no local edits block it).
+    RemoteAhead,
+    /// The server diverged from BASE and we hold un-pushed edits — needs reconcile.
+    Conflict,
+    /// Not determined (logged out / offline / lookup failed).
+    Unknown,
+}
+
+/// Outcome of `speleodb_push` (T2d): push the open project's edits **without**
+/// releasing the lock (unlike [`DoneResult`], which releases). The lock is
+/// retained in every arm so editing continues.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PushResult {
+    /// Edits pushed (or nothing to push); the lock is retained.
+    Pushed,
+    /// The server diverged: nothing pushed, lock + dirty bit retained to reconcile.
+    DivergenceNeeded,
+    /// Ambiguous push (no confirmed server commit): dirty bit + lock retained so a
+    /// retry recovers via ancestry (#193).
+    PushUnconfirmed,
 }
 
 /// [Track A] #186/D-B2: the structured error the SpeleoDB IPC commands return.
@@ -282,9 +319,9 @@ pub struct SpeleoErrorDto {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        DoneResult, Permission, Project, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus,
-        SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus,
-        StartEditingResult, UpdateResult,
+        DoneResult, Permission, Project, PushResult, RemoteState, SpeleoDbAction, SpeleoErrorDto,
+        SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
+        SpeleoSessionStatus, StartEditingResult, UpdateResult,
     };
 
     #[test]
@@ -350,8 +387,10 @@ mod tests {
             has_unpushed_edits: false,
             permission: Some(Permission::ReadAndWrite),
             lock_holder: Some("holder@example.com".to_owned()),
+            remote_state: RemoteState::RemoteAhead,
         })
         .expect("serialize link status");
+        let push = serde_json::to_string(&PushResult::PushUnconfirmed).expect("serialize push");
 
         for json in [
             &login,
@@ -364,6 +403,7 @@ mod tests {
             &done,
             &update,
             &link_status,
+            &push,
         ] {
             assert!(
                 !json.to_ascii_lowercase().contains("token"),

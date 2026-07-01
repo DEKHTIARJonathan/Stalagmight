@@ -28,8 +28,9 @@ pub(crate) mod tls;
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::SpeleoDbAction;
 pub use models::{
-    DoneResult, Permission, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult, UpdateResult,
+    DoneResult, Permission, PushResult, RemoteState, SpeleoErrorDto, SpeleoLinkStatus,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus,
+    StartEditingResult, UpdateResult,
 };
 
 /// Errors from the SpeleoDB client and dump handling.
