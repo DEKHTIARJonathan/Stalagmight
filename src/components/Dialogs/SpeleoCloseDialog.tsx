@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
@@ -8,21 +9,43 @@ import { DialogWrapper } from './DialogWrapper';
 
 /**
  * Close-flow guard (T2d): shown when closing a SpeleoDB project while you still
- * hold the write lock. Encourages pushing your changes and releasing the lock
- * before leaving (otherwise the lock stays held on the server until you resume or
- * an admin releases it). "Close & keep the lock" is offered for the deliberate
- * "resume later" case.
+ * hold the write lock. This path bypasses the normal unsaved-changes prompt, so
+ * it handles both dirty states itself:
+ * - **unsaved local changes** (`projectStore.isDirty`) → a "Save changes locally"
+ *   checkbox (default on) so closing can't silently drop them;
+ * - **saved locally but not pushed** (`link.hasUnpushedEdits`) → a note that the
+ *   work is safe on disk, it just isn't on SpeleoDB yet.
+ * Then it encourages pushing + releasing the lock before leaving.
  */
 export default function SpeleoCloseDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const link = useSpeleoStore((s) => s.link);
   const closeProject = useProjectStore((s) => s.closeProject);
+  const saveProject = useProjectStore((s) => s.saveProject);
+  const isDirtyLocal = useProjectStore((s) => s.isDirty);
   const { busy, done } = useSpeleoActions();
 
-  const dirty = link?.hasUnpushedEdits ?? false;
+  const sdbDirty = link?.hasUnpushedEdits ?? false;
+  const [saveLocally, setSaveLocally] = useState(isDirtyLocal);
+  const [saving, setSaving] = useState(false);
+  const busyAny = busy || saving;
+
+  // Persist the local .stalx first when there are unsaved changes and the user
+  // left the checkbox on (so neither the push nor the close loses them).
+  const maybeSaveLocally = async () => {
+    if (isDirtyLocal && saveLocally) {
+      setSaving(true);
+      try {
+        await saveProject();
+      } finally {
+        setSaving(false);
+      }
+    }
+  };
 
   const pushReleaseThenClose = async () => {
+    await maybeSaveLocally();
     // done(null) pushes (when dirty) and releases the lock.
     const resolved = await done(null);
     if (resolved) {
@@ -32,6 +55,7 @@ export default function SpeleoCloseDialog() {
   };
 
   const closeKeepingLock = async () => {
+    await maybeSaveLocally();
     closeDialog();
     await closeProject();
   };
@@ -45,16 +69,34 @@ export default function SpeleoCloseDialog() {
     >
       <div className="space-y-4">
         <p className="text-sm text-text-secondary">
-          {dirty ? t('speleodb.close.dirtyMessage') : t('speleodb.close.message')}
+          {sdbDirty ? t('speleodb.close.dirtyMessage') : t('speleodb.close.message')}
         </p>
+
+        {isDirtyLocal ? (
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={saveLocally}
+              onChange={(e) => setSaveLocally(e.target.checked)}
+              className="rounded"
+              data-testid="speleodb-close-save-locally"
+            />
+            {t('speleodb.close.saveLocally')}
+          </label>
+        ) : sdbDirty ? (
+          <p className="text-xs text-text-secondary" data-testid="speleodb-close-saved-locally-note">
+            {t('speleodb.close.savedLocallyNote')}
+          </p>
+        ) : null}
+
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={closeDialog} disabled={busy} data-testid="speleodb-close-cancel">
+          <Button onClick={closeDialog} disabled={busyAny} data-testid="speleodb-close-cancel">
             {t('common.actions.cancel')}
           </Button>
           <Button
             variant="secondary"
             onClick={() => void closeKeepingLock()}
-            disabled={busy}
+            disabled={busyAny}
             data-testid="speleodb-close-keep-lock"
           >
             {t('speleodb.close.keepLock')}
@@ -62,10 +104,10 @@ export default function SpeleoCloseDialog() {
           <Button
             variant="primary"
             onClick={() => void pushReleaseThenClose()}
-            disabled={busy}
+            disabled={busyAny}
             data-testid="speleodb-close-push-release"
           >
-            {dirty ? t('speleodb.close.pushRelease') : t('speleodb.close.release')}
+            {sdbDirty ? t('speleodb.close.pushRelease') : t('speleodb.close.release')}
           </Button>
         </div>
       </div>

@@ -2643,7 +2643,9 @@
       "dirtyMessage": "You have unpushed changes and still hold the SpeleoDB write lock. Push your changes and release the lock before closing?",
       "keepLock": "Close & keep the lock",
       "release": "Release & close",
-      "pushRelease": "Push, release & close"
+      "pushRelease": "Push, release & close",
+      "saveLocally": "Save changes locally before closing",
+      "savedLocallyNote": "Your changes are saved locally — they just haven't been uploaded to SpeleoDB yet."
     },
     "divergence": {
       "title": "Resolve SpeleoDB conflict",
