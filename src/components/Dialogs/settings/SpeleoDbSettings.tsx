@@ -14,13 +14,10 @@ import {
   createNumericHandler,
   parseIntRadix10,
 } from './types';
-import { defaultConfig } from '../../../types/config';
+import { defaultConfig, MIN_POLL_INTERVAL_SECONDS } from '../../../types/config';
 import type { SpeleoSessionStatus, TokenFallback } from '../../../types/ipc.generated';
 import { useSpeleoStore, type PendingLogin } from '../../../store/speleoStore';
 import { invokeIpc } from '../../../utils/ipc';
-
-/** Mirror of `MIN_POLL_INTERVAL_SECONDS` in `config/types.rs` — the UI floor. */
-const MIN_POLL_INTERVAL_SECONDS = 30;
 
 /**
  * SpeleoDB settings category (#205, reworked per feedback A1–A4).
@@ -30,8 +27,9 @@ const MIN_POLL_INTERVAL_SECONDS = 30;
  *   `applyPendingAuth`), matching the rest of Settings. Nothing hits the server
  *   on button click.
  * - **Connection** (staged config): endpoint, token storage, insecure HTTP, and
- *   the remote-state poll interval (floor 30s). Changing the **endpoint** logs
- *   the active session out on blur (A3) — a session on the old server is void.
+ *   the remote-state poll interval (floor 30s). Changing the **endpoint** STAGES a
+ *   logout (A3) — a session on the old server is void — applied on Save with the
+ *   rest, so nothing hits the server until the user commits (fix 9).
  */
 export function SpeleoDbSettings({
   config,
@@ -47,7 +45,6 @@ export function SpeleoDbSettings({
   const setPendingAuth = useSpeleoStore((s) => s.setPendingAuth);
   const clearPendingAuth = useSpeleoStore((s) => s.clearPendingAuth);
   const authError = useSpeleoStore((s) => s.authError);
-  const logout = useSpeleoStore((s) => s.logout);
 
   const speleo = config.speleodb;
   const endpointAtFocus = useRef<string | null>(null);
@@ -78,6 +75,15 @@ export function SpeleoDbSettings({
       onValidationError('speleodb', hasError);
     }
   }, [speleo.poll_interval_seconds, onValidationError]);
+  // Clear a lingering validation error when the panel unmounts (switching category
+  // only renders the active one) — otherwise a strayed error would block Save with
+  // no visible cause.
+  useEffect(
+    () => () => {
+      if (pollHasErrorRef.current) onValidationError('speleodb', false);
+    },
+    [onValidationError],
+  );
 
   // --- staged account (A2) ---
   const login: PendingLogin =
@@ -92,10 +98,14 @@ export function SpeleoDbSettings({
   // --- connection (staged config) ---
   const handleEndpointChange = (v: string) =>
     onChange({ speleodb: { ...speleo, endpoint: v.length > 0 ? v : null } });
-  // A3: switching servers voids a session on the old one — log out on blur.
+  // A3/fix9: switching servers voids a session on the old one — but nothing hits
+  // the server on blur. STAGE the logout so it applies only on Save (like every
+  // other setting), unless the user is already staging a login to the new server.
   const handleEndpointBlur = () => {
     const changed = (speleo.endpoint ?? '') !== (endpointAtFocus.current ?? '');
-    if (changed && session?.loggedIn) void logout();
+    if (changed && session?.loggedIn && pendingAuth?.kind !== 'login') {
+      setPendingAuth({ kind: 'logout' });
+    }
     endpointAtFocus.current = null;
   };
   const handleTokenFallbackChange = createSelectHandler(onChange, (v) => ({

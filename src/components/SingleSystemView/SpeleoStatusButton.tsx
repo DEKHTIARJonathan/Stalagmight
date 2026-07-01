@@ -5,6 +5,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { permissionAtLeast } from '../../utils/speleoPermission';
+import { MIN_POLL_INTERVAL_SECONDS, MAX_POLL_INTERVAL_SECONDS } from '../../types/config';
 import { LockIcon, PencilIcon } from '../common/icons';
 import {
   SpeleoBadgedIcon,
@@ -13,12 +14,6 @@ import {
   ExclamationGlyph,
   CrossedPencilGlyph,
 } from '../common/SpeleoBadgedIcon';
-
-const MIN_POLL_INTERVAL_SECONDS = 30;
-// Cap the poll interval so a huge configured value can't effectively disable the
-// freshness poll (fix 14). setInterval also overflows its 32-bit delay past ~24.8
-// days and would fire immediately; 24h stays well clear.
-const MAX_POLL_INTERVAL_SECONDS = 24 * 60 * 60;
 
 type ButtonKind =
   | 'unlocked'

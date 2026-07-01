@@ -2675,23 +2675,7 @@
       "listFailed": "Could not load projects"
     },
     "editBar": {
-      "readOnly": "Read-only",
-      "editing": "Editing",
-      "lockedBy": "Locked by {{email}}",
-      "startEditing": "Start editing",
-      "done": "Done",
-      "update": "Update",
-      "unpushed": "Unpushed changes",
       "someone": "someone else",
-      "tooltips": {
-        "readOnlyAccess": "You have read-only access to this project.",
-        "lockedByOther": "Locked by {{email}} — they must release it first."
-      },
-      "divergence": {
-        "label": "Divergence",
-        "resolve": "Resolve divergence…",
-        "comingSoon": "Divergence resolution is coming soon (#198)."
-      },
       "toasts": {
         "editing": "You now hold the lock — editing enabled.",
         "lockedBy": "Unable to lock the project right now — it's being edited by {{email}}. Please try again later.",

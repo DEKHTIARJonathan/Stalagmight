@@ -40,6 +40,17 @@ export type {
   SyntacticHighlightPreset,
 } from './ipc.generated';
 
+/**
+ * Bounds for `speleodb.poll_interval_seconds` (the action-shell remote-state
+ * poll). The floor mirrors `MIN_POLL_INTERVAL_SECONDS` in `config/types.rs` (the
+ * Settings UI blocks Save below it; the backend re-clamps a hand-edited file on
+ * load). The ceiling keeps a huge value from effectively disabling the poll (and
+ * clear of setInterval's 32-bit delay overflow). Shared so the Settings panel and
+ * the status button agree.
+ */
+export const MIN_POLL_INTERVAL_SECONDS = 30;
+export const MAX_POLL_INTERVAL_SECONDS = 24 * 60 * 60;
+
 export const defaultConfig: Config = {
   general: {
     auto_save: true,

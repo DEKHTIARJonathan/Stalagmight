@@ -17,9 +17,9 @@ const NETWORK_PREFIX = 'Network error talking to SpeleoDB';
  * `Unable to open the project: …` — except on transport errors, which are
  * returned verbatim so they don't read as "Login failed: Network error…".
  */
-export function humanizeSpeleoError(e: unknown, contextPrefix?: string, fallback?: string): string {
+export function humanizeSpeleoError(e: unknown, contextPrefix?: string): string {
   // Strip a trailing period so "…credentials." reads cleanly after our prefix.
-  const msg = getErrorMessage(e, fallback).replace(/\.\s*$/, '');
+  const msg = getErrorMessage(e).replace(/\.\s*$/, '');
   if (!contextPrefix || msg.startsWith(NETWORK_PREFIX)) return msg;
   return `${contextPrefix}: ${msg}`;
 }
