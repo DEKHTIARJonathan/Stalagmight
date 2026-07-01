@@ -747,6 +747,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // (where the browser's optimistic setLinkOnOpen never ran) and the
         // fast-forward reload path (which routes back through loadProject).
         void useSpeleoStore.getState().refreshLinkStatus();
+        // Also refresh who we are, so the action button can tell our own held lock
+        // from someone else's (otherwise a reopen-from-recents has no session and
+        // every held lock reads as "locked by other").
+        void useSpeleoStore.getState().refreshSession();
 
         // Collaboration mode (non-blocking, best-effort): if the project
         // has collab on AND the sibling .tml was edited externally

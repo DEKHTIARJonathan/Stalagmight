@@ -2243,11 +2243,16 @@ function MapCanvas() {
   // project with no closures where the display falls back to measured geometry. Drop any
   // geometry-mutating tool back to select in either case (appMode is the robust authority;
   // geometryMode only drives which coords are drawn).
+  // A remote SpeleoDB project opened without the write lock is read-only too, so
+  // drop a mutating tool back to select on open (mirrors closure-adjusted).
   useEffect(() => {
-    if ((geometryMode === 'closureAdjusted' || appMode !== 'survey') && isMutatingTool(activeTool)) {
+    if (
+      (geometryMode === 'closureAdjusted' || appMode !== 'survey' || speleoReadOnly) &&
+      isMutatingTool(activeTool)
+    ) {
       setActiveTool('select');
     }
-  }, [geometryMode, appMode, activeTool, setActiveTool]);
+  }, [geometryMode, appMode, speleoReadOnly, activeTool, setActiveTool]);
 
   // Update callbacks when they change
   useEffect(() => {

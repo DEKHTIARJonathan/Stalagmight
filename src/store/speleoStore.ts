@@ -80,6 +80,9 @@ interface SpeleoStore {
   setSession: (s: SpeleoSessionStatus) => void;
   setSessionFromLogin: (r: SpeleoLoginResult) => void;
   clearSession: () => void;
+  /** Query `speleodb_session` and set it (best-effort; runs on project load so the
+      action button knows who we are — e.g. to tell our own lock from another's). */
+  refreshSession: () => Promise<void>;
 
   // --- staged account actions (Settings #205, A2/A3) ---
   /** The login/logout the user staged; applied on the dialog's Save. */
@@ -182,6 +185,15 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         keychainBacked: s.keychain_backed,
       },
     }),
+
+  refreshSession: async () => {
+    try {
+      const status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
+      get().setSession(status);
+    } catch {
+      // Best-effort — leave whatever the store had.
+    }
+  },
 
   setSessionFromLogin: (r) =>
     set({

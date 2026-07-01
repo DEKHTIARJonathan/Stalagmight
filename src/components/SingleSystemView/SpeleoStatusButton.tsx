@@ -57,7 +57,10 @@ export function SpeleoStatusButton() {
   if (!link || appMode !== 'survey') return null;
 
   const myEmail = session?.userEmail ?? null;
-  const lockedByOther = !!link.lockHolder && link.lockHolder !== myEmail;
+  // Only "locked by other" when we KNOW our own email and it differs — otherwise a
+  // held lock (possibly our own) must not read as someone else's. Case-insensitive.
+  const lockedByOther =
+    !!link.lockHolder && !!myEmail && link.lockHolder.toLowerCase() !== myEmail.toLowerCase();
   const conflict = divergence !== null || link.remoteState === 'conflict';
 
   const kind: ButtonKind = conflict
