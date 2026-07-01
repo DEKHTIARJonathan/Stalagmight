@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
@@ -18,6 +18,7 @@ import { defaultConfig, MIN_POLL_INTERVAL_SECONDS } from '../../../types/config'
 import type { SpeleoSessionStatus, TokenFallback } from '../../../types/ipc.generated';
 import { useSpeleoStore, type PendingLogin } from '../../../store/speleoStore';
 import { invokeIpc } from '../../../utils/ipc';
+import { humanizeSpeleoError } from '../../../utils/speleoError';
 
 /**
  * SpeleoDB settings category (#205, reworked per feedback A1–A4).
@@ -44,10 +45,13 @@ export function SpeleoDbSettings({
   const pendingAuth = useSpeleoStore((s) => s.pendingAuth);
   const setPendingAuth = useSpeleoStore((s) => s.setPendingAuth);
   const clearPendingAuth = useSpeleoStore((s) => s.clearPendingAuth);
+  const applyPendingAuth = useSpeleoStore((s) => s.applyPendingAuth);
+  const setAuthError = useSpeleoStore((s) => s.setAuthError);
   const authError = useSpeleoStore((s) => s.authError);
 
   const speleo = config.speleodb;
   const endpointAtFocus = useRef<string | null>(null);
+  const [loggingIn, setLoggingIn] = useState(false);
 
   // Reflect the backend session (a rehydrated keychain token = already signed in).
   useEffect(() => {
@@ -94,6 +98,27 @@ export function SpeleoDbSettings({
 
   const stagedLogout = pendingAuth?.kind === 'logout';
   const showLoginForm = pendingAuth?.kind === 'login' || (!stagedLogout && !session?.loggedIn);
+
+  // Log in NOW (don't wait for Save) so the user can verify their credentials
+  // against the staged endpoint. Applies the same login `applyPendingAuth` runs on
+  // Save; on success it clears the staged login + flips the panel to "signed in",
+  // on failure it surfaces the error. The credentials required (email or token) —
+  // an empty form just reports the backend's "missing credentials".
+  const canTryLogin = login.useToken ? login.token.trim().length > 0 : login.email.trim().length > 0;
+  const handleTryLogin = async () => {
+    // Ensure the typed credentials are staged before applyPendingAuth reads them
+    // (zustand `set` is synchronous, so the subsequent read sees this).
+    if (pendingAuth?.kind !== 'login') setPendingAuth(login);
+    setLoggingIn(true);
+    try {
+      const result = await applyPendingAuth(speleo.endpoint);
+      if (!result.ok) {
+        setAuthError(humanizeSpeleoError(result.error, t('speleodb.errors.loginFailed')));
+      }
+    } finally {
+      setLoggingIn(false);
+    }
+  };
 
   // --- connection (staged config) ---
   const handleEndpointChange = (v: string) =>
@@ -235,6 +260,18 @@ export function SpeleoDbSettings({
                 {t('settings.speleodb.account.replacesSession', { email: session.userEmail ?? '' })}
               </p>
             )}
+            <div>
+              <Button
+                variant="primary"
+                onClick={() => void handleTryLogin()}
+                disabled={loggingIn || !canTryLogin}
+                data-testid="speleodb-settings-try-login"
+              >
+                {loggingIn
+                  ? t('settings.speleodb.account.tryingLogin')
+                  : t('settings.speleodb.account.tryLogin')}
+              </Button>
+            </div>
           </div>
         )}
       </SettingsSection>

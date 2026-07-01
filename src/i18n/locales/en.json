@@ -647,13 +647,15 @@
         "memoryOnly": "Token kept in memory only (no keychain) — it won't survive a restart.",
         "logout": "Log out",
         "willSignOut": "You'll be signed out when you press Save.",
-        "willSignIn": "You'll be signed in when you press Save.",
+        "willSignIn": "Log in now to check your details, or they'll be applied when you press Save.",
         "replacesSession": "This will replace your current session ({{email}}).",
         "undo": "Undo",
         "email": "Email",
         "password": "Password",
         "token": "Token",
-        "useToken": "Paste an existing token instead of a password"
+        "useToken": "Paste an existing token instead of a password",
+        "tryLogin": "Log in now",
+        "tryingLogin": "Logging in…"
       },
       "pollInterval": {
         "label": "Remote refresh interval",
