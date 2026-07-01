@@ -71,6 +71,7 @@
       "export": "Export",
       "shortcuts": "Shortcuts",
       "cache": "Cache",
+      "speleodb": "SpeleoDB",
       "advanced": "Advanced"
     },
     "common": {
@@ -611,6 +612,52 @@
         "minSize": "Cache size must be at least {{value}} MB",
         "maxSize": "Cache size must not exceed {{value}} MB",
         "ttl": "Cache TTL must be between 1 and 365 days"
+      }
+    },
+    "speleodb": {
+      "title": "SpeleoDB",
+      "sections": {
+        "connection": "Connection",
+        "account": "Account"
+      },
+      "endpoint": {
+        "label": "Server endpoint",
+        "help": "The SpeleoDB server to connect to (e.g. https://www.speleodb.org/).",
+        "aria": "SpeleoDB server endpoint"
+      },
+      "tokenFallback": {
+        "label": "Token storage",
+        "help": "Where to keep your login token. The OS keychain is always tried first.",
+        "aria": "Token storage fallback",
+        "options": {
+          "sessionOnly": "This session only",
+          "plaintext": "Plaintext file (less secure)"
+        },
+        "plaintextWarning": "If the keychain is unavailable, your token will be written to a plaintext file on disk (readable only by your user). Prefer keeping it in memory for this session unless you understand the risk."
+      },
+      "insecureHttp": {
+        "label": "Allow insecure HTTP",
+        "help": "By default only HTTPS (or HTTP to a private/loopback address) is allowed.",
+        "aria": "Allow insecure HTTP endpoints",
+        "warning": "Allowing plain HTTP to a public address sends your token unencrypted. Only enable this for a trusted local server."
+      },
+      "account": {
+        "appliesImmediately": "Sign in and sign out take effect immediately (they are not part of Save).",
+        "signedInAs": "Signed in as {{email}}",
+        "memoryOnly": "Token kept in memory only (no keychain) — it won't survive a restart.",
+        "logout": "Log out",
+        "loggingOut": "Logging out…",
+        "email": "Email",
+        "password": "Password",
+        "token": "Token",
+        "useToken": "Paste an existing token instead of a password",
+        "login": "Log in",
+        "loggingIn": "Connecting…",
+        "emailRequired": "Email is required",
+        "passwordRequired": "Password is required",
+        "tokenRequired": "Token is required",
+        "loginFailed": "Login failed",
+        "logoutFailed": "Logout failed"
       }
     },
     "advanced": {

@@ -22,6 +22,7 @@ import { ShortcutsSettings } from './settings/ShortcutsSettings';
 import { CacheSettings } from './settings/CacheSettings';
 import { AdvancedSettings } from './settings/AdvancedSettings';
 import { AppearanceSettings } from './settings/AppearanceSettings';
+import { SpeleoDbSettings } from './settings/SpeleoDbSettings';
 import type { Config } from '../../types/config';
 import {
   defaultConfig,
@@ -107,6 +108,10 @@ function getCategoryDefaults(category: SettingsCategory, resolvedTheme: Resolved
       return { shortcuts: { ...defaultConfig.shortcuts } };
     case 'cache':
       return { cache: { ...defaultConfig.cache } };
+    case 'speleodb':
+      // Only the staged connection fields reset here; the live account session
+      // (login/logout) is not part of the config and is unaffected by a reset.
+      return { speleodb: { ...defaultConfig.speleodb } };
     case 'appearance':
       // Highlighting controls live in the Appearance tab, so resetting Appearance
       // also resets syntactic highlighting.
@@ -314,6 +319,9 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   }
   if (updates.gas) {
     result.gas = { ...result.gas, ...updates.gas };
+  }
+  if (updates.speleodb) {
+    result.speleodb = { ...result.speleodb, ...updates.speleodb };
   }
 
   return result;
@@ -577,6 +585,8 @@ export default function SettingsDialog() {
         return <ShortcutsSettings {...commonProps} />;
       case 'cache':
         return <CacheSettings {...commonProps} />;
+      case 'speleodb':
+        return <SpeleoDbSettings {...commonProps} />;
       case 'appearance':
         return <AppearanceSettings {...commonProps} />;
       case 'advanced':

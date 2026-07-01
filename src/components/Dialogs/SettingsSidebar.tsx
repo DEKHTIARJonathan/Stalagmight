@@ -14,6 +14,7 @@ export type SettingsCategory =
   | 'export'
   | 'shortcuts'
   | 'cache'
+  | 'speleodb'
   | 'advanced'
   | 'appearance';
 
@@ -36,6 +37,7 @@ const CATEGORIES: CategoryConfig[] = [
   { id: 'export', labelKey: 'settings.sidebar.export' },
   { id: 'shortcuts', labelKey: 'settings.sidebar.shortcuts' },
   { id: 'cache', labelKey: 'settings.sidebar.cache' },
+  { id: 'speleodb', labelKey: 'settings.sidebar.speleodb' },
   { id: 'advanced', labelKey: 'settings.sidebar.advanced' },
 ];
 
