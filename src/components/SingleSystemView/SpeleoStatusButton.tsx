@@ -125,6 +125,19 @@ export function SpeleoStatusButton() {
             ? 'text-blue-400'
             : 'text-red-200';
 
+  // Hover background tint tracks the badge colour (conflict keeps its persistent
+  // crimson; the rest are transparent with a coloured hover).
+  const bgClass =
+    kind === 'conflict'
+      ? 'bg-red-900 hover:bg-red-800'
+      : kind === 'editing'
+        ? 'hover:bg-green-400/20'
+        : kind === 'locked_by_other'
+          ? 'hover:bg-orange-400/20'
+          : kind === 'remote_ahead'
+            ? 'hover:bg-blue-400/20'
+            : 'hover:bg-yellow-400/20';
+
   const title =
     kind === 'unlocked'
       ? t('speleodb.button.unlocked')
@@ -147,9 +160,7 @@ export function SpeleoStatusButton() {
       aria-label={title}
       data-testid="speleodb-status-button"
       data-kind={kind}
-      className={`flex items-center justify-center w-8 h-8 rounded ml-1 transition-opacity disabled:opacity-50 ${
-        kind === 'conflict' ? 'bg-red-900 hover:bg-red-800' : 'hover:bg-panel'
-      }`}
+      className={`flex items-center justify-center w-8 h-8 rounded ml-1 transition-colors disabled:opacity-50 ${bgClass}`}
     >
       {/* The state badge sits on the ICON — a small disc + glyph anchored to the
           logo's corner (like the DisplayMenu shot/station symbols), not floating
