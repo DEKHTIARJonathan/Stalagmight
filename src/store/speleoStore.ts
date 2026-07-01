@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type {
   DoneResult,
   Permission,
+  PushResult,
   RemoteState,
   SpeleoLinkStatus,
   SpeleoLoginResult,
@@ -104,6 +105,8 @@ interface SpeleoStore {
   applyStartEditing: (r: StartEditingResult) => void;
   applyUpdate: (r: UpdateResult) => void;
   applyDone: (r: DoneResult) => void;
+  /** Push-without-release (T2d): keeps the lock; clears the dirty bit on success. */
+  applyPush: (r: PushResult) => void;
   /** First successful mutation while editing flips the dirty indicator on. */
   markDirty: () => void;
 
@@ -271,6 +274,22 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             link: { ...state.link, editState: 'read-only', hasUnpushedEdits: false },
             divergence: null,
           };
+        case 'divergence_needed':
+          return { divergence: 'done' };
+        case 'push_unconfirmed':
+          return { banner: { kind: 'push_unconfirmed' } };
+        default:
+          return {};
+      }
+    }),
+
+  applyPush: (r) =>
+    set((state) => {
+      if (!state.link) return {};
+      switch (r.kind) {
+        case 'pushed':
+          // Lock retained (still editing); edits are now on the server.
+          return { link: { ...state.link, hasUnpushedEdits: false } };
         case 'divergence_needed':
           return { divergence: 'done' };
         case 'push_unconfirmed':

@@ -11,6 +11,9 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
+import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoActions } from '../../hooks/useSpeleoActions';
+import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { dmpImportFilters } from '../../utils/fileDialogs';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
@@ -42,8 +45,12 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
     handleCloseProject,
   } = useProject();
   const openDialog = useUIStore((s) => s.openDialog);
+  const showToast = useUIStore((s) => s.showToast);
   const showDevStats = useUIStore((s) => s.showDevStats);
   const toggleDisplay = useUIStore((s) => s.toggleDisplay);
+  // SpeleoDB submenu (T2d) — only for a remote project.
+  const speleoLink = useSpeleoStore((s) => s.link);
+  const { startEditing, update, push, done } = useSpeleoActions();
   // The closure-adjusted view is read-only — imports add sections. Disable the
   // Import item up front (the toolbar Import button and Ctrl+I already do), so the
   // user isn't sent through a file picker only to be rejected after choosing.
@@ -51,6 +58,16 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
 
   return useMemo(() => {
     const sz = 18;
+
+    // T2d: closing while holding the SpeleoDB write lock routes through a guard
+    // that encourages pushing + releasing first (otherwise the lock stays held).
+    const closeWithSpeleoGuard = async () => {
+      if (speleoLink?.editState === 'editing') {
+        openDialog('speleodb-close');
+        return;
+      }
+      await handleCloseProject();
+    };
 
     const saveAndClose = async () => {
       // Pass the close intent so a deferred Save-As (the overwrite-confirm dialog)
@@ -61,7 +78,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       // Only leave the project if the save actually succeeded (a cancelled
       // Save As returns null; an integrity/permission block returns success:false).
       if (result && result.success) {
-        await handleCloseProject();
+        await closeWithSpeleoGuard();
       }
     };
 
@@ -78,6 +95,60 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
     return [
       ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
       openFromSpeleoDbMenuItem(t, { onOpen: () => openDialog('open-from-speleodb') }),
+      // SpeleoDB submenu (T2d) — only when a remote project is open.
+      ...(speleoLink
+        ? [
+            {
+              id: 'speleodb-menu',
+              label: t('speleodb.menu.title'),
+              icon: <SpeleoDbLogo size={sz} />,
+              iconColor: MENU_ICON_COLORS.open,
+              submenu: [
+                speleoLink.editState === 'editing'
+                  ? {
+                      id: 'speleodb-menu-unlock',
+                      label: t('speleodb.menu.unlock'),
+                      onClick: () => {
+                        // Release; the push&release dialog when there are local edits.
+                        if (speleoLink.hasUnpushedEdits) openDialog('speleodb-done');
+                        else void done(null);
+                      },
+                    }
+                  : {
+                      id: 'speleodb-menu-lock',
+                      label: t('speleodb.menu.lock'),
+                      onClick: () => {
+                        void startEditing();
+                      },
+                    },
+                {
+                  id: 'speleodb-menu-push',
+                  label: t('speleodb.menu.push'),
+                  // Push-without-unlock only makes sense while editing with edits.
+                  disabled: speleoLink.editState !== 'editing' || !speleoLink.hasUnpushedEdits,
+                  onClick: () => {
+                    void push();
+                  },
+                },
+                {
+                  id: 'speleodb-menu-refresh',
+                  label: t('speleodb.menu.refresh'),
+                  onClick: () => {
+                    void update();
+                  },
+                },
+                {
+                  id: 'speleodb-menu-edit-without-lock',
+                  label: t('speleodb.menu.editWithoutLock'),
+                  // TODO(#213): optimistic force-edit — a data-safety/contention
+                  // warning then edit-without-lock + reconcile-on-push. Stubbed.
+                  onClick: () =>
+                    showToast(t('speleodb.menu.editWithoutLockSoon'), 'speleodb-edit-without-lock'),
+                },
+              ],
+            },
+          ]
+        : []),
       { id: 'project-menu-sep-1', label: '', separator: true },
       {
         id: 'toolbar-save-button',
@@ -161,9 +232,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         label: t('singleView.menu.closeProject'),
         icon: <CloseIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.close,
-        onClick: () => { void handleCloseProject(); },
+        onClick: () => { void closeWithSpeleoGuard(); },
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showDevStats, toggleDisplay, geometryReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject]);
+  }, [t, openDialog, showToast, showDevStats, toggleDisplay, geometryReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, startEditing, update, push, done]);
 }

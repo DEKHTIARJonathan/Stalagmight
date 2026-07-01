@@ -5,7 +5,12 @@ import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
-import type { DoneResult, StartEditingResult, UpdateResult } from '../types/ipc.generated';
+import type {
+  DoneResult,
+  PushResult,
+  StartEditingResult,
+  UpdateResult,
+} from '../types/ipc.generated';
 
 /**
  * The single-writer hand-off verbs (#204), with backend-result routing. Keeps
@@ -19,6 +24,8 @@ export interface SpeleoActions {
   busy: boolean;
   startEditing: () => Promise<void>;
   update: () => Promise<void>;
+  /** Push edits without releasing the lock (T2d). */
+  push: () => Promise<void>;
   /** Returns true if the call resolved (any outcome), false if it threw. */
   done: (message?: string | null) => Promise<boolean>;
 }
@@ -31,6 +38,7 @@ export function useSpeleoActions(): SpeleoActions {
   const applyStartEditing = useSpeleoStore((s) => s.applyStartEditing);
   const applyUpdate = useSpeleoStore((s) => s.applyUpdate);
   const applyDone = useSpeleoStore((s) => s.applyDone);
+  const applyPush = useSpeleoStore((s) => s.applyPush);
   const clearSession = useSpeleoStore((s) => s.clearSession);
 
   const handleError = useCallback(
@@ -98,6 +106,22 @@ export function useSpeleoActions(): SpeleoActions {
     }
   }, [applyUpdate, loadProject, showToast, t, handleError]);
 
+  const push = useCallback(async () => {
+    setBusy(true);
+    try {
+      const result = await invokeIpc<PushResult>('speleodb_push', { message: null });
+      applyPush(result);
+      if (result.kind === 'pushed') {
+        showToast(t('speleodb.editBar.toasts.pushed'), 'speleodb-pushed');
+      }
+      // divergence_needed / push_unconfirmed surface via the store (#198/#200 seams).
+    } catch (e) {
+      handleError(e, 'speleodb.editBar.toasts.pushFailed');
+    } finally {
+      setBusy(false);
+    }
+  }, [applyPush, showToast, t, handleError]);
+
   const done = useCallback(
     async (message?: string | null) => {
       setBusy(true);
@@ -126,5 +150,5 @@ export function useSpeleoActions(): SpeleoActions {
     [applyDone, showToast, t, handleError],
   );
 
-  return { busy, startEditing, update, done };
+  return { busy, startEditing, update, push, done };
 }

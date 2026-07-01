@@ -2628,6 +2628,23 @@
       "remoteAhead": "SpeleoDB has newer changes — click to pull",
       "conflict": "Local and remote have diverged — click to resolve"
     },
+    "menu": {
+      "title": "SpeleoDB",
+      "lock": "Start editing (lock)",
+      "unlock": "Finish editing (push & unlock)",
+      "push": "Push (keep the lock)",
+      "refresh": "Refresh from SpeleoDB",
+      "editWithoutLock": "Edit without lock…",
+      "editWithoutLockSoon": "Editing without the lock is coming soon (#213)."
+    },
+    "close": {
+      "title": "Close SpeleoDB project",
+      "message": "You still hold the SpeleoDB write lock. Release it so others can edit?",
+      "dirtyMessage": "You have unpushed changes and still hold the SpeleoDB write lock. Push your changes and release the lock before closing?",
+      "keepLock": "Close & keep the lock",
+      "release": "Release & close",
+      "pushRelease": "Push, release & close"
+    },
     "divergence": {
       "title": "Resolve SpeleoDB conflict",
       "description": "Your local changes and the version on SpeleoDB have diverged. Choose how to resolve it.",
@@ -2674,9 +2691,11 @@
         "lockedBy": "Locked by {{email}}.",
         "upToDate": "Already up to date.",
         "released": "Changes uploaded and lock released.",
+        "pushed": "Changes pushed to SpeleoDB.",
         "startFailed": "Could not start editing",
         "updateFailed": "Could not update",
-        "doneFailed": "Could not finish editing"
+        "doneFailed": "Could not finish editing",
+        "pushFailed": "Could not push changes"
       }
     },
     "done": {

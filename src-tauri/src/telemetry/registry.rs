@@ -217,6 +217,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.open-from-speleodb",
     "action.dialog.speleodb-done",
     "action.dialog.speleodb-divergence",
+    "action.dialog.speleodb-close",
     "action.dialog.split-section",
     "action.dialog.swap-comments",
     "action.dialog.tml-import",
@@ -272,6 +273,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.open-from-speleodb",
     "dialog-cancel.speleodb-done",
     "dialog-cancel.speleodb-divergence",
+    "dialog-cancel.speleodb-close",
     "dialog-cancel.split-section",
     "dialog-cancel.swap-comments",
     "dialog-cancel.tml-import",
@@ -353,6 +355,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.open-from-speleodb",
     "dwell.dialog.speleodb-done",
     "dwell.dialog.speleodb-divergence",
+    "dwell.dialog.speleodb-close",
     "dwell.dialog.split-section",
     "dwell.dialog.swap-comments",
     "dwell.dialog.tml-import",
@@ -485,6 +488,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.open-from-speleodb",
     "active-dwell.dialog.speleodb-done",
     "active-dwell.dialog.speleodb-divergence",
+    "active-dwell.dialog.speleodb-close",
     "active-dwell.dialog.split-section",
     "active-dwell.dialog.swap-comments",
     "active-dwell.dialog.tml-import",
@@ -574,7 +578,8 @@ mod tests {
         //       .open-from-speleodb = 427.
         //   + 1 SpeleoDB push event (T2d): command.speleodb_push = 428.
         //   + 4 speleodb-divergence dialog events (#198): = 432.
-        assert_eq!(EVENT_NAMES.len(), 432);
+        //   + 4 speleodb-close dialog events (T2d): = 436.
+        assert_eq!(EVENT_NAMES.len(), 436);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
