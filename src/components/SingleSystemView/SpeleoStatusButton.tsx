@@ -4,38 +4,15 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
-import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { LockIcon, PencilIcon } from '../common/icons';
+import {
+  SpeleoBadgedIcon,
+  HourglassGlyph,
+  PullGlyph,
+  ExclamationGlyph,
+} from '../common/SpeleoBadgedIcon';
 
 const MIN_POLL_INTERVAL_SECONDS = 30;
-
-/** Filled hourglass glyph (someone else is editing). */
-function HourglassGlyph({ size = 10 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path d="M4 2h8v3L8 8 4 5V2zM4 14h8v-3L8 8l-4 3v3z" />
-    </svg>
-  );
-}
-
-/** Filled pull-down arrow glyph (remote has an update to pull). */
-function PullGlyph({ size = 10 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path d="M6 2h4v6h3l-5 6-5-6h3V2z" />
-    </svg>
-  );
-}
-
-/** Filled exclamation-mark glyph (local/remote conflict). */
-function ExclamationGlyph({ size = 10 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path d="M6.6 2h2.8l-0.5 7h-1.8l-0.5-7z" />
-      <circle cx="8" cy="12.4" r="1.5" />
-    </svg>
-  );
-}
 
 type ButtonKind = 'unlocked' | 'editing' | 'locked_by_other' | 'remote_ahead' | 'conflict';
 
@@ -179,15 +156,7 @@ export function SpeleoStatusButton() {
       {/* The state badge sits on the ICON — a small disc + glyph anchored to the
           logo's corner (like the DisplayMenu shot/station symbols), not floating
           on the button. */}
-      <span className="relative inline-flex">
-        <SpeleoDbLogo size={20} />
-        <span
-          className={`absolute -bottom-1 -right-1 flex items-center justify-center rounded-full bg-slate-900 p-[1px] ${glyphColor}`}
-          data-testid="speleodb-status-badge"
-        >
-          {glyph}
-        </span>
-      </span>
+      <SpeleoBadgedIcon badge={glyph} badgeColor={glyphColor} size={20} />
     </button>
   );
 }

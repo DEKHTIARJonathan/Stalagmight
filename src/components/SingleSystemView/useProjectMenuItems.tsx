@@ -14,6 +14,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
+import { SpeleoBadgedIcon, PushGlyph, PullGlyph } from '../common/SpeleoBadgedIcon';
 import { dmpImportFilters } from '../../utils/fileDialogs';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
@@ -27,6 +28,8 @@ import {
   SlidersIcon,
   InfoIcon,
   DatabaseIcon,
+  PencilIcon,
+  LockIcon,
 } from '../common/icons';
 
 interface UseProjectMenuItemsArgs {
@@ -107,6 +110,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                   ? {
                       id: 'speleodb-menu-unlock',
                       label: t('speleodb.menu.unlock'),
+                      icon: (
+                        <SpeleoBadgedIcon badge={<LockIcon size={9} />} badgeColor="text-green-400" size={sz} />
+                      ),
                       onClick: () => {
                         // Release; the push&release dialog when there are local edits.
                         if (speleoLink.hasUnpushedEdits) openDialog('speleodb-done');
@@ -116,6 +122,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                   : {
                       id: 'speleodb-menu-lock',
                       label: t('speleodb.menu.lock'),
+                      icon: (
+                        <SpeleoBadgedIcon badge={<PencilIcon size={9} />} badgeColor="text-yellow-400" size={sz} />
+                      ),
                       onClick: () => {
                         void startEditing();
                       },
@@ -123,6 +132,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                 {
                   id: 'speleodb-menu-push',
                   label: t('speleodb.menu.push'),
+                  icon: (
+                    <SpeleoBadgedIcon badge={<PushGlyph size={9} />} badgeColor="text-green-400" size={sz} />
+                  ),
                   // Push-without-unlock only makes sense while editing with edits.
                   disabled: speleoLink.editState !== 'editing' || !speleoLink.hasUnpushedEdits,
                   onClick: () => {
@@ -132,6 +144,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                 {
                   id: 'speleodb-menu-refresh',
                   label: t('speleodb.menu.refresh'),
+                  icon: (
+                    <SpeleoBadgedIcon badge={<PullGlyph size={9} />} badgeColor="text-blue-400" size={sz} />
+                  ),
                   onClick: () => {
                     void update();
                   },
@@ -139,6 +154,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                 {
                   id: 'speleodb-menu-edit-without-lock',
                   label: t('speleodb.menu.editWithoutLock'),
+                  icon: (
+                    <SpeleoBadgedIcon badge={<PencilIcon size={9} />} badgeColor="text-orange-400" size={sz} />
+                  ),
                   // TODO(#213): optimistic force-edit — a data-safety/contention
                   // warning then edit-without-lock + reconcile-on-push. Stubbed.
                   onClick: () =>
