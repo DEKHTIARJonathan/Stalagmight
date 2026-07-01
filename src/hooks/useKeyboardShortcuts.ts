@@ -570,14 +570,20 @@ export function useKeyboardShortcuts() {
           break;
 
         // Edit actions
+        // GUARD: undo/redo are survey-only (#243) — parity with the toolbar buttons,
+        // which are hidden in Plan/Export. Only appMode is checked (not geometryMode):
+        // the buttons stay available in the closure-adjusted survey view, so the
+        // shortcuts do too.
         case 'undo':
           event.preventDefault();
+          if (useUIStore.getState().appMode !== 'survey') break;
           undo();
           maybeShowToast(action);
           break;
 
         case 'redo':
           event.preventDefault();
+          if (useUIStore.getState().appMode !== 'survey') break;
           redo();
           maybeShowToast(action);
           break;

@@ -196,7 +196,10 @@ export default function Toolbar({
         <SpeleoStatusButton />
         {/* In fullscreen table mode the left slot shows the "Back to Map" button
             (the relabeled shrink button) instead of Import; both Save/Export/Close
-            live in the hamburger now. */}
+            live in the hamburger now. Import and Undo/Redo are survey-only (#243):
+            Plan/Export are read-only workspaces, so the mutating file/history
+            controls are HIDDEN there (not merely disabled) — undoing under the
+            read-only map would mutate the survey out from under it. */}
         {dataTableFullScreen ? (
           <Button
             icon={
@@ -212,7 +215,7 @@ export default function Toolbar({
           >
             {t('dataTable.fullScreen.exit')}
           </Button>
-        ) : (
+        ) : appMode === 'survey' ? (
           <Button
             onClick={() => onImport()}
             disabled={placementModeActive || geometryReadOnly}
@@ -223,38 +226,42 @@ export default function Toolbar({
           >
             {t('common.actions.import')}
           </Button>
+        ) : null}
+        {appMode === 'survey' && (
+          <>
+            <div className="w-px h-6 bg-border mx-2" />
+            <UndoHistoryDropdown
+              mode="undo"
+              disabled={placementModeActive || !canUndo}
+              onSingleAction={onUndo}
+              testId="toolbar-undo-button"
+            >
+              <span className="inline-flex items-center gap-0.5">
+                {t('common.actions.undo')}
+                {canUndo && !placementModeActive && (
+                  <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="undo-chevron">
+                    <ChevronDownIcon size={10} />
+                  </span>
+                )}
+              </span>
+            </UndoHistoryDropdown>
+            <UndoHistoryDropdown
+              mode="redo"
+              disabled={placementModeActive || !canRedo}
+              onSingleAction={onRedo}
+              testId="toolbar-redo-button"
+            >
+              <span className="inline-flex items-center gap-0.5">
+                {t('common.actions.redo')}
+                {canRedo && !placementModeActive && (
+                  <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="redo-chevron">
+                    <ChevronDownIcon size={10} />
+                  </span>
+                )}
+              </span>
+            </UndoHistoryDropdown>
+          </>
         )}
-        <div className="w-px h-6 bg-border mx-2" />
-        <UndoHistoryDropdown
-          mode="undo"
-          disabled={placementModeActive || !canUndo}
-          onSingleAction={onUndo}
-          testId="toolbar-undo-button"
-        >
-          <span className="inline-flex items-center gap-0.5">
-            {t('common.actions.undo')}
-            {canUndo && !placementModeActive && (
-              <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="undo-chevron">
-                <ChevronDownIcon size={10} />
-              </span>
-            )}
-          </span>
-        </UndoHistoryDropdown>
-        <UndoHistoryDropdown
-          mode="redo"
-          disabled={placementModeActive || !canRedo}
-          onSingleAction={onRedo}
-          testId="toolbar-redo-button"
-        >
-          <span className="inline-flex items-center gap-0.5">
-            {t('common.actions.redo')}
-            {canRedo && !placementModeActive && (
-              <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="redo-chevron">
-                <ChevronDownIcon size={10} />
-              </span>
-            )}
-          </span>
-        </UndoHistoryDropdown>
       </div>
 
       {/* Center - the Survey/Plan/Export workspace carousel (#38, the workspace-mode reframe).
