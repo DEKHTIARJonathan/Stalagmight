@@ -3782,7 +3782,7 @@ function MapCanvas() {
           {/* In focus mode the button also exits focus — label it so that's clear. */}
           {focusedSectionId !== null && <span>{t('sections.focus.exitLabel')}</span>}
         </button>
-        {speleoReadOnly && !placementMode && (
+        {speleoReadOnly && !placementMode && appMode === 'survey' && (
           <div
             className="bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-1.5"
             data-testid="speleodb-readonly-banner"

@@ -59,6 +59,7 @@ export function SpeleoStatusButton() {
   const divergence = useSpeleoStore((s) => s.divergence);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
   const openDialog = useUIStore((s) => s.openDialog);
+  const appMode = useUIStore((s) => s.appMode);
   const pollInterval = useProjectStore((s) => s.config?.speleodb.poll_interval_seconds ?? 60);
   const { busy, startEditing, update, done } = useSpeleoActions();
 
@@ -73,7 +74,10 @@ export function SpeleoStatusButton() {
     return () => clearInterval(id);
   }, [isRemote, pollInterval, refreshLinkStatus]);
 
-  if (!link) return null;
+  // Only in Survey mode — Plan/Export are non-editing views, so the hand-off
+  // button + read-only badge are hidden there. Polling above keeps running so the
+  // state is fresh when you return to Survey.
+  if (!link || appMode !== 'survey') return null;
 
   const myEmail = session?.userEmail ?? null;
   const lockedByOther = !!link.lockHolder && link.lockHolder !== myEmail;
