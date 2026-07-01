@@ -10,7 +10,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useGlobalViewStore } from '../../store/globalViewStore';
 import { Button } from '../common/Button';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
-import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, runImport } from '../common/appMenuItems';
+import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, runImport, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
 import { CloseIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIcon } from '../common/icons';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ICON_COLORS } from '../common/menuColors';
@@ -522,19 +522,7 @@ export default function GlobalView() {
   const menuItems: AppMenuItem[] = useMemo(
     () => [
       ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
-      // Dev-only spike entry (#183). The production "Open from SpeleoDB" menu +
-      // project browser is #203; this is gated to dev builds only.
-      ...(import.meta.env.DEV
-        ? [
-            {
-              id: 'global-speleodb-spike-button',
-              label: 'Open from SpeleoDB (spike)',
-              icon: <DownloadIcon size={18} />,
-              iconColor: MENU_ICON_COLORS.open,
-              onClick: () => openDialog('speleodb-spike'),
-            },
-          ]
-        : []),
+      openFromSpeleoDbMenuItem(t, { onOpen: () => openDialog('open-from-speleodb') }),
       {
         id: 'global-import-menu-button',
         label: t('globalView.actions.import'),

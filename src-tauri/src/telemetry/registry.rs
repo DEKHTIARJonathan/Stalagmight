@@ -213,6 +213,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.remove-closure",
     "action.dialog.section-adjust",
     "action.dialog.settings",
+    "action.dialog.open-from-speleodb",
     "action.dialog.speleodb-spike",
     "action.dialog.split-section",
     "action.dialog.swap-comments",
@@ -266,6 +267,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.remove-closure",
     "dialog-cancel.section-adjust",
     "dialog-cancel.settings",
+    "dialog-cancel.open-from-speleodb",
     "dialog-cancel.speleodb-spike",
     "dialog-cancel.split-section",
     "dialog-cancel.swap-comments",
@@ -345,6 +347,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.remove-closure",
     "dwell.dialog.section-adjust",
     "dwell.dialog.settings",
+    "dwell.dialog.open-from-speleodb",
     "dwell.dialog.speleodb-spike",
     "dwell.dialog.split-section",
     "dwell.dialog.swap-comments",
@@ -475,6 +478,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.remove-closure",
     "active-dwell.dialog.section-adjust",
     "active-dwell.dialog.settings",
+    "active-dwell.dialog.open-from-speleodb",
     "active-dwell.dialog.speleodb-spike",
     "active-dwell.dialog.split-section",
     "active-dwell.dialog.swap-comments",
@@ -560,7 +564,10 @@ mod tests {
         //       speleodb_{start_editing,done,update} = 422.
         //   + 1 SpeleoDB link-status event (#204):
         //       command.speleodb_link_status = 423.
-        assert_eq!(EVENT_NAMES.len(), 423);
+        //   + 4 open-from-speleodb dialog events (#203):
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .open-from-speleodb = 427.
+        assert_eq!(EVENT_NAMES.len(), 427);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

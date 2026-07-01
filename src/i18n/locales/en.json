@@ -1691,6 +1691,7 @@
       "mergeProjectsAria": "Merge {{countFormatted}} selected projects",
       "newProject": "New project",
       "openProject": "Open project",
+      "openFromSpeleoDb": "Open from SpeleoDB",
       "openOrImport": "Open / Import",
       "settings": "Settings",
       "debugLogs": "Debug Logs",
@@ -2611,6 +2612,25 @@
       },
       "no": "No thanks",
       "yes": "Yes, share data"
+    }
+  },
+  "speleodb": {
+    "browser": {
+      "title": "Open from SpeleoDB",
+      "checking": "Checking session…",
+      "loginPrompt": "You're not signed in to SpeleoDB. Sign in from Settings to browse your projects.",
+      "goToSettings": "Open Settings",
+      "filterPlaceholder": "Filter projects…",
+      "noProjects": "No projects visible to this account.",
+      "noMatches": "No projects match your filter.",
+      "noAccess": "NO ACCESS",
+      "lockedBy": "Locked by {{email}}",
+      "open": "Open",
+      "refresh": "Refresh",
+      "signedInAs": "Signed in as {{email}}",
+      "concurrentSession": "This project is already locked by your account in another session. Editing it from two sessions at once is unsupported and can lose edits.",
+      "listFailed": "Could not load projects",
+      "openFailed": "Could not open project"
     }
   }
 }

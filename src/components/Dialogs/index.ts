@@ -40,3 +40,4 @@ export { default as KeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
 export { default as TelemetryOptInDialog } from './TelemetryOptInDialog';
 export { default as CollabReviewDialog } from './CollabReviewDialog';
 export { default as SpeleoDbSpikeDialog } from './SpeleoDbSpikeDialog';
+export { default as OpenFromSpeleoDbDialog } from './OpenFromSpeleoDbDialog';

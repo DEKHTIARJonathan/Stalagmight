@@ -14,7 +14,7 @@ import { useUIStore } from '../../store/uiStore';
 import { dmpImportFilters } from '../../utils/fileDialogs';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
-import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem } from '../common/appMenuItems';
+import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
 import type { AppMenuItem } from '../common/AppMenu';
 import {
   SaveIcon,
@@ -77,6 +77,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
 
     return [
       ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
+      openFromSpeleoDbMenuItem(t, { onOpen: () => openDialog('open-from-speleodb') }),
       { id: 'project-menu-sep-1', label: '', separator: true },
       {
         id: 'toolbar-save-button',
