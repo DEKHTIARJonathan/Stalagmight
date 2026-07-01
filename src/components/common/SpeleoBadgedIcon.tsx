@@ -67,3 +67,29 @@ export function ExclamationGlyph({ size = 11 }: { size?: number }) {
     </svg>
   );
 }
+
+/**
+ * "Edit without lock" glyph (#213): a pencil + exclamation in a single
+ * badge-sized box (so it takes no more space than the other badges), entirely in
+ * `currentColor`. The exclamation carries a panel-coloured border (painted under
+ * its fill) so it reads as separate from the pencil.
+ */
+export function EditNoLockGlyph({ size = 11 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      {/* pencil, lower-left */}
+      <path d="M2 14l0.8-2.7 5.3-5.3 1.9 1.9-5.3 5.3L2 14z" />
+      {/* exclamation, upper-right, with a panel-coloured border to separate it */}
+      <g
+        style={{ stroke: 'var(--cc-panel)' }}
+        strokeWidth={1.3}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        paintOrder="stroke"
+      >
+        <path d="M11.9 3.4h2.2l-0.4 5h-1.4z" />
+        <circle cx="13" cy="11.6" r="1.25" />
+      </g>
+    </svg>
+  );
+}

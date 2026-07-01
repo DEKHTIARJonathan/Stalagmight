@@ -14,7 +14,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
-import { SpeleoBadgedIcon, PushGlyph, RefreshGlyph, ExclamationGlyph } from '../common/SpeleoBadgedIcon';
+import { SpeleoBadgedIcon, PushGlyph, RefreshGlyph, EditNoLockGlyph } from '../common/SpeleoBadgedIcon';
 import { dmpImportFilters } from '../../utils/fileDialogs';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
@@ -156,15 +156,8 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                   label: t('speleodb.menu.editWithoutLock'),
                   icon: (
                     <SpeleoBadgedIcon
-                      badge={
-                        <span className="inline-flex items-center gap-[1px]">
-                          <PencilIcon size={9} />
-                          <span className="text-red-500">
-                            <ExclamationGlyph size={9} />
-                          </span>
-                        </span>
-                      }
-                      badgeColor="text-orange-400"
+                      badge={<EditNoLockGlyph size={11} />}
+                      badgeColor="text-red-500"
                       size={sz}
                     />
                   ),
