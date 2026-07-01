@@ -58,6 +58,24 @@ export function PushGlyph({ size = 10 }: { size?: number }) {
   );
 }
 
+/**
+ * Filled pencil with a slash through it (read-only / web-viewer: you can view
+ * but not edit). The slash carries a panel-coloured under-stroke so it reads as
+ * a distinct diagonal cut across the pencil.
+ */
+export function CrossedPencilGlyph({ size = 11 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      {/* vertical pencil, tip pointing down */}
+      <path d="M5.4 2h3.2v9l-1.6 3-1.6-3z" />
+      {/* diagonal "no" slash: a wider panel-coloured line underneath cuts a gap so
+          the slash reads as separate from the pencil, then the slash on top. */}
+      <path d="M2.5 13.5L13.5 2.5" style={{ stroke: 'var(--cc-panel)' }} strokeWidth={3.4} />
+      <path d="M2.5 13.5L13.5 2.5" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** Filled exclamation-mark glyph (local/remote conflict). */
 export function ExclamationGlyph({ size = 11 }: { size?: number }) {
   return (

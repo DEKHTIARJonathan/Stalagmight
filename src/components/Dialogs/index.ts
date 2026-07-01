@@ -43,3 +43,4 @@ export { default as OpenFromSpeleoDbDialog } from './OpenFromSpeleoDbDialog';
 export { default as SpeleoDoneDialog } from './SpeleoDoneDialog';
 export { default as SpeleoDivergenceDialog } from './SpeleoDivergenceDialog';
 export { default as SpeleoCloseDialog } from './SpeleoCloseDialog';
+export { default as SpeleoNoPermissionDialog } from './SpeleoNoPermissionDialog';

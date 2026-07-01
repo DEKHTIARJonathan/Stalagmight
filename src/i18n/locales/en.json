@@ -2626,7 +2626,9 @@
       "editingClean": "You hold the lock — click to release it",
       "lockedByOther": "Being edited by {{email}} — click to pull the latest",
       "remoteAhead": "SpeleoDB has newer changes — click to pull",
-      "conflict": "Local and remote have diverged — click to resolve"
+      "conflict": "Local and remote have diverged — click to resolve",
+      "viewOnly": "Read-only access — click to refresh from SpeleoDB",
+      "noPermission": "You don't have permission to this SpeleoDB project — click for options"
     },
     "menu": {
       "title": "SpeleoDB",
@@ -2654,15 +2656,17 @@
       "comingSoon": "This resolution option is coming soon (#198).",
       "keepLocal": {
         "label": "Keep my local version",
-        "help": "Dismiss and keep editing locally. Nothing is pulled or overwritten."
+        "help": "Upload your version to SpeleoDB to resolve the conflict.",
+        "noLock": "Start editing (acquire the lock) before you can push your version."
       },
       "takeRemote": {
         "label": "Take the SpeleoDB version",
         "help": "Discard your local changes and replace them with the server's version."
       },
       "saveCopy": {
-        "label": "Save my version as a local copy",
-        "help": "Keep your changes in a separate local file, then take the SpeleoDB version."
+        "label": "Save my version as an unmanaged file",
+        "help": "Keep your edits in a separate local .stalx (no longer linked to SpeleoDB); the SpeleoDB project stays at the server's version.",
+        "converting": "Saving a local copy…"
       }
     },
     "errors": {
@@ -2703,10 +2707,19 @@
     "done": {
       "title": "Finish editing",
       "description": "Upload your changes to SpeleoDB and release the lock.",
+      "pushTitle": "Push changes",
+      "pushDescription": "Upload your changes to SpeleoDB and keep the lock so you can carry on editing.",
       "messageLabel": "Commit message (optional)",
       "messagePlaceholder": "Describe your changes…",
       "confirm": "Upload & release",
+      "pushConfirm": "Upload & keep editing",
       "pushing": "Uploading…"
+    },
+    "noPermission": {
+      "title": "No SpeleoDB access",
+      "description": "This project is linked to SpeleoDB, but your account doesn't have permission to view or edit it — it may have been shared with you as a file. You can convert it to a regular, unmanaged .stalx file to keep and edit locally.",
+      "convert": "Convert to a local file",
+      "converting": "Converting…"
     },
     "banner": {
       "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept — click Done again to retry.",

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
@@ -24,21 +24,26 @@ export interface SpeleoActions {
   busy: boolean;
   startEditing: () => Promise<void>;
   update: () => Promise<void>;
-  /** Push edits without releasing the lock (T2d). */
-  push: () => Promise<void>;
-  /** Returns true if the call resolved (any outcome), false if it threw. */
-  done: (message?: string | null) => Promise<boolean>;
+  /** Push edits without releasing the lock (T2d) — collects an optional message. */
+  push: (message?: string | null) => Promise<void>;
+  /** The backend outcome, or `null` if the call threw. Callers key off `.kind`
+      (e.g. the close flow only leaves once the lock is actually `released`). */
+  done: (message?: string | null) => Promise<DoneResult | null>;
 }
 
 export function useSpeleoActions(): SpeleoActions {
   const { t } = useTranslation();
-  const [busy, setBusy] = useState(false);
+  // Shared busy so the status button and the hamburger submenu gate on the same
+  // in-flight lock and can't double-issue a verb (fix 12).
+  const busy = useSpeleoStore((s) => s.busy);
+  const setBusy = useSpeleoStore((s) => s.setBusy);
   const showToast = useUIStore((s) => s.showToast);
   const loadProject = useProjectStore((s) => s.loadProject);
   const applyStartEditing = useSpeleoStore((s) => s.applyStartEditing);
   const applyUpdate = useSpeleoStore((s) => s.applyUpdate);
   const applyDone = useSpeleoStore((s) => s.applyDone);
   const applyPush = useSpeleoStore((s) => s.applyPush);
+  const bumpPoll = useSpeleoStore((s) => s.bumpPoll);
   const clearSession = useSpeleoStore((s) => s.clearSession);
 
   const handleError = useCallback(
@@ -80,9 +85,12 @@ export function useSpeleoActions(): SpeleoActions {
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.startFailed');
     } finally {
+      // Reset the poll timer so the next poll is a full interval out — a buffer
+      // past the just-issued lock change the server mutex may not yet reflect (1b).
+      bumpPoll();
       setBusy(false);
     }
-  }, [applyStartEditing, loadProject, showToast, t, handleError]);
+  }, [applyStartEditing, loadProject, showToast, t, handleError, setBusy, bumpPoll]);
 
   const update = useCallback(async () => {
     setBusy(true);
@@ -102,28 +110,33 @@ export function useSpeleoActions(): SpeleoActions {
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.updateFailed');
     } finally {
+      bumpPoll();
       setBusy(false);
     }
-  }, [applyUpdate, loadProject, showToast, t, handleError]);
+  }, [applyUpdate, loadProject, showToast, t, handleError, setBusy, bumpPoll]);
 
-  const push = useCallback(async () => {
-    setBusy(true);
-    try {
-      const result = await invokeIpc<PushResult>('speleodb_push', { message: null });
-      applyPush(result);
-      if (result.kind === 'pushed') {
-        showToast(t('speleodb.editBar.toasts.pushed'), 'speleodb-pushed');
+  const push = useCallback(
+    async (message?: string | null) => {
+      setBusy(true);
+      try {
+        const result = await invokeIpc<PushResult>('speleodb_push', { message: message ?? null });
+        applyPush(result);
+        if (result.kind === 'pushed') {
+          showToast(t('speleodb.editBar.toasts.pushed'), 'speleodb-pushed');
+        }
+        // divergence_needed / push_unconfirmed surface via the store (#198/#200 seams).
+      } catch (e) {
+        handleError(e, 'speleodb.editBar.toasts.pushFailed');
+      } finally {
+        bumpPoll();
+        setBusy(false);
       }
-      // divergence_needed / push_unconfirmed surface via the store (#198/#200 seams).
-    } catch (e) {
-      handleError(e, 'speleodb.editBar.toasts.pushFailed');
-    } finally {
-      setBusy(false);
-    }
-  }, [applyPush, showToast, t, handleError]);
+    },
+    [applyPush, showToast, t, handleError, setBusy, bumpPoll],
+  );
 
   const done = useCallback(
-    async (message?: string | null) => {
+    async (message?: string | null): Promise<DoneResult | null> => {
       setBusy(true);
       try {
         const result = await invokeIpc<DoneResult>('speleodb_done', { message: message ?? null });
@@ -139,15 +152,16 @@ export function useSpeleoActions(): SpeleoActions {
             // #198 seam: applyDone recorded the divergence origin.
             break;
         }
-        return true;
+        return result;
       } catch (e) {
         handleError(e, 'speleodb.editBar.toasts.doneFailed');
-        return false;
+        return null;
       } finally {
+        bumpPoll();
         setBusy(false);
       }
     },
-    [applyDone, showToast, t, handleError],
+    [applyDone, showToast, t, handleError, setBusy, bumpPoll],
   );
 
   return { busy, startEditing, update, push, done };

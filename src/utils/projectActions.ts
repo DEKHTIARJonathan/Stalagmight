@@ -16,8 +16,9 @@
 import { exists } from '@tauri-apps/plugin-fs';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
+import { useSpeleoStore } from '../store/speleoStore';
 import { surfaceSaveFailure } from './saveFeedback';
-import { getErrorMessage } from './ipc';
+import { getErrorMessage, invokeIpc } from './ipc';
 import {
   ensureExtension,
   projectSaveFilters,
@@ -98,4 +99,45 @@ export async function saveProjectAs(opts?: {
     });
     return null;
   }
+}
+
+/**
+ * Detach the open SpeleoDB project from SpeleoDB, keeping the local copy as a
+ * plain unmanaged `.stalx` (#204 — the shared action behind the no-permission
+ * prompt (10) and the divergence "keep my copy" path (11)).
+ *
+ * Pick a permanent home via the native Save dialog, write the CURRENT (possibly
+ * locally-edited) content there, then `speleodb_unlink` so the open project is no
+ * longer tied to SpeleoDB and edits freely. Nothing is pushed or released — the
+ * SpeleoDB copy is simply abandoned; a later Open-from-SpeleoDB re-pulls the
+ * server tip, so the managed side stays clean. Returns true once converted.
+ *
+ * The save must land first: if it is cancelled or fails, we do NOT unlink (that
+ * would silently strand the user's work in the cache with no SpeleoDB link).
+ */
+export async function convertToUnmanagedStalx(): Promise<boolean> {
+  const { openDialog } = useUIStore.getState();
+  let finalPath: string;
+  try {
+    const selected = await saveDialog({ filters: projectSaveFilters() });
+    if (!selected) return false;
+    finalPath = ensureExtension(selected, PROJECT_EXTENSION);
+    const result = await useProjectStore.getState().saveProject(finalPath);
+    if (!result || !result.success) {
+      surfaceSaveFailure(result?.error ?? null, openDialog);
+      return false;
+    }
+  } catch (e) {
+    openDialog('error', {
+      title: 'Save Failed',
+      message: getErrorMessage(e, 'Failed to save a local copy'),
+    });
+    return false;
+  }
+
+  // The copy is safe on disk — now drop the SpeleoDB link and re-seed the shell as
+  // a plain local project (link_status returns is_remote:false → link cleared).
+  await invokeIpc('speleodb_unlink');
+  await useSpeleoStore.getState().refreshLinkStatus();
+  return true;
 }

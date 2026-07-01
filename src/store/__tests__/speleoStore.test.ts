@@ -9,6 +9,7 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   permission: 'READ_AND_WRITE',
   lock_holder: null,
   remote_state: 'up_to_date',
+  access_denied: false,
   ...o,
 });
 
@@ -77,6 +78,11 @@ describe('speleoStore', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, lock_holder: 'me@x' }));
       expect(useSpeleoStore.getState().link?.lockedByOther).toBe(false);
     });
+
+    it('carries the access_denied flag through as noAccess', () => {
+      useSpeleoStore.getState().seedFromStatus(status({ permission: null, access_denied: true }));
+      expect(useSpeleoStore.getState().link?.noAccess).toBe(true);
+    });
   });
 
   describe('setLinkOnOpen', () => {
@@ -89,6 +95,7 @@ describe('speleoStore', () => {
         lockedByOther: false,
         hasUnpushedEdits: false,
         remoteState: 'up_to_date',
+        noAccess: false,
       });
     });
   });

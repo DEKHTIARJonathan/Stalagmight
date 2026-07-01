@@ -53,7 +53,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   const toggleDisplay = useUIStore((s) => s.toggleDisplay);
   // SpeleoDB submenu (T2d) — only for a remote project.
   const speleoLink = useSpeleoStore((s) => s.link);
-  const { startEditing, update, push, done } = useSpeleoActions();
+  const { busy: speleoBusy, startEditing, update, done } = useSpeleoActions();
   // The closure-adjusted view is read-only — imports add sections. Disable the
   // Import item up front (the toolbar Import button and Ctrl+I already do), so the
   // user isn't sent through a file picker only to be rejected after choosing.
@@ -113,6 +113,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                       icon: (
                         <SpeleoBadgedIcon badge={<LockIcon size={9} />} badgeColor="text-green-400" size={sz} />
                       ),
+                      disabled: speleoBusy,
                       onClick: () => {
                         // Release; the push&release dialog when there are local edits.
                         if (speleoLink.hasUnpushedEdits) openDialog('speleodb-done');
@@ -125,6 +126,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                       icon: (
                         <SpeleoBadgedIcon badge={<PencilIcon size={9} />} badgeColor="text-yellow-400" size={sz} />
                       ),
+                      disabled: speleoBusy,
                       onClick: () => {
                         void startEditing();
                       },
@@ -136,10 +138,10 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                     <SpeleoBadgedIcon badge={<PushGlyph size={9} />} badgeColor="text-green-400" size={sz} />
                   ),
                   // Push-without-unlock only makes sense while editing with edits.
-                  disabled: speleoLink.editState !== 'editing' || !speleoLink.hasUnpushedEdits,
-                  onClick: () => {
-                    void push();
-                  },
+                  disabled: speleoBusy || speleoLink.editState !== 'editing' || !speleoLink.hasUnpushedEdits,
+                  // Collect a commit message via the done dialog in push mode (like
+                  // push & release, but the lock is retained — fix 8).
+                  onClick: () => openDialog('speleodb-done', { mode: 'push' }),
                 },
                 {
                   id: 'speleodb-menu-refresh',
@@ -147,6 +149,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                   icon: (
                     <SpeleoBadgedIcon badge={<RefreshGlyph size={11} />} badgeColor="text-blue-400" size={sz} />
                   ),
+                  disabled: speleoBusy,
                   onClick: () => {
                     void update();
                   },
@@ -257,5 +260,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showToast, showDevStats, toggleDisplay, geometryReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, startEditing, update, push, done]);
+  }, [t, openDialog, showToast, showDevStats, toggleDisplay, geometryReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoBusy, startEditing, update, done]);
 }

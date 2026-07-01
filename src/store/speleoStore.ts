@@ -56,6 +56,14 @@ export interface SpeleoLinkState {
   hasUnpushedEdits: boolean;
   /** The local copy's relationship to the server tip (drives the button, T2c). */
   remoteState: RemoteState;
+  /**
+   * The project is linked but the server refused this user access to it (a 403) —
+   * e.g. a managed .stalx shared as a bare file. Drives the button's red-
+   * exclamation "no permission" state, whose only action is offering to convert
+   * the file to a plain unmanaged local .stalx (fix 10). Distinct from an offline
+   * miss (which leaves this false), so we never nag a merely-offline user.
+   */
+  noAccess: boolean;
 }
 
 /**
@@ -89,6 +97,13 @@ interface SpeleoStore {
    */
   pollNonce: number;
   bumpPoll: () => void;
+  /**
+   * True while a hand-off verb (start/update/push/done) is in flight. Shared so
+   * every entry point — the status button AND the hamburger submenu — gates on
+   * the same lock and can't double-issue (fix 12).
+   */
+  busy: boolean;
+  setBusy: (busy: boolean) => void;
 
   // --- session (Settings #205 / browser #203) ---
   setSession: (s: SpeleoSessionStatus) => void;
@@ -140,10 +155,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   divergence: null,
   banner: null,
   pollNonce: 0,
+  busy: false,
   pendingAuth: null,
   authError: null,
 
   bumpPoll: () => set((state) => ({ pollNonce: state.pollNonce + 1 })),
+  setBusy: (busy) => set({ busy }),
 
   setPendingAuth: (pendingAuth) => set({ pendingAuth }),
   clearPendingAuth: () => set({ pendingAuth: null, authError: null }),
@@ -249,6 +266,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             (!s.lock_holder && (state.link?.lockedByOther ?? false) && editState !== 'editing'),
           hasUnpushedEdits: s.has_unpushed_edits,
           remoteState: s.remote_state,
+          noAccess: s.access_denied,
         },
       };
     }),
@@ -264,6 +282,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         lockedByOther: false,
         hasUnpushedEdits: false,
         remoteState: 'up_to_date',
+        noAccess: false,
       },
       divergence: null,
       banner: null,
