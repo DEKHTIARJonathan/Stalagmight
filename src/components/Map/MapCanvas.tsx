@@ -2076,10 +2076,27 @@ function MapCanvas() {
       ) as [number, number];
       const el = document.createElement('div');
       el.setAttribute('data-testid', 'gas-turn-marker');
+      el.setAttribute('role', 'button');
+      // Keyboard-operable like the zero-datum star: focusable + Enter/Space, so
+      // keyboard / AT users can pick a route endpoint too (#243).
+      el.setAttribute('tabindex', '0');
+      el.setAttribute('aria-label', t('gasPanel.map.turnMarkerAria'));
       el.title = t('gasPanel.map.turnMarkerTooltip');
       el.style.cssText =
         'width:14px;height:14px;border-radius:50%;border:2px solid #ffffff;' +
-        'background:#c0392b;box-shadow:0 0 3px rgba(0,0,0,0.7);cursor:context-menu;';
+        'background:#c0392b;box-shadow:0 0 3px rgba(0,0,0,0.7);cursor:pointer;';
+      // Left-click a candidate end point → select it as the route endpoint (#243).
+      const pick = () => useGasPlanStore.getState().setEndpoint(ref);
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pick();
+      });
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          pick();
+        }
+      });
       // Right-click a candidate end point → the Plan context menu for that station.
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault();
