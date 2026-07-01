@@ -123,9 +123,21 @@ fn with_retry(
             }
         }
     }
-    Err(SpeleoDbError::Transport(
-        last_err.unwrap_or_else(|| "unknown transport error".to_owned()),
-    ))
+    Err(SpeleoDbError::Transport(clean_transport(
+        &last_err.unwrap_or_else(|| "unknown transport error".to_owned()),
+    )))
+}
+
+/// Strip `ureq`/std-io noise from a transport error string so it reads as a
+/// user-facing detail: drop a leading `io: ` and a trailing ` (os error N)`.
+/// (e.g. `io: Connection refused (os error 111)` → `Connection refused`.)
+fn clean_transport(raw: &str) -> String {
+    let s = raw.strip_prefix("io: ").unwrap_or(raw);
+    let s = match s.rfind(" (os error ") {
+        Some(idx) if s.ends_with(')') => &s[..idx],
+        _ => s,
+    };
+    s.trim().to_owned()
 }
 
 /// Read a response into `(status, body)` for [`with_retry`]'s closure. A
@@ -157,7 +169,31 @@ fn parse_error_message(body: &[u8]) -> Option<String> {
     if let Some(s) = value.get("detail").and_then(serde_json::Value::as_str) {
         return Some(s.to_owned());
     }
-    value.get("errors").map(ToString::to_string)
+    // DRF validation error: `{errors: {non_field_errors: ["..."], field: ["..."]}}`.
+    // Surface the first human sentence (non_field_errors first, else any field's
+    // first message) rather than dumping the raw JSON object at the user.
+    if let Some(errors) = value.get("errors") {
+        return first_error_sentence(errors).or_else(|| Some(errors.to_string()));
+    }
+    None
+}
+
+/// Pull the first human message out of a DRF `errors` object: prefer
+/// `non_field_errors`, else the first string in any field's array.
+fn first_error_sentence(errors: &serde_json::Value) -> Option<String> {
+    fn first_string(v: &serde_json::Value) -> Option<String> {
+        match v {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Array(a) => a.iter().find_map(|x| x.as_str().map(str::to_owned)),
+            _ => None,
+        }
+    }
+    if let Some(m) = errors.get("non_field_errors").and_then(first_string) {
+        return Some(m);
+    }
+    errors
+        .as_object()
+        .and_then(|obj| obj.values().find_map(first_string))
 }
 
 #[derive(Deserialize)]
@@ -665,7 +701,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        api_url, bearer, build_upload_parts, mime_for, parse_error_message,
+        api_url, bearer, build_upload_parts, clean_transport, mime_for, parse_error_message,
         parse_upload_auto_response, with_retry, RevisionHistory, UserInfo,
     };
     use crate::speleodb::SpeleoDbError;
@@ -785,10 +821,34 @@ mod tests {
             parse_error_message(br#"{"detail":"Not found."}"#).as_deref(),
             Some("Not found.")
         );
-        // The auth-token bad-credentials shape: a nested `errors` object.
-        let msg = parse_error_message(br#"{"errors":{"non_field_errors":["bad"]}}"#);
-        assert!(msg.is_some_and(|m| m.contains("non_field_errors")));
+        // The auth-token bad-credentials shape: a nested `errors` object — surface
+        // the human sentence (non_field_errors first), never the raw JSON.
+        assert_eq!(
+            parse_error_message(br#"{"errors":{"non_field_errors":["bad"]}}"#).as_deref(),
+            Some("bad")
+        );
+        // A field error with no non_field_errors falls back to the first field msg.
+        assert_eq!(
+            parse_error_message(br#"{"errors":{"email":["Enter a valid email."]}}"#).as_deref(),
+            Some("Enter a valid email.")
+        );
         assert_eq!(parse_error_message(b"not json"), None);
+    }
+
+    #[test]
+    fn clean_transport_strips_io_and_os_error_noise() {
+        assert_eq!(
+            clean_transport("io: Connection refused (os error 111)"),
+            "Connection refused"
+        );
+        assert_eq!(clean_transport("io: Connection reset"), "Connection reset");
+        // A message without the noise is returned as-is (trimmed).
+        assert_eq!(clean_transport("timed out"), "timed out");
+        // A parenthetical that isn't an os-error suffix is preserved.
+        assert_eq!(
+            clean_transport("dns error (lookup failed)"),
+            "dns error (lookup failed)"
+        );
     }
 
     #[test]

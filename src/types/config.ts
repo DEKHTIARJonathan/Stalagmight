@@ -293,6 +293,9 @@ export const defaultConfig: Config = {
     // block on unless explicitly relaxed). #205 Settings binds the UI to these.
     token_fallback: 'session_only',
     insecure_http: false,
+    // How often (seconds) the action shell re-checks remote state. Floor 30 is
+    // enforced in the Settings UI and clamped again backend-side on load.
+    poll_interval_seconds: 60,
   },
 };
 

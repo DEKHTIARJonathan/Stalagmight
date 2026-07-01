@@ -77,7 +77,7 @@ pub enum TokenFallback {
 /// plaintext escape hatch / in-memory session fallback); see
 /// `crate::speleodb::auth`. At runtime the `DEV_SPELEODB_URL` env var overrides
 /// `endpoint`. The full Settings-tab UI binding is #205.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SpeleoDbConfig {
     /// Persisted endpoint base URL (e.g. `https://www.speleodb.org`). Overridden
     /// at runtime by `DEV_SPELEODB_URL` when set.
@@ -98,11 +98,37 @@ pub struct SpeleoDbConfig {
     /// D-B19's scheme reject lives in `tls.rs`, not here.
     #[serde(default)]
     pub insecure_http: bool,
+    /// How often (seconds) the action shell re-checks the linked project's remote
+    /// state (lock holder / remote-ahead / conflict) for its status icon. Default
+    /// 60; **clamped up to `MIN_POLL_INTERVAL_SECONDS` on load** so a hand-edited
+    /// config below the floor can't spam the server.
+    #[serde(default = "default_poll_interval_seconds")]
+    pub poll_interval_seconds: u32,
+}
+
+/// Floor for [`SpeleoDbConfig::poll_interval_seconds`]. Enforced both in the
+/// Settings UI and here on load (a hand-edited sub-floor value is corrected up).
+pub const MIN_POLL_INTERVAL_SECONDS: u32 = 30;
+
+fn default_poll_interval_seconds() -> u32 {
+    60
+}
+
+impl Default for SpeleoDbConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: None,
+            email: None,
+            token_fallback: TokenFallback::default(),
+            insecure_http: false,
+            poll_interval_seconds: default_poll_interval_seconds(),
+        }
+    }
 }
 
 impl SpeleoDbConfig {
     /// [Track C] (#188): coerce the `#[serde(other)]` sentinel back to the safe
-    /// default. `insecure_http` needs no normalization. Mirrors
+    /// default, and clamp the poll interval up to the floor. Mirrors
     /// [`AppearanceConfig::normalize`]; wired into [`Config::normalize`].
     pub fn normalize(&mut self) {
         if self.token_fallback == TokenFallback::Unknown {
@@ -110,6 +136,14 @@ impl SpeleoDbConfig {
                 "Unknown token_fallback value in config, normalizing to \"session_only\""
             );
             self.token_fallback = TokenFallback::SessionOnly;
+        }
+        if self.poll_interval_seconds < MIN_POLL_INTERVAL_SECONDS {
+            tracing::warn!(
+                requested = self.poll_interval_seconds,
+                floor = MIN_POLL_INTERVAL_SECONDS,
+                "SpeleoDB poll_interval_seconds below floor; clamping up"
+            );
+            self.poll_interval_seconds = MIN_POLL_INTERVAL_SECONDS;
         }
     }
 }

@@ -2615,6 +2615,11 @@
     }
   },
   "speleodb": {
+    "errors": {
+      "loginFailed": "Login to SpeleoDB failed",
+      "openFailed": "Unable to open the project",
+      "listFailed": "Could not load projects"
+    },
     "editBar": {
       "readOnly": "Read-only",
       "editing": "Editing",

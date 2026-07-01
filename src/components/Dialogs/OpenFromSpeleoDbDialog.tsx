@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
-import { invokeIpc, getErrorMessage } from '../../utils/ipc';
-import { speleoErrorAction } from '../../utils/speleoError';
+import { invokeIpc } from '../../utils/ipc';
+import { speleoErrorAction, humanizeSpeleoError } from '../../utils/speleoError';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type {
@@ -62,7 +62,7 @@ export default function OpenFromSpeleoDbDialog() {
         if (cancelled) return;
         // A dead token surfaces here — drop the session and prompt a re-login.
         if (speleoErrorAction(e) === 'ReLogin') clearSession();
-        setError(getErrorMessage(e, t('speleodb.browser.listFailed')));
+        setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
         setPhase('logged-out');
       }
     })();
@@ -87,7 +87,7 @@ export default function OpenFromSpeleoDbDialog() {
         clearSession();
         setPhase('logged-out');
       }
-      setError(getErrorMessage(e, t('speleodb.browser.listFailed')));
+      setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
     } finally {
       setBusy(false);
     }
@@ -106,7 +106,7 @@ export default function OpenFromSpeleoDbDialog() {
         latestCommitSha: project.latest_commit_sha ?? null,
       });
     } catch (e) {
-      setError(getErrorMessage(e, t('speleodb.browser.openFailed')));
+      setError(humanizeSpeleoError(e, t('speleodb.errors.openFailed')));
       if (speleoErrorAction(e) === 'ReLogin') {
         clearSession();
         setPhase('logged-out');

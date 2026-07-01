@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
-import { invokeIpc, getErrorMessage } from '../utils/ipc';
-import { speleoErrorAction } from '../utils/speleoError';
+import { invokeIpc } from '../utils/ipc';
+import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
 import type { DoneResult, StartEditingResult, UpdateResult } from '../types/ipc.generated';
 
 /**
@@ -34,11 +34,11 @@ export function useSpeleoActions(): SpeleoActions {
   const clearSession = useSpeleoStore((s) => s.clearSession);
 
   const handleError = useCallback(
-    (e: unknown, fallbackKey: string) => {
+    (e: unknown, prefixKey: string) => {
       // A dead token collapses the shell to read-only (mirrors the backend gate
       // drop); other errors are transient — surface and let the user retry.
       if (speleoErrorAction(e) === 'ReLogin') clearSession();
-      showToast(getErrorMessage(e, t(fallbackKey)), 'speleodb-action-error');
+      showToast(humanizeSpeleoError(e, t(prefixKey)), 'speleodb-action-error');
     },
     [clearSession, showToast, t],
   );
