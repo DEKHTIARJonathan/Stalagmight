@@ -17,7 +17,7 @@ use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
 use crate::speleodb::models::SpeleoProjectSummary;
-use crate::speleodb::sync::{self, PushPlan, ReconcileVerdict};
+use crate::speleodb::sync::{self, FenceOutcome, PushPlan, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
     DoneResult, PushResult, RemoteState, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus,
@@ -402,6 +402,7 @@ impl AppState {
                     permission: None,
                     lock_holder: None,
                     remote_state: RemoteState::Unknown,
+                    access_denied: false,
                 });
             }
             Err(e) => return Err(local_dto(e)),
@@ -416,28 +417,36 @@ impl AppState {
         // validation as the edit verbs; on any miss (invalid id, no token,
         // transport/HTTP error) the fields degrade to None / Unknown — the local
         // truth still returns.
-        let (permission, lock_holder, remote_state) =
+        let (permission, lock_holder, remote_state, access_denied) =
             if validate_project_id(&link.project_id).is_ok() {
                 match self.speleodb_active_token() {
                     Ok((endpoint, token)) => {
                         let insecure_http = self.speleodb_insecure_http();
-                        let (permission, lock_holder) = match client::get_project(
+                        let (permission, lock_holder, access_denied) = match client::get_project(
                             &endpoint,
                             &token,
                             insecure_http,
                             &link.project_id,
                         ) {
-                            Ok(p) => (p.permission, p.active_mutex.map(|m| m.user)),
-                            Err(_) => (None, None),
+                            Ok(p) => (p.permission, p.active_mutex.map(|m| m.user), false),
+                            // A definitive 403 (or a 404 hiding the resource) means we
+                            // are logged in but have no access to this managed project —
+                            // flag it so the UI can offer converting to a local file.
+                            // A 401 is a dead token (re-login), NOT access-denied; a
+                            // transport error is offline — both leave the flag false.
+                            Err(SpeleoDbError::Status {
+                                status: 403 | 404, ..
+                            }) => (None, None, true),
+                            Err(_) => (None, None, false),
                         };
                         let remote_state =
                             self.speleodb_remote_state(&endpoint, &token, insecure_http, &link);
-                        (permission, lock_holder, remote_state)
+                        (permission, lock_holder, remote_state, access_denied)
                     }
-                    Err(_) => (None, None, RemoteState::Unknown),
+                    Err(_) => (None, None, RemoteState::Unknown, false),
                 }
             } else {
-                (None, None, RemoteState::Unknown)
+                (None, None, RemoteState::Unknown, false)
             };
 
         // Invariant: holding the write lock means we may edit. If we hold it but the
@@ -464,14 +473,24 @@ impl AppState {
             permission,
             lock_holder,
             remote_state,
+            access_denied,
         })
     }
 
     /// Best-effort remote-state (freshness fold, #202): resolve the server tip from
-    /// the revision topology and project the reconcile verdict for the action
+    /// the revision topology and project the BASE-vs-tip fence for the action
     /// button (T2c). Any failure → `Unknown` — the passive poll must never surface
     /// an error, and it is NOT routed through `handle_auth` (a transient 401 here
     /// must not auto-drop the session, mirroring [`Self::speleodb_lock_holder`]).
+    ///
+    /// This uses the raw [`sync::fence`], NOT [`sync::reconcile_verdict`]: the
+    /// verdict folds `FailClosed` (a recorded BASE but no server tip — a transient
+    /// empty response) and a clean-but-non-ancestor fast-forward into `Diverged`,
+    /// which would paint the passive button crimson "conflict" with no local edits
+    /// at stake. The fence keeps them apart — only a genuine divergence (the server
+    /// moved AND we hold un-pushed edits) is a `Conflict`; a moved-with-no-edits is
+    /// `RemoteAhead`; the anomaly is `Unknown`. The Update/Start verbs still run the
+    /// stricter reconcile (fail-closed to the prompt) when the user actually acts.
     fn speleodb_remote_state(
         &self,
         endpoint: &str,
@@ -482,15 +501,18 @@ impl AppState {
         match head_with_empty_retry(link.base_commit_sha.as_deref(), || {
             self.speleodb_server_head(endpoint, token, insecure_http, &link.project_id)
         }) {
-            Ok((tip, commits)) => match sync::reconcile_verdict(
+            Ok((tip, _commits)) => match sync::fence(
                 link.base_commit_sha.as_deref(),
                 tip.as_deref(),
                 link.has_unpushed_edits,
-                &commits,
             ) {
-                ReconcileVerdict::UpToDate => RemoteState::UpToDate,
-                ReconcileVerdict::FastForward => RemoteState::RemoteAhead,
-                ReconcileVerdict::Diverged => RemoteState::Conflict,
+                FenceOutcome::UpToDate => RemoteState::UpToDate,
+                FenceOutcome::FastForward => RemoteState::RemoteAhead,
+                FenceOutcome::Diverged => RemoteState::Conflict,
+                // Anomaly (BASE but no tip): not a conflict — nothing local is at
+                // risk of being clobbered. Degrade to Unknown; a later poll or the
+                // Update verb re-fences.
+                FenceOutcome::FailClosed => RemoteState::Unknown,
             },
             Err(_) => RemoteState::Unknown,
         }
@@ -1039,6 +1061,32 @@ impl AppState {
         db.load_speleo_link()
             .map_err(|e| SpeleoDbError::Io(e.to_string()))?
             .ok_or(SpeleoDbError::NoRemoteProject)
+    }
+
+    /// Convert the open managed project into a plain, unmanaged `.stalx` (T2/#204):
+    /// drop its `speleo_link` row so it is no longer tied to SpeleoDB, then open the
+    /// edit gate. Two callers reach this: (10) a project the server refused us access
+    /// to (`access_denied`), and (11) keeping locally-edited work after a divergence
+    /// by saving it elsewhere. Nothing is pushed or released — the SpeleoDB copy is
+    /// simply abandoned (a fresh Open-from-SpeleoDB re-pulls the server tip), so the
+    /// managed side stays clean. No-op-safe: a `None` delete over an absent row is
+    /// fine. The lock, if any, is intentionally NOT released here (the caller decides).
+    pub(crate) fn speleodb_unlink(&self) -> Result<(), SpeleoErrorDto> {
+        {
+            let db_guard = self
+                .database
+                .lock()
+                .map_err(|_| local_dto(SpeleoDbError::Io("database lock poisoned".to_owned())))?;
+            let db = db_guard
+                .as_ref()
+                .ok_or_else(|| local_dto(SpeleoDbError::NoRemoteProject))?;
+            db.save_speleo_link(None)
+                .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        }
+        // Now a local-only project: it edits freely (the read-only gate hung on the
+        // remote link, which is gone).
+        self.set_edit_enabled(true);
+        Ok(())
     }
 
     /// Best-effort: re-GET the project and return who holds its mutex (the active

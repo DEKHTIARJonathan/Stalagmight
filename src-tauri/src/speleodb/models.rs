@@ -264,6 +264,13 @@ pub struct SpeleoLinkStatus {
     /// "remote has an update" / "conflict" states (T2c). Best-effort over the
     /// revision topology; `Unknown` when logged out / offline / the lookup failed.
     pub remote_state: RemoteState,
+    /// The project is linked but the server definitively refused this user access
+    /// to it (a 403 on `get_project`) — e.g. a managed `.stalx` shared as a bare
+    /// file to someone who is not a collaborator. Distinct from a transient
+    /// offline miss (which leaves `permission: None` but this `false`), so the UI
+    /// can offer converting it to an unmanaged local file rather than nagging to
+    /// retry. Never set on a plain 401 (that is a dead token → re-login).
+    pub access_denied: bool,
 }
 
 /// The local copy's relationship to the server tip (the reconcile verdict,
@@ -388,6 +395,7 @@ mod tests {
             permission: Some(Permission::ReadAndWrite),
             lock_holder: Some("holder@example.com".to_owned()),
             remote_state: RemoteState::RemoteAhead,
+            access_denied: false,
         })
         .expect("serialize link status");
         let push = serde_json::to_string(&PushResult::PushUnconfirmed).expect("serialize push");

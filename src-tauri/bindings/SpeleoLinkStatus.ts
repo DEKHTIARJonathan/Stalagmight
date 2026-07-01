@@ -2,4 +2,4 @@
 import type { Permission } from "./Permission";
 import type { RemoteState } from "./RemoteState";
 
-export interface SpeleoLinkStatus { is_remote: boolean, edit_enabled: boolean, has_unpushed_edits: boolean, permission: Permission | null, lock_holder: string | null, remote_state: RemoteState, }
+export interface SpeleoLinkStatus { is_remote: boolean, edit_enabled: boolean, has_unpushed_edits: boolean, permission: Permission | null, lock_holder: string | null, remote_state: RemoteState, access_denied: boolean, }
