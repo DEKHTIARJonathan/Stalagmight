@@ -2617,6 +2617,9 @@
     }
   },
   "speleodb": {
+    "map": {
+      "readOnlyBadge": "SpeleoDB · read-only"
+    },
     "errors": {
       "loginFailed": "Login to SpeleoDB failed",
       "openFailed": "Unable to open the project",

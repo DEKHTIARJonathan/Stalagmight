@@ -38,7 +38,8 @@ import { installPanZoomDebug } from './panZoomDebug';
 import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
-import { FitToViewIcon } from '../common/icons';
+import { FitToViewIcon, LockIcon } from '../common/icons';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { setSource } from '../../utils/telemetry';
@@ -266,6 +267,9 @@ function MapCanvas() {
 
   // Geometry display mode (measured vs read-only closure-adjusted).
   const geometryMode = useUIStore((s) => s.geometryMode);
+  // T2b: a remote SpeleoDB project opened without the write lock shows a
+  // top-left read-only badge, mirroring the closure-adjusted view-only badge.
+  const speleoReadOnly = useSpeleoStore((s) => (s.link ? s.link.editState !== 'editing' : false));
   const setGeometryMode = useUIStore((s) => s.setGeometryMode);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
 
@@ -3864,6 +3868,20 @@ function MapCanvas() {
               {t('map.geometry.computing')}
             </span>
           )}
+        </div>
+      )}
+
+      {/* SpeleoDB read-only badge (T2b) — a remote project opened without the write
+          lock. Sits below the closure-adjusted badge / fit-to-view button so both
+          can show. The single logo button (right of the hamburger) drives the
+          lock; this badge is the passive read-only indicator. */}
+      {speleoReadOnly && !placementMode && (
+        <div
+          className="absolute top-12 left-2 bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-1.5"
+          data-testid="speleodb-readonly-banner"
+        >
+          <LockIcon size={13} />
+          <span className="text-accent font-medium">{t('speleodb.map.readOnlyBadge')}</span>
         </div>
       )}
 

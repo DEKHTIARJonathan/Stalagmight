@@ -17,6 +17,7 @@ import DisplayMenu from './DisplayMenu';
 import { ModeCarousel } from './ModeCarousel';
 import TableSelectDropdown from './TableSelectDropdown';
 import { SpeleoEditBar } from './SpeleoEditBar';
+import { useSpeleoStore } from '../../store/speleoStore';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, type ToolGroupDef } from '../../utils/toolGroups';
 import { isMutatingTool } from '../../utils/toolUtils';
@@ -164,9 +165,13 @@ export default function Toolbar({
   // Read-only both in the closure-adjusted view AND in Plan/Export (the whole map is
   // non-editable there) — disable the geometry-mutating tools in both. Select/Pan/Zoom/
   // Measure stay enabled, so they remain available in every mode.
-  const geometryReadOnly = useUIStore(
-    (s) => s.geometryMode === 'closureAdjusted' || s.appMode !== 'survey'
-  );
+  // A remote SpeleoDB project opened without the write lock is read-only — disable
+  // the mutating tools + Import exactly like closure-adjusted mode (T2a). The
+  // backend edit gate is the real enforcement; this is the visual parity.
+  const speleoReadOnly = useSpeleoStore((s) => (s.link ? s.link.editState !== 'editing' : false));
+  const geometryReadOnly =
+    useUIStore((s) => s.geometryMode === 'closureAdjusted' || s.appMode !== 'survey') ||
+    speleoReadOnly;
   // Survey shows the full toolbar; Plan/Export show only the non-mutating tools.
   const toolbarItems = appMode === 'survey' ? TOOLBAR_ITEMS : READ_ONLY_TOOLBAR_ITEMS;
 
