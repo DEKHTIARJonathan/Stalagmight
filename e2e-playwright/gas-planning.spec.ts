@@ -473,16 +473,22 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="export-mode-preview"]')).toBeVisible();
     await expect(panel.getByTestId('export-type-image')).toBeChecked();
 
-    // Customize toggles are present; colors are enabled for the default PNG.
+    // Customize controls: the penetration-labels toggle + the Color dropdown, which
+    // offers the depth/distance/section gradients that match the survey map.
     await expect(panel.getByTestId('export-show-labels')).toBeVisible();
-    const colorToggle = panel.getByTestId('export-show-colors');
-    await expect(colorToggle).toBeEnabled();
+    const colorSelect = panel.getByTestId('export-color-mode');
+    await expect(colorSelect).toBeVisible();
+    await colorSelect.locator('button').first().click();
+    const colorList = page.getByRole('listbox');
+    await expect(colorList.locator('[role="option"]:has-text("By depth")')).toBeVisible();
+    await expect(colorList.locator('[role="option"]:has-text("By distance")')).toBeVisible();
+    await colorList.locator('[role="option"]:has-text("By depth")').click();
 
-    // Switch the format to SVG → colors disable (SVG is always monochrome).
+    // Switch the format to SVG → the Color dropdown disables (SVG is always monochrome).
     const formatSelect = panel.getByTestId('image-format-select');
     await formatSelect.locator('button').first().click();
     await page.getByRole('listbox').locator('[role="option"]:has-text("SVG")').click();
-    await expect(colorToggle).toBeDisabled();
+    await expect(colorSelect.locator('button').first()).toBeDisabled();
 
     // Switch to the data export type → the map preview overlay goes away.
     await panel.getByTestId('export-type-data').click();

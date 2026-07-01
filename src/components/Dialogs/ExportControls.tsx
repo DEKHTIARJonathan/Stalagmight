@@ -7,7 +7,7 @@ import { Select } from '../common/Select';
 import { AlertDialog } from './AlertDialog';
 import { LoadingProgress } from '../LoadingProgress/LoadingProgress';
 import ExportPreview from './ExportPreview';
-import type { ExportImageOptions, ImageFormat } from '../../types/commands';
+import type { ExportImageOptions, ImageFormat, ColorMode } from '../../types/commands';
 import type { LoadingProgressPayload } from '../../types/loading';
 import type { ExportType, DataFormat } from '../../store/exportStore';
 import { ensureExtension, exportSaveFilters } from '../../utils/fileDialogs';
@@ -364,26 +364,32 @@ export default function ExportControls({
                   />
                   <span>Penetration-distance labels</span>
                 </label>
-                <label
-                  className={`flex items-center gap-2 text-sm ${
-                    svgSelected ? 'opacity-50' : ''
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={imageOptions.show_colors && !svgSelected}
-                    disabled={svgSelected}
-                    onChange={(e) =>
-                      onImageOptionsChange({ ...imageOptions, show_colors: e.target.checked })
+                <div className={svgSelected ? 'opacity-50' : ''}>
+                  <label
+                    htmlFor="export-color-mode"
+                    className="block text-sm text-text-secondary mb-1"
+                  >
+                    Color
+                  </label>
+                  <Select
+                    value={imageOptions.color_mode}
+                    onChange={(v) =>
+                      onImageOptionsChange({ ...imageOptions, color_mode: v as ColorMode })
                     }
-                    data-testid="export-show-colors"
+                    disabled={svgSelected}
+                    options={[
+                      { value: 'none', label: 'None (monochrome)' },
+                      { value: 'section', label: 'By section' },
+                      { value: 'depth', label: 'By depth' },
+                      { value: 'distance', label: 'By distance' },
+                    ]}
+                    data-testid="export-color-mode"
                   />
-                  <span>Color by section</span>
-                </label>
+                </div>
                 <p className="text-xs text-text-secondary">
                   {svgSelected
-                    ? 'SVG export is always monochrome. Choose PNG or PDF to enable colors.'
-                    : 'Colors apply to PNG / PDF only.'}
+                    ? 'SVG export is always monochrome. Choose PNG or PDF to color the map.'
+                    : 'Depth / distance gradients match the survey map. Color applies to PNG / PDF.'}
                 </p>
               </div>
             </>

@@ -79,12 +79,124 @@ fn sanitize_hex_color(color: &str) -> &str {
     }
 }
 
+// --- Shot color gradients (mirror the live survey map) ----------------------
+// The map computes these colors in the FRONTEND (src/utils/colors.ts +
+// distanceGradient.ts), NOT via the orphaned Rust DepthPreset. To match on
+// screen, port those exact endpoints + math here.
+
+/// Live-map depth-gradient endpoints (dark-theme tokens, pinned theme-independent):
+/// shallow teal → deep coral. From `--cc-depth-shallow` / `--cc-depth-deep`.
+const DEPTH_SHALLOW: &str = "#4ecdc4";
+const DEPTH_DEEP: &str = "#ff6b6b";
+
+/// Live-map distance-gradient endpoints (near gold → far purple) + the grey the
+/// map paints unreachable features. From `src/utils/distanceGradient.ts`.
+const DIST_NEAR: (u8, u8, u8) = (0xf4, 0xd0, 0x3f);
+const DIST_FAR: (u8, u8, u8) = (0x7d, 0x3c, 0x98);
+const DIST_UNREACHABLE: &str = "#666666";
+
+/// Depth-gradient color for `depth` normalized over `[min_d, max_d]`, matching
+/// the survey map: a 2-stop HSL shortest-hue-path lerp shallow→deep. Non-finite
+/// input falls back to black; a flat range collapses to the shallow color.
+fn depth_gradient_color(depth: f64, min_d: f64, max_d: f64) -> String {
+    if !depth.is_finite() || !min_d.is_finite() || !max_d.is_finite() {
+        return "#000000".to_string();
+    }
+    if max_d == min_d {
+        return DEPTH_SHALLOW.to_string();
+    }
+    let t = ((depth.clamp(min_d, max_d) - min_d) / (max_d - min_d)).clamp(0.0, 1.0);
+    crate::export::depth_colors::interpolate_hsl(DEPTH_SHALLOW, DEPTH_DEEP, t)
+}
+
+/// The global depth range the survey map normalizes over: min/max across every
+/// station's z AND every shot's `depth_in`/`depth_out` (reference shots included,
+/// to match `MapCanvas` even though only non-reference shots are drawn). Falls
+/// back to `(0, 50)` when non-finite.
+fn depth_range(project: &Project, stations: &[crate::models::Station]) -> (f64, f64) {
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for s in stations {
+        min = min.min(s.coordinates.z);
+        max = max.max(s.coordinates.z);
+    }
+    for section in &project.sections {
+        for shot in &section.shots {
+            min = min.min(shot.depth_in).min(shot.depth_out);
+            max = max.max(shot.depth_in).max(shot.depth_out);
+        }
+    }
+    if min.is_finite() && max.is_finite() {
+        (min.min(max), max.max(min))
+    } else {
+        (0.0, 50.0)
+    }
+}
+
+/// sRGB channel (0-255) → linear light. MapLibre interpolates in linear space.
+fn srgb_to_linear(c: f64) -> f64 {
+    let c = c / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Linear light → sRGB channel (0-255, rounded).
+fn linear_to_srgb(c: f64) -> f64 {
+    let s = if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0).round()
+}
+
+/// Distance-gradient color for `value` normalized over `[0, max]`, matching the
+/// survey map: a linearized-sRGB lerp near→far, `None`/negative rendered grey.
+fn distance_gradient_color(value: Option<f64>, max: f64) -> String {
+    let Some(v) = value.filter(|v| v.is_finite() && *v >= 0.0) else {
+        return DIST_UNREACHABLE.to_string();
+    };
+    let safe_max = if max > 0.0 { max } else { 1.0 };
+    let t = (v / safe_max).clamp(0.0, 1.0);
+    let lerp = |a: u8, b: u8| -> u8 {
+        let (la, lb) = (srgb_to_linear(f64::from(a)), srgb_to_linear(f64::from(b)));
+        linear_to_srgb(la + t * (lb - la)) as u8
+    };
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        lerp(DIST_NEAR.0, DIST_FAR.0),
+        lerp(DIST_NEAR.1, DIST_FAR.1),
+        lerp(DIST_NEAR.2, DIST_FAR.2),
+    )
+}
+
+/// How the exported map colors its shots. Mirrors the live survey map's shot
+/// coloring so a PNG/PDF export matches what's on screen. Raster-only: SVG
+/// export is always monochrome regardless of this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+pub enum ColorMode {
+    /// Monochrome black-on-white (the classic minimal stick map).
+    #[default]
+    None,
+    /// Each shot in its section's color.
+    Section,
+    /// Depth gradient (shallow teal → deep coral), matching the survey map.
+    Depth,
+    /// Along-cave distance-from-entrance gradient (gold → purple), matching the map.
+    Distance,
+}
+
 /// Options for SVG / PNG / PDF map image export.
 ///
-/// The export is a minimal black-on-white stick map; the knobs are the output
+/// The export is a black-on-white stick map by default; the knobs are the output
 /// format, the PNG DPI, the branching-factor threshold that decides where to
-/// split between the two stroke widths, and whether to draw the
-/// penetration-distance labels.
+/// split between the two stroke widths, whether to draw the penetration-distance
+/// labels, and how to color the shots.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 pub struct ExportImageOptions {
     /// Image format (png, svg, pdf).
@@ -98,12 +210,11 @@ pub struct ExportImageOptions {
     /// deepest reachable station. Defaults to `true` (the historical behavior).
     #[serde(default = "default_true")]
     pub show_penetration_labels: bool,
-    /// Whether to color shots by their section color. Opt-in (default `false`)
-    /// so the export stays a minimal black-on-white stick map unless asked.
-    /// **Raster-only**: ignored for SVG, which is always monochrome (see
-    /// [`generate_svg_string`]).
+    /// How to color the shots (section / depth / distance gradient), mirroring
+    /// the live survey map. Opt-in (default [`ColorMode::None`] = monochrome).
+    /// **Raster-only**: SVG export is always monochrome regardless of this.
     #[serde(default)]
-    pub show_colors: bool,
+    pub color_mode: ColorMode,
 }
 
 impl Default for ExportImageOptions {
@@ -113,7 +224,7 @@ impl Default for ExportImageOptions {
             dpi: 300,
             branching_threshold: 2,
             show_penetration_labels: true,
-            show_colors: false,
+            color_mode: ColorMode::None,
         }
     }
 }
@@ -717,113 +828,194 @@ pub fn generate_svg_string_with_stations(
     // Every shot in a single run shares the same segment_uf root (the run
     // is unioned by its own non-ref shots), so the run's stroke width is
     // well-defined by looking at any one shot's segment.
-    // Color shots by their section color only for raster output; SVG export is
-    // always a clean monochrome stick map regardless of the toggle.
-    let colored = options.show_colors && !matches!(options.format, ImageFormat::Svg);
+    // Shots are monochrome by default. Raster export can color them to match the
+    // live survey map (SVG export always stays monochrome). Depth/Distance are
+    // per-shot gradients; Section/None use the smooth run-batched polylines below.
+    let mode = if matches!(options.format, ImageFormat::Svg) {
+        ColorMode::None
+    } else {
+        options.color_mode
+    };
+    let depth_rng = (mode == ColorMode::Depth).then(|| depth_range(project, &stations));
+    let dist_field = (mode == ColorMode::Distance).then(|| {
+        let field = project.distance_field_from(&stations, None);
+        let by_ref: HashMap<StationRef, Option<f64>> = field
+            .station_refs
+            .iter()
+            .copied()
+            .zip(field.distances.iter().copied())
+            .collect();
+        (by_ref, field.max_reachable)
+    });
     let _ = writeln!(
         svg,
         r##"<g class="shots" stroke="#000000" fill="none" stroke-linejoin="round" stroke-linecap="round">"##,
     );
-    for section in &project.sections {
-        // Per-section stroke override (computed once); `None` inherits the
-        // group's black stroke for the monochrome path.
-        let section_stroke = colored.then(|| sanitize_hex_color(&section.color));
-        let mut i = 0;
-        while i < section.shots.len() {
-            if section.shots[i].is_reference {
-                i += 1;
-                continue;
-            }
-            // Walk the maximal contiguous run of non-ref shots from `i`,
-            // collecting station positions into a single polyline.
-            let mut points: Vec<(f64, f64)> = Vec::new();
-            let mut stroke_width = thin_sw;
-            let mut first_si: Option<usize> = None;
-            let mut last_si: Option<usize> = None;
-            let mut j = i;
-            while j < section.shots.len() && !section.shots[j].is_reference {
+    if matches!(mode, ColorMode::Depth | ColorMode::Distance) {
+        // Per-shot gradient: mirror the live map's per-shot coloring. No junction
+        // trimming here — the color variation carries the visual, not line breaks.
+        for section in &project.sections {
+            for j in 0..section.shots.len() {
+                if section.shots[j].is_reference {
+                    continue;
+                }
                 let from_ref = StationRef::new(section.id, j as u32);
                 let to_ref = StationRef::new(section.id, (j + 1) as u32);
                 let (Some(from), Some(to)) =
                     (station_by_ref.get(&from_ref), station_by_ref.get(&to_ref))
                 else {
-                    break;
+                    continue;
                 };
-                let Some(&fi) = station_index.get(&from_ref) else {
-                    break;
-                };
-                let Some(&ti) = station_index.get(&to_ref) else {
-                    break;
-                };
-                if points.is_empty() {
-                    let root = uf.find(fi);
-                    let branching = neighbors.get(&root).map_or(0u32, |s| s.len() as u32);
-                    stroke_width = if branching >= threshold {
-                        thick_sw
-                    } else {
-                        thin_sw
+                // Same thick/thin classification as the run-batched path.
+                let width = station_index
+                    .get(&from_ref)
+                    .map(|&fi| neighbors.get(&uf.find(fi)).map_or(0u32, |s| s.len() as u32))
+                    .map_or(thin_sw, |b| if b >= threshold { thick_sw } else { thin_sw });
+                let (x0, y0) = (from.coordinates.x, -from.coordinates.y);
+                let (x1, y1) = (to.coordinates.x, -to.coordinates.y);
+                if mode == ColorMode::Distance {
+                    let color = match dist_field.as_ref() {
+                        Some((by_ref, max)) => {
+                            let avg = match (
+                                by_ref.get(&from_ref).copied().flatten(),
+                                by_ref.get(&to_ref).copied().flatten(),
+                            ) {
+                                (Some(a), Some(b)) => Some((a + b) / 2.0),
+                                _ => None,
+                            };
+                            distance_gradient_color(avg, *max)
+                        }
+                        None => DIST_UNREACHABLE.to_string(),
                     };
-                    first_si = Some(fi);
-                    points.push((from.coordinates.x, -from.coordinates.y));
-                }
-                last_si = Some(ti);
-                points.push((to.coordinates.x, -to.coordinates.y));
-                j += 1;
-            }
-            // Trim either end that lands on a multi-segment junction so
-            // distinct segments don't blend into one continuous line.
-            // Cap the combined trim at `total_len - MIN_VISIBLE_SHOT_PX`
-            // so a short tied passage doesn't get its vertices eaten
-            // entirely and silently disappear from the export — scale
-            // both ends proportionally when the budget is tight.
-            let want_start = first_si.map_or(0.0, |si| station_trim_dist[si]);
-            let want_end = last_si.map_or(0.0, |si| station_trim_dist[si]);
-            if want_start > 0.0 || want_end > 0.0 {
-                let total_len = polyline_length(&points);
-                let min_visible = px(MIN_VISIBLE_SHOT_PX);
-                let max_total = (total_len - min_visible).max(0.0);
-                let (use_start, use_end) = if want_start + want_end <= max_total {
-                    (want_start, want_end)
-                } else if want_start + want_end > 0.0 {
-                    let s = max_total / (want_start + want_end);
-                    (want_start * s, want_end * s)
+                    let _ = writeln!(
+                        svg,
+                        r#"<polyline points="{x0:.2},{y0:.2} {x1:.2},{y1:.2}" stroke="{color}" stroke-width="{width}"/>"#,
+                    );
                 } else {
-                    (0.0, 0.0)
-                };
-                if use_start > 0.0 {
-                    trim_polyline_end(&mut points, true, use_start);
-                }
-                if use_end > 0.0 {
-                    trim_polyline_end(&mut points, false, use_end);
-                }
-            }
-            if points.len() >= 2 {
-                let mut pts_str = String::with_capacity(points.len() * 14);
-                for (idx, (x, y)) in points.iter().enumerate() {
-                    if idx > 0 {
-                        pts_str.push(' ');
-                    }
-                    let _ = write!(pts_str, "{x:.2},{y:.2}");
-                }
-                match section_stroke {
-                    Some(stroke) => {
+                    let (min_d, max_d) = depth_rng.unwrap_or((0.0, 50.0));
+                    let shot = &section.shots[j];
+                    // Subdivide into 4–12 segments (the map's smoothness formula),
+                    // each colored at its midpoint depth.
+                    let segs = ((shot.length / 2.0).ceil() as i64).clamp(4, 12) as usize;
+                    for s in 0..segs {
+                        let t0 = s as f64 / segs as f64;
+                        let t1 = (s + 1) as f64 / segs as f64;
+                        let mid = shot.depth_in
+                            + (shot.depth_out - shot.depth_in) * ((s as f64 + 0.5) / segs as f64);
+                        let color = depth_gradient_color(mid, min_d, max_d);
+                        let (ax, ay) = (x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0);
+                        let (bx, by) = (x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1);
                         let _ = writeln!(
                             svg,
-                            r#"<polyline points="{pts_str}" stroke="{stroke}" stroke-width="{stroke_width}"/>"#,
-                        );
-                    }
-                    None => {
-                        let _ = writeln!(
-                            svg,
-                            r#"<polyline points="{pts_str}" stroke-width="{stroke_width}"/>"#,
+                            r#"<polyline points="{ax:.2},{ay:.2} {bx:.2},{by:.2}" stroke="{color}" stroke-width="{width}"/>"#,
                         );
                     }
                 }
             }
-            // Advance past the run, but never less than one — protects
-            // against a station-lookup failure on the run's first shot
-            // (which would leave `j == i`).
-            i = if j > i { j } else { i + 1 };
+        }
+    } else {
+        for section in &project.sections {
+            // Per-section stroke override (computed once); `None` inherits the
+            // group's black stroke for the monochrome path.
+            let section_stroke =
+                (mode == ColorMode::Section).then(|| sanitize_hex_color(&section.color));
+            let mut i = 0;
+            while i < section.shots.len() {
+                if section.shots[i].is_reference {
+                    i += 1;
+                    continue;
+                }
+                // Walk the maximal contiguous run of non-ref shots from `i`,
+                // collecting station positions into a single polyline.
+                let mut points: Vec<(f64, f64)> = Vec::new();
+                let mut stroke_width = thin_sw;
+                let mut first_si: Option<usize> = None;
+                let mut last_si: Option<usize> = None;
+                let mut j = i;
+                while j < section.shots.len() && !section.shots[j].is_reference {
+                    let from_ref = StationRef::new(section.id, j as u32);
+                    let to_ref = StationRef::new(section.id, (j + 1) as u32);
+                    let (Some(from), Some(to)) =
+                        (station_by_ref.get(&from_ref), station_by_ref.get(&to_ref))
+                    else {
+                        break;
+                    };
+                    let Some(&fi) = station_index.get(&from_ref) else {
+                        break;
+                    };
+                    let Some(&ti) = station_index.get(&to_ref) else {
+                        break;
+                    };
+                    if points.is_empty() {
+                        let root = uf.find(fi);
+                        let branching = neighbors.get(&root).map_or(0u32, |s| s.len() as u32);
+                        stroke_width = if branching >= threshold {
+                            thick_sw
+                        } else {
+                            thin_sw
+                        };
+                        first_si = Some(fi);
+                        points.push((from.coordinates.x, -from.coordinates.y));
+                    }
+                    last_si = Some(ti);
+                    points.push((to.coordinates.x, -to.coordinates.y));
+                    j += 1;
+                }
+                // Trim either end that lands on a multi-segment junction so
+                // distinct segments don't blend into one continuous line.
+                // Cap the combined trim at `total_len - MIN_VISIBLE_SHOT_PX`
+                // so a short tied passage doesn't get its vertices eaten
+                // entirely and silently disappear from the export — scale
+                // both ends proportionally when the budget is tight.
+                let want_start = first_si.map_or(0.0, |si| station_trim_dist[si]);
+                let want_end = last_si.map_or(0.0, |si| station_trim_dist[si]);
+                if want_start > 0.0 || want_end > 0.0 {
+                    let total_len = polyline_length(&points);
+                    let min_visible = px(MIN_VISIBLE_SHOT_PX);
+                    let max_total = (total_len - min_visible).max(0.0);
+                    let (use_start, use_end) = if want_start + want_end <= max_total {
+                        (want_start, want_end)
+                    } else if want_start + want_end > 0.0 {
+                        let s = max_total / (want_start + want_end);
+                        (want_start * s, want_end * s)
+                    } else {
+                        (0.0, 0.0)
+                    };
+                    if use_start > 0.0 {
+                        trim_polyline_end(&mut points, true, use_start);
+                    }
+                    if use_end > 0.0 {
+                        trim_polyline_end(&mut points, false, use_end);
+                    }
+                }
+                if points.len() >= 2 {
+                    let mut pts_str = String::with_capacity(points.len() * 14);
+                    for (idx, (x, y)) in points.iter().enumerate() {
+                        if idx > 0 {
+                            pts_str.push(' ');
+                        }
+                        let _ = write!(pts_str, "{x:.2},{y:.2}");
+                    }
+                    match section_stroke {
+                        Some(stroke) => {
+                            let _ = writeln!(
+                                svg,
+                                r#"<polyline points="{pts_str}" stroke="{stroke}" stroke-width="{stroke_width}"/>"#,
+                            );
+                        }
+                        None => {
+                            let _ = writeln!(
+                                svg,
+                                r#"<polyline points="{pts_str}" stroke-width="{stroke_width}"/>"#,
+                            );
+                        }
+                    }
+                }
+                // Advance past the run, but never less than one — protects
+                // against a station-lookup failure on the run's first shot
+                // (which would leave `j == i`).
+                i = if j > i { j } else { i + 1 };
+            }
         }
     }
     svg.push_str("</g>\n");
@@ -1297,7 +1489,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 2,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
             project.compute_station_coordinates(),
         )
@@ -1375,7 +1567,7 @@ mod tests {
             dpi: 72,
             branching_threshold: 2,
             show_penetration_labels: true,
-            show_colors: false,
+            color_mode: ColorMode::None,
         };
         export_png(
             &project,
@@ -1410,7 +1602,7 @@ mod tests {
                     dpi,
                     branching_threshold: 2,
                     show_penetration_labels: true,
-                    show_colors: false,
+                    color_mode: ColorMode::None,
                 },
                 project.compute_station_coordinates(),
             )
@@ -1470,7 +1662,7 @@ mod tests {
             dpi: 2000,
             branching_threshold: 2,
             show_penetration_labels: true,
-            show_colors: false,
+            color_mode: ColorMode::None,
         };
         let err = export_png(
             &project,
@@ -1493,7 +1685,7 @@ mod tests {
             dpi: 0,
             branching_threshold: 2,
             show_penetration_labels: true,
-            show_colors: false,
+            color_mode: ColorMode::None,
         };
         let err = export_png(
             &project,
@@ -1588,7 +1780,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 1,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -1699,7 +1891,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 3, // trunk thick, children thin
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -1808,7 +2000,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 3,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -1905,7 +2097,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 1,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -1924,7 +2116,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 2,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -2037,7 +2229,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 3,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -2116,7 +2308,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 1,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -2136,7 +2328,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 2,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -2213,7 +2405,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 2,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -2292,7 +2484,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 2,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -2354,7 +2546,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 1,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -2377,7 +2569,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 1,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -2411,7 +2603,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 0,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -2495,7 +2687,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 0,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -2578,7 +2770,7 @@ mod tests {
                 dpi: 72,
                 branching_threshold: 1,
                 show_penetration_labels: true,
-                show_colors: false,
+                color_mode: ColorMode::None,
             },
         )
         .unwrap();
@@ -2590,7 +2782,7 @@ mod tests {
 
     #[test]
     fn no_section_color_in_default_output() {
-        // Color is opt-in: with the default options (show_colors = false) the
+        // Color is opt-in: with the default options (color_mode None) the
         // export stays a monochrome stick map.
         let mut project = Project::new("Colored".to_string(), None);
         project.add_section(SectionData {
@@ -2621,7 +2813,7 @@ mod tests {
             &project,
             &ExportImageOptions {
                 format: ImageFormat::Png,
-                show_colors: true,
+                color_mode: ColorMode::Section,
                 ..Default::default()
             },
         )
@@ -2636,7 +2828,7 @@ mod tests {
             &project,
             &ExportImageOptions {
                 format: ImageFormat::Svg,
-                show_colors: true,
+                color_mode: ColorMode::Section,
                 ..Default::default()
             },
         )
@@ -2722,6 +2914,116 @@ mod tests {
         assert_ne!(
             measured, shifted,
             "supplied station coordinates should change the rendered geometry"
+        );
+    }
+
+    #[test]
+    fn depth_gradient_color_matches_map_scheme() {
+        // Flat range collapses to the shallow endpoint; non-finite falls back to black.
+        assert_eq!(depth_gradient_color(5.0, 10.0, 10.0), "#4ecdc4");
+        assert_eq!(depth_gradient_color(f64::NAN, 0.0, 1.0), "#000000");
+        // Shallow (t=0) and deep (t=1) differ, and the midpoint differs from both.
+        let shallow = depth_gradient_color(0.0, 0.0, 100.0);
+        let deep = depth_gradient_color(100.0, 0.0, 100.0);
+        let mid = depth_gradient_color(50.0, 0.0, 100.0);
+        assert_ne!(shallow, deep);
+        assert_ne!(mid, shallow);
+        assert_ne!(mid, deep);
+        // Out-of-range depths clamp to the endpoints.
+        assert_eq!(depth_gradient_color(-10.0, 0.0, 100.0), shallow);
+        assert_eq!(depth_gradient_color(999.0, 0.0, 100.0), deep);
+    }
+
+    #[test]
+    fn distance_gradient_color_greys_unreachable_and_ramps() {
+        // Unreachable (None) and the -1 sentinel both render grey.
+        assert_eq!(distance_gradient_color(None, 100.0), "#666666");
+        assert_eq!(distance_gradient_color(Some(-1.0), 100.0), "#666666");
+        // Near and far are distinct, non-grey ramp colors.
+        let near = distance_gradient_color(Some(0.0), 100.0);
+        let far = distance_gradient_color(Some(100.0), 100.0);
+        assert_ne!(near, far);
+        assert_ne!(near, "#666666");
+        assert_ne!(far, "#666666");
+        // Degenerate max is guarded (no divide-by-zero / NaN).
+        assert_eq!(distance_gradient_color(Some(0.0), 0.0), near);
+    }
+
+    #[test]
+    fn depth_color_mode_colors_raster_but_svg_stays_mono() {
+        let mut project = Project::new("Depth".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("A".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 90.0, false)],
+            ..Default::default()
+        });
+        // Raster + depth mode → shots carry the depth gradient (shallow color here,
+        // since make_shot depths are flat).
+        let png = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Png,
+                color_mode: ColorMode::Depth,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            png.contains("#4ecdc4"),
+            "depth mode should color raster: {png}"
+        );
+        // SVG stays monochrome regardless of the color mode.
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                color_mode: ColorMode::Depth,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains("#4ecdc4"),
+            "SVG export must stay monochrome regardless of the color mode: {svg}"
+        );
+    }
+
+    #[test]
+    fn distance_color_mode_greys_unreachable_raster_but_svg_stays_mono() {
+        // No zero datum → every station is unreachable → shots render grey.
+        let mut project = Project::new("Dist".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("A".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 90.0, false)],
+            ..Default::default()
+        });
+        let png = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Png,
+                color_mode: ColorMode::Distance,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            png.contains("#666666"),
+            "distance mode should grey unreachable shots in raster: {png}"
+        );
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                color_mode: ColorMode::Distance,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains("#666666"),
+            "SVG export must stay monochrome regardless of the color mode: {svg}"
         );
     }
 

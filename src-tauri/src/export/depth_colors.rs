@@ -297,7 +297,9 @@ fn hue_to_rgb(p: f64, q: f64, t: f64) -> f64 {
 }
 
 /// Interpolate between two hex colors using HSL interpolation with shortest hue path.
-fn interpolate_hsl(color1: &str, color2: &str, t: f64) -> String {
+/// Shared with the image exporter's depth gradient (byte-identical to the
+/// frontend `interpolateHue`/`hslToHex` math).
+pub(crate) fn interpolate_hsl(color1: &str, color2: &str, t: f64) -> String {
     let (r1, g1, b1) = hex_to_rgb(color1);
     let (r2, g2, b2) = hex_to_rgb(color2);
 

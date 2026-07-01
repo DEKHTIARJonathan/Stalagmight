@@ -20,7 +20,7 @@ describe('exportStore', () => {
       dpi: 300,
       branching_threshold: 2,
       show_penetration_labels: true,
-      show_colors: false,
+      color_mode: 'none',
     });
   });
 
@@ -28,10 +28,10 @@ describe('exportStore', () => {
     const s = useExportStore.getState();
     s.setExportType('data');
     s.setDataFormat('tml');
-    s.setImageOptions({ ...DEFAULT_IMAGE_OPTIONS, show_colors: true });
+    s.setImageOptions({ ...DEFAULT_IMAGE_OPTIONS, color_mode: 'depth' });
     const next = useExportStore.getState();
     expect(next.exportType).toBe('data');
     expect(next.dataFormat).toBe('tml');
-    expect(next.imageOptions.show_colors).toBe(true);
+    expect(next.imageOptions.color_mode).toBe('depth');
   });
 });

@@ -14,7 +14,7 @@ export const DEFAULT_IMAGE_OPTIONS: ExportImageOptions = {
   dpi: 300,
   branching_threshold: 2,
   show_penetration_labels: true,
-  show_colors: false,
+  color_mode: 'none',
 };
 
 /**
