@@ -130,14 +130,20 @@ describe('speleoStore', () => {
 
   describe('applyDone', () => {
     beforeEach(() =>
-      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, has_unpushed_edits: true })),
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(
+          status({ edit_enabled: true, has_unpushed_edits: true, lock_holder: 'me@x' }),
+        ),
     );
 
-    it('released → read-only, dirty cleared, divergence cleared', () => {
+    it('released → read-only, dirty + lock holder cleared, divergence cleared', () => {
       useSpeleoStore.getState().applyDone({ kind: 'released' });
       const s = useSpeleoStore.getState();
       expect(s.link?.editState).toBe('read-only');
       expect(s.link?.hasUnpushedEdits).toBe(false);
+      // Regression: a released lock must not still read as held (button stayed green).
+      expect(s.link?.lockHolder).toBeNull();
       expect(s.divergence).toBeNull();
     });
 

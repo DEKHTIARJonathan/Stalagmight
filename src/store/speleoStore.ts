@@ -282,8 +282,14 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       if (!state.link) return {};
       switch (r.kind) {
         case 'released':
+          // Lock released — clear the holder too, or we'd still read as holding it.
           return {
-            link: { ...state.link, editState: 'read-only', hasUnpushedEdits: false },
+            link: {
+              ...state.link,
+              editState: 'read-only',
+              hasUnpushedEdits: false,
+              lockHolder: null,
+            },
             divergence: null,
           };
         case 'divergence_needed':
