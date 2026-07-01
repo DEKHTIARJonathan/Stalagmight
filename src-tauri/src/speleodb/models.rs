@@ -144,6 +144,9 @@ impl SpeleoProjectSummary {
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct SpeleoLoginResult {
     pub user_email: String,
+    /// The server this login authenticated against (the resolved endpoint), so the
+    /// UI can show "signed in as … at …" immediately without re-querying.
+    pub endpoint: String,
     /// True when the token was stored in the OS keychain; false means a
     /// session-only in-memory fallback (e.g. headless CI with no secret service).
     pub keychain_backed: bool,
@@ -227,6 +230,10 @@ pub struct SpeleoSessionStatus {
     pub logged_in: bool,
     /// Email of the logged-in user, when `logged_in`.
     pub user_email: Option<String>,
+    /// The server this session is authenticated against, when `logged_in`. Shown
+    /// in Settings ("signed in as … at …") so the user can see the session is tied
+    /// to a specific server — a later endpoint change only affects FUTURE logins.
+    pub endpoint: Option<String>,
     /// False when the token is held in memory only (no OS keychain) — surfaced so
     /// the UI keeps showing the "won't survive a restart" note after a reopen.
     pub keychain_backed: bool,
@@ -338,12 +345,14 @@ mod tests {
         // names or holds a token can't silently break "token never in IPC".
         let login = serde_json::to_string(&SpeleoLoginResult {
             user_email: "u@x".to_owned(),
+            endpoint: "https://x/".to_owned(),
             keychain_backed: true,
         })
         .expect("serialize login result");
         let status = serde_json::to_string(&SpeleoSessionStatus {
             logged_in: true,
             user_email: Some("u@x".to_owned()),
+            endpoint: Some("https://x/".to_owned()),
             keychain_backed: true,
         })
         .expect("serialize session status");

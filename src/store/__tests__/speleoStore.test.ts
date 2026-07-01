@@ -24,18 +24,22 @@ describe('speleoStore', () => {
       useSpeleoStore.getState().setSession({
         logged_in: true,
         user_email: 'u@x',
+        endpoint: 'https://x/',
         keychain_backed: false,
       });
       expect(useSpeleoStore.getState().session).toEqual({
         loggedIn: true,
         userEmail: 'u@x',
+        endpoint: 'https://x/',
         keychainBacked: false,
       });
     });
 
     it('clearSession degrades an active edit to read-only', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
-      useSpeleoStore.getState().setSessionFromLogin({ user_email: 'u@x', keychain_backed: true });
+      useSpeleoStore
+        .getState()
+        .setSessionFromLogin({ user_email: 'u@x', endpoint: 'https://x/', keychain_backed: true });
       useSpeleoStore.getState().clearSession();
       const s = useSpeleoStore.getState();
       expect(s.session).toBeNull();

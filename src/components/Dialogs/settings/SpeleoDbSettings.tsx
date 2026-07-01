@@ -23,14 +23,14 @@ import { humanizeSpeleoError } from '../../../utils/speleoError';
 /**
  * SpeleoDB settings category (#205, reworked per feedback A1–A4).
  *
- * - **Account** (shown first): sign-in/out is **staged** — it is applied only
- *   when the dialog's Save is pressed (`speleoStore.pendingAuth` +
- *   `applyPendingAuth`), matching the rest of Settings. Nothing hits the server
- *   on button click.
+ * - **Account** (shown first): sign-in/out is **staged** — applied only when the
+ *   dialog's Save is pressed (`speleoStore.pendingAuth` + `applyPendingAuth`),
+ *   matching the rest of Settings — with a "Log in now" escape hatch to verify
+ *   credentials immediately. Shows which server the live session is signed in to.
  * - **Connection** (staged config): endpoint, token storage, insecure HTTP, and
- *   the remote-state poll interval (floor 30s). Changing the **endpoint** STAGES a
- *   logout (A3) — a session on the old server is void — applied on Save with the
- *   rest, so nothing hits the server until the user commits (fix 9).
+ *   the remote-state poll interval (floor 30s). The **endpoint** is only the
+ *   default for FUTURE logins — the live session is pinned to the server it
+ *   authenticated against — so changing it does NOT log the user out.
  */
 export function SpeleoDbSettings({
   config,
@@ -50,7 +50,6 @@ export function SpeleoDbSettings({
   const authError = useSpeleoStore((s) => s.authError);
 
   const speleo = config.speleodb;
-  const endpointAtFocus = useRef<string | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
 
   // Reflect the backend session (a rehydrated keychain token = already signed in).
@@ -121,18 +120,12 @@ export function SpeleoDbSettings({
   };
 
   // --- connection (staged config) ---
+  // The endpoint is just the default server for FUTURE logins; the live session is
+  // pinned to the server it authenticated against (shown in the Account panel). So
+  // changing it here does NOT log the current session out — no side effects, purely
+  // staged config applied on Save.
   const handleEndpointChange = (v: string) =>
     onChange({ speleodb: { ...speleo, endpoint: v.length > 0 ? v : null } });
-  // A3/fix9: switching servers voids a session on the old one — but nothing hits
-  // the server on blur. STAGE the logout so it applies only on Save (like every
-  // other setting), unless the user is already staging a login to the new server.
-  const handleEndpointBlur = () => {
-    const changed = (speleo.endpoint ?? '') !== (endpointAtFocus.current ?? '');
-    if (changed && session?.loggedIn && pendingAuth?.kind !== 'login') {
-      setPendingAuth({ kind: 'logout' });
-    }
-    endpointAtFocus.current = null;
-  };
   const handleTokenFallbackChange = createSelectHandler(onChange, (v) => ({
     speleodb: { ...speleo, token_fallback: v as TokenFallback },
   }));
@@ -184,8 +177,13 @@ export function SpeleoDbSettings({
           </div>
         ) : session?.loggedIn && !showLoginForm ? (
           <div className="space-y-2" data-testid="speleodb-account-signed-in">
-            <p className="text-sm text-text-primary truncate">
-              {t('settings.speleodb.account.signedInAs', { email: session.userEmail ?? '' })}
+            <p className="text-sm text-text-primary break-all">
+              {session.endpoint
+                ? t('settings.speleodb.account.signedInAsAt', {
+                    email: session.userEmail ?? '',
+                    endpoint: session.endpoint,
+                  })
+                : t('settings.speleodb.account.signedInAs', { email: session.userEmail ?? '' })}
             </p>
             {!session.keychainBacked && (
               <p className="text-xs text-warning" data-testid="speleodb-memory-only-warning">
@@ -291,11 +289,7 @@ export function SpeleoDbSettings({
           <input
             type="text"
             value={speleo.endpoint ?? ''}
-            onFocus={() => {
-              endpointAtFocus.current = speleo.endpoint ?? '';
-            }}
             onChange={(e) => handleEndpointChange(e.target.value)}
-            onBlur={handleEndpointBlur}
             className="w-64 px-2 py-1 bg-background border border-border rounded text-sm"
             placeholder="https://www.speleodb.org/"
             aria-label={t('settings.speleodb.endpoint.aria')}

@@ -622,7 +622,7 @@
       },
       "endpoint": {
         "label": "Server endpoint",
-        "help": "The SpeleoDB server to connect to (e.g. https://www.speleodb.org/).",
+        "help": "The SpeleoDB server to connect to (e.g. https://www.speleodb.org/). This only applies to future logins — your current session stays on the server it signed in to.",
         "aria": "SpeleoDB server endpoint"
       },
       "tokenFallback": {
@@ -644,6 +644,7 @@
       "account": {
         "appliesOnSave": "Sign in and sign out apply when you press Save.",
         "signedInAs": "Signed in as {{email}}",
+        "signedInAsAt": "Signed in as {{email}} at {{endpoint}}",
         "memoryOnly": "Token kept in memory only (no keychain) — it won't survive a restart.",
         "logout": "Log out",
         "willSignOut": "You'll be signed out when you press Save.",

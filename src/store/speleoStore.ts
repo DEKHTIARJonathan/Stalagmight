@@ -37,6 +37,9 @@ export type SpeleoBanner = { kind: 'push_unconfirmed' } | { kind: 'concurrent_se
 export interface SpeleoSession {
   loggedIn: boolean;
   userEmail: string | null;
+  /** The server this session is authenticated against (a change to the config
+      endpoint only affects future logins, so we show where we're actually signed in). */
+  endpoint: string | null;
   /** False when the token is held in memory only (won't survive a restart). */
   keychainBacked: boolean;
 }
@@ -216,6 +219,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       session: {
         loggedIn: s.logged_in,
         userEmail: s.user_email ?? null,
+        endpoint: s.endpoint ?? null,
         keychainBacked: s.keychain_backed,
       },
     }),
@@ -231,7 +235,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   setSessionFromLogin: (r) =>
     set({
-      session: { loggedIn: true, userEmail: r.user_email, keychainBacked: r.keychain_backed },
+      session: {
+        loggedIn: true,
+        userEmail: r.user_email,
+        endpoint: r.endpoint,
+        keychainBacked: r.keychain_backed,
+      },
     }),
 
   // A logout / dead-token drop can't push a remote edit anymore — the backend

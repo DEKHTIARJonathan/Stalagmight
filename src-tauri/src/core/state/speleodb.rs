@@ -156,6 +156,7 @@ impl SpeleoDbSession {
         let logged_in = self.active_token().is_ok();
         SpeleoSessionStatus {
             user_email: logged_in.then(|| self.email.clone()).flatten(),
+            endpoint: logged_in.then(|| self.endpoint.clone()).flatten(),
             keychain_backed: logged_in && self.token_store.keychain_backed(),
             logged_in,
         }
@@ -717,6 +718,7 @@ impl AppState {
 
         Ok(SpeleoLoginResult {
             user_email: email,
+            endpoint,
             keychain_backed,
         })
     }
