@@ -403,7 +403,7 @@ test.describe('Gas planning', () => {
               }
             ).__stalagmight_map__;
             try {
-              return map?.queryRenderedFeatures({ layers: ['survey-gas-route-solid'] }).length ?? 0;
+              return map?.queryRenderedFeatures({ layers: ['survey-gas-route'] }).length ?? 0;
             } catch {
               return 0;
             }

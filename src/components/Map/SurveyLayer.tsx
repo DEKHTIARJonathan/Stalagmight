@@ -107,8 +107,7 @@ export default class SurveyLayer {
   private shotsHitboxLayerId = 'survey-shots-hitbox';
   // Gas route highlight (#233): the picked penetration route drawn over the survey — solid for
   // swum legs, dashed for jumps (a separate layer since line-dasharray can't be data-driven).
-  private gasRouteSolidLayerId = 'survey-gas-route-solid';
-  private gasRouteDashedLayerId = 'survey-gas-route-dashed';
+  private gasRouteLayerId = 'survey-gas-route';
 
   // Base zoom-density filters for label layers (set at init, restored when clearing reference filter)
   private shotLabelsBaseFilter: maplibregl.FilterSpecification | null = null;
@@ -879,29 +878,18 @@ export default class SurveyLayer {
       ],
     });
 
-    // Gas route highlight (#233): the picked route drawn over the survey. Two layers because
-    // `line-dasharray` can't be data-driven per feature — solid for swum legs, dashed for jumps.
+    // Gas route highlight (#233): the picked route drawn over the survey. Jump legs are
+    // faded rather than dashed (#243) — the same half-opacity treatment reference shots
+    // get — and unlike `line-dasharray`, `line-opacity` IS data-driven, so one layer
+    // covers both leg kinds.
     this.map.addLayer({
-      id: this.gasRouteSolidLayerId,
+      id: this.gasRouteLayerId,
       type: 'line',
       source: this.sourceId + '-gas-route',
-      filter: ['!=', ['get', 'isJump'], true],
       paint: {
         'line-color': '#22d3ee',
         'line-width': 4,
-        'line-opacity': 0.9,
-      },
-    });
-    this.map.addLayer({
-      id: this.gasRouteDashedLayerId,
-      type: 'line',
-      source: this.sourceId + '-gas-route',
-      filter: ['==', ['get', 'isJump'], true],
-      paint: {
-        'line-color': '#22d3ee',
-        'line-width': 4,
-        'line-opacity': 0.9,
-        'line-dasharray': [2, 2],
+        'line-opacity': ['case', ['==', ['get', 'isJump'], true], 0.45, 0.9],
       },
     });
 
