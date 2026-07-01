@@ -407,6 +407,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (result.success) {
         await get().refreshProjectState();
         set({ isDirty: true });
+        // #204: mirror the backend's mark_remote_dirty so the SpeleoDB action shell
+        // knows there are un-pushed edits (drives the button's push&release-with-
+        // comment flow). No-op for a local project (no link).
+        useSpeleoStore.getState().markDirty();
         // A command can RESOLVE (or surface) an integrity issue — e.g. removing a
         // drifted loop closure clears its banner entry — so re-check, mirroring
         // executeUndoRedo. refreshProjectState doesn't re-check, and the next save
@@ -456,9 +460,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       result = await invokeIpc<CommandResult>(command, args, meta);
       if (result.success) {
         set({ isDirty: true });
+        // #204: an undo/redo mutates the remote project too — mirror the backend
+        // dirty bit into the SpeleoDB store (no-op for a local project).
+        useSpeleoStore.getState().markDirty();
       } else {
         if (checkPartialFailure && isPartialMultiStepFailure(result.error)) {
           set({ isDirty: true });
+          useSpeleoStore.getState().markDirty();
         }
         // A read-only rejection (EDIT_DISABLED) gets the same friendly notice +
         // dedup key as executeCommand, not the raw coded string — mashing Ctrl+Z
