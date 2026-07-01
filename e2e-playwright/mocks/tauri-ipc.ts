@@ -261,6 +261,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_RESET_UNMERGE_STATION_PAIR_CALLS__ = () => {
         unmergeStationPairCalls = [];
       };
+      // Records undo/redo invocations so specs can prove the shortcuts are inert in the
+      // read-only workspaces (zero calls in Plan/Export, then one back in Survey).
+      let undoRedoCalls: string[] = [];
+      (window as unknown as Record<string, unknown>).__MOCK_GET_UNDO_REDO_CALLS__ = () => [...undoRedoCalls];
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_UNDO_REDO_CALLS__ = () => {
+        undoRedoCalls = [];
+      };
       (window as unknown as Record<string, unknown>).__MOCK_SET_ORPHAN_SUGGESTIONS__ = (suggestions: unknown[]) => {
         mockOrphanPlacementSuggestions = Array.isArray(suggestions) ? [...suggestions] : [];
       };
@@ -2483,6 +2490,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'undo':
           case 'redo':
+            undoRedoCalls.push(cmd);
             return { success: true };
 
           case 'can_undo':

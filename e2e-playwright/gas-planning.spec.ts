@@ -388,6 +388,60 @@ test.describe('Gas planning', () => {
     expect(endpoint).not.toBeNull();
   });
 
+  test('left-clicking a turn-frontier dot selects it as the route endpoint @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect
+      .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
+      .toBeGreaterThan(0);
+    // A single left click sets the endpoint directly — no menu round-trip (#243).
+    await page.locator('[data-testid="gas-turn-marker"]').first().click();
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (
+                window as unknown as {
+                  __E2E_TEST__: { gasPlanStore: { getState: () => { endpoint: unknown } } };
+                }
+              ).__E2E_TEST__.gasPlanStore.getState().endpoint,
+          ),
+        { timeout: 2000 },
+      )
+      .not.toBeNull();
+    // And it must not have opened the context menu.
+    await expect(page.getByText('Set as endpoint')).toHaveCount(0);
+  });
+
+  test('undo/redo shortcuts are inert in Plan (read-only guard parity with the hidden buttons)', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await page.evaluate(() =>
+      (
+        window as unknown as { __MOCK_RESET_UNDO_REDO_CALLS__: () => void }
+      ).__MOCK_RESET_UNDO_REDO_CALLS__(),
+    );
+    await page.keyboard.press('Control+z');
+    const getCalls = () =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as { __MOCK_GET_UNDO_REDO_CALLS__: () => string[] }
+          ).__MOCK_GET_UNDO_REDO_CALLS__(),
+      );
+    expect(await getCalls()).toEqual([]);
+
+    // The exact-equality below is the injection-proof step: a guard leak in Plan would
+    // arrive long before this poll settles and turn the array into ['undo','undo'],
+    // while the survey call proves the recorder itself is live (no vacuous green).
+    await enterMode(page, 'survey');
+    await page.keyboard.press('Control+z');
+    await expect.poll(getCalls, { timeout: 2000 }).toEqual(['undo']);
+  });
+
   test('the planned route renders as a highlighted overlay @smoke', async ({ page }) => {
     await enterMode(page, 'plan');
     // The default route (origin → deepest reachable) draws the solid route line over the survey.
@@ -435,6 +489,10 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="tool-merge"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="tool-select"]')).toBeVisible();
     await expect(page.locator('[data-testid="tool-measure"]')).toBeVisible();
+    // Import and Undo/Redo are likewise HIDDEN in the read-only workspaces (#243).
+    await expect(page.locator('[data-testid="toolbar-import-button"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="toolbar-undo-button"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="toolbar-redo-button"]')).toHaveCount(0);
     // A mutating tool selected programmatically (e.g. via shortcut) snaps back to select.
     await page.evaluate(() =>
       (window as unknown as E2EWindow).__E2E_TEST__?.uiStore.getState().setActiveTool('merge'),
@@ -453,11 +511,19 @@ test.describe('Gas planning', () => {
     ).toBeVisible();
     await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="plan-tables-panel"]')).toHaveCount(0);
+    // Export hides the file/history controls too (#243).
+    await expect(page.locator('[data-testid="toolbar-import-button"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="toolbar-undo-button"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="toolbar-redo-button"]')).toHaveCount(0);
 
     // Back to Survey.
     await enterMode(page, 'survey');
     expect(await appMode(page)).toBe('survey');
     await expect(page.locator('[data-testid="export-panel"]')).toHaveCount(0);
+    // The survey toolbar gets its file/history controls back (#243).
+    await expect(page.locator('[data-testid="toolbar-import-button"]')).toBeVisible();
+    await expect(page.locator('[data-testid="toolbar-undo-button"]')).toBeVisible();
+    await expect(page.locator('[data-testid="toolbar-redo-button"]')).toBeVisible();
   });
 
   test('Export panel: inline controls, large WYSIWYG preview, colors are raster-only', async ({
