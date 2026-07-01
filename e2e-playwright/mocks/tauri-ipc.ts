@@ -3671,6 +3671,24 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'push_frontend_log':
             return null;
 
+          // SpeleoDB (#203/#204/#205): deterministic logged-out / local defaults so
+          // the settings tab + browser render without a live server. No e2e spec
+          // drives the hand-off yet; these keep the mounts from erroring on null.
+          case 'speleodb_session':
+            return { logged_in: false, user_email: null, keychain_backed: false };
+          case 'speleodb_link_status':
+            return {
+              is_remote: false,
+              edit_enabled: true,
+              has_unpushed_edits: false,
+              permission: null,
+              lock_holder: null,
+            };
+          case 'speleodb_list_projects':
+            return [];
+          case 'speleodb_logout':
+            return null;
+
           default:
             console.warn(`[Mock IPC] Unhandled command: ${cmd}`);
             return null;
