@@ -248,7 +248,7 @@ test.describe('Gas planning', () => {
       .toBe(14);
   });
 
-  test('Display menu is available in Plan and Export, without the survey-only geometry toggle @smoke', async ({
+  test('Display menu is in Survey and Plan (not Export), without the survey-only geometry toggle @smoke', async ({
     page,
   }) => {
     const openMenu = async () => {
@@ -276,12 +276,10 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="display-color-section"]')).toHaveCount(0);
     await closeMenu();
 
-    // Export: visibility toggles + color overlays (no gas gradient here), still no geometry toggle.
+    // Export: the Display menu is gone entirely — the Export panel's own controls decide what
+    // the exported image contains, so a survey-style Display menu would be a confusing no-op.
     await enterMode(page, 'export');
-    await openMenu();
-    await expect(page.locator('[data-testid="display-toggle-showStations"]')).toBeVisible();
-    await expect(page.locator('[data-testid="display-color-section"]')).toBeVisible();
-    await expect(page.locator('[data-testid="geometry-mode-measured"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="display-menu-button"]')).toHaveCount(0);
   });
 
   test('adding a stage enables a pushy preset behind the advanced acknowledgment @smoke', async ({
