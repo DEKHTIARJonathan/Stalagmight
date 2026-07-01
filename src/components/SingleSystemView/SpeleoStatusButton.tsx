@@ -81,6 +81,11 @@ export function SpeleoStatusButton() {
         else void done(null);
         break;
       case 'locked_by_other':
+        // Try to take the lock — the acquire fails while someone else holds it and
+        // reports "unable to lock — being edited by {email}", or succeeds if they've
+        // since released it.
+        void startEditing();
+        break;
       case 'remote_ahead':
         // Pull the latest; hand off to the resolution dialog if we'd clobber edits.
         if (link.hasUnpushedEdits) openDialog('speleodb-divergence');
