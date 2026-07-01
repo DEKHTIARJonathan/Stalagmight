@@ -642,22 +642,24 @@
         "warning": "Allowing plain HTTP to a public address sends your token unencrypted. Only enable this for a trusted local server."
       },
       "account": {
-        "appliesImmediately": "Sign in and sign out take effect immediately (they are not part of Save).",
+        "appliesOnSave": "Sign in and sign out apply when you press Save.",
         "signedInAs": "Signed in as {{email}}",
         "memoryOnly": "Token kept in memory only (no keychain) — it won't survive a restart.",
         "logout": "Log out",
-        "loggingOut": "Logging out…",
+        "willSignOut": "You'll be signed out when you press Save.",
+        "willSignIn": "You'll be signed in when you press Save.",
+        "replacesSession": "This will replace your current session ({{email}}).",
+        "undo": "Undo",
         "email": "Email",
         "password": "Password",
         "token": "Token",
-        "useToken": "Paste an existing token instead of a password",
-        "login": "Log in",
-        "loggingIn": "Connecting…",
-        "emailRequired": "Email is required",
-        "passwordRequired": "Password is required",
-        "tokenRequired": "Token is required",
-        "loginFailed": "Login failed",
-        "logoutFailed": "Logout failed"
+        "useToken": "Paste an existing token instead of a password"
+      },
+      "pollInterval": {
+        "label": "Remote refresh interval",
+        "help": "How often (seconds) to re-check a linked project's remote state. Minimum {{min}}.",
+        "aria": "Remote refresh interval in seconds",
+        "tooLow": "Must be at least {{min}} seconds."
       }
     },
     "advanced": {

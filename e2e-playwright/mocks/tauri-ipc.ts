@@ -3688,6 +3688,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return [];
           case 'speleodb_logout':
             return null;
+          case 'speleodb_login':
+            return { user_email: 'test@example.com', keychain_backed: true };
 
           default:
             console.warn(`[Mock IPC] Unhandled command: ${cmd}`);

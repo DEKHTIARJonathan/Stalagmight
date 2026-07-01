@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
@@ -7,50 +7,52 @@ import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
-import { isFieldChanged, createToggleHandler, createSelectHandler } from './types';
+import {
+  isFieldChanged,
+  createToggleHandler,
+  createSelectHandler,
+  createNumericHandler,
+  parseIntRadix10,
+} from './types';
 import { defaultConfig } from '../../../types/config';
-import type {
-  SpeleoLoginResult,
-  SpeleoSessionStatus,
-  TokenFallback,
-} from '../../../types/ipc.generated';
-import { useSpeleoStore } from '../../../store/speleoStore';
-import { invokeIpc, getErrorMessage } from '../../../utils/ipc';
+import type { SpeleoSessionStatus, TokenFallback } from '../../../types/ipc.generated';
+import { useSpeleoStore, type PendingLogin } from '../../../store/speleoStore';
+import { invokeIpc } from '../../../utils/ipc';
+
+/** Mirror of `MIN_POLL_INTERVAL_SECONDS` in `config/types.rs` — the UI floor. */
+const MIN_POLL_INTERVAL_SECONDS = 30;
 
 /**
- * SpeleoDB settings category (#205). Two concerns:
+ * SpeleoDB settings category (#205, reworked per feedback A1–A4).
  *
- * - **Connection** — `endpoint` / `token_fallback` / `insecure_http` are staged
- *   config (persisted on the dialog's Save, like every other tab), bound through
- *   the standard `onChange({ speleodb: { … } })` diff path.
- * - **Account** — login / logout are **live, side-effecting** calls that apply
- *   immediately (not on Save) and update the shared `speleoStore` session. The
- *   token is exchanged + stored entirely backend-side; it never reaches here.
+ * - **Account** (shown first): sign-in/out is **staged** — it is applied only
+ *   when the dialog's Save is pressed (`speleoStore.pendingAuth` +
+ *   `applyPendingAuth`), matching the rest of Settings. Nothing hits the server
+ *   on button click.
+ * - **Connection** (staged config): endpoint, token storage, insecure HTTP, and
+ *   the remote-state poll interval (floor 30s). Changing the **endpoint** logs
+ *   the active session out on blur (A3) — a session on the old server is void.
  */
 export function SpeleoDbSettings({
   config,
   onChange,
   changedFields,
+  onValidationError,
   panelIdBase,
 }: SettingsCategoryProps) {
   const { t } = useTranslation();
   const session = useSpeleoStore((s) => s.session);
   const setSession = useSpeleoStore((s) => s.setSession);
-  const setSessionFromLogin = useSpeleoStore((s) => s.setSessionFromLogin);
-  const clearSession = useSpeleoStore((s) => s.clearSession);
+  const pendingAuth = useSpeleoStore((s) => s.pendingAuth);
+  const setPendingAuth = useSpeleoStore((s) => s.setPendingAuth);
+  const clearPendingAuth = useSpeleoStore((s) => s.clearPendingAuth);
+  const authError = useSpeleoStore((s) => s.authError);
+  const logout = useSpeleoStore((s) => s.logout);
 
   const speleo = config.speleodb;
+  const endpointAtFocus = useRef<string | null>(null);
 
-  // Live account form state — deliberately NOT part of the staged config diff.
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [token, setToken] = useState('');
-  const [useToken, setUseToken] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // On mount, sync the session store from the backend (a rehydrated keychain
-  // token means we're already logged in without re-prompting).
+  // Reflect the backend session (a rehydrated keychain token = already signed in).
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -58,7 +60,7 @@ export function SpeleoDbSettings({
         const status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
         if (!cancelled) setSession(status);
       } catch {
-        // Leave whatever the store had; the login form still works.
+        /* leave whatever the store had */
       }
     })();
     return () => {
@@ -66,70 +68,48 @@ export function SpeleoDbSettings({
     };
   }, [setSession]);
 
-  // Login uses the endpoint currently staged above, so first-time setup works
-  // before Save (the account email is persisted backend-side on success; the
-  // endpoint persists when the dialog is saved).
-  const endpointForLogin = (speleo.endpoint ?? '').trim() || undefined;
+  // Poll interval floor is a hard validation error (blocks Save; backend also
+  // clamps a hand-edited file on load).
+  const pollHasErrorRef = useRef(false);
+  useEffect(() => {
+    const hasError = speleo.poll_interval_seconds < MIN_POLL_INTERVAL_SECONDS;
+    if (hasError !== pollHasErrorRef.current) {
+      pollHasErrorRef.current = hasError;
+      onValidationError('speleodb', hasError);
+    }
+  }, [speleo.poll_interval_seconds, onValidationError]);
 
-  const handleLogin = async () => {
-    if (!useToken && !email.trim()) {
-      setError(t('settings.speleodb.account.emailRequired'));
-      return;
-    }
-    if (useToken ? !token.trim() : !password) {
-      setError(
-        useToken
-          ? t('settings.speleodb.account.tokenRequired')
-          : t('settings.speleodb.account.passwordRequired'),
-      );
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await invokeIpc<SpeleoLoginResult>('speleodb_login', {
-        endpoint: endpointForLogin,
-        email: useToken ? undefined : email.trim(),
-        password: useToken ? undefined : password,
-        token: useToken ? token.trim() : undefined,
-      });
-      setSessionFromLogin(result);
-      setPassword('');
-      setToken('');
-    } catch (e) {
-      setError(getErrorMessage(e, t('settings.speleodb.account.loginFailed')));
-    } finally {
-      setBusy(false);
-    }
-  };
+  // --- staged account (A2) ---
+  const login: PendingLogin =
+    pendingAuth?.kind === 'login'
+      ? pendingAuth
+      : { kind: 'login', email: '', password: '', token: '', useToken: false };
+  const updateLogin = (patch: Partial<PendingLogin>) => setPendingAuth({ ...login, ...patch });
 
-  const handleLogout = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await invokeIpc<null>('speleodb_logout');
-      clearSession();
-      setEmail('');
-      setPassword('');
-      setToken('');
-    } catch (e) {
-      setError(getErrorMessage(e, t('settings.speleodb.account.logoutFailed')));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const stagedLogout = pendingAuth?.kind === 'logout';
+  const showLoginForm = pendingAuth?.kind === 'login' || (!stagedLogout && !session?.loggedIn);
 
+  // --- connection (staged config) ---
   const handleEndpointChange = (v: string) =>
     onChange({ speleodb: { ...speleo, endpoint: v.length > 0 ? v : null } });
+  // A3: switching servers voids a session on the old one — log out on blur.
+  const handleEndpointBlur = () => {
+    const changed = (speleo.endpoint ?? '') !== (endpointAtFocus.current ?? '');
+    if (changed && session?.loggedIn) void logout();
+    endpointAtFocus.current = null;
+  };
   const handleTokenFallbackChange = createSelectHandler(onChange, (v) => ({
     speleodb: { ...speleo, token_fallback: v as TokenFallback },
   }));
   const handleInsecureHttpToggle = createToggleHandler(onChange, (v) => ({
     speleodb: { ...speleo, insecure_http: v },
   }));
+  const handlePollIntervalChange = createNumericHandler(
+    onChange,
+    (n) => ({ speleodb: { ...speleo, poll_interval_seconds: n } }),
+    parseIntRadix10,
+  );
 
-  const loggedIn = session?.loggedIn === true;
-  // The 'unknown' sentinel normalizes to the secure default for display.
   const tokenFallbackValue = speleo.token_fallback === 'plaintext' ? 'plaintext' : 'session_only';
 
   return (
@@ -140,6 +120,114 @@ export function SpeleoDbSettings({
       data-testid="settings-panel-speleodb"
     >
       <h2 className="text-lg font-medium mb-4">{t('settings.speleodb.title')}</h2>
+
+      <SettingsSection
+        title={t('settings.speleodb.sections.account')}
+        data-testid="section-speleodb-account"
+      >
+        <p className="mb-3 text-xs text-text-secondary">
+          {t('settings.speleodb.account.appliesOnSave')}
+        </p>
+
+        {authError && (
+          <div
+            className="mb-3 p-3 bg-error-10 border border-error-20 rounded text-error text-sm"
+            data-testid="speleodb-settings-error"
+          >
+            {authError}
+          </div>
+        )}
+
+        {stagedLogout ? (
+          <div className="space-y-2" data-testid="speleodb-account-staged-logout">
+            <p className="text-sm text-text-primary">
+              {t('settings.speleodb.account.willSignOut')}
+            </p>
+            <Button onClick={clearPendingAuth} data-testid="speleodb-settings-undo-logout">
+              {t('settings.speleodb.account.undo')}
+            </Button>
+          </div>
+        ) : session?.loggedIn && !showLoginForm ? (
+          <div className="space-y-2" data-testid="speleodb-account-signed-in">
+            <p className="text-sm text-text-primary truncate">
+              {t('settings.speleodb.account.signedInAs', { email: session.userEmail ?? '' })}
+            </p>
+            {!session.keychainBacked && (
+              <p className="text-xs text-warning" data-testid="speleodb-memory-only-warning">
+                {t('settings.speleodb.account.memoryOnly')}
+              </p>
+            )}
+            <Button
+              onClick={() => setPendingAuth({ kind: 'logout' })}
+              data-testid="speleodb-settings-logout"
+            >
+              {t('settings.speleodb.account.logout')}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3" data-testid="speleodb-account-login-form">
+            <p className="text-xs text-text-secondary">
+              {t('settings.speleodb.account.willSignIn')}
+            </p>
+            {!login.useToken && (
+              <div>
+                <label className="block text-sm text-text-secondary mb-1">
+                  {t('settings.speleodb.account.email')}
+                </label>
+                <input
+                  type="email"
+                  value={login.email}
+                  onChange={(e) => updateLogin({ email: e.target.value })}
+                  className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
+                  data-testid="speleodb-settings-email"
+                />
+              </div>
+            )}
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={login.useToken}
+                onChange={(e) => updateLogin({ useToken: e.target.checked })}
+                className="rounded"
+                data-testid="speleodb-settings-use-token"
+              />
+              {t('settings.speleodb.account.useToken')}
+            </label>
+            {login.useToken ? (
+              <div>
+                <label className="block text-sm text-text-secondary mb-1">
+                  {t('settings.speleodb.account.token')}
+                </label>
+                <input
+                  type="password"
+                  value={login.token}
+                  onChange={(e) => updateLogin({ token: e.target.value })}
+                  className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
+                  data-testid="speleodb-settings-token"
+                />
+              </div>
+            ) : (
+              <div>
+                <label className="block text-sm text-text-secondary mb-1">
+                  {t('settings.speleodb.account.password')}
+                </label>
+                <input
+                  type="password"
+                  value={login.password}
+                  onChange={(e) => updateLogin({ password: e.target.value })}
+                  className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
+                  data-testid="speleodb-settings-password"
+                />
+              </div>
+            )}
+            {session?.loggedIn && (
+              <p className="text-xs text-text-secondary">
+                {t('settings.speleodb.account.replacesSession', { email: session.userEmail ?? '' })}
+              </p>
+            )}
+          </div>
+        )}
+      </SettingsSection>
 
       <SettingsSection
         title={t('settings.speleodb.sections.connection')}
@@ -156,7 +244,11 @@ export function SpeleoDbSettings({
           <input
             type="text"
             value={speleo.endpoint ?? ''}
+            onFocus={() => {
+              endpointAtFocus.current = speleo.endpoint ?? '';
+            }}
             onChange={(e) => handleEndpointChange(e.target.value)}
+            onBlur={handleEndpointBlur}
             className="w-64 px-2 py-1 bg-background border border-border rounded text-sm"
             placeholder="https://www.speleodb.org/"
             aria-label={t('settings.speleodb.endpoint.aria')}
@@ -220,100 +312,33 @@ export function SpeleoDbSettings({
             {t('settings.speleodb.insecureHttp.warning')}
           </div>
         )}
-      </SettingsSection>
 
-      <SettingsSection
-        title={t('settings.speleodb.sections.account')}
-        data-testid="section-speleodb-account"
-      >
-        <p className="mb-3 text-xs text-text-secondary">
-          {t('settings.speleodb.account.appliesImmediately')}
-        </p>
-
-        {error && (
-          <div
-            className="mb-3 p-3 bg-error-10 border border-error-20 rounded text-error text-sm"
-            data-testid="speleodb-settings-error"
-          >
-            {error}
-          </div>
-        )}
-
-        {loggedIn ? (
-          <div className="space-y-2" data-testid="speleodb-account-signed-in">
-            <p className="text-sm text-text-primary truncate">
-              {t('settings.speleodb.account.signedInAs', { email: session?.userEmail ?? '' })}
-            </p>
-            {session && !session.keychainBacked && (
-              <p className="text-xs text-warning" data-testid="speleodb-memory-only-warning">
-                {t('settings.speleodb.account.memoryOnly')}
-              </p>
-            )}
-            <Button onClick={handleLogout} disabled={busy} data-testid="speleodb-settings-logout">
-              {busy ? t('settings.speleodb.account.loggingOut') : t('settings.speleodb.account.logout')}
-            </Button>
-          </div>
-        ) : (
-          <div className="space-y-3" data-testid="speleodb-account-login-form">
-            {!useToken && (
-              <div>
-                <label className="block text-sm text-text-secondary mb-1">
-                  {t('settings.speleodb.account.email')}
-                </label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
-                  data-testid="speleodb-settings-email"
-                />
-              </div>
-            )}
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={useToken}
-                onChange={(e) => setUseToken(e.target.checked)}
-                className="rounded"
-                data-testid="speleodb-settings-use-token"
-              />
-              {t('settings.speleodb.account.useToken')}
-            </label>
-            {useToken ? (
-              <div>
-                <label className="block text-sm text-text-secondary mb-1">
-                  {t('settings.speleodb.account.token')}
-                </label>
-                <input
-                  type="password"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
-                  data-testid="speleodb-settings-token"
-                />
-              </div>
-            ) : (
-              <div>
-                <label className="block text-sm text-text-secondary mb-1">
-                  {t('settings.speleodb.account.password')}
-                </label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
-                  data-testid="speleodb-settings-password"
-                />
-              </div>
-            )}
-            <Button
-              variant="primary"
-              onClick={() => void handleLogin()}
-              disabled={busy || (useToken ? !token.trim() : !email.trim())}
-              data-testid="speleodb-settings-login"
-            >
-              {busy ? t('settings.speleodb.account.loggingIn') : t('settings.speleodb.account.login')}
-            </Button>
+        <SettingRow
+          label={t('settings.speleodb.pollInterval.label')}
+          helpText={t('settings.speleodb.pollInterval.help', { min: MIN_POLL_INTERVAL_SECONDS })}
+          isChanged={isFieldChanged(changedFields, 'speleodb.poll_interval_seconds')}
+          onReset={() =>
+            onChange({
+              speleodb: { ...speleo, poll_interval_seconds: defaultConfig.speleodb.poll_interval_seconds },
+            })
+          }
+          isDefault={speleo.poll_interval_seconds === defaultConfig.speleodb.poll_interval_seconds}
+          data-testid="setting-speleodb-poll-interval"
+        >
+          <input
+            type="number"
+            inputMode="numeric"
+            min={MIN_POLL_INTERVAL_SECONDS}
+            value={speleo.poll_interval_seconds}
+            onChange={(e) => handlePollIntervalChange(e.target.value)}
+            className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
+            aria-label={t('settings.speleodb.pollInterval.aria')}
+            data-testid="input-speleodb-poll-interval"
+          />
+        </SettingRow>
+        {speleo.poll_interval_seconds < MIN_POLL_INTERVAL_SECONDS && (
+          <div className="mb-2 text-xs text-error" data-testid="speleodb-poll-interval-error">
+            {t('settings.speleodb.pollInterval.tooLow', { min: MIN_POLL_INTERVAL_SECONDS })}
           </div>
         )}
       </SettingsSection>

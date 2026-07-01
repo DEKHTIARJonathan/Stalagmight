@@ -47,6 +47,21 @@ export interface SpeleoLinkState {
   hasUnpushedEdits: boolean;
 }
 
+/**
+ * A staged login intent (A2): entered in the Settings account panel but applied
+ * only when the dialog's Save is pressed. Credentials are transient — cleared on
+ * apply, cancel, or dialog close (never persisted).
+ */
+export interface PendingLogin {
+  kind: 'login';
+  email: string;
+  password: string;
+  token: string;
+  useToken: boolean;
+}
+
+export type PendingAuth = PendingLogin | { kind: 'logout' } | null;
+
 interface SpeleoStore {
   /** Backend session, or `null` before the first `setSession`/`refreshSession`. */
   session: SpeleoSession | null;
@@ -61,6 +76,19 @@ interface SpeleoStore {
   setSession: (s: SpeleoSessionStatus) => void;
   setSessionFromLogin: (r: SpeleoLoginResult) => void;
   clearSession: () => void;
+
+  // --- staged account actions (Settings #205, A2/A3) ---
+  /** The login/logout the user staged; applied on the dialog's Save. */
+  pendingAuth: PendingAuth;
+  /** Error from the last apply-on-save (already humanized), shown in the panel. */
+  authError: string | null;
+  setPendingAuth: (p: PendingAuth) => void;
+  clearPendingAuth: () => void;
+  setAuthError: (msg: string | null) => void;
+  /** Apply the staged login/logout (A2). ok=false carries the raw error. */
+  applyPendingAuth: (endpoint: string | null) => Promise<{ ok: boolean; error?: unknown }>;
+  /** Immediate logout (A3 server-address change / dead token). */
+  logout: () => Promise<void>;
 
   // --- link/edit (action shell #204) ---
   /** Query `speleodb_link_status` and seed the link (best-effort; runs post-load). */
@@ -88,6 +116,47 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   link: null,
   divergence: null,
   banner: null,
+  pendingAuth: null,
+  authError: null,
+
+  setPendingAuth: (pendingAuth) => set({ pendingAuth }),
+  clearPendingAuth: () => set({ pendingAuth: null, authError: null }),
+  setAuthError: (authError) => set({ authError }),
+
+  applyPendingAuth: async (endpoint) => {
+    const p = get().pendingAuth;
+    if (!p) return { ok: true };
+    try {
+      if (p.kind === 'logout') {
+        await invokeIpc<null>('speleodb_logout');
+        set({ pendingAuth: null, authError: null });
+        get().clearSession();
+      } else {
+        const r = await invokeIpc<SpeleoLoginResult>('speleodb_login', {
+          endpoint: (endpoint ?? '').trim() || undefined,
+          email: p.useToken ? undefined : p.email.trim() || undefined,
+          password: p.useToken ? undefined : p.password || undefined,
+          token: p.useToken ? p.token.trim() || undefined : undefined,
+        });
+        set({ pendingAuth: null, authError: null });
+        get().setSessionFromLogin(r);
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  },
+
+  logout: async () => {
+    // Best-effort: the token is forgotten locally regardless of the server call.
+    try {
+      await invokeIpc<null>('speleodb_logout');
+    } catch {
+      /* ignore — clearSession still drops the local session */
+    }
+    set({ pendingAuth: null, authError: null });
+    get().clearSession();
+  },
 
   refreshLinkStatus: async () => {
     try {
