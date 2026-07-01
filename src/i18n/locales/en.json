@@ -2624,6 +2624,7 @@
       "unlocked": "Read-only — click to start editing (acquire the lock)",
       "editingDirty": "You're editing — click to push your changes and release the lock",
       "editingClean": "You hold the lock — click to release it",
+      "heldByMe": "You hold the lock — click to resume editing",
       "lockedByOther": "Being edited by {{email}} — click to pull the latest",
       "remoteAhead": "SpeleoDB has newer changes — click to pull",
       "conflict": "Local and remote have diverged — click to resolve"

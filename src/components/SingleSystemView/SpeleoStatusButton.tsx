@@ -14,7 +14,13 @@ import {
 
 const MIN_POLL_INTERVAL_SECONDS = 30;
 
-type ButtonKind = 'unlocked' | 'editing' | 'locked_by_other' | 'remote_ahead' | 'conflict';
+type ButtonKind =
+  | 'unlocked'
+  | 'editing'
+  | 'held_by_me'
+  | 'locked_by_other'
+  | 'remote_ahead'
+  | 'conflict';
 
 /**
  * The single SpeleoDB status button (T2c), mounted right of the hamburger when a
@@ -61,6 +67,10 @@ export function SpeleoStatusButton() {
   // held lock (possibly our own) must not read as someone else's. Case-insensitive.
   const lockedByOther =
     !!link.lockHolder && !!myEmail && link.lockHolder.toLowerCase() !== myEmail.toLowerCase();
+  // We hold the server lock but aren't in an active edit session (e.g. reopened a
+  // project we locked but didn't release) — show that we hold it, click resumes.
+  const lockedByMe =
+    !!link.lockHolder && !!myEmail && link.lockHolder.toLowerCase() === myEmail.toLowerCase();
   const conflict = divergence !== null || link.remoteState === 'conflict';
 
   const kind: ButtonKind = conflict
@@ -69,9 +79,11 @@ export function SpeleoStatusButton() {
       ? 'editing'
       : lockedByOther
         ? 'locked_by_other'
-        : link.remoteState === 'remote_ahead'
-          ? 'remote_ahead'
-          : 'unlocked';
+        : lockedByMe
+          ? 'held_by_me'
+          : link.remoteState === 'remote_ahead'
+            ? 'remote_ahead'
+            : 'unlocked';
 
   const handleClick = () => {
     switch (kind) {
@@ -82,6 +94,10 @@ export function SpeleoStatusButton() {
         // Release; push & release via the dialog when there are local changes.
         if (link.hasUnpushedEdits) openDialog('speleodb-done');
         else void done(null);
+        break;
+      case 'held_by_me':
+        // We already hold the lock — resume editing (re-acquire + enable).
+        void startEditing();
         break;
       case 'locked_by_other':
         // Try to take the lock — the acquire fails while someone else holds it and
@@ -103,7 +119,7 @@ export function SpeleoStatusButton() {
   const glyph =
     kind === 'unlocked' ? (
       <PencilIcon size={10} />
-    ) : kind === 'editing' ? (
+    ) : kind === 'editing' || kind === 'held_by_me' ? (
       <LockIcon size={10} />
     ) : kind === 'locked_by_other' ? (
       <HourglassGlyph size={10} />
@@ -116,7 +132,7 @@ export function SpeleoStatusButton() {
   const glyphColor =
     kind === 'unlocked'
       ? 'text-yellow-400'
-      : kind === 'editing'
+      : kind === 'editing' || kind === 'held_by_me'
         ? 'text-green-400'
         : kind === 'locked_by_other'
           ? 'text-orange-400'
@@ -129,7 +145,7 @@ export function SpeleoStatusButton() {
   const bgClass =
     kind === 'conflict'
       ? 'bg-red-900 hover:bg-red-800'
-      : kind === 'editing'
+      : kind === 'editing' || kind === 'held_by_me'
         ? 'hover:bg-green-400/20'
         : kind === 'locked_by_other'
           ? 'hover:bg-orange-400/20'
@@ -144,11 +160,13 @@ export function SpeleoStatusButton() {
         ? link.hasUnpushedEdits
           ? t('speleodb.button.editingDirty')
           : t('speleodb.button.editingClean')
-        : kind === 'locked_by_other'
-          ? t('speleodb.button.lockedByOther', { email: link.lockHolder })
-          : kind === 'remote_ahead'
-            ? t('speleodb.button.remoteAhead')
-            : t('speleodb.button.conflict');
+        : kind === 'held_by_me'
+          ? t('speleodb.button.heldByMe')
+          : kind === 'locked_by_other'
+            ? t('speleodb.button.lockedByOther', { email: link.lockHolder })
+            : kind === 'remote_ahead'
+              ? t('speleodb.button.remoteAhead')
+              : t('speleodb.button.conflict');
 
   return (
     <button
