@@ -2,7 +2,7 @@
 
 Tauri desktop app for processing underwater cave survey data (Rust backend + React/TypeScript frontend).
 
-It is year 2026.
+It is year 2026. No em-dashes.
 
 ## Quick Reference
 
