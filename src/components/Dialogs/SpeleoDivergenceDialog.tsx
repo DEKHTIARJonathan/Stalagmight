@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { convertToUnmanagedStalx } from '../../utils/projectActions';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -29,17 +30,30 @@ export default function SpeleoDivergenceDialog() {
   const showToast = useUIStore((s) => s.showToast);
   const clearDivergence = useSpeleoStore((s) => s.clearDivergence);
   const editState = useSpeleoStore((s) => s.link?.editState ?? 'read-only');
+  const { startEditing } = useSpeleoActions();
   const [converting, setConverting] = useState(false);
 
-  // Keep local → push your version. Only meaningful while we hold the lock; a
-  // read-only editor (no lock) is nudged to keep their copy via Save-As instead.
+  // Closing without resolving leaves the divergence for later, but must CLEAR the
+  // transient flag so the App-level effect doesn't immediately re-open this dialog
+  // (fix 3). The button stays crimson while `remoteState === 'conflict'`, so the
+  // user can reopen from there.
+  const handleCancel = () => {
+    clearDivergence();
+    closeDialog();
+  };
+
+  // Keep local → push your version. While we hold the lock, route to the push
+  // dialog. Without the lock, acquire it first (Start editing): if our BASE actually
+  // matches the server the lock is granted and the user can then push their version;
+  // if it still diverges, startEditing re-reports it and the App effect re-opens this
+  // dialog - a real next step, not a dead-end toast (fix 11).
   const keepLocal = () => {
     clearDivergence();
     if (editState === 'editing') {
       openDialog('speleodb-done', { mode: 'push' });
     } else {
       closeDialog();
-      showToast(t('speleodb.divergence.keepLocal.noLock'), 'speleodb-divergence-keep-local');
+      void startEditing();
     }
   };
 
@@ -60,7 +74,7 @@ export default function SpeleoDivergenceDialog() {
   return (
     <DialogWrapper
       title={t('speleodb.divergence.title')}
-      onClose={closeDialog}
+      onClose={handleCancel}
       size="md"
       data-testid="speleodb-divergence-dialog"
     >
@@ -120,7 +134,7 @@ export default function SpeleoDivergenceDialog() {
         </div>
 
         <div className="flex justify-end pt-2 border-t border-border">
-          <Button onClick={closeDialog} disabled={converting} data-testid="speleodb-divergence-cancel">
+          <Button onClick={handleCancel} disabled={converting} data-testid="speleodb-divergence-cancel">
             {t('common.actions.cancel')}
           </Button>
         </div>

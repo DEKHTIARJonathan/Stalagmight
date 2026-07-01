@@ -62,16 +62,6 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   return useMemo(() => {
     const sz = 18;
 
-    // T2d: closing while holding the SpeleoDB write lock routes through a guard
-    // that encourages pushing + releasing first (otherwise the lock stays held).
-    const closeWithSpeleoGuard = async () => {
-      if (speleoLink?.editState === 'editing') {
-        openDialog('speleodb-close');
-        return;
-      }
-      await handleCloseProject();
-    };
-
     const saveAndClose = async () => {
       // Pass the close intent so a deferred Save-As (the overwrite-confirm dialog)
       // still closes the project after it saves. A direct save returns the result
@@ -80,8 +70,10 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       const result = await onSave({ closeAfterSave: true });
       // Only leave the project if the save actually succeeded (a cancelled
       // Save As returns null; an integrity/permission block returns success:false).
+      // handleCloseProject now owns the held-lock close guard (fix 1), so the T2d
+      // "push & release before closing" prompt fires here too.
       if (result && result.success) {
-        await closeWithSpeleoGuard();
+        await handleCloseProject();
       }
     };
 
@@ -256,7 +248,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         label: t('singleView.menu.closeProject'),
         icon: <CloseIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.close,
-        onClick: () => { void closeWithSpeleoGuard(); },
+        // handleCloseProject now routes a lock-held close through the speledb-close
+        // guard itself (fix 1).
+        onClick: () => { void handleCloseProject(); },
       },
       quitMenuItem(t),
     ];

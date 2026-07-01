@@ -241,7 +241,13 @@ interface ProjectStore {
    * (the caller must leave it visible rather than dismiss it with `closeDialog`).
    */
   saveAfterImport: () => Promise<boolean>;
-  closeProject: () => Promise<CommandResult>;
+  /**
+   * Close the open project. By default (`releaseLock` unset/true) the backend
+   * best-effort releases a held SpeleoDB write lock first so the close can't strand
+   * the server mutex (fix 1); the close dialog's "Keep lock" path passes
+   * `{ releaseLock: false }` to retain it.
+   */
+  closeProject: (opts?: { releaseLock?: boolean }) => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   /**
    * Mark the project dirty (unsaved changes) without running a command. The DMP
@@ -1091,6 +1097,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // flow persists the import, and the close-guard prevents silent loss.
     if (useUIStore.getState().importContext !== 'new-project') {
       set({ isDirty: true });
+      // #204/fix 8: an import into an existing remote project is an un-pushed edit -
+      // mirror the SpeleoDB dirty bit so the status button offers push (no-op for a
+      // local project). The import command usually already marks it via
+      // executeCommand; this keeps the two dirty flags in lockstep on every path.
+      useSpeleoStore.getState().markDirty();
       return true;
     }
     // New project: the initial save is deferred, so the import is invisible until
@@ -1127,7 +1138,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     return true;
   },
 
-  closeProject: async () => {
+  closeProject: async (opts) => {
     // Terminate the feature-build worker on close so its JSC heap (and any
     // bmalloc slabs it committed during the last load) goes back to the OS.
     // The worker is a singleton lazily recreated on the next project open;
@@ -1150,9 +1161,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
     set({ isClosing: true });
     try {
-      const result = await invokeIpc<CommandResult>('close_project', undefined, {
-        purpose: 'close project and release resources',
-      });
+      const result = await invokeIpc<CommandResult>(
+        'close_project',
+        // Default: release a held SpeleoDB lock so the close doesn't strand it
+        // (fix 1). The keep-lock close path passes { releaseLock: false }.
+        { releaseLock: opts?.releaseLock ?? true },
+        { purpose: 'close project and release resources' },
+      );
       if (result.success) {
         set({ project: null, databaseOpen: false, stations: [], surveyData: null, stationsAdjusted: null, surveyDataAdjusted: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
         // Closing a project bypasses the setView() cleanup funnel, so drop the gas
@@ -1359,6 +1374,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // fixes too while still leaving a true no-op repair clean.
       if (result.changed) {
         set({ isDirty: true });
+        // #204/fix 8: a repair that actually mutated the project makes a remote
+        // SpeleoDB project un-pushed-dirty too - mirror the backend dirty bit (as
+        // executeCommand/executeUndoRedo do) so the status button offers push &
+        // prompts for a commit message rather than reading "editing clean". No-op
+        // for a local project (no link).
+        useSpeleoStore.getState().markDirty();
       }
       return result;
     } catch (e) {

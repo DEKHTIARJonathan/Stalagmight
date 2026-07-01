@@ -15,9 +15,8 @@ import {
   parseIntRadix10,
 } from './types';
 import { defaultConfig, MIN_POLL_INTERVAL_SECONDS } from '../../../types/config';
-import type { SpeleoSessionStatus, TokenFallback } from '../../../types/ipc.generated';
+import type { TokenFallback } from '../../../types/ipc.generated';
 import { useSpeleoStore, type PendingLogin } from '../../../store/speleoStore';
-import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 
 /**
@@ -41,7 +40,7 @@ export function SpeleoDbSettings({
 }: SettingsCategoryProps) {
   const { t } = useTranslation();
   const session = useSpeleoStore((s) => s.session);
-  const setSession = useSpeleoStore((s) => s.setSession);
+  const refreshSession = useSpeleoStore((s) => s.refreshSession);
   const pendingAuth = useSpeleoStore((s) => s.pendingAuth);
   const setPendingAuth = useSpeleoStore((s) => s.setPendingAuth);
   const clearPendingAuth = useSpeleoStore((s) => s.clearPendingAuth);
@@ -53,20 +52,11 @@ export function SpeleoDbSettings({
   const [loggingIn, setLoggingIn] = useState(false);
 
   // Reflect the backend session (a rehydrated keychain token = already signed in).
+  // Reuses the store's shared `refreshSession` (the same probe the project browser
+  // uses) rather than re-implementing the speleodb_session query inline.
   useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
-        if (!cancelled) setSession(status);
-      } catch {
-        /* leave whatever the store had */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [setSession]);
+    void refreshSession();
+  }, [refreshSession]);
 
   // Poll interval floor is a hard validation error (blocks Save; backend also
   // clamps a hand-edited file on load).

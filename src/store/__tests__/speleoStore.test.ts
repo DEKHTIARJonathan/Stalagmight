@@ -10,6 +10,7 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   lock_holder: null,
   remote_state: 'up_to_date',
   access_denied: false,
+  server_error: null,
   ...o,
 });
 
@@ -44,6 +45,30 @@ describe('speleoStore', () => {
       const s = useSpeleoStore.getState();
       expect(s.session).toBeNull();
       expect(s.link?.editState).toBe('read-only');
+    });
+
+    it('clearSession fully resets stale link fields, keeping the permission tier (fix 4)', () => {
+      // Mid-edit with a held lock, un-pushed edits, a raised banner and divergence:
+      // a logout must clear ALL of it (not just editState) so the button can't render
+      // a self-contradictory state for a session that no longer exists.
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(
+          status({ edit_enabled: true, has_unpushed_edits: true, lock_holder: 'me@x' }),
+        );
+      useSpeleoStore.setState({ divergence: 'push', banner: { kind: 'push_unconfirmed' } });
+      useSpeleoStore.getState().clearSession();
+      const s = useSpeleoStore.getState();
+      expect(s.link?.editState).toBe('read-only');
+      expect(s.link?.lockHolder).toBeNull();
+      expect(s.link?.lockedByOther).toBe(false);
+      expect(s.link?.hasUnpushedEdits).toBe(false);
+      expect(s.link?.remoteState).toBe('unknown');
+      expect(s.link?.noAccess).toBe(false);
+      expect(s.link?.serverError).toBeNull();
+      expect(s.link?.permission).toBe('READ_AND_WRITE');
+      expect(s.divergence).toBeNull();
+      expect(s.banner).toBeNull();
     });
   });
 
@@ -83,9 +108,26 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().link?.lockedByOther).toBe(false);
     });
 
+    it('clears a prior lockedByOther once a later poll resolves no holder (fix 7)', () => {
+      // Someone else held it, then released: the next poll reports no holder, and the
+      // flag must drop (no "preserve prior" carry keeping the button stuck orange).
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, lock_holder: 'a@b' }));
+      expect(useSpeleoStore.getState().link?.lockedByOther).toBe(true);
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, lock_holder: null }));
+      expect(useSpeleoStore.getState().link?.lockedByOther).toBe(false);
+    });
+
     it('carries the access_denied flag through as noAccess', () => {
       useSpeleoStore.getState().seedFromStatus(status({ permission: null, access_denied: true }));
       expect(useSpeleoStore.getState().link?.noAccess).toBe(true);
+    });
+
+    it('surfaces an unexpected server_error, and clears it on the next clean poll (fix 12)', () => {
+      const err = { message: 'No Project matches the given query.', action: 'Fatal' as const, status: 404 };
+      useSpeleoStore.getState().seedFromStatus(status({ server_error: err }));
+      expect(useSpeleoStore.getState().link?.serverError).toEqual(err);
+      useSpeleoStore.getState().seedFromStatus(status({ server_error: null }));
+      expect(useSpeleoStore.getState().link?.serverError).toBeNull();
     });
   });
 
@@ -100,6 +142,7 @@ describe('speleoStore', () => {
         hasUnpushedEdits: false,
         remoteState: 'up_to_date',
         noAccess: false,
+        serverError: null,
       });
     });
   });
@@ -176,7 +219,7 @@ describe('speleoStore', () => {
     });
 
     it('released clears a lingering push-unconfirmed banner', () => {
-      useSpeleoStore.getState().setBanner({ kind: 'push_unconfirmed' });
+      useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
       useSpeleoStore.getState().applyDone({ kind: 'released' });
       expect(useSpeleoStore.getState().banner).toBeNull();
     });
@@ -206,7 +249,7 @@ describe('speleoStore', () => {
     );
 
     it('pushed → keeps the lock, clears dirty + banner, resets remote state', () => {
-      useSpeleoStore.getState().setBanner({ kind: 'push_unconfirmed' });
+      useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
       useSpeleoStore.getState().applyPush({ kind: 'pushed' });
       const s = useSpeleoStore.getState();
       // Push behaves like push&release WITHOUT releasing the lock - still editing.
@@ -247,8 +290,7 @@ describe('speleoStore', () => {
   describe('clearLink', () => {
     it('drops link, divergence and banner', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
-      useSpeleoStore.getState().enterDivergence('update');
-      useSpeleoStore.getState().setBanner({ kind: 'concurrent_session' });
+      useSpeleoStore.setState({ divergence: 'update', banner: { kind: 'concurrent_session' } });
       useSpeleoStore.getState().clearLink();
       const s = useSpeleoStore.getState();
       expect(s.link).toBeNull();

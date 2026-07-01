@@ -4,6 +4,7 @@ import type {
   Permission,
   PushResult,
   RemoteState,
+  SpeleoErrorDto,
   SpeleoLinkStatus,
   SpeleoLoginResult,
   SpeleoSessionStatus,
@@ -67,6 +68,14 @@ export interface SpeleoLinkState {
    * miss (which leaves this false), so we never nag a merely-offline user.
    */
   noAccess: boolean;
+  /**
+   * An UNEXPECTED server error hit while probing the link (a status that is not the
+   * handled 401 dead-token / 403 access-denied, and not a transient offline miss -
+   * e.g. a 404 for a deleted project, a 422, or a 5xx). Drives the button's yellow
+   * "?" state, whose click opens a dialog with this detail. `null` on success /
+   * offline / the handled auth cases (see backend `speleodb_link_status`).
+   */
+  serverError: SpeleoErrorDto | null;
 }
 
 /**
@@ -146,9 +155,7 @@ interface SpeleoStore {
   markDirty: () => void;
 
   // --- seams ---
-  enterDivergence: (origin: DivergenceOrigin) => void;
   clearDivergence: () => void;
-  setBanner: (banner: SpeleoBanner) => void;
   dismissBanner: () => void;
 }
 
@@ -243,16 +250,34 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       },
     }),
 
-  // A logout / dead-token drop can't push a remote edit anymore - the backend
-  // drops its edit gate on the same event, so degrade any active edit to
-  // read-only to match (the shell then offers Start editing again on re-login).
+  // A logout / dead-token drop can't act on the remote project anymore - the
+  // backend drops its edit gate AND releases the lock on the same event - so fully
+  // reset the link to a clean read-only state (keeping only the last-known
+  // permission tier so the view-only glyph stays right). Leaving stale lockHolder /
+  // dirty / lockedByOther / remoteState / noAccess / serverError behind would render
+  // a self-contradictory button (e.g. yellow "click to edit" while still claiming we
+  // hold the lock and have un-pushed edits). The shell offers Start editing again on
+  // re-login, and the next poll re-seeds. (fix 4)
   clearSession: () =>
     set((state) => ({
       session: null,
-      link:
-        state.link && state.link.editState === 'editing'
-          ? { ...state.link, editState: 'read-only' }
-          : state.link,
+      link: state.link
+        ? {
+            ...state.link,
+            editState: 'read-only',
+            lockHolder: null,
+            lockedByOther: false,
+            hasUnpushedEdits: false,
+            // We can no longer verify the server relationship without a token, so
+            // report Unknown (what a token-less backend poll returns) rather than
+            // claiming up-to-date; the next poll re-resolves it.
+            remoteState: 'unknown',
+            noAccess: false,
+            serverError: null,
+          }
+        : null,
+      divergence: null,
+      banner: null,
     })),
 
   seedFromStatus: (s) =>
@@ -266,16 +291,19 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           // last-known permission rather than blanking the gate on a transient miss.
           permission: s.permission ?? state.link?.permission ?? null,
           lockHolder: s.lock_holder,
-          // Read-only + a holder ⟹ someone else holds it (backend gives us the
-          // gate when the lock is ours). A failed acquire may also set this via
-          // applyStartEditing; preserve that if this refresh couldn't reach the
-          // server (no holder resolved) but we were told it's locked.
-          lockedByOther:
-            (editState !== 'editing' && !!s.lock_holder) ||
-            (!s.lock_holder && (state.link?.lockedByOther ?? false) && editState !== 'editing'),
+          // Read-only + a resolved holder ⟹ someone else holds it (the backend
+          // gives us the gate when the lock is ours). Derived PURELY from this
+          // poll's (editState, lockHolder), with NO "preserve prior" carry: once the
+          // other holder releases (a later poll resolves no holder) the button stops
+          // reading "locked by other" instead of sticking orange until a poll both
+          // reaches the server AND happens to resolve a holder (fix 7). A transient
+          // offline poll may briefly drop it to read-only; the next poll re-resolves,
+          // and the backend gate stays the real enforcement.
+          lockedByOther: editState !== 'editing' && !!s.lock_holder,
           hasUnpushedEdits: s.has_unpushed_edits,
           remoteState: s.remote_state,
           noAccess: s.access_denied,
+          serverError: s.server_error,
         },
       };
     }),
@@ -292,6 +320,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         hasUnpushedEdits: false,
         remoteState: 'up_to_date',
         noAccess: false,
+        serverError: null,
       },
       divergence: null,
       banner: null,
@@ -313,6 +342,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               editState: 'editing',
               lockedByOther: false,
               remoteState: 'up_to_date',
+              serverError: null,
             },
             divergence: null,
             banner: null,
@@ -342,7 +372,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         case 'up_to_date':
           // Nothing to pull - clear any stale remote-ahead/conflict indicator so
           // the button doesn't keep showing "pull available" after a no-op refresh.
-          return { link: { ...state.link, remoteState: 'up_to_date' }, divergence: null };
+          return {
+            link: { ...state.link, remoteState: 'up_to_date', serverError: null },
+            divergence: null,
+          };
         case 'divergence_needed':
           return { divergence: 'update' };
         // fast_forwarded: the caller reloads + re-seeds.
@@ -367,6 +400,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               lockHolder: null,
               lockedByOther: false,
               remoteState: 'up_to_date',
+              serverError: null,
             },
             divergence: null,
             banner: null,
@@ -388,7 +422,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           // Lock retained (still editing); edits are now on the server. Clear a
           // prior push-unconfirmed banner since this push landed.
           return {
-            link: { ...state.link, hasUnpushedEdits: false, remoteState: 'up_to_date' },
+            link: {
+              ...state.link,
+              hasUnpushedEdits: false,
+              remoteState: 'up_to_date',
+              serverError: null,
+            },
             banner: null,
           };
         case 'divergence_needed':
@@ -407,8 +446,15 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         : {},
     ),
 
-  enterDivergence: (origin) => set({ divergence: origin }),
   clearDivergence: () => set({ divergence: null }),
-  setBanner: (banner) => set({ banner }),
   dismissBanner: () => set({ banner: null }),
 }));
+
+/**
+ * A remote SpeleoDB project opened without the write lock is read-only. Shared so
+ * the toolbar, map read-only badge, and context menu all derive "read-only"
+ * identically (the backend edit gate is the real enforcement; this is the visual
+ * parity). Local projects (`link === null`) are never read-only via this path.
+ */
+export const selectSpeleoReadOnly = (s: SpeleoStore): boolean =>
+  s.link ? s.link.editState !== 'editing' : false;

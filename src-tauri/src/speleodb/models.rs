@@ -278,6 +278,13 @@ pub struct SpeleoLinkStatus {
     /// can offer converting it to an unmanaged local file rather than nagging to
     /// retry. Never set on a plain 401 (that is a dead token → re-login).
     pub access_denied: bool,
+    /// An UNEXPECTED server error hit while probing the link (a status that is
+    /// neither the handled 401 dead-token / 403 access-denied nor a transient
+    /// offline miss - e.g. a 404 for a deleted project, a 422, or a 5xx). Carries
+    /// the humanized detail so the action button can show a "?" state and open a
+    /// dialog explaining what SpeleoDB said, instead of silently degrading to
+    /// `Unknown`. `None` on success / offline / the handled auth cases.
+    pub server_error: Option<SpeleoErrorDto>,
 }
 
 /// The local copy's relationship to the server tip (the reconcile verdict,
@@ -405,6 +412,7 @@ mod tests {
             lock_holder: Some("holder@example.com".to_owned()),
             remote_state: RemoteState::RemoteAhead,
             access_denied: false,
+            server_error: None,
         })
         .expect("serialize link status");
         let push = serde_json::to_string(&PushResult::PushUnconfirmed).expect("serialize push");

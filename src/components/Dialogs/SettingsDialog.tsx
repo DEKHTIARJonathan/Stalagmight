@@ -28,7 +28,10 @@ import {
   defaultConfig,
   getThemedDisplayDefaults,
   getThemedSectionColorDefaults,
+  MIN_POLL_INTERVAL_SECONDS,
+  MAX_POLL_INTERVAL_SECONDS,
 } from '../../types/config';
+import { clamp } from '../../utils/clamp';
 import type { ResolvedTheme } from '../../store/uiStore';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { isValidationConfigValid } from '../../utils/validation';
@@ -475,7 +478,23 @@ export default function SettingsDialog() {
   const commitSettings = useCallback(async (): Promise<boolean> => {
     if (!localConfig) return false;
     if (isDirty) {
-      const result = await updateConfig(localConfig);
+      // Guarantee the SpeleoDB poll interval is in range no matter how it was
+      // entered - a below-floor value whose validation error was cleared when the
+      // panel unmounted on a category switch, or a hand-set out-of-range one. The
+      // backend re-clamps the floor on load, but clamp BOTH ends here so an invalid
+      // value can never be persisted in the first place (fix 13).
+      const clamped: Config = {
+        ...localConfig,
+        speleodb: {
+          ...localConfig.speleodb,
+          poll_interval_seconds: clamp(
+            localConfig.speleodb.poll_interval_seconds,
+            MIN_POLL_INTERVAL_SECONDS,
+            MAX_POLL_INTERVAL_SECONDS,
+          ),
+        },
+      };
+      const result = await updateConfig(clamped);
       if (!result.success) return false;
     }
     if (hasPendingAuth) {

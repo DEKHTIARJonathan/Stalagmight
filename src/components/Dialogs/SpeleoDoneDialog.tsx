@@ -13,10 +13,12 @@ import { DialogWrapper } from './DialogWrapper';
  * - **push** (T2d, fix 8): `speleodb_push` - the same push WITHOUT releasing the
  *   lock, so editing continues.
  *
- * Both collect an optional message then route through `useSpeleoActions`. Closes on
- * any resolved outcome - released / pushed / divergence / push-unconfirmed are
- * surfaced by the store (toast / #198 stub / #200 banner); only a thrown (network)
- * error keeps the dialog open so the typed message and a retry survive.
+ * Both collect an optional message then route through `useSpeleoActions`. Closes
+ * only when the verb actually LANDED (released / pushed). A `divergence_needed`
+ * keeps the dialog's typed message alive and lets the App-level effect open the
+ * resolution dialog over it (fix 3); a `push_unconfirmed` keeps it open for a retry
+ * (the #200 banner surfaces the ambiguity); a thrown (network) error likewise keeps
+ * it open so the message and a retry survive.
  */
 export default function SpeleoDoneDialog() {
   const { t } = useTranslation();
@@ -28,14 +30,19 @@ export default function SpeleoDoneDialog() {
   const handleConfirm = async () => {
     const text = message.trim() || null;
     if (mode === 'push') {
-      // push() has no return we branch on; the store surfaces the outcome. Close
-      // optimistically - a network throw shows a toast and the dialog is already
-      // gone, but the retry lives on the button.
-      await push(text);
-      closeDialog();
+      // Close only when the push actually LANDED. On divergence_needed /
+      // push_unconfirmed the store records the outcome and the App-level effect
+      // opens the resolution dialog; closing here unconditionally would discard the
+      // typed message and drop the user onto the crimson button with no next step
+      // (fix 3). A thrown (network) error returns null - keep the dialog for a retry.
+      const resolved = await push(text);
+      if (resolved?.kind === 'pushed') closeDialog();
     } else {
+      // Same for release: only leave once the lock is RELEASED. A divergence_needed
+      // result is truthy but must NOT close the dialog - the divergence dialog takes
+      // over (fix 3); a thrown error returns null and keeps this dialog open.
       const resolved = await done(text);
-      if (resolved) closeDialog();
+      if (resolved?.kind === 'released') closeDialog();
     }
   };
 

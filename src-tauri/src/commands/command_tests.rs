@@ -709,7 +709,7 @@ fn test_get_project_state_none_when_no_project() {
 fn test_close_project_clears_state() {
     let app = app_with_state();
     create_project(&app);
-    assert_success(&project::close_project(state(&app)));
+    assert_success(&project::close_project(state(&app), None));
     assert!(project::get_project_state(state(&app)).is_none());
 }
 
@@ -794,7 +794,7 @@ fn test_project_lifecycle_persists_undo_and_state() {
         // Wait for background undo persistence thread to complete
         std::thread::sleep(std::time::Duration::from_millis(200));
 
-        assert_success(&project::close_project(state(&app)));
+        assert_success(&project::close_project(state(&app), None));
         let open_result = project::open_project(state(&app), saved_path);
         assert_success(&open_result);
 

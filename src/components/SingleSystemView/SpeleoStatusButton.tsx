@@ -13,6 +13,7 @@ import {
   RefreshGlyph,
   ExclamationGlyph,
   CrossedPencilGlyph,
+  QuestionMarkGlyph,
 } from '../common/SpeleoBadgedIcon';
 
 type ButtonKind =
@@ -22,7 +23,8 @@ type ButtonKind =
   | 'remote_ahead'
   | 'conflict'
   | 'view_only'
-  | 'no_permission';
+  | 'no_permission'
+  | 'unknown_error';
 
 /**
  * The single SpeleoDB status button (T2c), mounted right of the hamburger when a
@@ -53,19 +55,26 @@ export function SpeleoStatusButton() {
 
   const isRemote = link !== null;
 
-  // Poll the remote state on the configured interval while a remote project is
-  // open (T2c freshness). Clamped 30s (backend floor) .. 24h (fix 14). Depends on
-  // pollNonce so a just-issued hand-off verb restarts the timer - the next poll is
-  // then a full interval past a lock change the server may not yet reflect (1b).
+  // Poll the remote state on the configured interval while the button is actually
+  // SHOWN - a remote project open in Survey mode with the window visible (T2c
+  // freshness). Clamped 30s (backend floor) .. 24h (fix 14). Gated on `appMode` +
+  // `document.hidden` so we don't spend server round trips on an indicator nobody
+  // can see in Plan/Export or a backgrounded window (fix 15). Depends on pollNonce
+  // so a just-issued hand-off verb restarts the timer - the next poll is then a full
+  // interval past a lock change the server may not yet reflect (1b).
   useEffect(() => {
-    if (!isRemote) return undefined;
+    if (!isRemote || appMode !== 'survey') return undefined;
     const seconds = Math.min(
       MAX_POLL_INTERVAL_SECONDS,
       Math.max(MIN_POLL_INTERVAL_SECONDS, pollInterval),
     );
-    const id = setInterval(() => void refreshLinkStatus(), seconds * 1000);
+    const id = setInterval(() => {
+      // Skip the round trip while the window is hidden (minimized / another app);
+      // the timer stays armed so polling resumes on the next visible tick.
+      if (!document.hidden) void refreshLinkStatus();
+    }, seconds * 1000);
     return () => clearInterval(id);
-  }, [isRemote, pollInterval, refreshLinkStatus, pollNonce]);
+  }, [isRemote, appMode, pollInterval, refreshLinkStatus, pollNonce]);
 
   // Only in Survey mode - Plan/Export are non-editing views, so the hand-off
   // button + read-only badge are hidden there. Polling above keeps running so the
@@ -82,6 +91,11 @@ export function SpeleoStatusButton() {
   // (offline) - treat it as potentially editable and let the backend gate decide,
   // rather than showing a misleading crossed pencil.
   const viewOnly = link.permission !== null && !permissionAtLeast(link.permission, 'READ_AND_WRITE');
+  // An unexpected server error (a 404 for a deleted/renamed project, a 5xx, ...) the
+  // shell can't otherwise act on - surfaced as a "?" when we are NOT already in a
+  // higher-priority definitive state (no-permission / conflict / actively editing),
+  // so an active edit session is never overridden by a transient blip (fix 12).
+  const serverError = link.serverError !== null;
 
   const kind: ButtonKind = link.noAccess
     ? 'no_permission'
@@ -89,13 +103,15 @@ export function SpeleoStatusButton() {
       ? 'conflict'
       : link.editState === 'editing'
         ? 'editing'
-        : lockedByOther
-          ? 'locked_by_other'
-          : viewOnly
-            ? 'view_only'
-            : link.remoteState === 'remote_ahead'
-              ? 'remote_ahead'
-              : 'unlocked';
+        : serverError
+          ? 'unknown_error'
+          : lockedByOther
+            ? 'locked_by_other'
+            : viewOnly
+              ? 'view_only'
+              : link.remoteState === 'remote_ahead'
+                ? 'remote_ahead'
+                : 'unlocked';
 
   const handleClick = () => {
     switch (kind) {
@@ -129,6 +145,15 @@ export function SpeleoStatusButton() {
         // No access on the server - offer converting to a plain local .stalx.
         openDialog('speleodb-no-permission');
         break;
+      case 'unknown_error':
+        // Nothing to act on - just surface what SpeleoDB actually said (a deleted
+        // project, a 5xx, ...) in the generic error dialog (fix 12).
+        openDialog('error', {
+          title: t('speleodb.serverError.title'),
+          message: link.serverError?.message ?? t('speleodb.serverError.fallback'),
+          hideReportHint: true,
+        });
+        break;
     }
   };
 
@@ -143,6 +168,8 @@ export function SpeleoStatusButton() {
       <CrossedPencilGlyph size={12} />
     ) : kind === 'remote_ahead' ? (
       <RefreshGlyph size={12} />
+    ) : kind === 'unknown_error' ? (
+      <QuestionMarkGlyph size={11} />
     ) : (
       <ExclamationGlyph size={11} />
     );
@@ -158,7 +185,9 @@ export function SpeleoStatusButton() {
             ? 'text-text-secondary'
             : kind === 'remote_ahead'
               ? 'text-blue-400'
-              : 'text-red-500';
+              : kind === 'unknown_error'
+                ? 'text-yellow-400'
+                : 'text-red-500';
 
   // Hover background tint tracks the badge colour (conflict + no-permission keep a
   // persistent red; the rest are transparent with a coloured hover).
@@ -173,7 +202,9 @@ export function SpeleoStatusButton() {
             ? 'hover:bg-white/10'
             : kind === 'remote_ahead'
               ? 'hover:bg-blue-400/20'
-              : 'hover:bg-yellow-400/20';
+              : kind === 'unknown_error'
+                ? 'hover:bg-yellow-400/20'
+                : 'hover:bg-yellow-400/20';
 
   const title =
     kind === 'unlocked'
@@ -190,7 +221,9 @@ export function SpeleoStatusButton() {
               ? t('speleodb.button.remoteAhead')
               : kind === 'no_permission'
                 ? t('speleodb.button.noPermission')
-                : t('speleodb.button.conflict');
+                : kind === 'unknown_error'
+                  ? t('speleodb.button.unknownError')
+                  : t('speleodb.button.conflict');
 
   return (
     <button

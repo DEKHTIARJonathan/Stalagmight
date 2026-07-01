@@ -3675,21 +3675,31 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // the settings tab + browser render without a live server. No e2e spec
           // drives the hand-off yet; these keep the mounts from erroring on null.
           case 'speleodb_session':
-            return { logged_in: false, user_email: null, keychain_backed: false };
+            return { logged_in: false, user_email: null, endpoint: null, keychain_backed: false };
           case 'speleodb_link_status':
+            // Full SpeleoLinkStatus shape (remote_state / access_denied / server_error
+            // included) so a spec that flips is_remote:true still matches the DTO.
             return {
               is_remote: false,
               edit_enabled: true,
               has_unpushed_edits: false,
               permission: null,
               lock_holder: null,
+              remote_state: 'unknown',
+              access_denied: false,
+              server_error: null,
             };
           case 'speleodb_list_projects':
             return [];
           case 'speleodb_logout':
+          case 'speleodb_unlink':
             return null;
           case 'speleodb_login':
-            return { user_email: 'test@example.com', keychain_backed: true };
+            return {
+              user_email: 'test@example.com',
+              endpoint: 'https://speleodb.example',
+              keychain_backed: true,
+            };
 
           default:
             console.warn(`[Mock IPC] Unhandled command: ${cmd}`);

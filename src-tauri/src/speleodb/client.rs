@@ -179,7 +179,18 @@ fn parse_error_message(body: &[u8]) -> Option<String> {
 }
 
 /// Pull the first human message out of a DRF `errors` object: prefer
-/// `non_field_errors`, else the first string in any field's array.
+/// `non_field_errors`, else the first string in the first field (by sorted key).
+///
+/// The SpeleoDB v2 endpoints raise `non_field_errors` (from a serializer's
+/// `validate()`) for the real failure cases the client surfaces - bad
+/// credentials, etc. - and per-field errors only for a missing/invalid single
+/// field; DRF never mixes both in one 400 (it runs `validate()` only after every
+/// per-field check passes). So `non_field_errors` wins whenever present. For a
+/// multi-field 400 with no `non_field_errors`, the field pick is made over
+/// EXPLICITLY sorted keys so the surfaced sentence is deterministic and can't
+/// silently depend on `serde_json`'s object-map ordering (a `BTreeMap` today, but
+/// a feature-unified `preserve_order` elsewhere would otherwise change which field
+/// wins).
 fn first_error_sentence(errors: &serde_json::Value) -> Option<String> {
     fn first_string(v: &serde_json::Value) -> Option<String> {
         match v {
@@ -191,9 +202,11 @@ fn first_error_sentence(errors: &serde_json::Value) -> Option<String> {
     if let Some(m) = errors.get("non_field_errors").and_then(first_string) {
         return Some(m);
     }
-    errors
-        .as_object()
-        .and_then(|obj| obj.values().find_map(first_string))
+    let obj = errors.as_object()?;
+    let mut keys: Vec<&String> = obj.keys().collect();
+    keys.sort();
+    keys.into_iter()
+        .find_map(|k| obj.get(k).and_then(first_string))
 }
 
 #[derive(Deserialize)]
@@ -831,6 +844,27 @@ mod tests {
         assert_eq!(
             parse_error_message(br#"{"errors":{"email":["Enter a valid email."]}}"#).as_deref(),
             Some("Enter a valid email.")
+        );
+        // A multi-field error with no non_field_errors picks the first field by
+        // SORTED key, deterministically, regardless of JSON key order on the wire
+        // (both orderings below must yield the same "email" message).
+        assert_eq!(
+            parse_error_message(br#"{"errors":{"password":["Too short."],"email":["Required."]}}"#)
+                .as_deref(),
+            Some("Required.")
+        );
+        assert_eq!(
+            parse_error_message(br#"{"errors":{"email":["Required."],"password":["Too short."]}}"#)
+                .as_deref(),
+            Some("Required.")
+        );
+        // non_field_errors still wins over any per-field entry.
+        assert_eq!(
+            parse_error_message(
+                br#"{"errors":{"email":["Required."],"non_field_errors":["Bad login."]}}"#
+            )
+            .as_deref(),
+            Some("Bad login.")
         );
         assert_eq!(parse_error_message(b"not json"), None);
     }

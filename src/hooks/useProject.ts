@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
+import { useSpeleoStore } from '../store/speleoStore';
 import { getErrorMessage } from '../utils/ipc';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
 import {
@@ -83,6 +84,15 @@ export function useProject() {
   }, [saveProject, handleSaveProjectAs, openDialog]);
 
   const handleCloseProject = useCallback(async () => {
+    // A SpeleoDB project we still hold the write lock for routes through the close-
+    // flow guard (push & release, or keep the lock) BEFORE the normal unsaved-changes
+    // prompt, so no in-app close affordance - hamburger Close, Save-and-Close, the
+    // overwrite-confirm close - can leave the server mutex stranded (fix 1). The
+    // dialog owns the actual close and handles both dirty states itself.
+    if (useSpeleoStore.getState().link?.editState === 'editing') {
+      openDialog('speleodb-close');
+      return { success: false, error: 'Showing dialog' };
+    }
     // Check for unsaved changes - use getState() to get current value, not stale closure
     const currentIsDirty = useProjectStore.getState().isDirty;
     debugLog('[useProject] handleCloseProject called, isDirty:', currentIsDirty);

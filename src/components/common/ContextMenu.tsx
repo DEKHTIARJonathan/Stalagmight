@@ -4,7 +4,7 @@ import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
-import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import type { StationRef, SectionId, ShotId } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
@@ -46,7 +46,7 @@ export default function ContextMenu() {
   })));
   // A remote SpeleoDB project without the lock is read-only (T2a) - treat it like
   // closure-adjusted for the right-click edit items.
-  const speleoReadOnly = useSpeleoStore((s) => (s.link ? s.link.editState !== 'editing' : false));
+  const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
   const { project, stations, setShotReference, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
 
   const menuRef = useRef<HTMLDivElement>(null);

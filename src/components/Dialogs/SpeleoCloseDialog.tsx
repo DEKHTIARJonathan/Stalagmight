@@ -65,7 +65,9 @@ export default function SpeleoCloseDialog() {
   const closeKeepingLock = async () => {
     if (!(await maybeSaveLocally())) return;
     closeDialog();
-    await closeProject();
+    // Explicitly retain the server lock: this is the one close path that opts out of
+    // the default lock-release (fix 1), so the user keeps their editing claim.
+    await closeProject({ releaseLock: false });
   };
 
   return (

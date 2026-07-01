@@ -39,7 +39,7 @@ import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { FitToViewIcon, LockIcon } from '../common/icons';
-import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { setSource } from '../../utils/telemetry';
@@ -269,7 +269,7 @@ function MapCanvas() {
   const geometryMode = useUIStore((s) => s.geometryMode);
   // T2b: a remote SpeleoDB project opened without the write lock shows a
   // top-left read-only badge, mirroring the closure-adjusted view-only badge.
-  const speleoReadOnly = useSpeleoStore((s) => (s.link ? s.link.editState !== 'editing' : false));
+  const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
   const setGeometryMode = useUIStore((s) => s.setGeometryMode);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
 

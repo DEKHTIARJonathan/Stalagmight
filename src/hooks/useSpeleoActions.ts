@@ -24,8 +24,10 @@ export interface SpeleoActions {
   busy: boolean;
   startEditing: () => Promise<void>;
   update: () => Promise<void>;
-  /** Push edits without releasing the lock (T2d) - collects an optional message. */
-  push: (message?: string | null) => Promise<void>;
+  /** Push edits without releasing the lock (T2d) - collects an optional message.
+      Returns the backend outcome (or `null` if the call threw) so callers can keep
+      a dialog open on a `divergence_needed` / `push_unconfirmed` result. */
+  push: (message?: string | null) => Promise<PushResult | null>;
   /** The backend outcome, or `null` if the call threw. Callers key off `.kind`
       (e.g. the close flow only leaves once the lock is actually `released`). */
   done: (message?: string | null) => Promise<DoneResult | null>;
@@ -116,7 +118,7 @@ export function useSpeleoActions(): SpeleoActions {
   }, [applyUpdate, loadProject, showToast, t, handleError, setBusy, bumpPoll]);
 
   const push = useCallback(
-    async (message?: string | null) => {
+    async (message?: string | null): Promise<PushResult | null> => {
       setBusy(true);
       try {
         const result = await invokeIpc<PushResult>('speleodb_push', { message: message ?? null });
@@ -124,9 +126,12 @@ export function useSpeleoActions(): SpeleoActions {
         if (result.kind === 'pushed') {
           showToast(t('speleodb.editBar.toasts.pushed'), 'speleodb-pushed');
         }
-        // divergence_needed / push_unconfirmed surface via the store (#198/#200 seams).
+        // divergence_needed / push_unconfirmed surface via the store (#198/#200 seams);
+        // the returned kind lets the dialog stay open to resolve them.
+        return result;
       } catch (e) {
         handleError(e, 'speleodb.editBar.toasts.pushFailed');
+        return null;
       } finally {
         bumpPoll();
         setBusy(false);

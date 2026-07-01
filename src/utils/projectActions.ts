@@ -136,8 +136,19 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
   }
 
   // The copy is safe on disk - now drop the SpeleoDB link and re-seed the shell as
-  // a plain local project (link_status returns is_remote:false → link cleared).
-  await invokeIpc('speleodb_unlink');
+  // a plain local project (link_status returns is_remote:false → link cleared). The
+  // unlink can still reject (e.g. a poisoned database lock); guard it so it can't
+  // escape as an unhandled rejection that leaves the dialog open while the project is
+  // silently still SpeleoDB-linked though the user was told it converted (fix 6).
+  try {
+    await invokeIpc('speleodb_unlink');
+  } catch (e) {
+    openDialog('error', {
+      title: 'Detach Failed',
+      message: getErrorMessage(e, 'The local copy was saved, but detaching from SpeleoDB failed'),
+    });
+    return false;
+  }
   await useSpeleoStore.getState().refreshLinkStatus();
   return true;
 }

@@ -76,6 +76,18 @@ export function CrossedPencilGlyph({ size = 11 }: { size?: number }) {
   );
 }
 
+/** Filled question-mark glyph (an unexpected SpeleoDB server error). */
+export function QuestionMarkGlyph({ size = 11 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      {/* Filled hook (not a stroke - WebKit fattens strokes under the UI zoom), plus
+          the same dot the exclamation uses so the badge family reads consistently. */}
+      <path d="M5 5.4a3 3 0 015.95.6c0 1.5-1.05 2.15-1.75 2.75-.55.48-.7.95-.7 1.75H6.7c0-1.15.2-1.75.9-2.4.6-.56 1.5-1 1.5-1.95a1.35 1.35 0 00-2.7-.05z" />
+      <circle cx="8" cy="12.4" r="1.5" />
+    </svg>
+  );
+}
+
 /** Filled exclamation-mark glyph (local/remote conflict). */
 export function ExclamationGlyph({ size = 11 }: { size?: number }) {
   return (

@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
+import { useSpeleoStore } from './store/speleoStore';
 import { invokeIpc } from './utils/ipc';
 import { extractFilename } from './utils/path';
 import { routeOpenedFile } from './utils/openOrImport';
@@ -50,6 +51,19 @@ function App() {
     toast,
     selectionAnnouncement,
   } = useUIStore();
+
+  // #198/fix 3: whenever a SpeleoDB hand-off verb (start/update/push/done, from the
+  // status button OR a close dialog) reports a divergence, surface the resolution
+  // dialog from ONE place - so no entry point can leave the user on a crimson button
+  // with no next step. App is the only always-mounted host (the status button
+  // unmounts in Plan/Export). The `activeDialog` guard prevents a re-open loop while
+  // the dialog is up; SpeleoDivergenceDialog clears `divergence` on resolve/cancel.
+  const speleoDivergence = useSpeleoStore((s) => s.divergence);
+  useEffect(() => {
+    if (speleoDivergence !== null && activeDialog !== 'speleodb-divergence') {
+      openDialog('speleodb-divergence');
+    }
+  }, [speleoDivergence, activeDialog, openDialog]);
 
   // Apply theme from config (resolves auto mode, sets data-theme attribute)
   useTheme();

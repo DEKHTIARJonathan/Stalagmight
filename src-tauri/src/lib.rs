@@ -1382,7 +1382,22 @@ pub fn run() {
             commands::telemetry::is_telemetry_available,
             commands::telemetry::set_telemetry_enabled,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
+        .map(|app| {
+            app.run(|app_handle, event| {
+                // Best-effort release of a held SpeleoDB write lock on app exit so
+                // quitting / closing the window doesn't strand the server mutex
+                // locked for every other editor (fix 1). This covers the quit +
+                // window-close paths that destroy the window WITHOUT routing through
+                // `close_project` (which releases on its own). No-op when no remote
+                // edit session is active.
+                if let tauri::RunEvent::ExitRequested { .. } = event {
+                    if let Some(state) = app_handle.try_state::<core::state::AppState>() {
+                        state.speleodb_release_held_lock_best_effort();
+                    }
+                }
+            });
+        })
         .unwrap_or_else(|e| {
             tracing::error!(error = %e, "Fatal: Tauri application failed to start");
         });

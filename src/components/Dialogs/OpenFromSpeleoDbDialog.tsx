@@ -124,7 +124,12 @@ export default function OpenFromSpeleoDbDialog() {
     setLinkOnOpen({ permission: project.permission });
     // Close so loadProject's own LoadingState progress is visible, then hand off.
     closeDialog();
-    await loadProject(result.local_path);
+    const loaded = await loadProject(result.local_path);
+    // Roll back the optimistic link seed if the load failed (corrupt / permission /
+    // any load error) - otherwise the shell keeps a remote read-only link for a
+    // project that never opened (fix 10). On success loadProject re-seeds the link
+    // from the backend status.
+    if (!loaded.success) useSpeleoStore.getState().clearLink();
   };
 
   const goToLogin = () => openDialog('settings', { initialCategory: 'speleodb' });
