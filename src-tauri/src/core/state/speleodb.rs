@@ -612,21 +612,25 @@ impl AppState {
         whoami_indicates_dead_token(&client::fetch_user_email(&endpoint, &token, insecure_http))
     }
 
-    /// Persist the user-supplied endpoint (when given) + email — never the token —
-    /// for a future prefill (#205). The `DEV_SPELEODB_URL` env default is
-    /// deliberately *not* persisted: writing the resolved endpoint here would leak
-    /// the dev box into the saved config and resurface it after the env var is
-    /// unset. Best-effort; a failure is logged, not fatal.
-    fn speleodb_persist_account(&self, endpoint: Option<&str>, email: &str) {
+    /// Persist the authoritative account email — never the token — so a later
+    /// silent rehydrate can key the keychain lookup by (endpoint, email) after a
+    /// restart. The email is only known once login resolves it, so it can't ride
+    /// the Settings config the way the endpoint does.
+    ///
+    /// The **endpoint is deliberately NOT persisted here**: it is a user-facing
+    /// Settings field owned by the config-staging flow, persisted only when the
+    /// Settings dialog's Save runs (`updateConfig`). Writing it as a login side
+    /// effect meant a "Log in now" test — or any login — leaked the endpoint into
+    /// the saved config behind the dialog's back, surviving a Cancel/Undo, and
+    /// also risked leaking the `DEV_SPELEODB_URL` dev box. Best-effort; a failure
+    /// is logged, not fatal.
+    fn speleodb_persist_email(&self, email: &str) {
         let Ok(mut config) = self.config.lock() else {
             return;
         };
-        if let Some(endpoint) = endpoint {
-            config.speleodb.endpoint = Some(endpoint.to_owned());
-        }
         config.speleodb.email = Some(email.to_owned());
         if let Err(e) = config.save() {
-            tracing::warn!(error = %e, "failed to persist SpeleoDB endpoint/email to config");
+            tracing::warn!(error = %e, "failed to persist SpeleoDB account email to config");
         }
     }
 
@@ -640,14 +644,6 @@ impl AppState {
         password: Option<String>,
         token: Option<String>,
     ) -> Result<SpeleoLoginResult, SpeleoErrorDto> {
-        // Only a user-supplied endpoint (the dialog override) is persisted; the env
-        // default must not leak into the saved config (see speleodb_persist_account).
-        let persist_endpoint = override_endpoint
-            .as_deref()
-            .map(str::trim)
-            .filter(|e| !e.is_empty())
-            .map(str::to_owned);
-
         let endpoint = self
             .speleodb_resolve_endpoint(override_endpoint.as_deref())
             .ok_or(SpeleoDbError::NoEndpoint)
@@ -717,7 +713,7 @@ impl AppState {
             tier == crate::speleodb::auth::TokenTier::Keychain
         };
 
-        self.speleodb_persist_account(persist_endpoint.as_deref(), &email);
+        self.speleodb_persist_email(&email);
 
         Ok(SpeleoLoginResult {
             user_email: email,
