@@ -133,38 +133,21 @@ fn depth_range(project: &Project, stations: &[crate::models::Station]) -> (f64, 
     }
 }
 
-/// sRGB channel (0-255) → linear light. MapLibre interpolates in linear space.
-fn srgb_to_linear(c: f64) -> f64 {
-    let c = c / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-/// Linear light → sRGB channel (0-255, rounded).
-fn linear_to_srgb(c: f64) -> f64 {
-    let s = if c <= 0.003_130_8 {
-        c * 12.92
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    };
-    (s * 255.0).round()
-}
-
 /// Distance-gradient color for `value` normalized over `[0, max]`, matching the
-/// survey map: a linearized-sRGB lerp near→far, `None`/negative rendered grey.
+/// survey map: `None`/negative render grey; otherwise a near→far lerp **in plain
+/// (gamma) sRGB channels**. MapLibre's `['interpolate', ['linear'], …]` on colors
+/// uses the default `rgb` space, which lerps the parsed gamma channels directly
+/// (NOT linear light) — so a naive per-channel lerp is what actually matches the
+/// on-screen distance ramp. (The GPU renders float colors, so the export's 8-bit
+/// rounding lands within ±1 level of the map.)
 fn distance_gradient_color(value: Option<f64>, max: f64) -> String {
     let Some(v) = value.filter(|v| v.is_finite() && *v >= 0.0) else {
         return DIST_UNREACHABLE.to_string();
     };
     let safe_max = if max > 0.0 { max } else { 1.0 };
     let t = (v / safe_max).clamp(0.0, 1.0);
-    let lerp = |a: u8, b: u8| -> u8 {
-        let (la, lb) = (srgb_to_linear(f64::from(a)), srgb_to_linear(f64::from(b)));
-        linear_to_srgb(la + t * (lb - la)) as u8
-    };
+    let lerp =
+        |a: u8, b: u8| -> u8 { (f64::from(a) + t * (f64::from(b) - f64::from(a))).round() as u8 };
     format!(
         "#{:02x}{:02x}{:02x}",
         lerp(DIST_NEAR.0, DIST_FAR.0),
@@ -838,7 +821,12 @@ pub fn generate_svg_string_with_stations(
     };
     let depth_rng = (mode == ColorMode::Depth).then(|| depth_range(project, &stations));
     let dist_field = (mode == ColorMode::Distance).then(|| {
-        let field = project.distance_field_from(&stations, None);
+        // The map colors the distance ramp from MEASURED distances (it draws
+        // adjusted geometry but deliberately computes the distance field from
+        // measured coords — see `AppState::distance_field`). Match that: distances
+        // key by station_ref, so this stays consistent with the adjusted geometry
+        // we draw. (It also skips the adjusted solve the map was designed to avoid.)
+        let field = project.distance_field_from(&project.compute_station_coordinates(), None);
         let by_ref: HashMap<StationRef, Option<f64>> = field
             .station_refs
             .iter()
@@ -3024,6 +3012,105 @@ mod tests {
         assert!(
             !svg.contains("#666666"),
             "SVG export must stay monochrome regardless of the color mode: {svg}"
+        );
+    }
+
+    #[test]
+    fn distance_gradient_color_lerps_in_gamma_space() {
+        // MapLibre's `['interpolate', ['linear'], …]` on colors uses the default
+        // `rgb` space, which lerps the parsed GAMMA channels directly. The midpoint
+        // of #f4d03f → #7d3c98 is ≈ #b8866c (184,134,108), NOT the linear-light
+        // #c49d76 (196,157,118). Guards against regressing to a linearized lerp.
+        let mid = distance_gradient_color(Some(50.0), 100.0);
+        let n = u32::from_str_radix(&mid[1..7], 16).expect("valid hex");
+        let (r, g, b) = ((n >> 16) as u8, (n >> 8) as u8, n as u8);
+        assert!(
+            (i32::from(r) - 184).abs() <= 1 && g == 134 && b == 108,
+            "gamma-space midpoint expected ~#b8866c, got {mid}"
+        );
+        assert_ne!(mid, "#c49d76", "must not lerp in linear light");
+    }
+
+    #[test]
+    fn depth_color_mode_paints_a_varying_gradient() {
+        // A shot descending 0 → 100 must paint MULTIPLE distinct depth colors from
+        // the per-shot subdivision — not one flat color. Guards the subdivision
+        // count, the midpoint-depth formula, and the per-segment coloring.
+        let mut project = Project::new("DepthGrad".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("A".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                length: 120.0, // >= the 100 m depth change so the geometry is valid
+                depth_in: 0.0,
+                depth_out: 100.0,
+                is_reference: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let png = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Png,
+                color_mode: ColorMode::Depth,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // Distinct shot stroke colors, excluding the group's black default: the
+        // per-shot subdivision paints a run of gradient colors, not one flat color.
+        let colors: HashSet<&str> = png
+            .split("stroke=\"")
+            .skip(1)
+            .filter_map(|s| s.get(0..7))
+            .filter(|h| h.starts_with('#') && *h != "#000000")
+            .collect();
+        assert!(
+            colors.len() >= 3,
+            "depth subdivision should paint a gradient of distinct colors, got {colors:?}"
+        );
+    }
+
+    #[test]
+    fn distance_color_mode_ramps_reachable_shots() {
+        // With a zero datum every station is reachable → shots get the gold→purple
+        // ramp, none grey. Exercises the reachable `Some((a+b)/2)` avg + ramp path.
+        let mut project = Project::new("DistReach".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("A".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
+            ..Default::default()
+        });
+        let sid = project.sections[0].id;
+        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
+        project
+            .set_zero_datum(StationRef::new(sid, 0), gps)
+            .unwrap();
+        let png = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Png,
+                color_mode: ColorMode::Distance,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let has_ramp = png
+            .split("stroke=\"")
+            .skip(1)
+            .filter_map(|s| s.get(0..7))
+            .any(|h| h.starts_with('#') && h != "#000000" && h != "#666666");
+        assert!(
+            has_ramp,
+            "reachable shots should paint a non-grey ramp color: {png}"
+        );
+        assert!(
+            !png.contains("#666666"),
+            "all stations reachable → no grey: {png}"
         );
     }
 
