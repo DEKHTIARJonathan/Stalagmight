@@ -1067,11 +1067,31 @@ impl AppState {
     /// drop its `speleo_link` row so it is no longer tied to SpeleoDB, then open the
     /// edit gate. Two callers reach this: (10) a project the server refused us access
     /// to (`access_denied`), and (11) keeping locally-edited work after a divergence
-    /// by saving it elsewhere. Nothing is pushed or released — the SpeleoDB copy is
-    /// simply abandoned (a fresh Open-from-SpeleoDB re-pulls the server tip), so the
-    /// managed side stays clean. No-op-safe: a `None` delete over an absent row is
-    /// fine. The lock, if any, is intentionally NOT released here (the caller decides).
+    /// by saving it elsewhere. Nothing is pushed — the SpeleoDB copy is abandoned (a
+    /// fresh Open-from-SpeleoDB re-pulls the server tip), so the managed side stays
+    /// clean. No-op-safe: a `None` delete over an absent row is fine.
+    ///
+    /// A held write lock IS released first (best-effort, mirroring logout — the lock
+    /// needs the token, so before we drop the link): abandoning the project while
+    /// still holding its server mutex would strand it locked for every other editor.
+    /// Unlike logout the token is kept — the user stays signed in, they just walk
+    /// away from this one project.
     pub(crate) fn speleodb_unlink(&self) -> Result<(), SpeleoErrorDto> {
+        // Release the server lock if this is a held remote edit session, so we don't
+        // leave it stranded. Best-effort: an offline / no-access release just no-ops.
+        if self.edit_enabled() {
+            if let Ok(link) = self.speleodb_open_link() {
+                if let Ok((endpoint, token)) = self.speleodb_active_token() {
+                    let insecure_http = self.speleodb_insecure_http();
+                    self.speleodb_release_best_effort(
+                        &endpoint,
+                        &token,
+                        insecure_http,
+                        &link.project_id,
+                    );
+                }
+            }
+        }
         {
             let db_guard = self
                 .database
