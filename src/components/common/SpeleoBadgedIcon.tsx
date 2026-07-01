@@ -19,7 +19,12 @@ export function SpeleoBadgedIcon({
   return (
     <span className="relative inline-flex">
       <SpeleoDbLogo size={size} />
-      <span className={`absolute -bottom-1 -right-1 flex items-center justify-center ${badgeColor}`}>
+      {/* The disc is the panel BACKGROUND colour (like the DisplayMenu badge-bg,
+          fill: var(--cc-panel)) so it knocks the icon out around the badge — a
+          cutout, not a coloured circle. */}
+      <span
+        className={`absolute -bottom-1 -right-1 flex items-center justify-center rounded-full bg-panel p-[1px] ${badgeColor}`}
+      >
         {badge}
       </span>
     </span>
