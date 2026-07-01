@@ -15,6 +15,8 @@ import DetailPanel from './DetailPanel';
 import { GasPlanPanel } from './GasPlanPanel';
 import { PlanTablesPanel } from './PlanTablesPanel';
 import { ExportPanel } from './ExportPanel';
+import ExportPreview from '../Dialogs/ExportPreview';
+import { useExportStore } from '../../store/exportStore';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
 import { PANEL_SIZE_BOUNDS, DETAIL_REVEAL_AUTOCLOSE_MS } from './layoutConstants';
@@ -81,6 +83,11 @@ export default function SingleSystemView() {
   // stub and hides the bottom table. The carousel owns enter/exit; setView()/setColorMode
   // reset it. The left Sections Dock is survey-only (Plan/Export are read-only).
   const appMode = useUIStore((s) => s.appMode);
+
+  // Export mode shows a large WYSIWYG export preview over the map area; it
+  // mirrors the inline ExportControls options via the shared export store.
+  const exportPreviewType = useExportStore((s) => s.exportType);
+  const exportImageOptions = useExportStore((s) => s.imageOptions);
 
   // Depend on the stable cancelPending useCallback (not the whole autoSave object,
   // which is a fresh object each render) so handleSaveProject keeps a stable
@@ -571,6 +578,19 @@ export default function SingleSystemView() {
             </ErrorBoundary>
             {/* Offline indicator - positioned in top-right of map area */}
             <OfflineIndicator className="absolute top-2 right-14 z-10" />
+            {/* Export mode: large WYSIWYG preview of the image export, overlaid
+                on the (still-mounted) map. Only for the image export type —
+                data exports keep the map visible. */}
+            {appMode === 'export' && exportPreviewType === 'image' && (
+              <div
+                className="absolute inset-0 z-20 bg-background flex items-center justify-center p-6"
+                data-testid="export-mode-preview"
+              >
+                <ErrorBoundary panelName="Export Preview">
+                  <ExportPreview options={exportImageOptions} fill />
+                </ErrorBoundary>
+              </div>
+            )}
           </div>
 
           {/* Data (bottom) — inside the center column so docked side panels push

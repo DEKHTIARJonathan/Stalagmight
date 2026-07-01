@@ -42,6 +42,7 @@ export type {
   FieldChange,
   ExportImageOptions,
   ImageFormat,
+  ColorMode,
   DepthPreset,
   DepthPresetColors,
   ColorStop,

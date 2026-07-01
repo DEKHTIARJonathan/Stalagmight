@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::AppState;
@@ -116,6 +116,15 @@ pub async fn export_image(
             format = ?options.format,
             "Starting image export"
         );
+        // Render from the memoized closure-adjusted solve so the saved image
+        // matches the on-screen (adjusted) map; falls back to measured
+        // coordinates when there are no eligible closures. Fetch before the
+        // emitter consumes `app_handle`.
+        let adjusted = app_handle
+            .state::<AppState>()
+            .inner()
+            .get_adjusted_stations();
+
         // Use shared ProgressEmitter for consistent progress events
         let mut emitter = ProgressEmitter::new_for_export(app_handle);
 
@@ -126,7 +135,12 @@ pub async fn export_image(
         emitter.start_phase(LoadingPhase::ExportGenerating);
 
         // Perform the actual export
-        let result = crate::export::export_image(&project, &path, &options);
+        let result = match adjusted {
+            Some(stations) => {
+                crate::export::export_image_with_stations(&project, &path, &options, stations)
+            }
+            None => crate::export::export_image(&project, &path, &options),
+        };
 
         if result.is_ok() {
             // Writing phase
@@ -221,14 +235,24 @@ pub(crate) fn export_image_impl(
 /// Tauri main thread on large surveys — mirroring `export_image`.
 #[tauri::command]
 pub async fn preview_svg_export(
-    state: State<'_, AppState>,
+    app_handle: AppHandle,
     options: ExportImageOptions,
 ) -> Result<String, String> {
-    let project = state
-        .get_project_state()
-        .ok_or_else(|| "No project open".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        crate::export::generate_svg_string(&project, &options).map_err(|e| e.to_string())
+        let state = app_handle.state::<AppState>();
+        let project = state
+            .get_project_state()
+            .ok_or_else(|| "No project open".to_string())?;
+        // Render from the memoized closure-adjusted solve so the preview matches
+        // the on-screen (adjusted) map; falls back to measured coordinates when
+        // there are no eligible closures.
+        match state.inner().get_adjusted_stations() {
+            Some(stations) => {
+                crate::export::generate_svg_string_with_stations(&project, &options, stations)
+            }
+            None => crate::export::generate_svg_string(&project, &options),
+        }
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("Preview task panicked: {e}"))?

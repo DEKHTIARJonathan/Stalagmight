@@ -847,3 +847,55 @@ describe('Geometry Mode', () => {
     expect(useUIStore.getState().view).toBe('global');
   });
 });
+
+describe('Plan/Export display isolation', () => {
+  beforeEach(() => {
+    useUIStore.setState({ ...getCleanTestState(), appMode: 'survey' });
+    vi.clearAllMocks();
+  });
+
+  it('Display changes in Plan update the (plan) view but are restored on return to Survey', () => {
+    expect(useUIStore.getState().showGrid).toBe(false);
+    useUIStore.getState().setAppMode('plan');
+    // Toggling in Plan takes effect immediately (the plan view re-renders).
+    useUIStore.getState().toggleDisplay('showGrid');
+    expect(useUIStore.getState().showGrid).toBe(true);
+    // Returning to Survey restores the pre-Plan survey value — Plan didn't touch it.
+    useUIStore.getState().setAppMode('survey');
+    expect(useUIStore.getState().showGrid).toBe(false);
+  });
+
+  it('Display changes in Plan do NOT persist to the saved (survey) config', () => {
+    useUIStore.getState().setAppMode('plan');
+    vi.clearAllMocks();
+    useUIStore.getState().toggleDisplay('showGrid');
+    useUIStore.getState().setGridSpacing(25);
+    expect(invoke).not.toHaveBeenCalledWith(
+      'save_display_setting',
+      expect.objectContaining({ key: 'showGrid' }),
+    );
+    expect(invoke).not.toHaveBeenCalledWith(
+      'save_display_setting',
+      expect.objectContaining({ key: 'gridSpacing' }),
+    );
+  });
+
+  it('entering Plan force-clears the color overlays, but Survey gets them back on exit', () => {
+    // A survey depth gradient must not be silently lost by a round-trip through Plan.
+    useUIStore.setState({ showDepthGradient: true });
+    useUIStore.getState().setAppMode('plan');
+    expect(useUIStore.getState().showDepthGradient).toBe(false); // gas gradient owns coloring in Plan
+    useUIStore.getState().setAppMode('survey');
+    expect(useUIStore.getState().showDepthGradient).toBe(true); // restored
+  });
+
+  it('a Survey display change still persists (isolation is Plan/Export-only)', async () => {
+    useUIStore.getState().toggleDisplay('showGrid');
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('save_display_setting', {
+        key: 'showGrid',
+        value: 'true',
+      });
+    });
+  });
+});

@@ -2164,11 +2164,7 @@
   },
   "exportPanel": {
     "title": "Export",
-    "subtitle": "Export the closure map for sharing or print.",
-    "description": "Export the current closure map as a vector or image file.",
-    "svg": "Export SVG",
-    "jpg": "Export JPG",
-    "comingSoon": "Export is coming soon."
+    "subtitle": "Export the map image or survey data."
   },
   "toolbar": {
     "groupAria": "{{group}} tools",

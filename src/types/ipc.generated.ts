@@ -104,6 +104,7 @@ export * from './ipc/WallsFile';
 export * from './ipc/WallsSurveySummary';
 export * from './ipc/ExportImageOptions';
 export * from './ipc/ImageFormat';
+export * from './ipc/ColorMode';
 export * from './ipc/DepthPreset';
 export * from './ipc/DepthPresetColors';
 export * from './ipc/ColorStop';

@@ -574,6 +574,44 @@ let focusLayoutSnapshot:
 let prePlanGeometryMode: GeometryMode | null = null;
 
 /**
+ * Display/overlay flags captured when entering Plan/Export, restored on return to
+ * Survey — so Display changes made while planning/exporting are scoped to that mode
+ * and never mutate (or persist to) the Survey view. Includes the color overlays that
+ * Plan force-clears on entry, so entering Plan no longer silently turns a survey
+ * depth/distance gradient off for good. Module-level bookkeeping like
+ * {@link prePlanGeometryMode}; the persistence skip lives in `toggleDisplay` /
+ * `setGridSpacing` (they only write to the saved config while in Survey).
+ */
+const PREPLAN_DISPLAY_KEYS = [
+  'showStations',
+  'showShots',
+  'showReferenceShots',
+  'showZeroDatum',
+  'showSectionNames',
+  'showStationLabels',
+  'showStationComments',
+  'showShotComments',
+  'showShotData',
+  'showGrid',
+  'showSatellite',
+  'gridSpacing',
+  'showDepthGradient',
+  'showDistanceGradient',
+  'showIssueSeverity',
+  'distanceGradientOrigin',
+  'distanceField',
+] as const;
+type PrePlanDisplay = Pick<UIStore, (typeof PREPLAN_DISPLAY_KEYS)[number]>;
+let prePlanDisplay: PrePlanDisplay | null = null;
+const snapshotDisplay = (s: UIStore): PrePlanDisplay => {
+  const snap: Partial<PrePlanDisplay> = {};
+  for (const k of PREPLAN_DISPLAY_KEYS) {
+    (snap as Record<string, unknown>)[k] = s[k];
+  }
+  return snap as PrePlanDisplay;
+};
+
+/**
  * The data table's open/mode captured when entering fullscreen, restored on exit.
  * Module-level bookkeeping (the UI never reads it). Fullscreen forces the table
  * open+pinned; without this, exiting would strand a hover-mode or closed table
@@ -1243,7 +1281,11 @@ export const useUIStore = create<UIStore>((set) => ({
       // can't linger in the editable survey workspace.
       const restore = prePlanGeometryMode ?? GEOMETRY_MODE_DEFAULT;
       prePlanGeometryMode = null;
-      set({ appMode: 'survey', geometryMode: restore, ...MEASURE_CLEARED });
+      // Restore the Survey display flags captured on entry so Plan/Export tweaks
+      // (and the forced color-overlay clear) don't bleed into the survey view.
+      const displayRestore = prePlanDisplay ?? {};
+      prePlanDisplay = null;
+      set({ appMode: 'survey', geometryMode: restore, ...displayRestore, ...MEASURE_CLEARED });
       useGasPlanStore.getState().reset();
       return;
     }
@@ -1259,7 +1301,10 @@ export const useUIStore = create<UIStore>((set) => ({
     //    layer the gas overlay uses, and are a survey concern).
     s.exitSectionFocus();
     s.exitDataTableFullScreen();
-    if (s.appMode === 'survey') prePlanGeometryMode = s.geometryMode;
+    if (s.appMode === 'survey') {
+      prePlanGeometryMode = s.geometryMode;
+      prePlanDisplay = snapshotDisplay(s);
+    }
     set({
       appMode: mode,
       geometryMode: 'closureAdjusted',
@@ -1306,11 +1351,18 @@ export const useUIStore = create<UIStore>((set) => ({
     // calls toggleDisplay directly (bypassing setColorMode's gas-exit).
     if (key === 'showDepthGradient' && newValue) useUIStore.getState().exitGasPlan();
     set({ [key]: newValue, ...exclusive });
-    // Persist the setting asynchronously via the helper
-    state.saveDisplaySetting(key, newValue);
+    // Persist only Survey display changes. In Plan/Export the toggles are scoped to
+    // that mode (snapshotted on entry, restored on exit), so they must not write to
+    // the saved survey config. Re-read appMode: the showDepthGradient branch above
+    // calls exitGasPlan() first, so a Shift+D from Plan lands (and persists) in Survey.
+    if (useUIStore.getState().appMode === 'survey') {
+      state.saveDisplaySetting(key, newValue);
+    }
   },
   setGridSpacing: (spacing) => {
     set({ gridSpacing: spacing });
+    // Scoped to Plan/Export while there (restored on exit) — don't persist it.
+    if (useUIStore.getState().appMode !== 'survey') return;
     // Persist the spacing setting
     invokeIpc(
       'save_display_setting',
@@ -1407,6 +1459,9 @@ export const useUIStore = create<UIStore>((set) => ({
     // module var outlives the project that set it). Clearing it + forcing survey here
     // makes that restore a no-op (appMode already 'survey').
     prePlanGeometryMode = null;
+    // Same module-var-outlives-project hazard for the Plan/Export display snapshot:
+    // clear it so a load doesn't later restore the previous project's survey display.
+    prePlanDisplay = null;
     // The gas/Plan store is per-dive, runtime-only state (origin, diver, cylinders, the
     // staged-reserve `pushyAck` safety acknowledgment). It is normally cleared on sub-mode
     // exit, but a DIRECT project switch sets appMode='survey' here, so the later
