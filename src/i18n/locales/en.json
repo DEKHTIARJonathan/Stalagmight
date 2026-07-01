@@ -2688,7 +2688,7 @@
       },
       "toasts": {
         "editing": "You now hold the lock — editing enabled.",
-        "lockedBy": "Locked by {{email}}.",
+        "lockedBy": "Unable to lock the project right now — it's being edited by {{email}}. Please try again later.",
         "upToDate": "Already up to date.",
         "released": "Changes uploaded and lock released.",
         "pushed": "Changes pushed to SpeleoDB.",

@@ -77,9 +77,9 @@ export function ExclamationGlyph({ size = 11 }: { size?: number }) {
 export function EditNoLockGlyph({ size = 11 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      {/* pencil, lower-left */}
-      <path d="M2 14l0.8-2.7 5.3-5.3 1.9 1.9-5.3 5.3L2 14z" />
-      {/* exclamation, upper-right, with a panel-coloured border to separate it */}
+      {/* vertical pencil (left), tip pointing down */}
+      <path d="M2.8 2h3.2v9l-1.6 3-1.6-3z" />
+      {/* exclamation right beside it, with a panel-coloured border to separate it */}
       <g
         style={{ stroke: 'var(--cc-panel)' }}
         strokeWidth={1.3}
@@ -87,8 +87,8 @@ export function EditNoLockGlyph({ size = 11 }: { size?: number }) {
         strokeLinecap="round"
         paintOrder="stroke"
       >
-        <path d="M11.9 3.4h2.2l-0.4 5h-1.4z" />
-        <circle cx="13" cy="11.6" r="1.25" />
+        <path d="M7.7 2h2.3l-0.4 6.4h-1.5z" />
+        <circle cx="8.85" cy="12" r="1.3" />
       </g>
     </svg>
   );
