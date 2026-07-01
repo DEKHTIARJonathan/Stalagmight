@@ -8,6 +8,7 @@ import type {
   StartEditingResult,
   UpdateResult,
 } from '../types/ipc.generated';
+import { invokeIpc } from '../utils/ipc';
 
 /**
  * Shared SpeleoDB frontend state (#204/#203/#205). Holds the backend **session**
@@ -62,6 +63,8 @@ interface SpeleoStore {
   clearSession: () => void;
 
   // --- link/edit (action shell #204) ---
+  /** Query `speleodb_link_status` and seed the link (best-effort; runs post-load). */
+  refreshLinkStatus: () => Promise<void>;
   /** Seed the link from the backend status command (authoritative; runs post-load). */
   seedFromStatus: (s: SpeleoLinkStatus) => void;
   /** Optimistic seed from the browser's summary before `loadProject` settles. */
@@ -80,11 +83,21 @@ interface SpeleoStore {
   dismissBanner: () => void;
 }
 
-export const useSpeleoStore = create<SpeleoStore>((set) => ({
+export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   session: null,
   link: null,
   divergence: null,
   banner: null,
+
+  refreshLinkStatus: async () => {
+    try {
+      const status = await invokeIpc<SpeleoLinkStatus>('speleodb_link_status');
+      get().seedFromStatus(status);
+    } catch {
+      // Best-effort — leave the prior link state (the backend gate is the
+      // real enforcement; the shell just can't refresh its indicator).
+    }
+  },
 
   setSession: (s) =>
     set({

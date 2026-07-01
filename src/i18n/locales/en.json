@@ -2615,6 +2615,46 @@
     }
   },
   "speleodb": {
+    "editBar": {
+      "readOnly": "Read-only",
+      "editing": "Editing",
+      "lockedBy": "Locked by {{email}}",
+      "startEditing": "Start editing",
+      "done": "Done",
+      "update": "Update",
+      "unpushed": "Unpushed changes",
+      "someone": "someone else",
+      "tooltips": {
+        "readOnlyAccess": "You have read-only access to this project.",
+        "lockedByOther": "Locked by {{email}} — they must release it first."
+      },
+      "divergence": {
+        "label": "Divergence",
+        "resolve": "Resolve divergence…",
+        "comingSoon": "Divergence resolution is coming soon (#198)."
+      },
+      "toasts": {
+        "editing": "You now hold the lock — editing enabled.",
+        "lockedBy": "Locked by {{email}}.",
+        "upToDate": "Already up to date.",
+        "released": "Changes uploaded and lock released.",
+        "startFailed": "Could not start editing",
+        "updateFailed": "Could not update",
+        "doneFailed": "Could not finish editing"
+      }
+    },
+    "done": {
+      "title": "Finish editing",
+      "description": "Upload your changes to SpeleoDB and release the lock.",
+      "messageLabel": "Commit message (optional)",
+      "messagePlaceholder": "Describe your changes…",
+      "confirm": "Upload & release",
+      "pushing": "Uploading…"
+    },
+    "banner": {
+      "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept — click Done again to retry.",
+      "concurrentSession": "This project is locked by your account in another session. Editing from two sessions at once can lose edits."
+    },
     "browser": {
       "title": "Open from SpeleoDB",
       "checking": "Checking session…",

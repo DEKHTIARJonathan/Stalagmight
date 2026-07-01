@@ -10,6 +10,7 @@ import { hasEligibleClosures } from '../utils/closures';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
+import { useSpeleoStore } from './speleoStore';
 import type {
   Project,
   ProjectState,
@@ -731,6 +732,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         await get().refreshUndoState();
         recordPerfTiming('loadProject total', performance.now() - tStart);
 
+        // #204: seed the SpeleoDB action-shell edit-state from the freshly-loaded
+        // project (is_remote / edit gate / permission / lock holder). Best-effort
+        // and non-blocking — a local project resolves to `link = null` (shell
+        // hidden); a remote one seeds read-only/editing. Covers reopen-from-recents
+        // (where the browser's optimistic setLinkOnOpen never ran) and the
+        // fast-forward reload path (which routes back through loadProject).
+        void useSpeleoStore.getState().refreshLinkStatus();
+
         // Collaboration mode (non-blocking, best-effort): if the project
         // has collab on AND the sibling .tml was edited externally
         // (Ariane), offer to reconcile.  When collab is off but a
@@ -1137,6 +1146,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Closing a project bypasses the setView() cleanup funnel, so drop the gas
         // sub-mode (#38) here too — a stale overlay/panel must not outlive the project.
         useUIStore.getState().exitGasPlan();
+        // #204: drop the SpeleoDB action-shell edit-state — no project is open.
+        useSpeleoStore.getState().clearLink();
       }
       return result;
     } finally {
