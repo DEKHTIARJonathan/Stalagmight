@@ -29,7 +29,7 @@ import { invokeIpc } from '../utils/ipc';
 export type SpeleoEditState = 'read-only' | 'editing';
 
 /** Which hand-off verb hit a divergence that needs the reconcile prompt (#198). */
-export type DivergenceOrigin = 'start' | 'update' | 'done';
+export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push';
 
 /** Transient banner the shell surfaces above the toolbar (#200 seam). */
 export type SpeleoBanner = { kind: 'push_unconfirmed' } | { kind: 'concurrent_session' };
@@ -44,8 +44,15 @@ export interface SpeleoSession {
 export interface SpeleoLinkState {
   permission: Permission | null;
   editState: SpeleoEditState;
-  /** Email of the current lock holder (may be us, or another user), if any. */
+  /** Email of the current lock holder (may be us, or another user), if known. */
   lockHolder: string | null;
+  /**
+   * Someone ELSE holds the write lock. Derived once here rather than compared
+   * against our email in every consumer: the backend enforces hold-lock ⟹
+   * edit-enabled, so a read-only project with a holder is held by another — even
+   * when that holder's email (or our own) couldn't be resolved.
+   */
+  lockedByOther: boolean;
   hasUnpushedEdits: boolean;
   /** The local copy's relationship to the server tip (drives the button, T2c). */
   remoteState: RemoteState;
@@ -75,6 +82,13 @@ interface SpeleoStore {
   divergence: DivergenceOrigin | null;
   /** Transient banner (#200 seam). */
   banner: SpeleoBanner | null;
+  /**
+   * Bumped after a hand-off verb to restart the status poll timer, so the next
+   * poll is a full (≥30 s) interval away — a buffer that avoids re-reading a
+   * server mutex that hasn't reflected our just-issued release yet (1b).
+   */
+  pollNonce: number;
+  bumpPoll: () => void;
 
   // --- session (Settings #205 / browser #203) ---
   setSession: (s: SpeleoSessionStatus) => void;
@@ -125,8 +139,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   link: null,
   divergence: null,
   banner: null,
+  pollNonce: 0,
   pendingAuth: null,
   authError: null,
+
+  bumpPoll: () => set((state) => ({ pollNonce: state.pollNonce + 1 })),
 
   setPendingAuth: (pendingAuth) => set({ pendingAuth }),
   clearPendingAuth: () => set({ pendingAuth: null, authError: null }),
@@ -215,13 +232,21 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   seedFromStatus: (s) =>
     set((state) => {
       if (!s.is_remote) return { link: null, divergence: null, banner: null };
+      const editState = s.edit_enabled ? 'editing' : 'read-only';
       return {
         link: {
-          editState: s.edit_enabled ? 'editing' : 'read-only',
+          editState,
           // The network fields degrade to null/unknown offline — keep the
           // last-known permission rather than blanking the gate on a transient miss.
           permission: s.permission ?? state.link?.permission ?? null,
           lockHolder: s.lock_holder,
+          // Read-only + a holder ⟹ someone else holds it (backend gives us the
+          // gate when the lock is ours). A failed acquire may also set this via
+          // applyStartEditing; preserve that if this refresh couldn't reach the
+          // server (no holder resolved) but we were told it's locked.
+          lockedByOther:
+            (editState !== 'editing' && !!s.lock_holder) ||
+            (!s.lock_holder && (state.link?.lockedByOther ?? false) && editState !== 'editing'),
           hasUnpushedEdits: s.has_unpushed_edits,
           remoteState: s.remote_state,
         },
@@ -236,6 +261,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         permission,
         editState: 'read-only',
         lockHolder: null,
+        lockedByOther: false,
         hasUnpushedEdits: false,
         remoteState: 'up_to_date',
       },
@@ -251,14 +277,30 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       switch (r.kind) {
         case 'editing':
         case 'fast_forwarded':
-          // On fast_forwarded the caller also reloads the project (which re-seeds
-          // via seedFromStatus); set editing optimistically so the shell updates now.
-          return { link: { ...state.link, editState: 'editing' }, divergence: null };
+          // We now hold the lock: not locked-by-other, no remote-ahead/conflict,
+          // no stale banner. (fast_forwarded also reloads + re-seeds.)
+          return {
+            link: {
+              ...state.link,
+              editState: 'editing',
+              lockedByOther: false,
+              remoteState: 'up_to_date',
+            },
+            divergence: null,
+            banner: null,
+          };
         case 'divergence_needed':
           return { divergence: 'start' };
         case 'locked_by':
+          // Someone else holds it — mark locked even when the holder email is
+          // unknown (keep the last-known email rather than nulling it).
           return {
-            link: { ...state.link, editState: 'read-only', lockHolder: r.email ?? null },
+            link: {
+              ...state.link,
+              editState: 'read-only',
+              lockHolder: r.email ?? state.link.lockHolder,
+              lockedByOther: true,
+            },
           };
         default:
           return {};
@@ -266,12 +308,16 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     }),
 
   applyUpdate: (r) =>
-    set(() => {
+    set((state) => {
+      if (!state.link) return {};
       switch (r.kind) {
+        case 'up_to_date':
+          // Nothing to pull — clear any stale remote-ahead/conflict indicator so
+          // the button doesn't keep showing "pull available" after a no-op refresh.
+          return { link: { ...state.link, remoteState: 'up_to_date' }, divergence: null };
         case 'divergence_needed':
           return { divergence: 'update' };
-        // up_to_date: nothing changes. fast_forwarded: the caller reloads +
-        // re-seeds, so no state change is needed here.
+        // fast_forwarded: the caller reloads + re-seeds.
         default:
           return {};
       }
@@ -282,15 +328,20 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       if (!state.link) return {};
       switch (r.kind) {
         case 'released':
-          // Lock released — clear the holder too, or we'd still read as holding it.
+          // Lock released and edits are on the server — clear the holder (or we'd
+          // read as still holding it), drop the dirty bit + any push-unconfirmed
+          // banner, and reset the remote state.
           return {
             link: {
               ...state.link,
               editState: 'read-only',
               hasUnpushedEdits: false,
               lockHolder: null,
+              lockedByOther: false,
+              remoteState: 'up_to_date',
             },
             divergence: null,
+            banner: null,
           };
         case 'divergence_needed':
           return { divergence: 'done' };
@@ -306,10 +357,14 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       if (!state.link) return {};
       switch (r.kind) {
         case 'pushed':
-          // Lock retained (still editing); edits are now on the server.
-          return { link: { ...state.link, hasUnpushedEdits: false } };
+          // Lock retained (still editing); edits are now on the server. Clear a
+          // prior push-unconfirmed banner since this push landed.
+          return {
+            link: { ...state.link, hasUnpushedEdits: false, remoteState: 'up_to_date' },
+            banner: null,
+          };
         case 'divergence_needed':
-          return { divergence: 'done' };
+          return { divergence: 'push' };
         case 'push_unconfirmed':
           return { banner: { kind: 'push_unconfirmed' } };
         default:

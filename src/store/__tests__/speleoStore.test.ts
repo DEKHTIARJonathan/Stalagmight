@@ -70,6 +70,13 @@ describe('speleoStore', () => {
       expect(link?.lockHolder).toBe('a@b');
       expect(link?.hasUnpushedEdits).toBe(true);
     });
+
+    it('read-only + a holder ⟹ lockedByOther; editing ⟹ not', () => {
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, lock_holder: 'a@b' }));
+      expect(useSpeleoStore.getState().link?.lockedByOther).toBe(true);
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, lock_holder: 'me@x' }));
+      expect(useSpeleoStore.getState().link?.lockedByOther).toBe(false);
+    });
   });
 
   describe('setLinkOnOpen', () => {
@@ -79,6 +86,7 @@ describe('speleoStore', () => {
         permission: 'READ_ONLY',
         editState: 'read-only',
         lockHolder: null,
+        lockedByOther: false,
         hasUnpushedEdits: false,
         remoteState: 'up_to_date',
       });
@@ -98,11 +106,17 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().link?.editState).toBe('editing');
     });
 
-    it('locked_by → read-only + lock holder', () => {
+    it('locked_by → read-only + lock holder + lockedByOther', () => {
       useSpeleoStore.getState().applyStartEditing({ kind: 'locked_by', email: 'a@b' });
       const s = useSpeleoStore.getState();
       expect(s.link?.editState).toBe('read-only');
       expect(s.link?.lockHolder).toBe('a@b');
+      expect(s.link?.lockedByOther).toBe(true);
+    });
+
+    it('locked_by with a null email still marks lockedByOther (not free/unlocked)', () => {
+      useSpeleoStore.getState().applyStartEditing({ kind: 'locked_by', email: null });
+      expect(useSpeleoStore.getState().link?.lockedByOther).toBe(true);
     });
 
     it('divergence_needed → divergence origin start', () => {
@@ -121,9 +135,11 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().divergence).toBe('update');
     });
 
-    it('up_to_date leaves the edit state unchanged', () => {
+    it('up_to_date clears a stale remote_ahead indicator', () => {
+      useSpeleoStore.getState().seedFromStatus(status({ remote_state: 'remote_ahead' }));
+      expect(useSpeleoStore.getState().link?.remoteState).toBe('remote_ahead');
       useSpeleoStore.getState().applyUpdate({ kind: 'up_to_date' });
-      expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+      expect(useSpeleoStore.getState().link?.remoteState).toBe('up_to_date');
       expect(useSpeleoStore.getState().divergence).toBeNull();
     });
   });
@@ -144,7 +160,14 @@ describe('speleoStore', () => {
       expect(s.link?.hasUnpushedEdits).toBe(false);
       // Regression: a released lock must not still read as held (button stayed green).
       expect(s.link?.lockHolder).toBeNull();
+      expect(s.link?.lockedByOther).toBe(false);
       expect(s.divergence).toBeNull();
+    });
+
+    it('released clears a lingering push-unconfirmed banner', () => {
+      useSpeleoStore.getState().setBanner({ kind: 'push_unconfirmed' });
+      useSpeleoStore.getState().applyDone({ kind: 'released' });
+      expect(useSpeleoStore.getState().banner).toBeNull();
     });
 
     it('push_unconfirmed → raises the banner, stays editing', () => {
@@ -158,6 +181,41 @@ describe('speleoStore', () => {
       useSpeleoStore.getState().applyDone({ kind: 'divergence_needed' });
       const s = useSpeleoStore.getState();
       expect(s.divergence).toBe('done');
+      expect(s.link?.editState).toBe('editing');
+    });
+  });
+
+  describe('applyPush', () => {
+    beforeEach(() =>
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(
+          status({ edit_enabled: true, has_unpushed_edits: true, lock_holder: 'me@x' }),
+        ),
+    );
+
+    it('pushed → keeps the lock, clears dirty + banner, resets remote state', () => {
+      useSpeleoStore.getState().setBanner({ kind: 'push_unconfirmed' });
+      useSpeleoStore.getState().applyPush({ kind: 'pushed' });
+      const s = useSpeleoStore.getState();
+      // Push behaves like push&release WITHOUT releasing the lock — still editing.
+      expect(s.link?.editState).toBe('editing');
+      expect(s.link?.hasUnpushedEdits).toBe(false);
+      expect(s.link?.remoteState).toBe('up_to_date');
+      expect(s.banner).toBeNull();
+    });
+
+    it('divergence_needed → divergence origin push, stays editing', () => {
+      useSpeleoStore.getState().applyPush({ kind: 'divergence_needed' });
+      const s = useSpeleoStore.getState();
+      expect(s.divergence).toBe('push');
+      expect(s.link?.editState).toBe('editing');
+    });
+
+    it('push_unconfirmed → raises the banner, stays editing', () => {
+      useSpeleoStore.getState().applyPush({ kind: 'push_unconfirmed' });
+      const s = useSpeleoStore.getState();
+      expect(s.banner).toEqual({ kind: 'push_unconfirmed' });
       expect(s.link?.editState).toBe('editing');
     });
   });
