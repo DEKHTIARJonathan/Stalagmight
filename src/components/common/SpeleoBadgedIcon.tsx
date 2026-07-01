@@ -19,9 +19,7 @@ export function SpeleoBadgedIcon({
   return (
     <span className="relative inline-flex">
       <SpeleoDbLogo size={size} />
-      <span
-        className={`absolute -bottom-1 -right-1 flex items-center justify-center rounded-full bg-slate-900 p-[1px] ${badgeColor}`}
-      >
+      <span className={`absolute -bottom-1 -right-1 flex items-center justify-center ${badgeColor}`}>
         {badge}
       </span>
     </span>
@@ -37,11 +35,11 @@ export function HourglassGlyph({ size = 10 }: { size?: number }) {
   );
 }
 
-/** Filled down-arrow glyph (pull / refresh from the server). */
-export function PullGlyph({ size = 10 }: { size?: number }) {
+/** Filled two-arrow circular glyph (refresh / sync with the server). */
+export function RefreshGlyph({ size = 10 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path d="M6 2h4v6h3l-5 6-5-6h3V2z" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
     </svg>
   );
 }

@@ -8,7 +8,7 @@ import { LockIcon, PencilIcon } from '../common/icons';
 import {
   SpeleoBadgedIcon,
   HourglassGlyph,
-  PullGlyph,
+  RefreshGlyph,
   ExclamationGlyph,
 } from '../common/SpeleoBadgedIcon';
 
@@ -100,7 +100,7 @@ export function SpeleoStatusButton() {
     ) : kind === 'locked_by_other' ? (
       <HourglassGlyph size={10} />
     ) : kind === 'remote_ahead' ? (
-      <PullGlyph size={10} />
+      <RefreshGlyph size={12} />
     ) : (
       <ExclamationGlyph size={11} />
     );
