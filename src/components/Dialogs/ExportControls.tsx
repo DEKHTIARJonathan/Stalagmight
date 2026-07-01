@@ -81,10 +81,16 @@ export default function ExportControls({
     };
   }, []);
 
-  // Surface the in-flight state to the host (the dialog guards its close).
-  useEffect(() => {
-    onExportingChange?.(isExporting);
-  }, [isExporting, onExportingChange]);
+  // Flip the in-flight flag AND notify the host in the SAME tick. The dialog
+  // guards its close (Escape/backdrop/×) on this; surfacing it via an effect
+  // lagged a render and briefly allowed closing mid-export (Copilot review).
+  const setExporting = useCallback(
+    (v: boolean) => {
+      setIsExporting(v);
+      onExportingChange?.(v);
+    },
+    [onExportingChange],
+  );
 
   const formatSectionLabel = useCallback((section: { id: number; name: string | null }): string => {
     const trimmedName = section.name?.trim();
@@ -141,7 +147,7 @@ export default function ExportControls({
             finalPath = ensureExtension(selected, dataFormat);
           }
           // Disable button during data export (no progress events for CSV/JSON/TML)
-          setIsExporting(true);
+          setExporting(true);
           try {
             if (dataFormat === 'csv') {
               await exportCsv(finalPath);
@@ -152,7 +158,7 @@ export default function ExportControls({
             }
           } finally {
             if (isMountedRef.current) {
-              setIsExporting(false);
+              setExporting(false);
             }
           }
         }
@@ -188,7 +194,7 @@ export default function ExportControls({
             }
           });
 
-          setIsExporting(true);
+          setExporting(true);
           setExportProgress(null);
           exportLoadingIdRef.current = null;
 
@@ -199,7 +205,7 @@ export default function ExportControls({
             unlisten();
             exportLoadingIdRef.current = null;
             if (isMountedRef.current) {
-              setIsExporting(false);
+              setExporting(false);
               setExportProgress(null);
             }
           }
@@ -207,13 +213,19 @@ export default function ExportControls({
       }
 
       if (isMountedRef.current) {
-        trackDialogComplete('export');
+        // `trackDialogComplete` pairs with a dialog close (it suppresses the
+        // dialog-cancel telemetry). The panel isn't a dialog, so firing it there
+        // would leave `_dialogCompleted` stuck — only track for the dialog variant
+        // (Copilot review).
+        if (variant === 'dialog') {
+          trackDialogComplete('export');
+        }
         onComplete?.();
       }
     } catch (e) {
       console.error('Export failed:', e);
       if (isMountedRef.current) {
-        setIsExporting(false);
+        setExporting(false);
         setExportProgress(null);
       }
     }
