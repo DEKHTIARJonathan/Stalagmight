@@ -118,18 +118,42 @@ impl Default for ExportImageOptions {
     }
 }
 
-/// Top-level entry point. Dispatches on `format`.
+/// Top-level entry point. Dispatches on `format`. Renders from the measured
+/// station coordinates; use [`export_image_with_stations`] to render from a
+/// caller-supplied set (e.g. the closure-adjusted solve).
 pub fn export_image(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
+    export_image_with_stations(
+        project,
+        path,
+        options,
+        project.compute_station_coordinates(),
+    )
+}
+
+/// Like [`export_image`] but renders from a caller-supplied set of station
+/// coordinates instead of the measured ones — the commands pass the memoized
+/// closure-adjusted solve so the export matches the on-screen (adjusted) map.
+pub fn export_image_with_stations(
+    project: &Project,
+    path: &Path,
+    options: &ExportImageOptions,
+    stations: Vec<crate::models::Station>,
+) -> Result<()> {
     match options.format {
-        ImageFormat::Svg => export_svg(project, path, options),
-        ImageFormat::Png => export_png(project, path, options),
-        ImageFormat::Pdf => export_pdf(project, path, options),
+        ImageFormat::Svg => export_svg(project, path, options, stations),
+        ImageFormat::Png => export_png(project, path, options, stations),
+        ImageFormat::Pdf => export_pdf(project, path, options, stations),
     }
 }
 
 /// Export project as SVG (writes file).
-fn export_svg(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
-    let svg = generate_svg_string(project, options)?;
+fn export_svg(
+    project: &Project,
+    path: &Path,
+    options: &ExportImageOptions,
+    stations: Vec<crate::models::Station>,
+) -> Result<()> {
+    let svg = generate_svg_string_with_stations(project, options, stations)?;
     std::fs::write(path, svg).context("Failed to write SVG file")?;
     tracing::info!(path = ?path, "Exported SVG");
     Ok(())
@@ -139,12 +163,17 @@ fn export_svg(project: &Project, path: &Path, options: &ExportImageOptions) -> R
 const MAX_PNG_DIMENSION: u32 = 16_384;
 
 /// Export project as PNG via resvg rasterization.
-fn export_png(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
+fn export_png(
+    project: &Project,
+    path: &Path,
+    options: &ExportImageOptions,
+    stations: Vec<crate::models::Station>,
+) -> Result<()> {
     if options.dpi == 0 {
         anyhow::bail!("DPI must be at least 1");
     }
 
-    let svg_content = generate_svg_string(project, options)?;
+    let svg_content = generate_svg_string_with_stations(project, options, stations)?;
 
     let mut opt = Options::default();
     opt.fontdb_mut().load_system_fonts();
@@ -175,8 +204,13 @@ fn export_png(project: &Project, path: &Path, options: &ExportImageOptions) -> R
 }
 
 /// Export project as PDF via svg2pdf.
-fn export_pdf(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
-    let svg_content = generate_svg_string(project, options)?;
+fn export_pdf(
+    project: &Project,
+    path: &Path,
+    options: &ExportImageOptions,
+    stations: Vec<crate::models::Station>,
+) -> Result<()> {
+    let svg_content = generate_svg_string_with_stations(project, options, stations)?;
 
     let mut opt = Options::default();
     opt.fontdb_mut().load_system_fonts();
@@ -248,10 +282,20 @@ const PEN_LABEL_CHAR_WIDTH_RATIO: f64 = 0.55;
 /// rasterization.
 const MIN_BOUNDS_EXTENT_M: f64 = 1.0;
 
-/// Generate SVG content as a string. Pure: never touches the filesystem.
+/// Generate SVG content as a string from the measured station coordinates.
+/// Pure: never touches the filesystem.
 pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Result<String> {
-    let stations = project.compute_station_coordinates();
+    generate_svg_string_with_stations(project, options, project.compute_station_coordinates())
+}
 
+/// Generate SVG content from a caller-supplied set of station coordinates. The
+/// commands pass the memoized closure-adjusted solve so the exported/previewed
+/// map matches the on-screen (adjusted) geometry.
+pub fn generate_svg_string_with_stations(
+    project: &Project,
+    options: &ExportImageOptions,
+    stations: Vec<crate::models::Station>,
+) -> Result<String> {
     // ---- Bounds and scale ---------------------------------------------------
     // Bounds come from *rendered* geometry only — endpoints of non-reference
     // shots plus zero-datum stations. Reference shots aren't drawn, so a
@@ -1255,6 +1299,7 @@ mod tests {
                 show_penetration_labels: true,
                 show_colors: false,
             },
+            project.compute_station_coordinates(),
         )
         .unwrap();
         std::fs::remove_file(&path).ok();
@@ -1308,7 +1353,13 @@ mod tests {
         let project = simple_project();
         let file = NamedTempFile::new().unwrap();
         let path = file.path().with_extension("svg");
-        export_svg(&project, &path, &ExportImageOptions::default()).unwrap();
+        export_svg(
+            &project,
+            &path,
+            &ExportImageOptions::default(),
+            project.compute_station_coordinates(),
+        )
+        .unwrap();
         let contents = std::fs::read_to_string(&path).unwrap();
         assert!(contents.starts_with("<?xml"));
         std::fs::remove_file(&path).ok();
@@ -1326,7 +1377,13 @@ mod tests {
             show_penetration_labels: true,
             show_colors: false,
         };
-        export_png(&project, &path, &options).unwrap();
+        export_png(
+            &project,
+            &path,
+            &options,
+            project.compute_station_coordinates(),
+        )
+        .unwrap();
         let contents = std::fs::read(&path).unwrap();
         assert!(contents.len() > 8);
         assert_eq!(&contents[0..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
@@ -1355,6 +1412,7 @@ mod tests {
                     show_penetration_labels: true,
                     show_colors: false,
                 },
+                project.compute_station_coordinates(),
             )
             .unwrap();
             let bytes = std::fs::read(&path).unwrap();
@@ -1414,9 +1472,14 @@ mod tests {
             show_penetration_labels: true,
             show_colors: false,
         };
-        let err = export_png(&project, &path, &options)
-            .unwrap_err()
-            .to_string();
+        let err = export_png(
+            &project,
+            &path,
+            &options,
+            project.compute_station_coordinates(),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("16384"), "{err}");
     }
 
@@ -1432,9 +1495,14 @@ mod tests {
             show_penetration_labels: true,
             show_colors: false,
         };
-        let err = export_png(&project, &path, &options)
-            .unwrap_err()
-            .to_string();
+        let err = export_png(
+            &project,
+            &path,
+            &options,
+            project.compute_station_coordinates(),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("DPI"), "{err}");
     }
 
@@ -2628,6 +2696,33 @@ mod tests {
         assert_eq!(sanitize_hex_color(r#""/><script>"#), "#000000");
         assert_eq!(sanitize_hex_color("#ff00"), "#000000"); // wrong length
         assert_eq!(sanitize_hex_color("#gggggg"), "#000000"); // non-hex digits
+    }
+
+    #[test]
+    fn generate_svg_string_with_stations_uses_supplied_coordinates() {
+        // The commands pass the closure-adjusted solve here; the renderer must
+        // draw from the supplied coordinates, not recompute the measured ones.
+        let mut project = Project::new("Coords".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("A".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 90.0, false)],
+            ..Default::default()
+        });
+        let opts = ExportImageOptions::default();
+        let measured = generate_svg_string(&project, &opts).unwrap();
+
+        // Move one station off the measured line → a different rendered shape.
+        let mut coords = project.compute_station_coordinates();
+        let last = coords.len() - 1;
+        coords[last].coordinates.x += 25.0;
+        coords[last].coordinates.y -= 25.0;
+        let shifted = generate_svg_string_with_stations(&project, &opts, coords).unwrap();
+
+        assert_ne!(
+            measured, shifted,
+            "supplied station coordinates should change the rendered geometry"
+        );
     }
 
     #[test]
