@@ -517,7 +517,7 @@ export default function SettingsDialog() {
       setShowUnsavedDialog(false);
       return;
     }
-    // Normal close logic — a staged (unsaved) account action counts as dirty.
+    // Normal close logic - a staged (unsaved) account action counts as dirty.
     if (isDirty || hasPendingAuth) {
       setShowUnsavedDialog(true);
     } else {

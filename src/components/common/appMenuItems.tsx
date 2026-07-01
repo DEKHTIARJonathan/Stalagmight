@@ -95,7 +95,7 @@ export function leadingMenuItems(
 }
 
 /**
- * "Open from SpeleoDB" row (#203) — opens the remote project browser. Shared by
+ * "Open from SpeleoDB" row (#203) - opens the remote project browser. Shared by
  * the GlobalView hamburger and the in-project menu so both reach the same
  * production browser (the dev spike entry it replaces was GlobalView-only).
  */

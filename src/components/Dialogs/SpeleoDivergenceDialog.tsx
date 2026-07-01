@@ -14,7 +14,7 @@ import { DialogWrapper } from './DialogWrapper';
  * Two live resolutions:
  * - **Keep my local version** (fix 5): route to the push dialog so the user
  *   uploads their version to resolve it (the push re-fences and, if it still
- *   diverges, lands back here — never a silent clobber).
+ *   diverges, lands back here - never a silent clobber).
  * - **Save my version as a local copy** (fix 11): keep the locally-edited work by
  *   converting it to a plain unmanaged `.stalx` (Save-As), abandoning the managed
  *   copy (a later Open-from-SpeleoDB re-pulls the clean server tip).

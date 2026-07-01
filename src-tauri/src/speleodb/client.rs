@@ -821,7 +821,7 @@ mod tests {
             parse_error_message(br#"{"detail":"Not found."}"#).as_deref(),
             Some("Not found.")
         );
-        // The auth-token bad-credentials shape: a nested `errors` object — surface
+        // The auth-token bad-credentials shape: a nested `errors` object - surface
         // the human sentence (non_field_errors first), never the raw JSON.
         assert_eq!(
             parse_error_message(br#"{"errors":{"non_field_errors":["bad"]}}"#).as_deref(),

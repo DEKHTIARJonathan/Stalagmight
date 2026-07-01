@@ -8,13 +8,13 @@ import { DialogWrapper } from './DialogWrapper';
 /**
  * Commit-message confirm for the action shell (#204), in two modes read off
  * `dialogData.mode`:
- * - **release** (default): `speleodb_done` — render + VACUUM snapshot + push +
+ * - **release** (default): `speleodb_done` - render + VACUUM snapshot + push +
  *   release the lock, returning to read-only.
- * - **push** (T2d, fix 8): `speleodb_push` — the same push WITHOUT releasing the
+ * - **push** (T2d, fix 8): `speleodb_push` - the same push WITHOUT releasing the
  *   lock, so editing continues.
  *
  * Both collect an optional message then route through `useSpeleoActions`. Closes on
- * any resolved outcome — released / pushed / divergence / push-unconfirmed are
+ * any resolved outcome - released / pushed / divergence / push-unconfirmed are
  * surfaced by the store (toast / #198 stub / #200 banner); only a thrown (network)
  * error keeps the dialog open so the typed message and a retry survive.
  */
@@ -29,7 +29,7 @@ export default function SpeleoDoneDialog() {
     const text = message.trim() || null;
     if (mode === 'push') {
       // push() has no return we branch on; the store surfaces the outcome. Close
-      // optimistically — a network throw shows a toast and the dialog is already
+      // optimistically - a network throw shows a toast and the dialog is already
       // gone, but the retry lives on the button.
       await push(text);
       closeDialog();

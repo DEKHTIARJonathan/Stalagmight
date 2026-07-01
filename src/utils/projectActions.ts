@@ -103,12 +103,12 @@ export async function saveProjectAs(opts?: {
 
 /**
  * Detach the open SpeleoDB project from SpeleoDB, keeping the local copy as a
- * plain unmanaged `.stalx` (#204 — the shared action behind the no-permission
+ * plain unmanaged `.stalx` (#204 - the shared action behind the no-permission
  * prompt (10) and the divergence "keep my copy" path (11)).
  *
  * Pick a permanent home via the native Save dialog, write the CURRENT (possibly
  * locally-edited) content there, then `speleodb_unlink` so the open project is no
- * longer tied to SpeleoDB and edits freely. Nothing is pushed or released — the
+ * longer tied to SpeleoDB and edits freely. Nothing is pushed or released - the
  * SpeleoDB copy is simply abandoned; a later Open-from-SpeleoDB re-pulls the
  * server tip, so the managed side stays clean. Returns true once converted.
  *
@@ -135,7 +135,7 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     return false;
   }
 
-  // The copy is safe on disk — now drop the SpeleoDB link and re-seed the shell as
+  // The copy is safe on disk - now drop the SpeleoDB link and re-seed the shell as
   // a plain local project (link_status returns is_remote:false → link cleared).
   await invokeIpc('speleodb_unlink');
   await useSpeleoStore.getState().refreshLinkStatus();

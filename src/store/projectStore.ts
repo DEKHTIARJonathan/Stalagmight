@@ -460,7 +460,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       result = await invokeIpc<CommandResult>(command, args, meta);
       if (result.success) {
         set({ isDirty: true });
-        // #204: an undo/redo mutates the remote project too — mirror the backend
+        // #204: an undo/redo mutates the remote project too - mirror the backend
         // dirty bit into the SpeleoDB store (no-op for a local project).
         useSpeleoStore.getState().markDirty();
       } else {
@@ -742,7 +742,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
         // #204: seed the SpeleoDB action-shell edit-state from the freshly-loaded
         // project (is_remote / edit gate / permission / lock holder). Best-effort
-        // and non-blocking — a local project resolves to `link = null` (shell
+        // and non-blocking - a local project resolves to `link = null` (shell
         // hidden); a remote one seeds read-only/editing. Covers reopen-from-recents
         // (where the browser's optimistic setLinkOnOpen never ran) and the
         // fast-forward reload path (which routes back through loadProject).
@@ -1158,7 +1158,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Closing a project bypasses the setView() cleanup funnel, so drop the gas
         // sub-mode (#38) here too — a stale overlay/panel must not outlive the project.
         useUIStore.getState().exitGasPlan();
-        // #204: drop the SpeleoDB action-shell edit-state — no project is open.
+        // #204: drop the SpeleoDB action-shell edit-state - no project is open.
         useSpeleoStore.getState().clearLink();
       }
       return result;

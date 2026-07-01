@@ -34,7 +34,7 @@ export default function SpeleoCloseDialog() {
   // Persist the local .stalx first when there are unsaved changes and the user
   // left the checkbox on (so neither the push nor the close loses them). Returns
   // false when a requested save FAILED (or was cancelled) so the caller aborts and
-  // the dialog stays open — closing anyway would drop the unsaved work (fix 3).
+  // the dialog stays open - closing anyway would drop the unsaved work (fix 3).
   const maybeSaveLocally = async (): Promise<boolean> => {
     if (!(isDirtyLocal && saveLocally)) return true;
     setSaving(true);
@@ -42,7 +42,7 @@ export default function SpeleoCloseDialog() {
       const result = await saveProject();
       return result?.success ?? false;
     } catch {
-      // A thrown save (permission / IO) must not be treated as success — keep the
+      // A thrown save (permission / IO) must not be treated as success - keep the
       // dialog open rather than closing over unsaved work.
       return false;
     } finally {
@@ -53,7 +53,7 @@ export default function SpeleoCloseDialog() {
   const pushReleaseThenClose = async () => {
     if (!(await maybeSaveLocally())) return;
     // done(null) pushes (when dirty) and releases the lock. Only leave once the
-    // lock is actually RELEASED — a divergence / unconfirmed push keeps us here so
+    // lock is actually RELEASED - a divergence / unconfirmed push keeps us here so
     // the user resolves it rather than walking away still holding the lock (fix 2).
     const resolved = await done(null);
     if (resolved?.kind === 'released') {

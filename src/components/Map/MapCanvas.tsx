@@ -3773,7 +3773,7 @@ function MapCanvas() {
 
       {/* Fit-to-view button (+ exit-focus, #50). The SpeleoDB read-only badge (T2b)
           sits to its RIGHT in the same top-left flex row when a remote project is
-          open without the lock — the flex gap tracks the button's variable width
+          open without the lock - the flex gap tracks the button's variable width
           (it widens with the exit-focus label). */}
       <div className="absolute top-2 left-2 flex items-center gap-2">
         <button
@@ -3784,7 +3784,7 @@ function MapCanvas() {
           data-testid="fit-to-view-button"
         >
           <FitToViewIcon size={16} />
-          {/* In focus mode the button also exits focus — label it so that's clear. */}
+          {/* In focus mode the button also exits focus - label it so that's clear. */}
           {focusedSectionId !== null && <span>{t('sections.focus.exitLabel')}</span>}
         </button>
         {speleoReadOnly && !placementMode && appMode === 'survey' && (

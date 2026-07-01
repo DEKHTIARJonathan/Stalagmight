@@ -3,7 +3,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 
 /**
  * Thin banner slot below the toolbar for SpeleoDB status (#200 seam). For now it
- * surfaces only the two states #204 already produces — a `push_unconfirmed`
+ * surfaces only the two states #204 already produces - a `push_unconfirmed`
  * result (retry Done) and a `concurrent_session` notice. #200 owns the richer set
  * (offline, stale lock, sync-needed) by writing to the same `speleoStore.banner`
  * field, so this component and the store shape don't need to change then.

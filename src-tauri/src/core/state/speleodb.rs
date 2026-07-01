@@ -380,15 +380,15 @@ impl AppState {
 
     /// Report the open project's SpeleoDB link/edit status for the action shell
     /// (#204): whether it is remote, whether editing is enabled (the write lock is
-    /// held), the un-pushed-edits dirty bit, and — best-effort over one
-    /// `get_project` — the user's permission tier and the current lock holder.
+    /// held), the un-pushed-edits dirty bit, and - best-effort over one
+    /// `get_project` - the user's permission tier and the current lock holder.
     ///
     /// A local project (or none open) reports `is_remote:false` with the network
     /// fields `None`. The network enrichment is deliberately fail-open: a logged
     /// out / offline / failed lookup leaves `permission`/`lock_holder` `None`
     /// rather than failing the whole status, because the local truth
     /// (`is_remote` + `edit_enabled`) is what the read-only gate hangs on. Not
-    /// routed through [`Self::speleodb_handle_auth`] — a transient 401 on this
+    /// routed through [`Self::speleodb_handle_auth`] - a transient 401 on this
     /// passive probe must not auto-drop the session (mirrors
     /// [`Self::speleodb_lock_holder`]).
     pub(crate) fn speleodb_link_status(&self) -> Result<SpeleoLinkStatus, SpeleoErrorDto> {
@@ -416,7 +416,7 @@ impl AppState {
         // (get_project), and the remote-state reconcile verdict (revision topology,
         // the #202 freshness fold). Guard the request URL with the same project-id
         // validation as the edit verbs; on any miss (invalid id, no token,
-        // transport/HTTP error) the fields degrade to None / Unknown — the local
+        // transport/HTTP error) the fields degrade to None / Unknown - the local
         // truth still returns.
         let (permission, lock_holder, remote_state, access_denied) =
             if validate_project_id(&link.project_id).is_ok() {
@@ -431,10 +431,10 @@ impl AppState {
                         ) {
                             Ok(p) => (p.permission, p.active_mutex.map(|m| m.user), false),
                             // A definitive 403 (or a 404 hiding the resource) means we
-                            // are logged in but have no access to this managed project —
+                            // are logged in but have no access to this managed project -
                             // flag it so the UI can offer converting to a local file.
                             // A 401 is a dead token (re-login), NOT access-denied; a
-                            // transport error is offline — both leave the flag false.
+                            // transport error is offline - both leave the flag false.
                             Err(SpeleoDbError::Status {
                                 status: 403 | 404, ..
                             }) => (None, None, true),
@@ -451,8 +451,8 @@ impl AppState {
             };
 
         // Invariant: holding the write lock means we may edit. If we hold it but the
-        // gate is off — e.g. we reopened a project we'd locked but not released, and
-        // the load re-derived the gate as read-only from is_remote — resume editing
+        // gate is off - e.g. we reopened a project we'd locked but not released, and
+        // the load re-derived the gate as read-only from is_remote - resume editing
         // now, so the project isn't stuck read-only under our own lock. (A same-
         // account concurrent session is warned about separately at open time.)
         let edit_enabled = if !edit_enabled
@@ -480,15 +480,15 @@ impl AppState {
 
     /// Best-effort remote-state (freshness fold, #202): resolve the server tip from
     /// the revision topology and project the BASE-vs-tip fence for the action
-    /// button (T2c). Any failure → `Unknown` — the passive poll must never surface
+    /// button (T2c). Any failure → `Unknown` - the passive poll must never surface
     /// an error, and it is NOT routed through `handle_auth` (a transient 401 here
     /// must not auto-drop the session, mirroring [`Self::speleodb_lock_holder`]).
     ///
     /// This uses the raw [`sync::fence`], NOT [`sync::reconcile_verdict`]: the
-    /// verdict folds `FailClosed` (a recorded BASE but no server tip — a transient
+    /// verdict folds `FailClosed` (a recorded BASE but no server tip - a transient
     /// empty response) and a clean-but-non-ancestor fast-forward into `Diverged`,
     /// which would paint the passive button crimson "conflict" with no local edits
-    /// at stake. The fence keeps them apart — only a genuine divergence (the server
+    /// at stake. The fence keeps them apart - only a genuine divergence (the server
     /// moved AND we hold un-pushed edits) is a `Conflict`; a moved-with-no-edits is
     /// `RemoteAhead`; the anomaly is `Unknown`. The Update/Start verbs still run the
     /// stricter reconcile (fail-closed to the prompt) when the user actually acts.
@@ -510,7 +510,7 @@ impl AppState {
                 FenceOutcome::UpToDate => RemoteState::UpToDate,
                 FenceOutcome::FastForward => RemoteState::RemoteAhead,
                 FenceOutcome::Diverged => RemoteState::Conflict,
-                // Anomaly (BASE but no tip): not a conflict — nothing local is at
+                // Anomaly (BASE but no tip): not a conflict - nothing local is at
                 // risk of being clobbered. Degrade to Unknown; a later poll or the
                 // Update verb re-fences.
                 FenceOutcome::FailClosed => RemoteState::Unknown,
@@ -613,7 +613,7 @@ impl AppState {
         whoami_indicates_dead_token(&client::fetch_user_email(&endpoint, &token, insecure_http))
     }
 
-    /// Persist the authoritative account email — never the token — so a later
+    /// Persist the authoritative account email - never the token - so a later
     /// silent rehydrate can key the keychain lookup by (endpoint, email) after a
     /// restart. The email is only known once login resolves it, so it can't ride
     /// the Settings config the way the endpoint does.
@@ -621,7 +621,7 @@ impl AppState {
     /// The **endpoint is deliberately NOT persisted here**: it is a user-facing
     /// Settings field owned by the config-staging flow, persisted only when the
     /// Settings dialog's Save runs (`updateConfig`). Writing it as a login side
-    /// effect meant a "Log in now" test — or any login — leaked the endpoint into
+    /// effect meant a "Log in now" test - or any login - leaked the endpoint into
     /// the saved config behind the dialog's back, surviving a Cancel/Undo, and
     /// also risked leaking the `DEV_SPELEODB_URL` dev box. Best-effort; a failure
     /// is logged, not fatal.
@@ -1065,14 +1065,14 @@ impl AppState {
     /// drop its `speleo_link` row so it is no longer tied to SpeleoDB, then open the
     /// edit gate. Two callers reach this: (10) a project the server refused us access
     /// to (`access_denied`), and (11) keeping locally-edited work after a divergence
-    /// by saving it elsewhere. Nothing is pushed — the SpeleoDB copy is abandoned (a
+    /// by saving it elsewhere. Nothing is pushed - the SpeleoDB copy is abandoned (a
     /// fresh Open-from-SpeleoDB re-pulls the server tip), so the managed side stays
     /// clean. No-op-safe: a `None` delete over an absent row is fine.
     ///
-    /// A held write lock IS released first (best-effort, mirroring logout — the lock
+    /// A held write lock IS released first (best-effort, mirroring logout - the lock
     /// needs the token, so before we drop the link): abandoning the project while
     /// still holding its server mutex would strand it locked for every other editor.
-    /// Unlike logout the token is kept — the user stays signed in, they just walk
+    /// Unlike logout the token is kept - the user stays signed in, they just walk
     /// away from this one project.
     pub(crate) fn speleodb_unlink(&self) -> Result<(), SpeleoErrorDto> {
         // Release the server lock if this is a held remote edit session, so we don't
@@ -1349,7 +1349,7 @@ impl AppState {
         let link = self.speleodb_validated_link()?;
 
         // Push acts only on an ACTIVE edit session (a held lock); without it there
-        // is no lock and nothing to push — no-op rather than a confusing 403 Fence.
+        // is no lock and nothing to push - no-op rather than a confusing 403 Fence.
         if !self.edit_enabled() || !link.has_unpushed_edits {
             return Ok(PushResult::Pushed);
         }

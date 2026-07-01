@@ -232,7 +232,7 @@ pub struct SpeleoSessionStatus {
     pub user_email: Option<String>,
     /// The server this session is authenticated against, when `logged_in`. Shown
     /// in Settings ("signed in as … at …") so the user can see the session is tied
-    /// to a specific server — a later endpoint change only affects FUTURE logins.
+    /// to a specific server - a later endpoint change only affects FUTURE logins.
     pub endpoint: Option<String>,
     /// False when the token is held in memory only (no OS keychain) — surfaced so
     /// the UI keeps showing the "won't survive a restart" note after a reopen.
@@ -241,7 +241,7 @@ pub struct SpeleoSessionStatus {
 
 /// IPC-facing status of the currently open project's SpeleoDB link, so the
 /// frontend action shell (#204) can render the read-only/editing indicator and
-/// gate its controls on ANY load — including a reopen from Recent Projects,
+/// gate its controls on ANY load - including a reopen from Recent Projects,
 /// where the open flow's [`SpeleoProjectSummary`] isn't in hand.
 ///
 /// The cheap local fields (`is_remote`, `edit_enabled`, `has_unpushed_edits`)
@@ -261,18 +261,18 @@ pub struct SpeleoLinkStatus {
     pub edit_enabled: bool,
     /// The command-driven dirty bit: un-pushed remote edits are pending.
     pub has_unpushed_edits: bool,
-    /// This user's permission tier on the project. Best-effort — `None` when
+    /// This user's permission tier on the project. Best-effort - `None` when
     /// logged out / offline / the lookup failed.
     pub permission: Option<Permission>,
-    /// Email of the current lock holder, if any. Best-effort — `None` when
+    /// Email of the current lock holder, if any. Best-effort - `None` when
     /// unlocked / logged out / the lookup failed.
     pub lock_holder: Option<String>,
-    /// How the local copy relates to the server tip — drives the action button's
+    /// How the local copy relates to the server tip - drives the action button's
     /// "remote has an update" / "conflict" states (T2c). Best-effort over the
     /// revision topology; `Unknown` when logged out / offline / the lookup failed.
     pub remote_state: RemoteState,
     /// The project is linked but the server definitively refused this user access
-    /// to it (a 403 on `get_project`) — e.g. a managed `.stalx` shared as a bare
+    /// to it (a 403 on `get_project`) - e.g. a managed `.stalx` shared as a bare
     /// file to someone who is not a collaborator. Distinct from a transient
     /// offline miss (which leaves `permission: None` but this `false`), so the UI
     /// can offer converting it to an unmanaged local file rather than nagging to
@@ -291,7 +291,7 @@ pub enum RemoteState {
     UpToDate,
     /// The server advanced and we can fast-forward cleanly (no local edits block it).
     RemoteAhead,
-    /// The server diverged from BASE and we hold un-pushed edits — needs reconcile.
+    /// The server diverged from BASE and we hold un-pushed edits - needs reconcile.
     Conflict,
     /// Not determined (logged out / offline / lookup failed).
     Unknown,

@@ -151,7 +151,7 @@ pub async fn speleodb_link_status(app: AppHandle) -> Result<SpeleoLinkStatus, Sp
 /// Detach the open project from SpeleoDB, turning it into a plain unmanaged
 /// `.stalx` (T2/#204): drop the `speleo_link` row and open the edit gate. Used to
 /// keep a copy the server refuses us access to, or locally-edited work after a
-/// divergence. Nothing is pushed or released — the managed copy is abandoned (a
+/// divergence. Nothing is pushed or released - the managed copy is abandoned (a
 /// later Open-from-SpeleoDB re-pulls the server tip). The caller typically saves
 /// the project to a new path first so the user's edits land somewhere permanent.
 #[tauri::command]

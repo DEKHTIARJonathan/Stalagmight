@@ -17,7 +17,7 @@ import type {
  * Production "Open from SpeleoDB" browser (#203). Lists the remote projects
  * visible to the logged-in account with permission / lock / type badges, filters
  * by name, and pulls + opens one read-only (the backend edit gate keeps it
- * read-only until Start editing — #204). Replaces the dev spike's list half;
+ * read-only until Start editing - #204). Replaces the dev spike's list half;
  * login now lives in Settings (#205), so this dialog only browses + opens.
  */
 export default function OpenFromSpeleoDbDialog() {
@@ -60,7 +60,7 @@ export default function OpenFromSpeleoDbDialog() {
         if (!cancelled) setPhase('list');
       } catch (e) {
         if (cancelled) return;
-        // A dead token surfaces here — drop the session and prompt a re-login.
+        // A dead token surfaces here - drop the session and prompt a re-login.
         if (speleoErrorAction(e) === 'ReLogin') clearSession();
         setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
         setPhase('logged-out');

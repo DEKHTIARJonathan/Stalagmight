@@ -19,7 +19,7 @@ import { invokeIpc } from '../utils/ipc';
  * indicator + control gating).
  *
  * This store is UI-truth seeded from backend results (`speleodb_link_status`,
- * the hand-off verb results); it never contradicts the backend edit gate — the
+ * the hand-off verb results); it never contradicts the backend edit gate - the
  * `EDIT_DISABLED` mutation rejection (see `utils/editErrors.ts`) remains the hard
  * backstop. `link === null` means the open project is local (or none is open), so
  * the shell renders nothing.
@@ -52,7 +52,7 @@ export interface SpeleoLinkState {
   /**
    * Someone ELSE holds the write lock. Derived once here rather than compared
    * against our email in every consumer: the backend enforces hold-lock ⟹
-   * edit-enabled, so a read-only project with a holder is held by another — even
+   * edit-enabled, so a read-only project with a holder is held by another - even
    * when that holder's email (or our own) couldn't be resolved.
    */
   lockedByOther: boolean;
@@ -60,7 +60,7 @@ export interface SpeleoLinkState {
   /** The local copy's relationship to the server tip (drives the button, T2c). */
   remoteState: RemoteState;
   /**
-   * The project is linked but the server refused this user access to it (a 403) —
+   * The project is linked but the server refused this user access to it (a 403) -
    * e.g. a managed .stalx shared as a bare file. Drives the button's red-
    * exclamation "no permission" state, whose only action is offering to convert
    * the file to a plain unmanaged local .stalx (fix 10). Distinct from an offline
@@ -71,7 +71,7 @@ export interface SpeleoLinkState {
 
 /**
  * A staged login intent (A2): entered in the Settings account panel but applied
- * only when the dialog's Save is pressed. Credentials are transient — cleared on
+ * only when the dialog's Save is pressed. Credentials are transient - cleared on
  * apply, cancel, or dialog close (never persisted).
  */
 export interface PendingLogin {
@@ -95,14 +95,14 @@ interface SpeleoStore {
   banner: SpeleoBanner | null;
   /**
    * Bumped after a hand-off verb to restart the status poll timer, so the next
-   * poll is a full (≥30 s) interval away — a buffer that avoids re-reading a
+   * poll is a full (≥30 s) interval away - a buffer that avoids re-reading a
    * server mutex that hasn't reflected our just-issued release yet (1b).
    */
   pollNonce: number;
   bumpPoll: () => void;
   /**
    * True while a hand-off verb (start/update/push/done) is in flight. Shared so
-   * every entry point — the status button AND the hamburger submenu — gates on
+   * every entry point - the status button AND the hamburger submenu - gates on
    * the same lock and can't double-issue (fix 12).
    */
   busy: boolean;
@@ -113,7 +113,7 @@ interface SpeleoStore {
   setSessionFromLogin: (r: SpeleoLoginResult) => void;
   clearSession: () => void;
   /** Query `speleodb_session` and set it (best-effort; runs on project load so the
-      action button knows who we are — e.g. to tell our own lock from another's). */
+      action button knows who we are - e.g. to tell our own lock from another's). */
   refreshSession: () => Promise<void>;
 
   // --- staged account actions (Settings #205, A2/A3) ---
@@ -198,7 +198,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     try {
       await invokeIpc<null>('speleodb_logout');
     } catch {
-      /* ignore — clearSession still drops the local session */
+      /* ignore - clearSession still drops the local session */
     }
     set({ pendingAuth: null, authError: null });
     get().clearSession();
@@ -209,7 +209,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       const status = await invokeIpc<SpeleoLinkStatus>('speleodb_link_status');
       get().seedFromStatus(status);
     } catch {
-      // Best-effort — leave the prior link state (the backend gate is the
+      // Best-effort - leave the prior link state (the backend gate is the
       // real enforcement; the shell just can't refresh its indicator).
     }
   },
@@ -229,7 +229,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       const status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
       get().setSession(status);
     } catch {
-      // Best-effort — leave whatever the store had.
+      // Best-effort - leave whatever the store had.
     }
   },
 
@@ -243,7 +243,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       },
     }),
 
-  // A logout / dead-token drop can't push a remote edit anymore — the backend
+  // A logout / dead-token drop can't push a remote edit anymore - the backend
   // drops its edit gate on the same event, so degrade any active edit to
   // read-only to match (the shell then offers Start editing again on re-login).
   clearSession: () =>
@@ -262,7 +262,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       return {
         link: {
           editState,
-          // The network fields degrade to null/unknown offline — keep the
+          // The network fields degrade to null/unknown offline - keep the
           // last-known permission rather than blanking the gate on a transient miss.
           permission: s.permission ?? state.link?.permission ?? null,
           lockHolder: s.lock_holder,
@@ -320,7 +320,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         case 'divergence_needed':
           return { divergence: 'start' };
         case 'locked_by':
-          // Someone else holds it — mark locked even when the holder email is
+          // Someone else holds it - mark locked even when the holder email is
           // unknown (keep the last-known email rather than nulling it).
           return {
             link: {
@@ -340,7 +340,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       if (!state.link) return {};
       switch (r.kind) {
         case 'up_to_date':
-          // Nothing to pull — clear any stale remote-ahead/conflict indicator so
+          // Nothing to pull - clear any stale remote-ahead/conflict indicator so
           // the button doesn't keep showing "pull available" after a no-op refresh.
           return { link: { ...state.link, remoteState: 'up_to_date' }, divergence: null };
         case 'divergence_needed':
@@ -356,7 +356,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       if (!state.link) return {};
       switch (r.kind) {
         case 'released':
-          // Lock released and edits are on the server — clear the holder (or we'd
+          // Lock released and edits are on the server - clear the holder (or we'd
           // read as still holding it), drop the dirty bit + any push-unconfirmed
           // banner, and reset the remote state.
           return {

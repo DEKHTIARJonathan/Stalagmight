@@ -21,16 +21,16 @@ import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 
 /**
- * SpeleoDB settings category (#205, reworked per feedback A1–A4).
+ * SpeleoDB settings category (#205, reworked per feedback A1-A4).
  *
- * - **Account** (shown first): sign-in/out is **staged** — applied only when the
+ * - **Account** (shown first): sign-in/out is **staged** - applied only when the
  *   dialog's Save is pressed (`speleoStore.pendingAuth` + `applyPendingAuth`),
- *   matching the rest of Settings — with a "Log in now" escape hatch to verify
+ *   matching the rest of Settings - with a "Log in now" escape hatch to verify
  *   credentials immediately. Shows which server the live session is signed in to.
  * - **Connection** (staged config): endpoint, token storage, insecure HTTP, and
  *   the remote-state poll interval (floor 30s). The **endpoint** is only the
- *   default for FUTURE logins — the live session is pinned to the server it
- *   authenticated against — so changing it does NOT log the user out.
+ *   default for FUTURE logins - the live session is pinned to the server it
+ *   authenticated against - so changing it does NOT log the user out.
  */
 export function SpeleoDbSettings({
   config,
@@ -79,7 +79,7 @@ export function SpeleoDbSettings({
     }
   }, [speleo.poll_interval_seconds, onValidationError]);
   // Clear a lingering validation error when the panel unmounts (switching category
-  // only renders the active one) — otherwise a strayed error would block Save with
+  // only renders the active one) - otherwise a strayed error would block Save with
   // no visible cause.
   useEffect(
     () => () => {
@@ -101,7 +101,7 @@ export function SpeleoDbSettings({
   // Log in NOW (don't wait for Save) so the user can verify their credentials
   // against the staged endpoint. Applies the same login `applyPendingAuth` runs on
   // Save; on success it clears the staged login + flips the panel to "signed in",
-  // on failure it surfaces the error. The credentials required (email or token) —
+  // on failure it surfaces the error. The credentials required (email or token) -
   // an empty form just reports the backend's "missing credentials".
   const canTryLogin = login.useToken ? login.token.trim().length > 0 : login.email.trim().length > 0;
   const handleTryLogin = async () => {
@@ -122,7 +122,7 @@ export function SpeleoDbSettings({
   // --- connection (staged config) ---
   // The endpoint is just the default server for FUTURE logins; the live session is
   // pinned to the server it authenticated against (shown in the Account panel). So
-  // changing it here does NOT log the current session out — no side effects, purely
+  // changing it here does NOT log the current session out - no side effects, purely
   // staged config applied on Save.
   const handleEndpointChange = (v: string) =>
     onChange({ speleodb: { ...speleo, endpoint: v.length > 0 ? v : null } });

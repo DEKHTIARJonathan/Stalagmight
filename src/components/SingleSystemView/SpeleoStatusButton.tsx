@@ -34,7 +34,7 @@ type ButtonKind =
  * - 🔵 pull (remote advanced) → pull the latest; if dirty, resolve
  * - ✏️̸ crossed pencil (read-only / web-viewer permission) → refresh the .stalx
  * - 🟥 crimson (conflict) → the resolution dialog (#198)
- * - ❗ red exclamation (no permission — shared as a file) → offer converting to a
+ * - ❗ red exclamation (no permission - shared as a file) → offer converting to a
  *   plain unmanaged .stalx (fix 10)
  *
  * It also owns the remote-state poll (configurable interval, clamped 30s..24h)
@@ -55,7 +55,7 @@ export function SpeleoStatusButton() {
 
   // Poll the remote state on the configured interval while a remote project is
   // open (T2c freshness). Clamped 30s (backend floor) .. 24h (fix 14). Depends on
-  // pollNonce so a just-issued hand-off verb restarts the timer — the next poll is
+  // pollNonce so a just-issued hand-off verb restarts the timer - the next poll is
   // then a full interval past a lock change the server may not yet reflect (1b).
   useEffect(() => {
     if (!isRemote) return undefined;
@@ -67,7 +67,7 @@ export function SpeleoStatusButton() {
     return () => clearInterval(id);
   }, [isRemote, pollInterval, refreshLinkStatus, pollNonce]);
 
-  // Only in Survey mode — Plan/Export are non-editing views, so the hand-off
+  // Only in Survey mode - Plan/Export are non-editing views, so the hand-off
   // button + read-only badge are hidden there. Polling above keeps running so the
   // state is fresh when you return to Survey.
   if (!link || appMode !== 'survey') return null;
@@ -79,7 +79,7 @@ export function SpeleoStatusButton() {
   const lockedByOther = link.lockedByOther;
   const conflict = divergence !== null || link.remoteState === 'conflict';
   // Known view-only grant (WEB_VIEWER / READ_ONLY). A null permission is "unknown"
-  // (offline) — treat it as potentially editable and let the backend gate decide,
+  // (offline) - treat it as potentially editable and let the backend gate decide,
   // rather than showing a misleading crossed pencil.
   const viewOnly = link.permission !== null && !permissionAtLeast(link.permission, 'READ_AND_WRITE');
 
@@ -108,8 +108,8 @@ export function SpeleoStatusButton() {
         else void done(null);
         break;
       case 'locked_by_other':
-        // Try to take the lock — the acquire fails while someone else holds it and
-        // reports "unable to lock — being edited by {email}", or succeeds if they've
+        // Try to take the lock - the acquire fails while someone else holds it and
+        // reports "unable to lock - being edited by {email}", or succeeds if they've
         // since released it.
         void startEditing();
         break;
@@ -126,7 +126,7 @@ export function SpeleoStatusButton() {
         openDialog('speleodb-divergence');
         break;
       case 'no_permission':
-        // No access on the server — offer converting to a plain local .stalx.
+        // No access on the server - offer converting to a plain local .stalx.
         openDialog('speleodb-no-permission');
         break;
     }
@@ -203,7 +203,7 @@ export function SpeleoStatusButton() {
       data-kind={kind}
       className={`flex items-center justify-center w-8 h-8 rounded ml-1 transition-colors disabled:opacity-50 ${bgClass}`}
     >
-      {/* The state badge sits on the ICON — a small disc + glyph anchored to the
+      {/* The state badge sits on the ICON - a small disc + glyph anchored to the
           logo's corner (like the DisplayMenu shot/station symbols), not floating
           on the button. */}
       <SpeleoBadgedIcon badge={glyph} badgeColor={glyphColor} size={20} />

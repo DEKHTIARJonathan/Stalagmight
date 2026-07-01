@@ -4,7 +4,7 @@ import type { Permission } from '../types/ipc.generated';
  * Capability ordering for SpeleoDB permission tiers, mirroring the Rust
  * `Permission` `Ord` derive (`src-tauri/src/speleodb/models.rs`): download ≥
  * READ_ONLY, upload/lock ≥ READ_AND_WRITE, delete/admin = ADMIN. The wire value
- * is the label string, so this map — not lexical comparison — is the source of
+ * is the label string, so this map - not lexical comparison - is the source of
  * truth for thresholds.
  */
 const PERMISSION_ORDER: Record<Permission, number> = {

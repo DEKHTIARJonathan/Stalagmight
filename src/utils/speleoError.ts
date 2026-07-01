@@ -13,8 +13,8 @@ const NETWORK_PREFIX = 'Network error talking to SpeleoDB';
  *
  * The backend already provides a clean detail (auth failures parse
  * `non_field_errors`; transport strips `io:`/`(os error N)`). This adds the
- * operation frame the backend can't know — e.g. `Login to SpeleoDB failed: …`,
- * `Unable to open the project: …` — except on transport errors, which are
+ * operation frame the backend can't know - e.g. `Login to SpeleoDB failed: …`,
+ * `Unable to open the project: …` - except on transport errors, which are
  * returned verbatim so they don't read as "Login failed: Network error…".
  */
 export function humanizeSpeleoError(e: unknown, contextPrefix?: string): string {

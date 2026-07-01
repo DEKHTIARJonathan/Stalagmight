@@ -8,7 +8,7 @@ import { DialogWrapper } from './DialogWrapper';
 /**
  * No-permission prompt (#204, fix 10): raised from the red-exclamation status
  * button when the open project is SpeleoDB-managed but the server refused this
- * user access (a 403 — e.g. a managed `.stalx` shared with them as a bare file).
+ * user access (a 403 - e.g. a managed `.stalx` shared with them as a bare file).
  * There is nothing to view or edit on SpeleoDB, so the only offer is converting it
  * to a plain unmanaged local `.stalx` they can keep and edit (Save-As + unlink).
  */

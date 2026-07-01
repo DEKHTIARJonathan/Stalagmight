@@ -209,7 +209,7 @@ describe('speleoStore', () => {
       useSpeleoStore.getState().setBanner({ kind: 'push_unconfirmed' });
       useSpeleoStore.getState().applyPush({ kind: 'pushed' });
       const s = useSpeleoStore.getState();
-      // Push behaves like push&release WITHOUT releasing the lock — still editing.
+      // Push behaves like push&release WITHOUT releasing the lock - still editing.
       expect(s.link?.editState).toBe('editing');
       expect(s.link?.hasUnpushedEdits).toBe(false);
       expect(s.link?.remoteState).toBe('up_to_date');

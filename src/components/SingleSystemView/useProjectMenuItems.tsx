@@ -51,7 +51,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   const showToast = useUIStore((s) => s.showToast);
   const showDevStats = useUIStore((s) => s.showDevStats);
   const toggleDisplay = useUIStore((s) => s.toggleDisplay);
-  // SpeleoDB submenu (T2d) — only for a remote project.
+  // SpeleoDB submenu (T2d) - only for a remote project.
   const speleoLink = useSpeleoStore((s) => s.link);
   const { busy: speleoBusy, startEditing, update, done } = useSpeleoActions();
   // The closure-adjusted view is read-only — imports add sections. Disable the
@@ -98,7 +98,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
     return [
       ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
       openFromSpeleoDbMenuItem(t, { onOpen: () => openDialog('open-from-speleodb') }),
-      // SpeleoDB submenu (T2d) — only when a remote project is open.
+      // SpeleoDB submenu (T2d) - only when a remote project is open.
       ...(speleoLink
         ? [
             {
@@ -140,7 +140,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                   // Push-without-unlock only makes sense while editing with edits.
                   disabled: speleoBusy || speleoLink.editState !== 'editing' || !speleoLink.hasUnpushedEdits,
                   // Collect a commit message via the done dialog in push mode (like
-                  // push & release, but the lock is retained — fix 8).
+                  // push & release, but the lock is retained - fix 8).
                   onClick: () => openDialog('speleodb-done', { mode: 'push' }),
                 },
                 {
@@ -164,7 +164,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                       size={sz}
                     />
                   ),
-                  // TODO(#213): optimistic force-edit — a data-safety/contention
+                  // TODO(#213): optimistic force-edit - a data-safety/contention
                   // warning then edit-without-lock + reconcile-on-push. Stubbed.
                   onClick: () =>
                     showToast(t('speleodb.menu.editWithoutLockSoon'), 'speleodb-edit-without-lock'),

@@ -530,7 +530,7 @@ export default function SingleSystemView() {
         placementModeActive={placementModeActive}
         dataTableFullScreen={dataTableFullScreen}
       />
-      {/* SpeleoDB status banner (#200 seam) — renders only when the store has a
+      {/* SpeleoDB status banner (#200 seam) - renders only when the store has a
           banner (push-unconfirmed / concurrent-session); otherwise nothing. */}
       <SpeleoBanner />
 

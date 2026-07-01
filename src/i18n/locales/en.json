@@ -622,7 +622,7 @@
       },
       "endpoint": {
         "label": "Server endpoint",
-        "help": "The SpeleoDB server to connect to (e.g. https://www.speleodb.org/). This only applies to future logins — your current session stays on the server it signed in to.",
+        "help": "The SpeleoDB server to connect to (e.g. https://www.speleodb.org/). This only applies to future logins - your current session stays on the server it signed in to.",
         "aria": "SpeleoDB server endpoint"
       },
       "tokenFallback": {
@@ -645,7 +645,7 @@
         "appliesOnSave": "Sign in and sign out apply when you press Save.",
         "signedInAs": "Signed in as {{email}}",
         "signedInAsAt": "Signed in as {{email}} at {{endpoint}}",
-        "memoryOnly": "Token kept in memory only (no keychain) — it won't survive a restart.",
+        "memoryOnly": "Token kept in memory only (no keychain) - it won't survive a restart.",
         "logout": "Log out",
         "willSignOut": "You'll be signed out when you press Save.",
         "willSignIn": "Log in now to check your details, or they'll be applied when you press Save.",
@@ -2624,14 +2624,14 @@
       "readOnlyBadge": "SpeleoDB · read-only"
     },
     "button": {
-      "unlocked": "Read-only — click to start editing (acquire the lock)",
-      "editingDirty": "You're editing — click to push your changes and release the lock",
-      "editingClean": "You hold the lock — click to release it",
-      "lockedByOther": "Being edited by {{email}} — click to pull the latest",
-      "remoteAhead": "SpeleoDB has newer changes — click to pull",
-      "conflict": "Local and remote have diverged — click to resolve",
-      "viewOnly": "Read-only access — click to refresh from SpeleoDB",
-      "noPermission": "You don't have permission to this SpeleoDB project — click for options"
+      "unlocked": "Read-only - click to start editing (acquire the lock)",
+      "editingDirty": "You're editing - click to push your changes and release the lock",
+      "editingClean": "You hold the lock - click to release it",
+      "lockedByOther": "Being edited by {{email}} - click to pull the latest",
+      "remoteAhead": "SpeleoDB has newer changes - click to pull",
+      "conflict": "Local and remote have diverged - click to resolve",
+      "viewOnly": "Read-only access - click to refresh from SpeleoDB",
+      "noPermission": "You don't have permission to this SpeleoDB project - click for options"
     },
     "menu": {
       "title": "SpeleoDB",
@@ -2650,7 +2650,7 @@
       "release": "Release & close",
       "pushRelease": "Push, release & close",
       "saveLocally": "Save changes locally before closing",
-      "savedLocallyNote": "Your changes are saved locally — they just haven't been uploaded to SpeleoDB yet."
+      "savedLocallyNote": "Your changes are saved locally - they just haven't been uploaded to SpeleoDB yet."
     },
     "divergence": {
       "title": "Resolve SpeleoDB conflict",
@@ -2680,8 +2680,8 @@
     "editBar": {
       "someone": "someone else",
       "toasts": {
-        "editing": "You now hold the lock — editing enabled.",
-        "lockedBy": "Unable to lock the project right now — it's being edited by {{email}}. Please try again later.",
+        "editing": "You now hold the lock - editing enabled.",
+        "lockedBy": "Unable to lock the project right now - it's being edited by {{email}}. Please try again later.",
         "upToDate": "Already up to date.",
         "released": "Changes uploaded and lock released.",
         "pushed": "Changes pushed to SpeleoDB.",
@@ -2704,12 +2704,12 @@
     },
     "noPermission": {
       "title": "No SpeleoDB access",
-      "description": "This project is linked to SpeleoDB, but your account doesn't have permission to view or edit it — it may have been shared with you as a file. You can convert it to a regular, unmanaged .stalx file to keep and edit locally.",
+      "description": "This project is linked to SpeleoDB, but your account doesn't have permission to view or edit it - it may have been shared with you as a file. You can convert it to a regular, unmanaged .stalx file to keep and edit locally.",
       "convert": "Convert to a local file",
       "converting": "Converting…"
     },
     "banner": {
-      "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept — click Done again to retry.",
+      "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept - click Done again to retry.",
       "concurrentSession": "This project is locked by your account in another session. Editing from two sessions at once can lose edits."
     },
     "browser": {

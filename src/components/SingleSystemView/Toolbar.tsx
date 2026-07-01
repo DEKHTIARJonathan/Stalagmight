@@ -165,7 +165,7 @@ export default function Toolbar({
   // Read-only both in the closure-adjusted view AND in Plan/Export (the whole map is
   // non-editable there) — disable the geometry-mutating tools in both. Select/Pan/Zoom/
   // Measure stay enabled, so they remain available in every mode.
-  // A remote SpeleoDB project opened without the write lock is read-only — disable
+  // A remote SpeleoDB project opened without the write lock is read-only - disable
   // the mutating tools + Import exactly like closure-adjusted mode (T2a). The
   // backend edit gate is the real enforcement; this is the visual parity.
   const speleoReadOnly = useSpeleoStore((s) => (s.link ? s.link.editState !== 'editing' : false));
@@ -191,7 +191,7 @@ export default function Toolbar({
           disabled={placementModeActive}
           aria-label={t('singleView.menu.aria')}
         />
-        {/* SpeleoDB status button (#204/T2c) — right of the hamburger; hidden for
+        {/* SpeleoDB status button (#204/T2c) - right of the hamburger; hidden for
             local projects. One click drives the single-writer hand-off. */}
         <SpeleoStatusButton />
         {/* In fullscreen table mode the left slot shows the "Back to Map" button

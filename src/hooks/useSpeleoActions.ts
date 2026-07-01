@@ -24,7 +24,7 @@ export interface SpeleoActions {
   busy: boolean;
   startEditing: () => Promise<void>;
   update: () => Promise<void>;
-  /** Push edits without releasing the lock (T2d) — collects an optional message. */
+  /** Push edits without releasing the lock (T2d) - collects an optional message. */
   push: (message?: string | null) => Promise<void>;
   /** The backend outcome, or `null` if the call threw. Callers key off `.kind`
       (e.g. the close flow only leaves once the lock is actually `released`). */
@@ -49,7 +49,7 @@ export function useSpeleoActions(): SpeleoActions {
   const handleError = useCallback(
     (e: unknown, prefixKey: string) => {
       // A dead token collapses the shell to read-only (mirrors the backend gate
-      // drop); other errors are transient — surface and let the user retry.
+      // drop); other errors are transient - surface and let the user retry.
       if (speleoErrorAction(e) === 'ReLogin') clearSession();
       showToast(humanizeSpeleoError(e, t(prefixKey)), 'speleodb-action-error');
     },
@@ -85,7 +85,7 @@ export function useSpeleoActions(): SpeleoActions {
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.startFailed');
     } finally {
-      // Reset the poll timer so the next poll is a full interval out — a buffer
+      // Reset the poll timer so the next poll is a full interval out - a buffer
       // past the just-issued lock change the server mutex may not yet reflect (1b).
       bumpPoll();
       setBusy(false);
