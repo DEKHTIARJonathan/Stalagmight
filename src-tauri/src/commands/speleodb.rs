@@ -21,8 +21,8 @@ use crate::core::AppState;
 // `err.action`. The orchestration `AppState::speleodb_*` methods build the DTO at
 // the call site where the endpoint is known.
 use crate::speleodb::{
-    DoneResult, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult, UpdateResult,
+    DoneResult, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
+    SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -125,4 +125,14 @@ pub async fn speleodb_update(app: AppHandle) -> Result<UpdateResult, SpeleoError
 #[tauri::command]
 pub async fn speleodb_session(app: AppHandle) -> Result<SpeleoSessionStatus, SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_session_status).await
+}
+
+/// Report the open project's SpeleoDB link/edit status (#204) so the action shell
+/// can render the read-only/editing indicator and gate its controls. The local
+/// fields are cheap; `permission`/`lock_holder` are best-effort (`None` when
+/// logged out / offline). Called after every project load (and after edit-verb
+/// results) to seed the frontend edit-state.
+#[tauri::command]
+pub async fn speleodb_link_status(app: AppHandle) -> Result<SpeleoLinkStatus, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_link_status).await
 }

@@ -120,6 +120,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.set_station_comment",
     "command.set_zero_datum",
     "command.speleodb_done",
+    "command.speleodb_link_status",
     "command.speleodb_list_projects",
     "command.speleodb_login",
     "command.speleodb_logout",
@@ -557,7 +558,9 @@ mod tests {
         //       command.compute_gas_reach_field = 419
         //   + 3 SpeleoDB sync events (#194/#197):
         //       speleodb_{start_editing,done,update} = 422.
-        assert_eq!(EVENT_NAMES.len(), 422);
+        //   + 1 SpeleoDB link-status event (#204):
+        //       command.speleodb_link_status = 423.
+        assert_eq!(EVENT_NAMES.len(), 423);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

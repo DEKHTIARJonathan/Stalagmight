@@ -232,6 +232,36 @@ pub struct SpeleoSessionStatus {
     pub keychain_backed: bool,
 }
 
+/// IPC-facing status of the currently open project's SpeleoDB link, so the
+/// frontend action shell (#204) can render the read-only/editing indicator and
+/// gate its controls on ANY load — including a reopen from Recent Projects,
+/// where the open flow's [`SpeleoProjectSummary`] isn't in hand.
+///
+/// The cheap local fields (`is_remote`, `edit_enabled`, `has_unpushed_edits`)
+/// come from the persisted `speleo_link` row + the transient edit gate. The
+/// network fields (`permission`, `lock_holder`) are best-effort from a single
+/// `get_project`; they degrade to `None` when logged out / offline so the local
+/// truth (which the read-only gate hangs on) always returns. Carries no token.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct SpeleoLinkStatus {
+    /// True when the open project is linked to a SpeleoDB project (a `speleo_link`
+    /// row exists). False for a local project or when no project is open.
+    pub is_remote: bool,
+    /// The backend edit gate: true when mutations are allowed (a local project,
+    /// or a remote one with the write lock held). False for a remote project
+    /// opened read-only.
+    pub edit_enabled: bool,
+    /// The command-driven dirty bit: un-pushed remote edits are pending.
+    pub has_unpushed_edits: bool,
+    /// This user's permission tier on the project. Best-effort — `None` when
+    /// logged out / offline / the lookup failed.
+    pub permission: Option<Permission>,
+    /// Email of the current lock holder, if any. Best-effort — `None` when
+    /// unlocked / logged out / the lookup failed.
+    pub lock_holder: Option<String>,
+}
+
 /// [Track A] #186/D-B2: the structured error the SpeleoDB IPC commands return.
 ///
 /// Replaces the spike's `String`-flattened error at the IPC boundary so the
@@ -252,9 +282,9 @@ pub struct SpeleoErrorDto {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        DoneResult, Permission, Project, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult,
-        SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult,
-        UpdateResult,
+        DoneResult, Permission, Project, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus,
+        SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus,
+        StartEditingResult, UpdateResult,
     };
 
     #[test]
@@ -312,9 +342,28 @@ mod tests {
             local_path: "/cache/project.stalx".to_owned(),
         })
         .expect("serialize update result");
+        // #204: the link-status DTO is authed-derived (permission + lock holder)
+        // but must likewise never carry the token.
+        let link_status = serde_json::to_string(&SpeleoLinkStatus {
+            is_remote: true,
+            edit_enabled: false,
+            has_unpushed_edits: false,
+            permission: Some(Permission::ReadAndWrite),
+            lock_holder: Some("holder@example.com".to_owned()),
+        })
+        .expect("serialize link status");
 
         for json in [
-            &login, &status, &summary, &open, &error, &start, &locked, &done, &update,
+            &login,
+            &status,
+            &summary,
+            &open,
+            &error,
+            &start,
+            &locked,
+            &done,
+            &update,
+            &link_status,
         ] {
             assert!(
                 !json.to_ascii_lowercase().contains("token"),

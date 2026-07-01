@@ -20,8 +20,8 @@ use crate::speleodb::models::SpeleoProjectSummary;
 use crate::speleodb::sync::{self, PushPlan, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
-    DoneResult, SpeleoDbError, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoSessionStatus, StartEditingResult, UpdateResult,
+    DoneResult, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
+    SpeleoOpenResult, SpeleoSessionStatus, StartEditingResult, UpdateResult,
 };
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
@@ -375,6 +375,65 @@ impl AppState {
         self.speleodb_ensure_rehydrated();
         // No network call — only the (local) session-lock error can surface here.
         Ok(self.speleodb_session_lock().map_err(local_dto)?.status())
+    }
+
+    /// Report the open project's SpeleoDB link/edit status for the action shell
+    /// (#204): whether it is remote, whether editing is enabled (the write lock is
+    /// held), the un-pushed-edits dirty bit, and — best-effort over one
+    /// `get_project` — the user's permission tier and the current lock holder.
+    ///
+    /// A local project (or none open) reports `is_remote:false` with the network
+    /// fields `None`. The network enrichment is deliberately fail-open: a logged
+    /// out / offline / failed lookup leaves `permission`/`lock_holder` `None`
+    /// rather than failing the whole status, because the local truth
+    /// (`is_remote` + `edit_enabled`) is what the read-only gate hangs on. Not
+    /// routed through [`Self::speleodb_handle_auth`] — a transient 401 on this
+    /// passive probe must not auto-drop the session (mirrors
+    /// [`Self::speleodb_lock_holder`]).
+    pub(crate) fn speleodb_link_status(&self) -> Result<SpeleoLinkStatus, SpeleoErrorDto> {
+        let link = match self.speleodb_open_link() {
+            Ok(link) => link,
+            // No remote project open (no database, or a local project): not-remote.
+            Err(SpeleoDbError::NoRemoteProject) => {
+                return Ok(SpeleoLinkStatus {
+                    is_remote: false,
+                    edit_enabled: self.edit_enabled(),
+                    has_unpushed_edits: false,
+                    permission: None,
+                    lock_holder: None,
+                });
+            }
+            Err(e) => return Err(local_dto(e)),
+        };
+
+        let edit_enabled = self.edit_enabled();
+        let has_unpushed_edits = link.has_unpushed_edits;
+
+        // Best-effort network enrichment. Guard the request URL with the same
+        // project-id validation as the edit verbs; on any miss (invalid id, no
+        // token, transport/HTTP error) both fields stay `None`.
+        let (permission, lock_holder) = if validate_project_id(&link.project_id).is_ok() {
+            match self.speleodb_active_token() {
+                Ok((endpoint, token)) => {
+                    let insecure_http = self.speleodb_insecure_http();
+                    match client::get_project(&endpoint, &token, insecure_http, &link.project_id) {
+                        Ok(p) => (p.permission, p.active_mutex.map(|m| m.user)),
+                        Err(_) => (None, None),
+                    }
+                }
+                Err(_) => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+
+        Ok(SpeleoLinkStatus {
+            is_remote: true,
+            edit_enabled,
+            has_unpushed_edits,
+            permission,
+            lock_holder,
+        })
     }
 
     /// [Track C] (#188, C5): centralized session-level 401 auto-drop handler.

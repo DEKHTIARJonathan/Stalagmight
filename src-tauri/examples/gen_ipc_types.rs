@@ -64,8 +64,8 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    DoneResult, Permission, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult, UpdateResult,
+    DoneResult, Permission, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
+    SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult, UpdateResult,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -296,6 +296,8 @@ fn main() {
     export::<SpeleoSessionStatus>(&out_dir);
     export::<SpeleoDbAction>(&out_dir);
     export::<SpeleoErrorDto>(&out_dir);
+    // SpeleoDB linked-project status for the action shell (#204)
+    export::<SpeleoLinkStatus>(&out_dir);
     // SpeleoDB single-writer hand-off DTOs (#194/#197)
     export::<StartEditingResult>(&out_dir);
     export::<DoneResult>(&out_dir);
@@ -477,6 +479,7 @@ fn main() {
         "SpeleoSessionStatus",
         "SpeleoDbAction",
         "SpeleoErrorDto",
+        "SpeleoLinkStatus",
         "StartEditingResult",
         "DoneResult",
         "UpdateResult",

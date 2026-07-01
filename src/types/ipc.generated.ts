@@ -173,6 +173,7 @@ export * from './ipc/SpeleoOpenResult';
 export * from './ipc/SpeleoSessionStatus';
 export * from './ipc/SpeleoDbAction';
 export * from './ipc/SpeleoErrorDto';
+export * from './ipc/SpeleoLinkStatus';
 export * from './ipc/StartEditingResult';
 export * from './ipc/DoneResult';
 export * from './ipc/UpdateResult';
