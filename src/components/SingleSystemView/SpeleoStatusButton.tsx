@@ -148,7 +148,7 @@ export function SpeleoStatusButton() {
       data-testid="speleodb-status-button"
       data-kind={kind}
       className={`flex items-center justify-center w-8 h-8 rounded ml-1 transition-opacity disabled:opacity-50 ${
-        kind === 'conflict' ? 'bg-red-900 hover:bg-red-800' : 'bg-slate-700 hover:bg-slate-600'
+        kind === 'conflict' ? 'bg-red-900 hover:bg-red-800' : 'hover:bg-panel'
       }`}
     >
       {/* The state badge sits on the ICON — a small disc + glyph anchored to the
