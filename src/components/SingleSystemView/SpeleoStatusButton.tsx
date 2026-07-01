@@ -5,7 +5,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
-import { LockIcon, PencilIcon, AlertTriangleIcon } from '../common/icons';
+import { LockIcon, PencilIcon } from '../common/icons';
 
 const MIN_POLL_INTERVAL_SECONDS = 30;
 
@@ -23,6 +23,16 @@ function PullGlyph({ size = 10 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
       <path d="M6 2h4v6h3l-5 6-5-6h3V2z" />
+    </svg>
+  );
+}
+
+/** Filled exclamation-mark glyph (local/remote conflict). */
+function ExclamationGlyph({ size = 10 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M6.6 2h2.8l-0.5 7h-1.8l-0.5-7z" />
+      <circle cx="8" cy="12.4" r="1.5" />
     </svg>
   );
 }
@@ -111,7 +121,7 @@ export function SpeleoStatusButton() {
     ) : kind === 'remote_ahead' ? (
       <PullGlyph size={10} />
     ) : (
-      <AlertTriangleIcon size={10} />
+      <ExclamationGlyph size={11} />
     );
 
   const glyphColor =
@@ -123,7 +133,7 @@ export function SpeleoStatusButton() {
           ? 'text-orange-400'
           : kind === 'remote_ahead'
             ? 'text-blue-400'
-            : 'text-red-200';
+            : 'text-red-500';
 
   // Hover background tint tracks the badge colour (conflict keeps its persistent
   // crimson; the rest are transparent with a coloured hover).
