@@ -440,6 +440,23 @@ impl AppState {
                 (None, None, RemoteState::Unknown)
             };
 
+        // Invariant: holding the write lock means we may edit. If we hold it but the
+        // gate is off — e.g. we reopened a project we'd locked but not released, and
+        // the load re-derived the gate as read-only from is_remote — resume editing
+        // now, so the project isn't stuck read-only under our own lock. (A same-
+        // account concurrent session is warned about separately at open time.)
+        let edit_enabled = if !edit_enabled
+            && lock_holder
+                .as_deref()
+                .zip(self.speleodb_my_email().as_deref())
+                .is_some_and(|(holder, me)| holder.eq_ignore_ascii_case(me))
+        {
+            self.set_edit_enabled(true);
+            true
+        } else {
+            edit_enabled
+        };
+
         Ok(SpeleoLinkStatus {
             is_remote: true,
             edit_enabled,
