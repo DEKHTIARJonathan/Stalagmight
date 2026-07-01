@@ -101,8 +101,13 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
             {
               id: 'speleodb-menu',
               label: t('speleodb.menu.title'),
-              icon: <SpeleoDbLogo size={sz} />,
-              iconColor: MENU_ICON_COLORS.open,
+              // The mark is white line-art; a dark chip keeps it visible on the
+              // (theme-dependent) menu background.
+              icon: (
+                <span className="inline-flex items-center justify-center rounded bg-slate-700 p-0.5">
+                  <SpeleoDbLogo size={sz - 4} />
+                </span>
+              ),
               submenu: [
                 speleoLink.editState === 'editing'
                   ? {

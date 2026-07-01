@@ -147,13 +147,21 @@ export function SpeleoStatusButton() {
       aria-label={title}
       data-testid="speleodb-status-button"
       data-kind={kind}
-      className={`relative flex items-center justify-center w-8 h-8 rounded ml-1 transition-opacity disabled:opacity-50 ${
+      className={`flex items-center justify-center w-8 h-8 rounded ml-1 transition-opacity disabled:opacity-50 ${
         kind === 'conflict' ? 'bg-red-900 hover:bg-red-800' : 'bg-slate-700 hover:bg-slate-600'
       }`}
     >
-      <SpeleoDbLogo size={16} className="text-white" />
-      <span className={`absolute -bottom-1 -right-1 rounded-full bg-panel p-[1px] ${glyphColor}`}>
-        {glyph}
+      {/* The state badge sits on the ICON — a small disc + glyph anchored to the
+          logo's corner (like the DisplayMenu shot/station symbols), not floating
+          on the button. */}
+      <span className="relative inline-flex">
+        <SpeleoDbLogo size={20} />
+        <span
+          className={`absolute -bottom-1 -right-1 flex items-center justify-center rounded-full bg-slate-900 p-[1px] ${glyphColor}`}
+          data-testid="speleodb-status-badge"
+        >
+          {glyph}
+        </span>
       </span>
     </button>
   );
