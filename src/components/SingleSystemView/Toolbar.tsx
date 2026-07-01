@@ -16,7 +16,7 @@ import type { CSSProperties } from 'react';
 import DisplayMenu from './DisplayMenu';
 import { ModeCarousel } from './ModeCarousel';
 import TableSelectDropdown from './TableSelectDropdown';
-import { SpeleoEditBar } from './SpeleoEditBar';
+import { SpeleoStatusButton } from './SpeleoStatusButton';
 import { useSpeleoStore } from '../../store/speleoStore';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, type ToolGroupDef } from '../../utils/toolGroups';
@@ -191,6 +191,9 @@ export default function Toolbar({
           disabled={placementModeActive}
           aria-label={t('singleView.menu.aria')}
         />
+        {/* SpeleoDB status button (#204/T2c) — right of the hamburger; hidden for
+            local projects. One click drives the single-writer hand-off. */}
+        <SpeleoStatusButton />
         {/* In fullscreen table mode the left slot shows the "Back to Map" button
             (the relabeled shrink button) instead of Import; both Save/Export/Close
             live in the hamburger now. */}
@@ -281,9 +284,6 @@ export default function Toolbar({
       {/* Right section - tools and display menu; while the table is fullscreen,
           just the table picker (the "Back to Map" button lives on the left). */}
       <div className="flex items-center gap-2">
-        {/* SpeleoDB linked-project action shell (#204) — hidden for local
-            projects; shown in every mode so the edit-state is always legible. */}
-        <SpeleoEditBar />
         {dataTableFullScreen ? (
           /* The "Back to Map" shrink button now lives on the left (in place of
              the project-close button); only the table picker stays on the right. */

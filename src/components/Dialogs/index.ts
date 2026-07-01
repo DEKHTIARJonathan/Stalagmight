@@ -41,3 +41,4 @@ export { default as TelemetryOptInDialog } from './TelemetryOptInDialog';
 export { default as CollabReviewDialog } from './CollabReviewDialog';
 export { default as OpenFromSpeleoDbDialog } from './OpenFromSpeleoDbDialog';
 export { default as SpeleoDoneDialog } from './SpeleoDoneDialog';
+export { default as SpeleoDivergenceDialog } from './SpeleoDivergenceDialog';

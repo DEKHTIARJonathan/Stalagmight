@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type {
   DoneResult,
   Permission,
+  RemoteState,
   SpeleoLinkStatus,
   SpeleoLoginResult,
   SpeleoSessionStatus,
@@ -45,6 +46,8 @@ export interface SpeleoLinkState {
   /** Email of the current lock holder (may be us, or another user), if any. */
   lockHolder: string | null;
   hasUnpushedEdits: boolean;
+  /** The local copy's relationship to the server tip (drives the button, T2c). */
+  remoteState: RemoteState;
 }
 
 /**
@@ -200,20 +203,27 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       return {
         link: {
           editState: s.edit_enabled ? 'editing' : 'read-only',
-          // The network fields degrade to null offline — keep the last-known
-          // permission rather than blanking the gate on a transient miss.
+          // The network fields degrade to null/unknown offline — keep the
+          // last-known permission rather than blanking the gate on a transient miss.
           permission: s.permission ?? state.link?.permission ?? null,
           lockHolder: s.lock_holder,
           hasUnpushedEdits: s.has_unpushed_edits,
+          remoteState: s.remote_state,
         },
       };
     }),
 
   setLinkOnOpen: ({ permission }) =>
     set({
-      // A freshly pulled project always opens read-only; `seedFromStatus`
-      // refines lock holder + dirty bit once the load settles.
-      link: { permission, editState: 'read-only', lockHolder: null, hasUnpushedEdits: false },
+      // A freshly pulled project always opens read-only + up-to-date;
+      // `seedFromStatus` refines lock holder / dirty bit / remote state on load.
+      link: {
+        permission,
+        editState: 'read-only',
+        lockHolder: null,
+        hasUnpushedEdits: false,
+        remoteState: 'up_to_date',
+      },
       divergence: null,
       banner: null,
     }),

@@ -8,6 +8,7 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   has_unpushed_edits: false,
   permission: 'READ_AND_WRITE',
   lock_holder: null,
+  remote_state: 'up_to_date',
   ...o,
 });
 
@@ -79,6 +80,7 @@ describe('speleoStore', () => {
         editState: 'read-only',
         lockHolder: null,
         hasUnpushedEdits: false,
+        remoteState: 'up_to_date',
       });
     });
   });

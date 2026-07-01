@@ -2620,6 +2620,32 @@
     "map": {
       "readOnlyBadge": "SpeleoDB · read-only"
     },
+    "button": {
+      "unlocked": "Read-only — click to start editing (acquire the lock)",
+      "editingDirty": "You're editing — click to push your changes and release the lock",
+      "editingClean": "You hold the lock — click to release it",
+      "lockedByOther": "Being edited by {{email}} — click to pull the latest",
+      "remoteAhead": "SpeleoDB has newer changes — click to pull",
+      "conflict": "Local and remote have diverged — click to resolve"
+    },
+    "divergence": {
+      "title": "Resolve SpeleoDB conflict",
+      "description": "Your local changes and the version on SpeleoDB have diverged. Choose how to resolve it.",
+      "soonTag": "(coming soon)",
+      "comingSoon": "This resolution option is coming soon (#198).",
+      "keepLocal": {
+        "label": "Keep my local version",
+        "help": "Dismiss and keep editing locally. Nothing is pulled or overwritten."
+      },
+      "takeRemote": {
+        "label": "Take the SpeleoDB version",
+        "help": "Discard your local changes and replace them with the server's version."
+      },
+      "saveCopy": {
+        "label": "Save my version as a local copy",
+        "help": "Keep your changes in a separate local file, then take the SpeleoDB version."
+      }
+    },
     "errors": {
       "loginFailed": "Login to SpeleoDB failed",
       "openFailed": "Unable to open the project",
