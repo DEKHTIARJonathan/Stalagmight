@@ -8,6 +8,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { invokeIpc } from '../../utils/ipc';
 import { humanizeSpeleoError, speleoErrorAction } from '../../utils/speleoError';
 import { validateCoordinates } from '../../utils/gps';
+import { reverseGeocodeCountry } from '../../utils/reverseGeocodeCountry';
 import { COUNTRIES } from '../../data/countries';
 import type { SpeleoPublishParams, SpeleoPublishResult, Visibility } from '../../types/ipc.generated';
 
@@ -28,10 +29,16 @@ export default function PublishToSpeleoDbDialog() {
 
   const [name, setName] = useState(project?.name ?? '');
   const [description, setDescription] = useState('');
-  const [country, setCountry] = useState('');
-  const [visibility, setVisibility] = useState<Visibility>('PRIVATE');
   // Best-effort prefill from the first georeferenced zero datum, if any.
   const firstGps = useMemo(() => project?.zero_datums?.[0]?.gps ?? null, [project]);
+  // Offline reverse-geocode the required country from that datum (#217). Lazy
+  // initializer so it runs once at mount; empty when there is no GPS or the point
+  // resolves to no country. Always user-editable via the <select> below.
+  const [country, setCountry] = useState(() => {
+    const gps = project?.zero_datums?.[0]?.gps ?? null;
+    return gps ? (reverseGeocodeCountry(gps.latitude, gps.longitude) ?? '') : '';
+  });
+  const [visibility, setVisibility] = useState<Visibility>('PRIVATE');
   const [latitude, setLatitude] = useState(firstGps ? String(firstGps.latitude) : '');
   const [longitude, setLongitude] = useState(firstGps ? String(firstGps.longitude) : '');
   const [publishing, setPublishing] = useState(false);

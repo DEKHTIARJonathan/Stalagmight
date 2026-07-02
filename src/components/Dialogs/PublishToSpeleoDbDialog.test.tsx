@@ -95,4 +95,33 @@ describe('PublishToSpeleoDbDialog', () => {
     expect(screen.getByTestId('publish-to-speleodb-dialog-submit')).toBeDisabled();
     expect(screen.getByTestId('publish-to-speleodb-dialog-coords-error')).toBeInTheDocument();
   });
+
+  it('prefills country and coordinates from the first georeferenced datum (#217)', () => {
+    // A Yucatan cenote datum should offline-resolve the required country to MX.
+    useProjectStore.setState({
+      project: {
+        name: 'Cenote',
+        zero_datums: [{ gps: { latitude: 20.21, longitude: -87.46 } }],
+      } as never,
+      loadProject: loadProjectMock,
+    });
+    render(<PublishToSpeleoDbDialog />);
+    expect(screen.getByTestId('publish-to-speleodb-dialog-country')).toHaveValue('MX');
+    expect(screen.getByTestId('publish-to-speleodb-dialog-latitude')).toHaveValue(20.21);
+    expect(screen.getByTestId('publish-to-speleodb-dialog-longitude')).toHaveValue(-87.46);
+    // Country + valid coords + prefilled name -> Publish is immediately enabled.
+    expect(screen.getByTestId('publish-to-speleodb-dialog-submit')).toBeEnabled();
+  });
+
+  it('leaves country empty when the datum resolves to no country (open ocean)', () => {
+    useProjectStore.setState({
+      project: {
+        name: 'Blue Hole',
+        zero_datums: [{ gps: { latitude: 30.0, longitude: -40.0 } }],
+      } as never,
+      loadProject: loadProjectMock,
+    });
+    render(<PublishToSpeleoDbDialog />);
+    expect(screen.getByTestId('publish-to-speleodb-dialog-country')).toHaveValue('');
+  });
 });
