@@ -63,6 +63,23 @@ export function useSpeleoActions(): SpeleoActions {
     }
   }, [raiseNoAnchorBanner]);
 
+  // A confirmed push/unlock already flushed the survey to disk (the backend's
+  // speleodb_upload runs save_project before the upload), but the projectStore's
+  // `isDirty` flag is a separate concept that stays set until the FE saves. Left
+  // alone it clears only on the 30s autosave debounce, so exiting in that window
+  // fires a false "Unsaved Changes" prompt for edits that are already on disk (and
+  // pushed to SpeleoDB). Re-flush from the FE now to clear `isDirty` immediately;
+  // saveProject writes the current in-memory state, so a late edit is captured too.
+  // Best-effort and quiet (autosave semantics): a failed flush leaves `isDirty` set,
+  // which is the safe direction since the push already persisted the same edits.
+  const flushToDiskAfterPush = useCallback(async () => {
+    try {
+      await useProjectStore.getState().saveProject(undefined, true);
+    } catch {
+      /* best-effort; isDirty stays set, which safely re-prompts on exit */
+    }
+  }, []);
+
   const handleError = useCallback(
     (e: unknown, prefixKey: string) => {
       // A dead token collapses the shell to read-only (mirrors the backend gate
@@ -141,6 +158,7 @@ export function useSpeleoActions(): SpeleoActions {
         if (result.kind === 'pushed') {
           showToast(t('speleodb.editBar.toasts.pushed'), 'speleodb-pushed');
           noteNoAnchorIfNeeded();
+          await flushToDiskAfterPush();
         }
         // divergence_needed / push_unconfirmed surface via the store (#198/#200 seams);
         // the returned kind lets the dialog stay open to resolve them.
@@ -153,7 +171,16 @@ export function useSpeleoActions(): SpeleoActions {
         setBusy(false);
       }
     },
-    [applyPush, showToast, t, handleError, setBusy, bumpPoll, noteNoAnchorIfNeeded],
+    [
+      applyPush,
+      showToast,
+      t,
+      handleError,
+      setBusy,
+      bumpPoll,
+      noteNoAnchorIfNeeded,
+      flushToDiskAfterPush,
+    ],
   );
 
   const done = useCallback(
@@ -166,6 +193,7 @@ export function useSpeleoActions(): SpeleoActions {
           case 'released':
             showToast(t('speleodb.editBar.toasts.released'), 'speleodb-released');
             noteNoAnchorIfNeeded();
+            await flushToDiskAfterPush();
             break;
           case 'push_unconfirmed':
             // #200 seam: applyDone raised the push_unconfirmed banner.
@@ -183,7 +211,16 @@ export function useSpeleoActions(): SpeleoActions {
         setBusy(false);
       }
     },
-    [applyDone, showToast, t, handleError, setBusy, bumpPoll, noteNoAnchorIfNeeded],
+    [
+      applyDone,
+      showToast,
+      t,
+      handleError,
+      setBusy,
+      bumpPoll,
+      noteNoAnchorIfNeeded,
+      flushToDiskAfterPush,
+    ],
   );
 
   const takeRemote = useCallback(async (): Promise<boolean> => {
