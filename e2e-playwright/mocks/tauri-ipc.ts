@@ -3688,11 +3688,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               remote_state: 'unknown',
               access_denied: false,
               server_error: null,
+              exclude_geojson: false,
             };
           case 'speleodb_list_projects':
             return [];
+          case 'speleodb_take_remote':
+            // Returns the reloaded .stalx path (#198); no e2e spec drives it yet.
+            return '/mock/project.stalx';
           case 'speleodb_logout':
           case 'speleodb_unlink':
+          case 'speleodb_release_all_locks':
+          case 'speleodb_set_exclude_geojson':
             return null;
           case 'speleodb_login':
             return {
