@@ -239,3 +239,38 @@ and `live_open1_bare_tml_mime_outcome` against the box — all pass:
   `{octet-stream, zip}` allow-list. So `client::mime_for`'s explicit
   `application/octet-stream` for `.tml` is load-bearing, not defensive (the old "not a
   hard requirement" comment was wrong and has been corrected).
+
+## Loop-UI client coverage (#198/#200/#201/#202)
+
+The single-writer loop UI added three client methods that had no live coverage.
+Each now has a `#[ignore]` single-account live test in `speleodb::live_tests`:
+
+- `live_get_project_reflects_holder_and_tip` (**#202**) - pins the two fields the
+  lazy re-verify (`speleodb_verify_lock_if_expired`) branches on: while we hold the
+  mutex `client::get_project` reports `active_mutex.user == me` and carries a
+  `latest_commit`; after `release_lock`, `active_mutex` goes **absent** (the
+  lost-lock signal that routes to the divergence prompt). It deliberately does NOT
+  assert `latest_commit.id` equals the pushed hexsha - that field is
+  `max(authored_date)` and documented unreliable as a tip, which is why #202's
+  tip-moved check is best-effort.
+- `live_release_all_locks_releases_held` (**#201**) - `client::release_all_locks`
+  (`DELETE /user/release_all_locks/`) drops **every** lock the token holds in one
+  request; the test locks two throwaway projects, releases all, asserts both are
+  freed, then re-calls to confirm the empty-handed no-op still 2xxes (idempotent).
+  Caveat: it clears **all** locks for the configured account, so run it only against
+  the throwaway box.
+- `live_patch_exclude_geojson_roundtrips` (**#200**) - `client::patch_project`
+  (`PATCH /projects/{id}/`, write permission, no lock) round-trips
+  `exclude_geojson`: flip to `true`, confirm the PATCH response and a follow-up GET
+  both report `true`, then flip back to `false` (the shipped Enable-rendering
+  action) and confirm the cleared state.
+
+### Live-run results (2026-07-02, box `http://10.10.0.220:8000/`)
+
+Full suite green: `cargo test … speleodb::live_tests -- --ignored --test-threads=1`
+ran **all 25** live tests (22 existing + the 3 above) against the box - **25 passed,
+0 failed** in ~50s, with both `DEV_SPELEODB_EMAIL2`/`_PASSWORD2` set (so the
+two-account tier ran too). This also confirms the loop-UI DTO additions
+(`Project.exclude_geojson`, `ProjectMetadata.speleodb_project_id`) still parse real
+server responses. Run single-threaded because `live_release_all_locks_releases_held`
+clears account-wide locks and must not race lock-holding tests.
