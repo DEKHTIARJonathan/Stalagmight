@@ -124,7 +124,7 @@ export default function SystemCard({
           (irrelevant for a linked project, #201); local ones show the path. */}
       {speleoLock?.isRemote ? (
         <div className="mb-3" data-testid="system-card-path">
-          <SpeleoRecentInfo info={speleoLock} />
+          <SpeleoRecentInfo info={speleoLock} name={name} />
         </div>
       ) : (
         <ElidedPath

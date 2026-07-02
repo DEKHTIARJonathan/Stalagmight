@@ -32,6 +32,7 @@ const reset = () => {
     divergence: null,
     banner: null,
     remoteLocks: {},
+    remoteProjects: {},
     heldLocks: null,
     heldLockPromptNonce: 0,
     heldLockPromptPending: true,
@@ -379,6 +380,8 @@ describe('speleoStore', () => {
       const s = useSpeleoStore.getState();
       expect(s.heldLocks).toEqual([{ projectId: 'p1', projectName: 'Held' }]);
       expect(s.remoteLocks).toEqual({ p1: 'me@x' });
+      // The SpeleoDB project name is captured for the recents "SpeleoDB: {name}" label.
+      expect(s.remoteProjects).toEqual({ p1: 'Held' });
       expect(s.heldLockPromptNonce).toBe(1);
       // Consumed, so a later routine scan won't retro-prompt.
       expect(s.heldLockPromptPending).toBe(false);
@@ -419,10 +422,12 @@ describe('speleoStore', () => {
       useSpeleoStore.setState({
         session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false },
         remoteLocks: { p1: 'x' },
+        remoteProjects: { p1: 'Stale' },
       });
       await useSpeleoStore.getState().scanLocksOnOpen();
       const s = useSpeleoStore.getState();
       expect(s.remoteLocks).toEqual({});
+      expect(s.remoteProjects).toEqual({});
       expect(s.heldLocks).toBeNull();
       expect(s.heldLockPromptPending).toBe(false);
       expect(s.heldLockPromptNonce).toBe(0);

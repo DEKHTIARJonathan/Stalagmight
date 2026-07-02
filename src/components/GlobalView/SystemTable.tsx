@@ -19,6 +19,8 @@ interface SystemTableProps {
   sortDirection: RecentSortDirection;
   /** SpeleoDB lock state per project id, from the login/app-open scan (#201). */
   remoteLocks: Record<string, string | null>;
+  /** SpeleoDB project name per project id, from the same scan (#201). */
+  remoteProjects: Record<string, string>;
   /** Current user's email, to tell our own held lock from another's (#201). */
   myEmail: string | null;
   /** Toggle/apply sorting when a sortable column header is clicked. */
@@ -83,6 +85,7 @@ export function SystemTable({
   sortField,
   sortDirection,
   remoteLocks,
+  remoteProjects,
   myEmail,
   onSort,
   onSelect,
@@ -171,7 +174,7 @@ export function SystemTable({
           }
 
           const { project } = item;
-          const lock = resolveSpeleoLock(project, remoteLocks, myEmail);
+          const lock = resolveSpeleoLock(project, remoteLocks, myEmail, remoteProjects);
           const isSelected =
             multiSelectedIds.has(item.filePath) || selectedProjectId === item.filePath;
 
@@ -205,7 +208,7 @@ export function SystemTable({
                 {/* SpeleoDB projects show the mark + lock state instead of the local
                     path (irrelevant for a linked project, #201); local ones show it. */}
                 {lock.isRemote ? (
-                  <SpeleoRecentInfo info={lock} />
+                  <SpeleoRecentInfo info={lock} name={project.name} />
                 ) : (
                   <ElidedPath path={item.filePath} className="text-xs text-text-tertiary" />
                 )}

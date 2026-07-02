@@ -148,6 +148,7 @@ export default function GlobalView() {
   // (App owns the once-per-session guard). Best-effort + a no-op when logged out.
   const scanLocksOnOpen = useSpeleoStore((s) => s.scanLocksOnOpen);
   const remoteLocks = useSpeleoStore((s) => s.remoteLocks);
+  const remoteProjects = useSpeleoStore((s) => s.remoteProjects);
   const speleoEmail = useSpeleoStore((s) => s.session?.userEmail ?? null);
   const speleoLoggedIn = useSpeleoStore((s) => s.session?.loggedIn ?? false);
   useEffect(() => {
@@ -814,6 +815,7 @@ export default function GlobalView() {
                   sortField={recentSort.field}
                   sortDirection={recentSort.direction}
                   remoteLocks={remoteLocks}
+                  remoteProjects={remoteProjects}
                   myEmail={speleoEmail}
                   onSort={handleHeaderSort}
                   onSelect={handleProjectSelect}
@@ -834,7 +836,7 @@ export default function GlobalView() {
                         sectionCount={item.project.section_count}
                         totalLength={item.project.total_length}
                         isSelected={multiSelectedIds.has(item.filePath)}
-                        speleoLock={resolveSpeleoLock(item.project, remoteLocks, speleoEmail)}
+                        speleoLock={resolveSpeleoLock(item.project, remoteLocks, speleoEmail, remoteProjects)}
                         onSelect={(ctrlKey) => handleProjectSelect(item.filePath, ctrlKey)}
                         onContextMenu={(e) => handleContextMenu(e, item.filePath)}
                       />

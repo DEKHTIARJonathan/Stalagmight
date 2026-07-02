@@ -128,6 +128,13 @@ interface SpeleoStore {
    */
   remoteLocks: Record<string, string | null>;
   /**
+   * SpeleoDB project NAME per accessible project (`project_id` → server-side name),
+   * from the same login/app-open scan (#201). The recents list shows this
+   * ("SpeleoDB: {name}") in place of the local path, since the server name can
+   * differ from the local survey name. Empty until the first scan.
+   */
+  remoteProjects: Record<string, string>;
+  /**
    * Locks the current user holds, found by the scan (#201). Populates the
    * resume/release prompt's list; a login/app-open scan that finds any also bumps
    * `heldLockPromptNonce` to raise the prompt.
@@ -241,6 +248,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   divergence: null,
   banner: null,
   remoteLocks: {},
+  remoteProjects: {},
   heldLocks: null,
   heldLockPromptNonce: 0,
   heldLockPromptPending: true,
@@ -341,15 +349,17 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // Logged out: no badges, no prompt. Consume the app-open "pending" so a later
       // return-to-recents (still using the pending flag) can't retro-prompt; a
       // subsequent login re-arms the prompt via its explicit `prompt: true`.
-      set({ remoteLocks: {}, heldLocks: null, heldLockPromptPending: false });
+      set({ remoteLocks: {}, remoteProjects: {}, heldLocks: null, heldLockPromptPending: false });
       return;
     }
     try {
       const projects = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
       const remoteLocks: Record<string, string | null> = {};
+      const remoteProjects: Record<string, string> = {};
       const heldLocks: HeldLock[] = [];
       for (const p of projects) {
         remoteLocks[p.id] = p.lock_holder;
+        remoteProjects[p.id] = p.name;
         if (p.lock_holder && p.lock_holder.toLowerCase() === me) {
           heldLocks.push({ projectId: p.id, projectName: p.name });
         }
@@ -362,6 +372,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         const promptWorthy = opts?.prompt === true || state.heldLockPromptPending;
         return {
           remoteLocks,
+          remoteProjects,
           heldLocks: heldLocks.length > 0 ? heldLocks : null,
           heldLockPromptPending: false,
           ...(promptWorthy && heldLocks.length > 0
@@ -442,6 +453,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       banner: null,
       // The lock scan was for this now-ended session; drop its badges + prompt.
       remoteLocks: {},
+      remoteProjects: {},
       heldLocks: null,
     })),
 

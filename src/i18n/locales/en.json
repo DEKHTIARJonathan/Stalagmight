@@ -2749,7 +2749,7 @@
       "lockedByOther": "Linked to SpeleoDB - locked by {{email}}"
     },
     "recentInfo": {
-      "remote": "Linked to SpeleoDB",
+      "prefix": "SpeleoDB: {{name}}",
       "lockedByYou": "Locked by you",
       "lockedByOther": "Locked by {{email}}"
     },
