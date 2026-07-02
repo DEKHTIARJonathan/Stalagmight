@@ -148,6 +148,17 @@ pub async fn speleodb_release_all_locks(app: AppHandle) -> Result<(), SpeleoErro
     run_blocking(app, AppState::speleodb_release_all_locks).await
 }
 
+/// Release the write lock on ONE project by id (#201 per-project "Release" in the
+/// held-lock resume prompt). Targets an arbitrary held project, not necessarily
+/// the open one; on success the caller re-scans to refresh the recents badges.
+#[tauri::command]
+pub async fn speleodb_release_lock(
+    app: AppHandle,
+    project_id: String,
+) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_release_lock(project_id)).await
+}
+
 /// Set the open project's server-side `exclude_geojson` flag (#200
 /// Enable-rendering): `PATCH /projects/{id}/`, permission-gated, no lock. Passing
 /// `false` re-enables web-viewer GeoJSON, effective on the next push.

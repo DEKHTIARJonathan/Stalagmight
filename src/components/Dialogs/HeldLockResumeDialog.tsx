@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
@@ -11,8 +11,9 @@ import { DialogWrapper } from './DialogWrapper';
  * TTL, so a crashed/abandoned session leaves its write locks held. On login /
  * app-open a single `list_projects` scan finds the locks THIS user holds; if any,
  * this prompt offers to resolve them:
- * - **Release all locks** - `DELETE /user/release_all_locks/`, freeing them for
- *   other editors.
+ * - **Release** (per project) - `POST /projects/{id}/release/`, freeing that one
+ *   lock; releasing the last one auto-closes the prompt.
+ * - **Release all locks** - `DELETE /user/release_all_locks/`, freeing them all.
  * - **Keep working** - dismiss and leave the locks held (the user is still using
  *   them; the open project, if held, is already resumed into its editing state).
  * - Closing the dialog (X) is the "do nothing" exit - same as Keep working.
@@ -23,8 +24,19 @@ export default function HeldLockResumeDialog() {
   const showToast = useUIStore((s) => s.showToast);
   const heldLocks = useSpeleoStore((s) => s.heldLocks);
   const releaseAllLocks = useSpeleoStore((s) => s.releaseAllLocks);
+  const releaseLock = useSpeleoStore((s) => s.releaseLock);
   const clearHeldLocks = useSpeleoStore((s) => s.clearHeldLocks);
-  const [releasing, setReleasing] = useState(false);
+  // Which project id is being released one-off, or 'all' for the Release-all path.
+  const [releasing, setReleasing] = useState<string | null>(null);
+
+  const locks = heldLocks ?? [];
+  const busy = releasing !== null;
+
+  // Auto-close once the last lock is gone - releasing them one by one shrinks
+  // `heldLocks` in the store, and when it empties there is nothing left to resolve.
+  useEffect(() => {
+    if (locks.length === 0) closeDialog();
+  }, [locks.length, closeDialog]);
 
   // Keep / Do-nothing: leave the locks held and just dismiss the prompt.
   const keep = () => {
@@ -33,7 +45,7 @@ export default function HeldLockResumeDialog() {
   };
 
   const releaseAll = async () => {
-    setReleasing(true);
+    setReleasing('all');
     try {
       await releaseAllLocks();
       closeDialog();
@@ -44,11 +56,25 @@ export default function HeldLockResumeDialog() {
         'speleodb-release-all-error',
       );
     } finally {
-      setReleasing(false);
+      setReleasing(null);
     }
   };
 
-  const locks = heldLocks ?? [];
+  const releaseOne = async (projectId: string) => {
+    setReleasing(projectId);
+    try {
+      // On success the store drops this lock from `heldLocks`; the effect above
+      // closes the dialog when the last one goes.
+      await releaseLock(projectId);
+    } catch (e) {
+      showToast(
+        humanizeSpeleoError(e, t('speleodb.heldLocks.releaseFailed')),
+        'speleodb-release-one-error',
+      );
+    } finally {
+      setReleasing(null);
+    }
+  };
 
   return (
     <DialogWrapper
@@ -66,25 +92,37 @@ export default function HeldLockResumeDialog() {
           {locks.map((lock) => (
             <li
               key={lock.projectId}
-              className="px-3 py-2 text-sm text-text-primary"
+              className="flex items-center justify-between gap-3 px-3 py-2 text-sm text-text-primary"
               data-testid={`speleodb-held-lock-${lock.projectId}`}
             >
-              {lock.projectName}
+              <span className="min-w-0 truncate">{lock.projectName}</span>
+              <button
+                type="button"
+                onClick={() => void releaseOne(lock.projectId)}
+                disabled={busy}
+                className="shrink-0 text-xs text-danger hover:underline disabled:opacity-50 disabled:no-underline"
+                aria-label={t('speleodb.heldLocks.releaseOneAria', { name: lock.projectName })}
+                data-testid={`speleodb-held-lock-release-${lock.projectId}`}
+              >
+                {releasing === lock.projectId
+                  ? t('speleodb.heldLocks.releasing')
+                  : t('speleodb.heldLocks.release')}
+              </button>
             </li>
           ))}
         </ul>
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={keep} disabled={releasing} data-testid="speleodb-held-lock-keep">
+          <Button onClick={keep} disabled={busy} data-testid="speleodb-held-lock-keep">
             {t('speleodb.heldLocks.keep')}
           </Button>
           <Button
             variant="danger"
             onClick={() => void releaseAll()}
-            disabled={releasing}
+            disabled={busy}
             data-testid="speleodb-held-lock-release-all"
           >
-            {releasing
+            {releasing === 'all'
               ? t('speleodb.heldLocks.releasing')
               : t('speleodb.heldLocks.releaseAll')}
           </Button>

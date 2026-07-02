@@ -3698,6 +3698,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'speleodb_logout':
           case 'speleodb_unlink':
           case 'speleodb_release_all_locks':
+          case 'speleodb_release_lock':
           case 'speleodb_set_exclude_geojson':
             return null;
           case 'speleodb_login':

@@ -9,7 +9,7 @@ import {
 import { ElidedPath, Tooltip } from '../common';
 import { setProjectActionSource } from '../../utils/telemetry';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
-import { SpeleoLockBadge, type SpeleoLockInfo } from './SpeleoLockBadge';
+import { SpeleoRecentInfo, type SpeleoLockInfo } from './SpeleoLockBadge';
 
 interface SystemCardProps {
   name: string;
@@ -116,18 +116,23 @@ export default function SystemCard({
         }
       }}
     >
-      <div className="flex items-start justify-between gap-2 mb-1">
-        <h3 className="text-lg font-medium">{name}</h3>
-        {speleoLock && <SpeleoLockBadge {...speleoLock} />}
-      </div>
+      <h3 className="text-lg font-medium mb-1">{name}</h3>
       {location && (
         <p className="text-sm text-text-secondary mb-1">{location}</p>
       )}
-      <ElidedPath
-        path={filePath}
-        className="text-xs text-text-tertiary mb-3"
-        data-testid="system-card-path"
-      />
+      {/* SpeleoDB projects show the mark + lock state instead of the local path
+          (irrelevant for a linked project, #201); local ones show the path. */}
+      {speleoLock?.isRemote ? (
+        <div className="mb-3" data-testid="system-card-path">
+          <SpeleoRecentInfo info={speleoLock} />
+        </div>
+      ) : (
+        <ElidedPath
+          path={filePath}
+          className="text-xs text-text-tertiary mb-3"
+          data-testid="system-card-path"
+        />
+      )}
 
       <div className="grid grid-cols-2 gap-2 text-sm">
         <div>

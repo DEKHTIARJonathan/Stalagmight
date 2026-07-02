@@ -1345,6 +1345,33 @@ impl AppState {
         Ok(())
     }
 
+    /// Release the write lock on ONE project by id (#201 per-project "Release" in
+    /// the held-lock resume prompt). Unlike [`Self::speleodb_done`] this targets an
+    /// arbitrary held project (not necessarily the open one) and neither pushes nor
+    /// touches the open project's edit state - EXCEPT when the released lock is the
+    /// open project's own, in which case the edit gate is dropped so the shell falls
+    /// back to read-only (mirrors [`Self::speleodb_release_all_locks`]).
+    pub(crate) fn speleodb_release_lock(&self, project_id: String) -> Result<(), SpeleoErrorDto> {
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+        self.speleodb_handle_auth(
+            Endpoint::Release,
+            client::release_lock(&endpoint, &token, insecure_http, &project_id),
+        )
+        .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
+        // If we just released the OPEN project's own lock, drop the edit gate so the
+        // shell falls back to read-only; releasing some other project's lock leaves
+        // the open project untouched.
+        if self.edit_enabled()
+            && self
+                .speleodb_open_link()
+                .is_ok_and(|l| l.project_id == project_id)
+        {
+            self.set_edit_enabled(false);
+        }
+        Ok(())
+    }
+
     /// Set the open project's server-side `exclude_geojson` flag (#200
     /// Enable-rendering): `PATCH /projects/{id}/`. The server enforces permission
     /// (READ_AND_WRITE) and NO lock is required - the edit mutex governs only the

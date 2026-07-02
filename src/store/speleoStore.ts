@@ -128,10 +128,24 @@ interface SpeleoStore {
    */
   remoteLocks: Record<string, string | null>;
   /**
-   * Locks the current user holds, found by the scan (#201). Non-empty raises the
-   * held-lock resume/release prompt (resolve abandoned/crashed locks: no server TTL).
+   * Locks the current user holds, found by the scan (#201). Populates the
+   * resume/release prompt's list; a login/app-open scan that finds any also bumps
+   * `heldLockPromptNonce` to raise the prompt.
    */
   heldLocks: HeldLock[] | null;
+  /**
+   * Bumped when a PROMPT-worthy scan (login, or the first app-open scan) finds
+   * held locks. App watches it to open the resume/release prompt exactly on those
+   * events - never on a routine badge refresh (returning to recents, the refresh
+   * button), which is what makes the prompt stop re-appearing on every visit.
+   */
+  heldLockPromptNonce: number;
+  /**
+   * True until the first lock scan of the app session runs. Lets that first scan
+   * count as PROMPT-worthy ("application first started") without a second GET,
+   * then it stays false so later badge refreshes don't re-prompt.
+   */
+  heldLockPromptPending: boolean;
   /**
    * Bumped after a hand-off verb to restart the status poll timer, so the next
    * poll is a full (≥30 s) interval away - a buffer that avoids re-reading a
@@ -158,11 +172,17 @@ interface SpeleoStore {
   // --- lock scan on login/app-open (#201, B1) ---
   /** One `list_projects` GET resolves lock state for ALL accessible projects:
       populates `remoteLocks` (badges) + `heldLocks` (the resume/release prompt).
-      Best-effort; a logged-out / offline scan clears both. */
-  scanLocksOnOpen: () => Promise<void>;
+      `prompt: true` (login) forces a prompt-worthy scan; the first app-open scan is
+      prompt-worthy via `heldLockPromptPending`. Best-effort; a logged-out / offline
+      scan clears the badges. */
+  scanLocksOnOpen: (opts?: { prompt?: boolean }) => Promise<void>;
   /** Release EVERY lock this user holds (the prompt's "Release all"); on success
       clears `heldLocks`, re-scans, and refreshes the open project's link status. */
   releaseAllLocks: () => Promise<void>;
+  /** Release ONE held lock by project id (the prompt's per-project "Release"); on
+      success drops it from `heldLocks`, marks it free in `remoteLocks`, and refreshes
+      the open project's link status. Throws on failure so the prompt can surface it. */
+  releaseLock: (projectId: string) => Promise<void>;
   /** Dismiss the held-lock prompt without a server call (Do nothing / keep working). */
   clearHeldLocks: () => void;
 
@@ -222,6 +242,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   banner: null,
   remoteLocks: {},
   heldLocks: null,
+  heldLockPromptNonce: 0,
+  heldLockPromptPending: true,
   pollNonce: 0,
   busy: false,
   pendingAuth: null,
@@ -252,8 +274,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         set({ pendingAuth: null, authError: null });
         get().setSessionFromLogin(r);
         // #201: a fresh login is an "on login" scan point - surface any locks this
-        // user left held (and prime the recents badges). Best-effort, non-blocking.
-        void get().scanLocksOnOpen();
+        // user left held (and prime the recents badges). `prompt: true` so it raises
+        // the resume/release prompt even after the app-open scan already ran.
+        void get().scanLocksOnOpen({ prompt: true });
       }
       return { ok: true };
     } catch (error) {
@@ -308,14 +331,17 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     }
   },
 
-  scanLocksOnOpen: async () => {
+  scanLocksOnOpen: async (opts) => {
     // Ensure we know who we are before filtering held-by-me: on the app-open home
     // screen the frontend session may be cold even though the backend holds a
     // rehydrated token (which list_projects uses).
     if (!get().session) await get().refreshSession();
     const me = get().session?.userEmail?.toLowerCase();
     if (!get().session?.loggedIn || !me) {
-      set({ remoteLocks: {}, heldLocks: null });
+      // Logged out: no badges, no prompt. Consume the app-open "pending" so a later
+      // return-to-recents (still using the pending flag) can't retro-prompt; a
+      // subsequent login re-arms the prompt via its explicit `prompt: true`.
+      set({ remoteLocks: {}, heldLocks: null, heldLockPromptPending: false });
       return;
     }
     try {
@@ -328,7 +354,21 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           heldLocks.push({ projectId: p.id, projectName: p.name });
         }
       }
-      set({ remoteLocks, heldLocks: heldLocks.length > 0 ? heldLocks : null });
+      set((state) => {
+        // Prompt on an explicit login/app-open scan (`prompt`), or on the FIRST scan
+        // of the session (`heldLockPromptPending`) - never on a routine badge refresh
+        // (returning to recents, the refresh button). That is what stops the prompt
+        // re-appearing on every recents visit while still firing on login + app-start.
+        const promptWorthy = opts?.prompt === true || state.heldLockPromptPending;
+        return {
+          remoteLocks,
+          heldLocks: heldLocks.length > 0 ? heldLocks : null,
+          heldLockPromptPending: false,
+          ...(promptWorthy && heldLocks.length > 0
+            ? { heldLockPromptNonce: state.heldLockPromptNonce + 1 }
+            : {}),
+        };
+      });
     } catch {
       // Best-effort: keep prior badges and never raise a prompt on a failed scan.
     }
@@ -340,6 +380,23 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     await invokeIpc<null>('speleodb_release_all_locks');
     set({ heldLocks: null });
     await get().scanLocksOnOpen();
+    await get().refreshLinkStatus();
+  },
+
+  releaseLock: async (projectId) => {
+    // Throws on failure so the dialog keeps itself open and surfaces the error.
+    await invokeIpc<null>('speleodb_release_lock', { projectId });
+    // Optimistic local update (avoids a full re-scan per release when the user frees
+    // several one by one): drop this lock from the prompt's list and mark the project
+    // free in the badge map. `heldLocks` going empty is what auto-closes the dialog.
+    set((state) => {
+      const heldLocks = (state.heldLocks ?? []).filter((l) => l.projectId !== projectId);
+      return {
+        heldLocks: heldLocks.length > 0 ? heldLocks : null,
+        remoteLocks: { ...state.remoteLocks, [projectId]: null },
+      };
+    });
+    // If we just freed the OPEN project's own lock, re-seed its status indicator.
     await get().refreshLinkStatus();
   },
 

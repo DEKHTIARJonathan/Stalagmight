@@ -9,7 +9,7 @@ import { ElidedPath, Tooltip, ChevronUpIcon, ChevronDownIcon } from '../common';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
 import type { RecentListItem } from './recentListItems';
 import type { RecentSortField, RecentSortDirection } from './useRecentSort';
-import { SpeleoLockBadge, resolveSpeleoLock } from './SpeleoLockBadge';
+import { SpeleoRecentInfo, resolveSpeleoLock } from './SpeleoLockBadge';
 
 interface SystemTableProps {
   items: RecentListItem[];
@@ -171,6 +171,7 @@ export function SystemTable({
           }
 
           const { project } = item;
+          const lock = resolveSpeleoLock(project, remoteLocks, myEmail);
           const isSelected =
             multiSelectedIds.has(item.filePath) || selectedProjectId === item.filePath;
 
@@ -195,19 +196,19 @@ export function SystemTable({
               }}
             >
               <td className={`${cellClass} font-medium`}>
-                <span className="inline-flex items-center gap-2">
-                  <SpeleoLockBadge
-                    {...resolveSpeleoLock(project, remoteLocks, myEmail)}
-                    size={16}
-                  />
-                  <span>{project.name}</span>
-                </span>
+                <span>{project.name}</span>
                 {project.location && (
                   <span className="text-text-secondary"> · {project.location}</span>
                 )}
               </td>
               <td className={cellClass}>
-                <ElidedPath path={item.filePath} className="text-xs text-text-tertiary" />
+                {/* SpeleoDB projects show the mark + lock state instead of the local
+                    path (irrelevant for a linked project, #201); local ones show it. */}
+                {lock.isRemote ? (
+                  <SpeleoRecentInfo info={lock} />
+                ) : (
+                  <ElidedPath path={item.filePath} className="text-xs text-text-tertiary" />
+                )}
               </td>
               <td className={`${cellClass} text-right tabular-nums`}>{formatNumber(project.section_count)}</td>
               <td className={`${cellClass} text-right tabular-nums`}>{formatLength(project.total_length)}</td>

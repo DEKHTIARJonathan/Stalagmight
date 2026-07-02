@@ -45,6 +45,7 @@ type ButtonKind =
 export function SpeleoStatusButton() {
   const { t } = useTranslation();
   const link = useSpeleoStore((s) => s.link);
+  const loggedIn = useSpeleoStore((s) => s.session?.loggedIn ?? false);
   const divergence = useSpeleoStore((s) => s.divergence);
   const pollNonce = useSpeleoStore((s) => s.pollNonce);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
@@ -82,6 +83,25 @@ export function SpeleoStatusButton() {
   // re-armed on return to Survey; the first poll is then up to one interval out, so
   // a status change that landed while away surfaces on the next tick.
   if (!link || appMode !== 'survey') return null;
+
+  // Logged out: every lock action needs a token (the backend gate would reject the
+  // acquire anyway), so present the mark grayed + inert and point the user at login
+  // via the tooltip, rather than a live "Start editing" that can only fail (#201).
+  if (!loggedIn) {
+    return (
+      <button
+        type="button"
+        disabled
+        title={t('speleodb.button.loggedOut')}
+        aria-label={t('speleodb.button.loggedOut')}
+        data-testid="speleodb-status-button"
+        data-kind="logged_out"
+        className="flex items-center justify-center w-8 h-8 rounded ml-1 opacity-40 cursor-not-allowed"
+      >
+        <SpeleoBadgedIcon badge={<LockIcon size={10} />} badgeColor="text-text-secondary" size={20} />
+      </button>
+    );
+  }
 
   // `editState === 'editing'` is the single source of truth for "we hold the lock
   // and may edit" (the backend enforces hold-lock ⟹ edit-enabled). `lockedByOther`

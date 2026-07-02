@@ -91,3 +91,35 @@ export function SpeleoLockBadge({
     </Tooltip>
   );
 }
+
+/**
+ * Recents PATH-slot content for a SpeleoDB project (#201). The local file path is
+ * irrelevant for a linked project, so in its place we show the SpeleoDB mark plus
+ * the lock state - "Locked by you" / "Locked by {email}" when held, else "Linked to
+ * SpeleoDB". Returns `null` for a local project (the caller shows the path instead).
+ * The last-edited time is not repeated here - it has its own column / card footer.
+ */
+export function SpeleoRecentInfo({
+  info,
+  size = 16,
+}: {
+  info: SpeleoLockInfo;
+  size?: number;
+}) {
+  const { t } = useTranslation();
+  if (!info.isRemote) return null;
+  const label = info.lockedByMe
+    ? t('speleodb.recentInfo.lockedByYou')
+    : info.lockHolder
+      ? t('speleodb.recentInfo.lockedByOther', { email: info.lockHolder })
+      : t('speleodb.recentInfo.remote');
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 min-w-0 text-xs text-text-tertiary"
+      data-testid="speleo-recent-info"
+    >
+      <SpeleoLockBadge {...info} size={size} />
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}

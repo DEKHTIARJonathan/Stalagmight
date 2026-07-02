@@ -71,18 +71,17 @@ function App() {
     }
   }, [speleoDivergence, openDialog]);
 
-  // #201 (B1): the login/app-open lock scan found write locks THIS user still holds
-  // (from a crashed/abandoned session). Surface the resume/release prompt ONCE per
-  // app session - a ref guard stops a later re-scan (which refreshes the recents
-  // badges) from re-opening it on top of whatever the user is now doing.
-  const heldLocks = useSpeleoStore((s) => s.heldLocks);
-  const heldLockPromptShown = useRef(false);
+  // #201 (B1): surface the held-lock resume/release prompt only on the events that
+  // warrant it - a fresh login and the first app-open scan - NOT on every return to
+  // recents. The store bumps `heldLockPromptNonce` exactly on those prompt-worthy
+  // scans (when this user actually holds locks); routine badge refreshes leave it
+  // untouched, so they never re-open the prompt on top of whatever the user is doing.
+  const heldLockPromptNonce = useSpeleoStore((s) => s.heldLockPromptNonce);
   useEffect(() => {
-    if (heldLocks && heldLocks.length > 0 && !heldLockPromptShown.current) {
-      heldLockPromptShown.current = true;
+    if (heldLockPromptNonce > 0) {
       openDialog('held-lock-resume');
     }
-  }, [heldLocks, openDialog]);
+  }, [heldLockPromptNonce, openDialog]);
 
   // Apply theme from config (resolves auto mode, sets data-theme attribute)
   useTheme();
