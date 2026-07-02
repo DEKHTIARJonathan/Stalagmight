@@ -82,7 +82,11 @@ export const COUNTRY_BOUNDS: readonly CountryBounds[] = [
   ['AL', 39.6, 42.7, 19.3, 21.1],
   ['MK', 40.9, 42.4, 20.4, 23.0],
   ['GR', 34.8, 41.8, 19.4, 28.3],
-  ['XK', 42.0, 43.3, 20.0, 21.8],
+  // No 'XK' (Kosovo): it is absent from `data/countries.ts` (the publishable
+  // country set), so emitting it would set the Publish <select> to a value with no
+  // matching <option>. A datum here falls through to the nearest neighbour box
+  // (RS/AL/MK/ME) instead - user-correctable, and never an unpublishable code. A
+  // unit test pins every COUNTRY_BOUNDS code to COUNTRIES so this cannot regress.
   ['HU', 45.7, 48.6, 16.1, 22.9],
   ['SK', 47.7, 49.6, 16.8, 22.6],
   ['CZ', 48.5, 51.1, 12.1, 18.9],

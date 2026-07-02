@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { reverseGeocodeCountry } from './reverseGeocodeCountry';
+import { COUNTRY_BOUNDS } from '../data/countryBounds';
+import { COUNTRIES } from '../data/countries';
 
 describe('reverseGeocodeCountry', () => {
   it('resolves interior points to the right country', () => {
@@ -35,5 +37,14 @@ describe('reverseGeocodeCountry', () => {
     // A point clearly inside Belgium but also within the looser NL/DE boxes
     // should still resolve to BE (its tight box centre is nearer). Brussels.
     expect(reverseGeocodeCountry(50.85, 4.35)).toBe('BE');
+  });
+
+  it('only ever returns a code the Publish country dropdown can display', () => {
+    // Every bounding-box code MUST exist in COUNTRIES, or the prefill would set the
+    // <select> to a value with no matching <option> (e.g. Kosovo XK, dropped for
+    // exactly this reason). This pins the two tables together so they cannot drift.
+    const publishable = new Set(COUNTRIES.map((c) => c.code));
+    const orphans = COUNTRY_BOUNDS.map(([code]) => code).filter((code) => !publishable.has(code));
+    expect(orphans).toEqual([]);
   });
 });
