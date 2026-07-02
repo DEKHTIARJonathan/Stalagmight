@@ -1563,4 +1563,207 @@ mod live_tests {
             eprintln!("cleanup: failed to release lock: {e:?}");
         }
     }
+
+    /// #202: the lazy lock re-verify (`speleodb_verify_lock_if_expired`) branches on
+    /// exactly one field of the single-project GET - `active_mutex.user` (is the lock
+    /// still ours? via `lock_held_by_me`). This pins that both `client::get_project`
+    /// and the short-budget `client::get_project_probe` surface it against the live
+    /// box: while we hold the mutex it names us as the holder; after we release,
+    /// `active_mutex` goes ABSENT - the lost-lock signal that drops the edit gate and
+    /// routes the user to the divergence prompt. (#202 no longer compares the server
+    /// tip: `latest_commit` is `max(authored_date)` and documented unreliable as a
+    /// tip, see `speleodb_server_head`, so the holder check is the whole signal.)
+    #[test]
+    #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
+    #[expect(
+        clippy::expect_used,
+        clippy::print_stderr,
+        reason = "ignored live integration test"
+    )]
+    fn live_get_project_reflects_holder_and_tip() {
+        let Some((url, email, password)) = live_env() else {
+            eprintln!(
+                "skipping live_get_project_reflects_holder_and_tip: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
+            );
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let my_email = client::fetch_user_email(&url, &token, false).expect("whoami");
+        let (cleanup, fixture, tml_dir) = seed_and_acquire(&url, &token);
+        let tml_sidecar = tml_dir.path().join("ariane.tml");
+        std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
+
+        // Land a commit, then GET the single project while still locked.
+        client::upload_auto(
+            &url,
+            &token,
+            false,
+            &cleanup.id,
+            &fixture,
+            &tml_sidecar,
+            "live get_project reverify test",
+        )
+        .expect("seed upload");
+
+        // Lock still ours: the short-budget probe the re-verify actually uses names
+        // us as the holder. This is the "still ours" path the re-verify allows.
+        let held = client::get_project_probe(&url, &token, false, &cleanup.id)
+            .expect("get_project_probe while we hold the mutex");
+        let holder = held
+            .active_mutex
+            .as_ref()
+            .map(|m| m.user.as_str())
+            .expect("active_mutex must name the lock holder while we hold it");
+        assert!(
+            holder.eq_ignore_ascii_case(&my_email),
+            "get_project must report us as the lock holder: {holder} vs {my_email}"
+        );
+
+        // Release, then GET again: active_mutex goes ABSENT. `lock_held_by_me(None,
+        // _)` is false - exactly the lost-lock signal #202 turns into a divergence
+        // prompt.
+        client::release_lock(&url, &token, false, &cleanup.id).expect("release mutex");
+        let freed = client::get_project(&url, &token, false, &cleanup.id)
+            .expect("get_project after releasing the mutex");
+        assert!(
+            freed.active_mutex.is_none(),
+            "after release, get_project active_mutex must be absent (the lost-lock signal), got: {:?}",
+            freed.active_mutex
+        );
+    }
+
+    /// #201: the held-lock resume/release prompt's "Release all" choice calls
+    /// `client::release_all_locks`, which must drop EVERY write lock this token
+    /// holds in one request, and be safe to repeat (the client marks it idempotent
+    /// so a transient-transport retry can't error). Hold the mutex on two throwaway
+    /// projects, release all, and assert both are freed via get_project; then call
+    /// again and assert the empty-handed no-op still succeeds.
+    ///
+    /// NOTE: this releases ALL locks held by the configured test account, so run it
+    /// only against the throwaway dev box - it will also drop any unrelated lock the
+    /// same account happens to hold (matching the one-session-per-account rule in
+    /// docs/speleodb-dev-testing.md).
+    #[test]
+    #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
+    #[expect(
+        clippy::expect_used,
+        clippy::print_stderr,
+        reason = "ignored live integration test"
+    )]
+    fn live_release_all_locks_releases_held() {
+        let Some((url, email, password)) = live_env() else {
+            eprintln!(
+                "skipping live_release_all_locks_releases_held: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
+            );
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+
+        // Two throwaway projects, both locked by us, so "release ALL" is meaningful.
+        let name_a = format!("stalagmight-relall-a-{}", uuid::Uuid::new_v4());
+        let id_a = client::create_project(&url, &token, false, &name_a)
+            .expect("create project A")
+            .id;
+        let cleanup_a = ProjectCleanup {
+            url: &url,
+            token: &token,
+            id: id_a,
+        };
+        client::acquire_lock(&url, &token, false, &cleanup_a.id).expect("acquire mutex A");
+
+        let name_b = format!("stalagmight-relall-b-{}", uuid::Uuid::new_v4());
+        let id_b = client::create_project(&url, &token, false, &name_b)
+            .expect("create project B")
+            .id;
+        let cleanup_b = ProjectCleanup {
+            url: &url,
+            token: &token,
+            id: id_b,
+        };
+        client::acquire_lock(&url, &token, false, &cleanup_b.id).expect("acquire mutex B");
+
+        // One request drops both locks.
+        client::release_all_locks(&url, &token, false).expect("release_all_locks");
+
+        for id in [&cleanup_a.id, &cleanup_b.id] {
+            let project = client::get_project(&url, &token, false, id)
+                .expect("get_project after release_all_locks");
+            assert!(
+                project.active_mutex.is_none(),
+                "release_all_locks must clear the mutex on {id}, still held: {:?}",
+                project.active_mutex
+            );
+        }
+
+        // Idempotent: with nothing held, a second call is a no-op that still succeeds.
+        client::release_all_locks(&url, &token, false)
+            .expect("release_all_locks must be a safe no-op when no locks are held");
+    }
+
+    /// #200: the "Enable rendering" action PATCHes `exclude_geojson = false` via
+    /// `client::patch_project`. Pin that the field is genuinely writable on the
+    /// live box and round-trips: flip it to `true`, confirm both the PATCH response
+    /// and a follow-up GET report `true`, then flip it back to `false` (the shipped
+    /// action) and confirm the cleared state. No lock is taken - the server gates
+    /// the metadata PATCH on write permission, not the mutex.
+    #[test]
+    #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
+    #[expect(
+        clippy::expect_used,
+        clippy::print_stderr,
+        reason = "ignored live integration test"
+    )]
+    fn live_patch_exclude_geojson_roundtrips() {
+        let Some((url, email, password)) = live_env() else {
+            eprintln!(
+                "skipping live_patch_exclude_geojson_roundtrips: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
+            );
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let name = format!("stalagmight-excljson-{}", uuid::Uuid::new_v4());
+        let project_id = client::create_project(&url, &token, false, &name)
+            .expect("create project")
+            .id;
+        let cleanup = ProjectCleanup {
+            url: &url,
+            token: &token,
+            id: project_id,
+        };
+
+        // Flip rendering OFF: the PATCH response reflects the new value...
+        let patched = client::patch_project(
+            &url,
+            &token,
+            false,
+            &cleanup.id,
+            r#"{"exclude_geojson": true}"#,
+        )
+        .expect("patch exclude_geojson = true");
+        assert!(
+            patched.exclude_geojson,
+            "PATCH response must carry exclude_geojson = true"
+        );
+        // ...and it persists (a fresh GET sees it).
+        let after = client::get_project(&url, &token, false, &cleanup.id)
+            .expect("get_project after the exclude_geojson PATCH");
+        assert!(
+            after.exclude_geojson,
+            "get_project must report the persisted exclude_geojson = true"
+        );
+
+        // The shipped Enable-rendering action: flip it back to false.
+        let re_enabled = client::patch_project(
+            &url,
+            &token,
+            false,
+            &cleanup.id,
+            r#"{"exclude_geojson": false}"#,
+        )
+        .expect("patch exclude_geojson = false (Enable rendering)");
+        assert!(
+            !re_enabled.exclude_geojson,
+            "Enable-rendering PATCH must clear exclude_geojson"
+        );
+    }
 }

@@ -7,11 +7,13 @@ import type {
   SpeleoErrorDto,
   SpeleoLinkStatus,
   SpeleoLoginResult,
+  SpeleoProjectSummary,
   SpeleoSessionStatus,
   StartEditingResult,
   UpdateResult,
 } from '../types/ipc.generated';
 import { invokeIpc } from '../utils/ipc';
+import { emailsMatch } from '../utils/email';
 import { useProjectStore } from './projectStore';
 
 /**
@@ -30,11 +32,27 @@ import { useProjectStore } from './projectStore';
 /** A remote project is either opened read-only or actively edited (lock held). */
 export type SpeleoEditState = 'read-only' | 'editing';
 
-/** Which hand-off verb hit a divergence that needs the reconcile prompt (#198). */
-export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push';
+/** Which hand-off verb hit a divergence that needs the reconcile prompt (#198).
+    `reverify` is the lazy 20-min lock re-verify (#202) catching a lost lock /
+    moved tip mid-edit-session. */
+export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push' | 'reverify';
 
-/** Transient banner the shell surfaces above the toolbar (#200 seam). */
-export type SpeleoBanner = { kind: 'push_unconfirmed' } | { kind: 'concurrent_session' };
+/** A banner the shell surfaces above the toolbar (#200/#204). `push_unconfirmed`
+    and `concurrent_session` are transient action feedback; `rendering_disabled`
+    (server `exclude_geojson`) and `no_anchor` (no georeferenced zero datum on
+    push/unlock) are the #200 non-blocking notices. */
+export type SpeleoBanner =
+  | { kind: 'push_unconfirmed' }
+  | { kind: 'concurrent_session' }
+  | { kind: 'rendering_disabled' }
+  | { kind: 'no_anchor' };
+
+/** A SpeleoDB project whose write lock the current user holds, surfaced by the
+    login/app-open scan so the resume/release prompt can offer to release it (#201). */
+export interface HeldLock {
+  projectId: string;
+  projectName: string;
+}
 
 export interface SpeleoSession {
   loggedIn: boolean;
@@ -104,6 +122,42 @@ interface SpeleoStore {
   /** Transient banner (#200 seam). */
   banner: SpeleoBanner | null;
   /**
+   * Lock holder per accessible SpeleoDB project (`project_id` → holder email, or
+   * `null` = free), from the single login/app-open `list_projects` scan (#201).
+   * Overlays lock badges onto the recents / GlobalView list; empty until the first
+   * scan (logged out / offline).
+   */
+  remoteLocks: Record<string, string | null>;
+  /**
+   * SpeleoDB project NAME per accessible project (`project_id` → server-side name),
+   * from the same login/app-open scan (#201). The recents list shows this
+   * ("SpeleoDB: {name}") in place of the local path, since the server name can
+   * differ from the local survey name. Empty until the first scan.
+   */
+  remoteProjects: Record<string, string>;
+  /**
+   * Locks the current user holds, found by the scan (#201). Populates the
+   * resume/release prompt's list; a login/app-open scan that finds any also bumps
+   * `heldLockPromptNonce` to raise the prompt.
+   */
+  heldLocks: HeldLock[] | null;
+  /**
+   * Visibility of the held-lock resume/release prompt. Set true only by a
+   * PROMPT-worthy scan (login, or the first app-open scan) that finds held locks -
+   * never by a routine badge refresh (returning to recents, the refresh button),
+   * which is what stops it re-appearing on every visit. App renders the prompt as
+   * an independent overlay keyed off this (NOT via the single `activeDialog` slot),
+   * so it layers OVER an open dialog (e.g. Settings during an inline login) instead
+   * of replacing it - the underlying dialog stays mounted and intact.
+   */
+  heldLockPromptOpen: boolean;
+  /**
+   * True until the first lock scan of the app session runs. Lets that first scan
+   * count as PROMPT-worthy ("application first started") without a second GET,
+   * then it stays false so later badge refreshes don't re-prompt.
+   */
+  heldLockPromptPending: boolean;
+  /**
    * Bumped after a hand-off verb to restart the status poll timer, so the next
    * poll is a full (≥30 s) interval away - a buffer that avoids re-reading a
    * server mutex that hasn't reflected our just-issued release yet (1b).
@@ -125,6 +179,26 @@ interface SpeleoStore {
   /** Query `speleodb_session` and set it (best-effort; runs on project load so the
       action button knows who we are - e.g. to tell our own lock from another's). */
   refreshSession: () => Promise<void>;
+
+  // --- lock scan on login/app-open (#201, B1) ---
+  /** One `list_projects` GET resolves lock state for ALL accessible projects:
+      populates `remoteLocks` (badges) + `heldLocks` (the resume/release prompt).
+      `prompt: true` (login) forces a prompt-worthy scan; the first app-open scan is
+      prompt-worthy via `heldLockPromptPending`. Best-effort; a logged-out / offline
+      scan clears the badges. */
+  scanLocksOnOpen: (opts?: { prompt?: boolean }) => Promise<void>;
+  /** Release EVERY lock this user holds (the prompt's "Release all"); on success
+      clears `heldLocks`, re-scans, and refreshes the open project's link status. */
+  releaseAllLocks: () => Promise<void>;
+  /** Release ONE held lock by project id (the prompt's per-project "Release"); on
+      success drops it from `heldLocks`, marks it free in `remoteLocks`, and refreshes
+      the open project's link status. Throws on failure so the prompt can surface it. */
+  releaseLock: (projectId: string) => Promise<void>;
+  /** Dismiss the held-lock prompt without a server call (Do nothing / keep working). */
+  clearHeldLocks: () => void;
+  /** Hide the held-lock prompt overlay (its close paths use this, NOT the shared
+      `closeDialog`, so it never closes the dialog it is layered over). */
+  closeHeldLockPrompt: () => void;
 
   // --- staged account actions (Settings #205, A2/A3) ---
   /** The login/logout the user staged; applied on the dialog's Save. */
@@ -157,6 +231,21 @@ interface SpeleoStore {
 
   // --- seams ---
   clearDivergence: () => void;
+  /**
+   * #202: the lazy 20-min re-verify blocked an edit because the write lock was
+   * lost or the server tip moved. Drop the shell to read-only + conflict (the
+   * backend already dropped its edit gate) and raise the divergence prompt.
+   */
+  notifyReverifyDivergence: () => void;
+  /** #200: after a push/unlock of a project with no georeferenced zero datum, note
+      (non-blocking) that the server generated no new map GeoJSON. Only claims a free
+      banner slot - never clobbers transient action feedback. */
+  raiseNoAnchorBanner: () => void;
+  /** #200 Enable-rendering: PATCH `exclude_geojson = false` so the server resumes
+      web-viewer GeoJSON on the NEXT push (not retroactively). Clears the
+      rendering-disabled banner and re-seeds link status. Throws on failure so the
+      banner can surface it. */
+  enableRendering: () => Promise<void>;
   dismissBanner: () => void;
 }
 
@@ -165,6 +254,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   link: null,
   divergence: null,
   banner: null,
+  remoteLocks: {},
+  remoteProjects: {},
+  heldLocks: null,
+  heldLockPromptOpen: false,
+  heldLockPromptPending: true,
   pollNonce: 0,
   busy: false,
   pendingAuth: null,
@@ -194,6 +288,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         });
         set({ pendingAuth: null, authError: null });
         get().setSessionFromLogin(r);
+        // #201: a fresh login is an "on login" scan point - surface any locks this
+        // user left held (and prime the recents badges). `prompt: true` so it raises
+        // the resume/release prompt even after the app-open scan already ran.
+        void get().scanLocksOnOpen({ prompt: true });
       }
       return { ok: true };
     } catch (error) {
@@ -248,6 +346,95 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     }
   },
 
+  scanLocksOnOpen: async (opts) => {
+    // Ensure we know who we are before filtering held-by-me: on the app-open home
+    // screen the frontend session may be cold even though the backend holds a
+    // rehydrated token (which list_projects uses).
+    if (!get().session) await get().refreshSession();
+    const me = get().session?.userEmail?.toLowerCase();
+    if (!get().session?.loggedIn || !me) {
+      // Logged out: no badges, no prompt. Also force the overlay shut (not just its
+      // pending flag) so a prompt open when the session ended can't linger. Consume
+      // the app-open "pending" so a later return-to-recents (still using the pending
+      // flag) can't retro-prompt; a subsequent login re-arms via its `prompt: true`.
+      set({
+        remoteLocks: {},
+        remoteProjects: {},
+        heldLocks: null,
+        heldLockPromptPending: false,
+        heldLockPromptOpen: false,
+      });
+      return;
+    }
+    try {
+      const projects = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
+      // Staleness guard: a logout / account switch can land while the list_projects
+      // GET is in flight. Bail if the session moved so we never repaint the ended
+      // session's badges or re-raise its prompt (mirrors refreshLinkStatus's guard).
+      if (!get().session?.loggedIn || get().session?.userEmail?.toLowerCase() !== me) {
+        return;
+      }
+      const remoteLocks: Record<string, string | null> = {};
+      const remoteProjects: Record<string, string> = {};
+      const heldLocks: HeldLock[] = [];
+      for (const p of projects) {
+        remoteLocks[p.id] = p.lock_holder;
+        remoteProjects[p.id] = p.name;
+        // Same ownership check the recents badge uses (emailsMatch), so the prompt's
+        // held list and the badge's "locked by you" can't disagree.
+        if (emailsMatch(p.lock_holder, me)) {
+          heldLocks.push({ projectId: p.id, projectName: p.name });
+        }
+      }
+      set((state) => {
+        // Prompt on an explicit login/app-open scan (`prompt`), or on the FIRST scan
+        // of the session (`heldLockPromptPending`) - never on a routine badge refresh
+        // (returning to recents, the refresh button). That is what stops the prompt
+        // re-appearing on every recents visit while still firing on login + app-start.
+        const promptWorthy = opts?.prompt === true || state.heldLockPromptPending;
+        return {
+          remoteLocks,
+          remoteProjects,
+          heldLocks: heldLocks.length > 0 ? heldLocks : null,
+          heldLockPromptPending: false,
+          ...(promptWorthy && heldLocks.length > 0 ? { heldLockPromptOpen: true } : {}),
+        };
+      });
+    } catch {
+      // Best-effort: keep prior badges and never raise a prompt on a failed scan.
+    }
+  },
+
+  releaseAllLocks: async () => {
+    // Throws on failure so the dialog can keep itself open and surface the error;
+    // heldLocks is cleared only on a confirmed release.
+    await invokeIpc<null>('speleodb_release_all_locks');
+    set({ heldLocks: null });
+    await get().scanLocksOnOpen();
+    await get().refreshLinkStatus();
+  },
+
+  releaseLock: async (projectId) => {
+    // Throws on failure so the dialog keeps itself open and surfaces the error.
+    await invokeIpc<null>('speleodb_release_lock', { projectId });
+    // Optimistic local update (avoids a full re-scan per release when the user frees
+    // several one by one): drop this lock from the prompt's list and mark the project
+    // free in the badge map. `heldLocks` going empty is what auto-closes the dialog.
+    set((state) => {
+      const heldLocks = (state.heldLocks ?? []).filter((l) => l.projectId !== projectId);
+      return {
+        heldLocks: heldLocks.length > 0 ? heldLocks : null,
+        remoteLocks: { ...state.remoteLocks, [projectId]: null },
+      };
+    });
+    // If we just freed the OPEN project's own lock, re-seed its status indicator.
+    await get().refreshLinkStatus();
+  },
+
+  clearHeldLocks: () => set({ heldLocks: null }),
+
+  closeHeldLockPrompt: () => set({ heldLockPromptOpen: false }),
+
   setSessionFromLogin: (r) =>
     set({
       session: {
@@ -286,13 +473,33 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         : null,
       divergence: null,
       banner: null,
+      // The lock scan was for this now-ended session; drop its badges + prompt.
+      remoteLocks: {},
+      remoteProjects: {},
+      heldLocks: null,
+      heldLockPromptOpen: false,
     })),
 
   seedFromStatus: (s) =>
     set((state) => {
       if (!s.is_remote) return { link: null, divergence: null, banner: null };
       const editState = s.edit_enabled ? 'editing' : 'read-only';
+      // #200: reflect the server's exclude_geojson as a persistent
+      // rendering-disabled banner. It outranks the informational `no_anchor` notice
+      // (rendering_disabled is actionable via Enable-rendering, and if both were true
+      // no_anchor would otherwise mask the only way to reach that action), so claim
+      // the slot when it is free OR held by no_anchor - but NEVER clobber transient
+      // action feedback (push_unconfirmed / concurrent_session). Clear it only when
+      // WE own the slot, so a routine poll never wipes another banner.
+      const prior = state.banner;
+      let banner = prior;
+      if (s.exclude_geojson) {
+        if (!prior || prior.kind === 'no_anchor') banner = { kind: 'rendering_disabled' };
+      } else if (prior?.kind === 'rendering_disabled') {
+        banner = null;
+      }
       return {
+        banner,
         link: {
           editState,
           // The network fields degrade to null/unknown offline - keep the
@@ -458,6 +665,27 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     ),
 
   clearDivergence: () => set({ divergence: null }),
+
+  notifyReverifyDivergence: () =>
+    set((state) => ({
+      divergence: 'reverify',
+      link: state.link
+        ? { ...state.link, editState: 'read-only', remoteState: 'conflict' }
+        : state.link,
+    })),
+
+  raiseNoAnchorBanner: () =>
+    set((state) => (state.banner ? {} : { banner: { kind: 'no_anchor' } })),
+
+  enableRendering: async () => {
+    // Throws on failure so the banner keeps itself open and shows the error.
+    await invokeIpc<null>('speleodb_set_exclude_geojson', { exclude: false });
+    // Drop the rendering-disabled banner (this resolved it) and re-seed from the
+    // server so the flag reflects the change.
+    set((state) => (state.banner?.kind === 'rendering_disabled' ? { banner: null } : {}));
+    await get().refreshLinkStatus();
+  },
+
   dismissBanner: () => set({ banner: null }),
 }));
 

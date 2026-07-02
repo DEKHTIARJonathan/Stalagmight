@@ -31,6 +31,10 @@ export interface SpeleoActions {
   /** The backend outcome, or `null` if the call threw. Callers key off `.kind`
       (e.g. the close flow only leaves once the lock is actually `released`). */
   done: (message?: string | null) => Promise<DoneResult | null>;
+  /** #198 "Take remote": DISCARD local unpushed edits and reset to the server
+      tip. Returns `true` once the tree is reloaded, `false` if the call threw.
+      The caller must gate this behind a destroy-confirmation. */
+  takeRemote: () => Promise<boolean>;
 }
 
 export function useSpeleoActions(): SpeleoActions {
@@ -47,6 +51,17 @@ export function useSpeleoActions(): SpeleoActions {
   const applyPush = useSpeleoStore((s) => s.applyPush);
   const bumpPoll = useSpeleoStore((s) => s.bumpPoll);
   const clearSession = useSpeleoStore((s) => s.clearSession);
+  const raiseNoAnchorBanner = useSpeleoStore((s) => s.raiseNoAnchorBanner);
+
+  // #200 (D2): a push/unlock of a survey with NO georeferenced zero datum means the
+  // server generates no new web-viewer GeoJSON. Surface the non-blocking notice; the
+  // push itself already succeeded and is never blocked. Checked from the local
+  // project (the same zero-datum set export_tml roots the .tml anchor on).
+  const noteNoAnchorIfNeeded = useCallback(() => {
+    if ((useProjectStore.getState().project?.zero_datums.length ?? 0) === 0) {
+      raiseNoAnchorBanner();
+    }
+  }, [raiseNoAnchorBanner]);
 
   const handleError = useCallback(
     (e: unknown, prefixKey: string) => {
@@ -125,6 +140,7 @@ export function useSpeleoActions(): SpeleoActions {
         applyPush(result);
         if (result.kind === 'pushed') {
           showToast(t('speleodb.editBar.toasts.pushed'), 'speleodb-pushed');
+          noteNoAnchorIfNeeded();
         }
         // divergence_needed / push_unconfirmed surface via the store (#198/#200 seams);
         // the returned kind lets the dialog stay open to resolve them.
@@ -137,7 +153,7 @@ export function useSpeleoActions(): SpeleoActions {
         setBusy(false);
       }
     },
-    [applyPush, showToast, t, handleError, setBusy, bumpPoll],
+    [applyPush, showToast, t, handleError, setBusy, bumpPoll, noteNoAnchorIfNeeded],
   );
 
   const done = useCallback(
@@ -149,6 +165,7 @@ export function useSpeleoActions(): SpeleoActions {
         switch (result.kind) {
           case 'released':
             showToast(t('speleodb.editBar.toasts.released'), 'speleodb-released');
+            noteNoAnchorIfNeeded();
             break;
           case 'push_unconfirmed':
             // #200 seam: applyDone raised the push_unconfirmed banner.
@@ -166,8 +183,31 @@ export function useSpeleoActions(): SpeleoActions {
         setBusy(false);
       }
     },
-    [applyDone, showToast, t, handleError, setBusy, bumpPoll],
+    [applyDone, showToast, t, handleError, setBusy, bumpPoll, noteNoAnchorIfNeeded],
   );
 
-  return { busy, startEditing, update, push, done };
+  const takeRemote = useCallback(async (): Promise<boolean> => {
+    setBusy(true);
+    try {
+      // Backend re-pulls + resets the tree to the server tip and returns the
+      // reloaded path; loadProject re-seeds the link status (→ read-only).
+      const localPath = await invokeIpc<string>('speleodb_take_remote');
+      // If the reload was superseded (the user opened another project mid-pull),
+      // don't claim success: the backend reset already happened, but the view the
+      // caller thinks it reloaded is not showing. Skip the toast + return false so
+      // the divergence dialog doesn't close over a project the user left.
+      const { success } = await loadProject(localPath);
+      if (!success) return false;
+      showToast(t('speleodb.editBar.toasts.tookRemote'), 'speleodb-took-remote');
+      return true;
+    } catch (e) {
+      handleError(e, 'speleodb.editBar.toasts.takeRemoteFailed');
+      return false;
+    } finally {
+      bumpPoll();
+      setBusy(false);
+    }
+  }, [loadProject, showToast, t, handleError, setBusy, bumpPoll]);
+
+  return { busy, startEditing, update, push, done, takeRemote };
 }

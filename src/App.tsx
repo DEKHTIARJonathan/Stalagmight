@@ -17,7 +17,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog, OpenFromSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoCloseDialog, SpeleoNoPermissionDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog, OpenFromSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoCloseDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu } from './components/common';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
@@ -70,6 +70,14 @@ function App() {
       openDialog('speleodb-divergence');
     }
   }, [speleoDivergence, openDialog]);
+
+  // #201 (B1): the held-lock resume/release prompt is an INDEPENDENT overlay (see
+  // `heldLockPromptOpen`), not the single `activeDialog` slot, so a login done from
+  // inside another dialog (e.g. the Settings account panel) layers the prompt OVER
+  // it instead of replacing it - the underlying dialog stays mounted and intact.
+  // The store opens it only on prompt-worthy scans (login / first app-open with held
+  // locks); routine badge refreshes never do.
+  const heldLockPromptOpen = useSpeleoStore((s) => s.heldLockPromptOpen);
 
   // Apply theme from config (resolves auto mode, sets data-theme attribute)
   useTheme();
@@ -715,6 +723,12 @@ function App() {
       {config && !onboarding.activeStep && (
         <TelemetryOptInDialog config={config} onConfigChanged={setConfig} />
       )}
+
+      {/* Held-lock resume/release prompt (#201): an INDEPENDENT top-layer overlay
+          (rendered last so its portal sits above any open dialog), so a login done
+          from inside another dialog - e.g. the Settings account panel - layers it
+          OVER that dialog instead of replacing it, leaving Settings intact. */}
+      {heldLockPromptOpen && <HeldLockResumeDialog />}
 
       {/* Toast notification (via Portal for z-index reliability) */}
       {toast && createPortal(

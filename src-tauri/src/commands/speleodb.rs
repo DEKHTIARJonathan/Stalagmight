@@ -130,6 +130,46 @@ pub async fn speleodb_push(
     run_blocking(app, move |s| s.speleodb_push_only(message)).await
 }
 
+/// Take the SpeleoDB version, DISCARDING local unpushed edits (#198 "Take
+/// remote"): re-pull the server tip and reset the local project to it, returning
+/// the reloaded `.stalx` path so the frontend reloads the view. The frontend
+/// gates this behind a second destroy-confirmation - it is the only irreversible
+/// choice in the divergence prompt, so there is no single-click path to it.
+#[tauri::command]
+pub async fn speleodb_take_remote(app: AppHandle) -> Result<String, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_take_remote).await
+}
+
+/// Release EVERY write lock this user currently holds (#201 "Release all"): the
+/// held-lock resume prompt's resolution for locks a crashed/abandoned session
+/// left behind. No-op server-side when none are held.
+#[tauri::command]
+pub async fn speleodb_release_all_locks(app: AppHandle) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_release_all_locks).await
+}
+
+/// Release the write lock on ONE project by id (#201 per-project "Release" in the
+/// held-lock resume prompt). Targets an arbitrary held project, not necessarily
+/// the open one; on success the caller re-scans to refresh the recents badges.
+#[tauri::command]
+pub async fn speleodb_release_lock(
+    app: AppHandle,
+    project_id: String,
+) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_release_lock(project_id)).await
+}
+
+/// Set the open project's server-side `exclude_geojson` flag (#200
+/// Enable-rendering): `PATCH /projects/{id}/`, permission-gated, no lock. Passing
+/// `false` re-enables web-viewer GeoJSON, effective on the next push.
+#[tauri::command]
+pub async fn speleodb_set_exclude_geojson(
+    app: AppHandle,
+    exclude: bool,
+) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_set_exclude_geojson(exclude)).await
+}
+
 /// Report whether the backend already holds a usable token (and for whom). The
 /// dialog calls this on open to restore the project list instead of re-prompting
 /// for credentials — the in-memory token outlives the dialog's React state.

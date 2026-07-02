@@ -45,12 +45,17 @@ type ButtonKind =
 export function SpeleoStatusButton() {
   const { t } = useTranslation();
   const link = useSpeleoStore((s) => s.link);
+  const loggedIn = useSpeleoStore((s) => s.session?.loggedIn ?? false);
   const divergence = useSpeleoStore((s) => s.divergence);
   const pollNonce = useSpeleoStore((s) => s.pollNonce);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
   const openDialog = useUIStore((s) => s.openDialog);
   const appMode = useUIStore((s) => s.appMode);
-  const pollInterval = useProjectStore((s) => s.config?.speleodb.poll_interval_seconds ?? 60);
+  // Optional-chain `speleodb` too: the config is loaded async, so a render can land
+  // before it arrives (or with an older-shaped config that predates the speleodb
+  // block) - reading `.poll_interval_seconds` off an undefined `speleodb` would throw
+  // and crash the whole SingleSystemView on mount. Fall back to the 60s default.
+  const pollInterval = useProjectStore((s) => s.config?.speleodb?.poll_interval_seconds ?? 60);
   const { busy, startEditing, update, done } = useSpeleoActions();
 
   const isRemote = link !== null;
@@ -82,6 +87,31 @@ export function SpeleoStatusButton() {
   // re-armed on return to Survey; the first poll is then up to one interval out, so
   // a status change that landed while away surfaces on the next tick.
   if (!link || appMode !== 'survey') return null;
+
+  // Logged out: every lock action needs a token (the backend gate would reject the
+  // acquire anyway), so present the mark grayed + inert and point the user at login
+  // via the tooltip, rather than a live "Start editing" that can only fail (#201).
+  //
+  // BUT trust an active editing link over a cold frontend session: on reopen the
+  // backend rehydrates the token and `refreshLinkStatus` can seed `editState:
+  // 'editing'` before `refreshSession` flips `loggedIn` true (both fire unawaited).
+  // Showing the inert logged-out mark then would wrongly hide Done/push for a
+  // project we actually hold the lock on, so fall through to the normal rendering.
+  if (!loggedIn && link.editState !== 'editing') {
+    return (
+      <button
+        type="button"
+        disabled
+        title={t('speleodb.button.loggedOut')}
+        aria-label={t('speleodb.button.loggedOut')}
+        data-testid="speleodb-status-button"
+        data-kind="logged_out"
+        className="flex items-center justify-center w-8 h-8 rounded ml-1 opacity-40 cursor-not-allowed"
+      >
+        <SpeleoBadgedIcon badge={<LockIcon size={10} />} badgeColor="text-text-secondary" size={20} />
+      </button>
+    );
+  }
 
   // `editState === 'editing'` is the single source of truth for "we hold the lock
   // and may edit" (the backend enforces hold-lock ⟹ edit-enabled). `lockedByOther`

@@ -8,16 +8,19 @@ import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useGlobalViewStore } from '../../store/globalViewStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { Button } from '../common/Button';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
 import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, runImport, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
 import { CloseIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIcon } from '../common/icons';
+import { SpeleoBadgedIcon, RefreshGlyph } from '../common/SpeleoBadgedIcon';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { setProjectActionSource } from '../../utils/telemetry';
 import { dmpOpenFilters, tmlOpenFilters, compassOpenFilters, wallsOpenFilters, gpxOpenFilters } from '../../utils/fileDialogs';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
+import { resolveSpeleoLock } from './SpeleoLockBadge';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
 import { RecentSortControl } from './RecentSortControl';
@@ -138,6 +141,32 @@ export default function GlobalView() {
   useEffect(() => {
     loadRecentProjects();
   }, [loadRecentProjects]);
+
+  // #201 (B1): the home screen is the app-open landing, so scan SpeleoDB lock state
+  // here - one GET resolves every accessible project's holder. Populates the recents
+  // lock badges and, if this user holds any locks, raises the resume/release prompt
+  // (App owns the once-per-session guard). Best-effort + a no-op when logged out.
+  const scanLocksOnOpen = useSpeleoStore((s) => s.scanLocksOnOpen);
+  const remoteLocks = useSpeleoStore((s) => s.remoteLocks);
+  const remoteProjects = useSpeleoStore((s) => s.remoteProjects);
+  const speleoEmail = useSpeleoStore((s) => s.session?.userEmail ?? null);
+  const speleoLoggedIn = useSpeleoStore((s) => s.session?.loggedIn ?? false);
+  useEffect(() => {
+    void scanLocksOnOpen();
+  }, [scanLocksOnOpen]);
+
+  // Manual SpeleoDB re-scan (the header refresh button, #201): re-reads lock state
+  // for the recents badges. `prompt`-less, so it never re-raises the held-lock
+  // dialog (that is reserved for login / app-open).
+  const [refreshingLocks, setRefreshingLocks] = useState(false);
+  const handleRefreshLocks = useCallback(async () => {
+    setRefreshingLocks(true);
+    try {
+      await scanLocksOnOpen();
+    } finally {
+      setRefreshingLocks(false);
+    }
+  }, [scanLocksOnOpen]);
 
   // Close on outside mousedown / external scroll / resize (shared hook, same as
   // Select/AppMenu). Escape is handled in the global-view keyboard handler.
@@ -610,6 +639,21 @@ export default function GlobalView() {
               </button>
             </div>
           )}
+          {/* SpeleoDB re-scan, far right of the view toggle - only when logged in
+              (#201). Refreshes the recents lock badges without re-prompting. */}
+          {speleoLoggedIn && (
+            <button
+              type="button"
+              onClick={() => void handleRefreshLocks()}
+              disabled={refreshingLocks}
+              title={t('globalView.speleoRefresh.title')}
+              aria-label={t('globalView.speleoRefresh.aria')}
+              data-testid="globalview-speleo-refresh"
+              className="flex items-center justify-center w-8 h-8 rounded text-text-secondary hover:text-text hover:bg-panel transition-colors disabled:opacity-50"
+            >
+              <SpeleoBadgedIcon badge={<RefreshGlyph size={10} />} badgeColor="text-accent" size={18} />
+            </button>
+          )}
         </div>
       </header>
 
@@ -770,6 +814,9 @@ export default function GlobalView() {
                   multiSelectedIds={multiSelectedIds}
                   sortField={recentSort.field}
                   sortDirection={recentSort.direction}
+                  remoteLocks={remoteLocks}
+                  remoteProjects={remoteProjects}
+                  myEmail={speleoEmail}
                   onSort={handleHeaderSort}
                   onSelect={handleProjectSelect}
                   onOpen={handleOpenFromList}
@@ -789,6 +836,7 @@ export default function GlobalView() {
                         sectionCount={item.project.section_count}
                         totalLength={item.project.total_length}
                         isSelected={multiSelectedIds.has(item.filePath)}
+                        speleoLock={resolveSpeleoLock(item.project, remoteLocks, speleoEmail, remoteProjects)}
                         onSelect={(ctrlKey) => handleProjectSelect(item.filePath, ctrlKey)}
                         onContextMenu={(e) => handleContextMenu(e, item.filePath)}
                       />

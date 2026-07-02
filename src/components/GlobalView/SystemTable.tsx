@@ -9,6 +9,7 @@ import { ElidedPath, Tooltip, ChevronUpIcon, ChevronDownIcon } from '../common';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
 import type { RecentListItem } from './recentListItems';
 import type { RecentSortField, RecentSortDirection } from './useRecentSort';
+import { SpeleoRecentInfo, resolveSpeleoLock } from './SpeleoLockBadge';
 
 interface SystemTableProps {
   items: RecentListItem[];
@@ -16,6 +17,12 @@ interface SystemTableProps {
   multiSelectedIds: Set<string>;
   sortField: RecentSortField;
   sortDirection: RecentSortDirection;
+  /** SpeleoDB lock state per project id, from the login/app-open scan (#201). */
+  remoteLocks: Record<string, string | null>;
+  /** SpeleoDB project name per project id, from the same scan (#201). */
+  remoteProjects: Record<string, string>;
+  /** Current user's email, to tell our own held lock from another's (#201). */
+  myEmail: string | null;
   /** Toggle/apply sorting when a sortable column header is clicked. */
   onSort: (field: RecentSortField) => void;
   onSelect: (filePath: string, ctrlKey: boolean) => void;
@@ -77,6 +84,9 @@ export function SystemTable({
   multiSelectedIds,
   sortField,
   sortDirection,
+  remoteLocks,
+  remoteProjects,
+  myEmail,
   onSort,
   onSelect,
   onOpen,
@@ -164,6 +174,7 @@ export function SystemTable({
           }
 
           const { project } = item;
+          const lock = resolveSpeleoLock(project, remoteLocks, myEmail, remoteProjects);
           const isSelected =
             multiSelectedIds.has(item.filePath) || selectedProjectId === item.filePath;
 
@@ -188,13 +199,19 @@ export function SystemTable({
               }}
             >
               <td className={`${cellClass} font-medium`}>
-                {project.name}
+                <span>{project.name}</span>
                 {project.location && (
                   <span className="text-text-secondary"> · {project.location}</span>
                 )}
               </td>
               <td className={cellClass}>
-                <ElidedPath path={item.filePath} className="text-xs text-text-tertiary" />
+                {/* SpeleoDB projects show the mark + lock state instead of the local
+                    path (irrelevant for a linked project, #201); local ones show it. */}
+                {lock.isRemote ? (
+                  <SpeleoRecentInfo info={lock} name={project.name} />
+                ) : (
+                  <ElidedPath path={item.filePath} className="text-xs text-text-tertiary" />
+                )}
               </td>
               <td className={`${cellClass} text-right tabular-nums`}>{formatNumber(project.section_count)}</td>
               <td className={`${cellClass} text-right tabular-nums`}>{formatLength(project.total_length)}</td>

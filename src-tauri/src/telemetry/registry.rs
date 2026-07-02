@@ -126,8 +126,12 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_logout",
     "command.speleodb_open_project",
     "command.speleodb_push",
+    "command.speleodb_release_all_locks",
+    "command.speleodb_release_lock",
     "command.speleodb_session",
+    "command.speleodb_set_exclude_geojson",
     "command.speleodb_start_editing",
+    "command.speleodb_take_remote",
     "command.speleodb_unlink",
     "command.speleodb_update",
     "command.suggest_all_import_placements",
@@ -205,6 +209,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.export",
     "action.dialog.gpx-placement",
     "action.dialog.gpx-selection",
+    "action.dialog.held-lock-resume",
     "action.dialog.import",
     "action.dialog.keyboard-shortcuts",
     "action.dialog.merge",
@@ -262,6 +267,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.export",
     "dialog-cancel.gpx-placement",
     "dialog-cancel.gpx-selection",
+    "dialog-cancel.held-lock-resume",
     "dialog-cancel.import",
     "dialog-cancel.keyboard-shortcuts",
     "dialog-cancel.merge",
@@ -345,6 +351,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.export",
     "dwell.dialog.gpx-placement",
     "dwell.dialog.gpx-selection",
+    "dwell.dialog.held-lock-resume",
     "dwell.dialog.import",
     "dwell.dialog.keyboard-shortcuts",
     "dwell.dialog.merge",
@@ -479,6 +486,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.export",
     "active-dwell.dialog.gpx-placement",
     "active-dwell.dialog.gpx-selection",
+    "active-dwell.dialog.held-lock-resume",
     "active-dwell.dialog.import",
     "active-dwell.dialog.keyboard-shortcuts",
     "active-dwell.dialog.merge",
@@ -535,7 +543,12 @@ mod tests {
     /// Dialog keys removed from `App.tsx` whose registry slots are likewise
     /// retained. The `action.dialog.*` / `dialog-cancel.*` / `dwell.dialog.*`
     /// coverage check skips them.
-    const REMOVED_DIALOGS: &[&str] = &["adjust-closures"];
+    // Dialogs whose 4 event slots are retained but excluded from the
+    // `activeDialog`-derived stale check: either genuinely removed
+    // (`adjust-closures`) or relocated OUT of the single `activeDialog` slot into an
+    // independent overlay (`held-lock-resume`, #201 - so it can layer over another
+    // dialog during login). The slots are kept for event-numbering stability.
+    const REMOVED_DIALOGS: &[&str] = &["adjust-closures", "held-lock-resume"];
 
     /// `action.toggle.*` events that are intentionally NOT derived from
     /// `DISPLAY_DEFAULTS`. `geometryMode` is an enum display mode tracked via an
@@ -587,7 +600,16 @@ mod tests {
         //   + 1 SpeleoDB unlink event (#204 convert-to-unmanaged):
         //       command.speleodb_unlink = 437.
         //   + 4 speleodb-no-permission dialog events (#204): = 441.
-        assert_eq!(EVENT_NAMES.len(), 441);
+        //   + 1 SpeleoDB take-remote event (#198):
+        //       command.speleodb_take_remote = 442.
+        //   + 1 SpeleoDB release-all-locks event (#201):
+        //       command.speleodb_release_all_locks = 443.
+        //   + 4 held-lock-resume dialog events (#201): = 447.
+        //   + 1 SpeleoDB set-exclude-geojson event (#200):
+        //       command.speleodb_set_exclude_geojson = 448.
+        //   + 1 SpeleoDB per-project release event (#201 individual release):
+        //       command.speleodb_release_lock = 449.
+        assert_eq!(EVENT_NAMES.len(), 449);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -365,6 +365,12 @@ pub struct ProjectMetadata {
     // DERIVED from EXISTS(speleo_link) in load_metadata, never a stored column;
     // tolerant of a missing table on a read-only metadata open.
     pub is_remote: bool,
+    /// The linked SpeleoDB project UUID (from `speleo_link.project_id`), or `None`
+    /// for a local project. Lets the recents/GlobalView list cross-reference a
+    /// single `GET /projects/` lock scan to badge each entry's lock state (#201).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub speleodb_project_id: Option<String>,
 }
 
 /// Per-station along-cave distance field from a chosen origin (or the zero-datum

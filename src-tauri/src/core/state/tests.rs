@@ -18735,6 +18735,7 @@ fn fixture_speleo_link() -> SpeleoLink {
         base_commit_sha: Some("abc123".to_string()),
         has_unpushed_edits: false,
         last_edit_at: None,
+        last_verify_at: None,
     }
 }
 

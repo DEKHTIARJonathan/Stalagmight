@@ -2710,6 +2710,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 preset: 'default',
                 overrides: {},
               },
+              // SpeleoDB config block: the real get_config always returns this
+              // (Rust SpeleoDbConfig::default), and SpeleoStatusButton reads
+              // config.speleodb.poll_interval_seconds on every project-view mount -
+              // omitting it here makes config.speleodb undefined and crashes the view.
+              speleodb: {
+                endpoint: null,
+                email: null,
+                token_fallback: 'session_only',
+                insecure_http: false,
+                poll_interval_seconds: 60,
+              },
             };
 
           case 'update_config':
@@ -3688,11 +3699,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               remote_state: 'unknown',
               access_denied: false,
               server_error: null,
+              exclude_geojson: false,
             };
           case 'speleodb_list_projects':
             return [];
+          case 'speleodb_take_remote':
+            // Returns the reloaded .stalx path (#198); no e2e spec drives it yet.
+            return '/mock/project.stalx';
           case 'speleodb_logout':
           case 'speleodb_unlink':
+          case 'speleodb_release_all_locks':
+          case 'speleodb_release_lock':
+          case 'speleodb_set_exclude_geojson':
             return null;
           case 'speleodb_login':
             return {

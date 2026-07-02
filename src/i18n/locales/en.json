@@ -1708,6 +1708,10 @@
     "viewToggle": {
       "aria": "Switch between map and list view"
     },
+    "speleoRefresh": {
+      "title": "Refresh SpeleoDB lock state",
+      "aria": "Refresh SpeleoDB lock state"
+    },
     "tabs": {
       "map": "Map",
       "list": "List"
@@ -2628,7 +2632,8 @@
       "conflict": "Local and remote have diverged - click to resolve",
       "viewOnly": "Read-only access - click to refresh from SpeleoDB",
       "noPermission": "You don't have permission to this SpeleoDB project - click for options",
-      "unknownError": "SpeleoDB reported an unexpected error - click for details"
+      "unknownError": "SpeleoDB reported an unexpected error - click for details",
+      "loggedOut": "Log in to SpeleoDB to edit this project"
     },
     "serverError": {
       "title": "SpeleoDB error",
@@ -2656,15 +2661,21 @@
     "divergence": {
       "title": "Resolve SpeleoDB conflict",
       "description": "Your local changes and the version on SpeleoDB have diverged. Choose how to resolve it.",
-      "soonTag": "(coming soon)",
-      "comingSoon": "This resolution option is coming soon (#198).",
       "keepLocal": {
         "label": "Keep my local version",
         "help": "Upload your version to SpeleoDB to resolve the conflict."
       },
       "takeRemote": {
         "label": "Take the SpeleoDB version",
-        "help": "Discard your local changes and replace them with the server's version."
+        "help": "Discard your local changes and replace them with the server's version.",
+        "confirm": {
+          "title": "Discard your local changes?",
+          "warning": "This permanently destroys your unpushed local edits since the last sync. They are not saved anywhere else and this cannot be undone.",
+          "hint": "To keep your work instead, go Back and choose \"Save my version as an unmanaged file\".",
+          "back": "Back",
+          "destroy": "Destroy and continue",
+          "destroying": "Discarding local changes…"
+        }
       },
       "saveCopy": {
         "label": "Save my version as an unmanaged file",
@@ -2688,7 +2699,9 @@
         "startFailed": "Could not start editing",
         "updateFailed": "Could not update",
         "doneFailed": "Could not finish editing",
-        "pushFailed": "Could not push changes"
+        "pushFailed": "Could not push changes",
+        "tookRemote": "Reset to the SpeleoDB version.",
+        "takeRemoteFailed": "Could not take the SpeleoDB version"
       }
     },
     "done": {
@@ -2710,7 +2723,35 @@
     },
     "banner": {
       "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept - click Done again to retry.",
-      "concurrentSession": "This project is locked by your account in another session. Editing from two sessions at once can lose edits."
+      "concurrentSession": "This project is locked by your account in another session. Editing from two sessions at once can lose edits.",
+      "renderingDisabled": "Web-map rendering is turned off for this project on SpeleoDB, so the online map won't refresh (it may show older geometry).",
+      "enableRendering": "Enable rendering",
+      "enableRenderingConfirm": "Rendering refreshes on your NEXT push, not right now (this does not re-render the current version). Enable it?",
+      "enableRenderingConfirmAction": "Enable rendering",
+      "enableRenderingBusy": "Enabling…",
+      "enableRenderingFailed": "Could not enable rendering",
+      "noAnchor": "This survey has no georeferenced zero datum, so SpeleoDB generated no new map geometry. Your data is still stored and shared; any existing online map may be stale."
+    },
+    "heldLocks": {
+      "title": "You hold SpeleoDB locks",
+      "description_one": "You still hold the write lock on this SpeleoDB project (perhaps from a session that did not exit cleanly). Others cannot edit it until it is released.",
+      "description_other": "You still hold the write lock on {{count}} SpeleoDB projects (perhaps from a session that did not exit cleanly). Others cannot edit them until they are released.",
+      "keep": "Keep working",
+      "release": "Release",
+      "releaseOneAria": "Release the lock on {{name}}",
+      "releaseAll": "Release all locks",
+      "releasing": "Releasing…",
+      "releaseFailed": "Could not release the locks"
+    },
+    "recentBadge": {
+      "remote": "Linked to SpeleoDB",
+      "lockedByYou": "Linked to SpeleoDB - locked by you",
+      "lockedByOther": "Linked to SpeleoDB - locked by {{email}}"
+    },
+    "recentInfo": {
+      "prefix": "SpeleoDB: {{name}}",
+      "lockedByYou": "Locked by you",
+      "lockedByOther": "Locked by {{email}}"
     },
     "browser": {
       "title": "Open from SpeleoDB",

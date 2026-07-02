@@ -154,19 +154,21 @@ impl Database {
             .map(|v| v != 0)
             .unwrap_or(false);
 
-        // Derived SpeleoDB-remote flag (#189, D-B14): true iff a speleo_link row
-        // exists. Probed like collab_enabled above but as EXISTS, NOT a stored
-        // column. `.ok().unwrap_or(false)` tolerates a missing table on a
-        // read-only metadata open (open_for_metadata; SQLITE_OPEN_READ_ONLY runs
-        // no migration, so a pre-v9 file simply has no table here).
-        let is_remote: bool = self
+        // The linked SpeleoDB project UUID (#201), so the recents/GlobalView list can
+        // match this entry against a single lock scan. The `speleo_link` row is a
+        // singleton (`CHECK(id = 1)`) with a NOT NULL project_id, so this doubles as
+        // the SpeleoDB-remote probe (#189, D-B14). `.ok()` tolerates a missing table
+        // on a read-only metadata open (open_for_metadata; SQLITE_OPEN_READ_ONLY runs
+        // no migration, so a pre-v9 file simply has no table here) → None.
+        let speleodb_project_id: Option<String> = self
             .conn
-            .query_row("SELECT EXISTS(SELECT 1 FROM speleo_link)", [], |r| {
-                r.get::<_, i64>(0)
+            .query_row("SELECT project_id FROM speleo_link WHERE id = 1", [], |r| {
+                r.get::<_, String>(0)
             })
-            .map(|c| c != 0)
-            .ok()
-            .unwrap_or(false);
+            .ok();
+
+        // Derived SpeleoDB-remote flag: true iff the singleton link row exists.
+        let is_remote: bool = speleodb_project_id.is_some();
 
         Ok(ProjectMetadata {
             name,
@@ -180,6 +182,7 @@ impl Database {
             gps_bounds,
             collab_enabled,
             is_remote,
+            speleodb_project_id,
         })
     }
 
@@ -860,7 +863,7 @@ impl Database {
         }
 
         let row = self.conn.query_row(
-            "SELECT endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, last_edit_at
+            "SELECT endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, last_edit_at, last_verify_at
              FROM speleo_link WHERE id = 1",
             [],
             |row| {
@@ -871,6 +874,7 @@ impl Database {
                     base_commit_sha: row.get::<_, Option<String>>(3)?,
                     has_unpushed_edits: row.get::<_, i64>(4)? != 0,
                     last_edit_at: row.get::<_, Option<String>>(5)?,
+                    last_verify_at: row.get::<_, Option<String>>(6)?,
                 })
             },
         );

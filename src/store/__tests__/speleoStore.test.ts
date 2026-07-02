@@ -1,6 +1,15 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useSpeleoStore } from '../speleoStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
+
+const invokeIpcMock = vi.hoisted(() => vi.fn());
+vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+
+/** A logged-in session so `scanLocksOnOpen` skips the `refreshSession` prelude. */
+const loggedInAs = (email: string) =>
+  useSpeleoStore.setState({
+    session: { loggedIn: true, userEmail: email, endpoint: 'https://x/', keychainBacked: true },
+  });
 
 const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   is_remote: true,
@@ -11,11 +20,24 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   remote_state: 'up_to_date',
   access_denied: false,
   server_error: null,
+  exclude_geojson: false,
   ...o,
 });
 
-const reset = () =>
-  useSpeleoStore.setState({ session: null, link: null, divergence: null, banner: null });
+const reset = () => {
+  invokeIpcMock.mockReset();
+  useSpeleoStore.setState({
+    session: null,
+    link: null,
+    divergence: null,
+    banner: null,
+    remoteLocks: {},
+    remoteProjects: {},
+    heldLocks: null,
+    heldLockPromptOpen: false,
+    heldLockPromptPending: true,
+  });
+};
 
 describe('speleoStore', () => {
   beforeEach(reset);
@@ -296,6 +318,234 @@ describe('speleoStore', () => {
       expect(s.link).toBeNull();
       expect(s.divergence).toBeNull();
       expect(s.banner).toBeNull();
+    });
+  });
+
+  describe('notifyReverifyDivergence (#202)', () => {
+    it('drops an active edit to read-only + conflict and raises the divergence prompt', () => {
+      // Mid-edit (lock held), then the lazy 20-min re-verify finds a lost lock /
+      // moved tip: the shell must go read-only + conflict and open the prompt.
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
+      expect(useSpeleoStore.getState().link?.editState).toBe('editing');
+      useSpeleoStore.getState().notifyReverifyDivergence();
+      const s = useSpeleoStore.getState();
+      expect(s.divergence).toBe('reverify');
+      expect(s.link?.editState).toBe('read-only');
+      expect(s.link?.remoteState).toBe('conflict');
+    });
+
+    it('is a safe no-op on link state when no project is linked', () => {
+      useSpeleoStore.getState().notifyReverifyDivergence();
+      const s = useSpeleoStore.getState();
+      expect(s.divergence).toBe('reverify');
+      expect(s.link).toBeNull();
+    });
+  });
+
+  describe('#200 banners', () => {
+    it('seedFromStatus raises the rendering-disabled banner when exclude_geojson is set', () => {
+      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
+    });
+
+    it('seedFromStatus clears its own rendering-disabled banner once the flag is off', () => {
+      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
+      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: false }));
+      expect(useSpeleoStore.getState().banner).toBeNull();
+    });
+
+    it('a rendering-disabled poll never clobbers transient push_unconfirmed feedback', () => {
+      useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
+      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
+    });
+
+    it('raiseNoAnchorBanner only claims a free banner slot', () => {
+      useSpeleoStore.getState().raiseNoAnchorBanner();
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'no_anchor' });
+      // With a transient banner already up, it must not overwrite it.
+      useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
+      useSpeleoStore.getState().raiseNoAnchorBanner();
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
+    });
+
+    it('rendering_disabled preempts a no_anchor banner (so Enable-rendering is reachable)', () => {
+      // Both conditions true: no_anchor holds the slot, then a poll sees
+      // exclude_geojson. rendering_disabled must take over - otherwise its
+      // Enable-rendering action (gated on the banner kind) is unreachable.
+      useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
+      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
+    });
+
+    it('a no_anchor notice is never clobbered by a poll when rendering is enabled', () => {
+      // exclude_geojson off: a no_anchor notice must survive routine polls (only a
+      // rendering_disabled banner that WE own is cleared when the flag goes off).
+      useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
+      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: false }));
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'no_anchor' });
+    });
+
+    it('enableRendering clears the rendering-disabled banner and PATCHes exclude=false', async () => {
+      useSpeleoStore.setState({ banner: { kind: 'rendering_disabled' } });
+      // set_exclude_geojson returns null; the follow-up refreshLinkStatus reads status.
+      invokeIpcMock.mockImplementation(async (cmd: string) =>
+        cmd === 'speleodb_link_status' ? status({ exclude_geojson: false }) : null,
+      );
+      await useSpeleoStore.getState().enableRendering();
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_exclude_geojson', { exclude: false });
+      expect(useSpeleoStore.getState().banner).toBeNull();
+    });
+
+    it('enableRendering rethrows and leaves the banner intact so the caller can surface it', async () => {
+      useSpeleoStore.setState({ banner: { kind: 'rendering_disabled' } });
+      invokeIpcMock.mockRejectedValue(new Error('403'));
+      await expect(useSpeleoStore.getState().enableRendering()).rejects.toThrow('403');
+      // The banner must stay up so SpeleoBanner keeps itself open to show the error.
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
+    });
+  });
+
+  // #201 refinements: the resume/release prompt fires only on login + app-open (not
+  // every recents visit), and individual locks can be released one at a time.
+  describe('held-lock scan + release (#201)', () => {
+    it('the first app-open scan is prompt-worthy: it opens the prompt when a lock is held', async () => {
+      loggedInAs('me@x');
+      invokeIpcMock.mockResolvedValue([{ id: 'p1', name: 'Held', lock_holder: 'me@x' }]);
+      await useSpeleoStore.getState().scanLocksOnOpen();
+      const s = useSpeleoStore.getState();
+      expect(s.heldLocks).toEqual([{ projectId: 'p1', projectName: 'Held' }]);
+      expect(s.remoteLocks).toEqual({ p1: 'me@x' });
+      // The SpeleoDB project name is captured for the recents "SpeleoDB: {name}" label.
+      expect(s.remoteProjects).toEqual({ p1: 'Held' });
+      expect(s.heldLockPromptOpen).toBe(true);
+      // Consumed, so a later routine scan won't retro-prompt.
+      expect(s.heldLockPromptPending).toBe(false);
+    });
+
+    it('a routine badge refresh keeps the badges but does NOT re-open the prompt', async () => {
+      loggedInAs('me@x');
+      useSpeleoStore.setState({ heldLockPromptPending: false, heldLockPromptOpen: false });
+      invokeIpcMock.mockResolvedValue([{ id: 'p1', name: 'Held', lock_holder: 'me@x' }]);
+      await useSpeleoStore.getState().scanLocksOnOpen();
+      const s = useSpeleoStore.getState();
+      expect(s.heldLocks).toEqual([{ projectId: 'p1', projectName: 'Held' }]); // badges still fresh
+      expect(s.heldLockPromptOpen).toBe(false); // but no new prompt
+    });
+
+    it('an explicit prompt scan (login) re-opens the prompt even after the pending flag is gone', async () => {
+      loggedInAs('me@x');
+      useSpeleoStore.setState({ heldLockPromptPending: false, heldLockPromptOpen: false });
+      invokeIpcMock.mockResolvedValue([{ id: 'p1', name: 'Held', lock_holder: 'me@x' }]);
+      await useSpeleoStore.getState().scanLocksOnOpen({ prompt: true });
+      expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(true);
+    });
+
+    it('a scan that finds no lock held by us never opens the prompt (case-insensitive match)', async () => {
+      loggedInAs('Me@X');
+      invokeIpcMock.mockResolvedValue([
+        { id: 'p2', name: 'Other', lock_holder: 'someone@x' },
+        { id: 'p3', name: 'Free', lock_holder: null },
+      ]);
+      await useSpeleoStore.getState().scanLocksOnOpen({ prompt: true });
+      const s = useSpeleoStore.getState();
+      expect(s.heldLocks).toBeNull();
+      expect(s.heldLockPromptOpen).toBe(false);
+      expect(s.remoteLocks).toEqual({ p2: 'someone@x', p3: null });
+    });
+
+    it('a logged-out scan clears the badges and consumes the app-open pending without prompting', async () => {
+      useSpeleoStore.setState({
+        session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false },
+        remoteLocks: { p1: 'x' },
+        remoteProjects: { p1: 'Stale' },
+      });
+      await useSpeleoStore.getState().scanLocksOnOpen();
+      const s = useSpeleoStore.getState();
+      expect(s.remoteLocks).toEqual({});
+      expect(s.remoteProjects).toEqual({});
+      expect(s.heldLocks).toBeNull();
+      expect(s.heldLockPromptPending).toBe(false);
+      expect(s.heldLockPromptOpen).toBe(false);
+      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_list_projects');
+    });
+
+    it('a logged-out scan also forces an already-open prompt overlay shut', async () => {
+      // The prompt was open under the prior session; logging out must not leave it
+      // lingering over a logged-out shell (not just consume the pending flag).
+      useSpeleoStore.setState({
+        session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false },
+        heldLocks: [{ projectId: 'p1', projectName: 'A' }],
+        heldLockPromptOpen: true,
+      });
+      await useSpeleoStore.getState().scanLocksOnOpen();
+      const s = useSpeleoStore.getState();
+      expect(s.heldLockPromptOpen).toBe(false);
+      expect(s.heldLocks).toBeNull();
+    });
+
+    it('a failed scan keeps prior badges, never prompts, and does not consume the pending flag', async () => {
+      loggedInAs('me@x');
+      useSpeleoStore.setState({
+        remoteLocks: { p1: 'me@x' },
+        remoteProjects: { p1: 'Prev' },
+        heldLockPromptPending: true,
+      });
+      invokeIpcMock.mockRejectedValue(new Error('offline'));
+      await useSpeleoStore.getState().scanLocksOnOpen({ prompt: true });
+      const s = useSpeleoStore.getState();
+      // Best-effort: prior badges survive, no prompt, and pending is NOT burned - so
+      // a later successful scan can still raise the first real prompt.
+      expect(s.remoteLocks).toEqual({ p1: 'me@x' });
+      expect(s.remoteProjects).toEqual({ p1: 'Prev' });
+      expect(s.heldLockPromptOpen).toBe(false);
+      expect(s.heldLockPromptPending).toBe(true);
+    });
+
+    it('a scan whose session ends mid-flight does not repaint the ended session badges', async () => {
+      loggedInAs('me@x');
+      // The list_projects GET resolves, but by then the user has logged out. The
+      // post-await staleness guard must drop the stale result rather than repaint.
+      invokeIpcMock.mockImplementation(async (cmd: string) => {
+        if (cmd === 'speleodb_list_projects') {
+          useSpeleoStore.setState({
+            session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false },
+          });
+          return [{ id: 'p1', name: 'Held', lock_holder: 'me@x' }];
+        }
+        return null;
+      });
+      await useSpeleoStore.getState().scanLocksOnOpen({ prompt: true });
+      const s = useSpeleoStore.getState();
+      expect(s.remoteLocks).toEqual({});
+      expect(s.heldLocks).toBeNull();
+      expect(s.heldLockPromptOpen).toBe(false);
+    });
+
+    it('releaseLock drops one lock and frees it in the badge map, emptying to null on the last', async () => {
+      loggedInAs('me@x');
+      useSpeleoStore.setState({
+        heldLocks: [
+          { projectId: 'p1', projectName: 'A' },
+          { projectId: 'p2', projectName: 'B' },
+        ],
+        remoteLocks: { p1: 'me@x', p2: 'me@x' },
+      });
+      // release_lock returns null; the follow-up refreshLinkStatus reads link_status.
+      invokeIpcMock.mockImplementation(async (cmd: string) =>
+        cmd === 'speleodb_link_status' ? status() : null,
+      );
+
+      await useSpeleoStore.getState().releaseLock('p1');
+      let s = useSpeleoStore.getState();
+      expect(s.heldLocks).toEqual([{ projectId: 'p2', projectName: 'B' }]);
+      expect(s.remoteLocks.p1).toBeNull();
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_release_lock', { projectId: 'p1' });
+
+      await useSpeleoStore.getState().releaseLock('p2');
+      s = useSpeleoStore.getState();
+      expect(s.heldLocks).toBeNull(); // empty → the dialog's effect auto-closes it
+      expect(s.remoteLocks.p2).toBeNull();
     });
   });
 });
