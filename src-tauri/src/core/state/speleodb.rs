@@ -67,7 +67,7 @@ fn visibility_label(visibility: Visibility) -> &'static str {
 }
 
 /// Map an optional coordinate to a JSON value for a PATCH body: a finite number when
-/// present, else `null` (the server clears the pin on null — both-or-neither, [#206]).
+/// present, else `null` (the server clears the pin on null - both-or-neither, [#206]).
 /// A non-finite `f64` (should never reach here) also becomes `null`.
 fn coord_json(value: Option<f64>) -> serde_json::Value {
     value
@@ -79,7 +79,7 @@ fn coord_json(value: Option<f64>) -> serde_json::Value {
 /// `None` scalar means "unchanged, omit"; the location pin is gated on
 /// `coordinates_edited` (both-or-neither: two numbers set it, two nulls clear it, and
 /// it is omitted entirely when the user did not touch it). An EMPTY map means nothing
-/// changed — the caller then skips the no-op PATCH. Pure + unit-tested.
+/// changed - the caller then skips the no-op PATCH. Pure + unit-tested.
 fn build_patch_body(
     patch: &SpeleoProjectMetadataPatch,
 ) -> serde_json::Map<String, serde_json::Value> {
@@ -1538,7 +1538,7 @@ impl AppState {
 
     /// [#206] PATCH the open remote project's metadata with ONLY the changed fields,
     /// then fold the SDB-authoritative name into the local `.stalx` (the name is the
-    /// one field stored on both sides; SDB is authoritative — see [#216]). No lock is
+    /// one field stored on both sides; SDB is authoritative - see [#216]). No lock is
     /// required (PATCH `/projects/{id}/` is `READ_AND_WRITE`, mutex-free); the edit
     /// lock governs only the survey file. Returns the post-edit server truth.
     pub(crate) fn speleodb_patch_project(
@@ -1548,6 +1548,16 @@ impl AppState {
         let link = self.speleodb_validated_link()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
+
+        // Reject a blank rename at the boundary: the server requires a non-empty name,
+        // and a folded "" would wipe the embedded `.stalx` name. `None` (unchanged) is
+        // fine; only an explicit empty/whitespace `Some` is refused. (The FE also gates
+        // this, but the backend must not depend on it.)
+        if patch.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
+            return Err(local_dto(SpeleoDbError::Io(
+                "a project name cannot be empty".to_owned(),
+            )));
+        }
 
         // Build the PATCH body from only the changed fields (both-or-neither location
         // pin gated on `coordinates_edited`; see `build_patch_body`).
@@ -1580,7 +1590,7 @@ impl AppState {
     /// setting the dirty bit ([#206]/[#216]): update the in-memory project, persist it
     /// directly (`db.save_project` bypasses the command/undo/dirty path and never
     /// touches the `speleo_link` table), and refresh the link's cached `project_name`.
-    /// Best-effort — a failure is logged, never surfaced (the server write already
+    /// Best-effort - a failure is logged, never surfaced (the server write already
     /// landed). Locks project → database in that order (mirrors `speleodb_render_tml`).
     fn speleodb_fold_local_name(&self, name: &str) {
         // Snapshot + update the in-memory name under the project lock, then release it
@@ -1629,6 +1639,44 @@ impl AppState {
     ) -> Result<SpeleoPublishResult, SpeleoErrorDto> {
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
+
+        // Guard rails BEFORE the irreversible create POST. The create is
+        // non-idempotent, so any deterministic failure AFTER it would leak an empty
+        // server project that a user retry then DUPLICATES - catch those up front:
+        //  - blank name: the server requires one, and a later name fold of "" would
+        //    also wipe the embedded `.stalx` name;
+        //  - already linked: the FE only offers Publish for a LOCAL project, but a stale
+        //    menu / race must not POST a duplicate and overwrite the existing hand-off
+        //    link (abandoning its lock);
+        //  - unresolvable cross-references: the one DETERMINISTIC `save_project` failure,
+        //    checked here so step 2's relocate cannot strand a freshly-created project.
+        if params.name.trim().is_empty() {
+            return Err(local_dto(SpeleoDbError::Io(
+                "a project name is required to publish".to_owned(),
+            )));
+        }
+        if self.speleodb_open_link().is_ok() {
+            return Err(local_dto(SpeleoDbError::Io(
+                "this project is already linked to SpeleoDB".to_owned(),
+            )));
+        }
+        {
+            let proj_guard = self
+                .project
+                .lock()
+                .map_err(|_| local_dto(SpeleoDbError::Io("project lock poisoned".to_owned())))?;
+            let project = proj_guard.as_ref().ok_or_else(|| {
+                local_dto(SpeleoDbError::Io(
+                    "no project is open to publish".to_owned(),
+                ))
+            })?;
+            if project.has_unresolvable_cross_references() {
+                return Err(local_dto(SpeleoDbError::Io(
+                    "can't publish: the project has unresolved cross-references (use Repair first)"
+                        .to_owned(),
+                )));
+            }
+        }
 
         // 1. Create the project. `type: other` + `exclude_geojson: false` are fixed
         //    (the repo-layout contract, [#208]); lat/long are both-or-neither;
@@ -1691,32 +1739,54 @@ impl AppState {
                 .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         }
 
-        // 4. Initial push: acquire the lock (we are the creator/ADMIN, so it is free),
-        //    upload the snapshot + `.tml` render, then release. No fence — nothing can
-        //    have raced a just-created project we hold the lock on.
-        self.speleodb_handle_auth(
+        // 4. Initial push (BEST-EFFORT): acquire the lock (we are the creator/ADMIN, so
+        //    it is free), upload the snapshot + `.tml` render, then release. No fence -
+        //    nothing can have raced a just-created project we hold the lock on.
+        //
+        //    CRUCIAL: the project now EXISTS on the server and is linked + dirty locally
+        //    (steps 1-3 already committed, irreversibly). Publish has therefore SUCCEEDED
+        //    as a create; the first push is a follow-on. A failure here must NOT return a
+        //    bare Err, because the webview only reloads the now-remote project on Ok - a
+        //    bare Err would strand it on a stale "local" view, where the Publish action
+        //    stays enabled and a retry re-POSTs a DUPLICATE server project. So we log any
+        //    acquire/upload failure and STILL return the cache path: the webview reloads a
+        //    dirty remote project and the user completes the upload via the normal Start
+        //    editing → Done (which surfaces a genuine push error, in context, if any).
+        match self.speleodb_handle_auth(
             Endpoint::Acquire,
             client::acquire_lock(&endpoint, &token, insecure_http, &project_id),
-        )
-        .map_err(|e| dto_for_error(Endpoint::Acquire, &e))?;
-
-        let upload = self.speleodb_upload(
-            &endpoint,
-            &token,
-            insecure_http,
-            &link,
-            Some("Initial publish from Stalagmight".to_owned()),
-        );
-
-        // Release the lock regardless of the push outcome (best-effort) — publish
-        // leaves the project read-only-remote, matching open-from-SDB. On an ambiguous
-        // upload the link stays dirty locally, so a later Start editing → Done re-pushes.
-        self.speleodb_release_best_effort(&endpoint, &token, insecure_http, &project_id);
-
-        // A hard upload failure surfaces (the project now EXISTS on the server and is
-        // linked + dirty locally, so the webview reloads it read-only and the user can
-        // retry the push); Confirmed / ambiguous-Unconfirmed both count as published.
-        upload?;
+        ) {
+            Ok(_) => {
+                let upload = self.speleodb_upload(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &link,
+                    Some("Initial publish from Stalagmight".to_owned()),
+                    // Skip the #216 name fold: the project was just created with this
+                    // exact name, so the fold GET would be a guaranteed no-op.
+                    false,
+                );
+                // Release the lock regardless of the push outcome (best-effort).
+                self.speleodb_release_best_effort(&endpoint, &token, insecure_http, &project_id);
+                if let Err(e) = upload {
+                    tracing::warn!(
+                        error = ?e,
+                        project_id = %project_id,
+                        purpose = "initial publish push",
+                        "speleodb_publish: project created + linked, but the initial push did not confirm; it stays dirty for a later Done"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    project_id = %project_id,
+                    purpose = "initial publish push",
+                    "speleodb_publish: project created + linked, but could not acquire the lock for the initial push; it stays dirty for a later Done"
+                );
+            }
+        }
 
         Ok(SpeleoPublishResult {
             project_id,
@@ -2130,7 +2200,8 @@ impl AppState {
             PushPlan::Diverged => return Ok(PushOutcome::Diverged),
         }
 
-        self.speleodb_upload(endpoint, token, insecure_http, link, message)
+        // Normal push (Done / Push): fold the SDB-authoritative name pre-push (#216).
+        self.speleodb_upload(endpoint, token, insecure_http, link, message, true)
     }
 
     /// Build the upload (VACUUM snapshot with the dirty bit cleared in the copy +
@@ -2143,6 +2214,7 @@ impl AppState {
         insecure_http: bool,
         link: &crate::models::SpeleoLink,
         message: Option<String>,
+        fold_metadata: bool,
     ) -> Result<PushOutcome, SpeleoErrorDto> {
         let project_id = &link.project_id;
         let commit_message = message
@@ -2158,16 +2230,20 @@ impl AppState {
         // Name is the only dual-stored field today (description/country/visibility live
         // only on the server). Best-effort and NON-fatal: a direct GET (NOT via the auth
         // handler, so a spurious 401 on this consistency refresh can't auto-drop the
-        // session mid-push — the upload itself routes through the handler and catches a
-        // truly dead token), and the fold never dirties the link.
-        match client::get_project(endpoint, token, insecure_http, project_id) {
-            Ok(project) => self.speleodb_fold_local_name(&project.name),
-            Err(e) => tracing::warn!(
-                error = %e,
-                project_id,
-                purpose = "pre-push SDB->.stalx name fold (#216)",
-                "speleodb_upload: could not GET project to fold the authoritative name; pushing the local name"
-            ),
+        // session mid-push - the upload itself routes through the handler and catches a
+        // truly dead token), and the fold never dirties the link. Skipped on the initial
+        // publish push (`fold_metadata == false`): that GET would hit a project created
+        // milliseconds earlier whose name is already known-current, a wasted round-trip.
+        if fold_metadata {
+            match client::get_project(endpoint, token, insecure_http, project_id) {
+                Ok(project) => self.speleodb_fold_local_name(&project.name),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    project_id,
+                    purpose = "pre-push SDB->.stalx name fold (#216)",
+                    "speleodb_upload: could not GET project to fold the authoritative name; pushing the local name"
+                ),
+            }
         }
 
         // The live on-disk `.stalx` (the open project's cache file) and the scratch
@@ -2803,7 +2879,7 @@ mod tests {
         //   struct-init `base_commit_sha:` (a fresh SpeleoLink):
         //     1. speleodb_open_project — stamp BASE on pull
         //     2. speleodb_fast_forward — re-stamp BASE = tip after a clean FF
-        //     3. speleodb_publish — stamp BASE = the create response's latest_commit
+        //     3. speleodb_publish - stamp BASE = the create response's latest_commit
         //        (None for a brand-new repo) when minting the link for a published
         //        local project (#207)
         let src = include_str!("speleodb.rs");
@@ -4122,8 +4198,9 @@ mod tests {
         );
 
         // Upload to a dead endpoint -> transport failure -> ambiguous outcome.
+        // (fold_metadata=false keeps the test on the upload path, not the #216 GET.)
         let outcome = state
-            .speleodb_upload("http://127.0.0.1:1/", &token, false, &link, None)
+            .speleodb_upload("http://127.0.0.1:1/", &token, false, &link, None, false)
             .expect("an ambiguous upload returns an outcome, not a hard error");
         assert!(
             matches!(outcome, PushOutcome::Unconfirmed),

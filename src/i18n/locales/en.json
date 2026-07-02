@@ -1139,7 +1139,8 @@
       },
       "name": {
         "label": "Project name",
-        "help": "The name of this cave system / project."
+        "help": "The name of this cave system / project.",
+        "remoteHelp": "This project is managed by SpeleoDB. Edit its name in the SpeleoDB tab."
       }
     },
     "collabReview": {
@@ -2813,7 +2814,8 @@
       "submit": "Publish",
       "submitting": "Publishing…",
       "success": "Project published to SpeleoDB.",
-      "failed": "Could not publish to SpeleoDB"
+      "failed": "Could not publish to SpeleoDB",
+      "reloadFailed": "Published to SpeleoDB, but the project could not be reopened. Reopen it from SpeleoDB."
     }
   }
 }

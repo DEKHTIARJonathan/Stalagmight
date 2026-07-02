@@ -7,6 +7,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { invokeIpc } from '../../utils/ipc';
 import { humanizeSpeleoError, speleoErrorAction } from '../../utils/speleoError';
+import { validateCoordinates } from '../../utils/gps';
 import { COUNTRIES } from '../../data/countries';
 import type { SpeleoPublishParams, SpeleoPublishResult, Visibility } from '../../types/ipc.generated';
 
@@ -39,10 +40,13 @@ export default function PublishToSpeleoDbDialog() {
   const lonTrim = longitude.trim();
   const latNum = latTrim === '' ? null : Number(latTrim);
   const lonNum = lonTrim === '' ? null : Number(lonTrim);
-  const latValid = latTrim === '' || Number.isFinite(latNum);
-  const lonValid = lonTrim === '' || Number.isFinite(lonNum);
   const coordsPairValid = (latTrim === '') === (lonTrim === '');
-  const coordsValid = latValid && lonValid && coordsPairValid;
+  // When both are provided they must be finite AND in range - reuse the shared
+  // validator (finiteness alone would let latitude 999 through to the server).
+  const bothProvided = latTrim !== '' && lonTrim !== '';
+  const coordsRangeValid =
+    !bothProvided || (latNum !== null && lonNum !== null && validateCoordinates(latNum, lonNum).valid);
+  const coordsValid = coordsPairValid && coordsRangeValid;
 
   const canPublish = name.trim().length > 0 && country !== '' && coordsValid && !publishing;
 
@@ -61,8 +65,15 @@ export default function PublishToSpeleoDbDialog() {
     };
     try {
       const result = await invokeIpc<SpeleoPublishResult>('speleodb_publish', { params });
-      // Reload the now-remote project (re-seeds link status), then refresh for good measure.
-      await useProjectStore.getState().loadProject(result.local_path);
+      // The project now EXISTS on the server and is linked. Reload its cache copy so the
+      // app converges on the now-remote project. loadProject reports failure via
+      // {success:false} (it never throws - it may have opened a recovery dialog), so a
+      // failed reload must NOT claim success or close over a stale/local view.
+      const { success } = await useProjectStore.getState().loadProject(result.local_path);
+      if (!success) {
+        showToast(t('speleodb.publish.reloadFailed'), 'speleodb-publish');
+        return;
+      }
       await useSpeleoStore.getState().refreshLinkStatus();
       showToast(t('speleodb.publish.success'), 'speleodb-publish');
       closeDialog();
@@ -93,7 +104,10 @@ export default function PublishToSpeleoDbDialog() {
     name.trim() !== (project?.name ?? '').trim() ||
     description.trim() !== '' ||
     country !== '' ||
-    visibility !== 'PRIVATE';
+    visibility !== 'PRIVATE' ||
+    // Include the coordinate pins so entering ONLY a location still prompts on close.
+    latTrim !== '' ||
+    lonTrim !== '';
 
   return (
     <DialogWrapper
@@ -200,8 +214,10 @@ export default function PublishToSpeleoDbDialog() {
             />
           </div>
         </div>
-        {!coordsPairValid && (
-          <p className="text-error text-xs">{t('speleodb.projectSettings.coordinatesHint')}</p>
+        {!coordsValid && (
+          <p className="text-error text-xs" data-testid="publish-to-speleodb-dialog-coords-error">
+            {t('speleodb.projectSettings.coordinatesHint')}
+          </p>
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">

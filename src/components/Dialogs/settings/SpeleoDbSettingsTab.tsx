@@ -8,6 +8,7 @@ import { useSpeleoStore } from '../../../store/speleoStore';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 import { permissionAtLeast } from '../../../utils/speleoPermission';
+import { validateCoordinates } from '../../../utils/gps';
 import { COUNTRIES } from '../../../data/countries';
 import type {
   SpeleoProjectMetadata,
@@ -92,10 +93,13 @@ export function SpeleoDbSettingsTab() {
   const lonTrim = form?.longitude.trim() ?? '';
   const latNum = latTrim === '' ? null : Number(latTrim);
   const lonNum = lonTrim === '' ? null : Number(lonTrim);
-  const latValid = latTrim === '' || Number.isFinite(latNum);
-  const lonValid = lonTrim === '' || Number.isFinite(lonNum);
   const coordsPairValid = (latTrim === '') === (lonTrim === '');
-  const coordsValid = latValid && lonValid && coordsPairValid;
+  // When both are set they must be finite AND in range - reuse the shared validator
+  // (finiteness alone would let an out-of-range latitude reach the server).
+  const bothProvided = latTrim !== '' && lonTrim !== '';
+  const coordsRangeValid =
+    !bothProvided || (latNum !== null && lonNum !== null && validateCoordinates(latNum, lonNum).valid);
+  const coordsValid = coordsPairValid && coordsRangeValid;
 
   // Which fields differ from the loaded baseline (drives the minimal PATCH + Save gate).
   const nameChanged = !!baseline && !!form && form.name !== baseline.name;
@@ -167,10 +171,11 @@ export function SpeleoDbSettingsTab() {
   const handleEnableRendering = useCallback(async () => {
     setEnablingRendering(true);
     try {
-      await invokeIpc('speleodb_set_exclude_geojson', { exclude: false });
+      // Reuse the shared store action (single source of truth for the IPC + the
+      // rendering-disabled banner drop + link re-seed), then mirror the flag into this
+      // tab's local baseline and toast. It throws on failure.
+      await useSpeleoStore.getState().enableRendering();
       setBaseline((prev) => (prev ? { ...prev, exclude_geojson: false } : prev));
-      // Keep the shared shell in sync (it surfaces the rendering-disabled banner).
-      void refreshLinkStatus();
       showToast(t('speleodb.projectSettings.rendering.enabled'), 'speleodb-project-settings');
     } catch (e) {
       showToast(
@@ -180,7 +185,7 @@ export function SpeleoDbSettingsTab() {
     } finally {
       setEnablingRendering(false);
     }
-  }, [refreshLinkStatus, showToast, t]);
+  }, [showToast, t]);
 
   if (loading) {
     return (
@@ -313,7 +318,7 @@ export function SpeleoDbSettingsTab() {
             />
           </div>
         </div>
-        {!coordsPairValid && (
+        {!coordsValid && (
           <p className="text-error text-xs pb-2" data-testid="speleodb-settings-coords-error">
             {t('speleodb.projectSettings.coordinatesHint')}
           </p>

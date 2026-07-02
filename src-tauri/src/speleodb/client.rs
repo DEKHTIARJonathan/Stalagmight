@@ -677,7 +677,7 @@ pub(crate) fn patch_project(
     parse_project(&body, "patch project response")
 }
 
-/// `POST /api/v2/projects/` with a caller-built JSON body — create a fresh project
+/// `POST /api/v2/projects/` with a caller-built JSON body - create a fresh project
 /// and return the full parsed [`Project`]. `idempotent = false` (run once so a
 /// mid-response failure can't double-submit a create). The #207 create-on-SDB
 /// orchestration builds the payload (name/description/country/visibility/`type`/
