@@ -1,0 +1,179 @@
+/**
+ * Component test (#215) - the admin half of the SpeleoDB Project Settings tab:
+ * collaborator management (users + teams), lock release, and project delete.
+ *
+ * Covers the ADMIN-vs-READ_ONLY gating, the exact IPC payloads the CRUD controls
+ * send, the self-row lockout, the lock-release flow, and the type-to-confirm delete
+ * (which unlinks + closes on success).
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+
+const invokeIpcMock = vi.hoisted(() => vi.fn());
+vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+
+import { SpeleoProjectAdmin } from './SpeleoProjectAdmin';
+import { useSpeleoStore } from '../../../store/speleoStore';
+import { useProjectStore } from '../../../store/projectStore';
+import { useUIStore } from '../../../store/uiStore';
+import type { Permission, SpeleoCollaborators } from '../../../types/ipc.generated';
+
+const ROSTER: SpeleoCollaborators = {
+  users: [
+    { email: 'me@x.com', permission: 'ADMIN', is_self: true },
+    { email: 'bob@x.com', permission: 'READ_ONLY', is_self: false },
+  ],
+  teams: [{ team_id: 't1', team_name: 'Divers', permission: 'READ_AND_WRITE' }],
+};
+
+let refreshLinkStatus: ReturnType<typeof vi.fn>;
+let clearLink: ReturnType<typeof vi.fn>;
+let closeDialog: ReturnType<typeof vi.fn>;
+
+const seed = (permission: Permission, lockHolder: string | null = null, editState = 'read-only') => {
+  useSpeleoStore.setState({
+    link: {
+      permission,
+      editState,
+      lockHolder,
+      lockedByOther: lockHolder != null && editState !== 'editing',
+      hasUnpushedEdits: false,
+      remoteState: 'up_to_date',
+      noAccess: false,
+      serverError: null,
+    } as never,
+    refreshLinkStatus,
+    clearLink,
+  });
+};
+
+const defaultMock = () =>
+  invokeIpcMock.mockImplementation((cmd: string) => {
+    if (cmd === 'speleodb_list_collaborators') return Promise.resolve(ROSTER);
+    if (cmd === 'speleodb_list_teams')
+      return Promise.resolve([
+        { id: 't1', name: 'Divers' },
+        { id: 't2', name: 'Surveyors' },
+      ]);
+    // add/set/remove all return the (unchanged, for the test) refreshed roster.
+    return Promise.resolve(ROSTER);
+  });
+
+beforeEach(() => {
+  invokeIpcMock.mockReset();
+  refreshLinkStatus = vi.fn(async () => {});
+  clearLink = vi.fn();
+  closeDialog = vi.fn();
+  useUIStore.setState({ showToast: vi.fn(), closeDialog });
+  useProjectStore.setState({ project: { name: 'My Cave' } as never });
+  defaultMock();
+});
+
+describe('SpeleoProjectAdmin', () => {
+  it('renders the user + team roster and the WEB_VIEWER note', async () => {
+    seed('ADMIN');
+    render(<SpeleoProjectAdmin />);
+    expect(await screen.findByTestId('speleodb-collab-user-bob@x.com')).toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-collab-team-t1')).toHaveTextContent('Divers');
+    expect(screen.getByTestId('speleodb-collaborators-webviewer-note')).toBeInTheDocument();
+  });
+
+  it('does not offer mutation controls to a non-admin', async () => {
+    seed('READ_ONLY');
+    render(<SpeleoProjectAdmin />);
+    expect(await screen.findByTestId('speleodb-collaborators-readonly-badge')).toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-collaborators-add-user')).toBeNull();
+    expect(screen.queryByTestId('speleodb-collab-user-remove-bob@x.com')).toBeNull();
+    // No delete danger zone for a non-admin.
+    expect(screen.queryByTestId('speleodb-delete-button')).toBeNull();
+  });
+
+  it('disables its own row (no self grant/remove)', async () => {
+    seed('ADMIN');
+    render(<SpeleoProjectAdmin />);
+    await screen.findByTestId('speleodb-collab-user-me@x.com');
+    expect(screen.queryByTestId('speleodb-collab-user-remove-me@x.com')).toBeNull();
+    expect(screen.queryByTestId('speleodb-collab-user-level-me@x.com')).toBeNull();
+    // But another user's row IS editable.
+    expect(screen.getByTestId('speleodb-collab-user-remove-bob@x.com')).toBeInTheDocument();
+  });
+
+  it('adds a collaborator with the chosen email + level', async () => {
+    seed('ADMIN');
+    render(<SpeleoProjectAdmin />);
+    await userEvent.type(await screen.findByTestId('speleodb-collaborators-add-email'), 'new@x.com');
+    await userEvent.selectOptions(
+      screen.getByTestId('speleodb-collaborators-add-level'),
+      'READ_AND_WRITE',
+    );
+    await userEvent.click(screen.getByTestId('speleodb-collaborators-add-user'));
+    await waitFor(() => {
+      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_add_collaborator');
+      expect(call).toBeTruthy();
+      expect(call![1]).toEqual({ email: 'new@x.com', permission: 'READ_AND_WRITE' });
+    });
+  });
+
+  it('changes and removes another user with the right payloads', async () => {
+    seed('ADMIN');
+    render(<SpeleoProjectAdmin />);
+    await userEvent.selectOptions(
+      await screen.findByTestId('speleodb-collab-user-level-bob@x.com'),
+      'READ_AND_WRITE',
+    );
+    await waitFor(() => {
+      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_set_collaborator');
+      expect(call![1]).toEqual({ email: 'bob@x.com', permission: 'READ_AND_WRITE' });
+    });
+    await userEvent.click(screen.getByTestId('speleodb-collab-user-remove-bob@x.com'));
+    await waitFor(() => {
+      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_remove_collaborator');
+      expect(call![1]).toEqual({ email: 'bob@x.com' });
+    });
+  });
+
+  it('adds a team via the picker (no ADMIN option offered)', async () => {
+    seed('ADMIN');
+    render(<SpeleoProjectAdmin />);
+    const picker = await screen.findByTestId('speleodb-collaborators-add-team-id');
+    // Teams cannot be ADMIN: the level select offers only the three non-admin tiers.
+    const levelSelect = screen.getByTestId('speleodb-collaborators-add-team-level');
+    expect(levelSelect.querySelectorAll('option')).toHaveLength(3);
+    await userEvent.selectOptions(picker, 't2');
+    await userEvent.click(screen.getByTestId('speleodb-collaborators-add-team'));
+    await waitFor(() => {
+      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_add_team');
+      expect(call![1]).toEqual({ teamId: 't2', permission: 'READ_ONLY' });
+    });
+  });
+
+  it('releases a held lock and refreshes status', async () => {
+    seed('ADMIN', 'bob@x.com');
+    render(<SpeleoProjectAdmin />);
+    const btn = await screen.findByTestId('speleodb-lock-release');
+    expect(screen.getByTestId('speleodb-lock-holder')).toHaveTextContent('bob@x.com');
+    await userEvent.click(btn);
+    await waitFor(() =>
+      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_release_current_lock')).toBe(
+        true,
+      ),
+    );
+    await waitFor(() => expect(refreshLinkStatus).toHaveBeenCalled());
+  });
+
+  it('gates delete on typing the project name, then unlinks + closes', async () => {
+    seed('ADMIN');
+    render(<SpeleoProjectAdmin />);
+    const del = await screen.findByTestId('speleodb-delete-button');
+    expect(del).toBeDisabled();
+    await userEvent.type(screen.getByTestId('speleodb-delete-confirm-input'), 'My Cave');
+    expect(del).toBeEnabled();
+    await userEvent.click(del);
+    await waitFor(() =>
+      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_delete_project')).toBe(true),
+    );
+    await waitFor(() => expect(clearLink).toHaveBeenCalled());
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+  });
+});

@@ -64,10 +64,11 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    DoneResult, Permission, PushResult, RemoteState, SpeleoDbAction, SpeleoErrorDto,
-    SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
-    SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
-    SpeleoSessionStatus, StartEditingResult, UpdateResult, Visibility,
+    DoneResult, Permission, PushResult, RemoteState, SpeleoCollaborator, SpeleoCollaborators,
+    SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
+    SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
+    SpeleoPublishResult, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption,
+    StartEditingResult, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -313,6 +314,11 @@ fn main() {
     export::<SpeleoProjectMetadataPatch>(&out_dir);
     export::<SpeleoPublishParams>(&out_dir);
     export::<SpeleoPublishResult>(&out_dir);
+    // #215 full Project Settings: collaborator roster (users + teams) + team picker
+    export::<SpeleoCollaborator>(&out_dir);
+    export::<SpeleoTeamGrant>(&out_dir);
+    export::<SpeleoCollaborators>(&out_dir);
+    export::<SpeleoTeamOption>(&out_dir);
 
     let export_list = [
         "CommandResult",
@@ -502,6 +508,10 @@ fn main() {
         "SpeleoProjectMetadataPatch",
         "SpeleoPublishParams",
         "SpeleoPublishResult",
+        "SpeleoCollaborator",
+        "SpeleoTeamGrant",
+        "SpeleoCollaborators",
+        "SpeleoTeamOption",
     ];
 
     let mut generated =

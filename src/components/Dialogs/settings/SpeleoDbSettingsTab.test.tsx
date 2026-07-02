@@ -54,6 +54,8 @@ describe('SpeleoDbSettingsTab', () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_get_project_metadata') return Promise.resolve(META);
       if (cmd === 'speleodb_patch_project') return Promise.resolve({ ...META, name: 'Cave B' });
+      if (cmd === 'speleodb_list_collaborators') return Promise.resolve({ users: [], teams: [] });
+      if (cmd === 'speleodb_list_teams') return Promise.resolve([]);
       return Promise.resolve(null);
     });
     seedRemote('READ_AND_WRITE');
@@ -86,7 +88,11 @@ describe('SpeleoDbSettingsTab', () => {
   });
 
   it('disables Save when only one coordinate is entered (both-or-neither)', async () => {
-    invokeIpcMock.mockResolvedValue(META);
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_list_collaborators') return Promise.resolve({ users: [], teams: [] });
+      if (cmd === 'speleodb_list_teams') return Promise.resolve([]);
+      return Promise.resolve(META);
+    });
     seedRemote('READ_AND_WRITE');
     render(<SpeleoDbSettingsTab />);
 
@@ -97,7 +103,11 @@ describe('SpeleoDbSettingsTab', () => {
   });
 
   it('disables Save for an out-of-range coordinate pair', async () => {
-    invokeIpcMock.mockResolvedValue(META);
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_list_collaborators') return Promise.resolve({ users: [], teams: [] });
+      if (cmd === 'speleodb_list_teams') return Promise.resolve([]);
+      return Promise.resolve(META);
+    });
     seedRemote('READ_AND_WRITE');
     render(<SpeleoDbSettingsTab />);
 
@@ -110,7 +120,11 @@ describe('SpeleoDbSettingsTab', () => {
   });
 
   it('is read-only (badge, disabled fields, no Save) without write permission', async () => {
-    invokeIpcMock.mockResolvedValue(META);
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_list_collaborators') return Promise.resolve({ users: [], teams: [] });
+      if (cmd === 'speleodb_list_teams') return Promise.resolve([]);
+      return Promise.resolve(META);
+    });
     seedRemote('READ_ONLY');
     render(<SpeleoDbSettingsTab />);
 

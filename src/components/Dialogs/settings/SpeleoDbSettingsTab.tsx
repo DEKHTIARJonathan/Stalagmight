@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SettingsSection } from './SettingsSection';
+import { SpeleoProjectAdmin } from './SpeleoProjectAdmin';
 import { Button } from '../../common/Button';
 import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
@@ -359,6 +360,9 @@ export function SpeleoDbSettingsTab() {
           </Button>
         </div>
       )}
+
+      {/* [#215] Collaborators (users + teams), lock release, and project delete. */}
+      <SpeleoProjectAdmin />
     </div>
   );
 }
