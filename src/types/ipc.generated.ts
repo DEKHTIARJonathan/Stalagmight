@@ -180,3 +180,8 @@ export * from './ipc/StartEditingResult';
 export * from './ipc/DoneResult';
 export * from './ipc/UpdateResult';
 export * from './ipc/PushResult';
+export * from './ipc/Visibility';
+export * from './ipc/SpeleoProjectMetadata';
+export * from './ipc/SpeleoProjectMetadataPatch';
+export * from './ipc/SpeleoPublishParams';
+export * from './ipc/SpeleoPublishResult';

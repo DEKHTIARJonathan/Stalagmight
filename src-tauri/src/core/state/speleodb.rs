@@ -21,7 +21,9 @@ use crate::speleodb::sync::{self, FenceOutcome, PushPlan, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
     DoneResult, PushResult, RemoteState, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus,
-    SpeleoLoginResult, SpeleoOpenResult, SpeleoSessionStatus, StartEditingResult, UpdateResult,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoSessionStatus, StartEditingResult,
+    UpdateResult, Visibility,
 };
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
@@ -52,6 +54,98 @@ fn resolve_endpoint(
         .map(str::trim)
         .find(|e| !e.is_empty())
         .map(str::to_owned)
+}
+
+/// The canonical SpeleoDB wire label for a visibility ([#206]/[#207]). The server's
+/// `CustomChoiceField` accepts the enum NAME case-insensitively on input; we send the
+/// UPPERCASE label it returns so a round-trip is byte-identical.
+fn visibility_label(visibility: Visibility) -> &'static str {
+    match visibility {
+        Visibility::Private => "PRIVATE",
+        Visibility::Public => "PUBLIC",
+    }
+}
+
+/// Map an optional coordinate to a JSON value for a PATCH body: a finite number when
+/// present, else `null` (the server clears the pin on null — both-or-neither, [#206]).
+/// A non-finite `f64` (should never reach here) also becomes `null`.
+fn coord_json(value: Option<f64>) -> serde_json::Value {
+    value
+        .and_then(serde_json::Number::from_f64)
+        .map_or(serde_json::Value::Null, serde_json::Value::Number)
+}
+
+/// Build the `PATCH /projects/{id}/` body from ONLY the changed fields ([#206]). A
+/// `None` scalar means "unchanged, omit"; the location pin is gated on
+/// `coordinates_edited` (both-or-neither: two numbers set it, two nulls clear it, and
+/// it is omitted entirely when the user did not touch it). An EMPTY map means nothing
+/// changed — the caller then skips the no-op PATCH. Pure + unit-tested.
+fn build_patch_body(
+    patch: &SpeleoProjectMetadataPatch,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut body = serde_json::Map::new();
+    if let Some(name) = &patch.name {
+        body.insert("name".to_owned(), serde_json::Value::from(name.clone()));
+    }
+    if let Some(description) = &patch.description {
+        body.insert(
+            "description".to_owned(),
+            serde_json::Value::from(description.clone()),
+        );
+    }
+    if let Some(country) = &patch.country {
+        body.insert(
+            "country".to_owned(),
+            serde_json::Value::from(country.clone()),
+        );
+    }
+    if let Some(visibility) = patch.visibility {
+        body.insert(
+            "visibility".to_owned(),
+            serde_json::Value::from(visibility_label(visibility)),
+        );
+    }
+    if patch.coordinates_edited {
+        body.insert("latitude".to_owned(), coord_json(patch.latitude));
+        body.insert("longitude".to_owned(), coord_json(patch.longitude));
+    }
+    body
+}
+
+/// Build the `POST /projects/` body for a create-on-SDB publish ([#207]). `type` is
+/// fixed to `other` and `exclude_geojson` to `false` (the repo-layout contract,
+/// [#208]); `created_by` is injected server-side. lat/long are both-or-neither: sent
+/// only when BOTH are present and finite, else omitted. Pure + unit-tested.
+fn build_create_body(params: &SpeleoPublishParams) -> serde_json::Value {
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "name".to_owned(),
+        serde_json::Value::from(params.name.clone()),
+    );
+    body.insert(
+        "description".to_owned(),
+        serde_json::Value::from(params.description.clone()),
+    );
+    body.insert(
+        "country".to_owned(),
+        serde_json::Value::from(params.country.clone()),
+    );
+    body.insert("type".to_owned(), serde_json::Value::from("other"));
+    body.insert("exclude_geojson".to_owned(), serde_json::Value::Bool(false));
+    body.insert(
+        "visibility".to_owned(),
+        serde_json::Value::from(visibility_label(params.visibility)),
+    );
+    if let (Some(lat), Some(lon)) = (params.latitude, params.longitude) {
+        if let (Some(lat), Some(lon)) = (
+            serde_json::Number::from_f64(lat),
+            serde_json::Number::from_f64(lon),
+        ) {
+            body.insert("latitude".to_owned(), serde_json::Value::Number(lat));
+            body.insert("longitude".to_owned(), serde_json::Value::Number(lon));
+        }
+    }
+    serde_json::Value::Object(body)
 }
 
 /// Reject any `project_id` that is not a plain SpeleoDB project UUID before it is
@@ -1423,6 +1517,214 @@ impl AppState {
         Ok(())
     }
 
+    /// [#206] GET the open remote project's authoritative metadata so the Project
+    /// Settings tab can prefill the current server truth. No lock required (reading
+    /// metadata is permission-free); routed through the auth handler so a dead token
+    /// here forces re-login (mirrors the other project-scoped reads).
+    pub(crate) fn speleodb_get_project_metadata(
+        &self,
+    ) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
+        let link = self.speleodb_validated_link()?;
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+        let project = self
+            .speleodb_handle_auth(
+                Endpoint::GetProject,
+                client::get_project(&endpoint, &token, insecure_http, &link.project_id),
+            )
+            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        Ok(SpeleoProjectMetadata::from_project(&project))
+    }
+
+    /// [#206] PATCH the open remote project's metadata with ONLY the changed fields,
+    /// then fold the SDB-authoritative name into the local `.stalx` (the name is the
+    /// one field stored on both sides; SDB is authoritative — see [#216]). No lock is
+    /// required (PATCH `/projects/{id}/` is `READ_AND_WRITE`, mutex-free); the edit
+    /// lock governs only the survey file. Returns the post-edit server truth.
+    pub(crate) fn speleodb_patch_project(
+        &self,
+        patch: SpeleoProjectMetadataPatch,
+    ) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
+        let link = self.speleodb_validated_link()?;
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+
+        // Build the PATCH body from only the changed fields (both-or-neither location
+        // pin gated on `coordinates_edited`; see `build_patch_body`).
+        let body = build_patch_body(&patch);
+
+        // Nothing actually changed: return the current server truth without a no-op
+        // PATCH (avoids an empty-body 400 and a needless write).
+        if body.is_empty() {
+            return self.speleodb_get_project_metadata();
+        }
+
+        let payload = serde_json::Value::Object(body).to_string();
+        let updated = self
+            .speleodb_handle_auth(
+                Endpoint::GetProject,
+                client::patch_project(&endpoint, &token, insecure_http, &link.project_id, &payload),
+            )
+            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+
+        // Fold the (possibly server-normalized) name into the open `.stalx` when it
+        // was edited, so the embedded project name tracks SDB without dirtying.
+        if patch.name.is_some() {
+            self.speleodb_fold_local_name(&updated.name);
+        }
+
+        Ok(SpeleoProjectMetadata::from_project(&updated))
+    }
+
+    /// Fold an SDB-authoritative project name into the OPEN local `.stalx` WITHOUT
+    /// setting the dirty bit ([#206]/[#216]): update the in-memory project, persist it
+    /// directly (`db.save_project` bypasses the command/undo/dirty path and never
+    /// touches the `speleo_link` table), and refresh the link's cached `project_name`.
+    /// Best-effort — a failure is logged, never surfaced (the server write already
+    /// landed). Locks project → database in that order (mirrors `speleodb_render_tml`).
+    fn speleodb_fold_local_name(&self, name: &str) {
+        // Snapshot + update the in-memory name under the project lock, then release it
+        // before taking the database lock (project → database order).
+        let to_persist = match self.project.lock() {
+            Ok(mut proj_guard) => match proj_guard.as_mut() {
+                Some(project) if project.name != name => {
+                    project.name = name.to_owned();
+                    Some(project.clone())
+                }
+                _ => None,
+            },
+            Err(_) => None,
+        };
+        if let Some(project) = to_persist {
+            if let Ok(mut db_guard) = self.database.lock() {
+                if let Some(db) = db_guard.as_mut() {
+                    if let Err(e) = db.save_project(&project) {
+                        tracing::warn!(
+                            error = %e,
+                            purpose = "fold SDB-authoritative name into local .stalx",
+                            "speleodb: failed to persist folded project name"
+                        );
+                    }
+                }
+            }
+        }
+        // Keep the cached link name in step (dirty bit deliberately untouched).
+        let _ = self.speleodb_mutate_link(|l| {
+            if l.project_name != name {
+                l.project_name = name.to_owned();
+            }
+        });
+    }
+
+    /// [#207] Create the OPEN local project on SpeleoDB and push its first revision.
+    /// Requires an authenticated session but NOT an existing remote link (this is
+    /// what mints one). Steps: `POST /projects/` → relocate the working copy into the
+    /// SpeleoDB cache (remote projects live there, mirroring `speleodb_open_project`)
+    /// → stamp a fresh `SpeleoLink` (dirty) → acquire → upload → release. No fence is
+    /// taken: a project created a moment ago and locked by us cannot have diverged.
+    /// Returns the new id + endpoint + the cache `local_path` the webview reloads.
+    pub(crate) fn speleodb_publish(
+        &self,
+        params: SpeleoPublishParams,
+    ) -> Result<SpeleoPublishResult, SpeleoErrorDto> {
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+
+        // 1. Create the project. `type: other` + `exclude_geojson: false` are fixed
+        //    (the repo-layout contract, [#208]); lat/long are both-or-neither;
+        //    `created_by` is injected server-side. Runs once (create is
+        //    non-idempotent) so a mid-response failure can't double-submit.
+        let payload = build_create_body(&params).to_string();
+
+        let created = self
+            .speleodb_handle_auth(
+                Endpoint::CreateProject,
+                client::create_project_with(&endpoint, &token, insecure_http, &payload),
+            )
+            .map_err(|e| dto_for_error(Endpoint::CreateProject, &e))?;
+
+        let project_id = created.id.clone();
+        // Validate the server-issued id before it reaches a cache-path join.
+        validate_project_id(&project_id).map_err(local_dto)?;
+
+        // 2. Relocate the open project's working copy into the SpeleoDB cache. A remote
+        //    project's canonical file lives at `speleodb_cache_path` (open/fast-forward
+        //    both extract there), and the push machinery reads exactly that path.
+        //    `save_project(Some(dest))` writes a fresh `.stalx` there AND switches the
+        //    active database + `project.file_path` to it.
+        let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        }
+        let save = self.save_project(Some(dest.clone()), false);
+        if !save.success {
+            return Err(local_dto(SpeleoDbError::Io(format!(
+                "failed to write project into the SpeleoDB cache: {}",
+                save.error.unwrap_or_else(|| "unknown error".to_owned())
+            ))));
+        }
+
+        // 3. Stamp a fresh hand-off link onto the cached file. BASE = the create
+        //    response's latest_commit (None for a brand-new empty repo); dirty = true
+        //    (the local content is not on the server yet). New sanctioned stamp site.
+        let link = crate::models::SpeleoLink {
+            endpoint: endpoint.clone(),
+            project_id: project_id.clone(),
+            project_name: params.name.clone(),
+            base_commit_sha: created.latest_commit.as_ref().map(|c| c.id.clone()),
+            has_unpushed_edits: true,
+            last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
+            last_verify_at: None,
+        };
+        {
+            let db_guard = self
+                .database
+                .lock()
+                .map_err(|_| local_dto(SpeleoDbError::Io("database lock poisoned".to_owned())))?;
+            let db = db_guard.as_ref().ok_or_else(|| {
+                local_dto(SpeleoDbError::Io(
+                    "no open database after writing the cache file".to_owned(),
+                ))
+            })?;
+            db.save_speleo_link(Some(&link))
+                .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        }
+
+        // 4. Initial push: acquire the lock (we are the creator/ADMIN, so it is free),
+        //    upload the snapshot + `.tml` render, then release. No fence — nothing can
+        //    have raced a just-created project we hold the lock on.
+        self.speleodb_handle_auth(
+            Endpoint::Acquire,
+            client::acquire_lock(&endpoint, &token, insecure_http, &project_id),
+        )
+        .map_err(|e| dto_for_error(Endpoint::Acquire, &e))?;
+
+        let upload = self.speleodb_upload(
+            &endpoint,
+            &token,
+            insecure_http,
+            &link,
+            Some("Initial publish from Stalagmight".to_owned()),
+        );
+
+        // Release the lock regardless of the push outcome (best-effort) — publish
+        // leaves the project read-only-remote, matching open-from-SDB. On an ambiguous
+        // upload the link stays dirty locally, so a later Start editing → Done re-pushes.
+        self.speleodb_release_best_effort(&endpoint, &token, insecure_http, &project_id);
+
+        // A hard upload failure surfaces (the project now EXISTS on the server and is
+        // linked + dirty locally, so the webview reloads it read-only and the user can
+        // retry the push); Confirmed / ambiguous-Unconfirmed both count as published.
+        upload?;
+
+        Ok(SpeleoPublishResult {
+            project_id,
+            endpoint,
+            local_path: dest.to_string_lossy().into_owned(),
+        })
+    }
+
     /// Best-effort: re-GET the project and return who holds its mutex (the active
     /// lock's user email), or `None` if unlocked / the lookup fails. Deliberately NOT
     /// routed through [`Self::speleodb_handle_auth`] — these are best-effort
@@ -1848,6 +2150,26 @@ impl AppState {
             .filter(|m| !m.is_empty())
             .unwrap_or_else(|| "Updated in Stalagmight".to_owned());
 
+        // [#216] Pre-push SDB → `.stalx` metadata fold. The project name is stored on
+        // BOTH the server and the embedded `.stalx` (via the Project model), and SDB is
+        // authoritative for it (edited through the Project Settings tab, or by another
+        // session / the web UI). Fold the server's current name into the open project
+        // BEFORE the flush below so the pushed snapshot carries the authoritative name.
+        // Name is the only dual-stored field today (description/country/visibility live
+        // only on the server). Best-effort and NON-fatal: a direct GET (NOT via the auth
+        // handler, so a spurious 401 on this consistency refresh can't auto-drop the
+        // session mid-push — the upload itself routes through the handler and catches a
+        // truly dead token), and the fold never dirties the link.
+        match client::get_project(endpoint, token, insecure_http, project_id) {
+            Ok(project) => self.speleodb_fold_local_name(&project.name),
+            Err(e) => tracing::warn!(
+                error = %e,
+                project_id,
+                purpose = "pre-push SDB->.stalx name fold (#216)",
+                "speleodb_upload: could not GET project to fold the authoritative name; pushing the local name"
+            ),
+        }
+
         // The live on-disk `.stalx` (the open project's cache file) and the scratch
         // snapshot / render paths beside it.
         let live = self.speleodb_cache_path(project_id).map_err(local_dto)?;
@@ -2068,16 +2390,150 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        auth_error_drops_token, classify_dump_entry, clear_snapshot_dirty, head_with_empty_retry,
-        lock_held_by_me, preserved_display_settings, resolve_endpoint, restore_display_settings,
-        reverify_due, validate_project_id, whoami_indicates_dead_token, Endpoint, PushOutcome,
-        SpeleoDbSession, REVERIFY_INTERVAL_SECS,
+        auth_error_drops_token, build_create_body, build_patch_body, classify_dump_entry,
+        clear_snapshot_dirty, coord_json, head_with_empty_retry, lock_held_by_me,
+        preserved_display_settings, resolve_endpoint, restore_display_settings, reverify_due,
+        validate_project_id, visibility_label, whoami_indicates_dead_token, Endpoint, PushOutcome,
+        SpeleoDbSession, SpeleoProjectMetadataPatch, SpeleoPublishParams, Visibility,
+        REVERIFY_INTERVAL_SECS,
     };
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
     use crate::speleodb::auth::{InMemoryStore, SecretStore, TokenStore};
     use crate::speleodb::SpeleoDbError;
     use tempfile::TempDir;
+
+    #[test]
+    fn visibility_label_matches_the_wire_contract() {
+        // The server's CustomChoiceField returns the UPPERCASE label; we send exactly
+        // that so a metadata round-trip is byte-identical (#206/#207).
+        assert_eq!(visibility_label(Visibility::Private), "PRIVATE");
+        assert_eq!(visibility_label(Visibility::Public), "PUBLIC");
+    }
+
+    #[test]
+    fn coord_json_maps_present_finite_absent_and_non_finite() {
+        assert_eq!(coord_json(Some(12.5)), serde_json::json!(12.5));
+        assert_eq!(coord_json(None), serde_json::Value::Null);
+        // A non-finite value (should never reach here) degrades to null, never a NaN
+        // that would serialize invalidly.
+        assert_eq!(coord_json(Some(f64::NAN)), serde_json::Value::Null);
+    }
+
+    /// A patch with the given fields, all others defaulted to "unchanged".
+    fn patch(
+        name: Option<&str>,
+        visibility: Option<Visibility>,
+        coordinates_edited: bool,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+    ) -> SpeleoProjectMetadataPatch {
+        SpeleoProjectMetadataPatch {
+            name: name.map(str::to_owned),
+            description: None,
+            country: None,
+            visibility,
+            coordinates_edited,
+            latitude,
+            longitude,
+        }
+    }
+
+    #[test]
+    fn patch_body_sends_only_changed_fields() {
+        // Only name + visibility changed; description/country omitted, pin untouched.
+        let body = build_patch_body(&patch(
+            Some("New Name"),
+            Some(Visibility::Public),
+            false,
+            None,
+            None,
+        ));
+        assert_eq!(body.get("name").and_then(|v| v.as_str()), Some("New Name"));
+        assert_eq!(
+            body.get("visibility").and_then(|v| v.as_str()),
+            Some("PUBLIC")
+        );
+        assert!(!body.contains_key("description"));
+        assert!(!body.contains_key("country"));
+        // Pin not edited -> latitude/longitude omitted entirely (server keeps them).
+        assert!(!body.contains_key("latitude"));
+        assert!(!body.contains_key("longitude"));
+    }
+
+    #[test]
+    fn patch_body_is_empty_when_nothing_changed() {
+        assert!(
+            build_patch_body(&patch(None, None, false, None, None)).is_empty(),
+            "no-op patch -> empty body -> caller skips the PATCH (no empty-body 400)"
+        );
+    }
+
+    #[test]
+    fn patch_body_sets_and_clears_the_location_pin() {
+        // coordinates_edited + both present -> set the pin (two numbers).
+        let body = build_patch_body(&patch(None, None, true, Some(1.0), Some(2.0)));
+        assert_eq!(body.get("latitude"), Some(&serde_json::json!(1.0)));
+        assert_eq!(body.get("longitude"), Some(&serde_json::json!(2.0)));
+        // coordinates_edited + both None -> clear the pin (two explicit nulls).
+        let body = build_patch_body(&patch(None, None, true, None, None));
+        assert_eq!(body.get("latitude"), Some(&serde_json::Value::Null));
+        assert_eq!(body.get("longitude"), Some(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn create_body_pins_the_repo_layout_contract() {
+        // #208: every create fixes type=other + exclude_geojson=false; visibility label;
+        // country as given; lat/long omitted when not both present (#207 both-or-neither).
+        let params = SpeleoPublishParams {
+            name: "Cave X".to_owned(),
+            description: "desc".to_owned(),
+            country: "US".to_owned(),
+            visibility: Visibility::Private,
+            latitude: None,
+            longitude: None,
+        };
+        let body = build_create_body(&params);
+        assert_eq!(
+            body.get("type").and_then(|v| v.as_str()),
+            Some("other"),
+            "#208: the repo type is always `other`"
+        );
+        assert_eq!(
+            body.get("exclude_geojson"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        assert_eq!(
+            body.get("visibility").and_then(|v| v.as_str()),
+            Some("PRIVATE")
+        );
+        assert_eq!(body.get("country").and_then(|v| v.as_str()), Some("US"));
+        assert_eq!(body.get("name").and_then(|v| v.as_str()), Some("Cave X"));
+        let obj = body.as_object().expect("create body is a JSON object");
+        assert!(
+            !obj.contains_key("latitude") && !obj.contains_key("longitude"),
+            "no pin -> lat/long omitted (both-or-neither)"
+        );
+    }
+
+    #[test]
+    fn create_body_includes_both_coordinates_when_pinned() {
+        let params = SpeleoPublishParams {
+            name: "Cave Y".to_owned(),
+            description: String::new(),
+            country: "FR".to_owned(),
+            visibility: Visibility::Public,
+            latitude: Some(45.1),
+            longitude: Some(-1.2),
+        };
+        let body = build_create_body(&params);
+        assert_eq!(body.get("latitude"), Some(&serde_json::json!(45.1)));
+        assert_eq!(body.get("longitude"), Some(&serde_json::json!(-1.2)));
+        assert_eq!(
+            body.get("visibility").and_then(|v| v.as_str()),
+            Some("PUBLIC")
+        );
+    }
 
     #[test]
     fn reverify_due_forces_a_check_when_never_verified_or_unparseable() {
@@ -2344,9 +2800,12 @@ mod tests {
         //     1. push 200 confirmed — advance to the adopted hexsha
         //     2. push ancestry Landed — advance BASE to tip
         //     3. push ancestry Landed — already-up-to-date sub-case
-        //   struct-init `base_commit_sha:` (a fresh SpeleoLink for the pulled file):
+        //   struct-init `base_commit_sha:` (a fresh SpeleoLink):
         //     1. speleodb_open_project — stamp BASE on pull
         //     2. speleodb_fast_forward — re-stamp BASE = tip after a clean FF
+        //     3. speleodb_publish — stamp BASE = the create response's latest_commit
+        //        (None for a brand-new repo) when minting the link for a published
+        //        local project (#207)
         let src = include_str!("speleodb.rs");
         let prod = src
             .split("#[cfg(test)]")
@@ -2359,8 +2818,8 @@ mod tests {
         );
         assert_eq!(
             prod.matches("base_commit_sha:").count(),
-            2,
-            "unexpected BASE stamp count (sanctioned: open-on-pull, fast-forward restamp)"
+            3,
+            "unexpected BASE stamp count (sanctioned: open-on-pull, fast-forward restamp, publish-create)"
         );
     }
 

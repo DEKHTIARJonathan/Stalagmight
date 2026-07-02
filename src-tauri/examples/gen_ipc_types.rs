@@ -65,8 +65,9 @@ use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoDbAction, SpeleoErrorDto,
-    SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
-    SpeleoSessionStatus, StartEditingResult, UpdateResult,
+    SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
+    SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
+    SpeleoSessionStatus, StartEditingResult, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -306,6 +307,12 @@ fn main() {
     export::<DoneResult>(&out_dir);
     export::<UpdateResult>(&out_dir);
     export::<PushResult>(&out_dir);
+    // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
+    export::<Visibility>(&out_dir);
+    export::<SpeleoProjectMetadata>(&out_dir);
+    export::<SpeleoProjectMetadataPatch>(&out_dir);
+    export::<SpeleoPublishParams>(&out_dir);
+    export::<SpeleoPublishResult>(&out_dir);
 
     let export_list = [
         "CommandResult",
@@ -490,6 +497,11 @@ fn main() {
         "DoneResult",
         "UpdateResult",
         "PushResult",
+        "Visibility",
+        "SpeleoProjectMetadata",
+        "SpeleoProjectMetadataPatch",
+        "SpeleoPublishParams",
+        "SpeleoPublishResult",
     ];
 
     let mut generated =

@@ -38,6 +38,19 @@ pub enum Permission {
     Admin,
 }
 
+/// Project visibility (#206/#207). The server's `ProjectVisibility` is an
+/// `IntegerChoices` (PRIVATE=0, PUBLIC=1), but the v2 API's `CustomChoiceField`
+/// serializes/accepts the **uppercase label** on the wire (verified in
+/// `serializer_fields.py` + `test_project_api.py`), so we key on the label, not
+/// the integer. Default on create is PRIVATE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub enum Visibility {
+    #[serde(rename = "PRIVATE")]
+    Private,
+    #[serde(rename = "PUBLIC")]
+    Public,
+}
+
 /// A git commit as carried in `latest_commit`. Only the SHA is needed here.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Commit {
@@ -105,6 +118,21 @@ pub(crate) struct Project {
     // banner + Enable-rendering PATCH).
     #[serde(default)]
     pub(crate) exclude_geojson: bool,
+    // [#206] editable metadata, parsed so the Project Settings tab can prefill the
+    // current server truth. `description`/`country` are required server-side (always
+    // present); `visibility` is PRIVATE/PUBLIC; `latitude`/`longitude` are JSON
+    // numbers (the serializer's `format_coordinate` rounds to a float) and are
+    // OMITTED when null (both-or-neither).
+    #[serde(default)]
+    pub(crate) description: Option<String>,
+    #[serde(default)]
+    pub(crate) country: Option<String>,
+    #[serde(default)]
+    pub(crate) visibility: Option<Visibility>,
+    #[serde(default)]
+    pub(crate) latitude: Option<f64>,
+    #[serde(default)]
+    pub(crate) longitude: Option<f64>,
 }
 
 /// IPC-facing summary of a project for the spike dialog's list. Derived from
@@ -146,6 +174,81 @@ pub struct SpeleoLoginResult {
     /// True when the token was stored in the OS keychain; false means a
     /// session-only in-memory fallback (e.g. headless CI with no secret service).
     pub keychain_backed: bool,
+}
+
+/// [#206] The editable SpeleoDB project metadata, returned to the webview by
+/// `speleodb_get_project_metadata` (to prefill the Project Settings tab) and by
+/// `speleodb_patch_project` (the post-edit server truth). `description`/`country`
+/// are required server-side; `latitude`/`longitude` are the optional both-or-neither
+/// location pin.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoProjectMetadata {
+    pub name: String,
+    pub description: String,
+    /// ISO 3166-1 alpha-2 country code (e.g. "US").
+    pub country: String,
+    pub visibility: Visibility,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub exclude_geojson: bool,
+}
+
+impl SpeleoProjectMetadata {
+    /// Project the SDB [`Project`] DTO down to the editable metadata surface,
+    /// defaulting the required-but-Option-parsed fields (they are always present
+    /// on a real GET/PATCH response).
+    pub(crate) fn from_project(p: &Project) -> Self {
+        Self {
+            name: p.name.clone(),
+            description: p.description.clone().unwrap_or_default(),
+            country: p.country.clone().unwrap_or_default(),
+            visibility: p.visibility.unwrap_or(Visibility::Private),
+            latitude: p.latitude,
+            longitude: p.longitude,
+            exclude_geojson: p.exclude_geojson,
+        }
+    }
+}
+
+/// [#206] A partial metadata edit from the webview. The frontend sends only the
+/// fields the user changed; the orchestration folds the `Some` fields into the
+/// `PATCH /projects/{id}/` body. `coordinates_edited` gates the location pin
+/// (both-or-neither): when true, `latitude`+`longitude` are sent (both `Some` =
+/// set the pin, both `None` = clear it); when false the pin is untouched.
+#[derive(Debug, Clone, Deserialize, TS)]
+pub struct SpeleoProjectMetadataPatch {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub country: Option<String>,
+    pub visibility: Option<Visibility>,
+    pub coordinates_edited: bool,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+}
+
+/// [#207] Parameters for creating + publishing a local project on SpeleoDB. The
+/// server injects `created_by`; `type` is fixed to `other`; `exclude_geojson` is
+/// sent `false` explicitly. `latitude`/`longitude` are both-or-neither.
+#[derive(Debug, Clone, Deserialize, TS)]
+pub struct SpeleoPublishParams {
+    pub name: String,
+    pub description: String,
+    /// ISO 3166-1 alpha-2 country code; required.
+    pub country: String,
+    pub visibility: Visibility,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+}
+
+/// [#207] Result of a successful create-on-SDB publish: the new project's id +
+/// the endpoint it was created on, so the webview can re-seed the link state.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoPublishResult {
+    pub project_id: String,
+    pub endpoint: String,
+    /// The SpeleoDB cache path the freshly-published project now lives at; the
+    /// webview reloads it through the normal `open_project` flow (read-only-remote).
+    pub local_path: String,
 }
 
 /// Result of pulling + extracting a project, returned to the webview. The
@@ -344,7 +447,7 @@ mod tests {
     use super::{
         DoneResult, Permission, Project, PushResult, RemoteState, SpeleoDbAction, SpeleoErrorDto,
         SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
-        SpeleoSessionStatus, StartEditingResult, UpdateResult,
+        SpeleoSessionStatus, StartEditingResult, UpdateResult, Visibility,
     };
 
     #[test]
@@ -451,7 +554,12 @@ mod tests {
             "active_mutex": {"user": "holder@example.com", "creation_date": "2026-01-01T00:00:00Z"},
             "latest_commit": {"id": "0123456789abcdef0123456789abcdef01234567", "message": "init"},
             "type": "ariane",
-            "exclude_geojson": true
+            "exclude_geojson": true,
+            "description": "A cave",
+            "country": "US",
+            "visibility": "PRIVATE",
+            "latitude": -45.367573,
+            "longitude": 100.423897
         }"#;
         let p: Project = serde_json::from_str(json).expect("valid project JSON");
         assert_eq!(p.id, "11111111-1111-1111-1111-111111111111");
@@ -459,6 +567,13 @@ mod tests {
         assert_eq!(p.permission, Some(Permission::ReadAndWrite));
         // [Track A] #185: exclude_geojson is now PARSED (not ignored).
         assert!(p.exclude_geojson);
+        // [#206] editable metadata parses (visibility as the uppercase label,
+        // lat/long as JSON numbers).
+        assert_eq!(p.description.as_deref(), Some("A cave"));
+        assert_eq!(p.country.as_deref(), Some("US"));
+        assert_eq!(p.visibility, Some(Visibility::Private));
+        assert_eq!(p.latitude, Some(-45.367573));
+        assert_eq!(p.longitude, Some(100.423897));
         assert_eq!(
             p.active_mutex.as_ref().map(|m| m.user.as_str()),
             Some("holder@example.com")
@@ -491,6 +606,13 @@ mod tests {
         assert_eq!(omitted.kind, "");
         // [Track A] #185: exclude_geojson defaults to false when the server omits it.
         assert!(!omitted.exclude_geojson);
+        // [#206] editable metadata defaults to None when omitted (an empty repo or
+        // a coordinate-less project omits lat/long).
+        assert!(omitted.description.is_none());
+        assert!(omitted.country.is_none());
+        assert!(omitted.visibility.is_none());
+        assert!(omitted.latitude.is_none());
+        assert!(omitted.longitude.is_none());
 
         // Explicit nulls deserialize to None just like absence.
         let nulled: Project = serde_json::from_str(

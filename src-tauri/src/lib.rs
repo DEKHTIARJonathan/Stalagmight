@@ -1279,6 +1279,10 @@ pub fn run() {
             commands::speleodb::speleodb_release_lock,
             // SpeleoDB Enable-rendering PATCH (#200)
             commands::speleodb::speleodb_set_exclude_geojson,
+            // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
+            commands::speleodb::speleodb_get_project_metadata,
+            commands::speleodb::speleodb_patch_project,
+            commands::speleodb::speleodb_publish,
             // Section commands
             commands::section::create_section,
             commands::section::update_section,
