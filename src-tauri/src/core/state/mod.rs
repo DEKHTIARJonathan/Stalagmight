@@ -19,6 +19,7 @@ mod project_merge;
 mod raw_data;
 mod recent_projects;
 mod speleodb;
+mod speleodb_admin;
 mod undo;
 mod undo_capture;
 mod undo_restore;

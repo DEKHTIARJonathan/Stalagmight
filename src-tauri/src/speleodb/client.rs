@@ -23,7 +23,10 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use super::models::{Commit, Project, RevisionHistory};
+use super::models::{
+    Commit, Permission, Project, RevisionHistory, Team, TeamPermission, TeamPermissionList,
+    UserPermission, UserPermissionList,
+};
 use super::SpeleoDbError;
 
 /// Global per-request timeout for reads. Larger than the tile timeout because a
@@ -755,20 +758,20 @@ fn post_no_body_project(
     parse_project(&body, context)
 }
 
-/// Test-only: `DELETE /api/v2/projects/{id}/` — soft-delete the project (server
-/// deactivates it; a cron purges after 30 days). Used to clean up the per-run
-/// test project. Does not require releasing the lock first.
-#[cfg(test)]
+/// `DELETE /api/v2/projects/{id}/` — soft-delete the project (the server
+/// deactivates it and a cron purges after ~30 days), returning `()` on success.
+/// DELETE is idempotent (deleting an already-deleted project is a no-op/404), so a
+/// transient-transport retry is safe. Consumed by #215's Delete-project action and
+/// the live tests' per-run cleanup. Does not require releasing the lock first.
 pub(crate) fn delete_project(
     base: &str,
     token: &str,
+    insecure_http: bool,
     project_id: &str,
 ) -> Result<(), SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/"));
     let auth = bearer(token);
-    // DELETE is idempotent (deleting an already-deleted project is a no-op/404),
-    // so a retry on a transient transport error is safe.
-    let (status, body) = with_retry(base, false, true, || {
+    let (status, body) = with_retry(base, insecure_http, true, || {
         let resp = agent()
             .delete(&url)
             .header("Authorization", auth.as_str())
@@ -781,10 +784,240 @@ pub(crate) fn delete_project(
     Ok(())
 }
 
-/// Test-only: `POST /api/v2/projects/{id}/permission/user/detail/` — grant
-/// `email` the permission `level` (`"WEB_VIEWER"` / `"READ_ONLY"` /
-/// `"READ_AND_WRITE"`) on the project. Drives the two-account live tests'
-/// collaborator setup.
+/// Send `payload` as a JSON body with an arbitrary `method` to `suffix`, enforcing
+/// the http private-network policy first ([`super::tls::enforce`], the #187
+/// chokepoint); a 2xx maps to `Ok(())`. The collaborator permission-detail
+/// endpoints (#215) are non-idempotent writes routed here: they run exactly once
+/// (no retry, matching every other SDB write), AND the `remove` variants are a
+/// DELETE-with-body - which ureq's typestate `.delete()` builder cannot express -
+/// so all three verbs go through `Agent::run` with an explicit `http::Request`.
+fn send_json_request(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    method: http::Method,
+    suffix: &str,
+    payload: &serde_json::Value,
+) -> Result<(), SpeleoDbError> {
+    // #187: block public `http://` / scheme-less endpoints before any dial (the
+    // same gate `with_retry` runs; these writes bypass the retry loop, never it).
+    super::tls::enforce(base, insecure_http)?;
+    let url = api_url(base, suffix);
+    let request = http::Request::builder()
+        .method(method)
+        .uri(url)
+        .header("Authorization", bearer(token))
+        .header("Content-Type", "application/json")
+        .body(payload.to_string())
+        .map_err(|e| SpeleoDbError::Parse(format!("build request: {e}")))?;
+    let resp = agent()
+        .run(request)
+        .map_err(|e| SpeleoDbError::Transport(clean_transport(&e.to_string())))?;
+    let (status, body) = read_status_body(resp)
+        .map_err(|e| SpeleoDbError::Transport(clean_transport(&e.to_string())))?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    Ok(())
+}
+
+/// `GET /api/v2/projects/{id}/permissions/user/` — list the project's active
+/// per-user permission grants (#215). A GET, so retry-safe; requires READ_ONLY+
+/// server-side (403 below that). Only the `permissions[]` array is consumed.
+pub(crate) fn list_user_permissions(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+) -> Result<Vec<UserPermission>, SpeleoDbError> {
+    let url = api_url(base, &format!("projects/{project_id}/permissions/user/"));
+    let auth = bearer(token);
+    let (status, body) = with_retry(base, insecure_http, true, || {
+        let resp = agent()
+            .get(&url)
+            .header("Authorization", auth.as_str())
+            .call()?;
+        read_status_body(resp)
+    })?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    let list: UserPermissionList = serde_json::from_slice(&body)
+        .map_err(|e| SpeleoDbError::Parse(format!("user permissions: {e}")))?;
+    Ok(list.permissions)
+}
+
+/// `POST /api/v2/projects/{id}/permission/user/detail/` `{user, level}` — grant a
+/// collaborator a permission level (#215). ADMIN-gated server-side.
+pub(crate) fn add_user_permission(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    email: &str,
+    level: Permission,
+) -> Result<(), SpeleoDbError> {
+    send_json_request(
+        base,
+        token,
+        insecure_http,
+        http::Method::POST,
+        &format!("projects/{project_id}/permission/user/detail/"),
+        &serde_json::json!({ "user": email, "level": level }),
+    )
+}
+
+/// `PUT /api/v2/projects/{id}/permission/user/detail/` `{user, level}` — change an
+/// existing collaborator's permission level (#215). ADMIN-gated server-side.
+pub(crate) fn set_user_permission(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    email: &str,
+    level: Permission,
+) -> Result<(), SpeleoDbError> {
+    send_json_request(
+        base,
+        token,
+        insecure_http,
+        http::Method::PUT,
+        &format!("projects/{project_id}/permission/user/detail/"),
+        &serde_json::json!({ "user": email, "level": level }),
+    )
+}
+
+/// `DELETE /api/v2/projects/{id}/permission/user/detail/` with body `{user}` —
+/// remove a collaborator (soft, #215). ADMIN-gated server-side.
+pub(crate) fn remove_user_permission(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    email: &str,
+) -> Result<(), SpeleoDbError> {
+    send_json_request(
+        base,
+        token,
+        insecure_http,
+        http::Method::DELETE,
+        &format!("projects/{project_id}/permission/user/detail/"),
+        &serde_json::json!({ "user": email }),
+    )
+}
+
+/// `GET /api/v2/projects/{id}/permissions/team/` — list the project's active
+/// per-team permission grants (#215). A GET, so retry-safe.
+pub(crate) fn list_team_permissions(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+) -> Result<Vec<TeamPermission>, SpeleoDbError> {
+    let url = api_url(base, &format!("projects/{project_id}/permissions/team/"));
+    let auth = bearer(token);
+    let (status, body) = with_retry(base, insecure_http, true, || {
+        let resp = agent()
+            .get(&url)
+            .header("Authorization", auth.as_str())
+            .call()?;
+        read_status_body(resp)
+    })?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    let list: TeamPermissionList = serde_json::from_slice(&body)
+        .map_err(|e| SpeleoDbError::Parse(format!("team permissions: {e}")))?;
+    Ok(list.permissions)
+}
+
+/// `POST /api/v2/projects/{id}/permission/team/detail/` `{team, level}` — grant a
+/// team a permission level (#215). ADMIN-gated; the server rejects `ADMIN` for a
+/// team (teams may only hold WEB_VIEWER / READ_ONLY / READ_AND_WRITE).
+pub(crate) fn add_team_permission(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    team_id: &str,
+    level: Permission,
+) -> Result<(), SpeleoDbError> {
+    send_json_request(
+        base,
+        token,
+        insecure_http,
+        http::Method::POST,
+        &format!("projects/{project_id}/permission/team/detail/"),
+        &serde_json::json!({ "team": team_id, "level": level }),
+    )
+}
+
+/// `PUT /api/v2/projects/{id}/permission/team/detail/` `{team, level}` — change a
+/// team's permission level (#215). ADMIN-gated; no `ADMIN` for teams.
+pub(crate) fn set_team_permission(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    team_id: &str,
+    level: Permission,
+) -> Result<(), SpeleoDbError> {
+    send_json_request(
+        base,
+        token,
+        insecure_http,
+        http::Method::PUT,
+        &format!("projects/{project_id}/permission/team/detail/"),
+        &serde_json::json!({ "team": team_id, "level": level }),
+    )
+}
+
+/// `DELETE /api/v2/projects/{id}/permission/team/detail/` with body `{team}` —
+/// revoke a team's access (soft, #215). ADMIN-gated server-side.
+pub(crate) fn remove_team_permission(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    team_id: &str,
+) -> Result<(), SpeleoDbError> {
+    send_json_request(
+        base,
+        token,
+        insecure_http,
+        http::Method::DELETE,
+        &format!("projects/{project_id}/permission/team/detail/"),
+        &serde_json::json!({ "team": team_id }),
+    )
+}
+
+/// `GET /api/v2/teams/` — the authenticated user's teams (a bare JSON array), for
+/// the add-team picker and to resolve a team-permission UUID to a display name
+/// (#215). A GET, so retry-safe.
+pub(crate) fn list_teams(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+) -> Result<Vec<Team>, SpeleoDbError> {
+    let url = api_url(base, "teams/");
+    let auth = bearer(token);
+    let (status, body) = with_retry(base, insecure_http, true, || {
+        let resp = agent()
+            .get(&url)
+            .header("Authorization", auth.as_str())
+            .call()?;
+        read_status_body(resp)
+    })?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    serde_json::from_slice(&body).map_err(|e| SpeleoDbError::Parse(format!("teams: {e}")))
+}
+
+/// Test-only convenience: grant `email` the given `level` string on the project.
+/// Drives the two-account live tests' collaborator setup; the production path is
+/// [`add_user_permission`] (typed `Permission`). The dev box is a private address,
+/// so `insecure_http = false` is fine here.
 #[cfg(test)]
 pub(crate) fn grant_permission(
     base: &str,
@@ -793,25 +1026,14 @@ pub(crate) fn grant_permission(
     email: &str,
     level: &str,
 ) -> Result<(), SpeleoDbError> {
-    let url = api_url(
+    send_json_request(
         base,
+        token,
+        false,
+        http::Method::POST,
         &format!("projects/{project_id}/permission/user/detail/"),
-    );
-    let auth = bearer(token);
-    let payload = serde_json::json!({ "user": email, "level": level }).to_string();
-    // Non-idempotent write: run once so a mid-response failure can't double-submit.
-    let (status, body) = with_retry(base, false, false, || {
-        let resp = agent()
-            .post(&url)
-            .header("Authorization", auth.as_str())
-            .header("Content-Type", "application/json")
-            .send(payload.as_str())?;
-        read_status_body(resp)
-    })?;
-    if !(200..300).contains(&status) {
-        return Err(status_error(status, &body));
-    }
-    Ok(())
+        &serde_json::json!({ "user": email, "level": level }),
+    )
 }
 
 #[cfg(test)]

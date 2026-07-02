@@ -155,7 +155,7 @@ fn build_create_body(params: &SpeleoPublishParams) -> serde_json::Value {
 /// `..`, an absolute path, or an embedded separator could otherwise redirect the
 /// cached `.stalx` write or the download URL). A parsed UUID has no separators,
 /// `..`, or absolute prefix, so it is always a safe single path component.
-fn validate_project_id(project_id: &str) -> Result<(), SpeleoDbError> {
+pub(super) fn validate_project_id(project_id: &str) -> Result<(), SpeleoDbError> {
     uuid::Uuid::parse_str(project_id)
         .map(|_| ())
         .map_err(|_| SpeleoDbError::InvalidProjectId)
@@ -441,7 +441,7 @@ impl AppState {
     /// config lock. It is threaded into every client call → `with_retry` →
     /// `tls::enforce`, where it relaxes ONLY the public-`http://` scheme block.
     /// Defaults `false` (the secure default) when the config lock is unavailable.
-    fn speleodb_insecure_http(&self) -> bool {
+    pub(super) fn speleodb_insecure_http(&self) -> bool {
         self.config
             .lock()
             .ok()
@@ -487,7 +487,7 @@ impl AppState {
 
     /// Resolve the active `(endpoint, token)` for an authenticated call, or
     /// [`SpeleoDbError::NotAuthenticated`] if there is no usable token.
-    fn speleodb_active_token(&self) -> Result<(String, String), SpeleoDbError> {
+    pub(super) fn speleodb_active_token(&self) -> Result<(String, String), SpeleoDbError> {
         self.speleodb_ensure_rehydrated();
         self.speleodb_session_lock()?.active_token()
     }
@@ -710,7 +710,7 @@ impl AppState {
     ///
     /// The login path is deliberately NOT routed here: login's 401 is a
     /// pasted-dead-token, not the drop of an *established* session.
-    fn speleodb_handle_auth<T>(
+    pub(super) fn speleodb_handle_auth<T>(
         &self,
         endpoint: Endpoint,
         result: Result<T, SpeleoDbError>,
@@ -1330,7 +1330,7 @@ impl AppState {
 
     /// Read the open project's persisted SpeleoDB hand-off link, or
     /// [`SpeleoDbError::NoRemoteProject`] when no remote project is open.
-    fn speleodb_open_link(&self) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
+    pub(super) fn speleodb_open_link(&self) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
         let db_guard = self
             .database
             .lock()
@@ -3485,7 +3485,7 @@ mod tests {
     }
     impl Drop for OrchCleanup {
         fn drop(&mut self) {
-            let _ = client::delete_project(&self.url, &self.token, &self.id);
+            let _ = client::delete_project(&self.url, &self.token, false, &self.id);
         }
     }
 

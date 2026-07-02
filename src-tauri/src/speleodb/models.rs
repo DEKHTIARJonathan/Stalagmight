@@ -135,6 +135,49 @@ pub(crate) struct Project {
     pub(crate) longitude: Option<f64>,
 }
 
+/// One active per-user permission grant on a project, from the `permissions[]`
+/// array of `GET /api/v2/projects/{id}/permissions/user/` (#215). Only the fields
+/// the collaborator UI needs are modelled; serde ignores `creation_date` etc.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct UserPermission {
+    /// Collaborator email.
+    pub(crate) user: String,
+    pub(crate) level: Permission,
+}
+
+/// Wrapper for `GET .../permissions/user/` -> `{project, permissions: [...]}`.
+/// Only the permissions array is consumed (the sibling `project` is ignored).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct UserPermissionList {
+    #[serde(default)]
+    pub(crate) permissions: Vec<UserPermission>,
+}
+
+/// One active per-team permission grant, from `GET .../permissions/team/` (#215).
+/// `team` is the team UUID (resolved to a display name against the caller's team
+/// list, falling back to the raw UUID).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct TeamPermission {
+    pub(crate) team: String,
+    pub(crate) level: Permission,
+}
+
+/// Wrapper for `GET .../permissions/team/` -> `{project, permissions: [...]}`.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct TeamPermissionList {
+    #[serde(default)]
+    pub(crate) permissions: Vec<TeamPermission>,
+}
+
+/// A survey team the authenticated user belongs to, from the bare-array
+/// `GET /api/v2/teams/` (#215). Only id + name are consumed (the name map for the
+/// team roster + the add-team picker).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Team {
+    pub(crate) id: String,
+    pub(crate) name: String,
+}
+
 /// IPC-facing summary of a project for the spike dialog's list. Derived from
 /// [`Project`]; carries only display fields — never a token or raw API detail.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -208,6 +251,41 @@ impl SpeleoProjectMetadata {
             exclude_geojson: p.exclude_geojson,
         }
     }
+}
+
+/// [#215] One individual collaborator on the linked project, returned to the
+/// Project Settings tab. `is_self` marks the signed-in user so the FE disables
+/// its own row's actions (the server 401s a self grant/change/remove regardless).
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoCollaborator {
+    pub email: String,
+    pub permission: Permission,
+    pub is_self: bool,
+}
+
+/// [#215] One team grant on the linked project. `team_name` is resolved from the
+/// caller's team list; it falls back to the raw UUID when the team is not among
+/// the caller's teams (still removable by id).
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoTeamGrant {
+    pub team_id: String,
+    pub team_name: String,
+    pub permission: Permission,
+}
+
+/// [#215] A team the signed-in user can grant access to (the add-team picker).
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoTeamOption {
+    pub id: String,
+    pub name: String,
+}
+
+/// [#215] The full collaborator roster for the linked project (individual users +
+/// teams), returned by `speleodb_list_collaborators`.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoCollaborators {
+    pub users: Vec<SpeleoCollaborator>,
+    pub teams: Vec<SpeleoTeamGrant>,
 }
 
 /// [#206] A partial metadata edit from the webview. The frontend sends only the
