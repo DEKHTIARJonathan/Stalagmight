@@ -1134,11 +1134,13 @@
       "tabs": {
         "general": "General",
         "validation": "Validation",
-        "experimental": "Experimental"
+        "experimental": "Experimental",
+        "speleodb": "SpeleoDB"
       },
       "name": {
         "label": "Project name",
-        "help": "The name of this cave system / project."
+        "help": "The name of this cave system / project.",
+        "remoteHelp": "This project is managed by SpeleoDB. Edit its name in the SpeleoDB tab."
       }
     },
     "collabReview": {
@@ -2769,6 +2771,51 @@
       "concurrentSession": "This project is already locked by your account in another session. Editing it from two sessions at once is unsupported and can lose edits.",
       "listFailed": "Could not load projects",
       "openFailed": "Could not open project"
+    },
+    "projectSettings": {
+      "title": "SpeleoDB project",
+      "loading": "Loading project details from SpeleoDB…",
+      "loadFailed": "Could not load project details",
+      "retry": "Retry",
+      "readOnlyBadge": "Read-only access",
+      "saveButton": "Save to SpeleoDB",
+      "saving": "Saving…",
+      "saveFailed": "Could not save to SpeleoDB",
+      "saved": "Saved to SpeleoDB.",
+      "coordinatesHint": "Latitude and longitude go together - fill in both or leave both blank.",
+      "fields": {
+        "name": "Name",
+        "description": "Description",
+        "country": "Country",
+        "visibility": "Visibility",
+        "latitude": "Latitude",
+        "longitude": "Longitude"
+      },
+      "visibilityOptions": {
+        "private": "Private",
+        "public": "Public"
+      },
+      "rendering": {
+        "label": "Web-map rendering",
+        "enabledNote": "Rendering is enabled - the online map refreshes on each push.",
+        "enableButton": "Enable rendering",
+        "enabled": "Rendering enabled."
+      }
+    },
+    "publish": {
+      "title": "Publish to SpeleoDB",
+      "menuItem": "Publish to SpeleoDB…",
+      "description": "Create this project on SpeleoDB and upload its first revision.",
+      "country": "Country",
+      "visibility": "Visibility",
+      "latitude": "Latitude",
+      "longitude": "Longitude",
+      "countryPlaceholder": "Select a country…",
+      "submit": "Publish",
+      "submitting": "Publishing…",
+      "success": "Project published to SpeleoDB.",
+      "failed": "Could not publish to SpeleoDB",
+      "reloadFailed": "Published to SpeleoDB, but the project could not be reopened. Reopen it from SpeleoDB."
     }
   }
 }

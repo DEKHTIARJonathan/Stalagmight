@@ -3712,6 +3712,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'speleodb_release_lock':
           case 'speleodb_set_exclude_geojson':
             return null;
+          case 'speleodb_get_project_metadata':
+          case 'speleodb_patch_project':
+            // Deterministic project metadata for the #206 settings tab. patch echoes
+            // the same shape (a real server would return post-edit truth).
+            return {
+              name: 'Mock Cave',
+              description: '',
+              country: 'US',
+              visibility: 'PRIVATE',
+              latitude: null,
+              longitude: null,
+              exclude_geojson: false,
+            };
+          case 'speleodb_publish':
+            // #207 publish result: the reloaded (now-remote) local .stalx path.
+            return {
+              project_id: 'mock-project-id',
+              endpoint: 'https://speleodb.example',
+              local_path: '/mock/project.stalx',
+            };
           case 'speleodb_login':
             return {
               user_email: 'test@example.com',

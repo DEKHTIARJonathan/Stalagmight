@@ -29,8 +29,9 @@ pub(crate) mod tls;
 pub use contract::SpeleoDbAction;
 pub use models::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoErrorDto, SpeleoLinkStatus,
-    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus,
-    StartEditingResult, UpdateResult,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
+    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoSessionStatus,
+    StartEditingResult, UpdateResult, Visibility,
 };
 
 /// Errors from the SpeleoDB client and dump handling.

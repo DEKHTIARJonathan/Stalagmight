@@ -677,36 +677,25 @@ pub(crate) fn patch_project(
     parse_project(&body, "patch project response")
 }
 
-/// `POST /api/v2/projects/` — create a fresh project, returning the full parsed
-/// [`Project`]. `idempotent = false`. The shipped create-on-SDB UX is #207; this
-/// is the production primitive.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "create-project orchestration caller is #207")
-)]
-pub(crate) fn create_project(
+/// `POST /api/v2/projects/` with a caller-built JSON body - create a fresh project
+/// and return the full parsed [`Project`]. `idempotent = false` (run once so a
+/// mid-response failure can't double-submit a create). The #207 create-on-SDB
+/// orchestration builds the payload (name/description/country/visibility/`type`/
+/// lat-long/`exclude_geojson`); `created_by` is injected server-side.
+pub(crate) fn create_project_with(
     base: &str,
     token: &str,
     insecure_http: bool,
-    name: &str,
+    payload: &str,
 ) -> Result<Project, SpeleoDbError> {
     let url = api_url(base, "projects/");
     let auth = bearer(token);
-    let payload = serde_json::json!({
-        "name": name,
-        "description": "Stalagmight project (auto-created)",
-        "country": "US",
-        "type": "other",
-    })
-    .to_string();
-
-    // Non-idempotent write: run once so a mid-response failure can't double-submit.
     let (status, body) = with_retry(base, insecure_http, false, || {
         let resp = agent()
             .post(&url)
             .header("Authorization", auth.as_str())
             .header("Content-Type", "application/json")
-            .send(payload.as_str())?;
+            .send(payload)?;
         read_status_body(resp)
     })?;
     if !(200..300).contains(&status) {
@@ -715,6 +704,31 @@ pub(crate) fn create_project(
     // FRESHNESS FOLD (#189/#191): authoritative Project available here; cache +
     // reset last_verify_at lands later (D-B1, #202).
     parse_project(&body, "create project response")
+}
+
+/// Convenience: create a minimal `other`-type project by name. Test/seed helper
+/// (the #207 production path uses [`create_project_with`] with a full payload).
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "name-only convenience; prod create-on-SDB (#207) uses create_project_with"
+    )
+)]
+pub(crate) fn create_project(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    name: &str,
+) -> Result<Project, SpeleoDbError> {
+    let payload = serde_json::json!({
+        "name": name,
+        "description": "Stalagmight project (auto-created)",
+        "country": "US",
+        "type": "other",
+    })
+    .to_string();
+    create_project_with(base, token, insecure_http, &payload)
 }
 
 /// Shared POST-with-no-body helper for the lock mutations (acquire/release):
@@ -1331,5 +1345,35 @@ mod tests {
             "the .tml part carries its explicit MIME"
         );
         assert!(wire.contains("PUT "), "it is a PUT");
+    }
+
+    #[test]
+    fn upload_parts_pin_the_canonical_repo_filenames() {
+        // #208 repo-layout contract: every push lands the survey as `project.stalx`
+        // and its render as `ariane.tml` REGARDLESS of the local source basenames.
+        // The push uploads from scratch paths (`snapshot.stalx`) beside the live
+        // cache file, so the multipart filename must be the CANONICAL server name,
+        // never the source's basename -- else a second `.stalx` (or a `snapshot.stalx`)
+        // would be committed and the next download_dump would be an ambiguous
+        // multi-`.stalx` repo. Assert build_upload_parts decouples the two.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stalx_src = dir.path().join("snapshot.stalx");
+        let tml_src = dir.path().join("render-42.tml");
+        std::fs::write(&stalx_src, b"x").expect("write stalx");
+        std::fs::write(&tml_src, b"y").expect("write tml");
+
+        let parts = build_upload_parts(&stalx_src, &tml_src, "msg").expect("build parts");
+        let names: Vec<&str> = parts.parts.iter().map(|p| p.file_name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["project.stalx", "ariane.tml"],
+            "#208: canonical wire names, decoupled from the source basenames"
+        );
+        // Both parts are the repeated `artifact` field (never `artifact[]`).
+        assert!(
+            parts.parts.iter().all(|p| p.name == "artifact"),
+            "each file is a repeated `artifact` part"
+        );
+        assert_eq!(parts.message, "msg");
     }
 }

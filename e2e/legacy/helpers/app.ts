@@ -114,8 +114,10 @@ export async function loadProjectFixture(fixtureName: string): Promise<void> {
       }
 
       try {
-        // Pass /tmp as location since documents directory isn't available under tauri-driver
-        const result = await e2e.projectStore.getState().createProject(projectName, '/tmp');
+        // Leave location unset - it is a free-text place description, not a save
+        // directory (that is options.savePath), so a path here just leaks into the
+        // project's visible "Location" metadata.
+        const result = await e2e.projectStore.getState().createProject(projectName);
         if (result.success) {
           // Switch to single view so MapCanvas mounts
           e2e.uiStore.getState().setView('single');
@@ -656,7 +658,6 @@ export async function createNewProject(projectName: string): Promise<void> {
   await nameInput.setValue(projectName);
 
   // Create project directly via store (bypassing button click which doesn't work in WebdriverIO)
-  // Pass /tmp as location since documents directory isn't available under tauri-driver
   // Add timestamp to avoid "file already exists" errors from previous test runs
   const uniqueName = `${projectName}_${Date.now()}`;
   const createResult = await browser.executeAsync(
@@ -680,8 +681,9 @@ export async function createNewProject(projectName: string): Promise<void> {
       }
 
       try {
-        // Pass /tmp as location since documents directory isn't available under tauri-driver
-        const result = await e2e.projectStore.getState().createProject(name, '/tmp');
+        // Leave location unset - a path here just leaks into the project's visible
+        // "Location" metadata (it is a description, not a save directory).
+        const result = await e2e.projectStore.getState().createProject(name);
         if (result.success) {
           e2e.uiStore.getState().closeDialog();
         }

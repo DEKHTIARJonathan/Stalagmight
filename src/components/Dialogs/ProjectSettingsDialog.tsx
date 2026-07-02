@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { DialogWrapper } from './DialogWrapper';
@@ -6,14 +6,17 @@ import { ValidationSettings } from './settings/ValidationSettings';
 import { CollaborationSection } from './settings/CollaborationSettings';
 import { SettingsSection } from './settings/SettingsSection';
 import { SettingRow } from './settings/SettingRow';
+import { SpeleoDbSettingsTab } from './settings/SpeleoDbSettingsTab';
 import type { SettingsCategory } from './SettingsSidebar';
 import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig, type Config } from '../../types/config';
 import { isValidationConfigValid } from '../../utils/validation';
 
-type ProjectSettingsTab = 'general' | 'validation' | 'experimental';
+type ProjectSettingsTab = 'general' | 'validation' | 'experimental' | 'speleodb';
+// The local (always-shown) tabs; the remote-only 'speleodb' tab is appended below.
 const TABS: readonly ProjectSettingsTab[] = ['general', 'validation', 'experimental'];
 const EMPTY_CHANGED: ReadonlySet<string> = new Set();
 
@@ -27,6 +30,8 @@ export function ProjectSettingsDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const showToast = useUIStore((s) => s.showToast);
+  // The SpeleoDB tab is only meaningful for a remote (linked) project.
+  const isRemote = useSpeleoStore((s) => s.link) != null;
   const { project, globalConfig, updateProjectSettings, setCollabEnabled } = useProjectStore(
     useShallow((s) => ({
       project: s.project,
@@ -43,7 +48,28 @@ export function ProjectSettingsDialog() {
   const panelId = (tk: ProjectSettingsTab) => `${panelIdBase}-panel-${tk}`;
 
   const [tab, setTab] = useState<ProjectSettingsTab>('general');
+  const renderedTabs = useMemo<readonly ProjectSettingsTab[]>(
+    () => (isRemote ? [...TABS, 'speleodb'] : TABS),
+    [isRemote],
+  );
+  // If the project unlinks from SpeleoDB while this dialog sits on the SpeleoDB tab
+  // (e.g. a convert-to-local from another surface), that tab disappears from
+  // renderedTabs and its panel is gated off - fall back to a valid tab so the body
+  // doesn't render blank.
+  useEffect(() => {
+    if (!isRemote && tab === 'speleodb') setTab('general');
+  }, [isRemote, tab]);
   const [name, setName] = useState(project?.name ?? '');
+  // Keep the General-tab name field in step when the project name changes underneath
+  // us - the SpeleoDB tab's Save folds the server-authoritative name into the store
+  // (SpeleoDbSettingsTab), and the (staged, on-mount-once) `name` above would otherwise
+  // go stale. A stale field makes the shared footer Save compute settingsChanged=true
+  // and REVERT the folded name (re-dirtying the project). Re-seeding here keeps both
+  // tabs consistent; a user's in-progress General-tab rename only changes local state
+  // (never project.name until its own Save), so this never clobbers an active edit.
+  useEffect(() => {
+    setName(project?.name ?? '');
+  }, [project?.name]);
   const [validation, setValidation] = useState<Config['validation']>(
     project?.validation ?? defaultConfig.validation,
   );
@@ -136,7 +162,7 @@ export function ProjectSettingsDialog() {
           <div className="flex flex-1 min-h-0">
             {/* Sidebar tabs (mirrors the global Settings structure). */}
             <div className="w-44 shrink-0 border-r border-border p-2 space-y-1" role="tablist">
-              {TABS.map((tk) => (
+              {renderedTabs.map((tk) => (
                 <button
                   key={tk}
                   id={tabId(tk)}
@@ -158,14 +184,22 @@ export function ProjectSettingsDialog() {
                   <SettingsSection title={t('dialogs.projectSettings.tabs.general')}>
                     <SettingRow
                       label={t('dialogs.projectSettings.name.label')}
-                      helpText={t('dialogs.projectSettings.name.help')}
+                      helpText={
+                        isRemote
+                          ? t('dialogs.projectSettings.name.remoteHelp')
+                          : t('dialogs.projectSettings.name.help')
+                      }
                       data-testid="project-settings-name-row"
                     >
                       <input
                         type="text"
                         value={name}
+                        // A remote project's name is authoritative on SpeleoDB: editing it
+                        // here would be reverted by the pre-push name fold (#216), so route
+                        // renames to the SpeleoDB tab and disable this field.
+                        disabled={isRemote}
                         onChange={(e) => setName(e.target.value)}
-                        className="w-64 px-2 py-1 bg-background border border-border rounded text-sm"
+                        className="w-64 px-2 py-1 bg-background border border-border rounded text-sm disabled:opacity-60"
                         aria-label={t('dialogs.projectSettings.name.label')}
                         data-testid="project-settings-name"
                       />
@@ -189,6 +223,11 @@ export function ProjectSettingsDialog() {
                   <SettingsSection title={t('dialogs.projectSettings.tabs.experimental')}>
                     <CollaborationSection project={project} enabled={collabEnabled} onChange={setCollabEnabledState} />
                   </SettingsSection>
+                </div>
+              )}
+              {tab === 'speleodb' && isRemote && (
+                <div role="tabpanel" id={panelId('speleodb')} aria-labelledby={tabId('speleodb')}>
+                  <SpeleoDbSettingsTab />
                 </div>
               )}
             </div>

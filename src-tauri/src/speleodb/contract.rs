@@ -67,10 +67,7 @@ pub(crate) enum Endpoint {
     Release,
     // [P1] #197 done maps upload errors via UploadAuto.
     UploadAuto,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by #207 create caller")
-    )]
+    // [P1] #207 speleodb_publish constructs CreateProject (auth handler + dto_for_error).
     CreateProject,
 }
 

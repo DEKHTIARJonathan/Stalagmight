@@ -120,11 +120,14 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.set_station_comment",
     "command.set_zero_datum",
     "command.speleodb_done",
+    "command.speleodb_get_project_metadata",
     "command.speleodb_link_status",
     "command.speleodb_list_projects",
     "command.speleodb_login",
     "command.speleodb_logout",
     "command.speleodb_open_project",
+    "command.speleodb_patch_project",
+    "command.speleodb_publish",
     "command.speleodb_push",
     "command.speleodb_release_all_locks",
     "command.speleodb_release_lock",
@@ -225,6 +228,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-divergence",
     "action.dialog.speleodb-close",
     "action.dialog.speleodb-no-permission",
+    "action.dialog.publish-to-speleodb",
     "action.dialog.split-section",
     "action.dialog.swap-comments",
     "action.dialog.tml-import",
@@ -283,6 +287,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-divergence",
     "dialog-cancel.speleodb-close",
     "dialog-cancel.speleodb-no-permission",
+    "dialog-cancel.publish-to-speleodb",
     "dialog-cancel.split-section",
     "dialog-cancel.swap-comments",
     "dialog-cancel.tml-import",
@@ -367,6 +372,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-divergence",
     "dwell.dialog.speleodb-close",
     "dwell.dialog.speleodb-no-permission",
+    "dwell.dialog.publish-to-speleodb",
     "dwell.dialog.split-section",
     "dwell.dialog.swap-comments",
     "dwell.dialog.tml-import",
@@ -502,6 +508,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-divergence",
     "active-dwell.dialog.speleodb-close",
     "active-dwell.dialog.speleodb-no-permission",
+    "active-dwell.dialog.publish-to-speleodb",
     "active-dwell.dialog.split-section",
     "active-dwell.dialog.swap-comments",
     "active-dwell.dialog.tml-import",
@@ -609,7 +616,12 @@ mod tests {
         //       command.speleodb_set_exclude_geojson = 448.
         //   + 1 SpeleoDB per-project release event (#201 individual release):
         //       command.speleodb_release_lock = 449.
-        assert_eq!(EVENT_NAMES.len(), 449);
+        //   + 3 SpeleoDB Project Settings + publish events (#206/#207):
+        //       command.speleodb_{get_project_metadata,patch_project,publish} = 452.
+        //   + 4 publish-to-speleodb dialog events (#207):
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .publish-to-speleodb = 456.
+        assert_eq!(EVENT_NAMES.len(), 456);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

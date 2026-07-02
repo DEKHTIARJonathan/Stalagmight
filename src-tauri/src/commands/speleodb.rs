@@ -22,7 +22,9 @@ use crate::core::AppState;
 // the call site where the endpoint is known.
 use crate::speleodb::{
     DoneResult, PushResult, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
-    SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult, UpdateResult,
+    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoSessionStatus, StartEditingResult,
+    UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -197,4 +199,36 @@ pub async fn speleodb_link_status(app: AppHandle) -> Result<SpeleoLinkStatus, Sp
 #[tauri::command]
 pub async fn speleodb_unlink(app: AppHandle) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_unlink).await
+}
+
+/// GET the open remote project's editable metadata so the Project Settings tab can
+/// prefill the current server truth (#206). No lock; permission-free read.
+#[tauri::command]
+pub async fn speleodb_get_project_metadata(
+    app: AppHandle,
+) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_get_project_metadata).await
+}
+
+/// PATCH the open remote project's metadata with only the changed fields (#206):
+/// `PATCH /projects/{id}/`, permission-gated (READ_AND_WRITE), no lock. On a name
+/// change the SDB-authoritative name is folded into the local `.stalx` without
+/// dirtying. Returns the post-edit server truth.
+#[tauri::command]
+pub async fn speleodb_patch_project(
+    app: AppHandle,
+    patch: SpeleoProjectMetadataPatch,
+) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_patch_project(patch)).await
+}
+
+/// Create the open local project on SpeleoDB and push its first revision (#207):
+/// `POST /projects/` → relocate into the cache → acquire → upload → release. Returns
+/// the new project id, endpoint, and cache `local_path` the frontend reloads.
+#[tauri::command]
+pub async fn speleodb_publish(
+    app: AppHandle,
+    params: SpeleoPublishParams,
+) -> Result<SpeleoPublishResult, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_publish(params)).await
 }
