@@ -758,7 +758,7 @@ fn post_no_body_project(
     parse_project(&body, context)
 }
 
-/// `DELETE /api/v2/projects/{id}/` — soft-delete the project (the server
+/// `DELETE /api/v2/projects/{id}/` - soft-delete the project (the server
 /// deactivates it and a cron purges after ~30 days), returning `()` on success.
 /// DELETE is idempotent (deleting an already-deleted project is a no-op/404), so a
 /// transient-transport retry is safe. Consumed by #215's Delete-project action and
@@ -821,7 +821,7 @@ fn send_json_request(
     Ok(())
 }
 
-/// `GET /api/v2/projects/{id}/permissions/user/` — list the project's active
+/// `GET /api/v2/projects/{id}/permissions/user/` - list the project's active
 /// per-user permission grants (#215). A GET, so retry-safe; requires READ_ONLY+
 /// server-side (403 below that). Only the `permissions[]` array is consumed.
 pub(crate) fn list_user_permissions(
@@ -847,7 +847,7 @@ pub(crate) fn list_user_permissions(
     Ok(list.permissions)
 }
 
-/// `POST /api/v2/projects/{id}/permission/user/detail/` `{user, level}` — grant a
+/// `POST /api/v2/projects/{id}/permission/user/detail/` `{user, level}` - grant a
 /// collaborator a permission level (#215). ADMIN-gated server-side.
 pub(crate) fn add_user_permission(
     base: &str,
@@ -867,7 +867,7 @@ pub(crate) fn add_user_permission(
     )
 }
 
-/// `PUT /api/v2/projects/{id}/permission/user/detail/` `{user, level}` — change an
+/// `PUT /api/v2/projects/{id}/permission/user/detail/` `{user, level}` - change an
 /// existing collaborator's permission level (#215). ADMIN-gated server-side.
 pub(crate) fn set_user_permission(
     base: &str,
@@ -887,7 +887,7 @@ pub(crate) fn set_user_permission(
     )
 }
 
-/// `DELETE /api/v2/projects/{id}/permission/user/detail/` with body `{user}` —
+/// `DELETE /api/v2/projects/{id}/permission/user/detail/` with body `{user}` -
 /// remove a collaborator (soft, #215). ADMIN-gated server-side.
 pub(crate) fn remove_user_permission(
     base: &str,
@@ -906,7 +906,7 @@ pub(crate) fn remove_user_permission(
     )
 }
 
-/// `GET /api/v2/projects/{id}/permissions/team/` — list the project's active
+/// `GET /api/v2/projects/{id}/permissions/team/` - list the project's active
 /// per-team permission grants (#215). A GET, so retry-safe.
 pub(crate) fn list_team_permissions(
     base: &str,
@@ -931,7 +931,7 @@ pub(crate) fn list_team_permissions(
     Ok(list.permissions)
 }
 
-/// `POST /api/v2/projects/{id}/permission/team/detail/` `{team, level}` — grant a
+/// `POST /api/v2/projects/{id}/permission/team/detail/` `{team, level}` - grant a
 /// team a permission level (#215). ADMIN-gated; the server rejects `ADMIN` for a
 /// team (teams may only hold WEB_VIEWER / READ_ONLY / READ_AND_WRITE).
 pub(crate) fn add_team_permission(
@@ -952,7 +952,7 @@ pub(crate) fn add_team_permission(
     )
 }
 
-/// `PUT /api/v2/projects/{id}/permission/team/detail/` `{team, level}` — change a
+/// `PUT /api/v2/projects/{id}/permission/team/detail/` `{team, level}` - change a
 /// team's permission level (#215). ADMIN-gated; no `ADMIN` for teams.
 pub(crate) fn set_team_permission(
     base: &str,
@@ -972,7 +972,7 @@ pub(crate) fn set_team_permission(
     )
 }
 
-/// `DELETE /api/v2/projects/{id}/permission/team/detail/` with body `{team}` —
+/// `DELETE /api/v2/projects/{id}/permission/team/detail/` with body `{team}` -
 /// revoke a team's access (soft, #215). ADMIN-gated server-side.
 pub(crate) fn remove_team_permission(
     base: &str,
@@ -991,7 +991,7 @@ pub(crate) fn remove_team_permission(
     )
 }
 
-/// `GET /api/v2/teams/` — the authenticated user's teams (a bare JSON array), for
+/// `GET /api/v2/teams/` - the authenticated user's teams (a bare JSON array), for
 /// the add-team picker and to resolve a team-permission UUID to a display name
 /// (#215). A GET, so retry-safe.
 pub(crate) fn list_teams(
@@ -1046,10 +1046,12 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        api_url, bearer, build_upload_parts, clean_transport, mime_for, parse_error_message,
-        parse_upload_auto_response, with_retry, RevisionHistory, UserInfo,
+        add_team_permission, add_user_permission, api_url, bearer, build_upload_parts,
+        clean_transport, delete_project, list_teams, list_user_permissions, mime_for,
+        parse_error_message, parse_upload_auto_response, remove_team_permission,
+        remove_user_permission, set_user_permission, with_retry, RevisionHistory, UserInfo,
     };
-    use crate::speleodb::SpeleoDbError;
+    use crate::speleodb::{Permission, SpeleoDbError};
 
     #[test]
     fn revisions_payload_decodes_verified_v2_field_names() {
@@ -1597,5 +1599,198 @@ mod tests {
             "each file is a repeated `artifact` part"
         );
         assert_eq!(parts.message, "msg");
+    }
+
+    // --- #215 collaborator/team permission + delete wire contract ---------------
+    //
+    // These pin the exact method + path + JSON body each new client fn puts on the
+    // wire, against the same LoopbackStub the multipart test uses. The load-bearing
+    // case is the DELETE-with-body: ureq's typestate `.delete()` builder cannot
+    // carry a body, so the remove-* fns hand-build an `http::Request` and go through
+    // `Agent::run`. If that body were ever dropped (a ureq bump, or a refactor back
+    // to `.delete()`), the server would receive a target-less DELETE and 400 - so
+    // asserting `{"user"}` / `{"team"}` actually reaches the socket is the point.
+    // The stub replies `{}`; the fns that return `()` treat 200 as success, so we
+    // assert the returned `Ok(())` too (the ones that parse a body are ignored - we
+    // only care about the request bytes).
+    const WIRE_PID: &str = "11111111-1111-1111-1111-111111111111";
+
+    #[test]
+    fn loopback_remove_user_permission_is_delete_with_user_body() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        remove_user_permission(&base, "tok", false, WIRE_PID, "bob@example.com")
+            .expect("200 -> Ok(())");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!(
+                "DELETE /api/v2/projects/{WIRE_PID}/permission/user/detail/ "
+            )),
+            "singular `permission/user/detail/` DELETE, not the plural list path: {wire}"
+        );
+        assert!(
+            wire.to_ascii_lowercase()
+                .contains("content-type: application/json"),
+            "carries a JSON content-type: {wire}"
+        );
+        assert!(
+            wire.contains(r#""user":"bob@example.com""#),
+            "the DELETE body identifies the target user on the wire: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_remove_team_permission_is_delete_with_team_body() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        remove_team_permission(&base, "tok", false, WIRE_PID, "team-uuid-9")
+            .expect("200 -> Ok(())");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!(
+                "DELETE /api/v2/projects/{WIRE_PID}/permission/team/detail/ "
+            )),
+            "singular `permission/team/detail/` DELETE: {wire}"
+        );
+        assert!(
+            wire.contains(r#""team":"team-uuid-9""#),
+            "the DELETE body identifies the target team on the wire: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_add_user_permission_is_post_with_user_and_level() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        add_user_permission(
+            &base,
+            "tok",
+            false,
+            WIRE_PID,
+            "bob@example.com",
+            Permission::ReadOnly,
+        )
+        .expect("200 -> Ok(())");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!(
+                "POST /api/v2/projects/{WIRE_PID}/permission/user/detail/ "
+            )),
+            "POST to the singular detail path: {wire}"
+        );
+        assert!(
+            wire.contains(r#""user":"bob@example.com""#),
+            "user on wire: {wire}"
+        );
+        assert!(
+            wire.contains(r#""level":"READ_ONLY""#),
+            "the typed Permission serializes to its wire label: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_set_user_permission_is_put() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        set_user_permission(
+            &base,
+            "tok",
+            false,
+            WIRE_PID,
+            "bob@example.com",
+            Permission::ReadAndWrite,
+        )
+        .expect("200 -> Ok(())");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!(
+                "PUT /api/v2/projects/{WIRE_PID}/permission/user/detail/ "
+            )),
+            "a level change is a PUT: {wire}"
+        );
+        assert!(
+            wire.contains(r#""level":"READ_AND_WRITE""#),
+            "new level on wire: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_add_team_permission_is_post_with_team_and_level() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        add_team_permission(
+            &base,
+            "tok",
+            false,
+            WIRE_PID,
+            "team-uuid-9",
+            Permission::ReadOnly,
+        )
+        .expect("200 -> Ok(())");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!(
+                "POST /api/v2/projects/{WIRE_PID}/permission/team/detail/ "
+            )),
+            "team grant POST: {wire}"
+        );
+        assert!(
+            wire.contains(r#""team":"team-uuid-9""#),
+            "team on wire: {wire}"
+        );
+        assert!(
+            wire.contains(r#""level":"READ_ONLY""#),
+            "level on wire: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_list_user_permissions_is_get_plural_path() {
+        // The list path is PLURAL (`permissions/user/`), distinct from the singular
+        // write path (`permission/user/detail/`) - a mismatch would 404 the roster.
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        // Stub replies `{}` -> `permissions` defaults to [] -> Ok(empty). We only
+        // assert the request bytes.
+        let _ = list_user_permissions(&base, "tok", false, WIRE_PID);
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!(
+                "GET /api/v2/projects/{WIRE_PID}/permissions/user/ "
+            )),
+            "plural `permissions/user/` GET: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_list_teams_is_get_teams() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        let _ = list_teams(&base, "tok", false);
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with("GET /api/v2/teams/ "),
+            "the teams picker/name-map GET: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_delete_project_is_bare_delete() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        delete_project(&base, "tok", false, WIRE_PID).expect("200 -> Ok(())");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!("DELETE /api/v2/projects/{WIRE_PID}/ ")),
+            "project delete is a bare DELETE on the project, no detail suffix: {wire}"
+        );
     }
 }
