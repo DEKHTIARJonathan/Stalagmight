@@ -51,7 +51,11 @@ export function SpeleoStatusButton() {
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
   const openDialog = useUIStore((s) => s.openDialog);
   const appMode = useUIStore((s) => s.appMode);
-  const pollInterval = useProjectStore((s) => s.config?.speleodb.poll_interval_seconds ?? 60);
+  // Optional-chain `speleodb` too: the config is loaded async, so a render can land
+  // before it arrives (or with an older-shaped config that predates the speleodb
+  // block) - reading `.poll_interval_seconds` off an undefined `speleodb` would throw
+  // and crash the whole SingleSystemView on mount. Fall back to the 60s default.
+  const pollInterval = useProjectStore((s) => s.config?.speleodb?.poll_interval_seconds ?? 60);
   const { busy, startEditing, update, done } = useSpeleoActions();
 
   const isRemote = link !== null;

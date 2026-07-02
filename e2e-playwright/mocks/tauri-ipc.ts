@@ -2710,6 +2710,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 preset: 'default',
                 overrides: {},
               },
+              // SpeleoDB config block: the real get_config always returns this
+              // (Rust SpeleoDbConfig::default), and SpeleoStatusButton reads
+              // config.speleodb.poll_interval_seconds on every project-view mount -
+              // omitting it here makes config.speleodb undefined and crashes the view.
+              speleodb: {
+                endpoint: null,
+                email: null,
+                token_fallback: 'session_only',
+                insecure_http: false,
+                poll_interval_seconds: 60,
+              },
             };
 
           case 'update_config':
