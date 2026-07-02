@@ -119,7 +119,7 @@ impl AppState {
     ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
         self.speleodb_handle_auth(
-            Endpoint::GetProject,
+            Endpoint::ManageProject,
             client::add_user_permission(
                 &endpoint,
                 &token,
@@ -129,7 +129,7 @@ impl AppState {
                 permission,
             ),
         )
-        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
         self.speleodb_list_collaborators()
     }
 
@@ -141,7 +141,7 @@ impl AppState {
     ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
         self.speleodb_handle_auth(
-            Endpoint::GetProject,
+            Endpoint::ManageProject,
             client::set_user_permission(
                 &endpoint,
                 &token,
@@ -151,7 +151,7 @@ impl AppState {
                 permission,
             ),
         )
-        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
         self.speleodb_list_collaborators()
     }
 
@@ -162,7 +162,7 @@ impl AppState {
     ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
         self.speleodb_handle_auth(
-            Endpoint::GetProject,
+            Endpoint::ManageProject,
             client::remove_user_permission(
                 &endpoint,
                 &token,
@@ -171,7 +171,7 @@ impl AppState {
                 &email,
             ),
         )
-        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
         self.speleodb_list_collaborators()
     }
 
@@ -184,7 +184,7 @@ impl AppState {
     ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
         self.speleodb_handle_auth(
-            Endpoint::GetProject,
+            Endpoint::ManageProject,
             client::add_team_permission(
                 &endpoint,
                 &token,
@@ -194,7 +194,7 @@ impl AppState {
                 permission,
             ),
         )
-        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
         self.speleodb_list_collaborators()
     }
 
@@ -206,7 +206,7 @@ impl AppState {
     ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
         self.speleodb_handle_auth(
-            Endpoint::GetProject,
+            Endpoint::ManageProject,
             client::set_team_permission(
                 &endpoint,
                 &token,
@@ -216,7 +216,7 @@ impl AppState {
                 permission,
             ),
         )
-        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
         self.speleodb_list_collaborators()
     }
 
@@ -227,7 +227,7 @@ impl AppState {
     ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
         self.speleodb_handle_auth(
-            Endpoint::GetProject,
+            Endpoint::ManageProject,
             client::remove_team_permission(
                 &endpoint,
                 &token,
@@ -236,7 +236,7 @@ impl AppState {
                 &team_id,
             ),
         )
-        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
         self.speleodb_list_collaborators()
     }
 
@@ -281,10 +281,10 @@ impl AppState {
     pub(crate) fn speleodb_delete_project(&self) -> Result<(), SpeleoErrorDto> {
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
         self.speleodb_handle_auth(
-            Endpoint::GetProject,
+            Endpoint::ManageProject,
             client::delete_project(&endpoint, &token, insecure_http, &link.project_id),
         )
-        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
         // Now local-only: drop the persisted link + reopen the edit gate (reuses the
         // shared unlink path so it can't drift from the menu Unlink action).
         self.speleodb_unlink()
