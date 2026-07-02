@@ -141,12 +141,15 @@ interface SpeleoStore {
    */
   heldLocks: HeldLock[] | null;
   /**
-   * Bumped when a PROMPT-worthy scan (login, or the first app-open scan) finds
-   * held locks. App watches it to open the resume/release prompt exactly on those
-   * events - never on a routine badge refresh (returning to recents, the refresh
-   * button), which is what makes the prompt stop re-appearing on every visit.
+   * Visibility of the held-lock resume/release prompt. Set true only by a
+   * PROMPT-worthy scan (login, or the first app-open scan) that finds held locks -
+   * never by a routine badge refresh (returning to recents, the refresh button),
+   * which is what stops it re-appearing on every visit. App renders the prompt as
+   * an independent overlay keyed off this (NOT via the single `activeDialog` slot),
+   * so it layers OVER an open dialog (e.g. Settings during an inline login) instead
+   * of replacing it - the underlying dialog stays mounted and intact.
    */
-  heldLockPromptNonce: number;
+  heldLockPromptOpen: boolean;
   /**
    * True until the first lock scan of the app session runs. Lets that first scan
    * count as PROMPT-worthy ("application first started") without a second GET,
@@ -192,6 +195,9 @@ interface SpeleoStore {
   releaseLock: (projectId: string) => Promise<void>;
   /** Dismiss the held-lock prompt without a server call (Do nothing / keep working). */
   clearHeldLocks: () => void;
+  /** Hide the held-lock prompt overlay (its close paths use this, NOT the shared
+      `closeDialog`, so it never closes the dialog it is layered over). */
+  closeHeldLockPrompt: () => void;
 
   // --- staged account actions (Settings #205, A2/A3) ---
   /** The login/logout the user staged; applied on the dialog's Save. */
@@ -250,7 +256,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   remoteLocks: {},
   remoteProjects: {},
   heldLocks: null,
-  heldLockPromptNonce: 0,
+  heldLockPromptOpen: false,
   heldLockPromptPending: true,
   pollNonce: 0,
   busy: false,
@@ -375,9 +381,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           remoteProjects,
           heldLocks: heldLocks.length > 0 ? heldLocks : null,
           heldLockPromptPending: false,
-          ...(promptWorthy && heldLocks.length > 0
-            ? { heldLockPromptNonce: state.heldLockPromptNonce + 1 }
-            : {}),
+          ...(promptWorthy && heldLocks.length > 0 ? { heldLockPromptOpen: true } : {}),
         };
       });
     } catch {
@@ -412,6 +416,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   },
 
   clearHeldLocks: () => set({ heldLocks: null }),
+
+  closeHeldLockPrompt: () => set({ heldLockPromptOpen: false }),
 
   setSessionFromLogin: (r) =>
     set({
@@ -455,6 +461,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       remoteLocks: {},
       remoteProjects: {},
       heldLocks: null,
+      heldLockPromptOpen: false,
     })),
 
   seedFromStatus: (s) =>

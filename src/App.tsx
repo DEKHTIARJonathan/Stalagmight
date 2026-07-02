@@ -71,17 +71,13 @@ function App() {
     }
   }, [speleoDivergence, openDialog]);
 
-  // #201 (B1): surface the held-lock resume/release prompt only on the events that
-  // warrant it - a fresh login and the first app-open scan - NOT on every return to
-  // recents. The store bumps `heldLockPromptNonce` exactly on those prompt-worthy
-  // scans (when this user actually holds locks); routine badge refreshes leave it
-  // untouched, so they never re-open the prompt on top of whatever the user is doing.
-  const heldLockPromptNonce = useSpeleoStore((s) => s.heldLockPromptNonce);
-  useEffect(() => {
-    if (heldLockPromptNonce > 0) {
-      openDialog('held-lock-resume');
-    }
-  }, [heldLockPromptNonce, openDialog]);
+  // #201 (B1): the held-lock resume/release prompt is an INDEPENDENT overlay (see
+  // `heldLockPromptOpen`), not the single `activeDialog` slot, so a login done from
+  // inside another dialog (e.g. the Settings account panel) layers the prompt OVER
+  // it instead of replacing it - the underlying dialog stays mounted and intact.
+  // The store opens it only on prompt-worthy scans (login / first app-open with held
+  // locks); routine badge refreshes never do.
+  const heldLockPromptOpen = useSpeleoStore((s) => s.heldLockPromptOpen);
 
   // Apply theme from config (resolves auto mode, sets data-theme attribute)
   useTheme();
@@ -521,7 +517,6 @@ function App() {
       {activeDialog === 'speleodb-divergence' && <SpeleoDivergenceDialog />}
       {activeDialog === 'speleodb-close' && <SpeleoCloseDialog />}
       {activeDialog === 'speleodb-no-permission' && <SpeleoNoPermissionDialog />}
-      {activeDialog === 'held-lock-resume' && <HeldLockResumeDialog />}
       {activeDialog === 'new-project-for-import' && <NewProjectForImportDialog />}
       {activeDialog === 'dmp-selection' && dialogData.dmpFile ? (
         <DmpSelectionDialog
@@ -728,6 +723,12 @@ function App() {
       {config && !onboarding.activeStep && (
         <TelemetryOptInDialog config={config} onConfigChanged={setConfig} />
       )}
+
+      {/* Held-lock resume/release prompt (#201): an INDEPENDENT top-layer overlay
+          (rendered last so its portal sits above any open dialog), so a login done
+          from inside another dialog - e.g. the Settings account panel - layers it
+          OVER that dialog instead of replacing it, leaving Settings intact. */}
+      {heldLockPromptOpen && <HeldLockResumeDialog />}
 
       {/* Toast notification (via Portal for z-index reliability) */}
       {toast && createPortal(

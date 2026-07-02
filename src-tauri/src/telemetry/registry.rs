@@ -543,7 +543,12 @@ mod tests {
     /// Dialog keys removed from `App.tsx` whose registry slots are likewise
     /// retained. The `action.dialog.*` / `dialog-cancel.*` / `dwell.dialog.*`
     /// coverage check skips them.
-    const REMOVED_DIALOGS: &[&str] = &["adjust-closures"];
+    // Dialogs whose 4 event slots are retained but excluded from the
+    // `activeDialog`-derived stale check: either genuinely removed
+    // (`adjust-closures`) or relocated OUT of the single `activeDialog` slot into an
+    // independent overlay (`held-lock-resume`, #201 - so it can layer over another
+    // dialog during login). The slots are kept for event-numbering stability.
+    const REMOVED_DIALOGS: &[&str] = &["adjust-closures", "held-lock-resume"];
 
     /// `action.toggle.*` events that are intentionally NOT derived from
     /// `DISPLAY_DEFAULTS`. `geometryMode` is an enum display mode tracked via an

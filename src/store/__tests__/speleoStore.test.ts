@@ -34,7 +34,7 @@ const reset = () => {
     remoteLocks: {},
     remoteProjects: {},
     heldLocks: null,
-    heldLockPromptNonce: 0,
+    heldLockPromptOpen: false,
     heldLockPromptPending: true,
   });
 };
@@ -373,7 +373,7 @@ describe('speleoStore', () => {
   // #201 refinements: the resume/release prompt fires only on login + app-open (not
   // every recents visit), and individual locks can be released one at a time.
   describe('held-lock scan + release (#201)', () => {
-    it('the first app-open scan is prompt-worthy: it bumps the nonce when a lock is held', async () => {
+    it('the first app-open scan is prompt-worthy: it opens the prompt when a lock is held', async () => {
       loggedInAs('me@x');
       invokeIpcMock.mockResolvedValue([{ id: 'p1', name: 'Held', lock_holder: 'me@x' }]);
       await useSpeleoStore.getState().scanLocksOnOpen();
@@ -382,30 +382,30 @@ describe('speleoStore', () => {
       expect(s.remoteLocks).toEqual({ p1: 'me@x' });
       // The SpeleoDB project name is captured for the recents "SpeleoDB: {name}" label.
       expect(s.remoteProjects).toEqual({ p1: 'Held' });
-      expect(s.heldLockPromptNonce).toBe(1);
+      expect(s.heldLockPromptOpen).toBe(true);
       // Consumed, so a later routine scan won't retro-prompt.
       expect(s.heldLockPromptPending).toBe(false);
     });
 
     it('a routine badge refresh keeps the badges but does NOT re-open the prompt', async () => {
       loggedInAs('me@x');
-      useSpeleoStore.setState({ heldLockPromptPending: false, heldLockPromptNonce: 1 });
+      useSpeleoStore.setState({ heldLockPromptPending: false, heldLockPromptOpen: false });
       invokeIpcMock.mockResolvedValue([{ id: 'p1', name: 'Held', lock_holder: 'me@x' }]);
       await useSpeleoStore.getState().scanLocksOnOpen();
       const s = useSpeleoStore.getState();
       expect(s.heldLocks).toEqual([{ projectId: 'p1', projectName: 'Held' }]); // badges still fresh
-      expect(s.heldLockPromptNonce).toBe(1); // but no new prompt
+      expect(s.heldLockPromptOpen).toBe(false); // but no new prompt
     });
 
     it('an explicit prompt scan (login) re-opens the prompt even after the pending flag is gone', async () => {
       loggedInAs('me@x');
-      useSpeleoStore.setState({ heldLockPromptPending: false, heldLockPromptNonce: 1 });
+      useSpeleoStore.setState({ heldLockPromptPending: false, heldLockPromptOpen: false });
       invokeIpcMock.mockResolvedValue([{ id: 'p1', name: 'Held', lock_holder: 'me@x' }]);
       await useSpeleoStore.getState().scanLocksOnOpen({ prompt: true });
-      expect(useSpeleoStore.getState().heldLockPromptNonce).toBe(2);
+      expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(true);
     });
 
-    it('a scan that finds no lock held by us never bumps the nonce (case-insensitive match)', async () => {
+    it('a scan that finds no lock held by us never opens the prompt (case-insensitive match)', async () => {
       loggedInAs('Me@X');
       invokeIpcMock.mockResolvedValue([
         { id: 'p2', name: 'Other', lock_holder: 'someone@x' },
@@ -414,7 +414,7 @@ describe('speleoStore', () => {
       await useSpeleoStore.getState().scanLocksOnOpen({ prompt: true });
       const s = useSpeleoStore.getState();
       expect(s.heldLocks).toBeNull();
-      expect(s.heldLockPromptNonce).toBe(0);
+      expect(s.heldLockPromptOpen).toBe(false);
       expect(s.remoteLocks).toEqual({ p2: 'someone@x', p3: null });
     });
 
@@ -430,7 +430,7 @@ describe('speleoStore', () => {
       expect(s.remoteProjects).toEqual({});
       expect(s.heldLocks).toBeNull();
       expect(s.heldLockPromptPending).toBe(false);
-      expect(s.heldLockPromptNonce).toBe(0);
+      expect(s.heldLockPromptOpen).toBe(false);
       expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_list_projects');
     });
 

@@ -20,12 +20,14 @@ import { DialogWrapper } from './DialogWrapper';
  */
 export default function HeldLockResumeDialog() {
   const { t } = useTranslation();
-  const closeDialog = useUIStore((s) => s.closeDialog);
   const showToast = useUIStore((s) => s.showToast);
   const heldLocks = useSpeleoStore((s) => s.heldLocks);
   const releaseAllLocks = useSpeleoStore((s) => s.releaseAllLocks);
   const releaseLock = useSpeleoStore((s) => s.releaseLock);
   const clearHeldLocks = useSpeleoStore((s) => s.clearHeldLocks);
+  // Close this OVERLAY only (not the shared `closeDialog`, which would close the
+  // dialog this prompt is layered over - e.g. Settings during an inline login).
+  const closeHeldLockPrompt = useSpeleoStore((s) => s.closeHeldLockPrompt);
   // Which project id is being released one-off, or 'all' for the Release-all path.
   const [releasing, setReleasing] = useState<string | null>(null);
 
@@ -35,20 +37,20 @@ export default function HeldLockResumeDialog() {
   // Auto-close once the last lock is gone - releasing them one by one shrinks
   // `heldLocks` in the store, and when it empties there is nothing left to resolve.
   useEffect(() => {
-    if (locks.length === 0) closeDialog();
-  }, [locks.length, closeDialog]);
+    if (locks.length === 0) closeHeldLockPrompt();
+  }, [locks.length, closeHeldLockPrompt]);
 
   // Keep / Do-nothing: leave the locks held and just dismiss the prompt.
   const keep = () => {
     clearHeldLocks();
-    closeDialog();
+    closeHeldLockPrompt();
   };
 
   const releaseAll = async () => {
     setReleasing('all');
     try {
       await releaseAllLocks();
-      closeDialog();
+      closeHeldLockPrompt();
     } catch (e) {
       // Release failed: keep the prompt open so the user can retry.
       showToast(
