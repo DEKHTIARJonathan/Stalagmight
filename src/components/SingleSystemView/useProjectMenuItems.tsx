@@ -53,6 +53,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   const toggleDisplay = useUIStore((s) => s.toggleDisplay);
   // SpeleoDB submenu (T2d) - only for a remote project.
   const speleoLink = useSpeleoStore((s) => s.link);
+  // The signed-in session gates "Publish to SpeleoDB" (a local project can only be
+  // published while logged in).
+  const speleoSession = useSpeleoStore((s) => s.session);
   const { busy: speleoBusy, startEditing, update, done } = useSpeleoActions();
   // The closure-adjusted view is read-only — imports add sections. Disable the
   // Import item up front (the toolbar Import button and Ctrl+I already do), so the
@@ -90,6 +93,18 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
     return [
       ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
       openFromSpeleoDbMenuItem(t, { onOpen: () => openDialog('open-from-speleodb') }),
+      // Publish to SpeleoDB - only for a LOCAL project (not already linked) while
+      // signed in (a publish needs a session).
+      ...(!speleoLink && speleoSession?.loggedIn
+        ? [
+            {
+              id: 'publish-to-speleodb-menu',
+              label: t('speleodb.publish.menuItem'),
+              icon: <SpeleoDbLogo size={sz} />,
+              onClick: () => openDialog('publish-to-speleodb'),
+            },
+          ]
+        : []),
       // SpeleoDB submenu (T2d) - only when a remote project is open.
       ...(speleoLink
         ? [
@@ -254,5 +269,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showToast, showDevStats, toggleDisplay, geometryReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoBusy, startEditing, update, done]);
+  }, [t, openDialog, showToast, showDevStats, toggleDisplay, geometryReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoBusy, startEditing, update, done]);
 }

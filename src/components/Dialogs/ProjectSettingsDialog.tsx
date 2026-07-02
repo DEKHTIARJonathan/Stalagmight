@@ -6,14 +6,17 @@ import { ValidationSettings } from './settings/ValidationSettings';
 import { CollaborationSection } from './settings/CollaborationSettings';
 import { SettingsSection } from './settings/SettingsSection';
 import { SettingRow } from './settings/SettingRow';
+import { SpeleoDbSettingsTab } from './settings/SpeleoDbSettingsTab';
 import type { SettingsCategory } from './SettingsSidebar';
 import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig, type Config } from '../../types/config';
 import { isValidationConfigValid } from '../../utils/validation';
 
-type ProjectSettingsTab = 'general' | 'validation' | 'experimental';
+type ProjectSettingsTab = 'general' | 'validation' | 'experimental' | 'speleodb';
+// The local (always-shown) tabs; the remote-only 'speleodb' tab is appended below.
 const TABS: readonly ProjectSettingsTab[] = ['general', 'validation', 'experimental'];
 const EMPTY_CHANGED: ReadonlySet<string> = new Set();
 
@@ -27,6 +30,8 @@ export function ProjectSettingsDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const showToast = useUIStore((s) => s.showToast);
+  // The SpeleoDB tab is only meaningful for a remote (linked) project.
+  const isRemote = useSpeleoStore((s) => s.link) != null;
   const { project, globalConfig, updateProjectSettings, setCollabEnabled } = useProjectStore(
     useShallow((s) => ({
       project: s.project,
@@ -43,6 +48,10 @@ export function ProjectSettingsDialog() {
   const panelId = (tk: ProjectSettingsTab) => `${panelIdBase}-panel-${tk}`;
 
   const [tab, setTab] = useState<ProjectSettingsTab>('general');
+  const renderedTabs = useMemo<readonly ProjectSettingsTab[]>(
+    () => (isRemote ? [...TABS, 'speleodb'] : TABS),
+    [isRemote],
+  );
   const [name, setName] = useState(project?.name ?? '');
   const [validation, setValidation] = useState<Config['validation']>(
     project?.validation ?? defaultConfig.validation,
@@ -136,7 +145,7 @@ export function ProjectSettingsDialog() {
           <div className="flex flex-1 min-h-0">
             {/* Sidebar tabs (mirrors the global Settings structure). */}
             <div className="w-44 shrink-0 border-r border-border p-2 space-y-1" role="tablist">
-              {TABS.map((tk) => (
+              {renderedTabs.map((tk) => (
                 <button
                   key={tk}
                   id={tabId(tk)}
@@ -189,6 +198,11 @@ export function ProjectSettingsDialog() {
                   <SettingsSection title={t('dialogs.projectSettings.tabs.experimental')}>
                     <CollaborationSection project={project} enabled={collabEnabled} onChange={setCollabEnabledState} />
                   </SettingsSection>
+                </div>
+              )}
+              {tab === 'speleodb' && isRemote && (
+                <div role="tabpanel" id={panelId('speleodb')} aria-labelledby={tabId('speleodb')}>
+                  <SpeleoDbSettingsTab />
                 </div>
               )}
             </div>

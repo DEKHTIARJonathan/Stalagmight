@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
@@ -10,11 +11,15 @@ import { ensureExtension, projectSaveFilters, saveDialog, PROJECT_EXTENSION } fr
 export default function NewProjectDialog() {
   const { closeDialog } = useUIStore();
   const { setView } = useUIStore();
+  const openDialog = useUIStore((s) => s.openDialog);
   const { createProject } = useProjectStore();
+  // Only offer the follow-up SpeleoDB publish when signed in.
+  const loggedIn = useSpeleoStore((s) => s.session?.loggedIn ?? false);
 
   const [name, setName] = useState('');
   const [projectLocation, setProjectLocation] = useState('');
   const [saveImmediately, setSaveImmediately] = useState(false);
+  const [alsoPublish, setAlsoPublish] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
@@ -50,7 +55,13 @@ export default function NewProjectDialog() {
         // Switch to single system view
         setView('single');
         trackDialogComplete('new-project');
-        closeDialog();
+        // When asked (and signed in), hand off to the Publish dialog instead of just
+        // closing - it replaces this dialog via the single activeDialog slot.
+        if (alsoPublish && loggedIn) {
+          openDialog('publish-to-speleodb');
+        } else {
+          closeDialog();
+        }
       } else {
         setError(result.error ?? 'Failed to create project');
       }
@@ -62,7 +73,7 @@ export default function NewProjectDialog() {
   };
 
   // Track if form has been modified
-  const isDirty = name.trim() !== '' || projectLocation.trim() !== '' || saveImmediately;
+  const isDirty = name.trim() !== '' || projectLocation.trim() !== '' || saveImmediately || alsoPublish;
 
   return (
     <DialogWrapper title="New Project" onClose={closeDialog} size="md" isDirty={isDirty} data-testid="new-project-dialog">
@@ -114,6 +125,22 @@ export default function NewProjectDialog() {
             Save project file immediately
           </label>
         </div>
+
+        {loggedIn && (
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="alsoPublish"
+              checked={alsoPublish}
+              onChange={(e) => setAlsoPublish(e.target.checked)}
+              className="rounded"
+              data-testid="new-project-also-publish"
+            />
+            <label htmlFor="alsoPublish" className="text-sm">
+              Also create on SpeleoDB after creating
+            </label>
+          </div>
+        )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={closeDialog} disabled={isCreating} data-testid="new-project-cancel-button">
