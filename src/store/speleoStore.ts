@@ -7,6 +7,7 @@ import type {
   SpeleoErrorDto,
   SpeleoLinkStatus,
   SpeleoLoginResult,
+  SpeleoProjectSummary,
   SpeleoSessionStatus,
   StartEditingResult,
   UpdateResult,
@@ -37,6 +38,13 @@ export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push' | 'reverify'
 
 /** Transient banner the shell surfaces above the toolbar (#200 seam). */
 export type SpeleoBanner = { kind: 'push_unconfirmed' } | { kind: 'concurrent_session' };
+
+/** A SpeleoDB project whose write lock the current user holds, surfaced by the
+    login/app-open scan so the resume/release prompt can offer to release it (#201). */
+export interface HeldLock {
+  projectId: string;
+  projectName: string;
+}
 
 export interface SpeleoSession {
   loggedIn: boolean;
@@ -106,6 +114,18 @@ interface SpeleoStore {
   /** Transient banner (#200 seam). */
   banner: SpeleoBanner | null;
   /**
+   * Lock holder per accessible SpeleoDB project (`project_id` → holder email, or
+   * `null` = free), from the single login/app-open `list_projects` scan (#201).
+   * Overlays lock badges onto the recents / GlobalView list; empty until the first
+   * scan (logged out / offline).
+   */
+  remoteLocks: Record<string, string | null>;
+  /**
+   * Locks the current user holds, found by the scan (#201). Non-empty raises the
+   * held-lock resume/release prompt (resolve abandoned/crashed locks: no server TTL).
+   */
+  heldLocks: HeldLock[] | null;
+  /**
    * Bumped after a hand-off verb to restart the status poll timer, so the next
    * poll is a full (≥30 s) interval away - a buffer that avoids re-reading a
    * server mutex that hasn't reflected our just-issued release yet (1b).
@@ -127,6 +147,17 @@ interface SpeleoStore {
   /** Query `speleodb_session` and set it (best-effort; runs on project load so the
       action button knows who we are - e.g. to tell our own lock from another's). */
   refreshSession: () => Promise<void>;
+
+  // --- lock scan on login/app-open (#201, B1) ---
+  /** One `list_projects` GET resolves lock state for ALL accessible projects:
+      populates `remoteLocks` (badges) + `heldLocks` (the resume/release prompt).
+      Best-effort; a logged-out / offline scan clears both. */
+  scanLocksOnOpen: () => Promise<void>;
+  /** Release EVERY lock this user holds (the prompt's "Release all"); on success
+      clears `heldLocks`, re-scans, and refreshes the open project's link status. */
+  releaseAllLocks: () => Promise<void>;
+  /** Dismiss the held-lock prompt without a server call (Do nothing / keep working). */
+  clearHeldLocks: () => void;
 
   // --- staged account actions (Settings #205, A2/A3) ---
   /** The login/logout the user staged; applied on the dialog's Save. */
@@ -173,6 +204,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   link: null,
   divergence: null,
   banner: null,
+  remoteLocks: {},
+  heldLocks: null,
   pollNonce: 0,
   busy: false,
   pendingAuth: null,
@@ -202,6 +235,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         });
         set({ pendingAuth: null, authError: null });
         get().setSessionFromLogin(r);
+        // #201: a fresh login is an "on login" scan point - surface any locks this
+        // user left held (and prime the recents badges). Best-effort, non-blocking.
+        void get().scanLocksOnOpen();
       }
       return { ok: true };
     } catch (error) {
@@ -256,6 +292,43 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     }
   },
 
+  scanLocksOnOpen: async () => {
+    // Ensure we know who we are before filtering held-by-me: on the app-open home
+    // screen the frontend session may be cold even though the backend holds a
+    // rehydrated token (which list_projects uses).
+    if (!get().session) await get().refreshSession();
+    const me = get().session?.userEmail?.toLowerCase();
+    if (!get().session?.loggedIn || !me) {
+      set({ remoteLocks: {}, heldLocks: null });
+      return;
+    }
+    try {
+      const projects = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
+      const remoteLocks: Record<string, string | null> = {};
+      const heldLocks: HeldLock[] = [];
+      for (const p of projects) {
+        remoteLocks[p.id] = p.lock_holder;
+        if (p.lock_holder && p.lock_holder.toLowerCase() === me) {
+          heldLocks.push({ projectId: p.id, projectName: p.name });
+        }
+      }
+      set({ remoteLocks, heldLocks: heldLocks.length > 0 ? heldLocks : null });
+    } catch {
+      // Best-effort: keep prior badges and never raise a prompt on a failed scan.
+    }
+  },
+
+  releaseAllLocks: async () => {
+    // Throws on failure so the dialog can keep itself open and surface the error;
+    // heldLocks is cleared only on a confirmed release.
+    await invokeIpc<null>('speleodb_release_all_locks');
+    set({ heldLocks: null });
+    await get().scanLocksOnOpen();
+    await get().refreshLinkStatus();
+  },
+
+  clearHeldLocks: () => set({ heldLocks: null }),
+
   setSessionFromLogin: (r) =>
     set({
       session: {
@@ -294,6 +367,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         : null,
       divergence: null,
       banner: null,
+      // The lock scan was for this now-ended session; drop its badges + prompt.
+      remoteLocks: {},
+      heldLocks: null,
     })),
 
   seedFromStatus: (s) =>

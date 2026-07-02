@@ -8,6 +8,7 @@ import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useGlobalViewStore } from '../../store/globalViewStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { Button } from '../common/Button';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
 import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, runImport, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
@@ -18,6 +19,7 @@ import { setProjectActionSource } from '../../utils/telemetry';
 import { dmpOpenFilters, tmlOpenFilters, compassOpenFilters, wallsOpenFilters, gpxOpenFilters } from '../../utils/fileDialogs';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
+import { resolveSpeleoLock } from './SpeleoLockBadge';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
 import { RecentSortControl } from './RecentSortControl';
@@ -138,6 +140,17 @@ export default function GlobalView() {
   useEffect(() => {
     loadRecentProjects();
   }, [loadRecentProjects]);
+
+  // #201 (B1): the home screen is the app-open landing, so scan SpeleoDB lock state
+  // here - one GET resolves every accessible project's holder. Populates the recents
+  // lock badges and, if this user holds any locks, raises the resume/release prompt
+  // (App owns the once-per-session guard). Best-effort + a no-op when logged out.
+  const scanLocksOnOpen = useSpeleoStore((s) => s.scanLocksOnOpen);
+  const remoteLocks = useSpeleoStore((s) => s.remoteLocks);
+  const speleoEmail = useSpeleoStore((s) => s.session?.userEmail ?? null);
+  useEffect(() => {
+    void scanLocksOnOpen();
+  }, [scanLocksOnOpen]);
 
   // Close on outside mousedown / external scroll / resize (shared hook, same as
   // Select/AppMenu). Escape is handled in the global-view keyboard handler.
@@ -770,6 +783,8 @@ export default function GlobalView() {
                   multiSelectedIds={multiSelectedIds}
                   sortField={recentSort.field}
                   sortDirection={recentSort.direction}
+                  remoteLocks={remoteLocks}
+                  myEmail={speleoEmail}
                   onSort={handleHeaderSort}
                   onSelect={handleProjectSelect}
                   onOpen={handleOpenFromList}
@@ -789,6 +804,7 @@ export default function GlobalView() {
                         sectionCount={item.project.section_count}
                         totalLength={item.project.total_length}
                         isSelected={multiSelectedIds.has(item.filePath)}
+                        speleoLock={resolveSpeleoLock(item.project, remoteLocks, speleoEmail)}
                         onSelect={(ctrlKey) => handleProjectSelect(item.filePath, ctrlKey)}
                         onContextMenu={(e) => handleContextMenu(e, item.filePath)}
                       />

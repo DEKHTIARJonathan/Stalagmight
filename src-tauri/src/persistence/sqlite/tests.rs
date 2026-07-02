@@ -3364,7 +3364,11 @@ fn speleo_link_last_verify_at_roundtrips() {
     link.last_verify_at = Some(stamp.clone());
     db.save_speleo_link(Some(&link)).unwrap();
     assert_eq!(
-        db.load_speleo_link().unwrap().unwrap().last_verify_at.as_deref(),
+        db.load_speleo_link()
+            .unwrap()
+            .unwrap()
+            .last_verify_at
+            .as_deref(),
         Some(stamp.as_str()),
     );
 

@@ -9,6 +9,7 @@ import {
 import { ElidedPath, Tooltip } from '../common';
 import { setProjectActionSource } from '../../utils/telemetry';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
+import { SpeleoLockBadge, type SpeleoLockInfo } from './SpeleoLockBadge';
 
 interface SystemCardProps {
   name: string;
@@ -18,6 +19,8 @@ interface SystemCardProps {
   sectionCount: number;
   totalLength: number;
   isSelected?: boolean;
+  /** SpeleoDB lock state for this entry (#201); a local project renders no badge. */
+  speleoLock?: SpeleoLockInfo;
   /** Called when the card is clicked. Receives true if Ctrl/Cmd was held. */
   onSelect?: (ctrlKey: boolean) => void;
   /** Called on right-click to show context menu */
@@ -32,6 +35,7 @@ export default function SystemCard({
   sectionCount,
   totalLength,
   isSelected,
+  speleoLock,
   onSelect,
   onContextMenu,
 }: SystemCardProps) {
@@ -112,7 +116,10 @@ export default function SystemCard({
         }
       }}
     >
-      <h3 className="text-lg font-medium mb-1">{name}</h3>
+      <div className="flex items-start justify-between gap-2 mb-1">
+        <h3 className="text-lg font-medium">{name}</h3>
+        {speleoLock && <SpeleoLockBadge {...speleoLock} />}
+      </div>
       {location && (
         <p className="text-sm text-text-secondary mb-1">{location}</p>
       )}

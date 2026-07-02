@@ -1274,6 +1274,8 @@ pub fn run() {
             commands::speleodb::speleodb_push,
             // SpeleoDB divergence resolution - take remote (#198)
             commands::speleodb::speleodb_take_remote,
+            // SpeleoDB held-lock resume/release prompt - release all (#201)
+            commands::speleodb::speleodb_release_all_locks,
             // Section commands
             commands::section::create_section,
             commands::section::update_section,

@@ -9,6 +9,7 @@ import { ElidedPath, Tooltip, ChevronUpIcon, ChevronDownIcon } from '../common';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
 import type { RecentListItem } from './recentListItems';
 import type { RecentSortField, RecentSortDirection } from './useRecentSort';
+import { SpeleoLockBadge, resolveSpeleoLock } from './SpeleoLockBadge';
 
 interface SystemTableProps {
   items: RecentListItem[];
@@ -16,6 +17,10 @@ interface SystemTableProps {
   multiSelectedIds: Set<string>;
   sortField: RecentSortField;
   sortDirection: RecentSortDirection;
+  /** SpeleoDB lock state per project id, from the login/app-open scan (#201). */
+  remoteLocks: Record<string, string | null>;
+  /** Current user's email, to tell our own held lock from another's (#201). */
+  myEmail: string | null;
   /** Toggle/apply sorting when a sortable column header is clicked. */
   onSort: (field: RecentSortField) => void;
   onSelect: (filePath: string, ctrlKey: boolean) => void;
@@ -77,6 +82,8 @@ export function SystemTable({
   multiSelectedIds,
   sortField,
   sortDirection,
+  remoteLocks,
+  myEmail,
   onSort,
   onSelect,
   onOpen,
@@ -188,7 +195,13 @@ export function SystemTable({
               }}
             >
               <td className={`${cellClass} font-medium`}>
-                {project.name}
+                <span className="inline-flex items-center gap-2">
+                  <SpeleoLockBadge
+                    {...resolveSpeleoLock(project, remoteLocks, myEmail)}
+                    size={16}
+                  />
+                  <span>{project.name}</span>
+                </span>
                 {project.location && (
                   <span className="text-text-secondary"> · {project.location}</span>
                 )}

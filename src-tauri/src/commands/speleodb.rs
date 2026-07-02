@@ -140,6 +140,14 @@ pub async fn speleodb_take_remote(app: AppHandle) -> Result<String, SpeleoErrorD
     run_blocking(app, AppState::speleodb_take_remote).await
 }
 
+/// Release EVERY write lock this user currently holds (#201 "Release all"): the
+/// held-lock resume prompt's resolution for locks a crashed/abandoned session
+/// left behind. No-op server-side when none are held.
+#[tauri::command]
+pub async fn speleodb_release_all_locks(app: AppHandle) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_release_all_locks).await
+}
+
 /// Report whether the backend already holds a usable token (and for whom). The
 /// dialog calls this on open to restore the project list instead of re-prompting
 /// for credentials — the in-memory token outlives the dialog's React state.

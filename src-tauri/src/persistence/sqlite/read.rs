@@ -168,6 +168,16 @@ impl Database {
             .ok()
             .unwrap_or(false);
 
+        // The linked SpeleoDB project UUID (#201), so the recents/GlobalView list can
+        // match this entry against a single lock scan. Same tolerance as is_remote: a
+        // missing table (pre-v9 / read-only metadata open) simply yields None.
+        let speleodb_project_id: Option<String> = self
+            .conn
+            .query_row("SELECT project_id FROM speleo_link WHERE id = 1", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok();
+
         Ok(ProjectMetadata {
             name,
             location,
@@ -180,6 +190,7 @@ impl Database {
             gps_bounds,
             collab_enabled,
             is_remote,
+            speleodb_project_id,
         })
     }
 

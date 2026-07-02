@@ -126,6 +126,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_logout",
     "command.speleodb_open_project",
     "command.speleodb_push",
+    "command.speleodb_release_all_locks",
     "command.speleodb_session",
     "command.speleodb_start_editing",
     "command.speleodb_take_remote",
@@ -206,6 +207,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.export",
     "action.dialog.gpx-placement",
     "action.dialog.gpx-selection",
+    "action.dialog.held-lock-resume",
     "action.dialog.import",
     "action.dialog.keyboard-shortcuts",
     "action.dialog.merge",
@@ -263,6 +265,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.export",
     "dialog-cancel.gpx-placement",
     "dialog-cancel.gpx-selection",
+    "dialog-cancel.held-lock-resume",
     "dialog-cancel.import",
     "dialog-cancel.keyboard-shortcuts",
     "dialog-cancel.merge",
@@ -346,6 +349,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.export",
     "dwell.dialog.gpx-placement",
     "dwell.dialog.gpx-selection",
+    "dwell.dialog.held-lock-resume",
     "dwell.dialog.import",
     "dwell.dialog.keyboard-shortcuts",
     "dwell.dialog.merge",
@@ -480,6 +484,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.export",
     "active-dwell.dialog.gpx-placement",
     "active-dwell.dialog.gpx-selection",
+    "active-dwell.dialog.held-lock-resume",
     "active-dwell.dialog.import",
     "active-dwell.dialog.keyboard-shortcuts",
     "active-dwell.dialog.merge",
@@ -590,7 +595,10 @@ mod tests {
         //   + 4 speleodb-no-permission dialog events (#204): = 441.
         //   + 1 SpeleoDB take-remote event (#198):
         //       command.speleodb_take_remote = 442.
-        assert_eq!(EVENT_NAMES.len(), 442);
+        //   + 1 SpeleoDB release-all-locks event (#201):
+        //       command.speleodb_release_all_locks = 443.
+        //   + 4 held-lock-resume dialog events (#201): = 447.
+        assert_eq!(EVENT_NAMES.len(), 447);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

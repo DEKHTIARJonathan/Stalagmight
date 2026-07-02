@@ -68,6 +68,9 @@ impl Project {
             // (the authoritative probe); this in-memory metadata() path conserves
             // the prior behaviour with a safe default.
             is_remote: false,
+            // Same rationale (#201): the linked project UUID lives in the on-disk
+            // speleo_link, not this in-memory Project, so None here.
+            speleodb_project_id: None,
         })
     }
 

@@ -581,6 +581,30 @@ pub(crate) fn release_lock(
     )
 }
 
+/// `DELETE /api/v2/user/release_all_locks/` — release EVERY write lock the token
+/// holder currently holds, returning `()` on success. Idempotent (releasing when
+/// none are held is a no-op), so a transient-transport retry is safe. Drives the
+/// held-lock resume/release prompt's "Release all" choice (#201, B1).
+pub(crate) fn release_all_locks(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+) -> Result<(), SpeleoDbError> {
+    let url = api_url(base, "user/release_all_locks/");
+    let auth = bearer(token);
+    let (status, body) = with_retry(base, insecure_http, true, || {
+        let resp = agent()
+            .delete(&url)
+            .header("Authorization", auth.as_str())
+            .call()?;
+        read_status_body(resp)
+    })?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    Ok(())
+}
+
 /// `POST /api/v2/projects/` — create a fresh project, returning the full parsed
 /// [`Project`]. `idempotent = false`. The shipped create-on-SDB UX is #207; this
 /// is the production primitive.

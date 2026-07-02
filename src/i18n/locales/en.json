@@ -2720,6 +2720,20 @@
       "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept - click Done again to retry.",
       "concurrentSession": "This project is locked by your account in another session. Editing from two sessions at once can lose edits."
     },
+    "heldLocks": {
+      "title": "You hold SpeleoDB locks",
+      "description_one": "You still hold the write lock on this SpeleoDB project (perhaps from a session that did not exit cleanly). Others cannot edit it until it is released.",
+      "description_other": "You still hold the write lock on {{count}} SpeleoDB projects (perhaps from a session that did not exit cleanly). Others cannot edit them until they are released.",
+      "keep": "Keep working",
+      "releaseAll": "Release all locks",
+      "releasing": "Releasing…",
+      "releaseFailed": "Could not release the locks"
+    },
+    "recentBadge": {
+      "remote": "Linked to SpeleoDB",
+      "lockedByYou": "Linked to SpeleoDB - locked by you",
+      "lockedByOther": "Linked to SpeleoDB - locked by {{email}}"
+    },
     "browser": {
       "title": "Open from SpeleoDB",
       "checking": "Checking session…",

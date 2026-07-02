@@ -81,8 +81,11 @@ fn reverify_due(last_verify_at: Option<&str>, now: chrono::DateTime<chrono::Utc>
         return true;
     };
     match chrono::DateTime::parse_from_rfc3339(stamp) {
-        Ok(t) => now.signed_duration_since(t.with_timezone(&chrono::Utc)).num_seconds()
-            >= REVERIFY_INTERVAL_SECS,
+        Ok(t) => {
+            now.signed_duration_since(t.with_timezone(&chrono::Utc))
+                .num_seconds()
+                >= REVERIFY_INTERVAL_SECS
+        }
         Err(_) => true,
     }
 }
@@ -934,7 +937,7 @@ impl AppState {
                     project_name,
                     base_commit_sha: base_sha,
                     has_unpushed_edits: false,
-                    last_edit_at: None, // freshly pulled: no local edits yet
+                    last_edit_at: None,   // freshly pulled: no local edits yet
                     last_verify_at: None, // no lock held on pull; stamped on acquire (#202)
                 };
                 if let Err(e) = db.save_speleo_link(Some(&link)) {
@@ -1173,8 +1176,9 @@ impl AppState {
                 // Acquiring the lock on a clean reconcile confirms BASE == the tip
                 // as of now, so start the #202 re-verify window here (best-effort;
                 // a failed stamp just makes the first edit re-verify sooner).
-                let _ = self
-                    .speleodb_mutate_link(|l| l.last_verify_at = Some(chrono::Utc::now().to_rfc3339()));
+                let _ = self.speleodb_mutate_link(|l| {
+                    l.last_verify_at = Some(chrono::Utc::now().to_rfc3339())
+                });
                 Ok(StartEditingResult::Editing)
             }
             ReconcileVerdict::FastForward => {
@@ -1313,6 +1317,28 @@ impl AppState {
         // re-derives the edit gate from is_remote, leaving the project read-only.
         self.speleodb_fast_forward(&endpoint, &token, insecure_http, &link, tip.as_deref())
             .map_err(local_dto)
+    }
+
+    /// Release EVERY write lock this user holds across all projects (#201, B1):
+    /// the "Release all" choice on the held-lock resume prompt, resolving locks a
+    /// crashed/abandoned session left behind (SpeleoDB has no server-side TTL).
+    /// Idempotent server-side (releasing when none are held is a no-op).
+    pub(crate) fn speleodb_release_all_locks(&self) -> Result<(), SpeleoErrorDto> {
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+        self.speleodb_handle_auth(
+            Endpoint::Release,
+            client::release_all_locks(&endpoint, &token, insecure_http),
+        )
+        .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
+        // If the OPEN project is a remote one we were editing, its lock is gone too:
+        // drop the edit gate so the shell falls back to read-only. A local project's
+        // always-true gate is left untouched (open_link fails → no reset). The FE
+        // refreshes link status afterwards to re-seed the indicator.
+        if self.edit_enabled() && self.speleodb_open_link().is_ok() {
+            self.set_edit_enabled(false);
+        }
+        Ok(())
     }
 
     /// Best-effort: re-GET the project and return who holds its mutex (the active
@@ -1987,15 +2013,24 @@ mod tests {
         let now = chrono::Utc::now();
         let fresh = (now - chrono::Duration::seconds(REVERIFY_INTERVAL_SECS - 1)).to_rfc3339();
         let stale = (now - chrono::Duration::seconds(REVERIFY_INTERVAL_SECS + 1)).to_rfc3339();
-        assert!(!reverify_due(Some(&fresh), now), "just under 20 min → not due");
+        assert!(
+            !reverify_due(Some(&fresh), now),
+            "just under 20 min → not due"
+        );
         assert!(reverify_due(Some(&stale), now), "just over 20 min → due");
     }
 
     #[test]
     fn lock_held_by_me_is_case_insensitive_and_none_safe() {
         // #202: matches the ancestry-recovery email comparison (case-insensitive).
-        assert!(lock_held_by_me(Some("Me@Example.com"), Some("me@example.com")));
-        assert!(!lock_held_by_me(Some("other@example.com"), Some("me@example.com")));
+        assert!(lock_held_by_me(
+            Some("Me@Example.com"),
+            Some("me@example.com")
+        ));
+        assert!(!lock_held_by_me(
+            Some("other@example.com"),
+            Some("me@example.com")
+        ));
         // A cleared lock (no holder) or an unknown self-email is never "ours".
         assert!(!lock_held_by_me(None, Some("me@example.com")));
         assert!(!lock_held_by_me(Some("me@example.com"), None));
