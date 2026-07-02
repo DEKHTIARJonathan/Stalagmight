@@ -4218,4 +4218,123 @@ mod tests {
             "an ambiguous push must not advance BASE (#197 b5)"
         );
     }
+
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* + _EMAIL2/_PASSWORD2 (run with --ignored --test-threads=1)"]
+    fn live_orch_admin_collaborators_teams_and_delete_unlink() {
+        // [#215] The Project Settings admin surface end-to-end against the live box:
+        // add/change/remove a collaborator (asserting the roster + is_self mapping),
+        // add/remove a team (asserting the UUID -> display-name resolution), and
+        // delete-the-project (asserting the backend unlinks locally). The offline
+        // LoopbackStub can't reproduce a real project pull, so this is a live test,
+        // like the rest of the orchestration suite. Needs the second account as the
+        // collaborator target (the server rejects granting a non-existent user).
+        use crate::speleodb::Permission;
+        let (Some((url, owner_email, owner_pw)), Some((email2, _pw2))) = (orch_env(), orch_env2())
+        else {
+            return;
+        };
+        let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
+        let id = orch_seed(&url, &owner, "orch-admin", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: owner.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &owner_email, &owner);
+        orch_open(&state, &id, "orch-admin");
+
+        // Grant the collaborator READ_ONLY; the returned roster is server truth.
+        let roster = state
+            .speleodb_add_collaborator(email2.clone(), Permission::ReadOnly)
+            .expect("add collaborator");
+        let added = roster
+            .users
+            .iter()
+            .find(|u| u.email.eq_ignore_ascii_case(&email2))
+            .expect("the new collaborator appears in the roster");
+        assert_eq!(added.permission, Permission::ReadOnly);
+        assert!(!added.is_self, "the collaborator is not the signed-in user");
+        // The owner's own row is flagged is_self (case-folded email match).
+        let me = roster
+            .users
+            .iter()
+            .find(|u| u.email.eq_ignore_ascii_case(&owner_email))
+            .expect("the owner appears in the roster");
+        assert!(me.is_self, "the owner's row is flagged is_self");
+
+        // Change the level: PUT reflects in the refreshed roster.
+        let roster = state
+            .speleodb_set_collaborator(email2.clone(), Permission::ReadAndWrite)
+            .expect("change collaborator level");
+        assert_eq!(
+            roster
+                .users
+                .iter()
+                .find(|u| u.email.eq_ignore_ascii_case(&email2))
+                .expect("collaborator still present")
+                .permission,
+            Permission::ReadAndWrite,
+        );
+
+        // Teams are optional (the owner may belong to none); when present, the
+        // UUID -> name resolution must produce the picker's display name.
+        if let Some(team) = state.speleodb_list_teams().expect("list teams").first() {
+            let roster = state
+                .speleodb_add_team(team.id.clone(), Permission::ReadOnly)
+                .expect("add team");
+            let grant = roster
+                .teams
+                .iter()
+                .find(|g| g.team_id == team.id)
+                .expect("the granted team appears in the roster");
+            assert_eq!(
+                grant.team_name, team.name,
+                "the team UUID resolves to its display name, not the raw id"
+            );
+            let roster = state
+                .speleodb_remove_team(team.id.clone())
+                .expect("remove team");
+            assert!(
+                !roster.teams.iter().any(|g| g.team_id == team.id),
+                "the team grant is gone after remove"
+            );
+        }
+
+        // Remove the collaborator: the row is gone from the refreshed roster.
+        let roster = state
+            .speleodb_remove_collaborator(email2.clone())
+            .expect("remove collaborator");
+        assert!(
+            !roster
+                .users
+                .iter()
+                .any(|u| u.email.eq_ignore_ascii_case(&email2)),
+            "the collaborator is gone after remove"
+        );
+
+        // Delete the project. The open project is still read-only (we never started
+        // editing), so this also proves the unlink REOPENS the local edit gate.
+        assert!(!state.edit_enabled(), "precondition: opened read-only");
+        state
+            .speleodb_delete_project()
+            .expect("delete + local unlink");
+        let link_after = state
+            .database
+            .lock()
+            .expect("db lock")
+            .as_ref()
+            .expect("db still open")
+            .load_speleo_link()
+            .expect("load link");
+        assert!(
+            link_after.is_none(),
+            "delete unlinks the project locally (no persisted speleo_link)"
+        );
+        assert!(
+            state.edit_enabled(),
+            "unlink reopens the local edit gate (now a plain local project)"
+        );
+    }
 }
