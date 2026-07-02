@@ -1181,7 +1181,7 @@ impl AppState {
                 // as of now, so start the #202 re-verify window here (best-effort;
                 // a failed stamp just makes the first edit re-verify sooner).
                 let _ = self.speleodb_mutate_link(|l| {
-                    l.last_verify_at = Some(chrono::Utc::now().to_rfc3339())
+                    l.last_verify_at = Some(chrono::Utc::now().to_rfc3339());
                 });
                 Ok(StartEditingResult::Editing)
             }
