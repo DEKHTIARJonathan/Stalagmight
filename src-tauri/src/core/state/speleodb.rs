@@ -1243,6 +1243,44 @@ impl AppState {
         Ok(())
     }
 
+    /// Take the SERVER version, DISCARDING all local unpushed edits (#198 "Take
+    /// remote"): re-pull the server tip and reset the local `.stalx` to it,
+    /// abandoning the local work. This is the ONLY irreversible choice in the
+    /// divergence prompt (local unpushed edits live in no git anywhere), so the
+    /// frontend gates it behind a SECOND destroy-confirmation before calling here;
+    /// there is no single-click path to this from the UI. Returns the reloaded
+    /// `.stalx` path so the frontend can reload the view (as the fast-forward arms
+    /// of Start-editing / Update do).
+    ///
+    /// A held write lock is released first (best-effort, like [`Self::speleodb_unlink`]):
+    /// the user is abandoning their edit session, and the fast-forward reload drops
+    /// the edit gate back to read-only. They resume via Start editing, which
+    /// re-acquires the lock and now reconciles cleanly (BASE has advanced to the tip).
+    pub(crate) fn speleodb_take_remote(&self) -> Result<String, SpeleoErrorDto> {
+        let link = self.speleodb_validated_link()?;
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+
+        // Authoritative server tip from the revision topology, NOT the unreliable
+        // latest_commit field (see speleodb_server_head).
+        let (tip, _commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
+            self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
+        })
+        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+
+        // Abandoning local edits: release the held lock (if any) so it isn't left
+        // stranded, mirroring speleodb_unlink. Best-effort - an offline release no-ops.
+        self.speleodb_release_held_lock_best_effort();
+
+        // Re-pull + reset to the tip: BASE = tip, dirty cleared, last_edit_at reset,
+        // and the in-place reload starts the undo/redo stacks empty (the server
+        // snapshot carries no history). This IS a fast-forward, minus the dirty guard
+        // - the whole point of take-remote is to discard the local edits. The reload
+        // re-derives the edit gate from is_remote, leaving the project read-only.
+        self.speleodb_fast_forward(&endpoint, &token, insecure_http, &link, tip.as_deref())
+            .map_err(local_dto)
+    }
+
     /// Best-effort: re-GET the project and return who holds its mutex (the active
     /// lock's user email), or `None` if unlocked / the lookup fails. Deliberately NOT
     /// routed through [`Self::speleodb_handle_auth`] — these are best-effort

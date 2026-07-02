@@ -128,6 +128,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_push",
     "command.speleodb_session",
     "command.speleodb_start_editing",
+    "command.speleodb_take_remote",
     "command.speleodb_unlink",
     "command.speleodb_update",
     "command.suggest_all_import_placements",
@@ -587,7 +588,9 @@ mod tests {
         //   + 1 SpeleoDB unlink event (#204 convert-to-unmanaged):
         //       command.speleodb_unlink = 437.
         //   + 4 speleodb-no-permission dialog events (#204): = 441.
-        assert_eq!(EVENT_NAMES.len(), 441);
+        //   + 1 SpeleoDB take-remote event (#198):
+        //       command.speleodb_take_remote = 442.
+        assert_eq!(EVENT_NAMES.len(), 442);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

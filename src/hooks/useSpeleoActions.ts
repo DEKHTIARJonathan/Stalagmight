@@ -31,6 +31,10 @@ export interface SpeleoActions {
   /** The backend outcome, or `null` if the call threw. Callers key off `.kind`
       (e.g. the close flow only leaves once the lock is actually `released`). */
   done: (message?: string | null) => Promise<DoneResult | null>;
+  /** #198 "Take remote": DISCARD local unpushed edits and reset to the server
+      tip. Returns `true` once the tree is reloaded, `false` if the call threw.
+      The caller must gate this behind a destroy-confirmation. */
+  takeRemote: () => Promise<boolean>;
 }
 
 export function useSpeleoActions(): SpeleoActions {
@@ -169,5 +173,23 @@ export function useSpeleoActions(): SpeleoActions {
     [applyDone, showToast, t, handleError, setBusy, bumpPoll],
   );
 
-  return { busy, startEditing, update, push, done };
+  const takeRemote = useCallback(async (): Promise<boolean> => {
+    setBusy(true);
+    try {
+      // Backend re-pulls + resets the tree to the server tip and returns the
+      // reloaded path; loadProject re-seeds the link status (→ read-only).
+      const localPath = await invokeIpc<string>('speleodb_take_remote');
+      await loadProject(localPath);
+      showToast(t('speleodb.editBar.toasts.tookRemote'), 'speleodb-took-remote');
+      return true;
+    } catch (e) {
+      handleError(e, 'speleodb.editBar.toasts.takeRemoteFailed');
+      return false;
+    } finally {
+      bumpPoll();
+      setBusy(false);
+    }
+  }, [loadProject, showToast, t, handleError, setBusy, bumpPoll]);
+
+  return { busy, startEditing, update, push, done, takeRemote };
 }

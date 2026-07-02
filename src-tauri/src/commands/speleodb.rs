@@ -130,6 +130,16 @@ pub async fn speleodb_push(
     run_blocking(app, move |s| s.speleodb_push_only(message)).await
 }
 
+/// Take the SpeleoDB version, DISCARDING local unpushed edits (#198 "Take
+/// remote"): re-pull the server tip and reset the local project to it, returning
+/// the reloaded `.stalx` path so the frontend reloads the view. The frontend
+/// gates this behind a second destroy-confirmation - it is the only irreversible
+/// choice in the divergence prompt, so there is no single-click path to it.
+#[tauri::command]
+pub async fn speleodb_take_remote(app: AppHandle) -> Result<String, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_take_remote).await
+}
+
 /// Report whether the backend already holds a usable token (and for whom). The
 /// dialog calls this on open to restore the project list instead of re-prompting
 /// for credentials — the in-memory token outlives the dialog's React state.
