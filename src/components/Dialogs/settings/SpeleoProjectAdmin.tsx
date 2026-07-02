@@ -400,7 +400,12 @@ export function SpeleoProjectAdmin() {
 
       {/* Lock */}
       <SettingsSection title={t('speleodb.lock.title')}>
-        {holder ? (
+        {/* Show the release UI whenever a lock is held - by someone else (`holder`
+            set) OR by us. After acquiring a lock, `editState` flips to 'editing' but
+            `lockHolder` can stay null (the fast start-editing path does not re-seed
+            it), so gating on `holder` alone would strand the very stuck-lock recovery
+            this section exists for. `iHoldLock` uses the self copy (no holder email). */}
+        {holder || iHoldLock ? (
           <>
             <p className="text-sm mb-2" data-testid="speleodb-lock-holder">
               {iHoldLock

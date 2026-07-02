@@ -11,7 +11,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../../utils/ipc', () => ({
+  invokeIpc: invokeIpcMock,
+  getErrorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
+}));
 
 import { SpeleoProjectAdmin } from './SpeleoProjectAdmin';
 import { useSpeleoStore } from '../../../store/speleoStore';
@@ -30,6 +33,7 @@ const ROSTER: SpeleoCollaborators = {
 let refreshLinkStatus: ReturnType<typeof vi.fn>;
 let clearLink: ReturnType<typeof vi.fn>;
 let closeDialog: ReturnType<typeof vi.fn>;
+let showToast: ReturnType<typeof vi.fn>;
 
 const seed = (permission: Permission, lockHolder: string | null = null, editState = 'read-only') => {
   useSpeleoStore.setState({
@@ -65,7 +69,8 @@ beforeEach(() => {
   refreshLinkStatus = vi.fn(async () => {});
   clearLink = vi.fn();
   closeDialog = vi.fn();
-  useUIStore.setState({ showToast: vi.fn(), closeDialog });
+  showToast = vi.fn();
+  useUIStore.setState({ showToast, closeDialog });
   useProjectStore.setState({ project: { name: 'My Cave' } as never });
   defaultMock();
 });
@@ -160,6 +165,90 @@ describe('SpeleoProjectAdmin', () => {
       ),
     );
     await waitFor(() => expect(refreshLinkStatus).toHaveBeenCalled());
+  });
+
+  it('changes and removes a team with the right payloads', async () => {
+    seed('ADMIN');
+    render(<SpeleoProjectAdmin />);
+    await userEvent.selectOptions(
+      await screen.findByTestId('speleodb-collab-team-level-t1'),
+      'READ_ONLY',
+    );
+    await waitFor(() => {
+      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_set_team');
+      expect(call![1]).toEqual({ teamId: 't1', permission: 'READ_ONLY' });
+    });
+    await userEvent.click(screen.getByTestId('speleodb-collab-team-remove-t1'));
+    await waitFor(() => {
+      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_remove_team');
+      expect(call![1]).toEqual({ teamId: 't1' });
+    });
+  });
+
+  it('surfaces a mutation failure as a toast and leaves the roster intact', async () => {
+    seed('ADMIN');
+    // The change call rejects; everything else (incl. the roster reload) stays fine.
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_list_collaborators') return Promise.resolve(ROSTER);
+      if (cmd === 'speleodb_list_teams') return Promise.resolve([{ id: 't1', name: 'Divers' }]);
+      if (cmd === 'speleodb_set_collaborator') return Promise.reject(new Error('boom'));
+      return Promise.resolve(ROSTER);
+    });
+    render(<SpeleoProjectAdmin />);
+    await userEvent.selectOptions(
+      await screen.findByTestId('speleodb-collab-user-level-bob@x.com'),
+      'READ_AND_WRITE',
+    );
+    // Error surfaced, and the row is still there (roster not blanked on failure).
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    expect(screen.getByTestId('speleodb-collab-user-bob@x.com')).toBeInTheDocument();
+  });
+
+  it('a FAILED delete does NOT unlink or close (no false success)', async () => {
+    seed('ADMIN');
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_list_collaborators') return Promise.resolve(ROSTER);
+      if (cmd === 'speleodb_list_teams') return Promise.resolve([]);
+      if (cmd === 'speleodb_delete_project') return Promise.reject(new Error('server 500'));
+      return Promise.resolve(ROSTER);
+    });
+    render(<SpeleoProjectAdmin />);
+    await userEvent.type(await screen.findByTestId('speleodb-delete-confirm-input'), 'My Cave');
+    const del = screen.getByTestId('speleodb-delete-button');
+    await userEvent.click(del);
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    expect(clearLink).not.toHaveBeenCalled();
+    expect(closeDialog).not.toHaveBeenCalled();
+    // The button re-enables so the user can retry / cancel.
+    await waitFor(() => expect(del).toBeEnabled());
+  });
+
+  it('shows the load-error state and retries', async () => {
+    seed('ADMIN');
+    let attempt = 0;
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_list_collaborators') {
+        attempt += 1;
+        return attempt === 1 ? Promise.reject(new Error('offline')) : Promise.resolve(ROSTER);
+      }
+      if (cmd === 'speleodb_list_teams') return Promise.resolve([]);
+      return Promise.resolve(ROSTER);
+    });
+    render(<SpeleoProjectAdmin />);
+    const retry = await screen.findByTestId('speleodb-collaborators-retry');
+    await userEvent.click(retry);
+    expect(await screen.findByTestId('speleodb-collab-user-bob@x.com')).toBeInTheDocument();
+  });
+
+  it('warns and offers release when the caller holds the lock (holder still null)', async () => {
+    // The stuck-lock recovery case: after acquiring a lock the fast path flips
+    // editState to 'editing' but leaves lockHolder null. The Lock section must still
+    // show "held by you" + a release button, not a dead-end "no lock held".
+    seed('ADMIN', null, 'editing');
+    render(<SpeleoProjectAdmin />);
+    expect(await screen.findByTestId('speleodb-lock-self-warning')).toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-lock-release')).toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-lock-none')).toBeNull();
   });
 
   it('gates delete on typing the project name, then unlinks + closes', async () => {
