@@ -12,6 +12,7 @@ import type {
   UpdateResult,
 } from '../types/ipc.generated';
 import { invokeIpc } from '../utils/ipc';
+import { useProjectStore } from './projectStore';
 
 /**
  * Shared SpeleoDB frontend state (#204/#203/#205). Holds the backend **session**
@@ -212,8 +213,15 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   },
 
   refreshLinkStatus: async () => {
+    // Capture which project this poll/refresh is for BEFORE the await, and drop the
+    // reply if the open project changed (switch / close / another load) while it was
+    // in flight - so a stale status can't paint the previous project's lock holder /
+    // remote-state / permission onto the newly-open one. Mirrors the load-time collab
+    // detection + `checkProjectIntegrity` staleness guards. (fix S3)
+    const requestedPath = useProjectStore.getState().project?.file_path ?? null;
     try {
       const status = await invokeIpc<SpeleoLinkStatus>('speleodb_link_status');
+      if ((useProjectStore.getState().project?.file_path ?? null) !== requestedPath) return;
       get().seedFromStatus(status);
     } catch {
       // Best-effort - leave the prior link state (the backend gate is the
@@ -326,7 +334,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       banner: null,
     }),
 
-  clearLink: () => set({ link: null, divergence: null, banner: null }),
+  // Reset `busy` too: a hand-off verb in flight when the project closes/switches
+  // would otherwise leave a freshly-opened project's status button disabled until
+  // that verb's `finally` runs (its `apply*` no-op safely, guarded on `link`). (N2)
+  clearLink: () => set({ link: null, divergence: null, banner: null, busy: false }),
 
   applyStartEditing: (r) =>
     set((state) => {

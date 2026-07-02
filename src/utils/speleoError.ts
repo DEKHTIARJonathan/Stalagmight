@@ -2,11 +2,23 @@ import type { SpeleoDbAction, SpeleoErrorDto } from '../types/ipc.generated';
 import { getErrorMessage } from './ipc';
 
 /**
- * Backend-framed prefix for transport errors (`SpeleoDbError::Transport`). Such
- * messages are already user-facing ("Network error talking to SpeleoDB: …"), so
- * the humanizer must NOT prepend an operation prefix on top of them.
+ * A SpeleoDB IPC rejection that is a network/timeout transport error, whose
+ * message is already self-framed ("Network error talking to SpeleoDB: …") so the
+ * humanizer must NOT prepend an operation prefix on top of it.
+ *
+ * Detected STRUCTURALLY from the typed DTO, not by string-matching the backend's
+ * Display text (which silently breaks whenever that wording changes - fix S5):
+ * `dto_for_error` maps `SpeleoDbError::Transport` to `action: 'Retry'` with
+ * `status: null`, whereas a retryable 5xx (also `Retry`) carries its HTTP `status`.
+ * See `src-tauri/src/speleodb/contract.rs`.
  */
-const NETWORK_PREFIX = 'Network error talking to SpeleoDB';
+function isTransportError(e: unknown): boolean {
+  if (e && typeof e === 'object' && 'action' in e && 'status' in e) {
+    const dto = e as Partial<SpeleoErrorDto>;
+    return dto.action === 'Retry' && (dto.status === null || dto.status === undefined);
+  }
+  return false;
+}
 
 /**
  * Turn a rejected SpeleoDB IPC error into a single user-facing line.
@@ -20,7 +32,7 @@ const NETWORK_PREFIX = 'Network error talking to SpeleoDB';
 export function humanizeSpeleoError(e: unknown, contextPrefix?: string): string {
   // Strip a trailing period so "…credentials." reads cleanly after our prefix.
   const msg = getErrorMessage(e).replace(/\.\s*$/, '');
-  if (!contextPrefix || msg.startsWith(NETWORK_PREFIX)) return msg;
+  if (!contextPrefix || isTransportError(e)) return msg;
   return `${contextPrefix}: ${msg}`;
 }
 

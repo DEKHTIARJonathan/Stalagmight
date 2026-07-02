@@ -77,8 +77,10 @@ export function SpeleoStatusButton() {
   }, [isRemote, appMode, pollInterval, refreshLinkStatus, pollNonce]);
 
   // Only in Survey mode - Plan/Export are non-editing views, so the hand-off
-  // button + read-only badge are hidden there. Polling above keeps running so the
-  // state is fresh when you return to Survey.
+  // button + read-only badge are hidden there. The poll above is torn down in those
+  // modes (its effect early-returns on non-Survey, clearing the interval) and
+  // re-armed on return to Survey; the first poll is then up to one interval out, so
+  // a status change that landed while away surfaces on the next tick.
   if (!link || appMode !== 'survey') return null;
 
   // `editState === 'editing'` is the single source of truth for "we hold the lock

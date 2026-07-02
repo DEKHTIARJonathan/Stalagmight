@@ -519,6 +519,18 @@ impl AppState {
         // during finalization because the alternative (silently skipping) leads to
         // inconsistent state that is harder to diagnose.
 
+        // [Track B] (fix M1) Swapping to a DIFFERENT project while still holding the
+        // OLD project's SpeleoDB write lock must release that lock, or it stays locked
+        // for every other editor until the app quits - `close_project`/quit release,
+        // but a direct open (Ctrl+O, Open-from-SpeleoDB, recents, discard-and-open)
+        // routes here without a close. Done in this non-cancellable finalize section
+        // (so a failed/cancelled load never releases), reading the OLD link BEFORE the
+        // database/gate are swapped below, and detached so it can't stall opening the
+        // new project on the old server. A same-project fast-forward reload doesn't
+        // reach here (it `close_project`s first, clearing the link) and the "already
+        // open" guard rejects reopening the same path, so neither releases our lock.
+        self.speleodb_release_held_lock_detached();
+
         // Commit 1: Project state mutation
         *self
             .project

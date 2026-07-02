@@ -4,6 +4,8 @@ import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
+import { surfaceSaveFailure } from '../../utils/saveFeedback';
+import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -20,6 +22,7 @@ import { DialogWrapper } from './DialogWrapper';
 export default function SpeleoCloseDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
+  const openDialog = useUIStore((s) => s.openDialog);
   const link = useSpeleoStore((s) => s.link);
   const closeProject = useProjectStore((s) => s.closeProject);
   const saveProject = useProjectStore((s) => s.saveProject);
@@ -40,10 +43,23 @@ export default function SpeleoCloseDialog() {
     setSaving(true);
     try {
       const result = await saveProject();
-      return result?.success ?? false;
-    } catch {
-      // A thrown save (permission / IO) must not be treated as success - keep the
-      // dialog open rather than closing over unsaved work.
+      if (!result?.success) {
+        // Surface WHY the save failed (integrity block -> Review & Repair, a real
+        // IO error -> error dialog; a permission denial is already surfaced by
+        // saveProject) instead of silently keeping this dialog open with no
+        // feedback - matches every other save path (fix S4). The abort below still
+        // keeps the project open so unsaved work is never dropped.
+        surfaceSaveFailure(result?.error ?? null, openDialog);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      // A thrown save (rare - real failures resolve as {success:false}) must not be
+      // treated as success; surface it and keep the project open over unsaved work.
+      openDialog('error', {
+        title: 'Save Failed',
+        message: getErrorMessage(e, 'Failed to save project'),
+      });
       return false;
     } finally {
       setSaving(false);

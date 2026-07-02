@@ -1042,6 +1042,12 @@ pub fn tile_fetch_impl(
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// How long the app-exit handler waits for a best-effort SpeleoDB lock release
+/// before exiting anyway (fix M2). Long enough for a healthy round trip, short
+/// enough that a hung / unreachable server can't noticeably freeze quit; the
+/// server-side mutex times out on its own if the release doesn't land.
+const EXIT_LOCK_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub fn run() {
     let _guard = logging::init();
 
@@ -1390,10 +1396,13 @@ pub fn run() {
                 // locked for every other editor (fix 1). This covers the quit +
                 // window-close paths that destroy the window WITHOUT routing through
                 // `close_project` (which releases on its own). No-op when no remote
-                // edit session is active.
+                // edit session is active. Bounded (fix M2): this closure runs on the
+                // main event-loop thread, so a synchronous release against a hung /
+                // unreachable server would freeze quit for the full HTTP timeout - cap
+                // the wait and exit anyway (the server lock times out on its own).
                 if let tauri::RunEvent::ExitRequested { .. } = event {
                     if let Some(state) = app_handle.try_state::<core::state::AppState>() {
-                        state.speleodb_release_held_lock_best_effort();
+                        state.speleodb_release_held_lock_bounded(EXIT_LOCK_RELEASE_TIMEOUT);
                     }
                 }
             });

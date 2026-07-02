@@ -424,50 +424,58 @@ impl AppState {
                 match self.speleodb_active_token() {
                     Ok((endpoint, token)) => {
                         let insecure_http = self.speleodb_insecure_http();
-                        let (permission, lock_holder, access_denied, server_error) =
-                            match client::get_project(
-                                &endpoint,
-                                &token,
-                                insecure_http,
-                                &link.project_id,
-                            ) {
-                                Ok(p) => {
-                                    (p.permission, p.active_mutex.map(|m| m.user), false, None)
-                                }
-                                // A definitive 403 means we are logged in but not a
-                                // collaborator on this managed project - flag it so the
-                                // UI can offer converting to a local file (fix 10).
-                                Err(SpeleoDbError::Status { status: 403, .. }) => {
-                                    (None, None, true, None)
-                                }
-                                // A 401 is a dead token (re-login) handled by the edit
-                                // verbs; this passive probe must not nag about it.
-                                Err(SpeleoDbError::Status { status: 401, .. }) => {
-                                    (None, None, false, None)
-                                }
-                                // Any OTHER status (a 404 for a deleted/renamed project,
-                                // a 422, a 5xx, ...) is unexpected - surface the
-                                // humanized detail so the button can show a "?" state and
-                                // explain what SpeleoDB said (fix 12), rather than
-                                // silently degrading to Unknown.
-                                Err(e @ SpeleoDbError::Status { .. }) => (
-                                    None,
-                                    None,
+                        match client::get_project(
+                            &endpoint,
+                            &token,
+                            insecure_http,
+                            &link.project_id,
+                        ) {
+                            Ok(p) => {
+                                // Only now (the project is reachable) is the revision-
+                                // topology fold worth a SECOND round trip. On every
+                                // error arm below the remote state is Unknown anyway
+                                // (get_revisions would fail the same way get_project
+                                // just did), so skip the doomed extra GET (N5).
+                                let remote_state = self.speleodb_remote_state(
+                                    &endpoint,
+                                    &token,
+                                    insecure_http,
+                                    &link,
+                                );
+                                (
+                                    p.permission,
+                                    p.active_mutex.map(|m| m.user),
+                                    remote_state,
                                     false,
-                                    Some(dto_for_error(Endpoint::GetProject, &e)),
-                                ),
-                                // Transport / local error is offline - stay quiet.
-                                Err(_) => (None, None, false, None),
-                            };
-                        let remote_state =
-                            self.speleodb_remote_state(&endpoint, &token, insecure_http, &link);
-                        (
-                            permission,
-                            lock_holder,
-                            remote_state,
-                            access_denied,
-                            server_error,
-                        )
+                                    None,
+                                )
+                            }
+                            // A definitive 403 means we are logged in but not a
+                            // collaborator on this managed project - flag it so the
+                            // UI can offer converting to a local file (fix 10).
+                            Err(SpeleoDbError::Status { status: 403, .. }) => {
+                                (None, None, RemoteState::Unknown, true, None)
+                            }
+                            // A 401 is a dead token (re-login) handled by the edit
+                            // verbs; this passive probe must not nag about it.
+                            Err(SpeleoDbError::Status { status: 401, .. }) => {
+                                (None, None, RemoteState::Unknown, false, None)
+                            }
+                            // Any OTHER status (a 404 for a deleted/renamed project,
+                            // a 422, a 5xx, ...) is unexpected - surface the humanized
+                            // detail so the button can show a "?" state and explain
+                            // what SpeleoDB said (fix 12), rather than silently
+                            // degrading to Unknown.
+                            Err(e @ SpeleoDbError::Status { .. }) => (
+                                None,
+                                None,
+                                RemoteState::Unknown,
+                                false,
+                                Some(dto_for_error(Endpoint::GetProject, &e)),
+                            ),
+                            // Transport / local error is offline - stay quiet.
+                            Err(_) => (None, None, RemoteState::Unknown, false, None),
+                        }
                     }
                     Err(_) => (None, None, RemoteState::Unknown, false, None),
                 }
@@ -971,6 +979,27 @@ impl AppState {
         Ok(())
     }
 
+    /// Snapshot of what a best-effort lock release needs (endpoint, token, the
+    /// insecure-http allowance, project id), or `None` when no held remote edit
+    /// session is active. Cheap + non-blocking (reads the open link + config, no
+    /// network), so a caller that must not block on the OLD project's server - the
+    /// app-exit path, a project switch - can hand the actual HTTP release to a
+    /// bounded / detached thread. Reads the link BEFORE the caller tears down or
+    /// swaps the database.
+    fn speleodb_held_lock_release_params(&self) -> Option<(String, String, bool, String)> {
+        if !self.edit_enabled() {
+            return None;
+        }
+        let link = self.speleodb_open_link().ok()?;
+        let (endpoint, token) = self.speleodb_active_token().ok()?;
+        Some((
+            endpoint,
+            token,
+            self.speleodb_insecure_http(),
+            link.project_id,
+        ))
+    }
+
     /// Best-effort release of a held SpeleoDB write lock when a remote EDIT session
     /// is closed, so a normal close/quit doesn't strand the server mutex locked for
     /// every other editor (fix 1). Unlike [`Self::speleodb_logout`] it keeps the
@@ -978,21 +1007,66 @@ impl AppState {
     /// only surrenders the server lock. Reads the link BEFORE the caller tears down
     /// the database. The keep-lock close path skips this by passing
     /// `release_lock = false` to the close command. A read-only-open or local
-    /// project holds no lock, so this is a no-op there.
+    /// project holds no lock, so this is a no-op there. Synchronous: acceptable on
+    /// the close command (Tauri runs it off the main thread); the app-exit and
+    /// project-switch paths use the bounded / detached variants below instead.
     pub(crate) fn speleodb_release_held_lock_best_effort(&self) {
-        if !self.edit_enabled() {
-            return;
+        if let Some((endpoint, token, insecure_http, project_id)) =
+            self.speleodb_held_lock_release_params()
+        {
+            self.speleodb_release_best_effort(&endpoint, &token, insecure_http, &project_id);
         }
-        if let Ok(link) = self.speleodb_open_link() {
-            if let Ok((endpoint, token)) = self.speleodb_active_token() {
-                let insecure_http = self.speleodb_insecure_http();
-                self.speleodb_release_best_effort(
-                    &endpoint,
-                    &token,
-                    insecure_http,
-                    &link.project_id,
-                );
-            }
+    }
+
+    /// Snapshot the release params, then run the network release on a detached
+    /// thread, returning a receiver for its outcome (or `None` when no lock is held,
+    /// so nothing was spawned). Because the params are captured synchronously first,
+    /// the release targets the CURRENT project even if the caller swaps the database
+    /// immediately after. Shared by the two non-blocking callers below.
+    fn speleodb_spawn_lock_release(
+        &self,
+    ) -> Option<std::sync::mpsc::Receiver<Result<(), SpeleoDbError>>> {
+        let (endpoint, token, insecure_http, project_id) =
+            self.speleodb_held_lock_release_params()?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(
+                client::release_lock(&endpoint, &token, insecure_http, &project_id).map(|_| ()),
+            );
+        });
+        Some(rx)
+    }
+
+    /// Release a held write lock WITHOUT blocking the caller: fire the network
+    /// release on a detached thread and return immediately. For a project switch,
+    /// where waiting would stall opening the NEXT project on the OLD project's
+    /// (possibly unreachable) server (fix M1). No-op when no lock is held.
+    pub(crate) fn speleodb_release_held_lock_detached(&self) {
+        // Drop the receiver: the release still runs on its thread (best-effort); we
+        // just don't wait for or read the result.
+        let _ = self.speleodb_spawn_lock_release();
+    }
+
+    /// Release a held write lock with a hard deadline, for the app-exit path: run
+    /// the network release on a detached thread and wait at most `deadline`. A hung
+    /// / unreachable server must not freeze quit for the full HTTP timeout; on
+    /// timeout we return and let the process exit (the server lock times out on its
+    /// own). (fix M2). No-op when no lock is held.
+    pub(crate) fn speleodb_release_held_lock_bounded(&self, deadline: std::time::Duration) {
+        let Some(rx) = self.speleodb_spawn_lock_release() else {
+            return;
+        };
+        match rx.recv_timeout(deadline) {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!(
+                error = %e,
+                purpose = "release held lock on exit",
+                "speleodb: exit-time lock release failed"
+            ),
+            Err(_) => tracing::warn!(
+                purpose = "release held lock on exit",
+                "speleodb: exit-time lock release timed out; exiting anyway"
+            ),
         }
     }
 
@@ -1150,19 +1224,8 @@ impl AppState {
     pub(crate) fn speleodb_unlink(&self) -> Result<(), SpeleoErrorDto> {
         // Release the server lock if this is a held remote edit session, so we don't
         // leave it stranded. Best-effort: an offline / no-access release just no-ops.
-        if self.edit_enabled() {
-            if let Ok(link) = self.speleodb_open_link() {
-                if let Ok((endpoint, token)) = self.speleodb_active_token() {
-                    let insecure_http = self.speleodb_insecure_http();
-                    self.speleodb_release_best_effort(
-                        &endpoint,
-                        &token,
-                        insecure_http,
-                        &link.project_id,
-                    );
-                }
-            }
-        }
+        // Reuses the shared helper so this can't drift from the close/quit release.
+        self.speleodb_release_held_lock_best_effort();
         {
             let db_guard = self
                 .database
