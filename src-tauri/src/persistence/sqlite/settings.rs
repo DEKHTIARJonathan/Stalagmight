@@ -55,7 +55,8 @@ impl Database {
                 project_name TEXT NOT NULL,
                 base_commit_sha TEXT,
                 has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
-                last_edit_at TEXT
+                last_edit_at TEXT,
+                last_verify_at TEXT
             )",
             [],
         )?;
@@ -63,15 +64,16 @@ impl Database {
             Some(link) => {
                 self.conn.execute(
                     "INSERT INTO speleo_link
-                        (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, last_edit_at)
-                     VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+                        (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, last_edit_at, last_verify_at)
+                     VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
                      ON CONFLICT(id) DO UPDATE SET
                         endpoint = excluded.endpoint,
                         project_id = excluded.project_id,
                         project_name = excluded.project_name,
                         base_commit_sha = excluded.base_commit_sha,
                         has_unpushed_edits = excluded.has_unpushed_edits,
-                        last_edit_at = excluded.last_edit_at",
+                        last_edit_at = excluded.last_edit_at,
+                        last_verify_at = excluded.last_verify_at",
                     params![
                         link.endpoint,
                         link.project_id,
@@ -79,6 +81,7 @@ impl Database {
                         link.base_commit_sha, // Option<String> → SQL NULL when None
                         i64::from(link.has_unpushed_edits),
                         link.last_edit_at, // Option<String> → SQL NULL when None
+                        link.last_verify_at, // Option<String> → SQL NULL when None
                     ],
                 )?;
             }

@@ -30,8 +30,10 @@ import { useProjectStore } from './projectStore';
 /** A remote project is either opened read-only or actively edited (lock held). */
 export type SpeleoEditState = 'read-only' | 'editing';
 
-/** Which hand-off verb hit a divergence that needs the reconcile prompt (#198). */
-export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push';
+/** Which hand-off verb hit a divergence that needs the reconcile prompt (#198).
+    `reverify` is the lazy 20-min lock re-verify (#202) catching a lost lock /
+    moved tip mid-edit-session. */
+export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push' | 'reverify';
 
 /** Transient banner the shell surfaces above the toolbar (#200 seam). */
 export type SpeleoBanner = { kind: 'push_unconfirmed' } | { kind: 'concurrent_session' };
@@ -157,6 +159,12 @@ interface SpeleoStore {
 
   // --- seams ---
   clearDivergence: () => void;
+  /**
+   * #202: the lazy 20-min re-verify blocked an edit because the write lock was
+   * lost or the server tip moved. Drop the shell to read-only + conflict (the
+   * backend already dropped its edit gate) and raise the divergence prompt.
+   */
+  notifyReverifyDivergence: () => void;
   dismissBanner: () => void;
 }
 
@@ -458,6 +466,15 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     ),
 
   clearDivergence: () => set({ divergence: null }),
+
+  notifyReverifyDivergence: () =>
+    set((state) => ({
+      divergence: 'reverify',
+      link: state.link
+        ? { ...state.link, editState: 'read-only', remoteState: 'conflict' }
+        : state.link,
+    })),
+
   dismissBanner: () => set({ banner: null }),
 }));
 

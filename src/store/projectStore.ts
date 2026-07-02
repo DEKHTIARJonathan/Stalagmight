@@ -5,7 +5,11 @@ import { trackCommand, setSource, peekProjectActionSource, clearProjectActionSou
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import { isPermissionError } from '../utils/saveErrors';
-import { isEditDisabledError, READ_ONLY_EDIT_NOTICE } from '../utils/editErrors';
+import {
+  isEditDisabledError,
+  isReverifyDivergedError,
+  READ_ONLY_EDIT_NOTICE,
+} from '../utils/editErrors';
 import { hasEligibleClosures } from '../utils/closures';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
@@ -436,7 +440,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // otherwise a silent no-op. Other failures keep their existing handling
         // (dialogs show an inline error), so validation errors aren't double-toasted.
         // Full edit-state UX (suppress this, offer "Start editing") is owned by #204.
-        if (isEditDisabledError(result.error)) {
+        // #202: a re-verify divergence (lost lock / moved tip) routes to the
+        // divergence prompt instead of the plain read-only notice - the dialog is
+        // the feedback, and the backend already dropped its edit gate.
+        if (isReverifyDivergedError(result.error)) {
+          useSpeleoStore.getState().notifyReverifyDivergence();
+        } else if (isEditDisabledError(result.error)) {
           useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled');
         }
       }
@@ -477,7 +486,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // A read-only rejection (EDIT_DISABLED) gets the same friendly notice +
         // dedup key as executeCommand, not the raw coded string — mashing Ctrl+Z
         // on a read-only remote project shows one tidy toast, not "EDIT_DISABLED:…".
-        if (isEditDisabledError(result.error)) {
+        // A #202 re-verify divergence routes to the divergence prompt instead.
+        if (isReverifyDivergedError(result.error)) {
+          useSpeleoStore.getState().notifyReverifyDivergence();
+        } else if (isEditDisabledError(result.error)) {
           useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled');
         } else {
           useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId);

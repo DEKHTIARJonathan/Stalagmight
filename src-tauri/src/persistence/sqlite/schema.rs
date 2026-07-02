@@ -22,6 +22,7 @@ pub(super) const PRESERVED_SPELEOLINK_COLUMNS: &[(&str, &str, bool)] = &[
     ("base_commit_sha", "TEXT", false), // nullable = empty-repo BASE
     ("has_unpushed_edits", "INTEGER", true),
     ("last_edit_at", "TEXT", false), // v10; nullable = never edited since pull
+    ("last_verify_at", "TEXT", false), // v11; nullable = never re-verified since pull
 ];
 
 impl Database {
@@ -270,7 +271,8 @@ impl Database {
                 project_name TEXT NOT NULL,
                 base_commit_sha TEXT,
                 has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
-                last_edit_at TEXT
+                last_edit_at TEXT,
+                last_verify_at TEXT
             )",
             [],
         )?;
@@ -306,6 +308,27 @@ impl Database {
                 [],
             )?;
             tracing::info!("Added last_edit_at column to speleo_link table (schema v10)");
+        }
+
+        // Add last_verify_at column to an EXISTING v10 speleo_link (schema v10→v11:
+        // lazy 20-min lock re-verify, #202). Same idempotent ALTER pattern as
+        // last_edit_at above; CREATE IF NOT EXISTS is a no-op on a pre-v11 table.
+        // No backfill: a NULL last_verify_at means "never verified since pull", which
+        // simply forces the first lock-held edit to re-verify - safe, since #202 only
+        // bounds wasted work (the release fence is the correctness backstop).
+        let has_last_verify_at_column: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('speleo_link') WHERE name='last_verify_at'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_last_verify_at_column {
+            self.conn
+                .execute("ALTER TABLE speleo_link ADD COLUMN last_verify_at TEXT", [])?;
+            tracing::info!("Added last_verify_at column to speleo_link table (schema v11)");
         }
 
         // Add uuid column to shots table (schema v5→v6: per-shot UUIDs
@@ -714,7 +737,8 @@ impl Database {
                 project_name TEXT NOT NULL,
                 base_commit_sha TEXT,
                 has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
-                last_edit_at TEXT
+                last_edit_at TEXT,
+                last_verify_at TEXT
             );
 
             -- Undo/redo stack (BLOB columns hold gzip-compressed JSON)

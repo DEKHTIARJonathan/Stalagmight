@@ -34,4 +34,12 @@ pub struct SpeleoLink {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub last_edit_at: Option<String>,
+    /// RFC-3339 UTC timestamp of the last successful lock re-verify (#202): set
+    /// when the write lock is acquired / fast-forwarded, and refreshed by the lazy
+    /// 20-min re-verify (schema v11; nullable = never verified since pull). Bounds
+    /// wasted work only - it is NOT a correctness guard (the release-time fence +
+    /// 403 handling are), so a stale/missing value never risks data loss.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_verify_at: Option<String>,
 }

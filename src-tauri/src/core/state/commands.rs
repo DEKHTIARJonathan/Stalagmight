@@ -433,6 +433,12 @@ impl AppState {
             if let Err(f) = self.guard_mutation(&cmd.description()) {
                 return f;
             }
+            // Lazy 20-min lock re-verify (#202): on a lock-held remote edit, confirm
+            // (at most ~3x/hr) we still hold the lock on our BASE before mutating.
+            // No-op for local / read-only projects and when recently verified.
+            if let Err(f) = self.speleodb_verify_lock_if_expired() {
+                return f;
+            }
         }
         // Any mutation invalidates the derived closure-adjusted view.
         self.invalidate_adjusted_cache();

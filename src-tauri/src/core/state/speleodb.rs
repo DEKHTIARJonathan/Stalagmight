@@ -67,6 +67,34 @@ fn validate_project_id(project_id: &str) -> Result<(), SpeleoDbError> {
         .map_err(|_| SpeleoDbError::InvalidProjectId)
 }
 
+/// #202: how long a lock stays "verified" before a lock-held edit re-verifies it.
+/// A continuously-active editor therefore issues at most ~3 re-verify requests/hr;
+/// an idle/AFK session issues zero (the check is edit-triggered, never a timer).
+const REVERIFY_INTERVAL_SECS: i64 = 20 * 60;
+
+/// #202 throttle: is a lock re-verify due? Due when we have never verified since
+/// pull (`None`) OR more than [`REVERIFY_INTERVAL_SECS`] has elapsed since
+/// `last_verify_at`. An unparseable timestamp fails toward re-verifying (safer to
+/// issue one extra GET than to skip a stale-lock check). Pure for unit tests.
+fn reverify_due(last_verify_at: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let Some(stamp) = last_verify_at else {
+        return true;
+    };
+    match chrono::DateTime::parse_from_rfc3339(stamp) {
+        Ok(t) => now.signed_duration_since(t.with_timezone(&chrono::Utc)).num_seconds()
+            >= REVERIFY_INTERVAL_SECS,
+        Err(_) => true,
+    }
+}
+
+/// #202: does `holder` (the project's `active_mutex.user`, if any) match our
+/// authenticated email? Case-insensitive, mirroring the ancestry-recovery email
+/// comparison in `sync.rs` (SpeleoDB may normalise case). A missing holder (lock
+/// cleared) or a missing self-email never matches - i.e. the lock is not ours.
+fn lock_held_by_me(holder: Option<&str>, me: Option<&str>) -> bool {
+    matches!((holder, me), (Some(h), Some(m)) if h.eq_ignore_ascii_case(m))
+}
+
 /// [Track A] #186/D-B2: map a non-endpoint (local / session) `SpeleoDbError` to
 /// the IPC `SpeleoErrorDto`. Local errors always fail closed to `Fatal`
 /// regardless of endpoint, so the endpoint passed to [`dto_for_error`] is
@@ -907,6 +935,7 @@ impl AppState {
                     base_commit_sha: base_sha,
                     has_unpushed_edits: false,
                     last_edit_at: None, // freshly pulled: no local edits yet
+                    last_verify_at: None, // no lock held on pull; stamped on acquire (#202)
                 };
                 if let Err(e) = db.save_speleo_link(Some(&link)) {
                     // Non-fatal: the pull succeeded and the file is openable; the
@@ -1141,6 +1170,11 @@ impl AppState {
         ) {
             ReconcileVerdict::UpToDate => {
                 self.set_edit_enabled(true);
+                // Acquiring the lock on a clean reconcile confirms BASE == the tip
+                // as of now, so start the #202 re-verify window here (best-effort;
+                // a failed stamp just makes the first edit re-verify sooner).
+                let _ = self
+                    .speleodb_mutate_link(|l| l.last_verify_at = Some(chrono::Utc::now().to_rfc3339()));
                 Ok(StartEditingResult::Editing)
             }
             ReconcileVerdict::FastForward => {
@@ -1369,6 +1403,10 @@ impl AppState {
                     base_commit_sha: tip.map(str::to_owned),
                     has_unpushed_edits: false,
                     last_edit_at: None,
+                    // A fresh pull confirms BASE == the server tip as of now, so this
+                    // IS a lock re-verify point (#202): stamp it so the 20-min lazy
+                    // re-verify starts its window from the pull, not from acquire-time.
+                    last_verify_at: Some(chrono::Utc::now().to_rfc3339()),
                 };
                 if let Err(e) = db.save_speleo_link(Some(&new_link)) {
                     tracing::warn!(
@@ -1837,6 +1875,82 @@ impl AppState {
             .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
         Ok(())
     }
+
+    /// #202 lazy lock re-verify: when EDITING a remote project with a real held
+    /// lock, at most once per [`REVERIFY_INTERVAL_SECS`], re-GET the project before
+    /// applying an edit and confirm we still hold the lock on our BASE. Called from
+    /// the command chokepoint AFTER `guard_mutation` (so it runs only for an enabled
+    /// edit session), it bounds wasted work; it is NOT a correctness guard (the
+    /// release-time fence + a 403 on push are), so a transient failure lets the edit
+    /// through and the fence catches any real conflict.
+    ///
+    /// - No lock held (read-only / local project) or not yet due: no-op.
+    /// - Lock lost (mutex holder is not us) OR the server tip moved off our BASE:
+    ///   drop the edit gate and return an `EDIT_REVERIFY_DIVERGED` failure so the FE
+    ///   blocks this edit and routes to the divergence prompt.
+    /// - Still ours on our BASE: stamp `last_verify_at` and allow.
+    /// - Transient / offline GET failure: stamp the attempt (keeps the <=3/hr bound)
+    ///   and ALLOW the edit - offline editing stays first-class.
+    pub(super) fn speleodb_verify_lock_if_expired(&self) -> Result<(), crate::core::CommandResult> {
+        // Only an active edit session on a remote project re-verifies. A read-only
+        // remote project (gate off) or a local project (no link row) never does.
+        if !self.edit_enabled() {
+            return Ok(());
+        }
+        let Ok(link) = self.speleodb_open_link() else {
+            return Ok(()); // local-only: no remote lock to verify
+        };
+        let now = chrono::Utc::now();
+        if !reverify_due(link.last_verify_at.as_deref(), now) {
+            return Ok(());
+        }
+        let Ok((endpoint, token)) = self.speleodb_active_token() else {
+            return Ok(()); // logged out: the close/logout path already drops the gate
+        };
+        let insecure_http = self.speleodb_insecure_http();
+
+        match client::get_project(&endpoint, &token, insecure_http, &link.project_id) {
+            Ok(project) => {
+                let me = self.speleodb_my_email();
+                let holder = project.active_mutex.as_ref().map(|m| m.user.as_str());
+                let lock_lost = !lock_held_by_me(holder, me.as_deref());
+                // Tip moved off our BASE (best-effort: uses the project's
+                // latest_commit; while we hold the lock the commit history is static,
+                // so a difference means another writer advanced it after our lock
+                // lapsed). A rare false positive is recoverable - the divergence
+                // prompt's Keep-local re-fences against the authoritative topology.
+                let tip_moved = matches!(
+                    (link.base_commit_sha.as_deref(), project.latest_commit.as_ref()),
+                    (Some(base), Some(commit)) if commit.id != base
+                );
+                if lock_lost || tip_moved {
+                    // We can no longer safely edit on this BASE. Drop the gate (so
+                    // further edits are cleanly read-only until resolved) and route
+                    // the user to the divergence prompt.
+                    self.set_edit_enabled(false);
+                    return Err(crate::core::CommandResult::failure(format!(
+                        "{}: the SpeleoDB lock or server version changed - reconcile before editing.",
+                        crate::core::command::EDIT_REVERIFY_DIVERGED_CODE
+                    )));
+                }
+                // Still ours, still on our BASE: stamp the verify and allow the edit.
+                let _ = self.speleodb_mutate_link(|l| l.last_verify_at = Some(now.to_rfc3339()));
+                Ok(())
+            }
+            Err(e) => {
+                // Transient / offline: #202 is not a correctness guard, so allow the
+                // edit (the release-time fence is the backstop). Stamp the attempt so
+                // an offline editor doesn't re-issue a failing GET on every edit.
+                tracing::warn!(
+                    error = %e,
+                    purpose = "lazy lock re-verify (#202)",
+                    "speleodb re-verify GET failed; allowing the edit (release fence is the backstop)"
+                );
+                let _ = self.speleodb_mutate_link(|l| l.last_verify_at = Some(now.to_rfc3339()));
+                Ok(())
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1844,14 +1958,49 @@ impl AppState {
 mod tests {
     use super::{
         auth_error_drops_token, classify_dump_entry, clear_snapshot_dirty, head_with_empty_retry,
-        preserved_display_settings, resolve_endpoint, restore_display_settings,
-        validate_project_id, whoami_indicates_dead_token, Endpoint, PushOutcome, SpeleoDbSession,
+        lock_held_by_me, preserved_display_settings, resolve_endpoint, restore_display_settings,
+        reverify_due, validate_project_id, whoami_indicates_dead_token, Endpoint, PushOutcome,
+        SpeleoDbSession, REVERIFY_INTERVAL_SECS,
     };
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
     use crate::speleodb::auth::{InMemoryStore, SecretStore, TokenStore};
     use crate::speleodb::SpeleoDbError;
     use tempfile::TempDir;
+
+    #[test]
+    fn reverify_due_forces_a_check_when_never_verified_or_unparseable() {
+        // #202: a never-verified link (None) always re-verifies on the first
+        // lock-held edit; an unparseable stamp fails toward re-verifying.
+        let now = chrono::Utc::now();
+        assert!(reverify_due(None, now), "None must force a re-verify");
+        assert!(
+            reverify_due(Some("not-a-timestamp"), now),
+            "an unparseable stamp must force a re-verify"
+        );
+    }
+
+    #[test]
+    fn reverify_due_respects_the_20_minute_window() {
+        // #202: within the window → not due; at/after the window → due. This bounds
+        // a continuously-active editor to ~3 re-verify requests/hour.
+        let now = chrono::Utc::now();
+        let fresh = (now - chrono::Duration::seconds(REVERIFY_INTERVAL_SECS - 1)).to_rfc3339();
+        let stale = (now - chrono::Duration::seconds(REVERIFY_INTERVAL_SECS + 1)).to_rfc3339();
+        assert!(!reverify_due(Some(&fresh), now), "just under 20 min → not due");
+        assert!(reverify_due(Some(&stale), now), "just over 20 min → due");
+    }
+
+    #[test]
+    fn lock_held_by_me_is_case_insensitive_and_none_safe() {
+        // #202: matches the ancestry-recovery email comparison (case-insensitive).
+        assert!(lock_held_by_me(Some("Me@Example.com"), Some("me@example.com")));
+        assert!(!lock_held_by_me(Some("other@example.com"), Some("me@example.com")));
+        // A cleared lock (no holder) or an unknown self-email is never "ours".
+        assert!(!lock_held_by_me(None, Some("me@example.com")));
+        assert!(!lock_held_by_me(Some("me@example.com"), None));
+        assert!(!lock_held_by_me(None, None));
+    }
 
     #[test]
     fn clear_snapshot_dirty_clears_the_flag_in_the_copy() {
@@ -1871,6 +2020,7 @@ mod tests {
                 base_commit_sha: Some("abc".to_owned()),
                 has_unpushed_edits: true,
                 last_edit_at: Some("2026-06-27T10:00:00+00:00".to_owned()),
+                last_verify_at: None,
             }))
             .expect("stamp dirty link");
         }
@@ -2189,6 +2339,7 @@ mod tests {
             base_commit_sha: Some("abc123".to_owned()),
             has_unpushed_edits: false,
             last_edit_at: None,
+            last_verify_at: None,
         }))
         .expect("save link");
         drop(db);

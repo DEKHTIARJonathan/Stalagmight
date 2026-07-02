@@ -3326,6 +3326,7 @@ fn sample_speleo_link(base_commit_sha: Option<&str>, dirty: bool) -> SpeleoLink 
         base_commit_sha: base_commit_sha.map(str::to_owned),
         has_unpushed_edits: dirty,
         last_edit_at: None,
+        last_verify_at: None,
     }
 }
 
@@ -3351,6 +3352,34 @@ fn speleo_link_roundtrips_through_save_and_load() {
         .query_row("SELECT COUNT(*) FROM speleo_link", [], |r| r.get(0))
         .unwrap();
     assert_eq!(count, 1, "upsert keeps a single row");
+}
+
+#[test]
+fn speleo_link_last_verify_at_roundtrips() {
+    // #202 (schema v11): last_verify_at persists and reloads verbatim, and None
+    // stays SQL NULL on disk (never coerced to "").
+    let db = Database::in_memory().unwrap();
+    let stamp = "2026-07-02T09:00:00+00:00".to_string();
+    let mut link = sample_speleo_link(Some("abc123"), true);
+    link.last_verify_at = Some(stamp.clone());
+    db.save_speleo_link(Some(&link)).unwrap();
+    assert_eq!(
+        db.load_speleo_link().unwrap().unwrap().last_verify_at.as_deref(),
+        Some(stamp.as_str()),
+    );
+
+    // None round-trips as SQL NULL.
+    db.save_speleo_link(Some(&sample_speleo_link(Some("abc123"), false)))
+        .unwrap();
+    let is_null: i64 = db
+        .conn
+        .query_row(
+            "SELECT last_verify_at IS NULL FROM speleo_link WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(is_null, 1, "None persists as SQL NULL");
 }
 
 #[test]
@@ -3393,8 +3422,8 @@ fn speleo_link_clear_removes_row() {
 }
 
 #[test]
-fn init_schema_creates_speleo_link_v10() {
-    // A freshly-created file (open() → init_schema, no migrate chain) has the v10
+fn init_schema_creates_speleo_link_v11() {
+    // A freshly-created file (open() → init_schema, no migrate chain) has the v11
     // table immediately.
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("fresh.stalx");
@@ -3408,7 +3437,7 @@ fn init_schema_creates_speleo_link_v10() {
         )
         .unwrap();
     assert_eq!(exists, 1, "init_schema created speleo_link");
-    assert_eq!(db.get_user_version().unwrap(), 10, "stamped at v10");
+    assert_eq!(db.get_user_version().unwrap(), 11, "stamped at v11");
 }
 
 #[test]
@@ -3451,7 +3480,7 @@ fn migrate_creates_speleo_link_on_legacy_v8() {
         )
         .unwrap();
     assert_eq!(exists, 1, "migrate_schema recreated speleo_link");
-    assert_eq!(db.get_user_version().unwrap(), 10, "bumped to v10");
+    assert_eq!(db.get_user_version().unwrap(), 11, "bumped to v11");
 }
 
 #[test]
@@ -3619,6 +3648,7 @@ fn last_edit_at_round_trips_and_survives_migration() {
             base_commit_sha: Some("abc".to_string()),
             has_unpushed_edits: true,
             last_edit_at: Some(stamp.clone()),
+            last_verify_at: None,
         }))
         .unwrap();
         db.set_user_version(8).unwrap(); // force migrate on next open
@@ -3708,7 +3738,7 @@ fn migrate_v9_dirty_speleo_link_backfills_last_edit_at() {
     );
     assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
     assert!(link.has_unpushed_edits, "existing row preserved");
-    assert_eq!(db.get_user_version().unwrap(), 10);
+    assert_eq!(db.get_user_version().unwrap(), 11);
 }
 
 #[test]
@@ -3854,7 +3884,7 @@ fn speleo_link_survives_open_then_fast_path_reopen() {
     // First open_existing: already at HEAD, fast-path early return.
     {
         let db = Database::open_existing(&path).unwrap();
-        assert_eq!(db.get_user_version().unwrap(), 10);
+        assert_eq!(db.get_user_version().unwrap(), 11);
         assert!(db.load_speleo_link().unwrap().is_some());
     }
     // Second reopen: still intact, dirty bit preserved.

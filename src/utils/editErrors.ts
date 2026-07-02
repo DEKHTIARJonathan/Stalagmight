@@ -16,6 +16,20 @@ export function isEditDisabledError(error?: string | null): boolean {
   return !!error && error.startsWith(EDIT_DISABLED);
 }
 
+/**
+ * Marker the backend prefixes when the lazy 20-min lock re-verify (#202) blocks an
+ * edit because the write lock was lost or the server tip moved. Mirrors
+ * `EDIT_REVERIFY_DIVERGED_CODE` in `src-tauri/src/core/command.rs`. Distinct from
+ * `EDIT_DISABLED` so the frontend routes it to the divergence prompt (reconcile)
+ * rather than the plain read-only notice.
+ */
+export const EDIT_REVERIFY_DIVERGED = 'EDIT_REVERIFY_DIVERGED';
+
+/** True if a `CommandResult.error` carries the #202 re-verify divergence marker. */
+export function isReverifyDivergedError(error?: string | null): boolean {
+  return !!error && error.startsWith(EDIT_REVERIFY_DIVERGED);
+}
+
 /** User-facing message shown when a read-only project rejects an edit. */
 export const READ_ONLY_EDIT_NOTICE =
   'This project is open read-only - click Start editing to acquire the lock.';

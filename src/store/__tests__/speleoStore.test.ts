@@ -298,4 +298,25 @@ describe('speleoStore', () => {
       expect(s.banner).toBeNull();
     });
   });
+
+  describe('notifyReverifyDivergence (#202)', () => {
+    it('drops an active edit to read-only + conflict and raises the divergence prompt', () => {
+      // Mid-edit (lock held), then the lazy 20-min re-verify finds a lost lock /
+      // moved tip: the shell must go read-only + conflict and open the prompt.
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
+      expect(useSpeleoStore.getState().link?.editState).toBe('editing');
+      useSpeleoStore.getState().notifyReverifyDivergence();
+      const s = useSpeleoStore.getState();
+      expect(s.divergence).toBe('reverify');
+      expect(s.link?.editState).toBe('read-only');
+      expect(s.link?.remoteState).toBe('conflict');
+    });
+
+    it('is a safe no-op on link state when no project is linked', () => {
+      useSpeleoStore.getState().notifyReverifyDivergence();
+      const s = useSpeleoStore.getState();
+      expect(s.divergence).toBe('reverify');
+      expect(s.link).toBeNull();
+    });
+  });
 });
