@@ -11,10 +11,14 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
+import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoActions } from '../../hooks/useSpeleoActions';
+import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
+import { SpeleoBadgedIcon, PushGlyph, RefreshGlyph, EditNoLockGlyph } from '../common/SpeleoBadgedIcon';
 import { dmpImportFilters } from '../../utils/fileDialogs';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
-import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem } from '../common/appMenuItems';
+import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
 import type { AppMenuItem } from '../common/AppMenu';
 import {
   SaveIcon,
@@ -24,6 +28,8 @@ import {
   SlidersIcon,
   InfoIcon,
   DatabaseIcon,
+  PencilIcon,
+  LockIcon,
 } from '../common/icons';
 
 interface UseProjectMenuItemsArgs {
@@ -42,8 +48,12 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
     handleCloseProject,
   } = useProject();
   const openDialog = useUIStore((s) => s.openDialog);
+  const showToast = useUIStore((s) => s.showToast);
   const showDevStats = useUIStore((s) => s.showDevStats);
   const toggleDisplay = useUIStore((s) => s.toggleDisplay);
+  // SpeleoDB submenu (T2d) - only for a remote project.
+  const speleoLink = useSpeleoStore((s) => s.link);
+  const { busy: speleoBusy, startEditing, update, done } = useSpeleoActions();
   // The closure-adjusted view is read-only — imports add sections. Disable the
   // Import item up front (the toolbar Import button and Ctrl+I already do), so the
   // user isn't sent through a file picker only to be rejected after choosing.
@@ -60,6 +70,8 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       const result = await onSave({ closeAfterSave: true });
       // Only leave the project if the save actually succeeded (a cancelled
       // Save As returns null; an integrity/permission block returns success:false).
+      // handleCloseProject now owns the held-lock close guard (fix 1), so the T2d
+      // "push & release before closing" prompt fires here too.
       if (result && result.success) {
         await handleCloseProject();
       }
@@ -77,6 +89,82 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
 
     return [
       ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
+      openFromSpeleoDbMenuItem(t, { onOpen: () => openDialog('open-from-speleodb') }),
+      // SpeleoDB submenu (T2d) - only when a remote project is open.
+      ...(speleoLink
+        ? [
+            {
+              id: 'speleodb-menu',
+              label: t('speleodb.menu.title'),
+              icon: <SpeleoDbLogo size={sz} />,
+              submenu: [
+                speleoLink.editState === 'editing'
+                  ? {
+                      id: 'speleodb-menu-unlock',
+                      label: t('speleodb.menu.unlock'),
+                      icon: (
+                        <SpeleoBadgedIcon badge={<LockIcon size={9} />} badgeColor="text-green-400" size={sz} />
+                      ),
+                      disabled: speleoBusy,
+                      onClick: () => {
+                        // Release; the push&release dialog when there are local edits.
+                        if (speleoLink.hasUnpushedEdits) openDialog('speleodb-done');
+                        else void done(null);
+                      },
+                    }
+                  : {
+                      id: 'speleodb-menu-lock',
+                      label: t('speleodb.menu.lock'),
+                      icon: (
+                        <SpeleoBadgedIcon badge={<PencilIcon size={9} />} badgeColor="text-yellow-400" size={sz} />
+                      ),
+                      disabled: speleoBusy,
+                      onClick: () => {
+                        void startEditing();
+                      },
+                    },
+                {
+                  id: 'speleodb-menu-push',
+                  label: t('speleodb.menu.push'),
+                  icon: (
+                    <SpeleoBadgedIcon badge={<PushGlyph size={9} />} badgeColor="text-green-400" size={sz} />
+                  ),
+                  // Push-without-unlock only makes sense while editing with edits.
+                  disabled: speleoBusy || speleoLink.editState !== 'editing' || !speleoLink.hasUnpushedEdits,
+                  // Collect a commit message via the done dialog in push mode (like
+                  // push & release, but the lock is retained - fix 8).
+                  onClick: () => openDialog('speleodb-done', { mode: 'push' }),
+                },
+                {
+                  id: 'speleodb-menu-refresh',
+                  label: t('speleodb.menu.refresh'),
+                  icon: (
+                    <SpeleoBadgedIcon badge={<RefreshGlyph size={11} />} badgeColor="text-blue-400" size={sz} />
+                  ),
+                  disabled: speleoBusy,
+                  onClick: () => {
+                    void update();
+                  },
+                },
+                {
+                  id: 'speleodb-menu-edit-without-lock',
+                  label: t('speleodb.menu.editWithoutLock'),
+                  icon: (
+                    <SpeleoBadgedIcon
+                      badge={<EditNoLockGlyph size={11} />}
+                      badgeColor="text-red-500"
+                      size={sz}
+                    />
+                  ),
+                  // TODO(#213): optimistic force-edit - a data-safety/contention
+                  // warning then edit-without-lock + reconcile-on-push. Stubbed.
+                  onClick: () =>
+                    showToast(t('speleodb.menu.editWithoutLockSoon'), 'speleodb-edit-without-lock'),
+                },
+              ],
+            },
+          ]
+        : []),
       { id: 'project-menu-sep-1', label: '', separator: true },
       {
         id: 'toolbar-save-button',
@@ -160,9 +248,11 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         label: t('singleView.menu.closeProject'),
         icon: <CloseIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.close,
+        // handleCloseProject now routes a lock-held close through the speledb-close
+        // guard itself (fix 1).
         onClick: () => { void handleCloseProject(); },
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showDevStats, toggleDisplay, geometryReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject]);
+  }, [t, openDialog, showToast, showDevStats, toggleDisplay, geometryReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoBusy, startEditing, update, done]);
 }

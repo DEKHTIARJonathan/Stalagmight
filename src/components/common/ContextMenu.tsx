@@ -4,6 +4,7 @@ import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import type { StationRef, SectionId, ShotId } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
@@ -43,6 +44,9 @@ export default function ContextMenu() {
     appMode: s.appMode,
     syntacticLevel: s.syntacticLevel,
   })));
+  // A remote SpeleoDB project without the lock is read-only (T2a) - treat it like
+  // closure-adjusted for the right-click edit items.
+  const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
   const { project, stations, setShotReference, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
 
   const menuRef = useRef<HTMLDivElement>(null);
@@ -554,7 +558,7 @@ export default function ContextMenu() {
   } else {
     // Survey view: closure-adjusted geometry is read-only — disable mutations (all except
     // read-only navigation like "Zoom to Section"). Edits are made on the measured view.
-    const geometryReadOnly = geometryMode === 'closureAdjusted';
+    const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly;
     const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Section']);
     items = buildMenuItems().map((item) => {
       const withIcon = item.separator ? item : { ...item, icon: iconForLabel(item.label) };

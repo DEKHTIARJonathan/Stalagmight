@@ -71,6 +71,7 @@
       "export": "Export",
       "shortcuts": "Shortcuts",
       "cache": "Cache",
+      "speleodb": "SpeleoDB",
       "advanced": "Advanced"
     },
     "common": {
@@ -611,6 +612,57 @@
         "minSize": "Cache size must be at least {{value}} MB",
         "maxSize": "Cache size must not exceed {{value}} MB",
         "ttl": "Cache TTL must be between 1 and 365 days"
+      }
+    },
+    "speleodb": {
+      "title": "SpeleoDB",
+      "sections": {
+        "connection": "Connection",
+        "account": "Account"
+      },
+      "endpoint": {
+        "label": "Server endpoint",
+        "help": "The SpeleoDB server to connect to (e.g. https://www.speleodb.org/). This only applies to future logins - your current session stays on the server it signed in to.",
+        "aria": "SpeleoDB server endpoint"
+      },
+      "tokenFallback": {
+        "label": "Token storage",
+        "help": "Where to keep your login token. The OS keychain is always tried first.",
+        "aria": "Token storage fallback",
+        "options": {
+          "sessionOnly": "This session only",
+          "plaintext": "Plaintext file (less secure)"
+        },
+        "plaintextWarning": "If the keychain is unavailable, your token will be written to a plaintext file on disk (readable only by your user). Prefer keeping it in memory for this session unless you understand the risk."
+      },
+      "insecureHttp": {
+        "label": "Allow insecure HTTP",
+        "help": "By default only HTTPS (or HTTP to a private/loopback address) is allowed.",
+        "aria": "Allow insecure HTTP endpoints",
+        "warning": "Allowing plain HTTP to a public address sends your token unencrypted. Only enable this for a trusted local server."
+      },
+      "account": {
+        "appliesOnSave": "Sign in and sign out apply when you press Save.",
+        "signedInAs": "Signed in as {{email}}",
+        "signedInAsAt": "Signed in as {{email}} at {{endpoint}}",
+        "memoryOnly": "Token kept in memory only (no keychain) - it won't survive a restart.",
+        "logout": "Log out",
+        "willSignOut": "You'll be signed out when you press Save.",
+        "willSignIn": "Log in now to check your details, or they'll be applied when you press Save.",
+        "replacesSession": "This will replace your current session ({{email}}).",
+        "undo": "Undo",
+        "email": "Email",
+        "password": "Password",
+        "token": "Token",
+        "useToken": "Paste an existing token instead of a password",
+        "tryLogin": "Log in now",
+        "tryingLogin": "Logging in…"
+      },
+      "pollInterval": {
+        "label": "Remote refresh interval",
+        "help": "How often (seconds) to re-check a linked project's remote state. Minimum {{min}}.",
+        "aria": "Remote refresh interval in seconds",
+        "tooLow": "Must be at least {{min}} seconds."
       }
     },
     "advanced": {
@@ -1644,6 +1696,7 @@
       "mergeProjectsAria": "Merge {{countFormatted}} selected projects",
       "newProject": "New project",
       "openProject": "Open project",
+      "openFromSpeleoDb": "Open from SpeleoDB",
       "openOrImport": "Open / Import",
       "settings": "Settings",
       "debugLogs": "Debug Logs",
@@ -2560,6 +2613,121 @@
       },
       "no": "No thanks",
       "yes": "Yes, share data"
+    }
+  },
+  "speleodb": {
+    "map": {
+      "readOnlyBadge": "SpeleoDB · read-only"
+    },
+    "button": {
+      "unlocked": "Read-only - click to start editing (acquire the lock)",
+      "editingDirty": "You're editing - click to push your changes and release the lock",
+      "editingClean": "You hold the lock - click to release it",
+      "lockedByOther": "Being edited by {{email}} - click to pull the latest",
+      "remoteAhead": "SpeleoDB has newer changes - click to pull",
+      "conflict": "Local and remote have diverged - click to resolve",
+      "viewOnly": "Read-only access - click to refresh from SpeleoDB",
+      "noPermission": "You don't have permission to this SpeleoDB project - click for options",
+      "unknownError": "SpeleoDB reported an unexpected error - click for details"
+    },
+    "serverError": {
+      "title": "SpeleoDB error",
+      "fallback": "SpeleoDB returned an unexpected error while checking this project."
+    },
+    "menu": {
+      "title": "SpeleoDB",
+      "lock": "Start editing (lock)",
+      "unlock": "Finish editing (push & unlock)",
+      "push": "Push (keep the lock)",
+      "refresh": "Refresh from SpeleoDB",
+      "editWithoutLock": "Edit without lock…",
+      "editWithoutLockSoon": "Editing without the lock is coming soon (#213)."
+    },
+    "close": {
+      "title": "Close SpeleoDB project",
+      "message": "You still hold the SpeleoDB write lock. Release it so others can edit?",
+      "dirtyMessage": "You have unpushed changes and still hold the SpeleoDB write lock. Push your changes and release the lock before closing?",
+      "keepLock": "Close & keep the lock",
+      "release": "Release & close",
+      "pushRelease": "Push, release & close",
+      "saveLocally": "Save changes locally before closing",
+      "savedLocallyNote": "Your changes are saved locally - they just haven't been uploaded to SpeleoDB yet."
+    },
+    "divergence": {
+      "title": "Resolve SpeleoDB conflict",
+      "description": "Your local changes and the version on SpeleoDB have diverged. Choose how to resolve it.",
+      "soonTag": "(coming soon)",
+      "comingSoon": "This resolution option is coming soon (#198).",
+      "keepLocal": {
+        "label": "Keep my local version",
+        "help": "Upload your version to SpeleoDB to resolve the conflict."
+      },
+      "takeRemote": {
+        "label": "Take the SpeleoDB version",
+        "help": "Discard your local changes and replace them with the server's version."
+      },
+      "saveCopy": {
+        "label": "Save my version as an unmanaged file",
+        "help": "Keep your edits in a separate local .stalx (no longer linked to SpeleoDB); the SpeleoDB project stays at the server's version.",
+        "converting": "Saving a local copy…"
+      }
+    },
+    "errors": {
+      "loginFailed": "Login to SpeleoDB failed",
+      "openFailed": "Unable to open the project",
+      "listFailed": "Could not load projects"
+    },
+    "editBar": {
+      "someone": "someone else",
+      "toasts": {
+        "editing": "You now hold the lock - editing enabled.",
+        "lockedBy": "Unable to lock the project right now - it's being edited by {{email}}. Please try again later.",
+        "upToDate": "Already up to date.",
+        "released": "Changes uploaded and lock released.",
+        "pushed": "Changes pushed to SpeleoDB.",
+        "startFailed": "Could not start editing",
+        "updateFailed": "Could not update",
+        "doneFailed": "Could not finish editing",
+        "pushFailed": "Could not push changes"
+      }
+    },
+    "done": {
+      "title": "Finish editing",
+      "description": "Upload your changes to SpeleoDB and release the lock.",
+      "pushTitle": "Push changes",
+      "pushDescription": "Upload your changes to SpeleoDB and keep the lock so you can carry on editing.",
+      "messageLabel": "Commit message (optional)",
+      "messagePlaceholder": "Describe your changes…",
+      "confirm": "Upload & release",
+      "pushConfirm": "Upload & keep editing",
+      "pushing": "Uploading…"
+    },
+    "noPermission": {
+      "title": "No SpeleoDB access",
+      "description": "This project is linked to SpeleoDB, but your account doesn't have permission to view or edit it - it may have been shared with you as a file. You can convert it to a regular, unmanaged .stalx file to keep and edit locally.",
+      "convert": "Convert to a local file",
+      "converting": "Converting…"
+    },
+    "banner": {
+      "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept - click Done again to retry.",
+      "concurrentSession": "This project is locked by your account in another session. Editing from two sessions at once can lose edits."
+    },
+    "browser": {
+      "title": "Open from SpeleoDB",
+      "checking": "Checking session…",
+      "loginPrompt": "You're not signed in to SpeleoDB. Sign in from Settings to browse your projects.",
+      "goToSettings": "Open Settings",
+      "filterPlaceholder": "Filter projects…",
+      "noProjects": "No projects visible to this account.",
+      "noMatches": "No projects match your filter.",
+      "noAccess": "NO ACCESS",
+      "lockedBy": "Locked by {{email}}",
+      "open": "Open",
+      "refresh": "Refresh",
+      "signedInAs": "Signed in as {{email}}",
+      "concurrentSession": "This project is already locked by your account in another session. Editing it from two sessions at once is unsupported and can lose edits.",
+      "listFailed": "Could not load projects",
+      "openFailed": "Could not open project"
     }
   }
 }

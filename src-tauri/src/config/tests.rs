@@ -2547,3 +2547,29 @@ fn speleodb_config_round_trips_new_fields() {
         "expected snake_case token_fallback in:\n{serialized}"
     );
 }
+
+#[test]
+fn speleodb_poll_interval_defaults_to_60_and_clamps_up_to_floor() {
+    // Default is 60 (not the u32 zero the old derived Default would have given).
+    assert_eq!(SpeleoDbConfig::default().poll_interval_seconds, 60);
+
+    // A hand-edited sub-floor value is corrected up on normalize (anti-spam).
+    let mut cfg = SpeleoDbConfig {
+        poll_interval_seconds: 5,
+        ..SpeleoDbConfig::default()
+    };
+    cfg.normalize();
+    assert_eq!(cfg.poll_interval_seconds, MIN_POLL_INTERVAL_SECONDS);
+
+    // A value at/above the floor is preserved.
+    let mut ok = SpeleoDbConfig {
+        poll_interval_seconds: 120,
+        ..SpeleoDbConfig::default()
+    };
+    ok.normalize();
+    assert_eq!(ok.poll_interval_seconds, 120);
+
+    // A config file that omits the field parses to the default (60).
+    let deserialized: SpeleoDbConfig = toml::from_str("").expect("empty speleodb parses");
+    assert_eq!(deserialized.poll_interval_seconds, 60);
+}

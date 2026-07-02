@@ -22,15 +22,21 @@ import { ShortcutsSettings } from './settings/ShortcutsSettings';
 import { CacheSettings } from './settings/CacheSettings';
 import { AdvancedSettings } from './settings/AdvancedSettings';
 import { AppearanceSettings } from './settings/AppearanceSettings';
+import { SpeleoDbSettings } from './settings/SpeleoDbSettings';
 import type { Config } from '../../types/config';
 import {
   defaultConfig,
   getThemedDisplayDefaults,
   getThemedSectionColorDefaults,
+  MIN_POLL_INTERVAL_SECONDS,
+  MAX_POLL_INTERVAL_SECONDS,
 } from '../../types/config';
+import { clamp } from '../../utils/clamp';
 import type { ResolvedTheme } from '../../store/uiStore';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { isValidationConfigValid } from '../../utils/validation';
+import { useSpeleoStore } from '../../store/speleoStore';
+import { humanizeSpeleoError } from '../../utils/speleoError';
 
 /**
  * Deep comparison of two config objects to detect changed field paths.
@@ -107,6 +113,10 @@ function getCategoryDefaults(category: SettingsCategory, resolvedTheme: Resolved
       return { shortcuts: { ...defaultConfig.shortcuts } };
     case 'cache':
       return { cache: { ...defaultConfig.cache } };
+    case 'speleodb':
+      // Only the staged connection fields reset here; the live account session
+      // (login/logout) is not part of the config and is unaffected by a reset.
+      return { speleodb: { ...defaultConfig.speleodb } };
     case 'appearance':
       // Highlighting controls live in the Appearance tab, so resetting Appearance
       // also resets syntactic highlighting.
@@ -315,6 +325,9 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   if (updates.gas) {
     result.gas = { ...result.gas, ...updates.gas };
   }
+  if (updates.speleodb) {
+    result.speleodb = { ...result.speleodb, ...updates.speleodb };
+  }
 
   return result;
 }
@@ -326,6 +339,13 @@ export default function SettingsDialog() {
   const setThemePreview = useUIStore((s) => s.setThemePreview);
   const setSyntacticHighlightPreview = useUIStore((s) => s.setSyntacticHighlightPreview);
   const { config, updateConfig } = useProjectStore();
+
+  // Staged SpeleoDB account action (A2): applied on Save alongside the config.
+  const pendingAuth = useSpeleoStore((s) => s.pendingAuth);
+  const applyPendingAuth = useSpeleoStore((s) => s.applyPendingAuth);
+  const clearPendingAuth = useSpeleoStore((s) => s.clearPendingAuth);
+  const setAuthError = useSpeleoStore((s) => s.setAuthError);
+  const hasPendingAuth = pendingAuth !== null;
 
   // Panel ID base for ARIA associations
   const panelIdBase = useId();
@@ -451,16 +471,54 @@ export default function SettingsDialog() {
     setFocusedIndex(index);
   }, []);
 
+  // Persist the config (if changed) then apply any staged SpeleoDB account action
+  // (A2). Returns true only if everything succeeded (so the caller may close). On
+  // an auth failure the config is already saved; we surface the error in the
+  // SpeleoDB panel and keep the dialog open for a retry.
+  const commitSettings = useCallback(async (): Promise<boolean> => {
+    if (!localConfig) return false;
+    if (isDirty) {
+      // Guarantee the SpeleoDB poll interval is in range no matter how it was
+      // entered - a below-floor value whose validation error was cleared when the
+      // panel unmounted on a category switch, or a hand-set out-of-range one. The
+      // backend re-clamps the floor on load, but clamp BOTH ends here so an invalid
+      // value can never be persisted in the first place (fix 13).
+      const clamped: Config = {
+        ...localConfig,
+        speleodb: {
+          ...localConfig.speleodb,
+          poll_interval_seconds: clamp(
+            localConfig.speleodb.poll_interval_seconds,
+            MIN_POLL_INTERVAL_SECONDS,
+            MAX_POLL_INTERVAL_SECONDS,
+          ),
+        },
+      };
+      const result = await updateConfig(clamped);
+      if (!result.success) return false;
+    }
+    if (hasPendingAuth) {
+      const kind = pendingAuth?.kind;
+      const auth = await applyPendingAuth(localConfig.speleodb.endpoint);
+      if (!auth.ok) {
+        setAuthError(
+          humanizeSpeleoError(auth.error, kind === 'login' ? t('speleodb.errors.loginFailed') : undefined),
+        );
+        setActiveCategory('speleodb');
+        return false;
+      }
+    }
+    return true;
+  }, [localConfig, isDirty, hasPendingAuth, pendingAuth, updateConfig, applyPendingAuth, setAuthError, t]);
+
   // Save settings
   const handleSave = useCallback(async () => {
-    if (!localConfig || !isDirty || hasAnyError) return;
-
-    const result = await updateConfig(localConfig);
-    if (result.success) {
+    if (!localConfig || (!isDirty && !hasPendingAuth) || hasAnyError) return;
+    if (await commitSettings()) {
       trackDialogComplete('settings');
       closeDialog();
     }
-  }, [localConfig, isDirty, hasAnyError, updateConfig, closeDialog]);
+  }, [localConfig, isDirty, hasPendingAuth, hasAnyError, commitSettings, closeDialog]);
 
   // Request close - show custom dialog if dirty
   // Short-circuit if an overlay is already open to prevent Escape conflicts
@@ -478,33 +536,33 @@ export default function SettingsDialog() {
       setShowUnsavedDialog(false);
       return;
     }
-    // Normal close logic
-    if (isDirty) {
+    // Normal close logic - a staged (unsaved) account action counts as dirty.
+    if (isDirty || hasPendingAuth) {
       setShowUnsavedDialog(true);
     } else {
       trackDialogComplete('settings');
       closeDialog();
     }
-  }, [isDirty, closeDialog, showAbout, showResetConfirm, showUnsavedDialog]);
+  }, [isDirty, hasPendingAuth, closeDialog, showAbout, showResetConfirm, showUnsavedDialog]);
 
   // Handle custom unsaved dialog - Save
   const handleSaveAndClose = useCallback(async () => {
     if (!localConfig) return;
-
-    const result = await updateConfig(localConfig);
-    if (result.success) {
+    if (await commitSettings()) {
       setShowUnsavedDialog(false);
       trackDialogComplete('settings');
       closeDialog();
     }
-  }, [localConfig, updateConfig, closeDialog]);
+  }, [localConfig, commitSettings, closeDialog]);
 
   // Handle custom unsaved dialog - Discard
   const handleDiscardAndClose = useCallback(() => {
+    // Drop any staged login/logout along with the config edits.
+    clearPendingAuth();
     setShowUnsavedDialog(false);
     trackDialogComplete('settings');
     closeDialog();
-  }, [closeDialog]);
+  }, [clearPendingAuth, closeDialog]);
 
   // Handle custom unsaved dialog - Cancel (stay in dialog)
   const handleCancelClose = useCallback(() => {
@@ -577,6 +635,8 @@ export default function SettingsDialog() {
         return <ShortcutsSettings {...commonProps} />;
       case 'cache':
         return <CacheSettings {...commonProps} />;
+      case 'speleodb':
+        return <SpeleoDbSettings {...commonProps} />;
       case 'appearance':
         return <AppearanceSettings {...commonProps} />;
       case 'advanced':
@@ -653,7 +713,7 @@ export default function SettingsDialog() {
                 <Button
                   variant="primary"
                   onClick={handleSave}
-                  disabled={!isDirty || hasAnyError}
+                  disabled={(!isDirty && !hasPendingAuth) || hasAnyError}
                   data-testid="settings-save-button"
                 >
                   {t('common.actions.save')}

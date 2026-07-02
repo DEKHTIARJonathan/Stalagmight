@@ -28,8 +28,9 @@ pub(crate) mod tls;
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::SpeleoDbAction;
 pub use models::{
-    DoneResult, Permission, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult, UpdateResult,
+    DoneResult, Permission, PushResult, RemoteState, SpeleoErrorDto, SpeleoLinkStatus,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus,
+    StartEditingResult, UpdateResult,
 };
 
 /// Errors from the SpeleoDB client and dump handling.
@@ -49,8 +50,10 @@ pub(crate) enum SpeleoDbError {
     /// blank credentials and relying on the server to 400.
     #[error("email and password are required to log in")]
     MissingCredentials,
-    /// A transport-level failure (DNS, timeout, connection reset, body read).
-    #[error("network error talking to SpeleoDB: {0}")]
+    /// A transport-level failure (DNS, timeout, connection reset, body read). The
+    /// inner string is cleaned of `ureq`/io noise (`io: `, ` (os error N)`) at
+    /// construction so the Display is user-facing (see `client::clean_transport`).
+    #[error("Network error talking to SpeleoDB: {0}")]
     Transport(String),
     /// The server returned a non-2xx status. `status` is the HTTP code; `message`
     /// is a best-effort detail parsed from the body.
@@ -66,7 +69,7 @@ pub(crate) enum SpeleoDbError {
     #[error("the project is an Ariane (.tml) project; adoption is not yet supported (#214)")]
     AdoptAriane,
     /// The dump held more than one `.stalx` — ambiguous; fail closed.
-    #[error("the project dump contained multiple .stalx files: {0:?}")]
+    #[error("SpeleoDB contained multiple ambiguous .stalx files: {}", .0.join(", "))]
     AmbiguousDump(Vec<String>),
     /// A local filesystem error while extracting/writing.
     #[error("filesystem error: {0}")]
@@ -131,7 +134,11 @@ mod tests {
         assert_eq!(
             SpeleoDbError::AmbiguousDump(vec!["a.stalx".to_owned(), "b.stalx".to_owned()])
                 .to_string(),
-            "the project dump contained multiple .stalx files: [\"a.stalx\", \"b.stalx\"]"
+            "SpeleoDB contained multiple ambiguous .stalx files: a.stalx, b.stalx"
+        );
+        assert_eq!(
+            SpeleoDbError::Transport("Connection refused".to_owned()).to_string(),
+            "Network error talking to SpeleoDB: Connection refused"
         );
         // [Track A] #187: the insecure-endpoint message is the human-facing
         // surface for a blocked public-http / scheme-less endpoint; pin it.

@@ -10,6 +10,7 @@ import { hasEligibleClosures } from '../utils/closures';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
+import { useSpeleoStore } from './speleoStore';
 import type {
   Project,
   ProjectState,
@@ -240,7 +241,13 @@ interface ProjectStore {
    * (the caller must leave it visible rather than dismiss it with `closeDialog`).
    */
   saveAfterImport: () => Promise<boolean>;
-  closeProject: () => Promise<CommandResult>;
+  /**
+   * Close the open project. By default (`releaseLock` unset/true) the backend
+   * best-effort releases a held SpeleoDB write lock first so the close can't strand
+   * the server mutex (fix 1); the close dialog's "Keep lock" path passes
+   * `{ releaseLock: false }` to retain it.
+   */
+  closeProject: (opts?: { releaseLock?: boolean }) => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   /**
    * Mark the project dirty (unsaved changes) without running a command. The DMP
@@ -406,6 +413,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (result.success) {
         await get().refreshProjectState();
         set({ isDirty: true });
+        // #204: mirror the backend's mark_remote_dirty so the SpeleoDB action shell
+        // knows there are un-pushed edits (drives the button's push&release-with-
+        // comment flow). No-op for a local project (no link).
+        useSpeleoStore.getState().markDirty();
         // A command can RESOLVE (or surface) an integrity issue — e.g. removing a
         // drifted loop closure clears its banner entry — so re-check, mirroring
         // executeUndoRedo. refreshProjectState doesn't re-check, and the next save
@@ -455,9 +466,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       result = await invokeIpc<CommandResult>(command, args, meta);
       if (result.success) {
         set({ isDirty: true });
+        // #204: an undo/redo mutates the remote project too - mirror the backend
+        // dirty bit into the SpeleoDB store (no-op for a local project).
+        useSpeleoStore.getState().markDirty();
       } else {
         if (checkPartialFailure && isPartialMultiStepFailure(result.error)) {
           set({ isDirty: true });
+          useSpeleoStore.getState().markDirty();
         }
         // A read-only rejection (EDIT_DISABLED) gets the same friendly notice +
         // dedup key as executeCommand, not the raw coded string — mashing Ctrl+Z
@@ -730,6 +745,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         get().resetLoading();
         await get().refreshUndoState();
         recordPerfTiming('loadProject total', performance.now() - tStart);
+
+        // #204: seed the SpeleoDB action-shell edit-state from the freshly-loaded
+        // project (is_remote / edit gate / permission / lock holder). Best-effort
+        // and non-blocking - a local project resolves to `link = null` (shell
+        // hidden); a remote one seeds read-only/editing. Covers reopen-from-recents
+        // (where the browser's optimistic setLinkOnOpen never ran) and the
+        // fast-forward reload path (which routes back through loadProject).
+        void useSpeleoStore.getState().refreshLinkStatus();
+        // Also refresh who we are, so the action button can tell our own held lock
+        // from someone else's (otherwise a reopen-from-recents has no session and
+        // every held lock reads as "locked by other").
+        void useSpeleoStore.getState().refreshSession();
 
         // Collaboration mode (non-blocking, best-effort): if the project
         // has collab on AND the sibling .tml was edited externally
@@ -1070,6 +1097,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // flow persists the import, and the close-guard prevents silent loss.
     if (useUIStore.getState().importContext !== 'new-project') {
       set({ isDirty: true });
+      // #204/fix 8: an import into an existing remote project is an un-pushed edit -
+      // mirror the SpeleoDB dirty bit so the status button offers push (no-op for a
+      // local project). The import command usually already marks it via
+      // executeCommand; this keeps the two dirty flags in lockstep on every path.
+      useSpeleoStore.getState().markDirty();
       return true;
     }
     // New project: the initial save is deferred, so the import is invisible until
@@ -1106,7 +1138,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     return true;
   },
 
-  closeProject: async () => {
+  closeProject: async (opts) => {
     // Terminate the feature-build worker on close so its JSC heap (and any
     // bmalloc slabs it committed during the last load) goes back to the OS.
     // The worker is a singleton lazily recreated on the next project open;
@@ -1129,14 +1161,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
     set({ isClosing: true });
     try {
-      const result = await invokeIpc<CommandResult>('close_project', undefined, {
-        purpose: 'close project and release resources',
-      });
+      const result = await invokeIpc<CommandResult>(
+        'close_project',
+        // Default: release a held SpeleoDB lock so the close doesn't strand it
+        // (fix 1). The keep-lock close path passes { releaseLock: false }.
+        { releaseLock: opts?.releaseLock ?? true },
+        { purpose: 'close project and release resources' },
+      );
       if (result.success) {
         set({ project: null, databaseOpen: false, stations: [], surveyData: null, stationsAdjusted: null, surveyDataAdjusted: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
         // Closing a project bypasses the setView() cleanup funnel, so drop the gas
         // sub-mode (#38) here too — a stale overlay/panel must not outlive the project.
         useUIStore.getState().exitGasPlan();
+        // #204: drop the SpeleoDB action-shell edit-state - no project is open.
+        useSpeleoStore.getState().clearLink();
       }
       return result;
     } finally {
@@ -1336,6 +1374,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // fixes too while still leaving a true no-op repair clean.
       if (result.changed) {
         set({ isDirty: true });
+        // #204/fix 8: a repair that actually mutated the project makes a remote
+        // SpeleoDB project un-pushed-dirty too - mirror the backend dirty bit (as
+        // executeCommand/executeUndoRedo do) so the status button offers push &
+        // prompts for a commit message rather than reading "editing clean". No-op
+        // for a local project (no link).
+        useSpeleoStore.getState().markDirty();
       }
       return result;
     } catch (e) {

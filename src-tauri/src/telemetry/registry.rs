@@ -120,12 +120,15 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.set_station_comment",
     "command.set_zero_datum",
     "command.speleodb_done",
+    "command.speleodb_link_status",
     "command.speleodb_list_projects",
     "command.speleodb_login",
     "command.speleodb_logout",
     "command.speleodb_open_project",
+    "command.speleodb_push",
     "command.speleodb_session",
     "command.speleodb_start_editing",
+    "command.speleodb_unlink",
     "command.speleodb_update",
     "command.suggest_all_import_placements",
     "command.suggest_import_placement",
@@ -212,7 +215,11 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.remove-closure",
     "action.dialog.section-adjust",
     "action.dialog.settings",
-    "action.dialog.speleodb-spike",
+    "action.dialog.open-from-speleodb",
+    "action.dialog.speleodb-done",
+    "action.dialog.speleodb-divergence",
+    "action.dialog.speleodb-close",
+    "action.dialog.speleodb-no-permission",
     "action.dialog.split-section",
     "action.dialog.swap-comments",
     "action.dialog.tml-import",
@@ -265,7 +272,11 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.remove-closure",
     "dialog-cancel.section-adjust",
     "dialog-cancel.settings",
-    "dialog-cancel.speleodb-spike",
+    "dialog-cancel.open-from-speleodb",
+    "dialog-cancel.speleodb-done",
+    "dialog-cancel.speleodb-divergence",
+    "dialog-cancel.speleodb-close",
+    "dialog-cancel.speleodb-no-permission",
     "dialog-cancel.split-section",
     "dialog-cancel.swap-comments",
     "dialog-cancel.tml-import",
@@ -344,7 +355,11 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.remove-closure",
     "dwell.dialog.section-adjust",
     "dwell.dialog.settings",
-    "dwell.dialog.speleodb-spike",
+    "dwell.dialog.open-from-speleodb",
+    "dwell.dialog.speleodb-done",
+    "dwell.dialog.speleodb-divergence",
+    "dwell.dialog.speleodb-close",
+    "dwell.dialog.speleodb-no-permission",
     "dwell.dialog.split-section",
     "dwell.dialog.swap-comments",
     "dwell.dialog.tml-import",
@@ -474,7 +489,11 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.remove-closure",
     "active-dwell.dialog.section-adjust",
     "active-dwell.dialog.settings",
-    "active-dwell.dialog.speleodb-spike",
+    "active-dwell.dialog.open-from-speleodb",
+    "active-dwell.dialog.speleodb-done",
+    "active-dwell.dialog.speleodb-divergence",
+    "active-dwell.dialog.speleodb-close",
+    "active-dwell.dialog.speleodb-no-permission",
     "active-dwell.dialog.split-section",
     "active-dwell.dialog.swap-comments",
     "active-dwell.dialog.tml-import",
@@ -557,7 +576,18 @@ mod tests {
         //       command.compute_gas_reach_field = 419
         //   + 3 SpeleoDB sync events (#194/#197):
         //       speleodb_{start_editing,done,update} = 422.
-        assert_eq!(EVENT_NAMES.len(), 422);
+        //   + 1 SpeleoDB link-status event (#204):
+        //       command.speleodb_link_status = 423.
+        //   + 4 open-from-speleodb dialog events (#203):
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .open-from-speleodb = 427.
+        //   + 1 SpeleoDB push event (T2d): command.speleodb_push = 428.
+        //   + 4 speleodb-divergence dialog events (#198): = 432.
+        //   + 4 speleodb-close dialog events (T2d): = 436.
+        //   + 1 SpeleoDB unlink event (#204 convert-to-unmanaged):
+        //       command.speleodb_unlink = 437.
+        //   + 4 speleodb-no-permission dialog events (#204): = 441.
+        assert_eq!(EVENT_NAMES.len(), 441);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

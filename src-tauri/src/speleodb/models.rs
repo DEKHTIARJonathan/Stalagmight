@@ -144,6 +144,9 @@ impl SpeleoProjectSummary {
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct SpeleoLoginResult {
     pub user_email: String,
+    /// The server this login authenticated against (the resolved endpoint), so the
+    /// UI can show "signed in as … at …" immediately without re-querying.
+    pub endpoint: String,
     /// True when the token was stored in the OS keychain; false means a
     /// session-only in-memory fallback (e.g. headless CI with no secret service).
     pub keychain_backed: bool,
@@ -227,9 +230,94 @@ pub struct SpeleoSessionStatus {
     pub logged_in: bool,
     /// Email of the logged-in user, when `logged_in`.
     pub user_email: Option<String>,
+    /// The server this session is authenticated against, when `logged_in`. Shown
+    /// in Settings ("signed in as … at …") so the user can see the session is tied
+    /// to a specific server - a later endpoint change only affects FUTURE logins.
+    pub endpoint: Option<String>,
     /// False when the token is held in memory only (no OS keychain) — surfaced so
     /// the UI keeps showing the "won't survive a restart" note after a reopen.
     pub keychain_backed: bool,
+}
+
+/// IPC-facing status of the currently open project's SpeleoDB link, so the
+/// frontend action shell (#204) can render the read-only/editing indicator and
+/// gate its controls on ANY load - including a reopen from Recent Projects,
+/// where the open flow's [`SpeleoProjectSummary`] isn't in hand.
+///
+/// The cheap local fields (`is_remote`, `edit_enabled`, `has_unpushed_edits`)
+/// come from the persisted `speleo_link` row + the transient edit gate. The
+/// network fields (`permission`, `lock_holder`) are best-effort from a single
+/// `get_project`; they degrade to `None` when logged out / offline so the local
+/// truth (which the read-only gate hangs on) always returns. Carries no token.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct SpeleoLinkStatus {
+    /// True when the open project is linked to a SpeleoDB project (a `speleo_link`
+    /// row exists). False for a local project or when no project is open.
+    pub is_remote: bool,
+    /// The backend edit gate: true when mutations are allowed (a local project,
+    /// or a remote one with the write lock held). False for a remote project
+    /// opened read-only.
+    pub edit_enabled: bool,
+    /// The command-driven dirty bit: un-pushed remote edits are pending.
+    pub has_unpushed_edits: bool,
+    /// This user's permission tier on the project. Best-effort - `None` when
+    /// logged out / offline / the lookup failed.
+    pub permission: Option<Permission>,
+    /// Email of the current lock holder, if any. Best-effort - `None` when
+    /// unlocked / logged out / the lookup failed.
+    pub lock_holder: Option<String>,
+    /// How the local copy relates to the server tip - drives the action button's
+    /// "remote has an update" / "conflict" states (T2c). Best-effort over the
+    /// revision topology; `Unknown` when logged out / offline / the lookup failed.
+    pub remote_state: RemoteState,
+    /// The project is linked but the server definitively refused this user access
+    /// to it (a 403 on `get_project`) - e.g. a managed `.stalx` shared as a bare
+    /// file to someone who is not a collaborator. Distinct from a transient
+    /// offline miss (which leaves `permission: None` but this `false`), so the UI
+    /// can offer converting it to an unmanaged local file rather than nagging to
+    /// retry. Never set on a plain 401 (that is a dead token → re-login).
+    pub access_denied: bool,
+    /// An UNEXPECTED server error hit while probing the link (a status that is
+    /// neither the handled 401 dead-token / 403 access-denied nor a transient
+    /// offline miss - e.g. a 404 for a deleted project, a 422, or a 5xx). Carries
+    /// the humanized detail so the action button can show a "?" state and open a
+    /// dialog explaining what SpeleoDB said, instead of silently degrading to
+    /// `Unknown`. `None` on success / offline / the handled auth cases.
+    pub server_error: Option<SpeleoErrorDto>,
+}
+
+/// The local copy's relationship to the server tip (the reconcile verdict,
+/// projected for the UI). Drives the action button (T2c): `RemoteAhead` → pull,
+/// `Conflict` → resolve. Derived from [`super::sync::reconcile_verdict`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteState {
+    /// Local BASE == server tip (nothing to pull).
+    UpToDate,
+    /// The server advanced and we can fast-forward cleanly (no local edits block it).
+    RemoteAhead,
+    /// The server diverged from BASE and we hold un-pushed edits - needs reconcile.
+    Conflict,
+    /// Not determined (logged out / offline / lookup failed).
+    Unknown,
+}
+
+/// Outcome of `speleodb_push` (T2d): push the open project's edits **without**
+/// releasing the lock (unlike [`DoneResult`], which releases). The lock is
+/// retained in every arm so editing continues.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PushResult {
+    /// Edits pushed (or nothing to push); the lock is retained.
+    Pushed,
+    /// The server diverged: nothing pushed, lock + dirty bit retained to reconcile.
+    DivergenceNeeded,
+    /// Ambiguous push (no confirmed server commit): dirty bit + lock retained so a
+    /// retry recovers via ancestry (#193).
+    PushUnconfirmed,
 }
 
 /// [Track A] #186/D-B2: the structured error the SpeleoDB IPC commands return.
@@ -252,9 +340,9 @@ pub struct SpeleoErrorDto {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        DoneResult, Permission, Project, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult,
-        SpeleoOpenResult, SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult,
-        UpdateResult,
+        DoneResult, Permission, Project, PushResult, RemoteState, SpeleoDbAction, SpeleoErrorDto,
+        SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
+        SpeleoSessionStatus, StartEditingResult, UpdateResult,
     };
 
     #[test]
@@ -264,12 +352,14 @@ mod tests {
         // names or holds a token can't silently break "token never in IPC".
         let login = serde_json::to_string(&SpeleoLoginResult {
             user_email: "u@x".to_owned(),
+            endpoint: "https://x/".to_owned(),
             keychain_backed: true,
         })
         .expect("serialize login result");
         let status = serde_json::to_string(&SpeleoSessionStatus {
             logged_in: true,
             user_email: Some("u@x".to_owned()),
+            endpoint: Some("https://x/".to_owned()),
             keychain_backed: true,
         })
         .expect("serialize session status");
@@ -312,9 +402,33 @@ mod tests {
             local_path: "/cache/project.stalx".to_owned(),
         })
         .expect("serialize update result");
+        // #204: the link-status DTO is authed-derived (permission + lock holder)
+        // but must likewise never carry the token.
+        let link_status = serde_json::to_string(&SpeleoLinkStatus {
+            is_remote: true,
+            edit_enabled: false,
+            has_unpushed_edits: false,
+            permission: Some(Permission::ReadAndWrite),
+            lock_holder: Some("holder@example.com".to_owned()),
+            remote_state: RemoteState::RemoteAhead,
+            access_denied: false,
+            server_error: None,
+        })
+        .expect("serialize link status");
+        let push = serde_json::to_string(&PushResult::PushUnconfirmed).expect("serialize push");
 
         for json in [
-            &login, &status, &summary, &open, &error, &start, &locked, &done, &update,
+            &login,
+            &status,
+            &summary,
+            &open,
+            &error,
+            &start,
+            &locked,
+            &done,
+            &update,
+            &link_status,
+            &push,
         ] {
             assert!(
                 !json.to_ascii_lowercase().contains("token"),

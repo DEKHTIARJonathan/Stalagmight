@@ -151,16 +151,25 @@ pub(crate) fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
 /// - `NotAuthenticated` → `ReLogin` (no usable token).
 /// - `InsecureEndpoint` and every other local error → `Fatal`, `status: None`.
 pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto {
-    let (action, status) = match err {
-        SpeleoDbError::Status { status, .. } => (map_status(endpoint, *status), Some(*status)),
-        SpeleoDbError::Transport(_) => (SpeleoDbAction::Retry, None),
-        SpeleoDbError::NotAuthenticated => (SpeleoDbAction::ReLogin, None),
+    let (action, status, message) = match err {
+        // Status: carry the parsed human detail WITHOUT the "SpeleoDB returned HTTP
+        // N:" wrapper - the frontend frames it per operation ("Login to SpeleoDB
+        // failed: …", "Unable to open the project: …"). See utils/speleoError.ts.
+        SpeleoDbError::Status { status, message } => (
+            map_status(endpoint, *status),
+            Some(*status),
+            message.clone(),
+        ),
+        // Transport is already fully framed ("Network error talking to SpeleoDB: …").
+        SpeleoDbError::Transport(_) => (SpeleoDbAction::Retry, None, err.to_string()),
+        SpeleoDbError::NotAuthenticated => (SpeleoDbAction::ReLogin, None, err.to_string()),
         // InsecureEndpoint / NoEndpoint / MissingCredentials / Parse / EmptyDump /
-        // AdoptAriane / AmbiguousDump / Io / InvalidProjectId — all fail closed.
-        _ => (SpeleoDbAction::Fatal, None),
+        // AdoptAriane / AmbiguousDump / Io / InvalidProjectId - all fail closed;
+        // their Display is already user-facing.
+        _ => (SpeleoDbAction::Fatal, None, err.to_string()),
     };
     SpeleoErrorDto {
-        message: err.to_string(),
+        message,
         action,
         status,
     }

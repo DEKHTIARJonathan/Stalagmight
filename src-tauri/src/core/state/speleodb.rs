@@ -17,11 +17,11 @@ use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
 use crate::speleodb::models::SpeleoProjectSummary;
-use crate::speleodb::sync::{self, PushPlan, ReconcileVerdict};
+use crate::speleodb::sync::{self, FenceOutcome, PushPlan, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
-    DoneResult, SpeleoDbError, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoSessionStatus, StartEditingResult, UpdateResult,
+    DoneResult, PushResult, RemoteState, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoSessionStatus, StartEditingResult, UpdateResult,
 };
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
@@ -156,6 +156,7 @@ impl SpeleoDbSession {
         let logged_in = self.active_token().is_ok();
         SpeleoSessionStatus {
             user_email: logged_in.then(|| self.email.clone()).flatten(),
+            endpoint: logged_in.then(|| self.endpoint.clone()).flatten(),
             keychain_backed: logged_in && self.token_store.keychain_backed(),
             logged_in,
         }
@@ -377,6 +378,203 @@ impl AppState {
         Ok(self.speleodb_session_lock().map_err(local_dto)?.status())
     }
 
+    /// Report the open project's SpeleoDB link/edit status for the action shell
+    /// (#204): whether it is remote, whether editing is enabled (the write lock is
+    /// held), the un-pushed-edits dirty bit, and - best-effort over one
+    /// `get_project` - the user's permission tier and the current lock holder.
+    ///
+    /// A local project (or none open) reports `is_remote:false` with the network
+    /// fields `None`. The network enrichment is deliberately fail-open: a logged
+    /// out / offline / failed lookup leaves `permission`/`lock_holder` `None`
+    /// rather than failing the whole status, because the local truth
+    /// (`is_remote` + `edit_enabled`) is what the read-only gate hangs on. Not
+    /// routed through [`Self::speleodb_handle_auth`] - a transient 401 on this
+    /// passive probe must not auto-drop the session (mirrors
+    /// [`Self::speleodb_lock_holder`]).
+    pub(crate) fn speleodb_link_status(&self) -> Result<SpeleoLinkStatus, SpeleoErrorDto> {
+        let link = match self.speleodb_open_link() {
+            Ok(link) => link,
+            // No remote project open (no database, or a local project): not-remote.
+            Err(SpeleoDbError::NoRemoteProject) => {
+                return Ok(SpeleoLinkStatus {
+                    is_remote: false,
+                    edit_enabled: self.edit_enabled(),
+                    has_unpushed_edits: false,
+                    permission: None,
+                    lock_holder: None,
+                    remote_state: RemoteState::Unknown,
+                    access_denied: false,
+                    server_error: None,
+                });
+            }
+            Err(e) => return Err(local_dto(e)),
+        };
+
+        let edit_enabled = self.edit_enabled();
+        let has_unpushed_edits = link.has_unpushed_edits;
+
+        // Best-effort network enrichment: the user's permission tier + lock holder
+        // (get_project), and the remote-state reconcile verdict (revision topology,
+        // the #202 freshness fold). Guard the request URL with the same project-id
+        // validation as the edit verbs; on any miss (invalid id, no token,
+        // transport/HTTP error) the fields degrade to None / Unknown - the local
+        // truth still returns.
+        let (permission, lock_holder, remote_state, access_denied, server_error) =
+            if validate_project_id(&link.project_id).is_ok() {
+                match self.speleodb_active_token() {
+                    Ok((endpoint, token)) => {
+                        let insecure_http = self.speleodb_insecure_http();
+                        match client::get_project(
+                            &endpoint,
+                            &token,
+                            insecure_http,
+                            &link.project_id,
+                        ) {
+                            Ok(p) => {
+                                // Only now (the project is reachable) is the revision-
+                                // topology fold worth a SECOND round trip. On every
+                                // error arm below the remote state is Unknown anyway
+                                // (get_revisions would fail the same way get_project
+                                // just did), so skip the doomed extra GET (N5).
+                                let remote_state = self.speleodb_remote_state(
+                                    &endpoint,
+                                    &token,
+                                    insecure_http,
+                                    &link,
+                                );
+                                (
+                                    p.permission,
+                                    p.active_mutex.map(|m| m.user),
+                                    remote_state,
+                                    false,
+                                    None,
+                                )
+                            }
+                            // A definitive 403 means we are logged in but not a
+                            // collaborator on this managed project - flag it so the
+                            // UI can offer converting to a local file (fix 10).
+                            Err(SpeleoDbError::Status { status: 403, .. }) => {
+                                (None, None, RemoteState::Unknown, true, None)
+                            }
+                            // A 401 is a dead token (re-login) handled by the edit
+                            // verbs; this passive probe must not nag about it.
+                            Err(SpeleoDbError::Status { status: 401, .. }) => {
+                                (None, None, RemoteState::Unknown, false, None)
+                            }
+                            // Any OTHER status (a 404 for a deleted/renamed project,
+                            // a 422, a 5xx, ...) is unexpected - surface the humanized
+                            // detail so the button can show a "?" state and explain
+                            // what SpeleoDB said (fix 12), rather than silently
+                            // degrading to Unknown.
+                            Err(e @ SpeleoDbError::Status { .. }) => (
+                                None,
+                                None,
+                                RemoteState::Unknown,
+                                false,
+                                Some(dto_for_error(Endpoint::GetProject, &e)),
+                            ),
+                            // Transport / local error is offline - stay quiet.
+                            Err(_) => (None, None, RemoteState::Unknown, false, None),
+                        }
+                    }
+                    Err(_) => (None, None, RemoteState::Unknown, false, None),
+                }
+            } else {
+                (None, None, RemoteState::Unknown, false, None)
+            };
+
+        // Invariant: holding the write lock means we may edit. If we hold it but the
+        // gate is off - e.g. we reopened a project we'd locked but not released, and
+        // the load re-derived the gate as read-only from is_remote - resume editing
+        // now, so the project isn't stuck read-only under our own lock. (A same-
+        // account concurrent session is warned about separately at open time.)
+        let edit_enabled = if !edit_enabled
+            && lock_holder
+                .as_deref()
+                .zip(self.speleodb_my_email().as_deref())
+                .is_some_and(|(holder, me)| holder.eq_ignore_ascii_case(me))
+        {
+            self.set_edit_enabled(true);
+            true
+        } else {
+            edit_enabled
+        };
+
+        Ok(SpeleoLinkStatus {
+            is_remote: true,
+            edit_enabled,
+            has_unpushed_edits,
+            permission,
+            lock_holder,
+            remote_state,
+            access_denied,
+            server_error,
+        })
+    }
+
+    /// Best-effort remote-state (freshness fold, #202): resolve the server tip from
+    /// the revision topology and project the BASE-vs-tip fence for the action
+    /// button (T2c). Any failure → `Unknown` - the passive poll must never surface
+    /// an error, and it is NOT routed through `handle_auth` (a transient 401 here
+    /// must not auto-drop the session, mirroring [`Self::speleodb_lock_holder`]).
+    ///
+    /// This drives off [`sync::fence`] but keeps the `FailClosed` anomaly separate
+    /// (a recorded BASE with no server tip - a transient empty response - degrades to
+    /// `Unknown`, NOT `Conflict`, since nothing local is at risk), unlike
+    /// [`sync::reconcile_verdict`] which folds `FailClosed` into `Diverged`. On a
+    /// `FastForward` it runs the SAME ancestry check the verdict does
+    /// ([`sync::base_is_ancestor_of_tip`]): a BASE that genuinely descends to the tip
+    /// is a clean pull (`RemoteAhead`); a non-ancestor fork (a server-side history
+    /// rewrite) is a `Conflict`, so the passive button never advertises a "pull" that
+    /// the Update verb's stricter reconcile would immediately fail closed on (fix 9).
+    /// `FastForward` only occurs when we hold no un-pushed edits (fence maps a dirty
+    /// moved tip straight to `Diverged`), so a `Conflict` here is the no-local-edits
+    /// fork case, agreeing with what Update/Start do when the user actually acts.
+    fn speleodb_remote_state(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        link: &crate::models::SpeleoLink,
+    ) -> RemoteState {
+        match head_with_empty_retry(link.base_commit_sha.as_deref(), || {
+            self.speleodb_server_head(endpoint, token, insecure_http, &link.project_id)
+        }) {
+            Ok((tip, commits)) => match sync::fence(
+                link.base_commit_sha.as_deref(),
+                tip.as_deref(),
+                link.has_unpushed_edits,
+            ) {
+                FenceOutcome::UpToDate => RemoteState::UpToDate,
+                // Only advertise a clean pull when BASE genuinely descends to the tip.
+                // A FastForward whose BASE is NOT an ancestor of the tip is a
+                // server-side history rewrite (a fork) that the Update verb's
+                // reconcile classifies as Diverged - paint it as a Conflict here too,
+                // so the button doesn't offer a blue "pull" that would immediately
+                // fail closed to the divergence prompt on click (fix 9). The ancestry
+                // check reuses the same helper reconcile_verdict does, so the passive
+                // button and the Update verb agree.
+                FenceOutcome::FastForward => {
+                    if sync::base_is_ancestor_of_tip(
+                        link.base_commit_sha.as_deref(),
+                        tip.as_deref().unwrap_or_default(),
+                        &commits,
+                    ) {
+                        RemoteState::RemoteAhead
+                    } else {
+                        RemoteState::Conflict
+                    }
+                }
+                FenceOutcome::Diverged => RemoteState::Conflict,
+                // Anomaly (BASE but no tip): not a conflict - nothing local is at
+                // risk of being clobbered. Degrade to Unknown; a later poll or the
+                // Update verb re-fences.
+                FenceOutcome::FailClosed => RemoteState::Unknown,
+            },
+            Err(_) => RemoteState::Unknown,
+        }
+    }
+
     /// [Track C] (#188, C5): centralized session-level 401 auto-drop handler.
     /// Every **established-session** authed call (list/open) routes its `Result`
     /// through this; a **genuine 401** fully clears the token (keychain +
@@ -471,21 +669,25 @@ impl AppState {
         whoami_indicates_dead_token(&client::fetch_user_email(&endpoint, &token, insecure_http))
     }
 
-    /// Persist the user-supplied endpoint (when given) + email — never the token —
-    /// for a future prefill (#205). The `DEV_SPELEODB_URL` env default is
-    /// deliberately *not* persisted: writing the resolved endpoint here would leak
-    /// the dev box into the saved config and resurface it after the env var is
-    /// unset. Best-effort; a failure is logged, not fatal.
-    fn speleodb_persist_account(&self, endpoint: Option<&str>, email: &str) {
+    /// Persist the authoritative account email - never the token - so a later
+    /// silent rehydrate can key the keychain lookup by (endpoint, email) after a
+    /// restart. The email is only known once login resolves it, so it can't ride
+    /// the Settings config the way the endpoint does.
+    ///
+    /// The **endpoint is deliberately NOT persisted here**: it is a user-facing
+    /// Settings field owned by the config-staging flow, persisted only when the
+    /// Settings dialog's Save runs (`updateConfig`). Writing it as a login side
+    /// effect meant a "Log in now" test - or any login - leaked the endpoint into
+    /// the saved config behind the dialog's back, surviving a Cancel/Undo, and
+    /// also risked leaking the `DEV_SPELEODB_URL` dev box. Best-effort; a failure
+    /// is logged, not fatal.
+    fn speleodb_persist_email(&self, email: &str) {
         let Ok(mut config) = self.config.lock() else {
             return;
         };
-        if let Some(endpoint) = endpoint {
-            config.speleodb.endpoint = Some(endpoint.to_owned());
-        }
         config.speleodb.email = Some(email.to_owned());
         if let Err(e) = config.save() {
-            tracing::warn!(error = %e, "failed to persist SpeleoDB endpoint/email to config");
+            tracing::warn!(error = %e, "failed to persist SpeleoDB account email to config");
         }
     }
 
@@ -499,14 +701,6 @@ impl AppState {
         password: Option<String>,
         token: Option<String>,
     ) -> Result<SpeleoLoginResult, SpeleoErrorDto> {
-        // Only a user-supplied endpoint (the dialog override) is persisted; the env
-        // default must not leak into the saved config (see speleodb_persist_account).
-        let persist_endpoint = override_endpoint
-            .as_deref()
-            .map(str::trim)
-            .filter(|e| !e.is_empty())
-            .map(str::to_owned);
-
         let endpoint = self
             .speleodb_resolve_endpoint(override_endpoint.as_deref())
             .ok_or(SpeleoDbError::NoEndpoint)
@@ -576,10 +770,11 @@ impl AppState {
             tier == crate::speleodb::auth::TokenTier::Keychain
         };
 
-        self.speleodb_persist_account(persist_endpoint.as_deref(), &email);
+        self.speleodb_persist_email(&email);
 
         Ok(SpeleoLoginResult {
             user_email: email,
+            endpoint,
             keychain_backed,
         })
     }
@@ -784,6 +979,97 @@ impl AppState {
         Ok(())
     }
 
+    /// Snapshot of what a best-effort lock release needs (endpoint, token, the
+    /// insecure-http allowance, project id), or `None` when no held remote edit
+    /// session is active. Cheap + non-blocking (reads the open link + config, no
+    /// network), so a caller that must not block on the OLD project's server - the
+    /// app-exit path, a project switch - can hand the actual HTTP release to a
+    /// bounded / detached thread. Reads the link BEFORE the caller tears down or
+    /// swaps the database.
+    fn speleodb_held_lock_release_params(&self) -> Option<(String, String, bool, String)> {
+        if !self.edit_enabled() {
+            return None;
+        }
+        let link = self.speleodb_open_link().ok()?;
+        let (endpoint, token) = self.speleodb_active_token().ok()?;
+        Some((
+            endpoint,
+            token,
+            self.speleodb_insecure_http(),
+            link.project_id,
+        ))
+    }
+
+    /// Best-effort release of a held SpeleoDB write lock when a remote EDIT session
+    /// is closed, so a normal close/quit doesn't strand the server mutex locked for
+    /// every other editor (fix 1). Unlike [`Self::speleodb_logout`] it keeps the
+    /// token and the edit gate (the caller's close teardown resets the gate) - it
+    /// only surrenders the server lock. Reads the link BEFORE the caller tears down
+    /// the database. The keep-lock close path skips this by passing
+    /// `release_lock = false` to the close command. A read-only-open or local
+    /// project holds no lock, so this is a no-op there. Synchronous: acceptable on
+    /// the close command (Tauri runs it off the main thread); the app-exit and
+    /// project-switch paths use the bounded / detached variants below instead.
+    pub(crate) fn speleodb_release_held_lock_best_effort(&self) {
+        if let Some((endpoint, token, insecure_http, project_id)) =
+            self.speleodb_held_lock_release_params()
+        {
+            self.speleodb_release_best_effort(&endpoint, &token, insecure_http, &project_id);
+        }
+    }
+
+    /// Snapshot the release params, then run the network release on a detached
+    /// thread, returning a receiver for its outcome (or `None` when no lock is held,
+    /// so nothing was spawned). Because the params are captured synchronously first,
+    /// the release targets the CURRENT project even if the caller swaps the database
+    /// immediately after. Shared by the two non-blocking callers below.
+    fn speleodb_spawn_lock_release(
+        &self,
+    ) -> Option<std::sync::mpsc::Receiver<Result<(), SpeleoDbError>>> {
+        let (endpoint, token, insecure_http, project_id) =
+            self.speleodb_held_lock_release_params()?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(
+                client::release_lock(&endpoint, &token, insecure_http, &project_id).map(|_| ()),
+            );
+        });
+        Some(rx)
+    }
+
+    /// Release a held write lock WITHOUT blocking the caller: fire the network
+    /// release on a detached thread and return immediately. For a project switch,
+    /// where waiting would stall opening the NEXT project on the OLD project's
+    /// (possibly unreachable) server (fix M1). No-op when no lock is held.
+    pub(crate) fn speleodb_release_held_lock_detached(&self) {
+        // Drop the receiver: the release still runs on its thread (best-effort); we
+        // just don't wait for or read the result.
+        let _ = self.speleodb_spawn_lock_release();
+    }
+
+    /// Release a held write lock with a hard deadline, for the app-exit path: run
+    /// the network release on a detached thread and wait at most `deadline`. A hung
+    /// / unreachable server must not freeze quit for the full HTTP timeout; on
+    /// timeout we return and let the process exit (the server lock times out on its
+    /// own). (fix M2). No-op when no lock is held.
+    pub(crate) fn speleodb_release_held_lock_bounded(&self, deadline: std::time::Duration) {
+        let Some(rx) = self.speleodb_spawn_lock_release() else {
+            return;
+        };
+        match rx.recv_timeout(deadline) {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!(
+                error = %e,
+                purpose = "release held lock on exit",
+                "speleodb: exit-time lock release failed"
+            ),
+            Err(_) => tracing::warn!(
+                purpose = "release held lock on exit",
+                "speleodb: exit-time lock release timed out; exiting anyway"
+            ),
+        }
+    }
+
     /// Where a pulled `.stalx` is cached: `<cache>/speleodb/<project_id>/project.stalx`.
     fn speleodb_cache_path(&self, project_id: &str) -> Result<PathBuf, SpeleoDbError> {
         let cache = crate::app_dirs::cache_dir()
@@ -920,6 +1206,41 @@ impl AppState {
         db.load_speleo_link()
             .map_err(|e| SpeleoDbError::Io(e.to_string()))?
             .ok_or(SpeleoDbError::NoRemoteProject)
+    }
+
+    /// Convert the open managed project into a plain, unmanaged `.stalx` (T2/#204):
+    /// drop its `speleo_link` row so it is no longer tied to SpeleoDB, then open the
+    /// edit gate. Two callers reach this: (10) a project the server refused us access
+    /// to (`access_denied`), and (11) keeping locally-edited work after a divergence
+    /// by saving it elsewhere. Nothing is pushed - the SpeleoDB copy is abandoned (a
+    /// fresh Open-from-SpeleoDB re-pulls the server tip), so the managed side stays
+    /// clean. No-op-safe: a `None` delete over an absent row is fine.
+    ///
+    /// A held write lock IS released first (best-effort, mirroring logout - the lock
+    /// needs the token, so before we drop the link): abandoning the project while
+    /// still holding its server mutex would strand it locked for every other editor.
+    /// Unlike logout the token is kept - the user stays signed in, they just walk
+    /// away from this one project.
+    pub(crate) fn speleodb_unlink(&self) -> Result<(), SpeleoErrorDto> {
+        // Release the server lock if this is a held remote edit session, so we don't
+        // leave it stranded. Best-effort: an offline / no-access release just no-ops.
+        // Reuses the shared helper so this can't drift from the close/quit release.
+        self.speleodb_release_held_lock_best_effort();
+        {
+            let db_guard = self
+                .database
+                .lock()
+                .map_err(|_| local_dto(SpeleoDbError::Io("database lock poisoned".to_owned())))?;
+            let db = db_guard
+                .as_ref()
+                .ok_or_else(|| local_dto(SpeleoDbError::NoRemoteProject))?;
+            db.save_speleo_link(None)
+                .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        }
+        // Now a local-only project: it edits freely (the read-only gate hung on the
+        // remote link, which is gone).
+        self.set_edit_enabled(true);
+        Ok(())
     }
 
     /// Best-effort: re-GET the project and return who holds its mutex (the active
@@ -1149,6 +1470,46 @@ impl AppState {
             // Stay locked + dirty so the user can reconcile / a retry can recover.
             PushOutcome::Diverged => Ok(DoneResult::DivergenceNeeded),
             PushOutcome::Unconfirmed => Ok(DoneResult::PushUnconfirmed),
+        }
+    }
+
+    /// Push the open project's edits to the server **without** releasing the lock
+    /// (T2d "Push"): the same fence + ancestry-recovery + upload as
+    /// [`Self::speleodb_done`]'s push half, but the mutex is retained in every arm
+    /// so editing continues. A no-op (reports `Pushed`) when not in an edit session
+    /// or when there is nothing to push.
+    pub(crate) fn speleodb_push_only(
+        &self,
+        message: Option<String>,
+    ) -> Result<PushResult, SpeleoErrorDto> {
+        let link = self.speleodb_validated_link()?;
+
+        // Push acts only on an ACTIVE edit session (a held lock); without it there
+        // is no lock and nothing to push - no-op rather than a confusing 403 Fence.
+        if !self.edit_enabled() || !link.has_unpushed_edits {
+            return Ok(PushResult::Pushed);
+        }
+
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+
+        match self.speleodb_push(&endpoint, &token, insecure_http, &link, message)? {
+            PushOutcome::Confirmed => {
+                // A late edit after push_start leaves the dirty bit set (not yet on
+                // the server); report PushUnconfirmed so a retry re-pushes it. The
+                // lock is retained either way.
+                let still_dirty = self
+                    .speleodb_open_link()
+                    .map_err(local_dto)?
+                    .has_unpushed_edits;
+                if still_dirty {
+                    Ok(PushResult::PushUnconfirmed)
+                } else {
+                    Ok(PushResult::Pushed)
+                }
+            }
+            PushOutcome::Diverged => Ok(PushResult::DivergenceNeeded),
+            PushOutcome::Unconfirmed => Ok(PushResult::PushUnconfirmed),
         }
     }
 

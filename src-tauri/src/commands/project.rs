@@ -82,13 +82,20 @@ pub(crate) fn save_project_impl(
     state.execute(Command::SaveProject { path, is_autosave })
 }
 
-/// Close the current project
+/// Close the current project. `release_lock` (default `true`) best-effort releases
+/// a held SpeleoDB write lock first so a close doesn't strand the server mutex
+/// (fix 1); the close dialog's "Keep lock" path passes `false`.
 #[tauri::command]
-pub fn close_project(state: State<AppState>) -> CommandResult {
-    close_project_impl(state.inner())
+pub fn close_project(state: State<AppState>, release_lock: Option<bool>) -> CommandResult {
+    close_project_impl(state.inner(), release_lock.unwrap_or(true))
 }
 
-pub(crate) fn close_project_impl(state: &AppState) -> CommandResult {
+pub(crate) fn close_project_impl(state: &AppState, release_lock: bool) -> CommandResult {
+    // Release a held SpeleoDB lock BEFORE the close tears down the database (the
+    // link row lives there). Best-effort + gated so the keep-lock path can opt out.
+    if release_lock {
+        state.speleodb_release_held_lock_best_effort();
+    }
     state.execute(Command::CloseProject)
 }
 

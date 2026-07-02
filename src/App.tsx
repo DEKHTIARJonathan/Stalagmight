@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
+import { useSpeleoStore } from './store/speleoStore';
 import { invokeIpc } from './utils/ipc';
 import { extractFilename } from './utils/path';
 import { routeOpenedFile } from './utils/openOrImport';
@@ -16,7 +17,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog, SpeleoDbSpikeDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog, OpenFromSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoCloseDialog, SpeleoNoPermissionDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu } from './components/common';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
@@ -50,6 +51,25 @@ function App() {
     toast,
     selectionAnnouncement,
   } = useUIStore();
+
+  // #198/fix 3: whenever a SpeleoDB hand-off verb (start/update/push/done, from the
+  // status button OR a close dialog) reports a divergence, surface the resolution
+  // dialog from ONE place - so no entry point can leave the user on a crimson button
+  // with no next step. App is the only always-mounted host (the status button
+  // unmounts in Plan/Export). SpeleoDivergenceDialog clears `divergence` on
+  // resolve/cancel.
+  const speleoDivergence = useSpeleoStore((s) => s.divergence);
+  useEffect(() => {
+    // Fire only on the transition to a pending divergence - deps intentionally OMIT
+    // `activeDialog`. Re-running on every active-dialog change let an unresolved
+    // divergence re-open ON TOP of an unrelated dialog the user had since navigated
+    // to (e.g. Settings), trapping them (N1). If they leave it unresolved the crimson
+    // status button still routes them back. No re-open loop: `openDialog` doesn't
+    // touch `divergence`, so this only runs when the divergence itself changes.
+    if (speleoDivergence !== null) {
+      openDialog('speleodb-divergence');
+    }
+  }, [speleoDivergence, openDialog]);
 
   // Apply theme from config (resolves auto mode, sets data-theme attribute)
   useTheme();
@@ -478,29 +498,17 @@ function App() {
         <SingleSystemView />
       )}
 
-      {/* Dev-only entry to the SpeleoDB sync spike (#197) while a project is
-          OPEN — the GlobalView trigger is hidden in the project view, but the
-          Start editing / Done / Update actions operate on the open project.
-          Throwaway; removed when the #204 action shell lands. */}
-      {import.meta.env.DEV && project && (
-        <button
-          type="button"
-          onClick={() => openDialog('speleodb-spike')}
-          className="fixed bottom-2 left-2 z-50 rounded bg-panel px-2 py-1 text-xs text-text-secondary shadow-lg hover:opacity-80"
-          data-testid="speleodb-spike-button-project"
-          title="SpeleoDB sync (spike) — Start editing / Done / Update on the open project"
-        >
-          SpeleoDB (spike)
-        </button>
-      )}
-
       <MemoryProbe />
 
       {/* Dialogs */}
       {activeDialog === 'import' && <ImportDialog />}
       {activeDialog === 'export' && <ExportDialog />}
       {activeDialog === 'new-project' && <NewProjectDialog />}
-      {activeDialog === 'speleodb-spike' && <SpeleoDbSpikeDialog />}
+      {activeDialog === 'open-from-speleodb' && <OpenFromSpeleoDbDialog />}
+      {activeDialog === 'speleodb-done' && <SpeleoDoneDialog />}
+      {activeDialog === 'speleodb-divergence' && <SpeleoDivergenceDialog />}
+      {activeDialog === 'speleodb-close' && <SpeleoCloseDialog />}
+      {activeDialog === 'speleodb-no-permission' && <SpeleoNoPermissionDialog />}
       {activeDialog === 'new-project-for-import' && <NewProjectForImportDialog />}
       {activeDialog === 'dmp-selection' && dialogData.dmpFile ? (
         <DmpSelectionDialog

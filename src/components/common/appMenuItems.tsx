@@ -9,6 +9,7 @@ import type { TFunction } from 'i18next';
 import {
   FilePlusIcon,
   FolderOpenIcon,
+  DownloadIcon,
   SettingsIcon,
   BugIcon,
   QuitIcon,
@@ -91,6 +92,24 @@ export function leadingMenuItems(
       },
     },
   ];
+}
+
+/**
+ * "Open from SpeleoDB" row (#203) - opens the remote project browser. Shared by
+ * the GlobalView hamburger and the in-project menu so both reach the same
+ * production browser (the dev spike entry it replaces was GlobalView-only).
+ */
+export function openFromSpeleoDbMenuItem(
+  t: TFunction,
+  actions: { onOpen: () => void },
+): AppMenuItem {
+  return {
+    id: 'open-from-speleodb-button',
+    label: t('globalView.actions.openFromSpeleoDb'),
+    icon: <DownloadIcon size={ICON_SIZE} />,
+    iconColor: MENU_ICON_COLORS.open,
+    onClick: actions.onOpen,
+  };
 }
 
 /** Settings + Debug-logs rows. */

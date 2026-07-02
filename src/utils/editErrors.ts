@@ -18,4 +18,4 @@ export function isEditDisabledError(error?: string | null): boolean {
 
 /** User-facing message shown when a read-only project rejects an edit. */
 export const READ_ONLY_EDIT_NOTICE =
-  'This project is open read-only — acquire the lock to edit.';
+  'This project is open read-only - click Start editing to acquire the lock.';

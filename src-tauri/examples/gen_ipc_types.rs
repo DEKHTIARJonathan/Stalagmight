@@ -64,8 +64,9 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    DoneResult, Permission, SpeleoDbAction, SpeleoErrorDto, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoProjectSummary, SpeleoSessionStatus, StartEditingResult, UpdateResult,
+    DoneResult, Permission, PushResult, RemoteState, SpeleoDbAction, SpeleoErrorDto,
+    SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
+    SpeleoSessionStatus, StartEditingResult, UpdateResult,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -297,10 +298,14 @@ fn main() {
     export::<SpeleoSessionStatus>(&out_dir);
     export::<SpeleoDbAction>(&out_dir);
     export::<SpeleoErrorDto>(&out_dir);
-    // SpeleoDB single-writer hand-off DTOs (#194/#197)
+    // SpeleoDB linked-project status for the action shell (#204) + remote-state (T2c)
+    export::<SpeleoLinkStatus>(&out_dir);
+    export::<RemoteState>(&out_dir);
+    // SpeleoDB single-writer hand-off DTOs (#194/#197) + push-without-unlock (T2d)
     export::<StartEditingResult>(&out_dir);
     export::<DoneResult>(&out_dir);
     export::<UpdateResult>(&out_dir);
+    export::<PushResult>(&out_dir);
 
     let export_list = [
         "CommandResult",
@@ -479,9 +484,12 @@ fn main() {
         "SpeleoSessionStatus",
         "SpeleoDbAction",
         "SpeleoErrorDto",
+        "SpeleoLinkStatus",
+        "RemoteState",
         "StartEditingResult",
         "DoneResult",
         "UpdateResult",
+        "PushResult",
     ];
 
     let mut generated =

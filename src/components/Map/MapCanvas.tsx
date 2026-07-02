@@ -38,7 +38,8 @@ import { installPanZoomDebug } from './panZoomDebug';
 import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
-import { FitToViewIcon } from '../common/icons';
+import { FitToViewIcon, LockIcon } from '../common/icons';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { setSource } from '../../utils/telemetry';
@@ -266,6 +267,9 @@ function MapCanvas() {
 
   // Geometry display mode (measured vs read-only closure-adjusted).
   const geometryMode = useUIStore((s) => s.geometryMode);
+  // T2b: a remote SpeleoDB project opened without the write lock shows a
+  // top-left read-only badge, mirroring the closure-adjusted view-only badge.
+  const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
   const setGeometryMode = useUIStore((s) => s.setGeometryMode);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
 
@@ -2239,11 +2243,16 @@ function MapCanvas() {
   // project with no closures where the display falls back to measured geometry. Drop any
   // geometry-mutating tool back to select in either case (appMode is the robust authority;
   // geometryMode only drives which coords are drawn).
+  // A remote SpeleoDB project opened without the write lock is read-only too, so
+  // drop a mutating tool back to select on open (mirrors closure-adjusted).
   useEffect(() => {
-    if ((geometryMode === 'closureAdjusted' || appMode !== 'survey') && isMutatingTool(activeTool)) {
+    if (
+      (geometryMode === 'closureAdjusted' || appMode !== 'survey' || speleoReadOnly) &&
+      isMutatingTool(activeTool)
+    ) {
       setActiveTool('select');
     }
-  }, [geometryMode, appMode, activeTool, setActiveTool]);
+  }, [geometryMode, appMode, speleoReadOnly, activeTool, setActiveTool]);
 
   // Update callbacks when they change
   useEffect(() => {
@@ -3762,20 +3771,32 @@ function MapCanvas() {
         />
       )}
 
-      {/* Fit-to-view button. In section-focus mode (#50) it doubles as the
-          exit-focus control: leaving focus re-fits the whole map anyway, so the
-          same top-left button returns you to the overview. */}
-      <button
-        onClick={() => (focusedSectionId !== null ? exitSectionFocus() : fitToBounds())}
-        className="absolute top-2 left-2 flex items-center gap-1.5 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
-        title={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
-        aria-label={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
-        data-testid="fit-to-view-button"
-      >
-        <FitToViewIcon size={16} />
-        {/* In focus mode the button also exits focus — label it so that's clear. */}
-        {focusedSectionId !== null && <span>{t('sections.focus.exitLabel')}</span>}
-      </button>
+      {/* Fit-to-view button (+ exit-focus, #50). The SpeleoDB read-only badge (T2b)
+          sits to its RIGHT in the same top-left flex row when a remote project is
+          open without the lock - the flex gap tracks the button's variable width
+          (it widens with the exit-focus label). */}
+      <div className="absolute top-2 left-2 flex items-center gap-2">
+        <button
+          onClick={() => (focusedSectionId !== null ? exitSectionFocus() : fitToBounds())}
+          className="flex items-center gap-1.5 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
+          title={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
+          aria-label={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
+          data-testid="fit-to-view-button"
+        >
+          <FitToViewIcon size={16} />
+          {/* In focus mode the button also exits focus - label it so that's clear. */}
+          {focusedSectionId !== null && <span>{t('sections.focus.exitLabel')}</span>}
+        </button>
+        {speleoReadOnly && !placementMode && appMode === 'survey' && (
+          <div
+            className="bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-1.5"
+            data-testid="speleodb-readonly-banner"
+          >
+            <LockIcon size={13} />
+            <span className="text-accent font-medium">{t('speleodb.map.readOnlyBadge')}</span>
+          </div>
+        )}
+      </div>
 
       {/* Placement mode indicator */}
       {placementMode && (

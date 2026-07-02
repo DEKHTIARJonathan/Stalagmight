@@ -10,6 +10,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 import { OfflineIndicator } from '../common/OfflineIndicator';
 import Toolbar from './Toolbar';
+import { SpeleoBanner } from './SpeleoBanner';
 import SectionsPanel from './SectionsPanel';
 import DetailPanel from './DetailPanel';
 import { GasPlanPanel } from './GasPlanPanel';
@@ -536,6 +537,9 @@ export default function SingleSystemView() {
         placementModeActive={placementModeActive}
         dataTableFullScreen={dataTableFullScreen}
       />
+      {/* SpeleoDB status banner (#200 seam) - renders only when the store has a
+          banner (push-unconfirmed / concurrent-session); otherwise nothing. */}
+      <SpeleoBanner />
 
       {/* Main content — the `relative` here is the positioning context for the
           side Docks' overlays + tabs. Each Dock renders a flow spacer (the only
