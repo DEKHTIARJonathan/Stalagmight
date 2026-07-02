@@ -128,6 +128,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_push",
     "command.speleodb_release_all_locks",
     "command.speleodb_session",
+    "command.speleodb_set_exclude_geojson",
     "command.speleodb_start_editing",
     "command.speleodb_take_remote",
     "command.speleodb_unlink",
@@ -598,7 +599,9 @@ mod tests {
         //   + 1 SpeleoDB release-all-locks event (#201):
         //       command.speleodb_release_all_locks = 443.
         //   + 4 held-lock-resume dialog events (#201): = 447.
-        assert_eq!(EVENT_NAMES.len(), 447);
+        //   + 1 SpeleoDB set-exclude-geojson event (#200):
+        //       command.speleodb_set_exclude_geojson = 448.
+        assert_eq!(EVENT_NAMES.len(), 448);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -101,12 +101,8 @@ pub(crate) struct Project {
     pub(crate) kind: String,
     // [Track A] #185/D-A-methods: the server's GeoJSON-export toggle. Parsed (not
     // ignored) so the full v2 payload round-trips; defaults false when omitted.
-    // Read by the tests; no production reader yet (the freshness fold that would
-    // consume it is #202), so it is dead in the non-test lib build for now.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "exclude_geojson consumer is #202")
-    )]
+    // Consumed by #200 (surfaced via SpeleoLinkStatus to drive the rendering-disabled
+    // banner + Enable-rendering PATCH).
     #[serde(default)]
     pub(crate) exclude_geojson: bool,
 }
@@ -285,6 +281,12 @@ pub struct SpeleoLinkStatus {
     /// dialog explaining what SpeleoDB said, instead of silently degrading to
     /// `Unknown`. `None` on success / offline / the handled auth cases.
     pub server_error: Option<SpeleoErrorDto>,
+    /// The server's `exclude_geojson` flag for this project (#200): when true, the
+    /// server generates NO new web-viewer GeoJSON on push, so the map may be stale.
+    /// Drives the rendering-disabled banner + its Enable-rendering action. Best-effort
+    /// over the same `get_project` probe; `false` when logged out / offline / the
+    /// lookup failed (never nag on a transient miss).
+    pub exclude_geojson: bool,
 }
 
 /// The local copy's relationship to the server tip (the reconcile verdict,
@@ -413,6 +415,7 @@ mod tests {
             remote_state: RemoteState::RemoteAhead,
             access_denied: false,
             server_error: None,
+            exclude_geojson: false,
         })
         .expect("serialize link status");
         let push = serde_json::to_string(&PushResult::PushUnconfirmed).expect("serialize push");

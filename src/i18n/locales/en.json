@@ -2718,7 +2718,14 @@
     },
     "banner": {
       "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept - click Done again to retry.",
-      "concurrentSession": "This project is locked by your account in another session. Editing from two sessions at once can lose edits."
+      "concurrentSession": "This project is locked by your account in another session. Editing from two sessions at once can lose edits.",
+      "renderingDisabled": "Web-map rendering is turned off for this project on SpeleoDB, so the online map won't refresh (it may show older geometry).",
+      "enableRendering": "Enable rendering",
+      "enableRenderingConfirm": "Rendering refreshes on your NEXT push, not right now (this does not re-render the current version). Enable it?",
+      "enableRenderingConfirmAction": "Enable rendering",
+      "enableRenderingBusy": "Enabling…",
+      "enableRenderingFailed": "Could not enable rendering",
+      "noAnchor": "This survey has no georeferenced zero datum, so SpeleoDB generated no new map geometry. Your data is still stored and shared; any existing online map may be stale."
     },
     "heldLocks": {
       "title": "You hold SpeleoDB locks",

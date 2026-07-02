@@ -148,6 +148,17 @@ pub async fn speleodb_release_all_locks(app: AppHandle) -> Result<(), SpeleoErro
     run_blocking(app, AppState::speleodb_release_all_locks).await
 }
 
+/// Set the open project's server-side `exclude_geojson` flag (#200
+/// Enable-rendering): `PATCH /projects/{id}/`, permission-gated, no lock. Passing
+/// `false` re-enables web-viewer GeoJSON, effective on the next push.
+#[tauri::command]
+pub async fn speleodb_set_exclude_geojson(
+    app: AppHandle,
+    exclude: bool,
+) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_set_exclude_geojson(exclude)).await
+}
+
 /// Report whether the backend already holds a usable token (and for whom). The
 /// dialog calls this on open to restore the project list instead of re-prompting
 /// for credentials — the in-memory token outlives the dialog's React state.

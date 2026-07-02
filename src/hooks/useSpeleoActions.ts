@@ -51,6 +51,17 @@ export function useSpeleoActions(): SpeleoActions {
   const applyPush = useSpeleoStore((s) => s.applyPush);
   const bumpPoll = useSpeleoStore((s) => s.bumpPoll);
   const clearSession = useSpeleoStore((s) => s.clearSession);
+  const raiseNoAnchorBanner = useSpeleoStore((s) => s.raiseNoAnchorBanner);
+
+  // #200 (D2): a push/unlock of a survey with NO georeferenced zero datum means the
+  // server generates no new web-viewer GeoJSON. Surface the non-blocking notice; the
+  // push itself already succeeded and is never blocked. Checked from the local
+  // project (the same zero-datum set export_tml roots the .tml anchor on).
+  const noteNoAnchorIfNeeded = useCallback(() => {
+    if ((useProjectStore.getState().project?.zero_datums.length ?? 0) === 0) {
+      raiseNoAnchorBanner();
+    }
+  }, [raiseNoAnchorBanner]);
 
   const handleError = useCallback(
     (e: unknown, prefixKey: string) => {
@@ -129,6 +140,7 @@ export function useSpeleoActions(): SpeleoActions {
         applyPush(result);
         if (result.kind === 'pushed') {
           showToast(t('speleodb.editBar.toasts.pushed'), 'speleodb-pushed');
+          noteNoAnchorIfNeeded();
         }
         // divergence_needed / push_unconfirmed surface via the store (#198/#200 seams);
         // the returned kind lets the dialog stay open to resolve them.
@@ -141,7 +153,7 @@ export function useSpeleoActions(): SpeleoActions {
         setBusy(false);
       }
     },
-    [applyPush, showToast, t, handleError, setBusy, bumpPoll],
+    [applyPush, showToast, t, handleError, setBusy, bumpPoll, noteNoAnchorIfNeeded],
   );
 
   const done = useCallback(
@@ -153,6 +165,7 @@ export function useSpeleoActions(): SpeleoActions {
         switch (result.kind) {
           case 'released':
             showToast(t('speleodb.editBar.toasts.released'), 'speleodb-released');
+            noteNoAnchorIfNeeded();
             break;
           case 'push_unconfirmed':
             // #200 seam: applyDone raised the push_unconfirmed banner.
@@ -170,7 +183,7 @@ export function useSpeleoActions(): SpeleoActions {
         setBusy(false);
       }
     },
-    [applyDone, showToast, t, handleError, setBusy, bumpPoll],
+    [applyDone, showToast, t, handleError, setBusy, bumpPoll, noteNoAnchorIfNeeded],
   );
 
   const takeRemote = useCallback(async (): Promise<boolean> => {

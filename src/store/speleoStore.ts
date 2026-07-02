@@ -36,8 +36,15 @@ export type SpeleoEditState = 'read-only' | 'editing';
     moved tip mid-edit-session. */
 export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push' | 'reverify';
 
-/** Transient banner the shell surfaces above the toolbar (#200 seam). */
-export type SpeleoBanner = { kind: 'push_unconfirmed' } | { kind: 'concurrent_session' };
+/** A banner the shell surfaces above the toolbar (#200/#204). `push_unconfirmed`
+    and `concurrent_session` are transient action feedback; `rendering_disabled`
+    (server `exclude_geojson`) and `no_anchor` (no georeferenced zero datum on
+    push/unlock) are the #200 non-blocking notices. */
+export type SpeleoBanner =
+  | { kind: 'push_unconfirmed' }
+  | { kind: 'concurrent_session' }
+  | { kind: 'rendering_disabled' }
+  | { kind: 'no_anchor' };
 
 /** A SpeleoDB project whose write lock the current user holds, surfaced by the
     login/app-open scan so the resume/release prompt can offer to release it (#201). */
@@ -196,6 +203,15 @@ interface SpeleoStore {
    * backend already dropped its edit gate) and raise the divergence prompt.
    */
   notifyReverifyDivergence: () => void;
+  /** #200: after a push/unlock of a project with no georeferenced zero datum, note
+      (non-blocking) that the server generated no new map GeoJSON. Only claims a free
+      banner slot - never clobbers transient action feedback. */
+  raiseNoAnchorBanner: () => void;
+  /** #200 Enable-rendering: PATCH `exclude_geojson = false` so the server resumes
+      web-viewer GeoJSON on the NEXT push (not retroactively). Clears the
+      rendering-disabled banner and re-seeds link status. Throws on failure so the
+      banner can surface it. */
+  enableRendering: () => Promise<void>;
   dismissBanner: () => void;
 }
 
@@ -376,7 +392,20 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     set((state) => {
       if (!s.is_remote) return { link: null, divergence: null, banner: null };
       const editState = s.edit_enabled ? 'editing' : 'read-only';
+      // #200: reflect the server's exclude_geojson as a persistent, LOW-priority
+      // rendering-disabled banner. Only claim the slot when it is free (don't
+      // clobber transient action feedback like push_unconfirmed, nor a no_anchor
+      // notice), and only clear it when WE own the slot - so a routine poll never
+      // wipes another banner.
+      const prior = state.banner;
+      let banner = prior;
+      if (s.exclude_geojson) {
+        if (!prior) banner = { kind: 'rendering_disabled' };
+      } else if (prior?.kind === 'rendering_disabled') {
+        banner = null;
+      }
       return {
+        banner,
         link: {
           editState,
           // The network fields degrade to null/unknown offline - keep the
@@ -550,6 +579,18 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         ? { ...state.link, editState: 'read-only', remoteState: 'conflict' }
         : state.link,
     })),
+
+  raiseNoAnchorBanner: () =>
+    set((state) => (state.banner ? {} : { banner: { kind: 'no_anchor' } })),
+
+  enableRendering: async () => {
+    // Throws on failure so the banner keeps itself open and shows the error.
+    await invokeIpc<null>('speleodb_set_exclude_geojson', { exclude: false });
+    // Drop the rendering-disabled banner (this resolved it) and re-seed from the
+    // server so the flag reflects the change.
+    set((state) => (state.banner?.kind === 'rendering_disabled' ? { banner: null } : {}));
+    await get().refreshLinkStatus();
+  },
 
   dismissBanner: () => set({ banner: null }),
 }));

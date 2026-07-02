@@ -605,6 +605,34 @@ pub(crate) fn release_all_locks(
     Ok(())
 }
 
+/// `PATCH /api/v2/projects/{id}/` — update project metadata, returning the updated
+/// [`Project`]. Non-idempotent (`idempotent = false`) so a mid-response transport
+/// failure can't double-apply. Consumed by #200's Enable-rendering action (PATCH
+/// `exclude_geojson = false`); the server enforces permission (READ_AND_WRITE, no
+/// lock) on the metadata PATCH.
+pub(crate) fn patch_project(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    payload: &str,
+) -> Result<Project, SpeleoDbError> {
+    let url = api_url(base, &format!("projects/{project_id}/"));
+    let auth = bearer(token);
+    let (status, body) = with_retry(base, insecure_http, false, || {
+        let resp = agent()
+            .patch(&url)
+            .header("Authorization", auth.as_str())
+            .header("Content-Type", "application/json")
+            .send(payload)?;
+        read_status_body(resp)
+    })?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    parse_project(&body, "patch project response")
+}
+
 /// `POST /api/v2/projects/` — create a fresh project, returning the full parsed
 /// [`Project`]. `idempotent = false`. The shipped create-on-SDB UX is #207; this
 /// is the production primitive.

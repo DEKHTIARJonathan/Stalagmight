@@ -11,6 +11,7 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   remote_state: 'up_to_date',
   access_denied: false,
   server_error: null,
+  exclude_geojson: false,
   ...o,
 });
 
@@ -317,6 +318,34 @@ describe('speleoStore', () => {
       const s = useSpeleoStore.getState();
       expect(s.divergence).toBe('reverify');
       expect(s.link).toBeNull();
+    });
+  });
+
+  describe('#200 banners', () => {
+    it('seedFromStatus raises the rendering-disabled banner when exclude_geojson is set', () => {
+      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
+    });
+
+    it('seedFromStatus clears its own rendering-disabled banner once the flag is off', () => {
+      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
+      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: false }));
+      expect(useSpeleoStore.getState().banner).toBeNull();
+    });
+
+    it('a rendering-disabled poll never clobbers transient push_unconfirmed feedback', () => {
+      useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
+      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
+    });
+
+    it('raiseNoAnchorBanner only claims a free banner slot', () => {
+      useSpeleoStore.getState().raiseNoAnchorBanner();
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'no_anchor' });
+      // With a transient banner already up, it must not overwrite it.
+      useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
+      useSpeleoStore.getState().raiseNoAnchorBanner();
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
     });
   });
 });

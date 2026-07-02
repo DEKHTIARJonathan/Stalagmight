@@ -436,6 +436,7 @@ impl AppState {
                     remote_state: RemoteState::Unknown,
                     access_denied: false,
                     server_error: None,
+                    exclude_geojson: false,
                 });
             }
             Err(e) => return Err(local_dto(e)),
@@ -450,7 +451,7 @@ impl AppState {
         // validation as the edit verbs; on any miss (invalid id, no token,
         // transport/HTTP error) the fields degrade to None / Unknown - the local
         // truth still returns.
-        let (permission, lock_holder, remote_state, access_denied, server_error) =
+        let (permission, lock_holder, remote_state, access_denied, server_error, exclude_geojson) =
             if validate_project_id(&link.project_id).is_ok() {
                 match self.speleodb_active_token() {
                     Ok((endpoint, token)) => {
@@ -479,18 +480,19 @@ impl AppState {
                                     remote_state,
                                     false,
                                     None,
+                                    p.exclude_geojson,
                                 )
                             }
                             // A definitive 403 means we are logged in but not a
                             // collaborator on this managed project - flag it so the
                             // UI can offer converting to a local file (fix 10).
                             Err(SpeleoDbError::Status { status: 403, .. }) => {
-                                (None, None, RemoteState::Unknown, true, None)
+                                (None, None, RemoteState::Unknown, true, None, false)
                             }
                             // A 401 is a dead token (re-login) handled by the edit
                             // verbs; this passive probe must not nag about it.
                             Err(SpeleoDbError::Status { status: 401, .. }) => {
-                                (None, None, RemoteState::Unknown, false, None)
+                                (None, None, RemoteState::Unknown, false, None, false)
                             }
                             // Any OTHER status (a 404 for a deleted/renamed project,
                             // a 422, a 5xx, ...) is unexpected - surface the humanized
@@ -503,15 +505,16 @@ impl AppState {
                                 RemoteState::Unknown,
                                 false,
                                 Some(dto_for_error(Endpoint::GetProject, &e)),
+                                false,
                             ),
                             // Transport / local error is offline - stay quiet.
-                            Err(_) => (None, None, RemoteState::Unknown, false, None),
+                            Err(_) => (None, None, RemoteState::Unknown, false, None, false),
                         }
                     }
-                    Err(_) => (None, None, RemoteState::Unknown, false, None),
+                    Err(_) => (None, None, RemoteState::Unknown, false, None, false),
                 }
             } else {
-                (None, None, RemoteState::Unknown, false, None)
+                (None, None, RemoteState::Unknown, false, None, false)
             };
 
         // Invariant: holding the write lock means we may edit. If we hold it but the
@@ -540,6 +543,7 @@ impl AppState {
             remote_state,
             access_denied,
             server_error,
+            exclude_geojson,
         })
     }
 
@@ -1338,6 +1342,26 @@ impl AppState {
         if self.edit_enabled() && self.speleodb_open_link().is_ok() {
             self.set_edit_enabled(false);
         }
+        Ok(())
+    }
+
+    /// Set the open project's server-side `exclude_geojson` flag (#200
+    /// Enable-rendering): `PATCH /projects/{id}/`. The server enforces permission
+    /// (READ_AND_WRITE) and NO lock is required - the edit mutex governs only the
+    /// survey `.stalx`, not project metadata. Setting it `false` re-enables
+    /// web-viewer GeoJSON generation, which takes effect only on the NEXT push
+    /// (the server has no retroactive re-render for the current tip; the FE
+    /// confirmation states this). A 403 surfaces as an error the button reports.
+    pub(crate) fn speleodb_set_exclude_geojson(&self, exclude: bool) -> Result<(), SpeleoErrorDto> {
+        let link = self.speleodb_validated_link()?;
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+        let payload = serde_json::json!({ "exclude_geojson": exclude }).to_string();
+        self.speleodb_handle_auth(
+            Endpoint::GetProject,
+            client::patch_project(&endpoint, &token, insecure_http, &link.project_id, &payload),
+        )
+        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
         Ok(())
     }
 
