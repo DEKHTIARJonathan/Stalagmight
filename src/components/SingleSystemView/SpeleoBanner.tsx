@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
@@ -10,7 +10,11 @@ import { humanizeSpeleoError } from '../../utils/speleoError';
  * - `push_unconfirmed` / `concurrent_session` - transient action feedback (#204);
  * - `rendering_disabled` - the server's `exclude_geojson` is set, so the web map
  *   won't refresh; offers Enable-rendering (a PATCH that takes effect on the NEXT
- *   push, gated behind an inline confirmation stating exactly that);
+ *   push, gated behind an inline confirmation stating exactly that). This one is
+ *   server-derived state, so it has NO Dismiss button - dismissing would just be
+ *   re-derived by the next status poll; the resolution is Enable-rendering (or the
+ *   flag being cleared server-side). It also preempts `no_anchor` in the store so it
+ *   is always reachable.
  * - `no_anchor` - a push/unlock of a survey with no georeferenced zero datum, so the
  *   server generated no new map geometry (the map may be stale).
  * None of these block editing or pushing.
@@ -25,6 +29,14 @@ export function SpeleoBanner() {
   // on server metadata; the confirm states rendering refreshes on the next push).
   const [confirmingEnable, setConfirmingEnable] = useState(false);
   const [enabling, setEnabling] = useState(false);
+
+  // If the banner kind changes out from under the confirm sub-step (e.g. a push
+  // lands and swaps in `push_unconfirmed` while the user is confirming), reset it -
+  // otherwise the confirm prompt text would linger with no actionable buttons (the
+  // confirm/back buttons are gated on `rendering_disabled`).
+  useEffect(() => {
+    if (banner?.kind !== 'rendering_disabled') setConfirmingEnable(false);
+  }, [banner?.kind]);
 
   if (!banner) return null;
 
@@ -95,7 +107,10 @@ export function SpeleoBanner() {
               {t('speleodb.banner.enableRendering')}
             </button>
           ))}
-        {!confirmingEnable && (
+        {/* `rendering_disabled` is server-derived, so it has no Dismiss (a poll would
+            just re-raise it): its resolution is Enable-rendering / the flag clearing.
+            Every other kind is dismissable transient/action feedback. */}
+        {banner.kind !== 'rendering_disabled' && (
           <button
             type="button"
             onClick={dismissBanner}

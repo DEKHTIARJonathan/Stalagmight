@@ -281,11 +281,55 @@ pub(crate) fn get_project(
     insecure_http: bool,
     project_id: &str,
 ) -> Result<Project, SpeleoDbError> {
+    get_project_inner(
+        base,
+        token,
+        insecure_http,
+        project_id,
+        REQUEST_TIMEOUT,
+        true,
+    )
+}
+
+/// Short per-request budget for the best-effort #202 lazy lock re-verify probe. It
+/// runs UNDER the command lock, so a slow/hung server must not stall the whole
+/// command pipeline (autosave included) for the full 30s x (1 + retries) read
+/// budget; a tight timeout keeps the worst-case block bounded.
+const REVERIFY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Like [`get_project`] but with a tight, NON-retried budget for the #202 lazy lock
+/// re-verify: one attempt, [`REVERIFY_PROBE_TIMEOUT`]. #202 is not a correctness
+/// guard (a probe miss allows the edit and the release fence backstops it), so a
+/// single fast attempt is the right trade - it must never freeze the editor.
+pub(crate) fn get_project_probe(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+) -> Result<Project, SpeleoDbError> {
+    get_project_inner(
+        base,
+        token,
+        insecure_http,
+        project_id,
+        REVERIFY_PROBE_TIMEOUT,
+        false,
+    )
+}
+
+fn get_project_inner(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    timeout: Duration,
+    idempotent: bool,
+) -> Result<Project, SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/"));
     let auth = bearer(token);
 
-    let (status, body) = with_retry(base, insecure_http, true, || {
-        let resp = agent()
+    let (status, body) = with_retry(base, insecure_http, idempotent, || {
+        let resp = agent_with_timeout(timeout)
             .get(&url)
             .header("Authorization", auth.as_str())
             .call()?;

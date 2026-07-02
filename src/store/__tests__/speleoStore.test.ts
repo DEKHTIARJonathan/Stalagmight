@@ -368,6 +368,42 @@ describe('speleoStore', () => {
       useSpeleoStore.getState().raiseNoAnchorBanner();
       expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
     });
+
+    it('rendering_disabled preempts a no_anchor banner (so Enable-rendering is reachable)', () => {
+      // Both conditions true: no_anchor holds the slot, then a poll sees
+      // exclude_geojson. rendering_disabled must take over - otherwise its
+      // Enable-rendering action (gated on the banner kind) is unreachable.
+      useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
+      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
+    });
+
+    it('a no_anchor notice is never clobbered by a poll when rendering is enabled', () => {
+      // exclude_geojson off: a no_anchor notice must survive routine polls (only a
+      // rendering_disabled banner that WE own is cleared when the flag goes off).
+      useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
+      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: false }));
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'no_anchor' });
+    });
+
+    it('enableRendering clears the rendering-disabled banner and PATCHes exclude=false', async () => {
+      useSpeleoStore.setState({ banner: { kind: 'rendering_disabled' } });
+      // set_exclude_geojson returns null; the follow-up refreshLinkStatus reads status.
+      invokeIpcMock.mockImplementation(async (cmd: string) =>
+        cmd === 'speleodb_link_status' ? status({ exclude_geojson: false }) : null,
+      );
+      await useSpeleoStore.getState().enableRendering();
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_exclude_geojson', { exclude: false });
+      expect(useSpeleoStore.getState().banner).toBeNull();
+    });
+
+    it('enableRendering rethrows and leaves the banner intact so the caller can surface it', async () => {
+      useSpeleoStore.setState({ banner: { kind: 'rendering_disabled' } });
+      invokeIpcMock.mockRejectedValue(new Error('403'));
+      await expect(useSpeleoStore.getState().enableRendering()).rejects.toThrow('403');
+      // The banner must stay up so SpeleoBanner keeps itself open to show the error.
+      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
+    });
   });
 
   // #201 refinements: the resume/release prompt fires only on login + app-open (not
@@ -432,6 +468,58 @@ describe('speleoStore', () => {
       expect(s.heldLockPromptPending).toBe(false);
       expect(s.heldLockPromptOpen).toBe(false);
       expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_list_projects');
+    });
+
+    it('a logged-out scan also forces an already-open prompt overlay shut', async () => {
+      // The prompt was open under the prior session; logging out must not leave it
+      // lingering over a logged-out shell (not just consume the pending flag).
+      useSpeleoStore.setState({
+        session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false },
+        heldLocks: [{ projectId: 'p1', projectName: 'A' }],
+        heldLockPromptOpen: true,
+      });
+      await useSpeleoStore.getState().scanLocksOnOpen();
+      const s = useSpeleoStore.getState();
+      expect(s.heldLockPromptOpen).toBe(false);
+      expect(s.heldLocks).toBeNull();
+    });
+
+    it('a failed scan keeps prior badges, never prompts, and does not consume the pending flag', async () => {
+      loggedInAs('me@x');
+      useSpeleoStore.setState({
+        remoteLocks: { p1: 'me@x' },
+        remoteProjects: { p1: 'Prev' },
+        heldLockPromptPending: true,
+      });
+      invokeIpcMock.mockRejectedValue(new Error('offline'));
+      await useSpeleoStore.getState().scanLocksOnOpen({ prompt: true });
+      const s = useSpeleoStore.getState();
+      // Best-effort: prior badges survive, no prompt, and pending is NOT burned - so
+      // a later successful scan can still raise the first real prompt.
+      expect(s.remoteLocks).toEqual({ p1: 'me@x' });
+      expect(s.remoteProjects).toEqual({ p1: 'Prev' });
+      expect(s.heldLockPromptOpen).toBe(false);
+      expect(s.heldLockPromptPending).toBe(true);
+    });
+
+    it('a scan whose session ends mid-flight does not repaint the ended session badges', async () => {
+      loggedInAs('me@x');
+      // The list_projects GET resolves, but by then the user has logged out. The
+      // post-await staleness guard must drop the stale result rather than repaint.
+      invokeIpcMock.mockImplementation(async (cmd: string) => {
+        if (cmd === 'speleodb_list_projects') {
+          useSpeleoStore.setState({
+            session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false },
+          });
+          return [{ id: 'p1', name: 'Held', lock_holder: 'me@x' }];
+        }
+        return null;
+      });
+      await useSpeleoStore.getState().scanLocksOnOpen({ prompt: true });
+      const s = useSpeleoStore.getState();
+      expect(s.remoteLocks).toEqual({});
+      expect(s.heldLocks).toBeNull();
+      expect(s.heldLockPromptOpen).toBe(false);
     });
 
     it('releaseLock drops one lock and frees it in the badge map, emptying to null on the last', async () => {

@@ -13,6 +13,7 @@ import type {
   UpdateResult,
 } from '../types/ipc.generated';
 import { invokeIpc } from '../utils/ipc';
+import { emailsMatch } from '../utils/email';
 import { useProjectStore } from './projectStore';
 
 /**
@@ -352,21 +353,36 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     if (!get().session) await get().refreshSession();
     const me = get().session?.userEmail?.toLowerCase();
     if (!get().session?.loggedIn || !me) {
-      // Logged out: no badges, no prompt. Consume the app-open "pending" so a later
-      // return-to-recents (still using the pending flag) can't retro-prompt; a
-      // subsequent login re-arms the prompt via its explicit `prompt: true`.
-      set({ remoteLocks: {}, remoteProjects: {}, heldLocks: null, heldLockPromptPending: false });
+      // Logged out: no badges, no prompt. Also force the overlay shut (not just its
+      // pending flag) so a prompt open when the session ended can't linger. Consume
+      // the app-open "pending" so a later return-to-recents (still using the pending
+      // flag) can't retro-prompt; a subsequent login re-arms via its `prompt: true`.
+      set({
+        remoteLocks: {},
+        remoteProjects: {},
+        heldLocks: null,
+        heldLockPromptPending: false,
+        heldLockPromptOpen: false,
+      });
       return;
     }
     try {
       const projects = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
+      // Staleness guard: a logout / account switch can land while the list_projects
+      // GET is in flight. Bail if the session moved so we never repaint the ended
+      // session's badges or re-raise its prompt (mirrors refreshLinkStatus's guard).
+      if (!get().session?.loggedIn || get().session?.userEmail?.toLowerCase() !== me) {
+        return;
+      }
       const remoteLocks: Record<string, string | null> = {};
       const remoteProjects: Record<string, string> = {};
       const heldLocks: HeldLock[] = [];
       for (const p of projects) {
         remoteLocks[p.id] = p.lock_holder;
         remoteProjects[p.id] = p.name;
-        if (p.lock_holder && p.lock_holder.toLowerCase() === me) {
+        // Same ownership check the recents badge uses (emailsMatch), so the prompt's
+        // held list and the badge's "locked by you" can't disagree.
+        if (emailsMatch(p.lock_holder, me)) {
           heldLocks.push({ projectId: p.id, projectName: p.name });
         }
       }
@@ -468,15 +484,17 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     set((state) => {
       if (!s.is_remote) return { link: null, divergence: null, banner: null };
       const editState = s.edit_enabled ? 'editing' : 'read-only';
-      // #200: reflect the server's exclude_geojson as a persistent, LOW-priority
-      // rendering-disabled banner. Only claim the slot when it is free (don't
-      // clobber transient action feedback like push_unconfirmed, nor a no_anchor
-      // notice), and only clear it when WE own the slot - so a routine poll never
-      // wipes another banner.
+      // #200: reflect the server's exclude_geojson as a persistent
+      // rendering-disabled banner. It outranks the informational `no_anchor` notice
+      // (rendering_disabled is actionable via Enable-rendering, and if both were true
+      // no_anchor would otherwise mask the only way to reach that action), so claim
+      // the slot when it is free OR held by no_anchor - but NEVER clobber transient
+      // action feedback (push_unconfirmed / concurrent_session). Clear it only when
+      // WE own the slot, so a routine poll never wipes another banner.
       const prior = state.banner;
       let banner = prior;
       if (s.exclude_geojson) {
-        if (!prior) banner = { kind: 'rendering_disabled' };
+        if (!prior || prior.kind === 'no_anchor') banner = { kind: 'rendering_disabled' };
       } else if (prior?.kind === 'rendering_disabled') {
         banner = null;
       }

@@ -154,29 +154,21 @@ impl Database {
             .map(|v| v != 0)
             .unwrap_or(false);
 
-        // Derived SpeleoDB-remote flag (#189, D-B14): true iff a speleo_link row
-        // exists. Probed like collab_enabled above but as EXISTS, NOT a stored
-        // column. `.ok().unwrap_or(false)` tolerates a missing table on a
-        // read-only metadata open (open_for_metadata; SQLITE_OPEN_READ_ONLY runs
-        // no migration, so a pre-v9 file simply has no table here).
-        let is_remote: bool = self
-            .conn
-            .query_row("SELECT EXISTS(SELECT 1 FROM speleo_link)", [], |r| {
-                r.get::<_, i64>(0)
-            })
-            .map(|c| c != 0)
-            .ok()
-            .unwrap_or(false);
-
         // The linked SpeleoDB project UUID (#201), so the recents/GlobalView list can
-        // match this entry against a single lock scan. Same tolerance as is_remote: a
-        // missing table (pre-v9 / read-only metadata open) simply yields None.
+        // match this entry against a single lock scan. The `speleo_link` row is a
+        // singleton (`CHECK(id = 1)`) with a NOT NULL project_id, so this doubles as
+        // the SpeleoDB-remote probe (#189, D-B14). `.ok()` tolerates a missing table
+        // on a read-only metadata open (open_for_metadata; SQLITE_OPEN_READ_ONLY runs
+        // no migration, so a pre-v9 file simply has no table here) → None.
         let speleodb_project_id: Option<String> = self
             .conn
             .query_row("SELECT project_id FROM speleo_link WHERE id = 1", [], |r| {
                 r.get::<_, String>(0)
             })
             .ok();
+
+        // Derived SpeleoDB-remote flag: true iff the singleton link row exists.
+        let is_remote: bool = speleodb_project_id.is_some();
 
         Ok(ProjectMetadata {
             name,

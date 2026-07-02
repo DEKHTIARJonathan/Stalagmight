@@ -202,8 +202,8 @@ pub enum Command {
 pub(crate) const EDIT_DISABLED_CODE: &str = "EDIT_DISABLED";
 
 /// Coded-failure prefix for a mutation blocked by the lazy 20-min lock re-verify
-/// (#202) because a definitive server answer showed the write lock was lost or the
-/// server tip moved under us. Same string-prefix idiom as [`EDIT_DISABLED_CODE`],
+/// (#202) because a definitive server answer showed the write lock is no longer
+/// held by us. Same string-prefix idiom as [`EDIT_DISABLED_CODE`],
 /// but distinct so the FE routes it to the divergence prompt (reconcile) instead of
 /// the plain read-only notice. NOT a correctness guard - the release-time fence + a
 /// 403 on push are - so a transient re-verify failure never emits this (it lets the

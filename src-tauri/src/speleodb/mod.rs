@@ -1564,17 +1564,15 @@ mod live_tests {
         }
     }
 
-    /// #202: the lazy lock re-verify (`speleodb_verify_lock_if_expired`) branches
-    /// on exactly two fields of the single-project GET - `active_mutex.user` (is
-    /// the lock still ours? via `lock_held_by_me`) and whether `latest_commit`
-    /// exists to compare against BASE. This pins that `client::get_project`
-    /// surfaces both against the live box: while we hold the mutex it names us as
-    /// the holder and carries a commit; after we release, `active_mutex` goes
-    /// ABSENT - the lost-lock signal that routes the user to the divergence
-    /// prompt. It deliberately does NOT assert `latest_commit.id` equals the
-    /// pushed hexsha: that field is `max(authored_date)` and documented unreliable
-    /// as a tip (see `speleodb_server_head`), which is why #202's tip check is
-    /// only best-effort.
+    /// #202: the lazy lock re-verify (`speleodb_verify_lock_if_expired`) branches on
+    /// exactly one field of the single-project GET - `active_mutex.user` (is the lock
+    /// still ours? via `lock_held_by_me`). This pins that both `client::get_project`
+    /// and the short-budget `client::get_project_probe` surface it against the live
+    /// box: while we hold the mutex it names us as the holder; after we release,
+    /// `active_mutex` goes ABSENT - the lost-lock signal that drops the edit gate and
+    /// routes the user to the divergence prompt. (#202 no longer compares the server
+    /// tip: `latest_commit` is `max(authored_date)` and documented unreliable as a
+    /// tip, see `speleodb_server_head`, so the holder check is the whole signal.)
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
     #[expect(
@@ -1595,8 +1593,7 @@ mod live_tests {
         let tml_sidecar = tml_dir.path().join("ariane.tml");
         std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
 
-        // Land a commit so latest_commit is populated (the tip-moved check needs a
-        // value to compare), then GET the single project while still locked.
+        // Land a commit, then GET the single project while still locked.
         client::upload_auto(
             &url,
             &token,
@@ -1608,10 +1605,10 @@ mod live_tests {
         )
         .expect("seed upload");
 
-        // Lock still ours: get_project names us as the holder and carries a commit.
-        // This is the "still ours, still on BASE" path the re-verify allows.
-        let held = client::get_project(&url, &token, false, &cleanup.id)
-            .expect("get_project while we hold the mutex");
+        // Lock still ours: the short-budget probe the re-verify actually uses names
+        // us as the holder. This is the "still ours" path the re-verify allows.
+        let held = client::get_project_probe(&url, &token, false, &cleanup.id)
+            .expect("get_project_probe while we hold the mutex");
         let holder = held
             .active_mutex
             .as_ref()
@@ -1620,10 +1617,6 @@ mod live_tests {
         assert!(
             holder.eq_ignore_ascii_case(&my_email),
             "get_project must report us as the lock holder: {holder} vs {my_email}"
-        );
-        assert!(
-            held.latest_commit.is_some(),
-            "get_project must carry latest_commit so the #202 tip check has a value"
         );
 
         // Release, then GET again: active_mutex goes ABSENT. `lock_held_by_me(None,

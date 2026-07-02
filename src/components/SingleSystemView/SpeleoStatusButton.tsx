@@ -87,7 +87,13 @@ export function SpeleoStatusButton() {
   // Logged out: every lock action needs a token (the backend gate would reject the
   // acquire anyway), so present the mark grayed + inert and point the user at login
   // via the tooltip, rather than a live "Start editing" that can only fail (#201).
-  if (!loggedIn) {
+  //
+  // BUT trust an active editing link over a cold frontend session: on reopen the
+  // backend rehydrates the token and `refreshLinkStatus` can seed `editState:
+  // 'editing'` before `refreshSession` flips `loggedIn` true (both fire unawaited).
+  // Showing the inert logged-out mark then would wrongly hide Done/push for a
+  // project we actually hold the lock on, so fall through to the normal rendering.
+  if (!loggedIn && link.editState !== 'editing') {
     return (
       <button
         type="button"

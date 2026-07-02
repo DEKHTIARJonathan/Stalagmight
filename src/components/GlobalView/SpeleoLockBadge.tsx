@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { SpeleoBadgedIcon, HourglassGlyph } from '../common/SpeleoBadgedIcon';
 import { Tooltip } from '../common';
+import { emailsMatch } from '../../utils/email';
 
 /** Resolved lock state for one recents entry, from the login/app-open scan (#201). */
 export interface SpeleoLockInfo {
@@ -29,11 +30,9 @@ export function resolveSpeleoLock(
   const pid = project.speleodb_project_id ?? undefined;
   const lockHolder = pid !== undefined && pid in remoteLocks ? remoteLocks[pid] : undefined;
   const speleoName = pid !== undefined ? remoteProjects[pid] : undefined;
-  const lockedByMe = !!(
-    lockHolder &&
-    myEmail &&
-    lockHolder.toLowerCase() === myEmail.toLowerCase()
-  );
+  // Shared ownership check (see emailsMatch): keeps this badge in step with the
+  // held-lock prompt's own derivation off the same scan.
+  const lockedByMe = emailsMatch(lockHolder, myEmail);
   return { isRemote: project.is_remote, lockHolder, lockedByMe, speleoName };
 }
 

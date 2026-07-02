@@ -192,7 +192,12 @@ export function useSpeleoActions(): SpeleoActions {
       // Backend re-pulls + resets the tree to the server tip and returns the
       // reloaded path; loadProject re-seeds the link status (→ read-only).
       const localPath = await invokeIpc<string>('speleodb_take_remote');
-      await loadProject(localPath);
+      // If the reload was superseded (the user opened another project mid-pull),
+      // don't claim success: the backend reset already happened, but the view the
+      // caller thinks it reloaded is not showing. Skip the toast + return false so
+      // the divergence dialog doesn't close over a project the user left.
+      const { success } = await loadProject(localPath);
+      if (!success) return false;
       showToast(t('speleodb.editBar.toasts.tookRemote'), 'speleodb-took-remote');
       return true;
     } catch (e) {

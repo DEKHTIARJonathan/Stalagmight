@@ -523,10 +523,7 @@ impl AppState {
         // now, so the project isn't stuck read-only under our own lock. (A same-
         // account concurrent session is warned about separately at open time.)
         let edit_enabled = if !edit_enabled
-            && lock_holder
-                .as_deref()
-                .zip(self.speleodb_my_email().as_deref())
-                .is_some_and(|(holder, me)| holder.eq_ignore_ascii_case(me))
+            && lock_held_by_me(lock_holder.as_deref(), self.speleodb_my_email().as_deref())
         {
             self.set_edit_enabled(true);
             true
@@ -1305,10 +1302,25 @@ impl AppState {
 
         // Authoritative server tip from the revision topology, NOT the unreliable
         // latest_commit field (see speleodb_server_head).
-        let (tip, _commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
+        let (tip, commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
             self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
         })
         .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+
+        // Fail closed on an ambiguous fork: `tip_of` returns None with a NON-empty
+        // history when there are multiple heads. We must not stamp BASE = None (the
+        // empty-repo sentinel) over a real server tree, which would leave a BASE that
+        // does not describe the downloaded working tree. Abort with the lock still
+        // held and the local edits intact so the user can instead keep their work via
+        // "Save as an unmanaged file". (An empty history yields tip == None too, but
+        // then there is nothing to take - the fast-forward handles the empty case.)
+        if tip.is_none() && !commits.is_empty() {
+            return Err(local_dto(SpeleoDbError::Parse(
+                "the SpeleoDB history has diverged into multiple heads; there is no single \
+                 server version to take"
+                    .to_owned(),
+            )));
+        }
 
         // Abandoning local edits: release the held lock (if any) so it isn't left
         // stranded, mirroring speleodb_unlink. Best-effort - an offline release no-ops.
@@ -1319,8 +1331,17 @@ impl AppState {
         // snapshot carries no history). This IS a fast-forward, minus the dirty guard
         // - the whole point of take-remote is to discard the local edits. The reload
         // re-derives the edit gate from is_remote, leaving the project read-only.
-        self.speleodb_fast_forward(&endpoint, &token, insecure_http, &link, tip.as_deref())
-            .map_err(local_dto)
+        let result =
+            self.speleodb_fast_forward(&endpoint, &token, insecure_http, &link, tip.as_deref());
+        if result.is_err() {
+            // The lock was already released above, so if the reset failed part-way we
+            // must not leave the edit gate ON (it would violate "gate on <=> lock
+            // held" and let the user keep editing lock-less). The user chose to
+            // abandon this session anyway; drop to read-only so they re-acquire via
+            // Start editing. Their local edits are untouched on disk until then.
+            self.set_edit_enabled(false);
+        }
+        result.map_err(local_dto)
     }
 
     /// Release EVERY write lock this user holds across all projects (#201, B1):
@@ -1352,6 +1373,12 @@ impl AppState {
     /// open project's own, in which case the edit gate is dropped so the shell falls
     /// back to read-only (mirrors [`Self::speleodb_release_all_locks`]).
     pub(crate) fn speleodb_release_lock(&self, project_id: String) -> Result<(), SpeleoErrorDto> {
+        // Validate the FE-supplied id BEFORE it is interpolated into the request URL
+        // (it targets an arbitrary project, so unlike the open-project verbs it does
+        // not pass through `speleodb_validated_link`): reject anything that is not a
+        // plain UUID to close the path/route-traversal vector at the trust boundary,
+        // exactly as `speleodb_open_project` does.
+        validate_project_id(&project_id).map_err(local_dto)?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
         self.speleodb_handle_auth(
@@ -1384,6 +1411,10 @@ impl AppState {
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
         let payload = serde_json::json!({ "exclude_geojson": exclude }).to_string();
+        // The PATCH reuses the GetProject endpoint mapping (there is no dedicated
+        // PatchProject variant): both are project-scoped calls whose only actionable
+        // failure here is a permission/transport error the button surfaces verbatim,
+        // so the humanized-error attribution is equivalent. Purely cosmetic reuse.
         self.speleodb_handle_auth(
             Endpoint::GetProject,
             client::patch_project(&endpoint, &token, insecure_http, &link.project_id, &payload),
@@ -1955,17 +1986,29 @@ impl AppState {
 
     /// #202 lazy lock re-verify: when EDITING a remote project with a real held
     /// lock, at most once per [`REVERIFY_INTERVAL_SECS`], re-GET the project before
-    /// applying an edit and confirm we still hold the lock on our BASE. Called from
-    /// the command chokepoint AFTER `guard_mutation` (so it runs only for an enabled
-    /// edit session), it bounds wasted work; it is NOT a correctness guard (the
+    /// applying an edit and confirm we STILL HOLD the write lock. Called from the
+    /// `execute()` command chokepoint AFTER `guard_mutation` (so it runs only for an
+    /// enabled edit session on that path - undo/redo and the other direct mutation
+    /// entrypoints deliberately do NOT re-verify; they are covered by the same
+    /// backstops). It bounds wasted work; it is NOT a correctness guard (the
     /// release-time fence + a 403 on push are), so a transient failure lets the edit
     /// through and the fence catches any real conflict.
     ///
+    /// Only the lock-holder is checked, NOT the server tip: while we hold the lock
+    /// no other writer can advance the tip, so a "tip moved" signal would mean our
+    /// lock was already lost - which the holder check catches directly. (The server's
+    /// `latest_commit` field is `max(authored_date)` and unreliable as a tip anyway,
+    /// see [`sync::tip_of`]; comparing it to a topology-derived BASE false-positives.)
+    ///
+    /// The GET uses a short, non-retried probe budget ([`client::get_project_probe`]):
+    /// it runs UNDER the command lock, so a hung server must not stall the whole
+    /// command pipeline (autosave included).
+    ///
     /// - No lock held (read-only / local project) or not yet due: no-op.
-    /// - Lock lost (mutex holder is not us) OR the server tip moved off our BASE:
-    ///   drop the edit gate and return an `EDIT_REVERIFY_DIVERGED` failure so the FE
-    ///   blocks this edit and routes to the divergence prompt.
-    /// - Still ours on our BASE: stamp `last_verify_at` and allow.
+    /// - Lock lost (mutex holder is not us): drop the edit gate and return an
+    ///   `EDIT_REVERIFY_DIVERGED` failure so the FE blocks this edit and routes to
+    ///   the divergence prompt.
+    /// - Still ours: stamp `last_verify_at` and allow.
     /// - Transient / offline GET failure: stamp the attempt (keeps the <=3/hr bound)
     ///   and ALLOW the edit - offline editing stays first-class.
     pub(super) fn speleodb_verify_lock_if_expired(&self) -> Result<(), crate::core::CommandResult> {
@@ -1986,31 +2029,22 @@ impl AppState {
         };
         let insecure_http = self.speleodb_insecure_http();
 
-        match client::get_project(&endpoint, &token, insecure_http, &link.project_id) {
+        match client::get_project_probe(&endpoint, &token, insecure_http, &link.project_id) {
             Ok(project) => {
                 let me = self.speleodb_my_email();
                 let holder = project.active_mutex.as_ref().map(|m| m.user.as_str());
-                let lock_lost = !lock_held_by_me(holder, me.as_deref());
-                // Tip moved off our BASE (best-effort: uses the project's
-                // latest_commit; while we hold the lock the commit history is static,
-                // so a difference means another writer advanced it after our lock
-                // lapsed). A rare false positive is recoverable - the divergence
-                // prompt's Keep-local re-fences against the authoritative topology.
-                let tip_moved = matches!(
-                    (link.base_commit_sha.as_deref(), project.latest_commit.as_ref()),
-                    (Some(base), Some(commit)) if commit.id != base
-                );
-                if lock_lost || tip_moved {
-                    // We can no longer safely edit on this BASE. Drop the gate (so
-                    // further edits are cleanly read-only until resolved) and route
-                    // the user to the divergence prompt.
+                if !lock_held_by_me(holder, me.as_deref()) {
+                    // The write lock is no longer ours (released, admin-cleared, or
+                    // taken by another session). We can no longer safely edit: drop
+                    // the gate (so further edits are cleanly read-only until resolved)
+                    // and route the user to the divergence prompt.
                     self.set_edit_enabled(false);
                     return Err(crate::core::CommandResult::failure(format!(
-                        "{}: the SpeleoDB lock or server version changed - reconcile before editing.",
+                        "{}: the SpeleoDB write lock is no longer held - reconcile before editing.",
                         crate::core::command::EDIT_REVERIFY_DIVERGED_CODE
                     )));
                 }
-                // Still ours, still on our BASE: stamp the verify and allow the edit.
+                // Still ours: stamp the verify and allow the edit.
                 let _ = self.speleodb_mutate_link(|l| l.last_verify_at = Some(now.to_rfc3339()));
                 Ok(())
             }
@@ -2063,10 +2097,17 @@ mod tests {
         // a continuously-active editor to ~3 re-verify requests/hour.
         let now = chrono::Utc::now();
         let fresh = (now - chrono::Duration::seconds(REVERIFY_INTERVAL_SECS - 1)).to_rfc3339();
+        let exact = (now - chrono::Duration::seconds(REVERIFY_INTERVAL_SECS)).to_rfc3339();
         let stale = (now - chrono::Duration::seconds(REVERIFY_INTERVAL_SECS + 1)).to_rfc3339();
         assert!(
             !reverify_due(Some(&fresh), now),
             "just under 20 min → not due"
+        );
+        // The predicate is `>= REVERIFY_INTERVAL_SECS`, so EXACTLY at the window is
+        // due (pins the boundary so a `>` vs `>=` regression can't slip through).
+        assert!(
+            reverify_due(Some(&exact), now),
+            "exactly at 20 min → due (boundary is inclusive)"
         );
         assert!(reverify_due(Some(&stale), now), "just over 20 min → due");
     }
@@ -2438,6 +2479,25 @@ mod tests {
         assert!(
             !state.edit_enabled(),
             "forget must drop the edit gate on a remote edit session"
+        );
+    }
+
+    #[test]
+    fn release_lock_rejects_a_non_uuid_id_before_any_network() {
+        // Security (trust boundary): speleodb_release_lock takes an FE-supplied id
+        // that is NOT routed through speleodb_validated_link, so it must reject a
+        // path/route-traversal id itself, BEFORE touching the token or the URL. A
+        // fresh (logged-out) state proves validation runs first: an invalid id fails
+        // with InvalidProjectId, not the NotAuthenticated we'd get past validation.
+        let state = AppState::new().expect("state");
+        let err = state
+            .speleodb_release_lock("../../etc/passwd".to_owned())
+            .expect_err("a traversal id must be rejected");
+        let msg = err.message.to_lowercase();
+        assert!(
+            msg.contains("invalid") && msg.contains("project id"),
+            "expected an invalid-project-id rejection, got: {}",
+            err.message
         );
     }
 

@@ -3791,6 +3791,71 @@ fn migrate_v9_clean_speleo_link_keeps_null_last_edit_at() {
 }
 
 #[test]
+fn migrate_v10_speleo_link_adds_last_verify_at() {
+    // #202 (schema v10→v11): a genuine v10-shaped speleo_link (last_edit_at present,
+    // last_verify_at ABSENT) gains the column via the idempotent ALTER on
+    // open_existing, defaulting to NULL ("never verified since pull"), WITHOUT
+    // disturbing the pre-existing last_edit_at / dirty bit / identity.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("v10_speleo_link.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("V10".to_string(), None))
+            .unwrap();
+        // Re-create the table in its pre-v11 (v10) shape and stamp the version back.
+        db.conn.execute("DROP TABLE speleo_link", []).unwrap();
+        db.conn
+            .execute(
+                "CREATE TABLE speleo_link (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    endpoint TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    project_name TEXT NOT NULL,
+                    base_commit_sha TEXT,
+                    has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
+                    last_edit_at TEXT
+                )",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO speleo_link
+                    (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, last_edit_at)
+                 VALUES (1, 'http://x', 'pid', 'pname', 'abc', 1, '2026-06-27T10:00:00+00:00')",
+                [],
+            )
+            .unwrap();
+        db.set_user_version(10).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let has_col: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('speleo_link') WHERE name='last_verify_at'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has_col, 1, "v10→v11 ALTER added last_verify_at");
+    let link = db.load_speleo_link().unwrap().unwrap();
+    assert_eq!(
+        link.last_verify_at, None,
+        "the new column defaults to NULL (never verified since pull)"
+    );
+    // The pre-existing v10 fields survive the migration untouched.
+    assert_eq!(
+        link.last_edit_at.as_deref(),
+        Some("2026-06-27T10:00:00+00:00"),
+        "existing last_edit_at preserved across the v10→v11 ALTER"
+    );
+    assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
+    assert!(link.has_unpushed_edits, "existing dirty bit preserved");
+    assert_eq!(db.get_user_version().unwrap(), 11);
+}
+
+#[test]
 fn touch_speleo_link_dirty_is_targeted_and_locality_aware() {
     // #197 review: the hot-path dirty stamp is a single UPDATE — no row for a
     // local-only project (no-op, false), and for a remote link it sets the bit +
