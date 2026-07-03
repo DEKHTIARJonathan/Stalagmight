@@ -61,6 +61,9 @@ export function PositiveNumberField({
       onChange={(e) => {
         const text = e.target.value;
         setDraft(text); // allow empty / intermediate so the field stays deletable
+        // An empty/blank draft must NOT commit — `Number('')` is 0, which `allowZero` would
+        // otherwise write mid-edit (the strictly-positive path already rejects 0). Keep it a draft.
+        if (text.trim() === '') return;
         const n = Number(text);
         if (Number.isFinite(n) && (allowZero ? n >= 0 : n > 0)) onCommit(n);
       }}
