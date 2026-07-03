@@ -414,13 +414,25 @@ fn cyl_basis(c: &Cylinder, conservative: bool) -> f64 {
     }
 }
 
+/// The diver's Free usable allowance (bar), sanitized: a non-finite input (NaN / ±inf — serde_json
+/// can't carry those today, but a future non-JSON deserializer might, and NaN would slip a bare
+/// `u <= 0.0` skip since NaN comparisons are false) becomes 0, then clamps to `[0, basis]` (the
+/// conservative-capped fill the budget credits). One helper so every Free path — budget, turn,
+/// drops, column — treats a stray value identically, and none can propagate NaN into a gauge.
+fn free_usable_bar(c: &Cylinder, conservative: bool) -> f64 {
+    if !c.usable_gas_bar.is_finite() {
+        return 0.0;
+    }
+    c.usable_gas_bar.clamp(0.0, cyl_basis(c, conservative))
+}
+
 /// Free-strategy IN gas for one cylinder (litres): the Z-derated span from full down to the diver's
 /// chosen turn pressure `fill − usable_gas_bar`. The usable bar is clamped to `[0, basis]` so a
 /// stray/over-large input can never credit more than the tank holds (the unsafe direction, §6).
 /// Mirrors `stage_in_gas`'s basis-scale deliverable arithmetic.
 fn free_in_gas(c: &Cylinder, conservative: bool) -> f64 {
     let basis = cyl_basis(c, conservative);
-    let u = c.usable_gas_bar.clamp(0.0, basis);
+    let u = free_usable_bar(c, conservative);
     let full = deliverable_gas(basis, c.water_volume_l, c.rated_pressure_bar, conservative);
     let held = deliverable_gas(
         basis - u,
@@ -564,13 +576,10 @@ fn cylinder_usable_bars(
             let basis = cyl_basis(c, conservative);
             match effective {
                 ReservePreset::Free => match c.role {
-                    // Clamp to `basis` (NOT raw fill) so the displayed usable bar equals what the
-                    // budget credits (`free_in_gas` also clamps to basis) even on an overfilled tank
-                    // under conservative — the "single source of truth" guarantee. `.max(0.0)`
-                    // sanitizes a NaN input to 0, matching the sibling free_* helpers.
-                    CylRole::BackGas | CylRole::Stage => {
-                        c.usable_gas_bar.clamp(0.0, basis).max(0.0)
-                    }
+                    // The same sanitized `[0, basis]` clamp the budget uses, so the displayed usable
+                    // bar equals what `free_in_gas` credits (the "single source of truth" guarantee)
+                    // even on an overfilled tank under conservative, and a NaN input reads 0.
+                    CylRole::BackGas | CylRole::Stage => free_usable_bar(c, conservative),
                     _ => 0.0,
                 },
                 // Thirds counts back gas AND stages at ⅓ (both are in `usable_oc_gas`).
@@ -612,7 +621,7 @@ fn free_backgas_turn(cylinders: &[Cylinder], conservative: bool) -> Option<f64> 
     let turn = back
         .iter()
         .map(|c| {
-            let u = c.usable_gas_bar.clamp(0.0, cyl_basis(c, conservative));
+            let u = free_usable_bar(c, conservative);
             (c.fill_bar - u) * c.water_volume_l
         })
         .sum::<f64>()
@@ -632,8 +641,9 @@ fn free_stage_drops(cylinders: &[Cylinder], conservative: bool) -> (Vec<f64>, Ve
         .filter(|c| matches!(c.role, CylRole::Stage))
     {
         // Clamp to `basis` (same ceiling as the budget's `free_in_gas`) so the drop gauge agrees
-        // with the credited gas on an overfilled tank under conservative.
-        let u = c.usable_gas_bar.clamp(0.0, cyl_basis(c, conservative));
+        // with the credited gas on an overfilled tank under conservative; a NaN input sanitizes to
+        // 0 so it takes the skip below rather than pushing a bogus drop.
+        let u = free_usable_bar(c, conservative);
         if u <= 0.0 {
             continue;
         }

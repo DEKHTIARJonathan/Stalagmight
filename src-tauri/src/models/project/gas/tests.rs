@@ -381,6 +381,42 @@ fn gas_free_display_clamps_to_basis_not_fill_on_overfill() {
 }
 
 #[test]
+fn gas_free_nonfinite_usable_sanitizes_to_zero() {
+    // A non-finite usable (NaN / ±inf — serde_json can't carry it today, but a future non-JSON path
+    // might) must sanitize to 0 in every Free path, never poisoning the budget / turn / column with
+    // NaN. `free_usable_bar` guards it; without the guard `basis − NaN` would flow through.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    for bad in [f64::NAN, f64::INFINITY] {
+        let bg = Cylinder {
+            usable_gas_bar: bad,
+            ..Cylinder::new(
+                24.0,
+                232.0,
+                90.0,
+                TankMaterial::Steel,
+                CylRole::BackGas,
+                None,
+            )
+            .unwrap()
+        };
+        let cfg = GasConfig {
+            default_reserve: ReservePreset::Free,
+            ..GasConfig::default()
+        };
+        let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg], &cfg);
+        assert!(
+            field.budget_litres.is_finite() && field.budget_litres.abs() < 1e-9,
+            "non-finite usable → 0 budget (not NaN), got {}",
+            field.budget_litres
+        );
+        assert_eq!(field.cylinder_usable_bars, vec![0.0]);
+        // turn gauge = fill − 0 = fill (finite), not NaN.
+        assert!((field.backgas_turn_bar.unwrap() - 90.0).abs() < 1e-6);
+    }
+}
+
+#[test]
 fn gas_free_negative_usable_clamps_to_zero() {
     // A negative usable (hand-edited / stale config; the UI blocks it) contributes nothing and
     // shows 0 — the lower clamp holds.

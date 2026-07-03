@@ -1417,7 +1417,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const rated = c.rated_pressure_bar ?? fill;
               const basis = gasConfig.conservative_tank_gas !== false ? Math.min(fill, rated) : fill;
               if (effective === 'free') {
-                return isBudget(c.role) ? Math.max(0, Math.min(c.usable_gas_bar ?? 0, fill)) : 0;
+                // Clamp to `basis` (min(fill, rated) under conservative), matching the engine's
+                // free_usable_bar — not raw fill — so the mock doesn't diverge on overfilled tanks.
+                return isBudget(c.role) ? Math.max(0, Math.min(c.usable_gas_bar ?? 0, basis)) : 0;
               }
               if (effective === 'all_thirds') {
                 return isBudget(c.role) ? fill / 3 : 0;

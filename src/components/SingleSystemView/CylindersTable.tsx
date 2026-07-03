@@ -78,6 +78,9 @@ export function CylindersTable() {
               : isBudgetRole(cyl.role)
                 ? undefined
                 : t('gasPanel.tanks.notCounted');
+            // Screen-reader name for the row's controls: the same label the Tank column shows,
+            // falling back to the water volume so an unnamed tank isn't announced as a blank.
+            const tankName = cyl.label ?? `${cyl.water_volume_l}L`;
             return (
             <tr
               key={idx}
@@ -91,7 +94,7 @@ export function CylindersTable() {
                   type="checkbox"
                   checked={cyl.enabled}
                   onChange={(e) => setEnabled(idx, e.target.checked)}
-                  aria-label={t('gasPanel.tanks.enabledAria', { tank: cyl.label ?? '' })}
+                  aria-label={t('gasPanel.tanks.enabledAria', { tank: tankName })}
                   data-testid="gas-cylinder-enabled"
                 />
               </td>
@@ -104,7 +107,7 @@ export function CylindersTable() {
                   step={units === 'imperial' ? 50 : 5}
                   displayPrecision={0}
                   className="w-20 bg-transparent border border-border rounded px-1 py-0.5"
-                  ariaLabel={t('gasPanel.tanks.fillAria', { tank: cyl.label ?? '' })}
+                  ariaLabel={t('gasPanel.tanks.fillAria', { tank: tankName })}
                   testId="gas-cylinder-fill"
                 />
               </td>
@@ -125,7 +128,7 @@ export function CylindersTable() {
                     step={units === 'imperial' ? 50 : 5}
                     displayPrecision={0}
                     className="w-20 bg-transparent border border-border rounded px-1 py-0.5"
-                    ariaLabel={t('gasPanel.tanks.usableAria', { tank: cyl.label ?? '' })}
+                    ariaLabel={t('gasPanel.tanks.usableAria', { tank: tankName })}
                     testId="gas-cylinder-usable"
                   />
                 ) : (
@@ -157,7 +160,7 @@ export function CylindersTable() {
                   type="button"
                   className="text-xs px-1 opacity-60 hover:opacity-100"
                   onClick={() => removeCylinder(idx)}
-                  aria-label={t('gasPanel.tanks.removeAria', { tank: cyl.label ?? '' })}
+                  aria-label={t('gasPanel.tanks.removeAria', { tank: tankName })}
                   data-testid="gas-cylinder-remove"
                 >
                   ✕
