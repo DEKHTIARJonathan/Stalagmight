@@ -840,17 +840,20 @@ fn send_json_request(
         .body(payload.to_string())
         .map_err(|e| SpeleoDbError::Parse(format!("build request: {e}")))?;
     // #210: this write bypasses `with_retry`, so record its one attempt here — the
-    // same count + latency + outcome the retry-loop chokepoint emits.
+    // same count + latency + outcome the retry-loop chokepoint emits. Time and
+    // classify the FULL attempt (dial + status + body read), exactly as
+    // `with_retry`'s timed closure does, so latency covers the body read and a
+    // mid-body read failure counts as `network-error` on both paths (not a false
+    // `ok`/`server-error` off the status line alone).
     let started = std::time::Instant::now();
-    let run = agent().run(request);
-    let outcome = match &run {
-        Ok(resp) => Outcome::from_status(resp.status().as_u16()),
+    let result = agent().run(request).and_then(read_status_body);
+    let outcome = match &result {
+        Ok((status, _)) => Outcome::from_status(*status),
         Err(_) => Outcome::NetworkError,
     };
     super::metrics::record(endpoint, outcome, started.elapsed());
-    let resp = run.map_err(|e| SpeleoDbError::Transport(clean_transport(&e.to_string())))?;
-    let (status, body) = read_status_body(resp)
-        .map_err(|e| SpeleoDbError::Transport(clean_transport(&e.to_string())))?;
+    let (status, body) =
+        result.map_err(|e| SpeleoDbError::Transport(clean_transport(&e.to_string())))?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
     }

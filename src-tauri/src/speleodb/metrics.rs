@@ -249,6 +249,10 @@ mod tests {
         assert_eq!(Outcome::from_status(404), Outcome::ClientError);
         assert_eq!(Outcome::from_status(500), Outcome::ServerError);
         assert_eq!(Outcome::from_status(503), Outcome::ServerError);
+        // Pin the inner range upper edges so a narrowed bound (e.g. 400..=498)
+        // can't silently misclassify the boundary status.
+        assert_eq!(Outcome::from_status(399), Outcome::Ok);
+        assert_eq!(Outcome::from_status(499), Outcome::ClientError);
     }
 
     #[test]
