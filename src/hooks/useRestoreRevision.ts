@@ -32,11 +32,15 @@ export function useRestoreRevision() {
   const { t } = useTranslation();
   const showToast = useUIStore((s) => s.showToast);
   const setView = useUIStore((s) => s.setView);
+  const clearSelection = useUIStore((s) => s.clearSelection);
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
 
   return useCallback(
     async ({ projectId, projectName, hexsha, shortSha, restore }: RestoreRevisionArgs) => {
+      // The backend hardcodes concurrent_session:false for an in-place revision swap
+      // (the open project is unchanged), so unlike the open/adopt flow there is no
+      // concurrent-session notice to surface here.
       await invokeIpc<SpeleoOpenResult>('speleodb_restore_revision', {
         projectId,
         projectName,
@@ -45,10 +49,18 @@ export function useRestoreRevision() {
       });
       // The backend closed + reopened the project at the swapped tree; pull the new
       // geometry + link state in. The on-disk copy IS the checked-out tree (saved),
-      // so it is clean until the user edits.
+      // so it is clean until the user edits. Clear the selection first: it is keyed by
+      // (section_id, station_index) which the swapped tree may not carry, so a stale
+      // selection could highlight a different station (loadProject's full path clears
+      // it too; this swap path bypasses that path).
+      clearSelection();
       setView('single');
       await refreshProjectState();
       useProjectStore.setState({ isDirty: false });
+      // The swapped-in revision can carry a different structural-integrity profile than
+      // the tree that was on screen; re-scan so the banner reflects the checked-out
+      // tree instead of the pre-swap one (fire-and-forget, identity-guarded).
+      void useProjectStore.getState().checkProjectIntegrity();
       await refreshLinkStatus();
       showToast(
         restore
@@ -57,6 +69,6 @@ export function useRestoreRevision() {
         'speleodb-restore',
       );
     },
-    [t, showToast, setView, refreshProjectState, refreshLinkStatus],
+    [t, showToast, setView, clearSelection, refreshProjectState, refreshLinkStatus],
   );
 }

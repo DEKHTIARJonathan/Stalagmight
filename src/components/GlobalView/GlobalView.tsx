@@ -166,26 +166,41 @@ export default function GlobalView() {
   const { openRemote, adoptRemote } = useOpenRemoteProject();
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [pendingAdopt, setPendingAdopt] = useState<SpeleoProjectSummary | null>(null);
+  // Synchronous re-entrancy guard: `remoteBusy` state only reflects on the next render,
+  // so a second row click (or a click on a different remote row) before then would slip
+  // past the visual disable and issue a concurrent open. The ref blocks it immediately.
+  const remoteBusyRef = useRef(false);
   const handleOpenRemote = useCallback(
     async (summary: SpeleoProjectSummary) => {
+      if (remoteBusyRef.current) return;
+      remoteBusyRef.current = true;
       setRemoteBusy(true);
-      const outcome = await openRemote(summary);
-      if (outcome.status === 'adopt') setPendingAdopt(summary);
-      else if (outcome.status === 'error') {
-        showToast(outcome.message, 'speleodb-open-remote-error');
+      try {
+        const outcome = await openRemote(summary);
+        if (outcome.status === 'adopt') setPendingAdopt(summary);
+        else if (outcome.status === 'error') {
+          showToast(outcome.message, 'speleodb-open-remote-error');
+        }
+      } finally {
+        remoteBusyRef.current = false;
+        setRemoteBusy(false);
       }
-      setRemoteBusy(false);
     },
     [openRemote, showToast],
   );
   const handleConfirmAdopt = useCallback(async () => {
-    if (!pendingAdopt) return;
+    if (!pendingAdopt || remoteBusyRef.current) return;
     const summary = pendingAdopt;
     setPendingAdopt(null);
+    remoteBusyRef.current = true;
     setRemoteBusy(true);
-    const outcome = await adoptRemote(summary);
-    if (outcome.status === 'error') showToast(outcome.message, 'speleodb-open-remote-error');
-    setRemoteBusy(false);
+    try {
+      const outcome = await adoptRemote(summary);
+      if (outcome.status === 'error') showToast(outcome.message, 'speleodb-open-remote-error');
+    } finally {
+      remoteBusyRef.current = false;
+      setRemoteBusy(false);
+    }
   }, [pendingAdopt, adoptRemote, showToast]);
   useEffect(() => {
     void scanLocksOnOpen();
@@ -866,6 +881,7 @@ export default function GlobalView() {
                   onContextMenu={handleContextMenu}
                   onRemoveMissing={handleRemoveFromRecent}
                   onOpenRemote={(summary) => void handleOpenRemote(summary)}
+                  busy={remoteBusy}
                 />
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

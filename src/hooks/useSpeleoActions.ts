@@ -26,8 +26,11 @@ export interface SpeleoActions {
   /** #213 (E2): enter optimistic force-edit - edit WITHOUT the write lock (offline,
       or while someone else holds it). Gated on the `allow_force_edit` opt-in (the
       backend refuses otherwise) and behind a big-red destructive confirm; the caller
-      must gate this on that confirm. Re-seeds the link (→ editing + `forceEditing`). */
-  forceEdit: () => Promise<void>;
+      must gate this on that confirm. Re-seeds the link (→ editing + `forceEditing`).
+      Returns `true` only on success so the confirm dialog closes on success and stays
+      open (error toast shown) on a backend refusal, rather than dismissing as if it
+      worked. */
+  forceEdit: () => Promise<boolean>;
   update: () => Promise<void>;
   /** Push edits without releasing the lock (T2d) - collects an optional message.
       Returns the backend outcome (or `null` if the call threw) so callers can keep
@@ -51,6 +54,7 @@ export function useSpeleoActions(): SpeleoActions {
   const showToast = useUIStore((s) => s.showToast);
   const loadProject = useProjectStore((s) => s.loadProject);
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
+  const clearSelection = useUIStore((s) => s.clearSelection);
   const applyStartEditing = useSpeleoStore((s) => s.applyStartEditing);
   const applyUpdate = useSpeleoStore((s) => s.applyUpdate);
   const applyDone = useSpeleoStore((s) => s.applyDone);
@@ -110,9 +114,15 @@ export function useSpeleoActions(): SpeleoActions {
           // Backend swapped the tree; reload so the view matches. loadProject
           // short-circuits when the backend reopened the SAME path (its "already
           // open" guard returns without re-reading), so pull the swapped geometry +
-          // link state in explicitly - otherwise the old tree stays on screen.
+          // link state in explicitly - otherwise the old tree stays on screen. Clear
+          // the (section_id, station_index)-keyed selection, which the swapped tree may
+          // not carry (loadProject's full path clears it; this path bypasses it).
+          clearSelection();
           await loadProject(result.local_path);
           await refreshProjectState();
+          // Re-scan integrity: the fast-forwarded tree can differ structurally from the
+          // one on screen (identity-guarded, fire-and-forget).
+          void useProjectStore.getState().checkProjectIntegrity();
           await refreshLinkStatus();
           break;
         case 'locked_by':
@@ -135,9 +145,9 @@ export function useSpeleoActions(): SpeleoActions {
       bumpPoll();
       setBusy(false);
     }
-  }, [applyStartEditing, loadProject, refreshProjectState, refreshLinkStatus, showToast, t, handleError, setBusy, bumpPoll]);
+  }, [applyStartEditing, loadProject, refreshProjectState, refreshLinkStatus, clearSelection, showToast, t, handleError, setBusy, bumpPoll]);
 
-  const forceEdit = useCallback(async () => {
+  const forceEdit = useCallback(async (): Promise<boolean> => {
     setBusy(true);
     try {
       // No result payload: the backend flips the edit gate + force-edit flag.
@@ -146,8 +156,13 @@ export function useSpeleoActions(): SpeleoActions {
       await invokeIpc<null>('speleodb_force_edit');
       await refreshLinkStatus();
       showToast(t('speleodb.forceEdit.toasts.active'), 'speleodb-force-edit');
+      return true;
     } catch (e) {
+      // Backend refusal (opt-in off / link lost / already lock-held): surface the
+      // toast and report failure so the confirm dialog stays open instead of
+      // dismissing as if force-edit engaged.
       handleError(e, 'speleodb.forceEdit.toasts.failed');
+      return false;
     } finally {
       bumpPoll();
       setBusy(false);
@@ -166,9 +181,14 @@ export function useSpeleoActions(): SpeleoActions {
         case 'fast_forwarded':
           // See startEditing: the FF reload swapped the tree in the backend, but
           // loadProject short-circuits on the reopened path - pull geometry + link
-          // state in so Update actually resets the view to the new tip.
+          // state in so Update actually resets the view to the new tip. Clear the stale
+          // selection for the same reason as the startEditing arm.
+          clearSelection();
           await loadProject(result.local_path);
           await refreshProjectState();
+          // Re-scan integrity: the fast-forwarded tree can differ structurally from the
+          // one on screen (identity-guarded, fire-and-forget).
+          void useProjectStore.getState().checkProjectIntegrity();
           await refreshLinkStatus();
           break;
         case 'divergence_needed':
@@ -180,7 +200,7 @@ export function useSpeleoActions(): SpeleoActions {
       bumpPoll();
       setBusy(false);
     }
-  }, [applyUpdate, loadProject, refreshProjectState, refreshLinkStatus, showToast, t, handleError, setBusy, bumpPoll]);
+  }, [applyUpdate, loadProject, refreshProjectState, refreshLinkStatus, clearSelection, showToast, t, handleError, setBusy, bumpPoll]);
 
   const push = useCallback(
     async (message?: string | null): Promise<PushResult | null> => {

@@ -66,7 +66,10 @@ beforeEach(() => {
     link: null,
     refreshLinkStatus: vi.fn(async () => {}),
   });
-  useProjectStore.setState({ refreshProjectState: vi.fn(async () => {}) });
+  useProjectStore.setState({
+    refreshProjectState: vi.fn(async () => {}),
+    checkProjectIntegrity: vi.fn(async () => []),
+  });
   useUIStore.setState({ openDialog: openDialogMock, showToast: showToastMock, setView: vi.fn() });
 });
 
@@ -130,5 +133,51 @@ describe('SpeleoRevisionHistory (#218)', () => {
     const { container } = render(<SpeleoRevisionHistory />);
     expect(container).toBeEmptyDOMElement();
     expect(invokeIpcMock).not.toHaveBeenCalled();
+  });
+
+  it('shows the empty state when the project has no revisions', async () => {
+    invokeIpcMock.mockResolvedValue([]);
+    seed('read-only');
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() =>
+      expect(screen.getByTestId('speleodb-revisions-empty')).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId('speleodb-revisions-list')).not.toBeInTheDocument();
+  });
+
+  it('shows the error state when the fetch fails', async () => {
+    invokeIpcMock.mockRejectedValue({ message: 'offline' });
+    seed('read-only');
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() =>
+      expect(screen.getByTestId('speleodb-revisions-error')).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId('speleodb-revisions-list')).not.toBeInTheDocument();
+  });
+
+  it('marks a merge commit (more than one parent)', async () => {
+    invokeIpcMock.mockResolvedValue([
+      { id: 'aaaaaaaa1111', parent_ids: ['b', 'c'], author_email: 'me@x', authored_date: null, message: 'merge' },
+      { id: 'bbbbbbbb2222', parent_ids: [], author_email: 'you@x', authored_date: null, message: 'root' },
+    ] satisfies SpeleoRevision[]);
+    seed('read-only');
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+    expect(screen.getByTestId('speleodb-revision-merge-aaaaaaaa1111')).toBeInTheDocument();
+  });
+
+  it('offers NEITHER View nor Restore while force-editing (no lock), with a hint', async () => {
+    // A force-editor holds unsaved, lock-less edits; swapping the tree would clobber
+    // them, so the backend refuses both and the UI offers no action.
+    useSpeleoStore.setState({
+      remoteProjectId: 'p1',
+      link: { ...LINK, editState: 'editing', forceEditing: true },
+    });
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+    expect(screen.queryByTestId('speleodb-revision-restore-bbbbbbbb2222')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-revision-view-bbbbbbbb2222')).not.toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-revisions-forceedit-hint')).toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-revisions-lock-hint')).not.toBeInTheDocument();
   });
 });

@@ -45,7 +45,7 @@ pub enum SpeleoDbAction {
     Retry,
     /// The opened project is an Ariane (`.tml`-only) project with no `.stalx`: the
     /// FE should offer the one-time C2 adoption flow (#214) instead of surfacing a
-    /// hard error. NOT derived from an HTTP status — it is the local
+    /// hard error. NOT derived from an HTTP status - it is the local
     /// [`SpeleoDbError::AdoptAriane`] dump classification crossing the same typed
     /// action channel so the FE never branches on message text.
     Adopt,

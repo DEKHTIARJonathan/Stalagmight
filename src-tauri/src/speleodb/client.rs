@@ -457,7 +457,7 @@ pub(crate) fn download_dump(
     Ok(body)
 }
 
-/// [#218] `GET /api/v2/projects/{id}/download/dump/{hexsha}/` — download the
+/// [#218] `GET /api/v2/projects/{id}/download/dump/{hexsha}/` - download the
 /// project's tree AT a specific past commit (the server's `FileDownloadAtHashView`)
 /// as a ZIP, for the revision-restore flow. Identical wire shape to
 /// [`download_dump`] (same `Endpoint::DownloadDump` contract/metrics, same read

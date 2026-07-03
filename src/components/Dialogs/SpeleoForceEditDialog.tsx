@@ -32,8 +32,11 @@ export default function SpeleoForceEditDialog() {
   const confirm = async () => {
     setEntering(true);
     try {
-      await forceEdit();
-      closeDialog();
+      // Only dismiss the big-red confirm when force-edit actually engaged. On a backend
+      // refusal (opt-in toggled off, link lost, already lock-held) forceEdit returns
+      // false and surfaces its own error toast; keep the dialog open so the user is not
+      // left believing they entered an editable state while the project stays read-only.
+      if (await forceEdit()) closeDialog();
     } finally {
       setEntering(false);
     }

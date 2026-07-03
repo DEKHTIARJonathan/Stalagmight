@@ -6,7 +6,7 @@ import type { SpeleoProjectSummary } from '../../types/ipc.generated';
  * metadata), a recent path whose file could not be loaded (missing/moved/
  * unreadable), or a purely-remote SpeleoDB project (#218) the user can access
  * on the server but hasn't pulled locally yet. Missing entries are derived on
- * the frontend — the backend silently drops unreadable paths from the metadata
+ * the frontend - the backend silently drops unreadable paths from the metadata
  * list, but the config keeps every recent path, so the difference is the set of
  * unavailable projects. Remote entries come from the lock-scan summaries and
  * carry no local file (Open pulls them, like the browser dialog).

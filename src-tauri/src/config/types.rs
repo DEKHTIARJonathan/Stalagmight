@@ -98,7 +98,7 @@ pub struct SpeleoDbConfig {
     /// D-B19's scheme reject lives in `tls.rs`, not here.
     #[serde(default)]
     pub insecure_http: bool,
-    /// [#213] Opt-in: allow "force-edit" — editing a remote project WITHOUT holding
+    /// [#213] Opt-in: allow "force-edit" - editing a remote project WITHOUT holding
     /// the server write lock (surveying offline / when someone else holds it), behind
     /// a big-red unmergeable-`.stalx` warning. Off by default; #205 Settings owns the
     /// warned toggle. When off, a remote project stays strictly read-only until the

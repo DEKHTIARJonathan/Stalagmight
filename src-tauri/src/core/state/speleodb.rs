@@ -175,6 +175,31 @@ pub(super) fn validate_hexsha(hexsha: &str) -> Result<(), SpeleoDbError> {
     }
 }
 
+/// [#218] The BASE / dirty stamp for a revision swap, keyed on the mode. Pure (no
+/// I/O, no clock) so both branches are unit-testable in isolation from the download.
+///
+/// - **Restore** (`restore == true`): the old tree rides as an unpushed edit ON TOP
+///   of the current server HEAD, so BASE = `server_tip` and the dirty bit is set. A
+///   push lands it as a forward commit (SpeleoDB exposes no server-side revert).
+/// - **View** (`restore == false`): BASE = the viewed `hexsha` itself and the copy is
+///   clean, so the working tree IS that revision (behind tip) and a later Update
+///   fast-forwards straight back to the latest.
+///
+/// `server_tip` is `None` only when the HEAD fetch failed with no fallback; the caller
+/// prefers the open link's last-known BASE over `None` so the next fence can't read a
+/// spurious `Diverged`.
+fn revision_swap_base(
+    restore: bool,
+    hexsha: &str,
+    server_tip: Option<String>,
+) -> (Option<String>, bool) {
+    if restore {
+        (server_tip, true)
+    } else {
+        (Some(hexsha.to_owned()), false)
+    }
+}
+
 /// #202: how long a lock stays "verified" before a lock-held edit re-verifies it.
 /// A continuously-active editor therefore issues at most ~3 re-verify requests/hr;
 /// an idle/AFK session issues zero (the check is edit-triggered, never a timer).
@@ -1254,7 +1279,7 @@ impl AppState {
     /// create → import → save pipeline is separable from the network/link steps.
     ///
     /// Reuses the existing importer defaults (`include_excluded = false`,
-    /// `comments_on_stations = true`) — the same settings the collab `.tml`
+    /// `comments_on_stations = true`) - the same settings the collab `.tml`
     /// round-trip and the FE import dialog use, so adoption yields the identical
     /// survey a manual TML import would. Overwrites any stale cache `.stalx`
     /// (re-adoption is a clean re-pull, like the pull path).
@@ -1450,7 +1475,7 @@ impl AppState {
     }
 
     /// [#213] Optimistic force-edit (E2): enable editing on the open remote project
-    /// WITHOUT acquiring the server write lock — for surveying offline, or when
+    /// WITHOUT acquiring the server write lock - for surveying offline, or when
     /// someone else holds the lock. Opt-in (gated on `allow_force_edit`); the FE
     /// shows a big-red "this `.stalx` cannot be merged" warning before calling this.
     ///
@@ -1493,7 +1518,7 @@ impl AppState {
     /// [#213] Doubles as the force-edit RECONNECT: when called while force-editing, a
     /// clean reconcile (UpToDate / FastForward) clears the force-edit flag because we
     /// now genuinely hold the lock, while the contention (400 `LockedBy`) and
-    /// `Diverged` arms leave both gates untouched — so a force-editor stays
+    /// `Diverged` arms leave both gates untouched - so a force-editor stays
     /// force-editing (keeps their edits) rather than reverting to read-only.
     pub(crate) fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
@@ -1580,7 +1605,7 @@ impl AppState {
                     }
                 };
                 self.set_edit_enabled(true);
-                // #213: reconnect transition — the FF reload already cleared it, but
+                // #213: reconnect transition - the FF reload already cleared it, but
                 // clear force-edit explicitly now that we hold the lock.
                 self.set_force_editing(false);
                 Ok(StartEditingResult::FastForwarded { local_path })
@@ -1655,8 +1680,11 @@ impl AppState {
                 .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         }
         // Now a local-only project: it edits freely (the read-only gate hung on the
-        // remote link, which is gone).
+        // remote link, which is gone). Clear force_editing too (a force-editor can reach
+        // "save a local copy"): a local project holds no lock concept, and every
+        // force_editing reader assumes an open remote link, so don't leave the flag set.
         self.set_edit_enabled(true);
+        self.set_force_editing(false);
         Ok(())
     }
 
@@ -1834,10 +1862,14 @@ impl AppState {
     /// - `restore == false` (**View**, read-only, no lock): BASE = `hexsha` and the
     ///   copy is stamped CLEAN, so the working tree IS that revision, behind tip. The
     ///   project stays read-only and a later Update fast-forwards straight back to the
-    ///   latest — a non-destructive peek.
+    ///   latest - a non-destructive peek.
     ///
-    /// Both ids are validated at the trust boundary before the download URL is built.
-    /// Returns the local path (like a pull); the FE pulls the swapped geometry.
+    /// Both ids are validated at the trust boundary before the download URL is built,
+    /// and the swap is BOUND to the open project (a mismatched id is refused). A
+    /// force-edit session (#213) is refused outright (both View and Restore), and
+    /// Restore additionally requires the write lock genuinely held - the backend never
+    /// trusts the FE's View/Restore choice. Returns the local path (like a pull); the
+    /// FE pulls the swapped geometry.
     pub(crate) fn speleodb_restore_revision(
         &self,
         project_id: String,
@@ -1847,6 +1879,33 @@ impl AppState {
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
         validate_hexsha(&hexsha).map_err(local_dto)?;
+
+        // Bind to the OPEN project. A revision swap replaces the whole tree in place,
+        // so a stale / mismatched FE project_id must never close the open project and
+        // swap in a DIFFERENT cached one behind the unsaved-changes guard - every other
+        // edit verb goes through the open link, and so does this.
+        let open_link = self.speleodb_open_link().map_err(local_dto)?;
+        if open_link.project_id != project_id {
+            return Err(local_dto(SpeleoDbError::NoRemoteProject));
+        }
+        // [#213] A force-edit session holds unsaved edits with NO lock protecting them.
+        // Swapping the tree (View OR Restore) would silently clobber that work, and
+        // clearing force_editing below would hide the big-red "no lock held" warning.
+        // Refuse both until the user finishes or discards the force-edit session.
+        if self.force_editing() {
+            return Err(local_dto(SpeleoDbError::Io(
+                "finish or discard force-editing before viewing or restoring a revision".to_owned(),
+            )));
+        }
+        // Restore (editable) additionally requires the write lock genuinely held (with
+        // force-editing already excluded above, edit_enabled here means a real lock).
+        // View is a read-only peek and needs no lock.
+        if restore && !self.edit_enabled() {
+            return Err(local_dto(SpeleoDbError::Io(
+                "acquire the write lock before restoring a revision".to_owned(),
+            )));
+        }
+
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -1875,30 +1934,33 @@ impl AppState {
         let preserved_view = preserved_display_settings(&dest);
         dump.extract_entry_to(&entry, &dest).map_err(local_dto)?;
 
-        // Restore (editable): BASE = the CURRENT server HEAD, dirty SET, so the tree
-        // rides as an unpushed edit ON TOP of HEAD and a push creates a forward commit;
-        // `last_edit_at` gets `now` so the g7 push-start comparison treats it as an
-        // edit. View (read-only): BASE = the viewed revision itself, dirty CLEAR, so
-        // the working tree IS that commit (behind tip) and a later Update fast-forwards
-        // back to the latest. HEAD resolution for Restore is best-effort (falls back to
-        // an unset BASE, which the first push / Start editing reconciles).
-        let (base_sha, has_unpushed_edits, last_edit_at) = if restore {
-            let tip = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
-                Ok(history) => sync::tip_of(&history.commits).map(str::to_owned),
+        // Restore rides ON TOP of the current server HEAD (BASE = tip, dirty SET).
+        // Resolve HEAD from the revision topology; if that blips, fall back to the open
+        // link's last-known BASE rather than `None` - a None BASE + dirty makes the next
+        // fence read `Diverged` and forces a spurious divergence prompt after a simple
+        // restore. View pins BASE to the viewed revision (see `revision_swap_base`).
+        let server_tip = if restore {
+            match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
+                Ok(history) => sync::tip_of(&history.commits)
+                    .map(str::to_owned)
+                    .or_else(|| open_link.base_commit_sha.clone()),
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
                         project_id = %project_id,
                         purpose = "resolve server HEAD on restore",
-                        "speleodb_restore_revision: could not resolve server HEAD; leaving BASE unset"
+                        "speleodb_restore_revision: could not resolve server HEAD; falling back to last-known BASE"
                     );
-                    None
+                    open_link.base_commit_sha.clone()
                 }
-            };
-            (tip, true, Some(chrono::Utc::now().to_rfc3339()))
+            }
         } else {
-            (Some(hexsha.clone()), false, None)
+            None
         };
+        let (base_sha, has_unpushed_edits) = revision_swap_base(restore, &hexsha, server_tip);
+        // `last_edit_at = now` on Restore so the g7 push-start comparison treats it as
+        // an edit; View stays clean and carries no edit timestamp.
+        let last_edit_at = has_unpushed_edits.then(|| chrono::Utc::now().to_rfc3339());
 
         match crate::persistence::Database::open_existing(&dest) {
             Ok(db) => {
@@ -1940,6 +2002,14 @@ impl AppState {
         // is a pushable unpushed edit); for View leave it read-only (a peek that Update
         // fast-forwards away). Mirrors the fast-forward reload (#193); the FE then
         // pulls the swapped geometry via refreshProjectState.
+        //
+        // The cache `.stalx` was overwritten above via a direct (non-atomic) write
+        // while this handle was still open - deliberately, matching the fast-forward
+        // reload: the cache is a re-downloadable server copy, and validate_integrity on
+        // the reopen below turns any torn write (crash mid-extract) or Windows
+        // file-share hiccup into a loud re-pull, never a silent bad load. Hardening the
+        // overwrite to atomic temp+rename (and closing before extract) belongs to a
+        // focused change that also covers the fast-forward path (needs Windows testing).
         self.close_project();
         self.do_load_project_full(dest).map_err(|e| {
             local_dto(SpeleoDbError::Io(format!(
@@ -2929,9 +2999,9 @@ mod tests {
         auth_error_drops_token, build_create_body, build_patch_body, classify_dump_entry,
         clear_snapshot_dirty, coord_json, head_with_empty_retry, lock_held_by_me,
         preserved_display_settings, resolve_endpoint, restore_display_settings, reverify_due,
-        validate_hexsha, validate_project_id, visibility_label, whoami_indicates_dead_token,
-        Endpoint, PushOutcome, SpeleoDbSession, SpeleoProjectMetadataPatch, SpeleoPublishParams,
-        Visibility, REVERIFY_INTERVAL_SECS,
+        revision_swap_base, validate_hexsha, validate_project_id, visibility_label,
+        whoami_indicates_dead_token, Endpoint, PushOutcome, SpeleoDbSession,
+        SpeleoProjectMetadataPatch, SpeleoPublishParams, Visibility, REVERIFY_INTERVAL_SECS,
     };
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
@@ -3961,6 +4031,29 @@ mod tests {
                 "expected {bad:?} to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn revision_swap_base_stamps_restore_on_tip_view_on_hexsha() {
+        // #218 Restore: BASE = the resolved server tip and the copy is dirty (rides as
+        // an unpushed edit on top of HEAD).
+        let (base, dirty) = revision_swap_base(true, "abc1234", Some("deadbeefcafe".to_owned()));
+        assert_eq!(base.as_deref(), Some("deadbeefcafe"));
+        assert!(dirty, "restore must set the dirty bit");
+
+        // Restore with no resolvable tip (the caller's fallback already yielded None):
+        // BASE stays None and the copy is still dirty. It is NOT stamped with the viewed
+        // hexsha - a restore never pins BASE to the old revision.
+        let (base, dirty) = revision_swap_base(true, "abc1234", None);
+        assert_eq!(base, None);
+        assert!(dirty);
+
+        // View: BASE = the viewed hexsha itself and the copy is clean, so the working
+        // tree IS that revision (a later Update fast-forwards back). The server tip is
+        // irrelevant to View and must be ignored.
+        let (base, dirty) = revision_swap_base(false, "abc1234", Some("deadbeefcafe".to_owned()));
+        assert_eq!(base.as_deref(), Some("abc1234"));
+        assert!(!dirty, "view must leave the copy clean");
     }
 
     #[test]

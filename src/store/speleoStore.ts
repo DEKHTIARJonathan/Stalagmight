@@ -511,6 +511,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         : null,
       divergence: null,
       banner: null,
+      // The revision-history section fetches per the open remote project id, which it
+      // can no longer read token-lessly; drop it so it hides (rather than error-fetching)
+      // until a re-login re-seeds it from the next status poll.
+      remoteProjectId: null,
       // The lock scan was for this now-ended session; drop its badges + prompt.
       remoteLocks: {},
       remoteProjects: {},

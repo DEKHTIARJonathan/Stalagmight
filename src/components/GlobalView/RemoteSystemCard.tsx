@@ -28,14 +28,22 @@ export default function RemoteSystemCard({
   busy = false,
 }: RemoteSystemCardProps) {
   const { t } = useTranslation();
-  const open = () => onOpen(summary);
+  // Gate the whole-card click on `busy` too, not just the Open button - otherwise a
+  // click on the card body (or Enter/Space) bypasses the disabled button and fires a
+  // concurrent open.
+  const open = () => {
+    if (!busy) onOpen(summary);
+  };
 
   return (
     <div
-      className="bg-panel border border-border rounded-lg p-4 cursor-pointer transition-colors hover:border-accent"
+      className={`bg-panel border border-border rounded-lg p-4 transition-colors ${
+        busy ? 'opacity-60 cursor-default' : 'cursor-pointer hover:border-accent'
+      }`}
       data-testid={`system-card-remote-${summary.id}`}
       data-remote="true"
       role="button"
+      aria-disabled={busy || undefined}
       tabIndex={0}
       onClick={open}
       onKeyDown={(e) => {

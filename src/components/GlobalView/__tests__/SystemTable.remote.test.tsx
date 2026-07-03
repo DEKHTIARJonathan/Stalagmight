@@ -20,7 +20,9 @@ const SUMMARY: SpeleoProjectSummary = {
 
 const REMOTE_ITEM: RecentListItem = { kind: 'remote', projectId: 'p1', summary: SUMMARY };
 
-function renderTable(overrides: { onOpenRemote?: ReturnType<typeof vi.fn> } = {}) {
+function renderTable(
+  overrides: { onOpenRemote?: ReturnType<typeof vi.fn>; busy?: boolean } = {},
+) {
   const onOpenRemote = overrides.onOpenRemote ?? vi.fn();
   render(
     <SystemTable
@@ -38,6 +40,7 @@ function renderTable(overrides: { onOpenRemote?: ReturnType<typeof vi.fn> } = {}
       onContextMenu={vi.fn()}
       onRemoveMissing={vi.fn()}
       onOpenRemote={onOpenRemote}
+      busy={overrides.busy ?? false}
     />,
   );
   return { onOpenRemote };
@@ -54,5 +57,15 @@ describe('SystemTable remote row (#218)', () => {
     const { onOpenRemote } = renderTable();
     await userEvent.click(screen.getByTestId('system-row-remote-open-p1'));
     expect(onOpenRemote).toHaveBeenCalledWith(SUMMARY);
+  });
+
+  it('gates the row + Open button while busy (no concurrent open)', async () => {
+    const { onOpenRemote } = renderTable({ busy: true });
+    const openButton = screen.getByTestId('system-row-remote-open-p1');
+    expect(openButton).toBeDisabled();
+    // Clicking the disabled button, or the row body, must not fire a second open.
+    await userEvent.click(openButton);
+    await userEvent.click(screen.getByTestId('system-row-remote-p1'));
+    expect(onOpenRemote).not.toHaveBeenCalled();
   });
 });

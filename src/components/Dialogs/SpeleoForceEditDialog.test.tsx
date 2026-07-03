@@ -76,6 +76,22 @@ describe('SpeleoForceEditDialog (#213)', () => {
     expect(showToastMock).toHaveBeenCalledWith(expect.any(String), 'speleodb-force-edit');
   });
 
+  it('keeps the dialog open and toasts when force-edit is refused', async () => {
+    // Backend refusal (opt-in off / link lost / already lock-held): the big-red confirm
+    // must NOT dismiss as if it worked - the project stays read-only.
+    seedLink();
+    invokeIpcMock.mockRejectedValue({ message: 'force-edit is disabled' });
+    render(<SpeleoForceEditDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-force-edit-confirm'));
+
+    await waitFor(() =>
+      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_force_edit')).toBe(true),
+    );
+    expect(showToastMock).toHaveBeenCalledWith(expect.any(String), 'speleodb-action-error');
+    expect(closeDialogMock).not.toHaveBeenCalled();
+  });
+
   it('names the lock holder when someone else holds it', () => {
     seedLink({ lockedByOther: true, lockHolder: 'holder@example.com' });
     render(<SpeleoForceEditDialog />);

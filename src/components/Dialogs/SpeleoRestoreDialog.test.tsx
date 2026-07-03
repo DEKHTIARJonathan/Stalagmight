@@ -36,7 +36,11 @@ beforeEach(() => {
     setView: vi.fn(),
     dialogData: { projectId: 'p1', projectName: 'Cave A', hexsha: 'abcdef0123', shortSha: 'abcdef01' },
   });
-  useProjectStore.setState({ refreshProjectState: refreshProjectStateMock, isDirty: false });
+  useProjectStore.setState({
+    refreshProjectState: refreshProjectStateMock,
+    isDirty: false,
+    checkProjectIntegrity: vi.fn(async () => []),
+  });
   useSpeleoStore.setState({ refreshLinkStatus: refreshLinkStatusMock });
 });
 

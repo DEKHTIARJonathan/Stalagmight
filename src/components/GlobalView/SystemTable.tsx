@@ -32,6 +32,9 @@ interface SystemTableProps {
   onRemoveMissing: (filePath: string) => void;
   /** Pull + open a purely-remote SpeleoDB project row (#218). */
   onOpenRemote: (summary: SpeleoProjectSummary) => void;
+  /** True while a remote open/adopt is in flight - gates the remote rows so a second
+      click can't issue a concurrent open (mirrors RemoteSystemCard's `busy`). */
+  busy?: boolean;
 }
 
 interface ColumnDef {
@@ -96,6 +99,7 @@ export function SystemTable({
   onContextMenu,
   onRemoveMissing,
   onOpenRemote,
+  busy = false,
 }: SystemTableProps) {
   const { t } = useTranslation();
   const { formatLength } = useProjectStatFormatters();
@@ -190,14 +194,19 @@ export function SystemTable({
             return (
               <tr
                 key={`remote-${item.projectId}`}
-                className="border-b border-border cursor-pointer transition-colors hover:bg-panel"
+                className={`border-b border-border transition-colors ${
+                  busy ? 'opacity-60 cursor-default' : 'cursor-pointer hover:bg-panel'
+                }`}
                 data-testid={`system-row-remote-${item.projectId}`}
                 data-remote="true"
                 role="button"
+                aria-disabled={busy || undefined}
                 tabIndex={0}
-                onClick={() => onOpenRemote(item.summary)}
+                onClick={() => {
+                  if (!busy) onOpenRemote(item.summary);
+                }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
+                  if (!busy && (e.key === 'Enter' || e.key === ' ')) {
                     e.preventDefault();
                     onOpenRemote(item.summary);
                   }
@@ -214,11 +223,12 @@ export function SystemTable({
                   <div className="flex items-center justify-end gap-3">
                     <button
                       type="button"
+                      disabled={busy}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onOpenRemote(item.summary);
+                        if (!busy) onOpenRemote(item.summary);
                       }}
-                      className="text-xs text-accent hover:underline"
+                      className="text-xs text-accent hover:underline disabled:opacity-60 disabled:no-underline"
                       data-testid={`system-row-remote-open-${item.projectId}`}
                     >
                       {t('speleodb.browser.open')}

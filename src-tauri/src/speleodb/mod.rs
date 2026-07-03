@@ -69,7 +69,7 @@ pub(crate) enum SpeleoDbError {
     /// The dump contained no openable project and no Ariane sidecar.
     #[error("the project dump contained nothing to open")]
     EmptyDump,
-    /// The dump held an `ariane.tml` but no `.stalx` — route to the one-time C2
+    /// The dump held an `ariane.tml` but no `.stalx` - route to the one-time C2
     /// adoption flow (#214). Surfaced to the FE as `SpeleoDbAction::Adopt`, not a
     /// hard error.
     #[error("this is an Ariane (.tml) project; adopt it to edit it in Stalagmight")]

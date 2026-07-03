@@ -31,12 +31,15 @@ function formatWhen(iso: string | null): string {
  * `speleodb_get_revisions` on mount and lists the server-ordered (newest-first)
  * commit chain: short SHA, author, date, message, a merge marker for >1 parent.
  *
- * Each PAST revision offers one action, keyed on whether the user holds the lock:
- * - **Restore** (editing): a git-forward restore that pulls the revision into the
- *   working copy as an unsaved, pushable edit (via a confirm dialog carrying the
- *   disclaimer + unsaved-changes safeguard).
+ * Each PAST revision offers one action, keyed on the edit state:
+ * - **Restore** (genuine lock held): a git-forward restore that pulls the revision
+ *   into the working copy as an unsaved, pushable edit (via a confirm dialog carrying
+ *   the disclaimer + unsaved-changes safeguard).
  * - **View** (read-only): a non-destructive peek - it checks the revision out
  *   read-only, and the SpeleoDB Update action fast-forwards back to the latest.
+ * - **Neither** (force-editing, i.e. editing WITHOUT the lock): a revision swap would
+ *   clobber the unsaved lock-less edits, so the backend refuses both and a hint asks
+ *   the user to finish or discard the force-edit session first.
  *
  * The newest commit is the current server state and is marked, not actionable.
  */
@@ -45,7 +48,14 @@ export function SpeleoRevisionHistory() {
   const openDialog = useUIStore((s) => s.openDialog);
   const showToast = useUIStore((s) => s.showToast);
   const projectId = useSpeleoStore((s) => s.remoteProjectId);
-  const iHoldLock = useSpeleoStore((s) => s.link?.editState === 'editing');
+  const editState = useSpeleoStore((s) => s.link?.editState);
+  const isForceEditing = useSpeleoStore((s) => s.link?.forceEditing ?? false);
+  // A genuine lock-held session (NOT force-editing, which holds no lock) may Restore;
+  // a plain read-only session may View. A force-editor gets neither: swapping the tree
+  // would clobber their unsaved, lock-less edits, so the backend refuses both and the
+  // UI offers no action. Mirrors SpeleoStatusButton / the hamburger menu, which also
+  // AND out forceEditing.
+  const iHoldLock = editState === 'editing' && !isForceEditing;
   const projectName = useProjectStore((s) => s.project?.name ?? '');
   const restoreRevision = useRestoreRevision();
 
@@ -100,10 +110,16 @@ export function SpeleoRevisionHistory() {
     <SettingsSection title={t('speleodb.revisions.title')} data-testid="speleodb-revisions">
       <div className="mb-2 space-y-1" data-testid="speleodb-revisions-hint">
         <p className="text-xs text-text-secondary">{t('speleodb.revisions.restoreHint')}</p>
-        {!iHoldLock && (
-          <p className="text-xs text-warning" data-testid="speleodb-revisions-lock-hint">
-            {t('speleodb.revisions.lockToRestore')}
+        {isForceEditing ? (
+          <p className="text-xs text-warning" data-testid="speleodb-revisions-forceedit-hint">
+            {t('speleodb.revisions.forceEditActive')}
           </p>
+        ) : (
+          !iHoldLock && (
+            <p className="text-xs text-warning" data-testid="speleodb-revisions-lock-hint">
+              {t('speleodb.revisions.lockToRestore')}
+            </p>
+          )
         )}
       </div>
       {error ? (
@@ -147,7 +163,10 @@ export function SpeleoRevisionHistory() {
                       </span>
                     )}
                     {rev.parent_ids.length > 1 && (
-                      <span className="px-1.5 py-0.5 rounded text-xs bg-warning-20 text-warning">
+                      <span
+                        className="px-1.5 py-0.5 rounded text-xs bg-warning-20 text-warning"
+                        data-testid={`speleodb-revision-merge-${rev.id}`}
+                      >
                         {t('speleodb.revisions.merge')}
                       </span>
                     )}
@@ -166,37 +185,37 @@ export function SpeleoRevisionHistory() {
                     </p>
                   )}
                 </div>
-                {!isCurrent &&
-                  (iHoldLock ? (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() =>
-                        openDialog('speleodb-restore', {
-                          projectId,
-                          projectName,
-                          hexsha: rev.id,
-                          shortSha: rev.id.slice(0, 8),
-                          message: rev.message ?? '',
-                        })
-                      }
-                      data-testid={`speleodb-revision-restore-${rev.id}`}
-                    >
-                      {t('speleodb.revisions.restore')}
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={pendingId !== null}
-                      onClick={() => void handleView(rev)}
-                      data-testid={`speleodb-revision-view-${rev.id}`}
-                    >
-                      {pendingId === rev.id
-                        ? t('speleodb.revisions.viewing')
-                        : t('speleodb.revisions.view')}
-                    </Button>
-                  ))}
+                {!isCurrent && iHoldLock && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() =>
+                      openDialog('speleodb-restore', {
+                        projectId,
+                        projectName,
+                        hexsha: rev.id,
+                        shortSha: rev.id.slice(0, 8),
+                        message: rev.message ?? '',
+                      })
+                    }
+                    data-testid={`speleodb-revision-restore-${rev.id}`}
+                  >
+                    {t('speleodb.revisions.restore')}
+                  </Button>
+                )}
+                {!isCurrent && !iHoldLock && !isForceEditing && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={pendingId !== null}
+                    onClick={() => void handleView(rev)}
+                    data-testid={`speleodb-revision-view-${rev.id}`}
+                  >
+                    {pendingId === rev.id
+                      ? t('speleodb.revisions.viewing')
+                      : t('speleodb.revisions.view')}
+                  </Button>
+                )}
               </li>
             );
           })}

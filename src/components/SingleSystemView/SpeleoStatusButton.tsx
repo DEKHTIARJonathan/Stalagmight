@@ -134,15 +134,19 @@ export function SpeleoStatusButton() {
 
   const kind: ButtonKind = link.noAccess
     ? 'no_permission'
-    : conflict
-      ? 'conflict'
-      : link.editState === 'editing'
-        ? // #213: editing WITHOUT the lock is a distinct danger state routing to
-          // Reconnect, not Done. A real conflict still preempts it (handled above).
-          link.forceEditing
-          ? 'force_edit'
-          : 'editing'
-        : serverError
+    : // #213: force-editing (editing WITHOUT the lock) preempts a conflict. The force
+      // editor holds no lock, so their way forward is Reconnect (acquire + reconcile),
+      // which surfaces any divergence via the resolution dialog; routing them straight
+      // to the divergence dialog (as 'conflict' does) would offer push / take-remote
+      // actions that assume a held lock. This also keeps the button in agreement with
+      // SpeleoBanner, which shows the force-edit banner ahead of a conflict.
+      link.editState === 'editing' && link.forceEditing
+      ? 'force_edit'
+      : conflict
+        ? 'conflict'
+        : link.editState === 'editing'
+          ? 'editing'
+          : serverError
           ? 'unknown_error'
           : lockedByOther
             ? 'locked_by_other'

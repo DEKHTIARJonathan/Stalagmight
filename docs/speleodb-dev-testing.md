@@ -308,7 +308,7 @@ read; never an ongoing reconcile). `speleodb_open_project` surfaces the typed
 `SpeleoDbAction::Adopt` (not a hard error); the browser then offers a confirm
 dialog, and on confirm `speleodb_adopt_ariane` downloads the dump, imports the
 `ariane.tml` through the normal TML importer (`include_excluded=false`,
-`comments_on_stations=true` — the same settings the collab `.tml` round-trip
+`comments_on_stations=true` - the same settings the collab `.tml` round-trip
 uses), saves a new `.stalx` at the pull cache path, stamps the `speleo_link`
 (`base = server tip`, `has_unpushed_edits = true`), and best-effort PATCHes the
 server project `type` ariane→other.
@@ -332,14 +332,14 @@ needs an app handle + a live box, so it is verified manually on the dev box:
 7. Negative: with a READ_ONLY account, adoption still opens the project locally
    and the toast notes the server type was not updated (`type_flipped = false`).
 
-## Optimistic force-edit — editing without the lock (E2, #213)
+## Optimistic force-edit - editing without the lock (E2, #213)
 
 Force-edit lets an **opted-in** user edit a remote project **without** the write
 lock (to survey offline, or while someone else holds it), behind a persistent
 big-red "this `.stalx` cannot be merged" warning. It introduces a transient
 `force_editing` flag distinct from `edit_enabled`: `edit_enabled && force_editing`
 = editing WITHOUT the lock; `edit_enabled && !force_editing` = the normal lock-held
-mode. Force-edit changes nothing else in the state model — edits set the existing
+mode. Force-edit changes nothing else in the state model - edits set the existing
 dirty bit, BASE never moves (no acquire), and reconnect runs the SAME acquire+fence
 as Start-editing (it folds into `speleodb_start_editing`, no new verb).
 
@@ -363,7 +363,7 @@ Vitest test. The reconnect handshake needs a live box, so verify manually:
    (no acquire) and `has_unpushed_edits = 1`.
 4. Confirm the #202 re-verify never fires while force-editing (no 20-min lock check).
 5. Close + reopen → opens read-only again (force-edit is transient; the edits
-   persist via the `.stalx` + dirty bit — re-enter force-edit to continue).
+   persist via the `.stalx` + dirty bit - re-enter force-edit to continue).
 6. Reconnect (the banner action, = Start-editing) while the server is unchanged →
    UpToDate → normal lock-held editing (banner clears, Done available).
 7. Reconnect while another account holds the lock → 400 → "locked by {holder}", and

@@ -112,7 +112,7 @@ describe('useSpeleoActions — flush to disk after a confirmed push/unlock', () 
   });
 });
 
-describe('useSpeleoActions — fast-forward resets the on-screen tree (#218)', () => {
+describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () => {
   it('update (→ fast_forwarded) refreshes geometry + link state', async () => {
     // The backend FF reload reopens the SAME path, so loadProject short-circuits on
     // the "already open" guard; without the explicit refresh the old tree would stay
@@ -120,7 +120,7 @@ describe('useSpeleoActions — fast-forward resets the on-screen tree (#218)', (
     const loadProject = vi.fn(async () => ({ success: true }));
     const refreshProjectState = vi.fn(async () => {});
     const refreshLinkStatus = vi.fn(async () => {});
-    useProjectStore.setState({ loadProject, refreshProjectState });
+    useProjectStore.setState({ loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
     useSpeleoStore.setState({ applyUpdate: vi.fn(), refreshLinkStatus });
     invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/x.stalx' });
     const { result } = renderHook(() => useSpeleoActions());
@@ -130,6 +130,26 @@ describe('useSpeleoActions — fast-forward resets the on-screen tree (#218)', (
     });
 
     expect(loadProject).toHaveBeenCalledWith('/x.stalx');
+    expect(refreshProjectState).toHaveBeenCalled();
+    expect(refreshLinkStatus).toHaveBeenCalled();
+  });
+
+  it('startEditing (→ fast_forwarded) refreshes geometry + link state', async () => {
+    // The startEditing FF arm has the same in-place-reopen refresh as update; guard it
+    // too (deleting its refresh calls would leave a stale tree after a Start-editing FF).
+    const loadProject = vi.fn(async () => ({ success: true }));
+    const refreshProjectState = vi.fn(async () => {});
+    const refreshLinkStatus = vi.fn(async () => {});
+    useProjectStore.setState({ loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useSpeleoStore.setState({ applyStartEditing: vi.fn(), refreshLinkStatus });
+    invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/y.stalx' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.startEditing();
+    });
+
+    expect(loadProject).toHaveBeenCalledWith('/y.stalx');
     expect(refreshProjectState).toHaveBeenCalled();
     expect(refreshLinkStatus).toHaveBeenCalled();
   });
