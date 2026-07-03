@@ -18,6 +18,10 @@ use crate::models::StationRef;
 
 use super::physics::{cylinder_gas_volume, sac_to_rmv};
 
+fn default_true() -> bool {
+    true
+}
+
 /// Cylinder construction material. Hints role suitability — steel ≈ negative buoyancy →
 /// back gas; aluminium ≈ neutral → fine as a stage — but it is guidance, never a hard
 /// rule (PRD §5.3).
@@ -108,6 +112,12 @@ pub struct Cylinder {
     pub material: TankMaterial,
     pub role: CylRole,
     pub label: Option<String>,
+    /// Whether this cylinder is carried on THIS dive (#245). A disabled tank stays in the
+    /// table (greyed) but is excluded from every gas computation — budget, gauges, drops —
+    /// so a diver can toggle rig variants without deleting rows. `#[serde(default)]` = `true`,
+    /// so a plan/config saved before this field loads with all tanks enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 impl Cylinder {
@@ -137,6 +147,7 @@ impl Cylinder {
             material,
             role,
             label,
+            enabled: true,
         })
     }
 

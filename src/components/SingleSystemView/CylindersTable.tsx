@@ -33,6 +33,8 @@ export function CylindersTable() {
     setCylinders(cylinders.map((c, i) => (i === idx ? { ...c, fill_bar: fillBar } : c)));
   const setRole = (idx: number, role: CylRole) =>
     setCylinders(cylinders.map((c, i) => (i === idx ? { ...c, role } : c)));
+  const setEnabled = (idx: number, enabled: boolean) =>
+    setCylinders(cylinders.map((c, i) => (i === idx ? { ...c, enabled } : c)));
   const removeCylinder = (idx: number) => setCylinders(cylinders.filter((_, i) => i !== idx));
   const addPreset = (presetId: string) => {
     const preset = TANK_PRESETS.find((p) => p.id === presetId);
@@ -44,6 +46,7 @@ export function CylindersTable() {
       <table className="w-full text-left">
         <thead className="text-xs uppercase tracking-wide opacity-60">
           <tr>
+            <th className="py-1 pr-2 font-semibold">{t('gasPanel.tanks.colEnabled')}</th>
             <th className="py-1 pr-3 font-semibold">{t('gasPanel.tanks.colTank')}</th>
             <th className="py-1 pr-3 font-semibold">{t('gasPanel.tanks.colWater')}</th>
             <th className="py-1 pr-3 font-semibold">
@@ -54,13 +57,32 @@ export function CylindersTable() {
           </tr>
         </thead>
         <tbody>
-          {cylinders.map((cyl, idx) => (
+          {cylinders.map((cyl, idx) => {
+            // A row is dimmed when it doesn't count toward the swim-in budget: either the
+            // tank is switched off for this dive (#245) or its role isn't a budget role.
+            const dimmed = !cyl.enabled || !isBudgetRole(cyl.role);
+            const dimReason = !cyl.enabled
+              ? t('gasPanel.tanks.disabledHint')
+              : isBudgetRole(cyl.role)
+                ? undefined
+                : t('gasPanel.tanks.notCounted');
+            return (
             <tr
               key={idx}
-              className={`border-t border-border ${isBudgetRole(cyl.role) ? '' : 'opacity-50'}`}
-              title={isBudgetRole(cyl.role) ? undefined : t('gasPanel.tanks.notCounted')}
+              className={`border-t border-border ${dimmed ? 'opacity-50' : ''}`}
+              title={dimReason}
               data-testid="gas-cylinder-row"
+              data-enabled={cyl.enabled}
             >
+              <td className="py-1 pr-2">
+                <input
+                  type="checkbox"
+                  checked={cyl.enabled}
+                  onChange={(e) => setEnabled(idx, e.target.checked)}
+                  aria-label={t('gasPanel.tanks.enabledAria', { tank: cyl.label ?? '' })}
+                  data-testid="gas-cylinder-enabled"
+                />
+              </td>
               <td className="py-1 pr-3 font-medium">{cyl.label ?? `${cyl.water_volume_l}L`}</td>
               <td className="py-1 pr-3 opacity-70">{cyl.water_volume_l} L</td>
               <td className="py-1 pr-3">
@@ -100,7 +122,8 @@ export function CylindersTable() {
                 </button>
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
       <div className="flex items-center gap-4 mt-3">

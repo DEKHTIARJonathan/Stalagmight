@@ -199,6 +199,89 @@ fn deliverable_gas_always_below_ideal_and_conservative_caps_overfill() {
 }
 
 #[test]
+fn gas_reach_field_excludes_disabled_cylinders_from_budget() {
+    // A disabled tank (#245) contributes nothing: the field computed WITH a disabled second
+    // back-gas tank must match the field from the single enabled tank alone.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let enabled_bg = Cylinder::new(
+        11.1,
+        207.0,
+        207.0,
+        TankMaterial::Aluminium,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let disabled_bg = Cylinder {
+        enabled: false,
+        ..enabled_bg.clone()
+    };
+
+    let with_disabled = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        &[enabled_bg.clone(), disabled_bg],
+        &GasConfig::default(),
+    );
+    let only_enabled = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        &[enabled_bg],
+        &GasConfig::default(),
+    );
+    assert!(
+        with_disabled.budget_litres > 0.0,
+        "the one enabled tank still yields a budget"
+    );
+    assert!(
+        (with_disabled.budget_litres - only_enabled.budget_litres).abs() < 1e-9,
+        "the disabled tank must not add to the budget"
+    );
+}
+
+#[test]
+fn gas_reach_field_disabled_stage_falls_back_off_staged_strategy() {
+    // When the rig's only Stage cylinder is disabled, a staged request has no stages to count,
+    // so the effective strategy falls back to All-thirds — no stage drops (§6, never invent gas).
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        24.0,
+        232.0,
+        200.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let disabled_stage = Cylinder {
+        enabled: false,
+        ..Cylinder::new(
+            11.0,
+            207.0,
+            200.0,
+            TankMaterial::Aluminium,
+            CylRole::Stage,
+            None,
+        )
+        .unwrap()
+    };
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    let field =
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg, disabled_stage], &cfg);
+    assert!(
+        field.stage_drop_refs.is_empty() && field.stage_drop_bars.is_empty(),
+        "a disabled-only stage rig falls back to All-thirds (no drops)"
+    );
+}
+
+#[test]
 fn penetration_budget_all_thirds_is_usable_over_three() {
     let bg = Cylinder::new(
         11.1,

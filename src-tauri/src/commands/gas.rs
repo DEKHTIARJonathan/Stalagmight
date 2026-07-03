@@ -26,6 +26,9 @@ pub async fn compute_gas_reach_field(
     let cylinders = cylinders
         .into_iter()
         .map(|c| {
+            // `new` re-validates the numerics and resets `enabled` to true, so carry the
+            // frontend's enabled flag across (serde already defaulted a missing one to true).
+            let enabled = c.enabled;
             Cylinder::new(
                 c.water_volume_l,
                 c.rated_pressure_bar,
@@ -34,6 +37,10 @@ pub async fn compute_gas_reach_field(
                 c.role,
                 c.label,
             )
+            .map(|mut cyl| {
+                cyl.enabled = enabled;
+                cyl
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut gas_config = gas_config;

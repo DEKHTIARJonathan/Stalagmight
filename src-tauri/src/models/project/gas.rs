@@ -44,6 +44,13 @@ impl Project {
         cylinders: &[Cylinder],
         gas_config: &GasConfig,
     ) -> GasReachField {
+        // Disabled tanks (#245) are excluded from EVERY gas computation — budget, gauges,
+        // stage drops. Filter once here so no downstream helper has to know about `enabled`;
+        // rig (vec) order is preserved, so "stage 1/2" still means the first/second enabled
+        // Stage cylinder.
+        let cylinders: Vec<Cylinder> = cylinders.iter().filter(|c| c.enabled).cloned().collect();
+        let cylinders = cylinders.as_slice();
+
         let stations = self.compute_station_coordinates();
         let n = stations.len();
         let station_refs: Vec<StationRef> = stations.iter().map(|s| s.station_ref).collect();

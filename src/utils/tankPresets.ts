@@ -49,5 +49,7 @@ export function cylinderFromPreset(p: TankPreset): Cylinder {
     material: p.material,
     role: p.role,
     label: p.label,
+    // A freshly-added tank is carried by default (#245); the user can toggle it off.
+    enabled: true,
   };
 }
