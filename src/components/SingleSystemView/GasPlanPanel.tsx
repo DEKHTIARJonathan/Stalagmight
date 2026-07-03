@@ -98,7 +98,11 @@ export function GasPlanPanel() {
     : t('gasPanel.origin.entrance');
 
   const turnCount = reachField ? reachField.turn_frontier.length : null;
-  const stageCount = cylinders.filter((c) => c.role === 'stage').length;
+  // Count only ENABLED stages: the engine filters disabled tanks before counting stages
+  // (gas.rs `active`), so a disabled stage must not keep a staged strategy selectable here or the
+  // panel would show a staged plan + its reserve control while the engine has fallen back to
+  // All-thirds (#245 UI/backend parity — this drives the button-enable, isStaged, and re-check).
+  const stageCount = cylinders.filter((c) => c.role === 'stage' && c.enabled).length;
   const strategy = gasConfig.default_reserve;
   // Effective staged state: a staged strategy AND the rig actually carries enough stages. Mirrors
   // the backend's stage-count fallback, so removing stages after selecting a staged strategy hides

@@ -109,10 +109,19 @@ export function CylindersTable() {
                 />
               </td>
               <td className="py-1 pr-3">
-                {isFree && isBudgetRole(cyl.role) ? (
+                {isFree && isBudgetRole(cyl.role) && cyl.enabled ? (
                   <PositiveNumberField
                     value={pressureToDisplay(cyl.usable_gas_bar, units)}
-                    onCommit={(n) => setUsable(idx, pressureFromDisplay(n, units))}
+                    // Clamp on commit to the tank's usable ceiling (the conservative-capped fill the
+                    // engine budgets against), so the field can't display more usable gas than the
+                    // cylinder actually credits (#245); the backend clamps too, this keeps the UI honest.
+                    onCommit={(n) => {
+                      const basis =
+                        gasConfig.conservative_tank_gas !== false
+                          ? Math.min(cyl.fill_bar, cyl.rated_pressure_bar)
+                          : cyl.fill_bar;
+                      setUsable(idx, Math.min(pressureFromDisplay(n, units), basis));
+                    }}
                     step={units === 'imperial' ? 50 : 5}
                     displayPrecision={0}
                     className="w-20 bg-transparent border border-border rounded px-1 py-0.5"

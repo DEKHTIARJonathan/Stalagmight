@@ -284,11 +284,13 @@ fn gas_reach_field_disabled_stage_falls_back_off_staged_strategy() {
 #[test]
 fn gas_free_budget_sums_user_usable_gas_and_gauges_match() {
     // Free (#245): budget = Σ (deliverable(fill) − deliverable(fill − usable)); at fill 90 / usable
-    // 30 the pressures are < 100 bar so Z == 1 and it reduces to usable × water-vol.
+    // 50 the pressures are < 100 bar so Z == 1 and it reduces to usable × water-vol.
+    // usable = 50 is deliberately ≠ fill/3 (= 30): were Free to fall through to the All-thirds
+    // arm, budget would be 720 / column 30 / turn 60 — so this test genuinely separates Free.
     let (project, origin) = linear_descent_project();
     let diver = Diver::new(20.0, None).unwrap();
     let bg = Cylinder {
-        usable_gas_bar: 30.0,
+        usable_gas_bar: 50.0,
         ..Cylinder::new(
             24.0,
             232.0,
@@ -305,12 +307,12 @@ fn gas_free_budget_sums_user_usable_gas_and_gauges_match() {
     };
     let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg], &cfg);
     assert!(
-        (field.budget_litres - 30.0 * 24.0).abs() < 1e-6,
-        "Free budget = usable × water-vol at Z == 1"
+        (field.budget_litres - 50.0 * 24.0).abs() < 1e-6,
+        "Free budget = usable × water-vol at Z == 1 (1200, not the All-thirds 720)"
     );
     // The column echoes the diver's chosen usable bar; the turn gauge is fill − usable.
-    assert_eq!(field.cylinder_usable_bars, vec![30.0]);
-    assert!((field.backgas_turn_bar.unwrap() - 60.0).abs() < 1e-6);
+    assert_eq!(field.cylinder_usable_bars, vec![50.0]);
+    assert!((field.backgas_turn_bar.unwrap() - 40.0).abs() < 1e-6);
 }
 
 #[test]
@@ -341,6 +343,115 @@ fn gas_free_clamps_usable_over_fill() {
         "clamped usable = whole tank (fill × water-vol at Z == 1)"
     );
     assert_eq!(field.cylinder_usable_bars, vec![90.0]);
+}
+
+#[test]
+fn gas_free_display_clamps_to_basis_not_fill_on_overfill() {
+    // Overfilled tank (fill 250 > rated 232) under the default conservative cap: the budget clamps
+    // usable to basis = 232, and so MUST the display column + turn gauge, or the readout would
+    // over-state relative to the reach (the drift bug). usable 240 → column shows 232 (basis), NOT
+    // 240 (fill); turn = fill − 232 = 18.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder {
+        usable_gas_bar: 240.0,
+        ..Cylinder::new(
+            24.0,
+            232.0,
+            250.0,
+            TankMaterial::Steel,
+            CylRole::BackGas,
+            None,
+        )
+        .unwrap()
+    };
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::Free,
+        ..GasConfig::default() // conservative_tank_gas = true
+    };
+    let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg], &cfg);
+    assert!(
+        (field.cylinder_usable_bars[0] - 232.0).abs() < 1e-6,
+        "column clamps to basis (232), not raw fill (240)"
+    );
+    assert!(
+        (field.backgas_turn_bar.unwrap() - 18.0).abs() < 1e-6,
+        "turn = fill − basis-clamped usable = 250 − 232"
+    );
+}
+
+#[test]
+fn gas_free_negative_usable_clamps_to_zero() {
+    // A negative usable (hand-edited / stale config; the UI blocks it) contributes nothing and
+    // shows 0 — the lower clamp holds.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder {
+        usable_gas_bar: -50.0,
+        ..Cylinder::new(
+            24.0,
+            232.0,
+            90.0,
+            TankMaterial::Steel,
+            CylRole::BackGas,
+            None,
+        )
+        .unwrap()
+    };
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::Free,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg], &cfg);
+    assert!(
+        field.budget_litres.abs() < 1e-9,
+        "negative usable → 0 budget"
+    );
+    assert_eq!(field.cylinder_usable_bars, vec![0.0]);
+}
+
+#[test]
+fn gas_cylinder_usable_bars_uncounted_stage_is_zero() {
+    // Under a 1-stage staged strategy only the FIRST enabled stage is counted; a second stage
+    // contributes 0 to the column (it isn't in the budget). Pins the `enabled_stage_i < needed`
+    // counting arm, which the all-thirds alignment test never exercises.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        24.0,
+        232.0,
+        90.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = || {
+        Cylinder::new(
+            11.0,
+            207.0,
+            90.0,
+            TankMaterial::Aluminium,
+            CylRole::Stage,
+            None,
+        )
+        .unwrap()
+    };
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    let field =
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg, stage(), stage()], &cfg);
+    // counted stage: (basis − reserve)/2 = (90 − 30)/2 = 30; uncounted second stage: 0.
+    assert!(
+        (field.cylinder_usable_bars[1] - 30.0).abs() < 1e-6,
+        "first (counted) stage = (basis − reserve)/2"
+    );
+    assert!(
+        field.cylinder_usable_bars[2].abs() < 1e-12,
+        "second (uncounted) stage = 0"
+    );
 }
 
 #[test]

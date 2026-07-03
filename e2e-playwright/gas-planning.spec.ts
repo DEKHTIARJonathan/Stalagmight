@@ -375,6 +375,30 @@ test.describe('Gas planning', () => {
       .toBe(false);
   });
 
+  test('disabling the only stage drops the staged reserve control (UI/backend parity #245) @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
+    // Carry one stage and select the (acked) 1-stage strategy → the stage-reserve control shows.
+    await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
+    await page.locator('[data-testid="gas-cylinder-role"]').last().selectOption('stage');
+    await page.locator('[data-testid="gas-reserve-one_stage"]').click();
+    await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
+    await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toBeVisible();
+
+    // Disable that stage. The engine counts only ENABLED stages, so it falls back to All-thirds;
+    // the panel must mirror that — the staged-only reserve control disappears and the 1-stage
+    // button greys out (before the fix, stageCount counted the disabled stage and both stayed live).
+    await page
+      .locator('[data-testid="gas-cylinder-row"]')
+      .last()
+      .locator('[data-testid="gas-cylinder-enabled"]')
+      .uncheck();
+    await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="gas-reserve-one_stage"]')).toBeDisabled();
+  });
+
   test('the Free strategy makes the usable-gas column editable per cylinder (#245) @smoke', async ({
     page,
   }) => {

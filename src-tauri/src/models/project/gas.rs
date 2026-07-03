@@ -243,7 +243,7 @@ impl Project {
         // Back-gas turn gauge — computed here so the UI never re-derives the budget math; honours the
         // conservative cap + effective strategy. Free averages the diver's per-tank turn directly.
         let backgas_turn_bar = match effective {
-            ReservePreset::Free => free_backgas_turn(active),
+            ReservePreset::Free => free_backgas_turn(active, conservative),
             _ => backgas_turn_pressure(active, backgas_fraction(effective), conservative),
         };
 
@@ -564,7 +564,13 @@ fn cylinder_usable_bars(
             let basis = cyl_basis(c, conservative);
             match effective {
                 ReservePreset::Free => match c.role {
-                    CylRole::BackGas | CylRole::Stage => c.usable_gas_bar.clamp(0.0, c.fill_bar),
+                    // Clamp to `basis` (NOT raw fill) so the displayed usable bar equals what the
+                    // budget credits (`free_in_gas` also clamps to basis) even on an overfilled tank
+                    // under conservative — the "single source of truth" guarantee. `.max(0.0)`
+                    // sanitizes a NaN input to 0, matching the sibling free_* helpers.
+                    CylRole::BackGas | CylRole::Stage => {
+                        c.usable_gas_bar.clamp(0.0, basis).max(0.0)
+                    }
                     _ => 0.0,
                 },
                 // Thirds counts back gas AND stages at ⅓ (both are in `usable_oc_gas`).
@@ -591,9 +597,10 @@ fn cylinder_usable_bars(
 }
 
 /// Free-strategy back-gas turn gauge (bar): the volume-weighted mean of each enabled back-gas
-/// tank's chosen turn pressure `fill − usable_gas_bar` (clamped). `None` when the rig carries no
-/// back gas — matching [`backgas_turn_pressure`].
-fn free_backgas_turn(cylinders: &[Cylinder]) -> Option<f64> {
+/// tank's chosen turn pressure `fill − usable_gas_bar`. The usable bar is clamped to `[0, basis]`
+/// (the conservative-capped fill, same ceiling the budget uses) so the gauge can't credit more than
+/// the plan does. `None` when the rig carries no back gas — matching [`backgas_turn_pressure`].
+fn free_backgas_turn(cylinders: &[Cylinder], conservative: bool) -> Option<f64> {
     let back: Vec<&Cylinder> = cylinders
         .iter()
         .filter(|c| matches!(c.role, CylRole::BackGas))
@@ -605,7 +612,7 @@ fn free_backgas_turn(cylinders: &[Cylinder]) -> Option<f64> {
     let turn = back
         .iter()
         .map(|c| {
-            let u = c.usable_gas_bar.clamp(0.0, c.fill_bar);
+            let u = c.usable_gas_bar.clamp(0.0, cyl_basis(c, conservative));
             (c.fill_bar - u) * c.water_volume_l
         })
         .sum::<f64>()
@@ -624,7 +631,9 @@ fn free_stage_drops(cylinders: &[Cylinder], conservative: bool) -> (Vec<f64>, Ve
         .iter()
         .filter(|c| matches!(c.role, CylRole::Stage))
     {
-        let u = c.usable_gas_bar.clamp(0.0, c.fill_bar);
+        // Clamp to `basis` (same ceiling as the budget's `free_in_gas`) so the drop gauge agrees
+        // with the credited gas on an overfilled tank under conservative.
+        let u = c.usable_gas_bar.clamp(0.0, cyl_basis(c, conservative));
         if u <= 0.0 {
             continue;
         }
