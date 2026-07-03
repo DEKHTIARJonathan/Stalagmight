@@ -76,13 +76,16 @@ describe('SpeleoRevisionHistory (#218)', () => {
     expect(screen.getByTestId('speleodb-revision-current-aaaaaaaa1111')).toBeInTheDocument();
     expect(screen.queryByTestId('speleodb-revision-restore-aaaaaaaa1111')).not.toBeInTheDocument();
     expect(screen.getByTestId('speleodb-revision-restore-bbbbbbbb2222')).toBeEnabled();
+    // While editing, the "lock first" note is not shown.
+    expect(screen.queryByTestId('speleodb-revisions-lock-hint')).not.toBeInTheDocument();
   });
 
-  it('disables Restore when the lock is not held (not editing)', async () => {
+  it('disables Restore and shows the lock-first note when not editing', async () => {
     seed('read-only');
     render(<SpeleoRevisionHistory />);
     await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
     expect(screen.getByTestId('speleodb-revision-restore-bbbbbbbb2222')).toBeDisabled();
+    expect(screen.getByTestId('speleodb-revisions-lock-hint')).toBeInTheDocument();
   });
 
   it('opens the restore confirm with the chosen revision', async () => {

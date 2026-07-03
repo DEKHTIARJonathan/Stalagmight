@@ -69,6 +69,14 @@ export function SpeleoRevisionHistory() {
 
   return (
     <SettingsSection title={t('speleodb.revisions.title')} data-testid="speleodb-revisions">
+      <div className="mb-2 space-y-1" data-testid="speleodb-revisions-hint">
+        <p className="text-xs text-text-secondary">{t('speleodb.revisions.restoreHint')}</p>
+        {!iHoldLock && (
+          <p className="text-xs text-warning" data-testid="speleodb-revisions-lock-hint">
+            {t('speleodb.revisions.lockToRestore')}
+          </p>
+        )}
+      </div>
       {error ? (
         <p className="text-error text-sm" data-testid="speleodb-revisions-error">
           {error}

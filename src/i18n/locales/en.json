@@ -2738,6 +2738,8 @@
       "current": "Current",
       "restore": "Restore",
       "restoreNeedsLock": "Start editing to restore a revision",
+      "restoreHint": "Restoring replaces the working copy with the selected revision as an unsaved edit; push to make it the project's latest. Your project history is not rewritten.",
+      "lockToRestore": "Lock the project for editing first to restore a revision. While it is read-only, the SpeleoDB Update action pulls forward to the latest instead.",
       "unknownAuthor": "unknown author"
     },
     "restore": {
