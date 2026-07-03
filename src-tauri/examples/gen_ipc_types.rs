@@ -67,8 +67,8 @@ use stalagmight_lib::speleodb::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoAdoptResult, SpeleoCollaborator,
     SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
     SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
-    SpeleoPublishParams, SpeleoPublishResult, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption,
-    SpeleoUserSuggestion, StartEditingResult, UpdateResult, Visibility,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoSessionStatus, SpeleoTeamGrant,
+    SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 

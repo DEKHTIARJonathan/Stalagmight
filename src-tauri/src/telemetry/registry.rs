@@ -121,6 +121,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.set_zero_datum",
     "command.speleodb_add_collaborator",
     "command.speleodb_add_team",
+    "command.speleodb_adopt_ariane",
     "command.speleodb_delete_project",
     "command.speleodb_done",
     "command.speleodb_get_project_metadata",

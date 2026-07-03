@@ -1181,19 +1181,24 @@ impl AppState {
         // Called directly (NOT via the auth handler) so a spurious 401/403 on this last
         // step can't auto-drop the session AFTER the project is already adopted locally.
         // A permission failure (READ_ONLY user) is the expected `type_flipped = false`.
-        let type_flipped =
-            match client::patch_project(&endpoint, &token, insecure_http, &project_id, r#"{"type":"other"}"#) {
-                Ok(_) => true,
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        project_id = %project_id,
-                        purpose = "flip SpeleoDB project type ariane->other on adopt",
-                        "speleodb_adopt_ariane: type flip failed (likely no write access); adopted locally"
-                    );
-                    false
-                }
-            };
+        let type_flipped = match client::patch_project(
+            &endpoint,
+            &token,
+            insecure_http,
+            &project_id,
+            r#"{"type":"other"}"#,
+        ) {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    project_id = %project_id,
+                    purpose = "flip SpeleoDB project type ariane->other on adopt",
+                    "speleodb_adopt_ariane: type flip failed (likely no write access); adopted locally"
+                );
+                false
+            }
+        };
 
         // Concurrent same-account session notice (mirrors the pull, #193 b8).
         let concurrent_session = {
@@ -1245,7 +1250,8 @@ impl AppState {
             ))));
         }
 
-        let saved = crate::commands::project::save_project_impl(self, Some(dest.to_path_buf()), false);
+        let saved =
+            crate::commands::project::save_project_impl(self, Some(dest.to_path_buf()), false);
         if !saved.success {
             return Err(local_dto(SpeleoDbError::Io(format!(
                 "could not save the adopted project: {}",
@@ -3073,6 +3079,8 @@ mod tests {
         //     3. speleodb_publish - stamp BASE = the create response's latest_commit
         //        (None for a brand-new repo) when minting the link for a published
         //        local project (#207)
+        //     4. speleodb_adopt_ariane - stamp BASE = the server tip when minting the
+        //        link for an adopted Ariane project (#214); same trigger as pull.
         let src = include_str!("speleodb.rs");
         let prod = src
             .split("#[cfg(test)]")
@@ -3085,8 +3093,8 @@ mod tests {
         );
         assert_eq!(
             prod.matches("base_commit_sha:").count(),
-            3,
-            "unexpected BASE stamp count (sanctioned: open-on-pull, fast-forward restamp, publish-create)"
+            4,
+            "unexpected BASE stamp count (sanctioned: open-on-pull, fast-forward restamp, publish-create, adopt-ariane)"
         );
     }
 

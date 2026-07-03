@@ -197,7 +197,10 @@ mod tests {
     #[test]
     fn zero_stalx_with_ariane_routes_to_adoption() {
         let got = classify(&paths(&["ariane.tml", "misc/notes.txt"]));
-        assert_eq!(got, DumpClassification::AdoptAriane("ariane.tml".to_owned()));
+        assert_eq!(
+            got,
+            DumpClassification::AdoptAriane("ariane.tml".to_owned())
+        );
     }
 
     #[test]
