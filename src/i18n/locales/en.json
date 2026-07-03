@@ -1755,6 +1755,9 @@
         "notFound": "File not found",
         "remove": "Remove"
       },
+      "remote": {
+        "onSpeleoDb": "On SpeleoDB"
+      },
       "sort": {
         "label": "Sort by",
         "lastOpened": "Last opened",

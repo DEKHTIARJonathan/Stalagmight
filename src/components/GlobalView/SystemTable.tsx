@@ -10,6 +10,7 @@ import { useProjectStatFormatters } from './useProjectStatFormatters';
 import type { RecentListItem } from './recentListItems';
 import type { RecentSortField, RecentSortDirection } from './useRecentSort';
 import { SpeleoRecentInfo, resolveSpeleoLock } from './SpeleoLockBadge';
+import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 
 interface SystemTableProps {
   items: RecentListItem[];
@@ -29,6 +30,8 @@ interface SystemTableProps {
   onOpen: (filePath: string) => void;
   onContextMenu: (e: MouseEvent, filePath: string) => void;
   onRemoveMissing: (filePath: string) => void;
+  /** Pull + open a purely-remote SpeleoDB project row (#218). */
+  onOpenRemote: (summary: SpeleoProjectSummary) => void;
 }
 
 interface ColumnDef {
@@ -92,6 +95,7 @@ export function SystemTable({
   onOpen,
   onContextMenu,
   onRemoveMissing,
+  onOpenRemote,
 }: SystemTableProps) {
   const { t } = useTranslation();
   const { formatLength } = useProjectStatFormatters();
@@ -167,6 +171,56 @@ export function SystemTable({
                     data-testid={`system-row-missing-remove-${item.filePath}`}
                   >
                     {t('globalView.recent.missing.remove')}
+                  </button>
+                </td>
+              </tr>
+            );
+          }
+
+          if (item.kind === 'remote') {
+            // #218: a purely-remote SpeleoDB project (not in local recents). No local
+            // file/stats - show the SpeleoDB name + lock badge, and open (pull) it on
+            // row click. Reuses resolveSpeleoLock via a synthetic project id.
+            const remoteLock = resolveSpeleoLock(
+              { is_remote: true, speleodb_project_id: item.projectId },
+              remoteLocks,
+              myEmail,
+              remoteProjects,
+            );
+            return (
+              <tr
+                key={`remote-${item.projectId}`}
+                className="border-b border-border cursor-pointer transition-colors hover:bg-panel"
+                data-testid={`system-row-remote-${item.projectId}`}
+                data-remote="true"
+                role="button"
+                tabIndex={0}
+                onClick={() => onOpenRemote(item.summary)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onOpenRemote(item.summary);
+                  }
+                }}
+              >
+                <td className={`${cellClass} font-medium`}>{item.summary.name}</td>
+                <td className={cellClass}>
+                  <SpeleoRecentInfo info={remoteLock} name={item.summary.name} />
+                </td>
+                <td className={`${cellClass} text-text-tertiary text-right`} colSpan={2}>
+                  {t('globalView.recent.remote.onSpeleoDb')}
+                </td>
+                <td className={cellClass}>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenRemote(item.summary);
+                    }}
+                    className="text-xs text-accent hover:underline"
+                    data-testid={`system-row-remote-open-${item.projectId}`}
+                  >
+                    {t('speleodb.browser.open')}
                   </button>
                 </td>
               </tr>

@@ -29,12 +29,17 @@ import { RecentDensityToggle } from './RecentDensityToggle';
 import { useRecentDensity } from './useRecentDensity';
 import SystemTable from './SystemTable';
 import MissingSystemCard from './MissingSystemCard';
+import RemoteSystemCard from './RemoteSystemCard';
 import {
   deriveMissingPaths,
+  deriveRemoteOnlyItems,
   buildRecentListItems,
   filterRecentListItems,
 } from './recentListItems';
+import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
+import { SpeleoAdoptConfirm } from '../Dialogs/SpeleoAdoptConfirm';
 import type { ProjectMetadata } from '../../types/project';
+import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import { formatNumber } from '../../i18n/format';
 import { debugLog } from '../../utils/debugLog';
 
@@ -114,6 +119,7 @@ export default function GlobalView() {
 
   // Note: useLoadingProgress() is called in App.tsx (always mounted) to avoid duplicate listeners
   const { openDialog } = useUIStore();
+  const showToast = useUIStore((s) => s.showToast);
   const syntacticLevel = useUIStore((s) => s.syntacticLevel);
   // Toolbar buttons show icons at the 'toolbar_only' level and up (menu items
   // use the stricter 'icons' level — handled inside AppMenu).
@@ -149,8 +155,38 @@ export default function GlobalView() {
   const scanLocksOnOpen = useSpeleoStore((s) => s.scanLocksOnOpen);
   const remoteLocks = useSpeleoStore((s) => s.remoteLocks);
   const remoteProjects = useSpeleoStore((s) => s.remoteProjects);
+  const remoteSummaries = useSpeleoStore((s) => s.remoteSummaries);
   const speleoEmail = useSpeleoStore((s) => s.session?.userEmail ?? null);
   const speleoLoggedIn = useSpeleoStore((s) => s.session?.loggedIn ?? false);
+
+  // #218: pull + open a purely-remote SpeleoDB project from a GlobalView row, via the
+  // shared flow. Errors surface as toasts; an Ariane (.tml-only) project routes to the
+  // shared adopt confirm (rendered inline below). No onBeforeLoad: GlobalView is not a
+  // dialog, so loadProject's LoadingState takes over the view directly.
+  const { openRemote, adoptRemote } = useOpenRemoteProject();
+  const [remoteBusy, setRemoteBusy] = useState(false);
+  const [pendingAdopt, setPendingAdopt] = useState<SpeleoProjectSummary | null>(null);
+  const handleOpenRemote = useCallback(
+    async (summary: SpeleoProjectSummary) => {
+      setRemoteBusy(true);
+      const outcome = await openRemote(summary);
+      if (outcome.status === 'adopt') setPendingAdopt(summary);
+      else if (outcome.status === 'error') {
+        showToast(outcome.message, 'speleodb-open-remote-error');
+      }
+      setRemoteBusy(false);
+    },
+    [openRemote, showToast],
+  );
+  const handleConfirmAdopt = useCallback(async () => {
+    if (!pendingAdopt) return;
+    const summary = pendingAdopt;
+    setPendingAdopt(null);
+    setRemoteBusy(true);
+    const outcome = await adoptRemote(summary);
+    if (outcome.status === 'error') showToast(outcome.message, 'speleodb-open-remote-error');
+    setRemoteBusy(false);
+  }, [pendingAdopt, adoptRemote, showToast]);
   useEffect(() => {
     void scanLocksOnOpen();
   }, [scanLocksOnOpen]);
@@ -528,10 +564,17 @@ export default function GlobalView() {
     () => deriveMissingPaths(recentPaths, recentProjects),
     [recentPaths, recentProjects]
   );
+  // #218: purely-remote SpeleoDB projects (accessible on the server, not in local
+  // recents) - excluding any already linked to a local recent so they aren't listed
+  // twice. Empty when logged out / before the scan.
+  const remoteItems = useMemo(
+    () => deriveRemoteOnlyItems(remoteSummaries, recentProjects),
+    [remoteSummaries, recentProjects]
+  );
   // Combined, then filtered by the search term (name / location / path).
   const listItems = useMemo(
-    () => buildRecentListItems(sortedProjects, missingPaths),
-    [sortedProjects, missingPaths]
+    () => buildRecentListItems(sortedProjects, missingPaths, remoteItems),
+    [sortedProjects, missingPaths, remoteItems]
   );
   const visibleItems = useMemo(
     () => filterRecentListItems(listItems, searchTerm),
@@ -822,6 +865,7 @@ export default function GlobalView() {
                   onOpen={handleOpenFromList}
                   onContextMenu={handleContextMenu}
                   onRemoveMissing={handleRemoveFromRecent}
+                  onOpenRemote={(summary) => void handleOpenRemote(summary)}
                 />
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -839,6 +883,19 @@ export default function GlobalView() {
                         speleoLock={resolveSpeleoLock(item.project, remoteLocks, speleoEmail, remoteProjects)}
                         onSelect={(ctrlKey) => handleProjectSelect(item.filePath, ctrlKey)}
                         onContextMenu={(e) => handleContextMenu(e, item.filePath)}
+                      />
+                    ) : item.kind === 'remote' ? (
+                      <RemoteSystemCard
+                        key={`remote-${item.projectId}`}
+                        summary={item.summary}
+                        lock={resolveSpeleoLock(
+                          { is_remote: true, speleodb_project_id: item.projectId },
+                          remoteLocks,
+                          speleoEmail,
+                          remoteProjects,
+                        )}
+                        busy={remoteBusy}
+                        onOpen={(summary) => void handleOpenRemote(summary)}
                       />
                     ) : (
                       <MissingSystemCard
@@ -988,6 +1045,17 @@ export default function GlobalView() {
             </>
           )}
         </div>
+      )}
+
+      {/* #218: an Ariane (.tml-only) remote project routes Open to the shared adopt
+          confirm; confirming pulls + adopts it via the same flow as the browser. */}
+      {pendingAdopt && (
+        <SpeleoAdoptConfirm
+          projectName={pendingAdopt.name}
+          busy={remoteBusy}
+          onCancel={() => setPendingAdopt(null)}
+          onConfirm={() => void handleConfirmAdopt()}
+        />
       )}
     </div>
   );

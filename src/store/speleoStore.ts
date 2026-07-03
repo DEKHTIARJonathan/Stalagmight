@@ -151,6 +151,14 @@ interface SpeleoStore {
    */
   remoteProjects: Record<string, string>;
   /**
+   * The full project summary per accessible project (`project_id` → summary), from
+   * the same scan (#218). Retains permission / type_tag / latest_commit_sha so
+   * GlobalView can list purely-remote projects (not in local recents) and Open them
+   * without a second `list_projects` round trip. Superset of `remoteLocks` /
+   * `remoteProjects`; empty until the first scan (logged out / offline).
+   */
+  remoteSummaries: Record<string, SpeleoProjectSummary>;
+  /**
    * Locks the current user holds, found by the scan (#201). Populates the
    * resume/release prompt's list; a login/app-open scan that finds any also bumps
    * `heldLockPromptNonce` to raise the prompt.
@@ -271,6 +279,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   banner: null,
   remoteLocks: {},
   remoteProjects: {},
+  remoteSummaries: {},
   heldLocks: null,
   heldLockPromptOpen: false,
   heldLockPromptPending: true,
@@ -375,6 +384,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       set({
         remoteLocks: {},
         remoteProjects: {},
+        remoteSummaries: {},
         heldLocks: null,
         heldLockPromptPending: false,
         heldLockPromptOpen: false,
@@ -391,10 +401,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       }
       const remoteLocks: Record<string, string | null> = {};
       const remoteProjects: Record<string, string> = {};
+      const remoteSummaries: Record<string, SpeleoProjectSummary> = {};
       const heldLocks: HeldLock[] = [];
       for (const p of projects) {
         remoteLocks[p.id] = p.lock_holder;
         remoteProjects[p.id] = p.name;
+        remoteSummaries[p.id] = p;
         // Same ownership check the recents badge uses (emailsMatch), so the prompt's
         // held list and the badge's "locked by you" can't disagree.
         if (emailsMatch(p.lock_holder, me)) {
@@ -410,6 +422,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         return {
           remoteLocks,
           remoteProjects,
+          remoteSummaries,
           heldLocks: heldLocks.length > 0 ? heldLocks : null,
           heldLockPromptPending: false,
           ...(promptWorthy && heldLocks.length > 0 ? { heldLockPromptOpen: true } : {}),
@@ -494,6 +507,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // The lock scan was for this now-ended session; drop its badges + prompt.
       remoteLocks: {},
       remoteProjects: {},
+      remoteSummaries: {},
       heldLocks: null,
       heldLockPromptOpen: false,
     })),
