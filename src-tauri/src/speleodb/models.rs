@@ -506,6 +506,12 @@ pub struct SpeleoLinkStatus {
     /// tells the shell to offer Reconnect rather than Done. Transient; `false` for a
     /// normal read-only or lock-held session.
     pub force_editing: bool,
+    /// [#213] The user's `SpeleoDbConfig.allow_force_edit` opt-in, surfaced here so
+    /// the read-only shell can gate the "Edit without lock" affordance without a
+    /// separate config fetch. A copy of a global preference (not per-link), refreshed
+    /// on every poll so a Settings change takes effect on the next status read. When
+    /// false, the force-edit menu item stays hidden and the backend also refuses.
+    pub allow_force_edit: bool,
 }
 
 /// The local copy's relationship to the server tip (the reconcile verdict,
@@ -636,6 +642,7 @@ mod tests {
             server_error: None,
             exclude_geojson: false,
             force_editing: false,
+            allow_force_edit: false,
         })
         .expect("serialize link status");
         let push = serde_json::to_string(&PushResult::PushUnconfirmed).expect("serialize push");

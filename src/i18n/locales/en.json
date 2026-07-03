@@ -641,6 +641,12 @@
         "aria": "Allow insecure HTTP endpoints",
         "warning": "Allowing plain HTTP to a public address sends your token unencrypted. Only enable this for a trusted local server."
       },
+      "allowForceEdit": {
+        "label": "Allow editing without the lock",
+        "help": "Adds an \"Edit without lock\" option for remote projects, so you can survey offline or while someone else holds the lock.",
+        "aria": "Allow editing SpeleoDB projects without the write lock",
+        "warning": "Changes made without the lock cannot be merged to SpeleoDB until you reconnect and acquire it. If someone else edits meanwhile you may have to reconcile or keep your work as a separate local file."
+      },
       "account": {
         "appliesOnSave": "Sign in and sign out apply when you press Save.",
         "signedInAs": "Signed in as {{email}}",
@@ -2630,6 +2636,8 @@
       "unlocked": "Read-only - click to start editing (acquire the lock)",
       "editingDirty": "You're editing - click to push your changes and release the lock",
       "editingClean": "You hold the lock - click to release it",
+      "forceEditing": "Editing WITHOUT the lock - your changes can't be merged until you reconnect. Click to reconnect.",
+      "forceEditingLockedBy": "Editing WITHOUT the lock ({{email}} holds it) - click to reconnect and reconcile",
       "lockedByOther": "Being edited by {{email}} - click to pull the latest",
       "remoteAhead": "SpeleoDB has newer changes - click to pull",
       "conflict": "Local and remote have diverged - click to resolve",
@@ -2648,8 +2656,7 @@
       "unlock": "Finish editing (push & unlock)",
       "push": "Push (keep the lock)",
       "refresh": "Refresh from SpeleoDB",
-      "editWithoutLock": "Edit without lock…",
-      "editWithoutLockSoon": "Editing without the lock is coming soon (#213)."
+      "editWithoutLock": "Edit without lock…"
     },
     "close": {
       "title": "Close SpeleoDB project",
@@ -2699,6 +2706,25 @@
       "confirmButton": "Adopt",
       "doneToast": "Project adopted. Start editing, then Done, to push it to SpeleoDB.",
       "doneToastNoWrite": "Project adopted locally, but its SpeleoDB type could not be changed (you may not have write access)."
+    },
+    "forceEdit": {
+      "reconnect": "Reconnect to sync",
+      "confirm": {
+        "title": "Edit without the write lock?",
+        "warning": "You are about to edit WITHOUT the SpeleoDB write lock. Your changes stay only on this computer and cannot be merged back to SpeleoDB until you reconnect and acquire the lock.",
+        "hint": "If someone else edits meanwhile, reconnecting may report a conflict - you would then reconcile, or save your work as an unmanaged local copy. Use this to survey offline or while another person holds the lock.",
+        "lockedBy": "{{email}} currently holds the lock, so their work is what a later reconnect will reconcile against.",
+        "action": "Edit without lock",
+        "entering": "Enabling…"
+      },
+      "banner": {
+        "text": "Editing WITHOUT the write lock - these changes cannot be merged to SpeleoDB until you reconnect and acquire the lock.",
+        "lockedBy": "Editing WITHOUT the write lock ({{email}} holds it) - reconnect to acquire the lock and reconcile before your work can be merged."
+      },
+      "toasts": {
+        "active": "Editing without the lock. Reconnect to sync when you're ready.",
+        "failed": "Could not start editing without the lock"
+      }
     },
     "editBar": {
       "someone": "someone else",

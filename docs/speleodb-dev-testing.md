@@ -331,3 +331,43 @@ needs an app handle + a live box, so it is verified manually on the dev box:
    confirming the bootstrap is one-time.
 7. Negative: with a READ_ONLY account, adoption still opens the project locally
    and the toast notes the server type was not updated (`type_flipped = false`).
+
+## Optimistic force-edit — editing without the lock (E2, #213)
+
+Force-edit lets an **opted-in** user edit a remote project **without** the write
+lock (to survey offline, or while someone else holds it), behind a persistent
+big-red "this `.stalx` cannot be merged" warning. It introduces a transient
+`force_editing` flag distinct from `edit_enabled`: `edit_enabled && force_editing`
+= editing WITHOUT the lock; `edit_enabled && !force_editing` = the normal lock-held
+mode. Force-edit changes nothing else in the state model — edits set the existing
+dirty bit, BASE never moves (no acquire), and reconnect runs the SAME acquire+fence
+as Start-editing (it folds into `speleodb_start_editing`, no new verb).
+
+The opt-in is `SpeleoDbConfig.allow_force_edit` (default false); without it the
+"Edit without lock" affordance stays hidden and `speleodb_force_edit` refuses.
+
+Offline coverage is the pure-state seam (no network): `speleodb_force_edit` flips
+both gates only when opted-in + remote + read-only; with `force_editing` set,
+`speleodb_held_lock_release_params` returns `None` (close/exit/switch never release
+a non-existent lock), `speleodb_verify_lock_if_expired` is a no-op (#202 exempt),
+`speleodb_done`/`speleodb_push_only` return the coded reconnect error, and
+`speleodb_logout` drops both gates without a release. FE coverage: the confirm
+dialog, banner + Reconnect, the settings toggle, and the menu gating each have a
+Vitest test. The reconnect handshake needs a live box, so verify manually:
+
+1. Settings → enable "Allow editing without the lock"; open a remote project
+   (opens read-only).
+2. Menu (or the status button) → "Edit without lock" → confirm the big-red dialog →
+   the persistent red banner appears and the survey becomes editable; make an edit.
+3. DB-inspect the cached `.stalx`: `speleo_link.base_commit_sha` is **unchanged**
+   (no acquire) and `has_unpushed_edits = 1`.
+4. Confirm the #202 re-verify never fires while force-editing (no 20-min lock check).
+5. Close + reopen → opens read-only again (force-edit is transient; the edits
+   persist via the `.stalx` + dirty bit — re-enter force-edit to continue).
+6. Reconnect (the banner action, = Start-editing) while the server is unchanged →
+   UpToDate → normal lock-held editing (banner clears, Done available).
+7. Reconnect while another account holds the lock → 400 → "locked by {holder}", and
+   the force-edit banner persists (keep editing offline).
+8. Reconnect after the server tip moved with local edits → the divergence prompt.
+9. Opt-out account: no "Edit without lock" affordance; only read-only + the existing
+   "Save a local copy" detach.

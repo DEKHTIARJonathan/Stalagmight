@@ -48,7 +48,6 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
     handleCloseProject,
   } = useProject();
   const openDialog = useUIStore((s) => s.openDialog);
-  const showToast = useUIStore((s) => s.showToast);
   const showDevStats = useUIStore((s) => s.showDevStats);
   const toggleDisplay = useUIStore((s) => s.toggleDisplay);
   // SpeleoDB submenu (T2d) - only for a remote project.
@@ -114,7 +113,22 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
               label: t('speleodb.menu.title'),
               icon: <SpeleoDbLogo size={sz} />,
               submenu: [
-                speleoLink.editState === 'editing'
+                speleoLink.editState === 'editing' && speleoLink.forceEditing
+                  ? {
+                      // #213: a force-editor holds no lock, so the top action is
+                      // Reconnect (acquire + reconcile), NOT Unlock. Done/push are
+                      // backend-guarded for this state, so we never offer them here.
+                      id: 'speleodb-menu-reconnect',
+                      label: t('speleodb.forceEdit.reconnect'),
+                      icon: (
+                        <SpeleoBadgedIcon badge={<LockIcon size={9} />} badgeColor="text-yellow-400" size={sz} />
+                      ),
+                      disabled: speleoBusy,
+                      onClick: () => {
+                        void startEditing();
+                      },
+                    }
+                  : speleoLink.editState === 'editing'
                   ? {
                       id: 'speleodb-menu-unlock',
                       label: t('speleodb.menu.unlock'),
@@ -162,21 +176,26 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                     void update();
                   },
                 },
-                {
-                  id: 'speleodb-menu-edit-without-lock',
-                  label: t('speleodb.menu.editWithoutLock'),
-                  icon: (
-                    <SpeleoBadgedIcon
-                      badge={<EditNoLockGlyph size={11} />}
-                      badgeColor="text-red-500"
-                      size={sz}
-                    />
-                  ),
-                  // TODO(#213): optimistic force-edit - a data-safety/contention
-                  // warning then edit-without-lock + reconcile-on-push. Stubbed.
-                  onClick: () =>
-                    showToast(t('speleodb.menu.editWithoutLockSoon'), 'speleodb-edit-without-lock'),
-                },
+                // #213: optimistic force-edit - edit WITHOUT the lock, behind the
+                // `allow_force_edit` opt-in (hidden otherwise) and a big-red confirm.
+                // Only offered while read-only; a force-editor uses Reconnect above.
+                ...(speleoLink.forceEditAllowed && speleoLink.editState !== 'editing'
+                  ? [
+                      {
+                        id: 'speleodb-menu-edit-without-lock',
+                        label: t('speleodb.menu.editWithoutLock'),
+                        icon: (
+                          <SpeleoBadgedIcon
+                            badge={<EditNoLockGlyph size={11} />}
+                            badgeColor="text-red-500"
+                            size={sz}
+                          />
+                        ),
+                        disabled: speleoBusy,
+                        onClick: () => openDialog('speleodb-force-edit'),
+                      },
+                    ]
+                  : []),
               ],
             },
           ]
@@ -270,5 +289,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showToast, showDevStats, toggleDisplay, mapReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoBusy, startEditing, update, done]);
+  }, [t, openDialog, showDevStats, toggleDisplay, mapReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoBusy, startEditing, update, done]);
 }

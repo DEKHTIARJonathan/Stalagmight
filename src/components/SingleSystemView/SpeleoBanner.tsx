@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
+import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 
 /**
@@ -18,13 +19,23 @@ import { humanizeSpeleoError } from '../../utils/speleoError';
  * - `no_anchor` - a push/unlock of a survey with no georeferenced zero datum, so the
  *   server generated no new map geometry (the map may be stale).
  * None of these block editing or pushing.
+ *
+ * Above all of them sits the #213 force-edit banner (big-red, derived from
+ * `link.forceEditing`, NOT the transient slot): while editing without the write lock
+ * it persistently warns the `.stalx` is unmergeable and offers Reconnect. It preempts
+ * the yellow notices so the data-safety warning is never masked.
  */
 export function SpeleoBanner() {
   const { t } = useTranslation();
   const banner = useSpeleoStore((s) => s.banner);
   const dismissBanner = useSpeleoStore((s) => s.dismissBanner);
   const enableRendering = useSpeleoStore((s) => s.enableRendering);
+  const forceEditing = useSpeleoStore((s) => s.link?.forceEditing ?? false);
+  const lockedByOther = useSpeleoStore((s) => s.link?.lockedByOther ?? false);
+  const lockHolder = useSpeleoStore((s) => s.link?.lockHolder ?? null);
   const showToast = useUIStore((s) => s.showToast);
+  // #213: Reconnect is the existing acquire+reconcile verb (startEditing).
+  const { startEditing, busy } = useSpeleoActions();
   // Inline second step for the Enable-rendering action (no single-click side effect
   // on server metadata; the confirm states rendering refreshes on the next push).
   const [confirmingEnable, setConfirmingEnable] = useState(false);
@@ -37,6 +48,39 @@ export function SpeleoBanner() {
   useEffect(() => {
     if (banner?.kind !== 'rendering_disabled') setConfirmingEnable(false);
   }, [banner?.kind]);
+
+  // #213: a force-edit session (editing WITHOUT the write lock) shows a PERSISTENT
+  // big-red data-safety warning that outranks the yellow transient notices - the
+  // "this .stalx cannot be merged" message must never be masked by a lesser banner.
+  // Its only action is Reconnect (acquire the lock + reconcile, via startEditing);
+  // it is not dismissable (backend state, re-derived every poll). When someone else
+  // holds the lock we name them, since their work is what a reconnect reconciles against.
+  if (forceEditing) {
+    return (
+      <div
+        className="flex items-center justify-between gap-3 px-4 py-2 bg-error-20 text-error text-sm font-medium border-b border-border"
+        data-testid="speleo-banner"
+        data-kind="force_edit_active"
+      >
+        <span>
+          {lockedByOther
+            ? t('speleodb.forceEdit.banner.lockedBy', {
+                email: lockHolder ?? t('speleodb.editBar.someone'),
+              })
+            : t('speleodb.forceEdit.banner.text')}
+        </span>
+        <button
+          type="button"
+          onClick={() => void startEditing()}
+          disabled={busy}
+          className="text-xs underline flex-shrink-0 disabled:opacity-50"
+          data-testid="speleo-banner-reconnect"
+        >
+          {t('speleodb.forceEdit.reconnect')}
+        </button>
+      </div>
+    );
+  }
 
   if (!banner) return null;
 

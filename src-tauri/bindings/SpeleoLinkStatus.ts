@@ -3,4 +3,4 @@ import type { Permission } from "./Permission";
 import type { RemoteState } from "./RemoteState";
 import type { SpeleoErrorDto } from "./SpeleoErrorDto";
 
-export interface SpeleoLinkStatus { is_remote: boolean, edit_enabled: boolean, has_unpushed_edits: boolean, permission: Permission | null, lock_holder: string | null, remote_state: RemoteState, access_denied: boolean, server_error: SpeleoErrorDto | null, exclude_geojson: boolean, }
+export interface SpeleoLinkStatus { is_remote: boolean, edit_enabled: boolean, has_unpushed_edits: boolean, permission: Permission | null, lock_holder: string | null, remote_state: RemoteState, access_denied: boolean, server_error: SpeleoErrorDto | null, exclude_geojson: boolean, force_editing: boolean, allow_force_edit: boolean, }

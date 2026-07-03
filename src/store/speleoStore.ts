@@ -77,6 +77,21 @@ export interface SpeleoLinkState {
    */
   lockedByOther: boolean;
   hasUnpushedEdits: boolean;
+  /**
+   * [#213] We are editing this remote project WITHOUT the write lock (force-edit):
+   * `editState === 'editing'` but no lock is held, so the `.stalx` cannot be merged
+   * until we reconnect and acquire the lock. Drives the persistent big-red banner
+   * and routes the status button / lock menu to Reconnect (the existing
+   * `startEditing`) instead of Done. Transient (backend-derived; resets on
+   * open/close/reconnect).
+   */
+  forceEditing: boolean;
+  /**
+   * [#213] The `SpeleoDbConfig.allow_force_edit` opt-in (a global preference,
+   * mirrored per-poll onto the link). Gates whether the read-only "Edit without
+   * lock" affordance appears at all; false hides it and the backend also refuses.
+   */
+  forceEditAllowed: boolean;
   /** The local copy's relationship to the server tip (drives the button, T2c). */
   remoteState: RemoteState;
   /**
@@ -463,6 +478,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             lockHolder: null,
             lockedByOther: false,
             hasUnpushedEdits: false,
+            // The backend drops the edit gate (and any force-edit) on a token loss,
+            // so mirror that here or the shell would keep offering Reconnect.
+            forceEditing: false,
             // We can no longer verify the server relationship without a token, so
             // report Unknown (what a token-less backend poll returns) rather than
             // claiming up-to-date; the next poll re-resolves it.
@@ -516,6 +534,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           // and the backend gate stays the real enforcement.
           lockedByOther: editState !== 'editing' && !!s.lock_holder,
           hasUnpushedEdits: s.has_unpushed_edits,
+          // #213: force-edit (edit-enabled WITHOUT a held lock) is backend-authoritative
+          // and reported every poll; a reconnect that acquires the lock clears it there.
+          forceEditing: s.force_editing,
+          forceEditAllowed: s.allow_force_edit,
           remoteState: s.remote_state,
           noAccess: s.access_denied,
           serverError: s.server_error,
@@ -533,6 +555,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         lockHolder: null,
         lockedByOther: false,
         hasUnpushedEdits: false,
+        // A fresh pull always opens without the lock and not force-editing;
+        // `seedFromStatus` refines the opt-in + any force-edit on the first poll.
+        forceEditing: false,
+        forceEditAllowed: false,
         remoteState: 'up_to_date',
         noAccess: false,
         serverError: null,
@@ -553,12 +579,14 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         case 'editing':
         case 'fast_forwarded':
           // We now hold the lock: not locked-by-other, no remote-ahead/conflict,
-          // no stale banner. (fast_forwarded also reloads + re-seeds.)
+          // no stale banner, and force-edit clears (Reconnect succeeded - #213).
+          // (fast_forwarded also reloads + re-seeds.)
           return {
             link: {
               ...state.link,
               editState: 'editing',
               lockedByOther: false,
+              forceEditing: false,
               remoteState: 'up_to_date',
               serverError: null,
             },
@@ -573,7 +601,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           return {
             link: {
               ...state.link,
-              editState: 'read-only',
+              // #213: a force-editor who tried to Reconnect and found the lock still
+              // held keeps editing offline (the backend left its gate + force-edit on),
+              // so preserve their editing state - only record the holder. A normal
+              // read-only start downgrades to read-only as before.
+              editState: state.link.forceEditing ? state.link.editState : 'read-only',
               lockHolder: r.email ?? state.link.lockHolder,
               lockedByOther: true,
             },

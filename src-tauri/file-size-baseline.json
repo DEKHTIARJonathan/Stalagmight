@@ -54,7 +54,7 @@
     "src-tauri/src/core/state/project_merge.rs": 319,
     "src-tauri/src/core/state/raw_data.rs": 25,
     "src-tauri/src/core/state/recent_projects.rs": 138,
-    "src-tauri/src/core/state/speleodb.rs": 1642,
+    "src-tauri/src/core/state/speleodb.rs": 1686,
     "src-tauri/src/core/state/tests_support.rs": 3,
     "src-tauri/src/core/state/undo.rs": 706,
     "src-tauri/src/core/state/undo_capture.rs": 406,

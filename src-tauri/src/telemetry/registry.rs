@@ -239,6 +239,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.open-from-speleodb",
     "action.dialog.speleodb-done",
     "action.dialog.speleodb-divergence",
+    "action.dialog.speleodb-force-edit",
     "action.dialog.speleodb-close",
     "action.dialog.speleodb-no-permission",
     "action.dialog.publish-to-speleodb",
@@ -298,6 +299,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.open-from-speleodb",
     "dialog-cancel.speleodb-done",
     "dialog-cancel.speleodb-divergence",
+    "dialog-cancel.speleodb-force-edit",
     "dialog-cancel.speleodb-close",
     "dialog-cancel.speleodb-no-permission",
     "dialog-cancel.publish-to-speleodb",
@@ -383,6 +385,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.open-from-speleodb",
     "dwell.dialog.speleodb-done",
     "dwell.dialog.speleodb-divergence",
+    "dwell.dialog.speleodb-force-edit",
     "dwell.dialog.speleodb-close",
     "dwell.dialog.speleodb-no-permission",
     "dwell.dialog.publish-to-speleodb",
@@ -519,6 +522,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.open-from-speleodb",
     "active-dwell.dialog.speleodb-done",
     "active-dwell.dialog.speleodb-divergence",
+    "active-dwell.dialog.speleodb-force-edit",
     "active-dwell.dialog.speleodb-close",
     "active-dwell.dialog.speleodb-no-permission",
     "active-dwell.dialog.publish-to-speleodb",
@@ -826,7 +830,14 @@ mod tests {
         //       kinds x (4 outcome counters + 6 latency buckets) = 170. Asserted
         //       exhaustively by `every_speleodb_endpoint_has_traffic_events`:
         //       467 + 170 = 637.
-        assert_eq!(EVENT_NAMES.len(), 637);
+        //   + 1 SpeleoDB adopt-Ariane command (#214, C2):
+        //       command.speleodb_adopt_ariane = 638.
+        //   + 1 SpeleoDB force-edit command (#213, E2):
+        //       command.speleodb_force_edit = 639.
+        //   + 4 speleodb-force-edit dialog events (#213):
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .speleodb-force-edit = 643.
+        assert_eq!(EVENT_NAMES.len(), 643);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

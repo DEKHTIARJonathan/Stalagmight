@@ -542,6 +542,7 @@ impl AppState {
                     server_error: None,
                     exclude_geojson: false,
                     force_editing: self.force_editing(),
+                    allow_force_edit: self.speleodb_allow_force_edit(),
                 });
             }
             Err(e) => return Err(local_dto(e)),
@@ -650,6 +651,7 @@ impl AppState {
             // Reconnect. An online force-editor whose tip moved already surfaces via
             // `remote_state` (RemoteAhead/Conflict); offline it stays Unknown (skipped).
             force_editing: self.force_editing(),
+            allow_force_edit: self.speleodb_allow_force_edit(),
         })
     }
 
