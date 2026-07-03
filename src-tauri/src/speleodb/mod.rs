@@ -19,6 +19,8 @@ pub(crate) mod client;
 // [Track A] #186 status→action contract (pure map_status + ts-rs SpeleoDbAction).
 pub(crate) mod contract;
 pub(crate) mod dump;
+// [F1] #210 per-endpoint traffic instrumentation (count + latency + outcome).
+pub(crate) mod metrics;
 pub mod models;
 // [P1] #192/#193 pure sync-engine logic: base-SHA fence + ancestry recovery.
 pub(crate) mod sync;

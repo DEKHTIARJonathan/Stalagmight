@@ -1224,6 +1224,10 @@ pub fn run() {
             let collector =
                 telemetry::TelemetryCollector::new(telemetry_config.general.telemetry_enabled);
             app.manage(collector.clone());
+            // #210 (F1): give the free-function SpeleoDB client a handle to emit
+            // per-endpoint traffic metrics through (it has no AppHandle to reach
+            // Tauri-managed state, so it records via this write-once sink).
+            speleodb::metrics::install(collector.clone());
             telemetry::start_periodic_flush(collector.clone());
             collector.send_buffered();
 

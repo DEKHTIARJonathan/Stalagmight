@@ -24,6 +24,7 @@ use std::time::Duration;
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
 
+use super::metrics::{Endpoint, Outcome};
 use super::models::{
     Commit, Permission, Project, RevisionHistory, Team, TeamPermission, TeamPermissionList,
     UserAutocomplete, UserPermission, UserPermissionList,
@@ -76,7 +77,10 @@ fn bearer(token: &str) -> String {
 /// retrying transient failures with backoff.
 ///
 /// `base` + `insecure_http` are threaded so [`super::tls::enforce`] runs once at
-/// the top — the single chokepoint a new method cannot forget (#187 step 5).
+/// the top — the single chokepoint a new method cannot forget (#187 step 5). The
+/// same chokepoint carries the #210 traffic instrumentation: `endpoint` labels
+/// each attempt so [`super::metrics::record`] emits its count + latency + outcome
+/// (a new method cannot forget that either — it must pass an [`Endpoint`]).
 ///
 /// The closure returns `(status, body)`. With `http_status_as_error(false)` every
 /// `Err` is transport-level (DNS, timeout, connection reset, mid-body read).
@@ -90,9 +94,11 @@ fn with_retry(
     base: &str,
     insecure_http: bool,
     idempotent: bool,
+    endpoint: Endpoint,
     mut attempt: impl FnMut() -> Result<(u16, Vec<u8>), ureq::Error>,
 ) -> Result<(u16, Vec<u8>), SpeleoDbError> {
-    // #187: block public `http://` / scheme-less endpoints before any dial.
+    // #187: block public `http://` / scheme-less endpoints before any dial. A
+    // policy block is not server traffic, so it is intentionally not recorded.
     super::tls::enforce(base, insecure_http)?;
 
     let max_retries = if idempotent { MAX_RETRIES } else { 0 };
@@ -105,7 +111,18 @@ fn with_retry(
                 .unwrap_or(REQUEST_TIMEOUT);
             std::thread::sleep(delay);
         }
-        match attempt() {
+        // #210: time each attempt (the backoff sleep above is excluded) and
+        // record it as one server hit — a retried 5xx really re-hits the server,
+        // so counting per attempt is what makes a retry storm legible.
+        let started = std::time::Instant::now();
+        let result = attempt();
+        let elapsed = started.elapsed();
+        let outcome = match &result {
+            Ok((status, _)) => Outcome::from_status(*status),
+            Err(_) => Outcome::NetworkError,
+        };
+        super::metrics::record(endpoint, outcome, elapsed);
+        match result {
             Ok((status, body)) => {
                 // D-B3: an idempotent 5xx is treated like a transient error so it
                 // is retried with backoff; a write (idempotent == false) returns
@@ -234,7 +251,7 @@ pub(crate) fn login(
 
     // Idempotent: the auth-token endpoint is get-or-create (non-rotating), so a
     // retried login returns the same token rather than minting a duplicate.
-    let (status, body) = with_retry(base, insecure_http, true, || {
+    let (status, body) = with_retry(base, insecure_http, true, Endpoint::Login, || {
         let resp = agent()
             .post(&url)
             .header("Content-Type", "application/json")
@@ -259,7 +276,7 @@ pub(crate) fn list_projects(
     let url = api_url(base, "projects/");
     let auth = bearer(token);
 
-    let (status, body) = with_retry(base, insecure_http, true, || {
+    let (status, body) = with_retry(base, insecure_http, true, Endpoint::ListProjects, || {
         let resp = agent()
             .get(&url)
             .header("Authorization", auth.as_str())
@@ -332,13 +349,19 @@ fn get_project_inner(
     let url = api_url(base, &format!("projects/{project_id}/"));
     let auth = bearer(token);
 
-    let (status, body) = with_retry(base, insecure_http, idempotent, || {
-        let resp = agent_with_timeout(timeout)
-            .get(&url)
-            .header("Authorization", auth.as_str())
-            .call()?;
-        read_status_body(resp)
-    })?;
+    let (status, body) = with_retry(
+        base,
+        insecure_http,
+        idempotent,
+        Endpoint::GetProject,
+        || {
+            let resp = agent_with_timeout(timeout)
+                .get(&url)
+                .header("Authorization", auth.as_str())
+                .call()?;
+            read_status_body(resp)
+        },
+    )?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
     }
@@ -361,7 +384,7 @@ pub(crate) fn get_revisions(
     let url = api_url(base, &format!("projects/{project_id}/revisions/"));
     let auth = bearer(token);
 
-    let (status, body) = with_retry(base, insecure_http, true, || {
+    let (status, body) = with_retry(base, insecure_http, true, Endpoint::GetRevisions, || {
         let resp = agent()
             .get(&url)
             .header("Authorization", auth.as_str())
@@ -395,7 +418,7 @@ pub(crate) fn fetch_user_email(
     let url = api_url(base, "user/");
     let auth = bearer(token);
 
-    let (status, body) = with_retry(base, insecure_http, true, || {
+    let (status, body) = with_retry(base, insecure_http, true, Endpoint::FetchUser, || {
         let resp = agent()
             .get(&url)
             .header("Authorization", auth.as_str())
@@ -421,7 +444,7 @@ pub(crate) fn download_dump(
     let url = api_url(base, &format!("projects/{project_id}/download/dump/"));
     let auth = bearer(token);
 
-    let (status, body) = with_retry(base, insecure_http, true, || {
+    let (status, body) = with_retry(base, insecure_http, true, Endpoint::DownloadDump, || {
         let resp = agent()
             .get(&url)
             .header("Authorization", auth.as_str())
@@ -533,7 +556,7 @@ pub(crate) fn upload_auto(
     // The Form/Part builders consume their inputs (`send(form)` takes the Form by
     // value), so the form is rebuilt inside the closure. `idempotent = false`
     // means the closure runs at most once regardless.
-    let (status, body) = with_retry(base, insecure_http, false, || {
+    let (status, body) = with_retry(base, insecure_http, false, Endpoint::Upload, || {
         let mut form = Form::new();
         for p in &descriptor.parts {
             let part = Part::file(&p.src)?
@@ -607,6 +630,7 @@ pub(crate) fn acquire_lock(
         base,
         token,
         insecure_http,
+        Endpoint::Acquire,
         &format!("projects/{project_id}/acquire/"),
         "acquire lock response",
     )
@@ -624,6 +648,7 @@ pub(crate) fn release_lock(
         base,
         token,
         insecure_http,
+        Endpoint::Release,
         &format!("projects/{project_id}/release/"),
         "release lock response",
     )
@@ -640,7 +665,7 @@ pub(crate) fn release_all_locks(
 ) -> Result<(), SpeleoDbError> {
     let url = api_url(base, "user/release_all_locks/");
     let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, true, || {
+    let (status, body) = with_retry(base, insecure_http, true, Endpoint::ReleaseAll, || {
         let resp = agent()
             .delete(&url)
             .header("Authorization", auth.as_str())
@@ -667,7 +692,7 @@ pub(crate) fn patch_project(
 ) -> Result<Project, SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/"));
     let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, false, || {
+    let (status, body) = with_retry(base, insecure_http, false, Endpoint::PatchProject, || {
         let resp = agent()
             .patch(&url)
             .header("Authorization", auth.as_str())
@@ -694,7 +719,7 @@ pub(crate) fn create_project_with(
 ) -> Result<Project, SpeleoDbError> {
     let url = api_url(base, "projects/");
     let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, false, || {
+    let (status, body) = with_retry(base, insecure_http, false, Endpoint::CreateProject, || {
         let resp = agent()
             .post(&url)
             .header("Authorization", auth.as_str())
@@ -741,12 +766,13 @@ fn post_no_body_project(
     base: &str,
     token: &str,
     insecure_http: bool,
+    endpoint: Endpoint,
     suffix: &str,
     context: &str,
 ) -> Result<Project, SpeleoDbError> {
     let url = api_url(base, suffix);
     let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, false, || {
+    let (status, body) = with_retry(base, insecure_http, false, endpoint, || {
         let resp = agent()
             .post(&url)
             .header("Authorization", auth.as_str())
@@ -772,7 +798,7 @@ pub(crate) fn delete_project(
 ) -> Result<(), SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/"));
     let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, true, || {
+    let (status, body) = with_retry(base, insecure_http, true, Endpoint::DeleteProject, || {
         let resp = agent()
             .delete(&url)
             .header("Authorization", auth.as_str())
@@ -796,12 +822,14 @@ fn send_json_request(
     base: &str,
     token: &str,
     insecure_http: bool,
+    endpoint: Endpoint,
     method: http::Method,
     suffix: &str,
     payload: &serde_json::Value,
 ) -> Result<(), SpeleoDbError> {
     // #187: block public `http://` / scheme-less endpoints before any dial (the
     // same gate `with_retry` runs; these writes bypass the retry loop, never it).
+    // A policy block is not server traffic, so it is intentionally not recorded.
     super::tls::enforce(base, insecure_http)?;
     let url = api_url(base, suffix);
     let request = http::Request::builder()
@@ -811,9 +839,16 @@ fn send_json_request(
         .header("Content-Type", "application/json")
         .body(payload.to_string())
         .map_err(|e| SpeleoDbError::Parse(format!("build request: {e}")))?;
-    let resp = agent()
-        .run(request)
-        .map_err(|e| SpeleoDbError::Transport(clean_transport(&e.to_string())))?;
+    // #210: this write bypasses `with_retry`, so record its one attempt here — the
+    // same count + latency + outcome the retry-loop chokepoint emits.
+    let started = std::time::Instant::now();
+    let run = agent().run(request);
+    let outcome = match &run {
+        Ok(resp) => Outcome::from_status(resp.status().as_u16()),
+        Err(_) => Outcome::NetworkError,
+    };
+    super::metrics::record(endpoint, outcome, started.elapsed());
+    let resp = run.map_err(|e| SpeleoDbError::Transport(clean_transport(&e.to_string())))?;
     let (status, body) = read_status_body(resp)
         .map_err(|e| SpeleoDbError::Transport(clean_transport(&e.to_string())))?;
     if !(200..300).contains(&status) {
@@ -833,7 +868,7 @@ pub(crate) fn list_user_permissions(
 ) -> Result<Vec<UserPermission>, SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/permissions/user/"));
     let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, true, || {
+    let (status, body) = with_retry(base, insecure_http, true, Endpoint::ListPermissions, || {
         let resp = agent()
             .get(&url)
             .header("Authorization", auth.as_str())
@@ -862,6 +897,7 @@ pub(crate) fn add_user_permission(
         base,
         token,
         insecure_http,
+        Endpoint::MutatePermission,
         http::Method::POST,
         &format!("projects/{project_id}/permission/user/detail/"),
         &serde_json::json!({ "user": email, "level": level }),
@@ -882,6 +918,7 @@ pub(crate) fn set_user_permission(
         base,
         token,
         insecure_http,
+        Endpoint::MutatePermission,
         http::Method::PUT,
         &format!("projects/{project_id}/permission/user/detail/"),
         &serde_json::json!({ "user": email, "level": level }),
@@ -901,6 +938,7 @@ pub(crate) fn remove_user_permission(
         base,
         token,
         insecure_http,
+        Endpoint::MutatePermission,
         http::Method::DELETE,
         &format!("projects/{project_id}/permission/user/detail/"),
         &serde_json::json!({ "user": email }),
@@ -917,7 +955,7 @@ pub(crate) fn list_team_permissions(
 ) -> Result<Vec<TeamPermission>, SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/permissions/team/"));
     let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, true, || {
+    let (status, body) = with_retry(base, insecure_http, true, Endpoint::ListPermissions, || {
         let resp = agent()
             .get(&url)
             .header("Authorization", auth.as_str())
@@ -947,6 +985,7 @@ pub(crate) fn add_team_permission(
         base,
         token,
         insecure_http,
+        Endpoint::MutatePermission,
         http::Method::POST,
         &format!("projects/{project_id}/permission/team/detail/"),
         &serde_json::json!({ "team": team_id, "level": level }),
@@ -967,6 +1006,7 @@ pub(crate) fn set_team_permission(
         base,
         token,
         insecure_http,
+        Endpoint::MutatePermission,
         http::Method::PUT,
         &format!("projects/{project_id}/permission/team/detail/"),
         &serde_json::json!({ "team": team_id, "level": level }),
@@ -986,6 +1026,7 @@ pub(crate) fn remove_team_permission(
         base,
         token,
         insecure_http,
+        Endpoint::MutatePermission,
         http::Method::DELETE,
         &format!("projects/{project_id}/permission/team/detail/"),
         &serde_json::json!({ "team": team_id }),
@@ -1002,7 +1043,7 @@ pub(crate) fn list_teams(
 ) -> Result<Vec<Team>, SpeleoDbError> {
     let url = api_url(base, "teams/");
     let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, true, || {
+    let (status, body) = with_retry(base, insecure_http, true, Endpoint::ListTeams, || {
         let resp = agent()
             .get(&url)
             .header("Authorization", auth.as_str())
@@ -1029,7 +1070,7 @@ pub(crate) fn list_user_autocomplete(
     let encoded = utf8_percent_encode(query, NON_ALPHANUMERIC);
     let url = api_url(base, &format!("user/autocomplete/?query={encoded}"));
     let auth = bearer(token);
-    let (status, body) = with_retry(base, insecure_http, true, || {
+    let (status, body) = with_retry(base, insecure_http, true, Endpoint::Autocomplete, || {
         let resp = agent()
             .get(&url)
             .header("Authorization", auth.as_str())
@@ -1059,6 +1100,7 @@ pub(crate) fn grant_permission(
         base,
         token,
         false,
+        Endpoint::MutatePermission,
         http::Method::POST,
         &format!("projects/{project_id}/permission/user/detail/"),
         &serde_json::json!({ "user": email, "level": level }),
@@ -1078,7 +1120,8 @@ mod tests {
         add_team_permission, add_user_permission, api_url, bearer, build_upload_parts,
         clean_transport, delete_project, list_teams, list_user_autocomplete, list_user_permissions,
         mime_for, parse_error_message, parse_upload_auto_response, remove_team_permission,
-        remove_user_permission, set_user_permission, with_retry, RevisionHistory, UserInfo,
+        remove_user_permission, set_user_permission, with_retry, Endpoint, RevisionHistory,
+        UserInfo,
     };
     use crate::speleodb::{Permission, SpeleoDbError};
 
@@ -1349,10 +1392,16 @@ mod tests {
         // runs even once (the closure increments a counter we assert stays 0).
         let calls = Arc::new(AtomicUsize::new(0));
         let c = Arc::clone(&calls);
-        let result = with_retry("http://8.8.8.8", false, true, move || {
-            c.fetch_add(1, Ordering::SeqCst);
-            Ok((200, Vec::new()))
-        });
+        let result = with_retry(
+            "http://8.8.8.8",
+            false,
+            true,
+            Endpoint::ListProjects,
+            move || {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok((200, Vec::new()))
+            },
+        );
         assert!(matches!(
             result,
             Err(SpeleoDbError::InsecureEndpoint { .. })
@@ -1366,14 +1415,20 @@ mod tests {
         // succeeds returns Ok — over a loopback base so tls::enforce allows it.
         let n = Arc::new(AtomicUsize::new(0));
         let c = Arc::clone(&n);
-        let out = with_retry("http://127.0.0.1:9", false, true, move || {
-            let i = c.fetch_add(1, Ordering::SeqCst);
-            if i == 0 {
-                Err(ureq::Error::HostNotFound)
-            } else {
-                Ok((200, b"ok".to_vec()))
-            }
-        })
+        let out = with_retry(
+            "http://127.0.0.1:9",
+            false,
+            true,
+            Endpoint::ListProjects,
+            move || {
+                let i = c.fetch_add(1, Ordering::SeqCst);
+                if i == 0 {
+                    Err(ureq::Error::HostNotFound)
+                } else {
+                    Ok((200, b"ok".to_vec()))
+                }
+            },
+        )
         .expect("idempotent read should retry then succeed");
         assert_eq!(out, (200, b"ok".to_vec()));
         assert_eq!(n.load(Ordering::SeqCst), 2, "one failure + one success");
@@ -1385,14 +1440,20 @@ mod tests {
         // and the eventual 200 is returned.
         let n = Arc::new(AtomicUsize::new(0));
         let c = Arc::clone(&n);
-        let out = with_retry("http://127.0.0.1:9", false, true, move || {
-            let i = c.fetch_add(1, Ordering::SeqCst);
-            if i < 2 {
-                Ok((503, b"busy".to_vec()))
-            } else {
-                Ok((200, b"ok".to_vec()))
-            }
-        })
+        let out = with_retry(
+            "http://127.0.0.1:9",
+            false,
+            true,
+            Endpoint::ListProjects,
+            move || {
+                let i = c.fetch_add(1, Ordering::SeqCst);
+                if i < 2 {
+                    Ok((503, b"busy".to_vec()))
+                } else {
+                    Ok((200, b"ok".to_vec()))
+                }
+            },
+        )
         .expect("idempotent 5xx should retry to success");
         assert_eq!(out.0, 200);
         assert_eq!(n.load(Ordering::SeqCst), 3, "503, 503, 200");
@@ -1404,10 +1465,16 @@ mod tests {
         // transport error) so map_status can classify it as Retry.
         let n = Arc::new(AtomicUsize::new(0));
         let c = Arc::clone(&n);
-        let out = with_retry("http://127.0.0.1:9", false, true, move || {
-            c.fetch_add(1, Ordering::SeqCst);
-            Ok((500, b"down".to_vec()))
-        })
+        let out = with_retry(
+            "http://127.0.0.1:9",
+            false,
+            true,
+            Endpoint::ListProjects,
+            move || {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok((500, b"down".to_vec()))
+            },
+        )
         .expect("exhausted 5xx is still an Ok((status, body)), not a transport Err");
         assert_eq!(out.0, 500);
         assert_eq!(n.load(Ordering::SeqCst), 3, "1 + MAX_RETRIES attempts");
@@ -1419,10 +1486,16 @@ mod tests {
         // straight through (no retry — double-submit hazard).
         let n = Arc::new(AtomicUsize::new(0));
         let c = Arc::clone(&n);
-        let out = with_retry("http://127.0.0.1:9", false, false, move || {
-            c.fetch_add(1, Ordering::SeqCst);
-            Ok((500, b"down".to_vec()))
-        })
+        let out = with_retry(
+            "http://127.0.0.1:9",
+            false,
+            false,
+            Endpoint::ListProjects,
+            move || {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok((500, b"down".to_vec()))
+            },
+        )
         .expect("write returns the 5xx body");
         assert_eq!(out.0, 500);
         assert_eq!(n.load(Ordering::SeqCst), 1, "write must run exactly once");
@@ -1431,10 +1504,16 @@ mod tests {
         // transport error).
         let n2 = Arc::new(AtomicUsize::new(0));
         let c2 = Arc::clone(&n2);
-        let err = with_retry("http://127.0.0.1:9", false, false, move || {
-            c2.fetch_add(1, Ordering::SeqCst);
-            Err(ureq::Error::HostNotFound)
-        })
+        let err = with_retry(
+            "http://127.0.0.1:9",
+            false,
+            false,
+            Endpoint::ListProjects,
+            move || {
+                c2.fetch_add(1, Ordering::SeqCst);
+                Err(ureq::Error::HostNotFound)
+            },
+        )
         .expect_err("transport error surfaces");
         assert!(matches!(err, SpeleoDbError::Transport(_)));
         assert_eq!(
@@ -1519,7 +1598,7 @@ mod tests {
         let mut stub = LoopbackStub::start(vec![503, 503, 200]);
         let url = format!("{}/api/v2/projects/", stub.base);
         let base = stub.base.clone();
-        let (status, _body) = with_retry(&base, false, true, || {
+        let (status, _body) = with_retry(&base, false, true, Endpoint::ListProjects, || {
             let resp = super::agent().get(&url).call()?;
             super::read_status_body(resp)
         })
@@ -1536,7 +1615,7 @@ mod tests {
         let mut stub = LoopbackStub::start(vec![503]);
         let url = format!("{}/api/v2/projects/", stub.base);
         let base = stub.base.clone();
-        let (status, _body) = with_retry(&base, false, false, || {
+        let (status, _body) = with_retry(&base, false, false, Endpoint::ListProjects, || {
             let resp = super::agent().post(&url).send("")?;
             super::read_status_body(resp)
         })
