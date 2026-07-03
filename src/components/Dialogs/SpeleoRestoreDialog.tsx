@@ -4,6 +4,7 @@ import { Button } from '../common/Button';
 import { AlertDialog } from './AlertDialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { invokeIpc } from '../../utils/ipc';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import type { SpeleoOpenResult } from '../../types/ipc.generated';
@@ -23,9 +24,11 @@ export default function SpeleoRestoreDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const showToast = useUIStore((s) => s.showToast);
+  const setView = useUIStore((s) => s.setView);
   const dialogData = useUIStore((s) => s.dialogData);
-  const loadProject = useProjectStore((s) => s.loadProject);
+  const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
   const isDirty = useProjectStore((s) => s.isDirty);
+  const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
 
   const projectId = typeof dialogData.projectId === 'string' ? dialogData.projectId : '';
   const projectName = typeof dialogData.projectName === 'string' ? dialogData.projectName : '';
@@ -41,17 +44,23 @@ export default function SpeleoRestoreDialog() {
     setBusy(true);
     setError(null);
     try {
-      const result = await invokeIpc<SpeleoOpenResult>('speleodb_restore_revision', {
+      await invokeIpc<SpeleoOpenResult>('speleodb_restore_revision', {
         projectId,
         projectName,
         hexsha,
       });
       closeDialog();
-      // loadProject re-seeds the link (dirty, unpushed) via its own refreshLinkStatus.
-      const loaded = await loadProject(result.local_path);
-      if (loaded.success) {
-        showToast(t('speleodb.restore.doneToast', { sha: shortSha }), 'speleodb-restore');
-      }
+      // The backend closed, overwrote, and REOPENED the project at the restored tree
+      // with editing re-enabled. Pull the swapped geometry + link state into the view
+      // directly - loadProject would short-circuit on the already-open project and
+      // leave the old tree on screen. The on-disk copy IS the restored tree (saved),
+      // so it is clean until the user edits; the push affordance comes from the link's
+      // unpushed-edits bit that refreshLinkStatus re-seeds.
+      setView('single');
+      await refreshProjectState();
+      useProjectStore.setState({ isDirty: false });
+      await refreshLinkStatus();
+      showToast(t('speleodb.restore.doneToast', { sha: shortSha }), 'speleodb-restore');
     } catch (e) {
       setError(humanizeSpeleoError(e, t('speleodb.restore.failed')));
       setBusy(false);

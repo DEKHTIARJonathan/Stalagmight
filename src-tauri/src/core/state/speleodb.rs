@@ -1922,8 +1922,26 @@ impl AppState {
             }
         }
 
+        let local_path = dest.to_string_lossy().into_owned();
+        // Reopen the restored tree in place, then re-enable editing. close_project
+        // drops the live handle to `dest` so do_load_project_full's "already open"
+        // guard won't reject the same path (and the reopened connection reads the
+        // overwritten file, not a stale page cache); a fresh load of a remote project
+        // defaults to read-only (#191), but the user still holds the lock and the
+        // restored tree rides as an unpushed edit they will push. Mirrors the
+        // fast-forward reload (#193); the FE then pulls the swapped geometry via
+        // refreshProjectState.
+        self.close_project();
+        self.do_load_project_full(dest).map_err(|e| {
+            local_dto(SpeleoDbError::Io(format!(
+                "reload after restore failed: {e}"
+            )))
+        })?;
+        self.set_edit_enabled(true);
+        self.set_force_editing(false);
+
         Ok(SpeleoOpenResult {
-            local_path: dest.to_string_lossy().into_owned(),
+            local_path,
             concurrent_session: false,
         })
     }

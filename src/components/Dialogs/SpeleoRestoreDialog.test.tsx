@@ -17,22 +17,27 @@ vi.mock('../../utils/ipc', () => ({
 import SpeleoRestoreDialog from './SpeleoRestoreDialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 
 let closeDialogMock: ReturnType<typeof vi.fn>;
 let showToastMock: ReturnType<typeof vi.fn>;
-let loadProjectMock: ReturnType<typeof vi.fn>;
+let refreshProjectStateMock: ReturnType<typeof vi.fn>;
+let refreshLinkStatusMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
   closeDialogMock = vi.fn();
   showToastMock = vi.fn();
-  loadProjectMock = vi.fn(async () => ({ success: true }));
+  refreshProjectStateMock = vi.fn(async () => {});
+  refreshLinkStatusMock = vi.fn(async () => {});
   useUIStore.setState({
     closeDialog: closeDialogMock,
     showToast: showToastMock,
+    setView: vi.fn(),
     dialogData: { projectId: 'p1', projectName: 'Cave A', hexsha: 'abcdef0123', shortSha: 'abcdef01' },
   });
-  useProjectStore.setState({ loadProject: loadProjectMock, isDirty: false });
+  useProjectStore.setState({ refreshProjectState: refreshProjectStateMock, isDirty: false });
+  useSpeleoStore.setState({ refreshLinkStatus: refreshLinkStatusMock });
 });
 
 describe('SpeleoRestoreDialog (#218)', () => {
@@ -44,12 +49,15 @@ describe('SpeleoRestoreDialog (#218)', () => {
     expect(closeDialogMock).toHaveBeenCalled();
   });
 
-  it('confirm restores the revision then reloads the project', async () => {
+  it('confirm restores the revision then refreshes the swapped tree', async () => {
     invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', concurrent_session: false });
     render(<SpeleoRestoreDialog />);
     await userEvent.click(screen.getByTestId('speleodb-restore-confirm-btn'));
 
-    await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx'));
+    // The backend reopened the restored tree; the FE pulls the swapped geometry +
+    // link state (not loadProject, which would short-circuit on the open project).
+    await waitFor(() => expect(refreshProjectStateMock).toHaveBeenCalled());
+    expect(refreshLinkStatusMock).toHaveBeenCalled();
     const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_restore_revision');
     expect(call?.[1]).toEqual({ projectId: 'p1', projectName: 'Cave A', hexsha: 'abcdef0123' });
     expect(closeDialogMock).toHaveBeenCalled();
@@ -62,7 +70,7 @@ describe('SpeleoRestoreDialog (#218)', () => {
     expect(screen.getByTestId('speleodb-restore-unsaved-warning')).toBeInTheDocument();
   });
 
-  it('surfaces an error and does not reload when the restore fails', async () => {
+  it('surfaces an error and does not refresh when the restore fails', async () => {
     invokeIpcMock.mockRejectedValue({ message: 'offline' });
     render(<SpeleoRestoreDialog />);
     await userEvent.click(screen.getByTestId('speleodb-restore-confirm-btn'));
@@ -70,6 +78,6 @@ describe('SpeleoRestoreDialog (#218)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('speleodb-restore-error')).toBeInTheDocument(),
     );
-    expect(loadProjectMock).not.toHaveBeenCalled();
+    expect(refreshProjectStateMock).not.toHaveBeenCalled();
   });
 });
