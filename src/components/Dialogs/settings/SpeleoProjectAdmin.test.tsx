@@ -76,12 +76,12 @@ beforeEach(() => {
 });
 
 describe('SpeleoProjectAdmin', () => {
-  it('renders the user + team roster and the WEB_VIEWER note', async () => {
+  it('renders the user + team roster and the instant-changes note', async () => {
     seed('ADMIN');
     render(<SpeleoProjectAdmin />);
     expect(await screen.findByTestId('speleodb-collab-user-bob@x.com')).toBeInTheDocument();
     expect(screen.getByTestId('speleodb-collab-team-t1')).toHaveTextContent('Divers');
-    expect(screen.getByTestId('speleodb-collaborators-webviewer-note')).toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-collaborators-changes-note')).toBeInTheDocument();
   });
 
   it('does not offer mutation controls to a non-admin', async () => {

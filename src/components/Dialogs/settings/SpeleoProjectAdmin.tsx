@@ -243,8 +243,8 @@ export function SpeleoProjectAdmin() {
           </div>
         )}
 
-        <p className="text-text-secondary text-xs mb-2" data-testid="speleodb-collaborators-webviewer-note">
-          {t('speleodb.collaborators.webViewerNote')}
+        <p className="text-text-secondary text-xs mb-2" data-testid="speleodb-collaborators-changes-note">
+          {t('speleodb.collaborators.changesInstantNote')}
         </p>
 
         <ul className="space-y-1" data-testid="speleodb-collaborators-users">

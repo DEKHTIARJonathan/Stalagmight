@@ -2823,7 +2823,7 @@
       "loadFailed": "Could not load collaborators",
       "retry": "Retry",
       "readOnlyBadge": "View only. You need admin access to change collaborators.",
-      "webViewerNote": "Grant Web Viewer to Ariane or web-only collaborators: they see the rendered geometry on SpeleoDB but cannot edit the survey. A plain .tml export is enough for Ariane-only work, with no .stalx to manage.",
+      "changesInstantNote": "Changes below take effect on SpeleoDB immediately - there is no separate save step.",
       "you": "(you)",
       "teamTag": "(team)",
       "remove": "Remove",
