@@ -158,6 +158,8 @@ impl AppState {
         // reset the gate so a previously-open read-only remote project's disabled
         // flag can't leak in.
         self.set_edit_enabled(true);
+        // #213: a new local project is never force-editing; clear any prior flag.
+        self.set_force_editing(false);
 
         CommandResult::success()
     }
@@ -436,6 +438,8 @@ impl AppState {
         // [Track B] (#191) A freshly-created local project is always editable;
         // reset the gate so a prior read-only remote project can't leak in.
         self.set_edit_enabled(true);
+        // #213: a new local project is never force-editing; clear any prior flag.
+        self.set_force_editing(false);
 
         // Track whether the initial save is still pending: a deferred new project
         // has no file on disk yet, so its first import must durably persist it.

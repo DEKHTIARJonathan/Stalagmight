@@ -98,6 +98,13 @@ pub struct SpeleoDbConfig {
     /// D-B19's scheme reject lives in `tls.rs`, not here.
     #[serde(default)]
     pub insecure_http: bool,
+    /// [#213] Opt-in: allow "force-edit" — editing a remote project WITHOUT holding
+    /// the server write lock (surveying offline / when someone else holds it), behind
+    /// a big-red unmergeable-`.stalx` warning. Off by default; #205 Settings owns the
+    /// warned toggle. When off, a remote project stays strictly read-only until the
+    /// lock is acquired (the only escape being "Save a local copy" / detach).
+    #[serde(default)]
+    pub allow_force_edit: bool,
     /// How often (seconds) the action shell re-checks the linked project's remote
     /// state (lock holder / remote-ahead / conflict) for its status icon. Default
     /// 60; **clamped up to `MIN_POLL_INTERVAL_SECONDS` on load** so a hand-edited
@@ -121,6 +128,7 @@ impl Default for SpeleoDbConfig {
             email: None,
             token_fallback: TokenFallback::default(),
             insecure_http: false,
+            allow_force_edit: false,
             poll_interval_seconds: default_poll_interval_seconds(),
         }
     }

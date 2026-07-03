@@ -1274,6 +1274,7 @@ pub fn run() {
             commands::speleodb::speleodb_unlink,
             // SpeleoDB single-writer hand-off (#194/#197)
             commands::speleodb::speleodb_start_editing,
+            commands::speleodb::speleodb_force_edit,
             commands::speleodb::speleodb_done,
             commands::speleodb::speleodb_update,
             commands::speleodb::speleodb_push,

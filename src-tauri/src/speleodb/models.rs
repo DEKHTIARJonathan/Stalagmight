@@ -500,6 +500,12 @@ pub struct SpeleoLinkStatus {
     /// over the same `get_project` probe; `false` when logged out / offline / the
     /// lookup failed (never nag on a transient miss).
     pub exclude_geojson: bool,
+    /// [#213] The open remote project is being force-edited WITHOUT the write lock
+    /// (`edit_enabled` is also true, but no lock is held). Drives the persistent
+    /// big-red "unmergeable `.stalx`" banner + the "Reconnect to sync" action, and
+    /// tells the shell to offer Reconnect rather than Done. Transient; `false` for a
+    /// normal read-only or lock-held session.
+    pub force_editing: bool,
 }
 
 /// The local copy's relationship to the server tip (the reconcile verdict,
@@ -629,6 +635,7 @@ mod tests {
             access_denied: false,
             server_error: None,
             exclude_geojson: false,
+            force_editing: false,
         })
         .expect("serialize link status");
         let push = serde_json::to_string(&PushResult::PushUnconfirmed).expect("serialize push");

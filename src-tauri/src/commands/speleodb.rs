@@ -113,9 +113,19 @@ pub async fn speleodb_logout(app: AppHandle) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_logout).await
 }
 
+/// [#213] Enable optimistic force-edit: edit the open remote project WITHOUT the
+/// server write lock (offline / contended), behind the FE's big-red warning. Opt-in
+/// (gated on the `allow_force_edit` config). No acquire, no network, BASE unchanged;
+/// the user later reconnects via `speleodb_start_editing`.
+#[tauri::command]
+pub async fn speleodb_force_edit(app: AppHandle) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_force_edit).await
+}
+
 /// Acquire the write lock on the open remote project and reconcile it against the
 /// server (#194). Enables editing on a clean reconcile; reports divergence,
-/// contention (locked-by), or an error otherwise.
+/// contention (locked-by), or an error otherwise. [#213] Also serves as the
+/// force-edit "reconnect".
 #[tauri::command]
 pub async fn speleodb_start_editing(app: AppHandle) -> Result<StartEditingResult, SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_start_editing).await
