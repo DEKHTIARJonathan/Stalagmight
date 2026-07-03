@@ -29,7 +29,7 @@ export interface LogReadResult {
 }
 
 /** Is this ring line an error (backend ERROR or a captured frontend crash)? */
-function isErrorLine(line: string): boolean {
+export function isErrorLine(line: string): boolean {
   return (
     line.startsWith('ERROR') ||
     line.includes('[unhandled-error]') ||
@@ -38,7 +38,7 @@ function isErrorLine(line: string): boolean {
   );
 }
 
-function isWarnLine(line: string): boolean {
+export function isWarnLine(line: string): boolean {
   return line.startsWith('WARN');
 }
 

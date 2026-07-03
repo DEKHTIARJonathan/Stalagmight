@@ -35,7 +35,10 @@
     "typecheck:agent": "tsc -p tsconfig.agent.json",
     "agent:smoke": "tsx e2e/agent/smoke.ts",
     "agent:mcp": "tsx e2e/agent/mcp/server.ts",
-    "agent:mcp:smoke": "tsx e2e/agent/mcp/smoke-client.ts"
+    "agent:mcp:smoke": "tsx e2e/agent/mcp/smoke-client.ts",
+    "agent:replay:gen": "node scripts/generate-replay.mjs",
+    "agent:report": "node scripts/generate-repro-report.mjs",
+    "test:e2e:replay": "wdio run wdio.replay.conf.ts"
   },
   "dependencies": {
     "@deck.gl/core": "^9.0.35",

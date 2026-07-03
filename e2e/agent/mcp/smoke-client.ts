@@ -102,6 +102,22 @@ async function main(): Promise<void> {
     const wait = parseText(await call('wait_for', { condition: 'app-ready', timeoutMs: 5000 })) as { met?: boolean };
     check('wait_for app-ready', wait?.met === true);
 
+    // Oracle self-test (harness doctor): a deliberate backend thread panic (app
+    // survives) must surface as a fatal crash-marker finding from check_problems.
+    await call('ipc', { command: 'debug_trigger_panic', args: { delayMs: 50 } });
+    let crashFinding: { severity?: string; kind?: string } | undefined;
+    for (let i = 0; i < 20 && !crashFinding; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      const sweep = parseText(await call('check_problems')) as {
+        findings?: Array<{ severity?: string; kind?: string }>;
+      };
+      crashFinding = sweep?.findings?.find((f) => f.kind === 'crash-marker');
+    }
+    check('oracle detects backend crash marker (fatal)', crashFinding?.severity === 'fatal', crashFinding);
+
+    const respondsAfterPanic = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
+    check('app survives thread panic (still responds)', respondsAfterPanic?.value === 'global');
+
     const stopped = parseText(await call('app_stop')) as { stopped?: boolean };
     check('app_stop', stopped?.stopped === true);
   } catch (err) {

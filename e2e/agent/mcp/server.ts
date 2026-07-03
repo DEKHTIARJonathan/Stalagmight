@@ -8,6 +8,8 @@ import { AppSession } from '../session';
 import { readStore, callStoreAction, postDigest, type StoreName } from '../lib/stores';
 import { LogCursor, type LogLevel } from '../lib/logs';
 import { invokeInApp, evalInApp, capJson } from '../lib/page';
+import { newOracleState, runSweep, type OracleState } from '../lib/oracles';
+import { listScenarios, runScenario } from '../scenarios';
 import {
   waitForAppReady,
   waitForUiIdle,
@@ -19,6 +21,7 @@ const STORE_NAMES = ['ui', 'project', 'globalView', 'gasPlan', 'speleo', 'export
 
 const session = new AppSession();
 let logCursor: LogCursor | null = null;
+let oracleState: OracleState = newOracleState();
 
 type ToolResult = { content: Array<Record<string, unknown>>; isError?: boolean };
 
@@ -27,6 +30,9 @@ function textResult(value: unknown): ToolResult {
 }
 function errorResult(message: string): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }], isError: true };
+}
+function asMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 interface RunOutput<T> {
@@ -48,9 +54,7 @@ async function record<T>(
     const { result, resolved, artifacts } = await fn(seq);
     if (session.hasRecorder) {
       let post: unknown;
-      if (opts.digest) {
-        post = await postDigest(session.browser).catch(() => undefined);
-      }
+      if (opts.digest) post = await postDigest(session.browser).catch(() => undefined);
       session.recorder.action({
         seq,
         ts: new Date().toISOString(),
@@ -65,17 +69,48 @@ async function record<T>(
     }
     return result;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
     if (session.hasRecorder) {
       session.recorder.action({
         seq,
         ts: new Date().toISOString(),
         tool,
         params,
-        outcome: { ok: false, durationMs: Date.now() - start, error: message },
+        outcome: { ok: false, durationMs: Date.now() - start, error: asMessage(err) },
       });
     }
     throw err;
+  }
+}
+
+/**
+ * Record a tool call, then (for mutating tools) run a cheap oracle sweep and
+ * merge any new findings into the JSON envelope so the agent sees problems the
+ * moment they appear. The tool's own result object is spread at the top level;
+ * findings ride under `oracle`.
+ */
+async function run(
+  tool: string,
+  params: unknown,
+  fn: (seq: number) => Promise<RunOutput<unknown>>,
+  opts: { digest?: boolean; sweep?: boolean } = {},
+): Promise<ToolResult> {
+  try {
+    const result = await record(tool, params, fn, { digest: opts.digest });
+    const envelope: Record<string, unknown> =
+      result && typeof result === 'object' ? { ...(result as Record<string, unknown>) } : { value: result };
+    if (opts.sweep) {
+      try {
+        const sweep = await runSweep(session, oracleState, {
+          recorder: session.hasRecorder ? session.recorder : undefined,
+        });
+        if (sweep.newFindings.length) envelope.oracle = { worst: sweep.worst, findings: sweep.newFindings };
+      } catch {
+        // The sweep is best-effort; never fail the action because of it.
+      }
+    }
+    return textResult(envelope);
+  } catch (err) {
+    return errorResult(asMessage(err));
   }
 }
 
@@ -108,11 +143,12 @@ define(
         headed: args.headed,
         freshProfile: args.freshProfile,
       });
+      oracleState = newOracleState();
       logCursor = new LogCursor(session.browser);
       await logCursor.checkpoint().catch(() => undefined);
       return textResult(res);
     } catch (err) {
-      return errorResult(err instanceof Error ? err.message : String(err));
+      return errorResult(asMessage(err));
     }
   },
 );
@@ -123,7 +159,7 @@ define('app_stop', 'Close the app and driver, freeing the session.', {}, async (
     logCursor = null;
     return textResult({ stopped: true });
   } catch (err) {
-    return errorResult(err instanceof Error ? err.message : String(err));
+    return errorResult(asMessage(err));
   }
 });
 
@@ -135,11 +171,12 @@ define(
     try {
       await session.stop('app_restart');
       const res = await session.start({ build: 'skip', freshProfile: args.freshProfile ?? false });
+      oracleState = newOracleState();
       logCursor = new LogCursor(session.browser);
       await logCursor.checkpoint().catch(() => undefined);
       return textResult(res);
     } catch (err) {
-      return errorResult(err instanceof Error ? err.message : String(err));
+      return errorResult(asMessage(err));
     }
   },
 );
@@ -172,47 +209,31 @@ define('screenshot', 'Capture a PNG screenshot (returned as image + saved to the
       ],
     };
   } catch (err) {
-    return errorResult(err instanceof Error ? err.message : String(err));
+    return errorResult(asMessage(err));
   }
 });
 
 define(
   'store_state',
   'Read a Zustand store. With no path, returns a key/type summary; with a dot path, the value (JSON-capped).',
-  {
-    store: z.enum(STORE_NAMES),
-    path: z.string().optional(),
-    maxBytes: z.number().optional(),
-  },
-  async (args) => {
-    try {
-      const value = await record('store_state', args, async () => ({
-        result: await session.exclusive(() =>
-          readStore(session.browser, args.store as StoreName, args.path ?? null, args.maxBytes ?? 16384),
-        ),
-      }));
-      return textResult(value);
-    } catch (err) {
-      return errorResult(err instanceof Error ? err.message : String(err));
-    }
-  },
+  { store: z.enum(STORE_NAMES), path: z.string().optional(), maxBytes: z.number().optional() },
+  (args) =>
+    run('store_state', args, async () => ({
+      result: await session.exclusive(() =>
+        readStore(session.browser, args.store as StoreName, args.path ?? null, args.maxBytes ?? 16384),
+      ),
+    })),
 );
 
 define(
   'logs',
   'Return ring-buffer log lines since the last read. level filters output; peek does not advance the cursor.',
   { level: z.enum(['all', 'warn', 'error']).optional(), peek: z.boolean().optional() },
-  async (args) => {
-    try {
-      if (!logCursor) return errorResult('no session (call app_start)');
-      const res = await record('logs', args, async () => ({
-        result: await session.exclusive(() => logCursor!.read((args.level ?? 'error') as LogLevel, args.peek)),
-      }));
-      return textResult(res);
-    } catch (err) {
-      return errorResult(err instanceof Error ? err.message : String(err));
-    }
-  },
+  (args) =>
+    run('logs', args, async () => {
+      if (!logCursor) throw new Error('no session (call app_start)');
+      return { result: await session.exclusive(() => logCursor!.read((args.level ?? 'error') as LogLevel, args.peek)) };
+    }),
 );
 
 define(
@@ -227,51 +248,45 @@ define(
     equals: z.unknown().optional(),
     timeoutMs: z.number().optional(),
   },
-  async (args) => {
-    try {
+  (args) =>
+    run('wait_for', args, async () => {
       const timeout = args.timeoutMs ?? 10000;
-      const res = await record('wait_for', args, async () => {
-        await session.exclusive(async () => {
-          const b = session.browser;
-          switch (args.condition) {
-            case 'selector':
-              await b.$(String(args.selector)).waitForDisplayed({ timeout });
-              break;
-            case 'hidden':
-              await b.$(String(args.selector)).waitForDisplayed({ timeout, reverse: true });
-              break;
-            case 'app-ready':
-              await waitForAppReady(b);
-              break;
-            case 'ui-idle':
-              await waitForUiIdle(b);
-              break;
-            case 'map-idle':
-              await waitForMapIdle(b);
-              break;
-            case 'active-tool':
-              await waitForActiveTool(b, String(args.tool));
-              break;
-            case 'store-path':
-              await b.waitUntil(
-                async () => {
-                  const v = await readStore(b, args.store as StoreName, String(args.path));
-                  return JSON.stringify((v as { value?: unknown }).value) === JSON.stringify(args.equals);
-                },
-                { timeout, timeoutMsg: 'store-path did not match' },
-              );
-              break;
-            default:
-              throw new Error(`unknown condition ${args.condition}`);
-          }
-        });
-        return { result: { met: true } };
+      await session.exclusive(async () => {
+        const b = session.browser;
+        switch (args.condition) {
+          case 'selector':
+            await b.$(String(args.selector)).waitForDisplayed({ timeout });
+            break;
+          case 'hidden':
+            await b.$(String(args.selector)).waitForDisplayed({ timeout, reverse: true });
+            break;
+          case 'app-ready':
+            await waitForAppReady(b);
+            break;
+          case 'ui-idle':
+            await waitForUiIdle(b);
+            break;
+          case 'map-idle':
+            await waitForMapIdle(b);
+            break;
+          case 'active-tool':
+            await waitForActiveTool(b, String(args.tool));
+            break;
+          case 'store-path':
+            await b.waitUntil(
+              async () => {
+                const v = await readStore(b, args.store as StoreName, String(args.path));
+                return JSON.stringify((v as { value?: unknown }).value) === JSON.stringify(args.equals);
+              },
+              { timeout, timeoutMsg: 'store-path did not match' },
+            );
+            break;
+          default:
+            throw new Error(`unknown condition ${args.condition}`);
+        }
       });
-      return textResult(res);
-    } catch (err) {
-      return errorResult(err instanceof Error ? err.message : String(err));
-    }
-  },
+      return { result: { met: true } };
+    }),
 );
 
 // ------------------------------------------------------------- interaction
@@ -288,48 +303,42 @@ define(
     double: z.boolean().optional(),
     modifiers: z.array(z.enum(['Control', 'Shift', 'Alt'])).optional(),
   },
-  async (args) => {
-    try {
-      const res = await record(
-        'click',
-        args,
-        async () => {
-          const b = session.browser;
-          const selector = args.testid ? `[data-testid="${args.testid}"]` : args.selector;
-          return session.exclusive(async () => {
-            let point: { x: number; y: number } | undefined;
-            const button = args.button ?? 'left';
-            const simple = button === 'left' && !args.double && !(args.modifiers && args.modifiers.length);
-            if (selector) {
-              const el = b.$(selector);
-              await el.waitForClickable({ timeout: 5000 });
-              if (simple) {
-                await el.click();
-              } else {
-                await el.moveTo();
-                await clickWithOptions(b, button, args.double, args.modifiers);
-              }
-            } else if (typeof args.x === 'number' && typeof args.y === 'number') {
-              point = { x: Math.round(args.x), y: Math.round(args.y) };
-              await b
-                .action('pointer', { parameters: { pointerType: 'mouse' } })
-                .move({ x: point.x, y: point.y })
-                .down({ button })
-                .up({ button })
-                .perform();
+  (args) =>
+    run(
+      'click',
+      args,
+      async () => {
+        const b = session.browser;
+        const selector = args.testid ? `[data-testid="${args.testid}"]` : args.selector;
+        const button = args.button ?? 'left';
+        return session.exclusive(async () => {
+          let point: { x: number; y: number } | undefined;
+          const simple = button === 'left' && !args.double && !(args.modifiers && args.modifiers.length);
+          if (selector) {
+            const el = b.$(selector);
+            await el.waitForClickable({ timeout: 5000 });
+            if (simple) {
+              await el.click();
             } else {
-              throw new Error('click needs one of testid, selector, or x+y');
+              await el.moveTo();
+              await clickWithOptions(b, button, args.double, args.modifiers);
             }
-            return { result: { clicked: true }, resolved: { selector, point } };
-          });
-        },
-        { digest: true },
-      );
-      return textResult(res);
-    } catch (err) {
-      return errorResult(err instanceof Error ? err.message : String(err));
-    }
-  },
+          } else if (typeof args.x === 'number' && typeof args.y === 'number') {
+            point = { x: Math.round(args.x), y: Math.round(args.y) };
+            await b
+              .action('pointer', { parameters: { pointerType: 'mouse' } })
+              .move({ x: point.x, y: point.y })
+              .down({ button })
+              .up({ button })
+              .perform();
+          } else {
+            throw new Error('click needs one of testid, selector, or x+y');
+          }
+          return { result: { clicked: true }, resolved: { selector, point } };
+        });
+      },
+      { digest: true, sweep: true },
+    ),
 );
 
 define(
@@ -342,180 +351,204 @@ define(
     clear: z.boolean().optional(),
     submit: z.boolean().optional(),
   },
-  async (args) => {
-    try {
-      const res = await record(
-        'type_text',
-        args,
-        async () => {
-          const b = session.browser;
-          const selector = args.testid ? `[data-testid="${args.testid}"]` : args.selector;
-          return session.exclusive(async () => {
-            if (selector) {
-              const el = b.$(selector);
-              await el.waitForDisplayed({ timeout: 5000 });
-              if (args.clear) await el.clearValue();
-              await el.setValue(args.text);
-            } else {
-              await b.keys(args.text.split(''));
-            }
-            if (args.submit) await b.keys(['Enter']);
-            return { result: { typed: true }, resolved: { selector } };
-          });
-        },
-        { digest: true },
-      );
-      return textResult(res);
-    } catch (err) {
-      return errorResult(err instanceof Error ? err.message : String(err));
-    }
-  },
+  (args) =>
+    run(
+      'type_text',
+      args,
+      async () => {
+        const b = session.browser;
+        const selector = args.testid ? `[data-testid="${args.testid}"]` : args.selector;
+        return session.exclusive(async () => {
+          if (selector) {
+            const el = b.$(selector);
+            await el.waitForDisplayed({ timeout: 5000 });
+            if (args.clear) await el.clearValue();
+            await el.setValue(args.text);
+          } else {
+            await b.keys(args.text.split(''));
+          }
+          if (args.submit) await b.keys(['Enter']);
+          return { result: { typed: true }, resolved: { selector } };
+        });
+      },
+      { digest: true, sweep: true },
+    ),
 );
 
 define('press_keys', 'Press a sequence of WebDriver keys (e.g. ["Control","z"]).', {
   keys: z.array(z.string()),
-}, async (args) => {
-  try {
-    const res = await record(
-      'press_keys',
-      args,
-      async () => {
-        await session.exclusive(() => session.browser.keys(args.keys));
-        return { result: { pressed: args.keys } };
-      },
-      { digest: true },
-    );
-    return textResult(res);
-  } catch (err) {
-    return errorResult(err instanceof Error ? err.message : String(err));
-  }
-});
+}, (args) =>
+  run(
+    'press_keys',
+    args,
+    async () => {
+      await session.exclusive(() => session.browser.keys(args.keys));
+      return { result: { pressed: args.keys } };
+    },
+    { digest: true, sweep: true },
+  ),
+);
 
 // ------------------------------------------------------------ escape hatches
 
 define('eval', 'Run an async function body in the webview (page context) and return its value.', {
   script: z.string(),
   args: z.array(z.unknown()).optional(),
-}, async (args) => {
-  try {
-    const value = await record('eval', args, async () => ({
-      result: await session.exclusive(() => evalInApp(session.browser, args.script, args.args ?? [])),
-    }));
-    return textResult(capJson(value, 16384));
-  } catch (err) {
-    return errorResult(err instanceof Error ? err.message : String(err));
-  }
-});
+}, (args) =>
+  run(
+    'eval',
+    args,
+    async () => ({
+      result: capJson(await session.exclusive(() => evalInApp(session.browser, args.script, args.args ?? [])), 16384),
+    }),
+    { sweep: true },
+  ),
+);
 
 define('ipc', 'Invoke a Tauri command from the webview (e.g. get_recent_logs_since, check_project_integrity).', {
   command: z.string(),
   args: z.record(z.string(), z.unknown()).optional(),
-}, async (args) => {
-  try {
-    const value = await record('ipc', args, async () => ({
-      result: await session.exclusive(() => invokeInApp(session.browser, args.command, args.args)),
-    }));
-    return textResult(capJson(value, 16384));
-  } catch (err) {
-    return errorResult(err instanceof Error ? err.message : String(err));
-  }
-});
+}, (args) =>
+  run(
+    'ipc',
+    args,
+    async () => ({
+      result: capJson(await session.exclusive(() => invokeInApp(session.browser, args.command, args.args)), 16384),
+    }),
+    { sweep: true },
+  ),
+);
 
 define(
   'store_action',
   'Call an action on a Zustand store (generic seeding/driving primitive).',
   { store: z.enum(STORE_NAMES), action: z.string(), args: z.array(z.unknown()).optional() },
-  async (args) => {
-    try {
-      const res = await record(
-        'store_action',
-        args,
-        async () => ({
-          result: await session.exclusive(() =>
-            callStoreAction(session.browser, args.store as StoreName, args.action, args.args ?? []),
-          ),
-        }),
-        { digest: true },
-      );
-      return textResult(res);
-    } catch (err) {
-      return errorResult(err instanceof Error ? err.message : String(err));
-    }
-  },
+  (args) =>
+    run(
+      'store_action',
+      args,
+      async () => ({
+        result: await session.exclusive(() =>
+          callStoreAction(session.browser, args.store as StoreName, args.action, args.args ?? []),
+        ),
+      }),
+      { digest: true, sweep: true },
+    ),
 );
 
 // ---------------------------------------------------------------------- map
 
-define('map_view', 'Read or set the MapLibre view (center/zoom/bearing or fit the project).', {
+define('map_view', 'Read or set the MapLibre view (center/zoom/bearing).', {
   set: z
     .object({ center: z.array(z.number()).optional(), zoom: z.number().optional(), bearing: z.number().optional() })
     .optional(),
-  fit: z.enum(['project']).optional(),
-}, async (args) => {
-  try {
-    const res = await record('map_view', args, async () => ({
-      result: await session.exclusive(async () => {
-        const out = await evalInApp<{ ok: boolean; view?: unknown }>(
-          session.browser,
-          `
-          const map = window.__stalagmight_map__;
-          if (!map) return { ok: false };
-          const set = args[0]; const fit = args[1];
-          if (fit === 'project' && map.__fitProject) { map.__fitProject(); }
-          else if (set) { map.jumpTo({ ...(set.center ? { center: set.center } : {}), ...(set.zoom != null ? { zoom: set.zoom } : {}), ...(set.bearing != null ? { bearing: set.bearing } : {}) }); }
-          return { ok: true, view: { center: map.getCenter && map.getCenter(), zoom: map.getZoom && map.getZoom(), bearing: map.getBearing && map.getBearing() } };
-        `,
-          [args.set ?? null, args.fit ?? null],
-        );
-        return out;
-      }),
-    }));
-    return textResult(res);
-  } catch (err) {
-    return errorResult(err instanceof Error ? err.message : String(err));
-  }
-});
+}, (args) =>
+  run('map_view', args, async () => ({
+    result: await session.exclusive(() =>
+      evalInApp<{ ok: boolean; view?: unknown }>(
+        session.browser,
+        `
+        const map = window.__stalagmight_map__;
+        if (!map) return { ok: false };
+        const set = args[0];
+        if (set) map.jumpTo({ ...(set.center ? { center: set.center } : {}), ...(set.zoom != null ? { zoom: set.zoom } : {}), ...(set.bearing != null ? { bearing: set.bearing } : {}) });
+        return { ok: true, view: { center: map.getCenter && map.getCenter(), zoom: map.getZoom && map.getZoom(), bearing: map.getBearing && map.getBearing() } };
+      `,
+        [args.set ?? null],
+      ),
+    ),
+  })),
+);
 
 define('map_click', 'Click a geographic point on the map canvas (lngLat -> pixel via map.project).', {
   lngLat: z.array(z.number()).length(2),
   button: z.enum(['left', 'right']).optional(),
-}, async (args) => {
-  try {
-    const res = await record(
-      'map_click',
-      args,
-      async () =>
-        session.exclusive(async () => {
-          const b = session.browser;
-          const point = await evalInApp<{ x: number; y: number } | null>(
-            b,
-            `
-            const map = window.__stalagmight_map__;
-            if (!map || !map.project) return null;
-            const p = map.project(args[0]);
-            const canvas = document.querySelector('[data-testid="map-canvas"]');
-            const rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
-            return { x: Math.round(rect.left + p.x), y: Math.round(rect.top + p.y) };
-          `,
-            [args.lngLat],
-          );
-          if (!point) throw new Error('map not available or point off-canvas');
-          const button = args.button ?? 'left';
-          await b
-            .action('pointer', { parameters: { pointerType: 'mouse' } })
-            .move({ x: point.x, y: point.y })
-            .down({ button })
-            .up({ button })
-            .perform();
-          return { result: { clicked: true }, resolved: { lngLat: args.lngLat, point } };
-        }),
-      { digest: true },
-    );
-    return textResult(res);
-  } catch (err) {
-    return errorResult(err instanceof Error ? err.message : String(err));
-  }
-});
+}, (args) =>
+  run(
+    'map_click',
+    args,
+    async () =>
+      session.exclusive(async () => {
+        const b = session.browser;
+        const point = await evalInApp<{ x: number; y: number } | null>(
+          b,
+          `
+          const map = window.__stalagmight_map__;
+          if (!map || !map.project) return null;
+          const p = map.project(args[0]);
+          const canvas = document.querySelector('[data-testid="map-canvas"]') || document.querySelector('.maplibregl-canvas');
+          const rect = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
+          return { x: Math.round(rect.left + p.x), y: Math.round(rect.top + p.y) };
+        `,
+          [args.lngLat],
+        );
+        if (!point) throw new Error('map not available or point off-canvas');
+        const button = args.button ?? 'left';
+        await b
+          .action('pointer', { parameters: { pointerType: 'mouse' } })
+          .move({ x: point.x, y: point.y })
+          .down({ button })
+          .up({ button })
+          .perform();
+        return { result: { clicked: true }, resolved: { lngLat: args.lngLat, point } };
+      }),
+    { digest: true, sweep: true },
+  ),
+);
+
+// ------------------------------------------------------------- oracles + scenarios
+
+define(
+  'check_problems',
+  'Run the full oracle sweep: crash markers, error/warn logs, error boundary, project integrity, leftover temp files, memory growth, and a responsiveness probe. Use after scenarios and before ending a session.',
+  {},
+  async () => {
+    try {
+      const sweep = await runSweep(session, oracleState, {
+        full: true,
+        recorder: session.hasRecorder ? session.recorder : undefined,
+      });
+      return textResult({
+        ok: sweep.worst === null,
+        worst: sweep.worst,
+        findings: sweep.findings,
+        newFindings: sweep.newFindings,
+      });
+    } catch (err) {
+      return errorResult(asMessage(err));
+    }
+  },
+);
+
+define(
+  'run_scenario',
+  `Run a named stress scenario against the current session, then a full sweep. Scenarios: ${listScenarios().join(', ')}.`,
+  { name: z.string(), seed: z.number().optional(), iterations: z.number().optional() },
+  async (args) => {
+    try {
+      const metrics = await runScenario(args.name, session, {
+        seed: args.seed,
+        iterations: args.iterations,
+        log: (m) => {
+          if (session.hasRecorder) session.recorder.event('scenario-log', { scenario: args.name, message: m });
+        },
+      });
+      const sweep = await runSweep(session, oracleState, {
+        full: true,
+        recorder: session.hasRecorder ? session.recorder : undefined,
+      });
+      return textResult({
+        scenario: args.name,
+        metrics,
+        ok: sweep.worst === null || sweep.worst === 'warning',
+        worst: sweep.worst,
+        findings: sweep.findings,
+      });
+    } catch (err) {
+      return errorResult(asMessage(err));
+    }
+  },
+);
 
 // -------------------------------------------------------------- helpers
 
