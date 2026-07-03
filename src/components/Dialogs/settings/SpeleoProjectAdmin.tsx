@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SettingsSection } from './SettingsSection';
+import { SpeleoRevisionHistory } from './SpeleoRevisionHistory';
 import { Button } from '../../common/Button';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
@@ -512,6 +513,9 @@ export function SpeleoProjectAdmin() {
           </p>
         )}
       </SettingsSection>
+
+      {/* Revision history + restore (#218) - directly below Lock. */}
+      <SpeleoRevisionHistory />
 
       {/* Danger zone: delete */}
       {canManage && (

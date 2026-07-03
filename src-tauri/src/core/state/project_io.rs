@@ -730,6 +730,8 @@ impl AppState {
         // [Track B] (#191) Reset the transient read-only edit gate so a previously
         // read-only remote project can't leave the flag stuck for the next open.
         self.set_edit_enabled(true);
+        // #213: clear force-edit so it never leaks across a close into the next open.
+        self.set_force_editing(false);
 
         tracing::info!(purpose = "release project resources", "Project closed");
         tracing::debug!("close_project: returning success");

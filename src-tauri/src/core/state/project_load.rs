@@ -181,6 +181,8 @@ impl AppState {
         // local-only ⇒ enabled (see do_load_project_full). Read before `db` moves.
         let is_remote = matches!(db.load_speleo_link(), Ok(Some(_)));
         self.set_edit_enabled(!is_remote);
+        // #213: force-edit is per-session; a fresh open never starts force-editing.
+        self.set_force_editing(false);
 
         if let Ok(mut database) = self.database.lock() {
             *database = Some(db);
@@ -544,6 +546,8 @@ impl AppState {
         // no-op off-SpeleoDB). Read before `db` is moved into the handle slot.
         let is_remote = matches!(db.load_speleo_link(), Ok(Some(_)));
         self.set_edit_enabled(!is_remote);
+        // #213: force-edit is per-session; a fresh open never starts force-editing.
+        self.set_force_editing(false);
 
         // Commit 2: Database handle mutation
         *self

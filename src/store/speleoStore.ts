@@ -77,6 +77,21 @@ export interface SpeleoLinkState {
    */
   lockedByOther: boolean;
   hasUnpushedEdits: boolean;
+  /**
+   * [#213] We are editing this remote project WITHOUT the write lock (force-edit):
+   * `editState === 'editing'` but no lock is held, so the `.stalx` cannot be merged
+   * until we reconnect and acquire the lock. Drives the persistent big-red banner
+   * and routes the status button / lock menu to Reconnect (the existing
+   * `startEditing`) instead of Done. Transient (backend-derived; resets on
+   * open/close/reconnect).
+   */
+  forceEditing: boolean;
+  /**
+   * [#213] The `SpeleoDbConfig.allow_force_edit` opt-in (a global preference,
+   * mirrored per-poll onto the link). Gates whether the read-only "Edit without
+   * lock" affordance appears at all; false hides it and the backend also refuses.
+   */
+  forceEditAllowed: boolean;
   /** The local copy's relationship to the server tip (drives the button, T2c). */
   remoteState: RemoteState;
   /**
@@ -117,6 +132,12 @@ interface SpeleoStore {
   session: SpeleoSession | null;
   /** The open project's link/edit state, or `null` when it is local / none open. */
   link: SpeleoLinkState | null;
+  /**
+   * [#218] The open remote project's SpeleoDB project id (from the poll'd status),
+   * so the in-project menu can open its revision history. `null` for a local project
+   * / none open / before the first status seed.
+   */
+  remoteProjectId: string | null;
   /** Set when a hand-off verb reported divergence; consumed by #198 (stub for now). */
   divergence: DivergenceOrigin | null;
   /** Transient banner (#200 seam). */
@@ -135,6 +156,14 @@ interface SpeleoStore {
    * differ from the local survey name. Empty until the first scan.
    */
   remoteProjects: Record<string, string>;
+  /**
+   * The full project summary per accessible project (`project_id` → summary), from
+   * the same scan (#218). Retains permission / type_tag / latest_commit_sha so
+   * GlobalView can list purely-remote projects (not in local recents) and Open them
+   * without a second `list_projects` round trip. Superset of `remoteLocks` /
+   * `remoteProjects`; empty until the first scan (logged out / offline).
+   */
+  remoteSummaries: Record<string, SpeleoProjectSummary>;
   /**
    * Locks the current user holds, found by the scan (#201). Populates the
    * resume/release prompt's list; a login/app-open scan that finds any also bumps
@@ -252,10 +281,12 @@ interface SpeleoStore {
 export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   session: null,
   link: null,
+  remoteProjectId: null,
   divergence: null,
   banner: null,
   remoteLocks: {},
   remoteProjects: {},
+  remoteSummaries: {},
   heldLocks: null,
   heldLockPromptOpen: false,
   heldLockPromptPending: true,
@@ -360,6 +391,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       set({
         remoteLocks: {},
         remoteProjects: {},
+        remoteSummaries: {},
         heldLocks: null,
         heldLockPromptPending: false,
         heldLockPromptOpen: false,
@@ -376,10 +408,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       }
       const remoteLocks: Record<string, string | null> = {};
       const remoteProjects: Record<string, string> = {};
+      const remoteSummaries: Record<string, SpeleoProjectSummary> = {};
       const heldLocks: HeldLock[] = [];
       for (const p of projects) {
         remoteLocks[p.id] = p.lock_holder;
         remoteProjects[p.id] = p.name;
+        remoteSummaries[p.id] = p;
         // Same ownership check the recents badge uses (emailsMatch), so the prompt's
         // held list and the badge's "locked by you" can't disagree.
         if (emailsMatch(p.lock_holder, me)) {
@@ -395,6 +429,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         return {
           remoteLocks,
           remoteProjects,
+          remoteSummaries,
           heldLocks: heldLocks.length > 0 ? heldLocks : null,
           heldLockPromptPending: false,
           ...(promptWorthy && heldLocks.length > 0 ? { heldLockPromptOpen: true } : {}),
@@ -463,6 +498,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             lockHolder: null,
             lockedByOther: false,
             hasUnpushedEdits: false,
+            // The backend drops the edit gate (and any force-edit) on a token loss,
+            // so mirror that here or the shell would keep offering Reconnect.
+            forceEditing: false,
             // We can no longer verify the server relationship without a token, so
             // report Unknown (what a token-less backend poll returns) rather than
             // claiming up-to-date; the next poll re-resolves it.
@@ -473,16 +511,21 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         : null,
       divergence: null,
       banner: null,
+      // The revision-history section fetches per the open remote project id, which it
+      // can no longer read token-lessly; drop it so it hides (rather than error-fetching)
+      // until a re-login re-seeds it from the next status poll.
+      remoteProjectId: null,
       // The lock scan was for this now-ended session; drop its badges + prompt.
       remoteLocks: {},
       remoteProjects: {},
+      remoteSummaries: {},
       heldLocks: null,
       heldLockPromptOpen: false,
     })),
 
   seedFromStatus: (s) =>
     set((state) => {
-      if (!s.is_remote) return { link: null, divergence: null, banner: null };
+      if (!s.is_remote) return { link: null, remoteProjectId: null, divergence: null, banner: null };
       const editState = s.edit_enabled ? 'editing' : 'read-only';
       // #200: reflect the server's exclude_geojson as a persistent
       // rendering-disabled banner. It outranks the informational `no_anchor` notice
@@ -516,10 +559,16 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           // and the backend gate stays the real enforcement.
           lockedByOther: editState !== 'editing' && !!s.lock_holder,
           hasUnpushedEdits: s.has_unpushed_edits,
+          // #213: force-edit (edit-enabled WITHOUT a held lock) is backend-authoritative
+          // and reported every poll; a reconnect that acquires the lock clears it there.
+          forceEditing: s.force_editing,
+          forceEditAllowed: s.allow_force_edit,
           remoteState: s.remote_state,
           noAccess: s.access_denied,
           serverError: s.server_error,
         },
+        // #218: the open remote project's id, for the in-project revision-history entry.
+        remoteProjectId: s.project_id,
       };
     }),
 
@@ -533,6 +582,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         lockHolder: null,
         lockedByOther: false,
         hasUnpushedEdits: false,
+        // A fresh pull always opens without the lock and not force-editing;
+        // `seedFromStatus` refines the opt-in + any force-edit on the first poll.
+        forceEditing: false,
+        forceEditAllowed: false,
         remoteState: 'up_to_date',
         noAccess: false,
         serverError: null,
@@ -544,7 +597,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   // Reset `busy` too: a hand-off verb in flight when the project closes/switches
   // would otherwise leave a freshly-opened project's status button disabled until
   // that verb's `finally` runs (its `apply*` no-op safely, guarded on `link`). (N2)
-  clearLink: () => set({ link: null, divergence: null, banner: null, busy: false }),
+  clearLink: () => set({ link: null, remoteProjectId: null, divergence: null, banner: null, busy: false }),
 
   applyStartEditing: (r) =>
     set((state) => {
@@ -553,12 +606,14 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         case 'editing':
         case 'fast_forwarded':
           // We now hold the lock: not locked-by-other, no remote-ahead/conflict,
-          // no stale banner. (fast_forwarded also reloads + re-seeds.)
+          // no stale banner, and force-edit clears (Reconnect succeeded - #213).
+          // (fast_forwarded also reloads + re-seeds.)
           return {
             link: {
               ...state.link,
               editState: 'editing',
               lockedByOther: false,
+              forceEditing: false,
               remoteState: 'up_to_date',
               serverError: null,
             },
@@ -573,7 +628,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           return {
             link: {
               ...state.link,
-              editState: 'read-only',
+              // #213: a force-editor who tried to Reconnect and found the lock still
+              // held keeps editing offline (the backend left its gate + force-edit on),
+              // so preserve their editing state - only record the holder. A normal
+              // read-only start downgrades to read-only as before.
+              editState: state.link.forceEditing ? state.link.editState : 'read-only',
               lockHolder: r.email ?? state.link.lockHolder,
               lockedByOther: true,
             },

@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
+import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
 import { invokeIpc } from '../../utils/ipc';
 import { speleoErrorAction, humanizeSpeleoError } from '../../utils/speleoError';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { SpeleoAdoptConfirm } from './SpeleoAdoptConfirm';
 import type {
-  SpeleoOpenResult,
   SpeleoProjectSummary,
   SpeleoSessionStatus,
 } from '../../types/ipc.generated';
@@ -24,13 +24,12 @@ export default function OpenFromSpeleoDbDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const openDialog = useUIStore((s) => s.openDialog);
-  const showToast = useUIStore((s) => s.showToast);
-  // loadProject (not openProject) drives the LoadingState progress UI.
-  const loadProject = useProjectStore((s) => s.loadProject);
   const session = useSpeleoStore((s) => s.session);
   const setSession = useSpeleoStore((s) => s.setSession);
   const clearSession = useSpeleoStore((s) => s.clearSession);
-  const setLinkOnOpen = useSpeleoStore((s) => s.setLinkOnOpen);
+  // Shared pull+open flow (#218): closeDialog runs right before loadProject so its
+  // LoadingState progress is visible. The Ariane-adopt route surfaces as an outcome.
+  const { openRemote, adoptRemote } = useOpenRemoteProject({ onBeforeLoad: closeDialog });
 
   // Start in 'checking' so the session probe settles before the first paint
   // (avoids a logged-out flash for an already-authenticated session).
@@ -39,6 +38,9 @@ export default function OpenFromSpeleoDbDialog() {
   const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // #214: an Ariane (.tml-only) project the user is being asked to adopt. Set when
+  // speleodb_open_project reports SpeleoDbAction::Adopt; cleared on confirm/cancel.
+  const [pendingAdopt, setPendingAdopt] = useState<SpeleoProjectSummary | null>(null);
 
   const refreshProjects = async (isCancelled: () => boolean = () => false) => {
     const list = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
@@ -93,48 +95,45 @@ export default function OpenFromSpeleoDbDialog() {
     }
   };
 
+  // Route the shared open outcome (#218 `useOpenRemoteProject`) to this dialog's
+  // inline surfaces: adopt -> confirm; error -> inline banner (+ re-login drop); the
+  // opened / load_failed cases are fully handled by the hook (it already closed the
+  // dialog before loading), so there is nothing left to do here.
+  const surfaceOpenError = (message: string, reLogin: boolean) => {
+    setError(message);
+    if (reLogin) {
+      clearSession();
+      setPhase('logged-out');
+    }
+    setBusy(false);
+  };
+
   const handleOpen = async (project: SpeleoProjectSummary) => {
     setBusy(true);
     setError(null);
-    let result: SpeleoOpenResult;
-    try {
-      result = await invokeIpc<SpeleoOpenResult>('speleodb_open_project', {
-        // [Track B] (#189) pass name + latest SHA so the backend stamps the
-        // speleo_link row (is_remote) on the pulled .stalx.
-        projectId: project.id,
-        projectName: project.name,
-        latestCommitSha: project.latest_commit_sha ?? null,
-      });
-    } catch (e) {
-      setError(humanizeSpeleoError(e, t('speleodb.errors.openFailed')));
-      if (speleoErrorAction(e) === 'ReLogin') {
-        clearSession();
-        setPhase('logged-out');
-      }
+    const outcome = await openRemote(project);
+    if (outcome.status === 'adopt') {
+      setPendingAdopt(project);
       setBusy(false);
-      return;
+    } else if (outcome.status === 'error') {
+      surfaceOpenError(outcome.message, outcome.reLogin);
     }
-    // #193 b8: a lock held by THIS account at open time = a second same-account
-    // session; warn (keyed so repeat opens don't stack duplicate toasts).
-    if (result.concurrent_session) {
-      showToast(t('speleodb.browser.concurrentSession'), 'speleodb-concurrent-session');
-    }
-    // Seed the action shell (#204) with the permission we already know from the
-    // summary, so it can gate Start editing before the async status settles.
-    setLinkOnOpen({ permission: project.permission });
-    // Close so loadProject's own LoadingState progress is visible, then hand off.
-    closeDialog();
-    const loaded = await loadProject(result.local_path);
-    // Roll back the optimistic link seed if the load failed (corrupt / permission /
-    // any load error) - otherwise the shell keeps a remote read-only link for a
-    // project that never opened (fix 10). On success loadProject re-seeds the link
-    // from the backend status.
-    if (!loaded.success) useSpeleoStore.getState().clearLink();
+  };
+
+  // #214: adopt the pending Ariane (.tml-only) project (imports the ariane.tml into a
+  // new .stalx, links it, flips the server type, reloads it), via the shared flow.
+  const handleAdopt = async (project: SpeleoProjectSummary) => {
+    setPendingAdopt(null);
+    setBusy(true);
+    setError(null);
+    const outcome = await adoptRemote(project);
+    if (outcome.status === 'error') surfaceOpenError(outcome.message, outcome.reLogin);
   };
 
   const goToLogin = () => openDialog('settings', { initialCategory: 'speleodb' });
 
   return (
+    <>
     <DialogWrapper
       title={t('speleodb.browser.title')}
       onClose={closeDialog}
@@ -243,5 +242,14 @@ export default function OpenFromSpeleoDbDialog() {
         )}
       </div>
     </DialogWrapper>
+    {pendingAdopt && (
+      <SpeleoAdoptConfirm
+        projectName={pendingAdopt.name}
+        busy={busy}
+        onCancel={() => setPendingAdopt(null)}
+        onConfirm={() => void handleAdopt(pendingAdopt)}
+      />
+    )}
+    </>
   );
 }

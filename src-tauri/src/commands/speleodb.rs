@@ -21,10 +21,11 @@ use crate::core::AppState;
 // `err.action`. The orchestration `AppState::speleodb_*` methods build the DTO at
 // the call site where the endpoint is known.
 use crate::speleodb::{
-    DoneResult, Permission, PushResult, SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto,
-    SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
+    DoneResult, Permission, PushResult, SpeleoAdoptResult, SpeleoCollaborators, SpeleoDbAction,
+    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
     SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
-    SpeleoSessionStatus, SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, UpdateResult,
+    SpeleoRevision, SpeleoSessionStatus, SpeleoTeamOption, SpeleoUserSuggestion,
+    StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -89,15 +90,43 @@ pub async fn speleodb_open_project(
     .await
 }
 
+/// [#214] Adopt an Ariane (`.tml`-only) project: import its `ariane.tml`, save a
+/// new `.stalx` into the cache, link it, and best-effort flip the server `type`
+/// ariane→other. The frontend calls this (after a user confirm) when
+/// `speleodb_open_project` reported `SpeleoDbAction::Adopt`, then reloads
+/// `local_path` through the normal `open_project` flow (read-only-remote).
+#[tauri::command]
+pub async fn speleodb_adopt_ariane(
+    app: AppHandle,
+    project_id: String,
+    project_name: String,
+    latest_commit_sha: Option<String>,
+) -> Result<SpeleoAdoptResult, SpeleoErrorDto> {
+    run_blocking(app, move |s| {
+        s.speleodb_adopt_ariane(project_id, project_name, latest_commit_sha)
+    })
+    .await
+}
+
 /// Forget the locally stored token and clear the session (no server call).
 #[tauri::command]
 pub async fn speleodb_logout(app: AppHandle) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_logout).await
 }
 
+/// [#213] Enable optimistic force-edit: edit the open remote project WITHOUT the
+/// server write lock (offline / contended), behind the FE's big-red warning. Opt-in
+/// (gated on the `allow_force_edit` config). No acquire, no network, BASE unchanged;
+/// the user later reconnects via `speleodb_start_editing`.
+#[tauri::command]
+pub async fn speleodb_force_edit(app: AppHandle) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_force_edit).await
+}
+
 /// Acquire the write lock on the open remote project and reconcile it against the
 /// server (#194). Enables editing on a clean reconcile; reports divergence,
-/// contention (locked-by), or an error otherwise.
+/// contention (locked-by), or an error otherwise. [#213] Also serves as the
+/// force-edit "reconnect".
 #[tauri::command]
 pub async fn speleodb_start_editing(app: AppHandle) -> Result<StartEditingResult, SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_start_editing).await
@@ -159,6 +188,37 @@ pub async fn speleodb_release_lock(
     project_id: String,
 ) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, move |s| s.speleodb_release_lock(project_id)).await
+}
+
+/// [#218] Read a project's revision history for the Project Settings history view:
+/// `GET /projects/{id}/revisions/`. Returns the commit chain projected to
+/// [`SpeleoRevision`] DTOs. Permission-free read; no lock required.
+#[tauri::command]
+pub async fn speleodb_get_revisions(
+    app: AppHandle,
+    project_id: String,
+) -> Result<Vec<SpeleoRevision>, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_get_revisions(project_id)).await
+}
+
+/// [#218] Check the open remote project's working copy out to a past revision:
+/// download the dump AT `hexsha`, replace the working copy, and reopen it. With
+/// `restore == true` (the user holds the lock) it is stamped as an unpushed edit on
+/// top of the current server HEAD (a git-forward restore; the user pushes to
+/// persist); with `restore == false` it is a read-only View that a later Update
+/// fast-forwards away. Returns the local path for the FE to refresh from.
+#[tauri::command]
+pub async fn speleodb_restore_revision(
+    app: AppHandle,
+    project_id: String,
+    project_name: String,
+    hexsha: String,
+    restore: bool,
+) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
+    run_blocking(app, move |s| {
+        s.speleodb_restore_revision(project_id, project_name, hexsha, restore)
+    })
+    .await
 }
 
 /// Set the open project's server-side `exclude_geojson` flag (#200

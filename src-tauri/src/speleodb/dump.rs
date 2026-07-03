@@ -26,7 +26,9 @@ pub(crate) enum DumpClassification {
     /// Exactly one `*.stalx` — open it. Holds the entry's path within the ZIP.
     Stalx(String),
     /// No `*.stalx` but an `ariane.tml` is present — route to C2 adoption (#214).
-    AdoptAriane,
+    /// Holds the `ariane.tml` entry's path within the ZIP (the adoption flow
+    /// extracts + imports it).
+    AdoptAriane(String),
     /// Neither a `*.stalx` nor an `ariane.tml` — nothing to open.
     NothingToOpen,
     /// More than one `*.stalx` — ambiguous; fail closed (never guess which).
@@ -43,13 +45,10 @@ pub(crate) fn classify(entry_paths: &[String]) -> DumpClassification {
 
     match stalx.as_slice() {
         [only] => DumpClassification::Stalx(only.clone()),
-        [] => {
-            if entry_paths.iter().any(|p| is_ariane_tml(p)) {
-                DumpClassification::AdoptAriane
-            } else {
-                DumpClassification::NothingToOpen
-            }
-        }
+        [] => match entry_paths.iter().find(|p| is_ariane_tml(p)) {
+            Some(tml) => DumpClassification::AdoptAriane(tml.clone()),
+            None => DumpClassification::NothingToOpen,
+        },
         _ => DumpClassification::AmbiguousStalx(stalx),
     }
 }
@@ -198,7 +197,10 @@ mod tests {
     #[test]
     fn zero_stalx_with_ariane_routes_to_adoption() {
         let got = classify(&paths(&["ariane.tml", "misc/notes.txt"]));
-        assert_eq!(got, DumpClassification::AdoptAriane);
+        assert_eq!(
+            got,
+            DumpClassification::AdoptAriane("ariane.tml".to_owned())
+        );
     }
 
     #[test]

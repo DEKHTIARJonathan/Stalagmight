@@ -23,6 +23,14 @@ import type {
 export interface SpeleoActions {
   busy: boolean;
   startEditing: () => Promise<void>;
+  /** #213 (E2): enter optimistic force-edit - edit WITHOUT the write lock (offline,
+      or while someone else holds it). Gated on the `allow_force_edit` opt-in (the
+      backend refuses otherwise) and behind a big-red destructive confirm; the caller
+      must gate this on that confirm. Re-seeds the link (→ editing + `forceEditing`).
+      Returns `true` only on success so the confirm dialog closes on success and stays
+      open (error toast shown) on a backend refusal, rather than dismissing as if it
+      worked. */
+  forceEdit: () => Promise<boolean>;
   update: () => Promise<void>;
   /** Push edits without releasing the lock (T2d) - collects an optional message.
       Returns the backend outcome (or `null` if the call threw) so callers can keep
@@ -45,12 +53,15 @@ export function useSpeleoActions(): SpeleoActions {
   const setBusy = useSpeleoStore((s) => s.setBusy);
   const showToast = useUIStore((s) => s.showToast);
   const loadProject = useProjectStore((s) => s.loadProject);
+  const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
+  const clearSelection = useUIStore((s) => s.clearSelection);
   const applyStartEditing = useSpeleoStore((s) => s.applyStartEditing);
   const applyUpdate = useSpeleoStore((s) => s.applyUpdate);
   const applyDone = useSpeleoStore((s) => s.applyDone);
   const applyPush = useSpeleoStore((s) => s.applyPush);
   const bumpPoll = useSpeleoStore((s) => s.bumpPoll);
   const clearSession = useSpeleoStore((s) => s.clearSession);
+  const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
   const raiseNoAnchorBanner = useSpeleoStore((s) => s.raiseNoAnchorBanner);
 
   // #200 (D2): a push/unlock of a survey with NO georeferenced zero datum means the
@@ -100,9 +111,19 @@ export function useSpeleoActions(): SpeleoActions {
           showToast(t('speleodb.editBar.toasts.editing'), 'speleodb-editing');
           break;
         case 'fast_forwarded':
-          // Backend swapped the tree; reload so the view matches (loadProject
-          // re-seeds the link status → editing).
+          // Backend swapped the tree; reload so the view matches. loadProject
+          // short-circuits when the backend reopened the SAME path (its "already
+          // open" guard returns without re-reading), so pull the swapped geometry +
+          // link state in explicitly - otherwise the old tree stays on screen. Clear
+          // the (section_id, station_index)-keyed selection, which the swapped tree may
+          // not carry (loadProject's full path clears it; this path bypasses it).
+          clearSelection();
           await loadProject(result.local_path);
+          await refreshProjectState();
+          // Re-scan integrity: the fast-forwarded tree can differ structurally from the
+          // one on screen (identity-guarded, fire-and-forget).
+          void useProjectStore.getState().checkProjectIntegrity();
+          await refreshLinkStatus();
           break;
         case 'locked_by':
           showToast(
@@ -124,7 +145,29 @@ export function useSpeleoActions(): SpeleoActions {
       bumpPoll();
       setBusy(false);
     }
-  }, [applyStartEditing, loadProject, showToast, t, handleError, setBusy, bumpPoll]);
+  }, [applyStartEditing, loadProject, refreshProjectState, refreshLinkStatus, clearSelection, showToast, t, handleError, setBusy, bumpPoll]);
+
+  const forceEdit = useCallback(async (): Promise<boolean> => {
+    setBusy(true);
+    try {
+      // No result payload: the backend flips the edit gate + force-edit flag.
+      // Re-seed the link so `editState → editing` and `forceEditing → true` drive
+      // the read-only badge off and the big-red banner on.
+      await invokeIpc<null>('speleodb_force_edit');
+      await refreshLinkStatus();
+      showToast(t('speleodb.forceEdit.toasts.active'), 'speleodb-force-edit');
+      return true;
+    } catch (e) {
+      // Backend refusal (opt-in off / link lost / already lock-held): surface the
+      // toast and report failure so the confirm dialog stays open instead of
+      // dismissing as if force-edit engaged.
+      handleError(e, 'speleodb.forceEdit.toasts.failed');
+      return false;
+    } finally {
+      bumpPoll();
+      setBusy(false);
+    }
+  }, [refreshLinkStatus, showToast, t, handleError, setBusy, bumpPoll]);
 
   const update = useCallback(async () => {
     setBusy(true);
@@ -136,7 +179,17 @@ export function useSpeleoActions(): SpeleoActions {
           showToast(t('speleodb.editBar.toasts.upToDate'), 'speleodb-up-to-date');
           break;
         case 'fast_forwarded':
+          // See startEditing: the FF reload swapped the tree in the backend, but
+          // loadProject short-circuits on the reopened path - pull geometry + link
+          // state in so Update actually resets the view to the new tip. Clear the stale
+          // selection for the same reason as the startEditing arm.
+          clearSelection();
           await loadProject(result.local_path);
+          await refreshProjectState();
+          // Re-scan integrity: the fast-forwarded tree can differ structurally from the
+          // one on screen (identity-guarded, fire-and-forget).
+          void useProjectStore.getState().checkProjectIntegrity();
+          await refreshLinkStatus();
           break;
         case 'divergence_needed':
           break;
@@ -147,7 +200,7 @@ export function useSpeleoActions(): SpeleoActions {
       bumpPoll();
       setBusy(false);
     }
-  }, [applyUpdate, loadProject, showToast, t, handleError, setBusy, bumpPoll]);
+  }, [applyUpdate, loadProject, refreshProjectState, refreshLinkStatus, clearSelection, showToast, t, handleError, setBusy, bumpPoll]);
 
   const push = useCallback(
     async (message?: string | null): Promise<PushResult | null> => {
@@ -246,5 +299,5 @@ export function useSpeleoActions(): SpeleoActions {
     }
   }, [loadProject, showToast, t, handleError, setBusy, bumpPoll]);
 
-  return { busy, startEditing, update, push, done, takeRemote };
+  return { busy, startEditing, forceEdit, update, push, done, takeRemote };
 }

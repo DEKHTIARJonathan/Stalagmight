@@ -59,9 +59,9 @@ pub(crate) struct Commit {
 }
 
 /// One commit in a project's **linear** revision history
-/// (`GET /api/v2/projects/{id}/revisions/`). Only the fields the ancestry
-/// classifier (#193) needs are modelled — the server also sends `author_name`,
-/// `authored_date`, and `message`, which serde ignores.
+/// (`GET /api/v2/projects/{id}/revisions/`). The ancestry classifier (#193) needs
+/// only `id` / `parent_ids` / `author_email`; the display fields (`authored_date`,
+/// `message`) are captured too for the #218 history view. `author_name` is ignored.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct RevisionCommit {
     /// 40-hex git commit SHA.
@@ -75,6 +75,13 @@ pub(crate) struct RevisionCommit {
     /// landed" from "someone else pushed".
     #[serde(default)]
     pub(crate) author_email: String,
+    /// [#218] Commit timestamp (RFC-3339), for the history view. `None` if the
+    /// server omits it.
+    #[serde(default)]
+    pub(crate) authored_date: Option<String>,
+    /// [#218] Commit message, for the history view. `None` if the server omits it.
+    #[serde(default)]
+    pub(crate) message: Option<String>,
 }
 
 /// Response of `GET /api/v2/projects/{id}/revisions/` — the project's linear
@@ -83,6 +90,36 @@ pub(crate) struct RevisionCommit {
 pub(crate) struct RevisionHistory {
     #[serde(default)]
     pub(crate) commits: Vec<RevisionCommit>,
+}
+
+/// [#218] One commit projected for the frontend revision-history view. A read-only
+/// slice of [`RevisionCommit`] carrying only what the UI renders (no token, no
+/// server-internal fields). The list is server-ordered (newest first).
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct SpeleoRevision {
+    /// 40-hex git commit SHA.
+    pub id: String,
+    /// Parent SHAs (empty for the root commit; >1 marks a merge).
+    pub parent_ids: Vec<String>,
+    /// Commit author's email (may be empty if the server omitted it).
+    pub author_email: String,
+    /// Commit timestamp (RFC-3339), or `None` if the server omitted it.
+    pub authored_date: Option<String>,
+    /// Commit message, or `None` if the server omitted it.
+    pub message: Option<String>,
+}
+
+impl From<RevisionCommit> for SpeleoRevision {
+    fn from(c: RevisionCommit) -> Self {
+        Self {
+            id: c.id,
+            parent_ids: c.parent_ids,
+            author_email: c.author_email,
+            authored_date: c.authored_date,
+            message: c.message,
+        }
+    }
 }
 
 /// The active lock ("mutex") on a project, when one is held.
@@ -358,6 +395,21 @@ pub struct SpeleoOpenResult {
     pub concurrent_session: bool,
 }
 
+/// [#214] Result of adopting an Ariane (`.tml`-only) project: the imported
+/// `.stalx` now lives at `local_path` (the webview reloads it through the normal
+/// `open_project` flow, read-only-remote). `type_flipped` reports whether the
+/// server project `type` was successfully PATCHed ariane→other; when `false` the
+/// adoption still succeeded locally (the user likely lacks write access) and the
+/// webview says so.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoAdoptResult {
+    pub local_path: String,
+    pub type_flipped: bool,
+    /// Same meaning as [`SpeleoOpenResult::concurrent_session`]: a write lock held
+    /// by THIS account at adopt time (a second same-account session).
+    pub concurrent_session: bool,
+}
+
 /// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write
 /// lock and reconciling the open project against the server. A discriminated
 /// union (`kind`) the webview branches on. Errors (no permission, anomalies,
@@ -485,6 +537,22 @@ pub struct SpeleoLinkStatus {
     /// over the same `get_project` probe; `false` when logged out / offline / the
     /// lookup failed (never nag on a transient miss).
     pub exclude_geojson: bool,
+    /// [#213] The open remote project is being force-edited WITHOUT the write lock
+    /// (`edit_enabled` is also true, but no lock is held). Drives the persistent
+    /// big-red "unmergeable `.stalx`" banner + the "Reconnect to sync" action, and
+    /// tells the shell to offer Reconnect rather than Done. Transient; `false` for a
+    /// normal read-only or lock-held session.
+    pub force_editing: bool,
+    /// [#213] The user's `SpeleoDbConfig.allow_force_edit` opt-in, surfaced here so
+    /// the read-only shell can gate the "Edit without lock" affordance without a
+    /// separate config fetch. A copy of a global preference (not per-link), refreshed
+    /// on every poll so a Settings change takes effect on the next status read. When
+    /// false, the force-edit menu item stays hidden and the backend also refuses.
+    pub allow_force_edit: bool,
+    /// [#218] The open remote project's SpeleoDB project id, so the in-project menu
+    /// can open the revision-history view for it (the FE otherwise has no way to name
+    /// which remote project is open). `None` for a local project / none open.
+    pub project_id: Option<String>,
 }
 
 /// The local copy's relationship to the server tip (the reconcile verdict,
@@ -540,9 +608,10 @@ pub struct SpeleoErrorDto {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        DoneResult, Permission, Project, PushResult, RemoteState, SpeleoDbAction, SpeleoErrorDto,
-        SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectSummary,
-        SpeleoSessionStatus, StartEditingResult, UpdateResult, Visibility,
+        DoneResult, Permission, Project, PushResult, RemoteState, RevisionCommit, RevisionHistory,
+        SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
+        SpeleoProjectSummary, SpeleoRevision, SpeleoSessionStatus, StartEditingResult,
+        UpdateResult, Visibility,
     };
 
     #[test]
@@ -614,6 +683,9 @@ mod tests {
             access_denied: false,
             server_error: None,
             exclude_geojson: false,
+            force_editing: false,
+            allow_force_edit: false,
+            project_id: Some("11111111-1111-1111-1111-111111111111".to_owned()),
         })
         .expect("serialize link status");
         let push = serde_json::to_string(&PushResult::PushUnconfirmed).expect("serialize push");
@@ -744,5 +816,62 @@ mod tests {
         assert!(Permission::WebViewer < Permission::ReadOnly);
         assert!(Permission::ReadOnly < Permission::ReadAndWrite);
         assert!(Permission::ReadAndWrite < Permission::Admin);
+    }
+
+    #[test]
+    fn revision_commit_deserializes_without_display_fields() {
+        // #218: the ancestry classifier's payloads omit authored_date/message; they
+        // must still parse (serde default -> None), never break the history read.
+        let c: RevisionCommit =
+            serde_json::from_str(r#"{"id": "abc", "parent_ids": ["p"], "author_email": "me@x"}"#)
+                .expect("minimal revision JSON");
+        assert_eq!(c.id, "abc");
+        assert_eq!(c.parent_ids, vec!["p".to_owned()]);
+        assert_eq!(c.author_email, "me@x");
+        assert!(c.authored_date.is_none());
+        assert!(c.message.is_none());
+    }
+
+    #[test]
+    fn revision_history_projects_to_dtos_in_order() {
+        // #218: the full server-ordered commit list projects to SpeleoRevision DTOs,
+        // capturing the display fields (date/message) when present and preserving order.
+        let history: RevisionHistory = serde_json::from_str(
+            r#"{"commits": [
+                {"id": "tip", "parent_ids": ["root"], "author_email": "me@x",
+                 "authored_date": "2026-07-03T10:00:00+00:00", "message": "second"},
+                {"id": "root", "parent_ids": [], "author_email": "you@x", "message": "first"}
+            ]}"#,
+        )
+        .expect("revision history JSON");
+        let dtos: Vec<SpeleoRevision> = history
+            .commits
+            .into_iter()
+            .map(SpeleoRevision::from)
+            .collect();
+        assert_eq!(dtos.len(), 2);
+        assert_eq!(dtos[0].id, "tip");
+        assert_eq!(
+            dtos[0].authored_date.as_deref(),
+            Some("2026-07-03T10:00:00+00:00")
+        );
+        assert_eq!(dtos[0].message.as_deref(), Some("second"));
+        assert_eq!(dtos[1].id, "root");
+        assert!(dtos[1].parent_ids.is_empty());
+        assert!(dtos[1].authored_date.is_none());
+    }
+
+    #[test]
+    fn speleo_revision_never_serializes_a_token() {
+        // Mirror the IPC token invariant for the new DTO.
+        let json = serde_json::to_string(&SpeleoRevision {
+            id: "abc".to_owned(),
+            parent_ids: vec![],
+            author_email: "me@x".to_owned(),
+            authored_date: None,
+            message: None,
+        })
+        .expect("serialize revision");
+        assert!(!json.to_lowercase().contains("token"));
     }
 }

@@ -93,6 +93,13 @@ pub struct AppState {
     /// read-only project can't leave the flag stuck. The mutation chokepoint
     /// (`guard_mutation`) reads it.
     pub(super) edit_enabled: AtomicBool,
+    /// Whether the open remote project is being edited WITHOUT the server write
+    /// lock (optimistic force-edit, #213). TRANSIENT, never persisted, DEFAULT
+    /// FALSE; `true` ONLY between `speleodb_force_edit` and the next reconnect
+    /// (a successful `speleodb_start_editing`) / close. When true, `edit_enabled`
+    /// is also true but NO lock is held, so `edit_enabled` alone must NOT be read
+    /// as "we hold the lock": every lock-release / re-verify path checks this too.
+    pub(super) force_editing: AtomicBool,
     /// In-memory display settings cache (used when no DB is open, e.g., new unsaved project)
     pub(super) display_settings_cache: Mutex<HashMap<String, String>>,
     /// Serialization lock for command execution.
@@ -168,6 +175,9 @@ impl AppState {
             // Default-true: editing is enabled unless a remote project is opened
             // read-only (#191). Reset on open/close.
             edit_enabled: AtomicBool::new(true),
+            // Default-false: force-edit (edit without the lock, #213) is opt-in and
+            // per-session. Reset on open/close alongside edit_enabled.
+            force_editing: AtomicBool::new(false),
             display_settings_cache: Mutex::new(HashMap::new()),
             command_lock: Mutex::new(()),
             tile_cache: Arc::new(Mutex::new(tile_cache)),
@@ -261,6 +271,23 @@ impl AppState {
     /// project opened without a write lock; reset to `true` on every open/close.
     pub(crate) fn set_edit_enabled(&self, v: bool) {
         self.edit_enabled
+            .store(v, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether the open remote project is being force-edited without the write lock
+    /// (#213). When `true`, `edit_enabled` is also `true` but no lock is held, so a
+    /// caller that needs "we hold the lock" must AND this out (`edit_enabled &&
+    /// !force_editing`).
+    pub(super) fn force_editing(&self) -> bool {
+        self.force_editing
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Set the transient force-edit flag (#213). `true` only between
+    /// `speleodb_force_edit` and the next reconnect/close; reset to `false` on every
+    /// open/close alongside `edit_enabled`.
+    pub(crate) fn set_force_editing(&self, v: bool) {
+        self.force_editing
             .store(v, std::sync::atomic::Ordering::Relaxed);
     }
 

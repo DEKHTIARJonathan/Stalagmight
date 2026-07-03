@@ -14,11 +14,13 @@ import {
   ExclamationGlyph,
   CrossedPencilGlyph,
   QuestionMarkGlyph,
+  EditNoLockGlyph,
 } from '../common/SpeleoBadgedIcon';
 
 type ButtonKind =
   | 'unlocked'
   | 'editing'
+  | 'force_edit'
   | 'locked_by_other'
   | 'remote_ahead'
   | 'conflict'
@@ -32,6 +34,7 @@ type ButtonKind =
  * drives the hand-off:
  * - 🟡 pencil (read-only, up to date) → acquire the lock (Start editing)
  * - 🟢 lock (we hold it) → release; if dirty, the push&release dialog
+ * - 🟥 crossed-pencil on faint red (force-editing WITHOUT the lock, #213) → Reconnect
  * - 🟠 hourglass (someone else holds it) → pull the latest; if dirty, resolve
  * - 🔵 pull (remote advanced) → pull the latest; if dirty, resolve
  * - ✏️̸ crossed pencil (read-only / web-viewer permission) → refresh the .stalx
@@ -131,11 +134,19 @@ export function SpeleoStatusButton() {
 
   const kind: ButtonKind = link.noAccess
     ? 'no_permission'
-    : conflict
-      ? 'conflict'
-      : link.editState === 'editing'
-        ? 'editing'
-        : serverError
+    : // #213: force-editing (editing WITHOUT the lock) preempts a conflict. The force
+      // editor holds no lock, so their way forward is Reconnect (acquire + reconcile),
+      // which surfaces any divergence via the resolution dialog; routing them straight
+      // to the divergence dialog (as 'conflict' does) would offer push / take-remote
+      // actions that assume a held lock. This also keeps the button in agreement with
+      // SpeleoBanner, which shows the force-edit banner ahead of a conflict.
+      link.editState === 'editing' && link.forceEditing
+      ? 'force_edit'
+      : conflict
+        ? 'conflict'
+        : link.editState === 'editing'
+          ? 'editing'
+          : serverError
           ? 'unknown_error'
           : lockedByOther
             ? 'locked_by_other'
@@ -154,6 +165,12 @@ export function SpeleoStatusButton() {
         // Release; push & release via the dialog when there are local changes.
         if (link.hasUnpushedEdits) openDialog('speleodb-done');
         else void done(null);
+        break;
+      case 'force_edit':
+        // We hold no lock, so the action is Reconnect (acquire + reconcile). If the
+        // acquire finds divergence it reports it and the App effect opens the
+        // resolution dialog; if someone else holds it, it reports "locked by {email}".
+        void startEditing();
         break;
       case 'locked_by_other':
         // Try to take the lock - the acquire fails while someone else holds it and
@@ -194,6 +211,8 @@ export function SpeleoStatusButton() {
       <PencilIcon size={10} />
     ) : kind === 'editing' ? (
       <LockIcon size={10} />
+    ) : kind === 'force_edit' ? (
+      <EditNoLockGlyph size={12} />
     ) : kind === 'locked_by_other' ? (
       <HourglassGlyph size={10} />
     ) : kind === 'view_only' ? (
@@ -211,7 +230,9 @@ export function SpeleoStatusButton() {
       ? 'text-yellow-400'
       : kind === 'editing'
         ? 'text-green-400'
-        : kind === 'locked_by_other'
+        : kind === 'force_edit'
+          ? 'text-red-500'
+          : kind === 'locked_by_other'
           ? 'text-orange-400'
           : kind === 'view_only'
             ? 'text-text-secondary'
@@ -226,9 +247,13 @@ export function SpeleoStatusButton() {
   const bgClass =
     kind === 'conflict' || kind === 'no_permission'
       ? 'bg-red-900 hover:bg-red-800'
-      : kind === 'editing'
-        ? 'hover:bg-green-400/20'
-        : kind === 'locked_by_other'
+      : kind === 'force_edit'
+        ? // A persistent faint-red tint so the danger reads even without hover (the
+          // full warning lives in the banner); distinct from conflict's solid red.
+          'bg-red-500/10 hover:bg-red-500/20'
+        : kind === 'editing'
+          ? 'hover:bg-green-400/20'
+          : kind === 'locked_by_other'
           ? 'hover:bg-orange-400/20'
           : kind === 'view_only'
             ? 'hover:bg-white/10'
@@ -245,7 +270,13 @@ export function SpeleoStatusButton() {
         ? link.hasUnpushedEdits
           ? t('speleodb.button.editingDirty')
           : t('speleodb.button.editingClean')
-        : kind === 'locked_by_other'
+        : kind === 'force_edit'
+          ? link.lockedByOther
+            ? t('speleodb.button.forceEditingLockedBy', {
+                email: link.lockHolder ?? t('speleodb.editBar.someone'),
+              })
+            : t('speleodb.button.forceEditing')
+          : kind === 'locked_by_other'
           ? t('speleodb.button.lockedByOther', { email: link.lockHolder })
           : kind === 'view_only'
             ? t('speleodb.button.viewOnly')

@@ -122,6 +122,9 @@ export function SpeleoDbSettings({
   const handleInsecureHttpToggle = createToggleHandler(onChange, (v) => ({
     speleodb: { ...speleo, insecure_http: v },
   }));
+  const handleAllowForceEditToggle = createToggleHandler(onChange, (v) => ({
+    speleodb: { ...speleo, allow_force_edit: v },
+  }));
   const handlePollIntervalChange = createNumericHandler(
     onChange,
     (n) => ({ speleodb: { ...speleo, poll_interval_seconds: n } }),
@@ -341,6 +344,32 @@ export function SpeleoDbSettings({
             data-testid="speleodb-insecure-http-warning"
           >
             {t('settings.speleodb.insecureHttp.warning')}
+          </div>
+        )}
+
+        <SettingRow
+          label={t('settings.speleodb.allowForceEdit.label')}
+          helpText={t('settings.speleodb.allowForceEdit.help')}
+          isChanged={isFieldChanged(changedFields, 'speleodb.allow_force_edit')}
+          onReset={() =>
+            onChange({ speleodb: { ...speleo, allow_force_edit: defaultConfig.speleodb.allow_force_edit } })
+          }
+          isDefault={speleo.allow_force_edit === defaultConfig.speleodb.allow_force_edit}
+          data-testid="setting-speleodb-allow-force-edit"
+        >
+          <Toggle
+            checked={speleo.allow_force_edit}
+            onChange={handleAllowForceEditToggle}
+            aria-label={t('settings.speleodb.allowForceEdit.aria')}
+            data-testid="toggle-speleodb-allow-force-edit"
+          />
+        </SettingRow>
+        {speleo.allow_force_edit && (
+          <div
+            className="mb-2 p-3 bg-warning-20 text-warning rounded text-xs"
+            data-testid="speleodb-allow-force-edit-warning"
+          >
+            {t('settings.speleodb.allowForceEdit.warning')}
           </div>
         )}
 

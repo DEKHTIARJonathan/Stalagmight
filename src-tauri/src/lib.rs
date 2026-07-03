@@ -1266,6 +1266,7 @@ pub fn run() {
             commands::speleodb::speleodb_login,
             commands::speleodb::speleodb_list_projects,
             commands::speleodb::speleodb_open_project,
+            commands::speleodb::speleodb_adopt_ariane,
             commands::speleodb::speleodb_logout,
             commands::speleodb::speleodb_session,
             // SpeleoDB linked-project status for the action shell (#204)
@@ -1273,6 +1274,7 @@ pub fn run() {
             commands::speleodb::speleodb_unlink,
             // SpeleoDB single-writer hand-off (#194/#197)
             commands::speleodb::speleodb_start_editing,
+            commands::speleodb::speleodb_force_edit,
             commands::speleodb::speleodb_done,
             commands::speleodb::speleodb_update,
             commands::speleodb::speleodb_push,
@@ -1281,6 +1283,9 @@ pub fn run() {
             // SpeleoDB held-lock resume/release prompt - release all + per-project (#201)
             commands::speleodb::speleodb_release_all_locks,
             commands::speleodb::speleodb_release_lock,
+            // SpeleoDB revision-history read + restore (#218)
+            commands::speleodb::speleodb_get_revisions,
+            commands::speleodb::speleodb_restore_revision,
             // SpeleoDB Enable-rendering PATCH (#200)
             commands::speleodb::speleodb_set_exclude_geojson,
             // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)

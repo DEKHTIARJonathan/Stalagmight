@@ -21,6 +21,9 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   access_denied: false,
   server_error: null,
   exclude_geojson: false,
+  force_editing: false,
+  allow_force_edit: false,
+  project_id: null,
   ...o,
 });
 
@@ -151,6 +154,18 @@ describe('speleoStore', () => {
       useSpeleoStore.getState().seedFromStatus(status({ server_error: null }));
       expect(useSpeleoStore.getState().link?.serverError).toBeNull();
     });
+
+    it('carries force_editing + allow_force_edit through (#213)', () => {
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(status({ edit_enabled: true, force_editing: true, allow_force_edit: true }));
+      const link = useSpeleoStore.getState().link;
+      expect(link?.forceEditing).toBe(true);
+      expect(link?.forceEditAllowed).toBe(true);
+      // A later poll that acquired the lock clears force-edit (backend-authoritative).
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, force_editing: false }));
+      expect(useSpeleoStore.getState().link?.forceEditing).toBe(false);
+    });
   });
 
   describe('setLinkOnOpen', () => {
@@ -162,6 +177,8 @@ describe('speleoStore', () => {
         lockHolder: null,
         lockedByOther: false,
         hasUnpushedEdits: false,
+        forceEditing: false,
+        forceEditAllowed: false,
         remoteState: 'up_to_date',
         noAccess: false,
         serverError: null,
@@ -200,6 +217,32 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().divergence).toBe('start');
       // Stays read-only (not enabled on divergence).
       expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+    });
+
+    it('a successful reconnect clears force-edit (#213)', () => {
+      // Enter force-edit, then reconnect (editing/fast_forwarded acquire the lock).
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(status({ edit_enabled: true, force_editing: true }));
+      expect(useSpeleoStore.getState().link?.forceEditing).toBe(true);
+      useSpeleoStore.getState().applyStartEditing({ kind: 'editing' });
+      expect(useSpeleoStore.getState().link?.forceEditing).toBe(false);
+      expect(useSpeleoStore.getState().link?.editState).toBe('editing');
+    });
+
+    it('a contended reconnect (locked_by) preserves the force-edit session (#213)', () => {
+      // The acquire failed (someone else holds it): the force-editor keeps editing
+      // offline, so force-edit is NOT cleared and the gate stays on.
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(status({ edit_enabled: true, force_editing: true }));
+      useSpeleoStore.getState().applyStartEditing({ kind: 'locked_by', email: 'a@b' });
+      const s = useSpeleoStore.getState();
+      expect(s.link?.forceEditing).toBe(true);
+      // Still editing (offline) - not downgraded to read-only - with the holder noted.
+      expect(s.link?.editState).toBe('editing');
+      expect(s.link?.lockedByOther).toBe(true);
+      expect(s.link?.lockHolder).toBe('a@b');
     });
   });
 

@@ -36,6 +36,8 @@ const seedRemote = (permission: Permission) =>
       lockHolder: null,
       lockedByOther: false,
       hasUnpushedEdits: false,
+      forceEditing: false,
+      forceEditAllowed: false,
       remoteState: 'up_to_date',
       noAccess: false,
       serverError: null,
