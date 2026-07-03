@@ -59,7 +59,12 @@ describe('SpeleoRestoreDialog (#218)', () => {
     await waitFor(() => expect(refreshProjectStateMock).toHaveBeenCalled());
     expect(refreshLinkStatusMock).toHaveBeenCalled();
     const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_restore_revision');
-    expect(call?.[1]).toEqual({ projectId: 'p1', projectName: 'Cave A', hexsha: 'abcdef0123' });
+    expect(call?.[1]).toEqual({
+      projectId: 'p1',
+      projectName: 'Cave A',
+      hexsha: 'abcdef0123',
+      restore: true,
+    });
     expect(closeDialogMock).toHaveBeenCalled();
     expect(showToastMock).toHaveBeenCalled();
   });

@@ -201,20 +201,22 @@ pub async fn speleodb_get_revisions(
     run_blocking(app, move |s| s.speleodb_get_revisions(project_id)).await
 }
 
-/// [#218] Restore the open remote project's working copy to a past revision:
-/// download the dump AT `hexsha` and replace the working copy, stamped as unpushed
-/// edits on top of the current server HEAD (a git-forward restore; the user pushes
-/// to persist). Returns the local path for the FE to reload, like an open. The FE
-/// gates this on holding the lock and confirms with an unsaved-changes safeguard.
+/// [#218] Check the open remote project's working copy out to a past revision:
+/// download the dump AT `hexsha`, replace the working copy, and reopen it. With
+/// `restore == true` (the user holds the lock) it is stamped as an unpushed edit on
+/// top of the current server HEAD (a git-forward restore; the user pushes to
+/// persist); with `restore == false` it is a read-only View that a later Update
+/// fast-forwards away. Returns the local path for the FE to refresh from.
 #[tauri::command]
 pub async fn speleodb_restore_revision(
     app: AppHandle,
     project_id: String,
     project_name: String,
     hexsha: String,
+    restore: bool,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     run_blocking(app, move |s| {
-        s.speleodb_restore_revision(project_id, project_name, hexsha)
+        s.speleodb_restore_revision(project_id, project_name, hexsha, restore)
     })
     .await
 }

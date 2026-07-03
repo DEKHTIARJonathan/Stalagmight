@@ -15,6 +15,7 @@ vi.mock('../../../utils/ipc', () => ({
 
 import { SpeleoRevisionHistory } from './SpeleoRevisionHistory';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
+import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import type { SpeleoRevision } from '../../../types/ipc.generated';
 
@@ -49,6 +50,7 @@ const REVISIONS: SpeleoRevision[] = [
 ];
 
 let openDialogMock: ReturnType<typeof vi.fn>;
+let showToastMock: ReturnType<typeof vi.fn>;
 
 const seed = (editState: SpeleoLinkState['editState']) => {
   useSpeleoStore.setState({ remoteProjectId: 'p1', link: { ...LINK, editState } });
@@ -58,8 +60,14 @@ beforeEach(() => {
   invokeIpcMock.mockReset();
   invokeIpcMock.mockResolvedValue(REVISIONS);
   openDialogMock = vi.fn();
-  useSpeleoStore.setState({ remoteProjectId: null, link: null });
-  useUIStore.setState({ openDialog: openDialogMock });
+  showToastMock = vi.fn();
+  useSpeleoStore.setState({
+    remoteProjectId: null,
+    link: null,
+    refreshLinkStatus: vi.fn(async () => {}),
+  });
+  useProjectStore.setState({ refreshProjectState: vi.fn(async () => {}) });
+  useUIStore.setState({ openDialog: openDialogMock, showToast: showToastMock, setView: vi.fn() });
 });
 
 describe('SpeleoRevisionHistory (#218)', () => {
@@ -80,12 +88,29 @@ describe('SpeleoRevisionHistory (#218)', () => {
     expect(screen.queryByTestId('speleodb-revisions-lock-hint')).not.toBeInTheDocument();
   });
 
-  it('disables Restore and shows the lock-first note when not editing', async () => {
+  it('offers View (not Restore) and shows the lock-first note when not editing', async () => {
     seed('read-only');
     render(<SpeleoRevisionHistory />);
     await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
-    expect(screen.getByTestId('speleodb-revision-restore-bbbbbbbb2222')).toBeDisabled();
+    // Read-only: the past revision gets an enabled View, not a Restore.
+    expect(screen.queryByTestId('speleodb-revision-restore-bbbbbbbb2222')).not.toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-revision-view-bbbbbbbb2222')).toBeEnabled();
     expect(screen.getByTestId('speleodb-revisions-lock-hint')).toBeInTheDocument();
+  });
+
+  it('View checks the revision out read-only (restore=false)', async () => {
+    seed('read-only');
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByTestId('speleodb-revision-view-bbbbbbbb2222'));
+    await waitFor(() =>
+      expect(
+        invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_restore_revision'),
+      ).toBe(true),
+    );
+    const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_restore_revision');
+    expect(call?.[1]).toMatchObject({ projectId: 'p1', hexsha: 'bbbbbbbb2222', restore: false });
   });
 
   it('opens the restore confirm with the chosen revision', async () => {

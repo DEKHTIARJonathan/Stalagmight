@@ -2737,9 +2737,10 @@
       "merge": "merge",
       "current": "Current",
       "restore": "Restore",
-      "restoreNeedsLock": "Start editing to restore a revision",
+      "view": "View",
+      "viewing": "Viewing…",
       "restoreHint": "Restoring replaces the working copy with the selected revision as an unsaved edit; push to make it the project's latest. Your project history is not rewritten.",
-      "lockToRestore": "Lock the project for editing first to restore a revision. While it is read-only, the SpeleoDB Update action pulls forward to the latest instead.",
+      "lockToRestore": "The project is read-only, so these buttons View a revision (the SpeleoDB Update returns you to the latest). Lock the project for editing to Restore a revision as a change you can push.",
       "unknownAuthor": "unknown author"
     },
     "restore": {
@@ -2750,6 +2751,7 @@
       "confirmButton": "Restore revision",
       "restoring": "Restoring…",
       "doneToast": "Restored to revision {{sha}}. Push to make it the latest.",
+      "viewToast": "Viewing revision {{sha}}. Use Update to return to the latest.",
       "failed": "Could not restore the revision"
     },
     "editBar": {

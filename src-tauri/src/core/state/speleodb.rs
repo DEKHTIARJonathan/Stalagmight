@@ -1821,25 +1821,29 @@ impl AppState {
         Ok(commits.into_iter().map(SpeleoRevision::from).collect())
     }
 
-    /// [#218] Restore the open remote project's working copy to a past revision.
+    /// [#218] Check the open remote project's working copy out to a past revision.
     /// Download the project tree AT `hexsha` (the server's `FileDownloadAtHashView`),
-    /// replace the cached `.stalx`, and re-stamp the hand-off link so the restored
-    /// tree is carried as UNPUSHED edits on top of the CURRENT server HEAD.
+    /// replace the cached `.stalx`, re-stamp the hand-off link, and reopen the swapped
+    /// tree in place. Two modes, keyed on `restore`:
     ///
-    /// This is a git-FORWARD restore, not a server-side reset: SpeleoDB exposes no
-    /// revert endpoint, so BASE stays at the true server HEAD and `has_unpushed_edits`
-    /// is set true. The user reviews the restored tree, then the normal push / Done
-    /// flow (which holds the lock) lands the old content as a NEW commit — project
-    /// history is never rewritten. Mirrors [`Self::speleodb_open_project`] (same
-    /// download → classify → extract → stamp pipeline, same cache path) but pinned to
-    /// `hexsha` and stamped dirty. Both ids are validated at the trust boundary before
-    /// the download URL is built; the FE gates the action on holding the lock.
-    /// Returns the local path for the FE to reload, exactly like a pull.
+    /// - `restore == true` (**Restore**, the user holds the lock): a git-FORWARD
+    ///   restore. BASE stays at the CURRENT server HEAD and `has_unpushed_edits` is set
+    ///   true, so the tree rides as an unpushed edit ON TOP of HEAD; editing is
+    ///   re-enabled. The normal push / Done flow lands the old content as a NEW commit,
+    ///   so project history is never rewritten (SpeleoDB exposes no server-side revert).
+    /// - `restore == false` (**View**, read-only, no lock): BASE = `hexsha` and the
+    ///   copy is stamped CLEAN, so the working tree IS that revision, behind tip. The
+    ///   project stays read-only and a later Update fast-forwards straight back to the
+    ///   latest — a non-destructive peek.
+    ///
+    /// Both ids are validated at the trust boundary before the download URL is built.
+    /// Returns the local path (like a pull); the FE pulls the swapped geometry.
     pub(crate) fn speleodb_restore_revision(
         &self,
         project_id: String,
         project_name: String,
         hexsha: String,
+        restore: bool,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
         validate_hexsha(&hexsha).map_err(local_dto)?;
@@ -1871,26 +1875,31 @@ impl AppState {
         let preserved_view = preserved_display_settings(&dest);
         dump.extract_entry_to(&entry, &dest).map_err(local_dto)?;
 
-        // BASE = the CURRENT server HEAD (NOT the restored revision): the restored
-        // tree is an unpushed edit ON TOP of HEAD, so a push creates a forward commit.
-        // Same best-effort resolution as the pull path; on failure BASE is left None
-        // and the first push / Start editing fast-forwards to reconcile.
-        let base_sha = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
-            Ok(history) => sync::tip_of(&history.commits).map(str::to_owned),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    project_id = %project_id,
-                    purpose = "resolve server HEAD on restore",
-                    "speleodb_restore_revision: could not resolve server HEAD; leaving BASE unset"
-                );
-                None
-            }
+        // Restore (editable): BASE = the CURRENT server HEAD, dirty SET, so the tree
+        // rides as an unpushed edit ON TOP of HEAD and a push creates a forward commit;
+        // `last_edit_at` gets `now` so the g7 push-start comparison treats it as an
+        // edit. View (read-only): BASE = the viewed revision itself, dirty CLEAR, so
+        // the working tree IS that commit (behind tip) and a later Update fast-forwards
+        // back to the latest. HEAD resolution for Restore is best-effort (falls back to
+        // an unset BASE, which the first push / Start editing reconciles).
+        let (base_sha, has_unpushed_edits, last_edit_at) = if restore {
+            let tip = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
+                Ok(history) => sync::tip_of(&history.commits).map(str::to_owned),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        project_id = %project_id,
+                        purpose = "resolve server HEAD on restore",
+                        "speleodb_restore_revision: could not resolve server HEAD; leaving BASE unset"
+                    );
+                    None
+                }
+            };
+            (tip, true, Some(chrono::Utc::now().to_rfc3339()))
+        } else {
+            (Some(hexsha.clone()), false, None)
         };
 
-        // Stamp the hand-off link with the dirty bit SET: the restored tree differs
-        // from HEAD until the user pushes. `last_edit_at` gets `now` (a restore IS an
-        // edit) so the g7 push-start comparison treats it like any other local edit.
         match crate::persistence::Database::open_existing(&dest) {
             Ok(db) => {
                 restore_display_settings(&db, &preserved_view);
@@ -1899,8 +1908,8 @@ impl AppState {
                     project_id: project_id.clone(),
                     project_name,
                     base_commit_sha: base_sha,
-                    has_unpushed_edits: true,
-                    last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
+                    has_unpushed_edits,
+                    last_edit_at,
                     last_verify_at: None,
                 };
                 if let Err(e) = db.save_speleo_link(Some(&link)) {
@@ -1923,21 +1932,23 @@ impl AppState {
         }
 
         let local_path = dest.to_string_lossy().into_owned();
-        // Reopen the restored tree in place, then re-enable editing. close_project
-        // drops the live handle to `dest` so do_load_project_full's "already open"
-        // guard won't reject the same path (and the reopened connection reads the
-        // overwritten file, not a stale page cache); a fresh load of a remote project
-        // defaults to read-only (#191), but the user still holds the lock and the
-        // restored tree rides as an unpushed edit they will push. Mirrors the
-        // fast-forward reload (#193); the FE then pulls the swapped geometry via
-        // refreshProjectState.
+        // Reopen the swapped tree in place. close_project drops the live handle to
+        // `dest` so do_load_project_full's "already open" guard won't reject the same
+        // path (and the reopened connection reads the overwritten file, not a stale
+        // page cache). A fresh load of a remote project defaults to read-only (#191):
+        // for Restore the user holds the lock, so re-enable editing (the restored tree
+        // is a pushable unpushed edit); for View leave it read-only (a peek that Update
+        // fast-forwards away). Mirrors the fast-forward reload (#193); the FE then
+        // pulls the swapped geometry via refreshProjectState.
         self.close_project();
         self.do_load_project_full(dest).map_err(|e| {
             local_dto(SpeleoDbError::Io(format!(
                 "reload after restore failed: {e}"
             )))
         })?;
-        self.set_edit_enabled(true);
+        if restore {
+            self.set_edit_enabled(true);
+        }
         self.set_force_editing(false);
 
         Ok(SpeleoOpenResult {

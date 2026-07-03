@@ -5,6 +5,7 @@ import { Button } from '../../common/Button';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
+import { useRestoreRevision } from '../../../hooks/useRestoreRevision';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 import { formatDate } from '../../../i18n/format';
@@ -30,21 +31,28 @@ function formatWhen(iso: string | null): string {
  * `speleodb_get_revisions` on mount and lists the server-ordered (newest-first)
  * commit chain: short SHA, author, date, message, a merge marker for >1 parent.
  *
- * Each PAST revision offers Restore - a git-forward restore that pulls that
- * revision's tree into the working copy as unsaved edits (the confirm dialog
- * carries the disclaimer + unsaved-changes safeguard). Restore is gated on holding
- * the lock (you can only change a project you are editing); the newest commit is
- * the current server state and is marked, not restorable.
+ * Each PAST revision offers one action, keyed on whether the user holds the lock:
+ * - **Restore** (editing): a git-forward restore that pulls the revision into the
+ *   working copy as an unsaved, pushable edit (via a confirm dialog carrying the
+ *   disclaimer + unsaved-changes safeguard).
+ * - **View** (read-only): a non-destructive peek - it checks the revision out
+ *   read-only, and the SpeleoDB Update action fast-forwards back to the latest.
+ *
+ * The newest commit is the current server state and is marked, not actionable.
  */
 export function SpeleoRevisionHistory() {
   const { t } = useTranslation();
   const openDialog = useUIStore((s) => s.openDialog);
+  const showToast = useUIStore((s) => s.showToast);
   const projectId = useSpeleoStore((s) => s.remoteProjectId);
   const iHoldLock = useSpeleoStore((s) => s.link?.editState === 'editing');
   const projectName = useProjectStore((s) => s.project?.name ?? '');
+  const restoreRevision = useRestoreRevision();
 
   const [revisions, setRevisions] = useState<SpeleoRevision[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The revision whose read-only View is currently loading (disables that button).
+  const [pendingId, setPendingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId) return undefined;
@@ -63,6 +71,27 @@ export function SpeleoRevisionHistory() {
       cancelled = true;
     };
   }, [projectId, t]);
+
+  // Read-only View of a past revision (no lock): check it out for inspection; the
+  // SpeleoDB Update then fast-forwards back to the latest. Errors toast (there is no
+  // confirm dialog for the non-destructive path).
+  const handleView = async (rev: SpeleoRevision) => {
+    if (!projectId) return;
+    setPendingId(rev.id);
+    try {
+      await restoreRevision({
+        projectId,
+        projectName,
+        hexsha: rev.id,
+        shortSha: rev.id.slice(0, 8),
+        restore: false,
+      });
+    } catch (e) {
+      showToast(humanizeSpeleoError(e, t('speleodb.restore.failed')), 'speleodb-restore');
+    } finally {
+      setPendingId(null);
+    }
+  };
 
   // A local project (no open remote) has no history to show.
   if (!projectId) return null;
@@ -137,26 +166,37 @@ export function SpeleoRevisionHistory() {
                     </p>
                   )}
                 </div>
-                {!isCurrent && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={!iHoldLock}
-                    title={iHoldLock ? undefined : t('speleodb.revisions.restoreNeedsLock')}
-                    onClick={() =>
-                      openDialog('speleodb-restore', {
-                        projectId,
-                        projectName,
-                        hexsha: rev.id,
-                        shortSha: rev.id.slice(0, 8),
-                        message: rev.message ?? '',
-                      })
-                    }
-                    data-testid={`speleodb-revision-restore-${rev.id}`}
-                  >
-                    {t('speleodb.revisions.restore')}
-                  </Button>
-                )}
+                {!isCurrent &&
+                  (iHoldLock ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() =>
+                        openDialog('speleodb-restore', {
+                          projectId,
+                          projectName,
+                          hexsha: rev.id,
+                          shortSha: rev.id.slice(0, 8),
+                          message: rev.message ?? '',
+                        })
+                      }
+                      data-testid={`speleodb-revision-restore-${rev.id}`}
+                    >
+                      {t('speleodb.revisions.restore')}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={pendingId !== null}
+                      onClick={() => void handleView(rev)}
+                      data-testid={`speleodb-revision-view-${rev.id}`}
+                    >
+                      {pendingId === rev.id
+                        ? t('speleodb.revisions.viewing')
+                        : t('speleodb.revisions.view')}
+                    </Button>
+                  ))}
               </li>
             );
           })}
