@@ -545,6 +545,188 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.walls-import",
     "dwell.dialog.walls-import",
     "active-dwell.dialog.walls-import",
+    // SpeleoDB per-endpoint traffic metrics (#210, F1). For each endpoint kind
+    // (`speleodb::metrics::Endpoint`) the client emits four outcome counters
+    // (`ok`/`client-error`/`server-error`/`network-error`, which sum to the call
+    // count) plus a latency histogram (`latency.<bucket>`) the backend
+    // reconstructs p50/p95 from. NO PII: only the endpoint kind, the outcome
+    // class, and a latency bucket ever leave the app - never a host, project id,
+    // email, token, or file bytes. Recorded per HTTP attempt at the
+    // `client::with_retry` / `client::send_json_request` chokepoints (a retried
+    // 5xx re-hits the server, so counting per attempt is what makes a retry storm
+    // legible). `every_speleodb_endpoint_has_traffic_events` regenerates this
+    // exact set from `Endpoint::ALL` x `Outcome::ALL` x `LATENCY_BUCKETS`: add an
+    // endpoint kind and CI fails until its ten names are listed here.
+    "speleodb-api.login.ok",
+    "speleodb-api.login.client-error",
+    "speleodb-api.login.server-error",
+    "speleodb-api.login.network-error",
+    "speleodb-api.login.latency.le-100",
+    "speleodb-api.login.latency.le-500",
+    "speleodb-api.login.latency.le-1000",
+    "speleodb-api.login.latency.le-5000",
+    "speleodb-api.login.latency.le-15000",
+    "speleodb-api.login.latency.gt-15000",
+    "speleodb-api.list-projects.ok",
+    "speleodb-api.list-projects.client-error",
+    "speleodb-api.list-projects.server-error",
+    "speleodb-api.list-projects.network-error",
+    "speleodb-api.list-projects.latency.le-100",
+    "speleodb-api.list-projects.latency.le-500",
+    "speleodb-api.list-projects.latency.le-1000",
+    "speleodb-api.list-projects.latency.le-5000",
+    "speleodb-api.list-projects.latency.le-15000",
+    "speleodb-api.list-projects.latency.gt-15000",
+    "speleodb-api.get-project.ok",
+    "speleodb-api.get-project.client-error",
+    "speleodb-api.get-project.server-error",
+    "speleodb-api.get-project.network-error",
+    "speleodb-api.get-project.latency.le-100",
+    "speleodb-api.get-project.latency.le-500",
+    "speleodb-api.get-project.latency.le-1000",
+    "speleodb-api.get-project.latency.le-5000",
+    "speleodb-api.get-project.latency.le-15000",
+    "speleodb-api.get-project.latency.gt-15000",
+    "speleodb-api.get-revisions.ok",
+    "speleodb-api.get-revisions.client-error",
+    "speleodb-api.get-revisions.server-error",
+    "speleodb-api.get-revisions.network-error",
+    "speleodb-api.get-revisions.latency.le-100",
+    "speleodb-api.get-revisions.latency.le-500",
+    "speleodb-api.get-revisions.latency.le-1000",
+    "speleodb-api.get-revisions.latency.le-5000",
+    "speleodb-api.get-revisions.latency.le-15000",
+    "speleodb-api.get-revisions.latency.gt-15000",
+    "speleodb-api.fetch-user.ok",
+    "speleodb-api.fetch-user.client-error",
+    "speleodb-api.fetch-user.server-error",
+    "speleodb-api.fetch-user.network-error",
+    "speleodb-api.fetch-user.latency.le-100",
+    "speleodb-api.fetch-user.latency.le-500",
+    "speleodb-api.fetch-user.latency.le-1000",
+    "speleodb-api.fetch-user.latency.le-5000",
+    "speleodb-api.fetch-user.latency.le-15000",
+    "speleodb-api.fetch-user.latency.gt-15000",
+    "speleodb-api.download-dump.ok",
+    "speleodb-api.download-dump.client-error",
+    "speleodb-api.download-dump.server-error",
+    "speleodb-api.download-dump.network-error",
+    "speleodb-api.download-dump.latency.le-100",
+    "speleodb-api.download-dump.latency.le-500",
+    "speleodb-api.download-dump.latency.le-1000",
+    "speleodb-api.download-dump.latency.le-5000",
+    "speleodb-api.download-dump.latency.le-15000",
+    "speleodb-api.download-dump.latency.gt-15000",
+    "speleodb-api.upload.ok",
+    "speleodb-api.upload.client-error",
+    "speleodb-api.upload.server-error",
+    "speleodb-api.upload.network-error",
+    "speleodb-api.upload.latency.le-100",
+    "speleodb-api.upload.latency.le-500",
+    "speleodb-api.upload.latency.le-1000",
+    "speleodb-api.upload.latency.le-5000",
+    "speleodb-api.upload.latency.le-15000",
+    "speleodb-api.upload.latency.gt-15000",
+    "speleodb-api.acquire.ok",
+    "speleodb-api.acquire.client-error",
+    "speleodb-api.acquire.server-error",
+    "speleodb-api.acquire.network-error",
+    "speleodb-api.acquire.latency.le-100",
+    "speleodb-api.acquire.latency.le-500",
+    "speleodb-api.acquire.latency.le-1000",
+    "speleodb-api.acquire.latency.le-5000",
+    "speleodb-api.acquire.latency.le-15000",
+    "speleodb-api.acquire.latency.gt-15000",
+    "speleodb-api.release.ok",
+    "speleodb-api.release.client-error",
+    "speleodb-api.release.server-error",
+    "speleodb-api.release.network-error",
+    "speleodb-api.release.latency.le-100",
+    "speleodb-api.release.latency.le-500",
+    "speleodb-api.release.latency.le-1000",
+    "speleodb-api.release.latency.le-5000",
+    "speleodb-api.release.latency.le-15000",
+    "speleodb-api.release.latency.gt-15000",
+    "speleodb-api.release-all.ok",
+    "speleodb-api.release-all.client-error",
+    "speleodb-api.release-all.server-error",
+    "speleodb-api.release-all.network-error",
+    "speleodb-api.release-all.latency.le-100",
+    "speleodb-api.release-all.latency.le-500",
+    "speleodb-api.release-all.latency.le-1000",
+    "speleodb-api.release-all.latency.le-5000",
+    "speleodb-api.release-all.latency.le-15000",
+    "speleodb-api.release-all.latency.gt-15000",
+    "speleodb-api.patch-project.ok",
+    "speleodb-api.patch-project.client-error",
+    "speleodb-api.patch-project.server-error",
+    "speleodb-api.patch-project.network-error",
+    "speleodb-api.patch-project.latency.le-100",
+    "speleodb-api.patch-project.latency.le-500",
+    "speleodb-api.patch-project.latency.le-1000",
+    "speleodb-api.patch-project.latency.le-5000",
+    "speleodb-api.patch-project.latency.le-15000",
+    "speleodb-api.patch-project.latency.gt-15000",
+    "speleodb-api.create-project.ok",
+    "speleodb-api.create-project.client-error",
+    "speleodb-api.create-project.server-error",
+    "speleodb-api.create-project.network-error",
+    "speleodb-api.create-project.latency.le-100",
+    "speleodb-api.create-project.latency.le-500",
+    "speleodb-api.create-project.latency.le-1000",
+    "speleodb-api.create-project.latency.le-5000",
+    "speleodb-api.create-project.latency.le-15000",
+    "speleodb-api.create-project.latency.gt-15000",
+    "speleodb-api.delete-project.ok",
+    "speleodb-api.delete-project.client-error",
+    "speleodb-api.delete-project.server-error",
+    "speleodb-api.delete-project.network-error",
+    "speleodb-api.delete-project.latency.le-100",
+    "speleodb-api.delete-project.latency.le-500",
+    "speleodb-api.delete-project.latency.le-1000",
+    "speleodb-api.delete-project.latency.le-5000",
+    "speleodb-api.delete-project.latency.le-15000",
+    "speleodb-api.delete-project.latency.gt-15000",
+    "speleodb-api.list-permissions.ok",
+    "speleodb-api.list-permissions.client-error",
+    "speleodb-api.list-permissions.server-error",
+    "speleodb-api.list-permissions.network-error",
+    "speleodb-api.list-permissions.latency.le-100",
+    "speleodb-api.list-permissions.latency.le-500",
+    "speleodb-api.list-permissions.latency.le-1000",
+    "speleodb-api.list-permissions.latency.le-5000",
+    "speleodb-api.list-permissions.latency.le-15000",
+    "speleodb-api.list-permissions.latency.gt-15000",
+    "speleodb-api.mutate-permission.ok",
+    "speleodb-api.mutate-permission.client-error",
+    "speleodb-api.mutate-permission.server-error",
+    "speleodb-api.mutate-permission.network-error",
+    "speleodb-api.mutate-permission.latency.le-100",
+    "speleodb-api.mutate-permission.latency.le-500",
+    "speleodb-api.mutate-permission.latency.le-1000",
+    "speleodb-api.mutate-permission.latency.le-5000",
+    "speleodb-api.mutate-permission.latency.le-15000",
+    "speleodb-api.mutate-permission.latency.gt-15000",
+    "speleodb-api.list-teams.ok",
+    "speleodb-api.list-teams.client-error",
+    "speleodb-api.list-teams.server-error",
+    "speleodb-api.list-teams.network-error",
+    "speleodb-api.list-teams.latency.le-100",
+    "speleodb-api.list-teams.latency.le-500",
+    "speleodb-api.list-teams.latency.le-1000",
+    "speleodb-api.list-teams.latency.le-5000",
+    "speleodb-api.list-teams.latency.le-15000",
+    "speleodb-api.list-teams.latency.gt-15000",
+    "speleodb-api.autocomplete.ok",
+    "speleodb-api.autocomplete.client-error",
+    "speleodb-api.autocomplete.server-error",
+    "speleodb-api.autocomplete.network-error",
+    "speleodb-api.autocomplete.latency.le-100",
+    "speleodb-api.autocomplete.latency.le-500",
+    "speleodb-api.autocomplete.latency.le-1000",
+    "speleodb-api.autocomplete.latency.le-5000",
+    "speleodb-api.autocomplete.latency.le-15000",
+    "speleodb-api.autocomplete.latency.gt-15000",
 ];
 
 #[cfg(test)]
@@ -638,7 +820,11 @@ mod tests {
         //       release_current_lock,delete_project} = 466.
         //   + 1 SpeleoDB collaborator autocomplete command (#215 follow-up):
         //       command.speleodb_search_users = 467.
-        assert_eq!(EVENT_NAMES.len(), 467);
+        //   + 170 SpeleoDB per-endpoint traffic events (#210, F1): 17 endpoint
+        //       kinds x (4 outcome counters + 6 latency buckets) = 170. Asserted
+        //       exhaustively by `every_speleodb_endpoint_has_traffic_events`:
+        //       467 + 170 = 637.
+        assert_eq!(EVENT_NAMES.len(), 637);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
@@ -671,6 +857,49 @@ mod tests {
                     "provider '{}' missing telemetry event '{event}' — add it to EVENT_NAMES \
                      here and in telemetry-worker/src/registry.ts",
                     info.name
+                );
+            }
+        }
+    }
+
+    /// Every SpeleoDB endpoint kind (#210, F1) must have its full traffic-event
+    /// set registered: four outcome counters + one counter per latency bucket.
+    /// Mirrors `every_tile_provider_has_consumption_events` - add an `Endpoint`
+    /// variant and this fails until its ten names land in `EVENT_NAMES`. Also
+    /// asserts the reverse: no orphan `speleodb-api.*` name the generator cannot
+    /// produce (a typo, or a renamed/removed kind), so the vocabulary can't drift
+    /// away from `speleodb::metrics::Endpoint`.
+    #[test]
+    fn every_speleodb_endpoint_has_traffic_events() {
+        use crate::speleodb::metrics::{Endpoint, Outcome, LATENCY_BUCKETS};
+
+        let registered: HashSet<&str> = EVENT_NAMES.iter().copied().collect();
+        let mut expected: HashSet<String> = HashSet::new();
+        for ep in Endpoint::ALL {
+            let kind = ep.kind();
+            for outcome in Outcome::ALL {
+                let event = format!("speleodb-api.{kind}.{outcome}");
+                assert!(
+                    registered.contains(event.as_str()),
+                    "endpoint '{kind}' missing outcome event '{event}' - add it to EVENT_NAMES"
+                );
+                expected.insert(event);
+            }
+            for bucket in LATENCY_BUCKETS {
+                let event = format!("speleodb-api.{kind}.latency.{bucket}");
+                assert!(
+                    registered.contains(event.as_str()),
+                    "endpoint '{kind}' missing latency event '{event}' - add it to EVENT_NAMES"
+                );
+                expected.insert(event);
+            }
+        }
+        for name in EVENT_NAMES {
+            if name.starts_with("speleodb-api.") {
+                assert!(
+                    expected.contains(*name),
+                    "orphan speleodb-api event '{name}' - not produced by Endpoint::ALL \
+                     x Outcome::ALL x LATENCY_BUCKETS; remove it or fix the kind/label"
                 );
             }
         }

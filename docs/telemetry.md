@@ -179,6 +179,47 @@ final state's accumulated time before sending.
 **Same-key no-op**: Calling `setDwellState` with the same key is a no-op —
 prevents timer resets from redundant calls.
 
+### SpeleoDB traffic - `speleodb-api.<kind>.*` (#210, F1)
+
+Every SpeleoDB HTTP call is instrumented at the Rust client's single choke
+points (`client::with_retry` and `client::send_json_request`) so we can size the
+server load Stalagmight causes and spot a runaway poll/retry loop *before* it
+reaches the server. Recorded **per HTTP attempt** (a retried idempotent 5xx
+really re-hits the server, so a retry storm shows up as inflated counts +
+latency). Emitted from the backend via `TelemetryCollector::track`, so they land
+in the global `project_seq 0` bucket.
+
+**No PII, by construction.** The only dimensions are the endpoint *kind*, the
+outcome class, and a latency bucket - never a host, project id, email, token, or
+file bytes. That is all sizing load / flagging abuse needs.
+
+`<kind>` is one of the `speleodb::metrics::Endpoint` labels: `login`,
+`list-projects`, `get-project`, `get-revisions`, `fetch-user`, `download-dump`,
+`upload`, `acquire`, `release`, `release-all`, `patch-project`, `create-project`,
+`delete-project`, `list-permissions`, `mutate-permission`, `list-teams`,
+`autocomplete`.
+
+```
+speleodb-api.<kind>.ok                  - completed exchange (2xx/3xx, incl. 304)
+speleodb-api.<kind>.client-error        - 4xx
+speleodb-api.<kind>.server-error        - 5xx
+speleodb-api.<kind>.network-error       - transport failure (DNS/timeout/reset)
+speleodb-api.<kind>.latency.<bucket>    - one hit per attempt, in its duration bucket
+```
+
+**Count** is implicit: the four outcome counters sum to the call count for that
+endpoint. **Latency** follows the `dwell.<state>` precedent (a plain counter),
+extended to a **histogram** because the flat `{name: count}` wire format cannot
+carry a computed percentile: each attempt increments exactly one
+`latency.<bucket>` counter, and the backend reconstructs per-endpoint p50/p95
+per session from the bucket distribution. Buckets (ms): `le-100`, `le-500`,
+`le-1000`, `le-5000`, `le-15000`, `gt-15000`.
+
+Adding an `Endpoint` variant is CI-gated: `every_speleodb_endpoint_has_traffic_events`
+regenerates the exact `speleodb-api.*` set from `Endpoint::ALL x Outcome::ALL x
+LATENCY_BUCKETS` and fails until the new kind's ten names are in `EVENT_NAMES`
+(and it flags any orphan `speleodb-api.*` name that no longer maps to a kind).
+
 ## Key Files
 
 | File | Role |
@@ -188,6 +229,7 @@ prevents timer resets from redundant calls.
 | `src/store/uiStore.ts` | Wires tracking into `closeDialog`, `openDialog`, `setSelection`, `addToSelection`, panel toggles, display settings |
 | `src-tauri/src/telemetry/mod.rs` | Rust collector, HTTP send, disk buffer, periodic flush |
 | `src-tauri/src/telemetry/registry.rs` | Canonical event/source name vocabulary (backs the coverage tests) |
+| `src-tauri/src/speleodb/metrics.rs` | Per-endpoint SpeleoDB traffic instrumentation (`speleodb-api.*`, #210) |
 | `src-tauri/src/commands/telemetry.rs` | IPC commands: `track_events`, `flush_telemetry`, etc. |
 | `src/store/displaySelectors.ts` | `DISPLAY_DEFAULTS` — single source of truth for default values |
 
@@ -281,6 +323,7 @@ name (or an event name with no corresponding feature).
 | `event_count` / `source_count` | Array lengths match expected totals |
 | `active_dwell_mirrors_dwell` | Every `dwell.<state>` has a matching `active-dwell.<state>` |
 | `every_tile_provider_has_consumption_events` | Every tile provider has `tile.fetch.*` / `tile.cache.*` |
+| `every_speleodb_endpoint_has_traffic_events` | Every `speleodb::metrics::Endpoint` has its `speleodb-api.<kind>.*` outcome + latency events (and no orphans) |
 | `registry_covers_all_tools` | `ToolType` union ↔ `action.tool.*` / `dwell.tool.*` |
 | `registry_covers_all_undoable_commands` | `UNDOABLE_COMMANDS` ↔ `undo-after.*` |
 | `registry_covers_all_display_toggles` | `DISPLAY_DEFAULTS` keys ↔ `action.toggle.*` |

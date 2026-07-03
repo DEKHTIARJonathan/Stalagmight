@@ -22,8 +22,9 @@
 //! that resolves private at check-time and public at connect-time (TOCTOU /
 //! DNS rebinding) is explicitly accepted as out of scope.
 
-use std::net::{IpAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use http::Uri;
 use ureq::unversioned::resolver::DefaultResolver;
@@ -45,61 +46,51 @@ fn is_private(class: AddrClass) -> bool {
     !matches!(class, AddrClass::Public)
 }
 
-/// Classify an IP address into the #187 policy buckets. Pure — this is the
-/// unit-test seam (D-T-unit): the literal ranges are exercised directly without
-/// any DNS or socket I/O.
+/// Classify an IP address into the #187 policy buckets. Pure (no DNS or socket
+/// I/O), so it is the unit-test seam (D-T-unit). Delegates the actual range
+/// checks to the standard library's audited predicates rather than hand-rolled
+/// bit math, so this security-sensitive boundary can't drift from the RFC set.
 ///
-/// IPv4: `127.0.0.0/8`→Loopback; `10/8`,`172.16/12`,`192.168/16`→Private;
-/// `169.254/16`→LinkLocal; everything else→Public.
-/// IPv6: `::1`→Loopback; `fc00::/7`→Private; `fe80::/10`→LinkLocal; else Public.
+/// IPv4: `is_loopback` (127/8) -> Loopback; `is_private` (10/8, 172.16/12,
+/// 192.168/16) -> Private; `is_link_local` (169.254/16) -> LinkLocal; else Public.
+/// IPv6: `is_loopback` (::1) -> Loopback; `is_unique_local` (fc00::/7) -> Private;
+/// `is_unicast_link_local` (fe80::/10) -> LinkLocal; else Public.
 /// An IPv4-mapped IPv6 address is unwrapped to its v4 form first, closing the
 /// `::ffff:8.8.8.8` bypass.
 fn classify_addr(ip: IpAddr) -> AddrClass {
     match ip {
-        IpAddr::V4(v4) => classify_v4(v4.octets()),
-        IpAddr::V6(v6) => {
-            // IPv4-mapped (`::ffff:a.b.c.d`) must be classified by its v4 range,
-            // not treated as an opaque public v6 address.
-            if let Some(mapped) = v6.to_ipv4_mapped() {
-                classify_v4(mapped.octets())
-            } else {
-                classify_v6(v6.segments())
-            }
-        }
+        IpAddr::V4(v4) => classify_v4(v4),
+        // IPv4-mapped (`::ffff:a.b.c.d`) must be classified by its v4 range,
+        // not treated as an opaque public v6 address.
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(mapped) => classify_v4(mapped),
+            None => classify_v6(v6),
+        },
     }
 }
 
-fn classify_v4(o: [u8; 4]) -> AddrClass {
-    match o {
-        // 127.0.0.0/8
-        [127, ..] => AddrClass::Loopback,
-        // 10.0.0.0/8
-        [10, ..] => AddrClass::Private,
-        // 172.16.0.0/12  (172.16 – 172.31)
-        [172, b, ..] if (16..=31).contains(&b) => AddrClass::Private,
-        // 192.168.0.0/16
-        [192, 168, ..] => AddrClass::Private,
-        // 169.254.0.0/16
-        [169, 254, ..] => AddrClass::LinkLocal,
-        _ => AddrClass::Public,
+fn classify_v4(v4: Ipv4Addr) -> AddrClass {
+    if v4.is_loopback() {
+        AddrClass::Loopback
+    } else if v4.is_private() {
+        AddrClass::Private
+    } else if v4.is_link_local() {
+        AddrClass::LinkLocal
+    } else {
+        AddrClass::Public
     }
 }
 
-fn classify_v6(seg: [u16; 8]) -> AddrClass {
-    // ::1
-    if seg == [0, 0, 0, 0, 0, 0, 0, 1] {
-        return AddrClass::Loopback;
+fn classify_v6(v6: Ipv6Addr) -> AddrClass {
+    if v6.is_loopback() {
+        AddrClass::Loopback
+    } else if v6.is_unique_local() {
+        AddrClass::Private
+    } else if v6.is_unicast_link_local() {
+        AddrClass::LinkLocal
+    } else {
+        AddrClass::Public
     }
-    let first = seg[0];
-    // fc00::/7  (first 7 bits == 1111110x → 0xFC00..=0xFDFF)
-    if (first & 0xFE00) == 0xFC00 {
-        return AddrClass::Private;
-    }
-    // fe80::/10 (first 10 bits == 1111111010 → 0xFE80..=0xFEBF)
-    if (first & 0xFFC0) == 0xFE80 {
-        return AddrClass::LinkLocal;
-    }
-    AddrClass::Public
 }
 
 /// Resolve the URI's authority to the address set the agent will dial.
@@ -133,11 +124,40 @@ fn is_localhost(host: &str) -> bool {
     host == "localhost" || host.ends_with(".localhost")
 }
 
+/// Process-wide one-shot latch behind the unencrypted-connection notice: `true`
+/// the first time any `http://` connection is allowed this session, `false`
+/// forever after. A `static`, so the notice fires once per run regardless of
+/// which endpoint or how many requests.
+static UNENCRYPTED_NOTICE_EMITTED: AtomicBool = AtomicBool::new(false);
+
+/// Return `true` exactly once - on the first call for a given `flag` - and
+/// `false` on every later call. Factored out so the "once" semantics are
+/// unit-testable with a fresh local flag, without a global or a log capture.
+fn latch_once(flag: &AtomicBool) -> bool {
+    !flag.swap(true, Ordering::Relaxed)
+}
+
+/// Emit the one-time unencrypted-connection notice (§4.3 E3). Called at the
+/// FIRST allowed `http://` connection of the session: every `http://` is
+/// plaintext (credentials + survey data in the clear), so the user gets a single
+/// heads-up. Later allowed http connections are silent (the latch is spent).
+fn notice_unencrypted_once(endpoint: &str) {
+    if latch_once(&UNENCRYPTED_NOTICE_EMITTED) {
+        tracing::warn!(
+            endpoint,
+            "Using an unencrypted http connection to SpeleoDB: credentials and \
+             survey data are sent in plaintext. This is allowed only for a \
+             trusted local/private network; prefer https otherwise."
+        );
+    }
+}
+
 /// Enforce the http/https transport policy for `endpoint`. See the module docs.
 ///
-/// - `https://` → `Ok(())` immediately (no resolution).
+/// - `https://` → `Ok(())` immediately (no resolution, no notice - it is encrypted).
 /// - `http://` → allowed only if every resolved address is private/loopback/
-///   link-local (or `insecure_http` is set, which lifts the scheme block only).
+///   link-local (or `insecure_http` is set, which lifts the scheme block only);
+///   the first allowed http connection of the session emits a one-time notice.
 /// - missing / unknown scheme → `Err(InsecureEndpoint)`.
 pub(crate) fn enforce(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoDbError> {
     let uri = Uri::from_str(endpoint).map_err(|_| SpeleoDbError::InsecureEndpoint {
@@ -148,25 +168,27 @@ pub(crate) fn enforce(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoD
         // TLS protects the credentials regardless of peer address; never resolve.
         Some("https") => Ok(()),
         Some("http") => {
-            // The persisted override lifts ONLY the public-http scheme block
-            // (D-B10) — TLS cert verification on https is untouched.
-            if insecure_http {
-                return Ok(());
-            }
-            // localhost / *.localhost are loopback by convention — allow without DNS.
-            if let Some(host) = uri.host() {
-                if is_localhost(host) {
-                    return Ok(());
-                }
-            }
-            let addrs = resolve_addrs(&uri)?;
-            // Empty resolution or any public address fails closed (D-187).
-            if !addrs.is_empty()
-                && addrs
-                    .iter()
-                    .copied()
-                    .all(|ip| is_private(classify_addr(ip)))
-            {
+            let allowed = if insecure_http {
+                // The persisted override lifts ONLY the public-http scheme block
+                // (D-B10) - TLS cert verification on https is untouched.
+                true
+            } else if uri.host().is_some_and(is_localhost) {
+                // localhost / *.localhost are loopback by convention (no DNS).
+                true
+            } else {
+                // Empty resolution or any public address fails closed (D-187);
+                // `resolve_addrs` returns Err (fail closed) on a resolution
+                // failure, propagated here before the private-only check.
+                let addrs = resolve_addrs(&uri)?;
+                !addrs.is_empty()
+                    && addrs
+                        .iter()
+                        .copied()
+                        .all(|ip| is_private(classify_addr(ip)))
+            };
+            if allowed {
+                // Any allowed http is plaintext - notice once per session (E3).
+                notice_unencrypted_once(endpoint);
                 Ok(())
             } else {
                 Err(SpeleoDbError::InsecureEndpoint {
@@ -186,8 +208,9 @@ pub(crate) fn enforce(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoD
 mod tests {
     use std::net::IpAddr;
     use std::str::FromStr;
+    use std::sync::atomic::AtomicBool;
 
-    use super::{classify_addr, enforce, AddrClass};
+    use super::{classify_addr, enforce, latch_once, AddrClass};
     use crate::speleodb::SpeleoDbError;
 
     fn ip(s: &str) -> IpAddr {
@@ -251,10 +274,26 @@ mod tests {
 
     #[test]
     fn enforce_http_private_allowed() {
-        // A literal private IP resolves to itself — no DNS needed.
+        // A literal private IP resolves to itself - no DNS needed. Acceptance
+        // (#187): `10.10.0.220` AND `[::1]` are both accepted under the policy.
         assert!(enforce("http://10.10.0.220:8000", false).is_ok());
         assert!(enforce("http://127.0.0.1:8000", false).is_ok());
         assert!(enforce("http://192.168.1.50", false).is_ok());
+        // IPv6 loopback literal, with and without a port - the bracketed
+        // authority must resolve to `::1` and classify as Loopback.
+        assert!(enforce("http://[::1]:8000", false).is_ok());
+        assert!(enforce("http://[::1]", false).is_ok());
+    }
+
+    #[test]
+    fn latch_once_fires_exactly_once() {
+        // The one-time unencrypted-connection notice fires on the first allowed
+        // http connection only. Tested with a fresh local flag so it does not
+        // depend on the process-wide static or on capturing the log.
+        let flag = AtomicBool::new(false);
+        assert!(latch_once(&flag), "first call must fire");
+        assert!(!latch_once(&flag), "second call must be silent");
+        assert!(!latch_once(&flag), "and every call after");
     }
 
     #[test]
