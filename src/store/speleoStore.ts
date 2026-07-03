@@ -132,6 +132,12 @@ interface SpeleoStore {
   session: SpeleoSession | null;
   /** The open project's link/edit state, or `null` when it is local / none open. */
   link: SpeleoLinkState | null;
+  /**
+   * [#218] The open remote project's SpeleoDB project id (from the poll'd status),
+   * so the in-project menu can open its revision history. `null` for a local project
+   * / none open / before the first status seed.
+   */
+  remoteProjectId: string | null;
   /** Set when a hand-off verb reported divergence; consumed by #198 (stub for now). */
   divergence: DivergenceOrigin | null;
   /** Transient banner (#200 seam). */
@@ -275,6 +281,7 @@ interface SpeleoStore {
 export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   session: null,
   link: null,
+  remoteProjectId: null,
   divergence: null,
   banner: null,
   remoteLocks: {},
@@ -514,7 +521,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   seedFromStatus: (s) =>
     set((state) => {
-      if (!s.is_remote) return { link: null, divergence: null, banner: null };
+      if (!s.is_remote) return { link: null, remoteProjectId: null, divergence: null, banner: null };
       const editState = s.edit_enabled ? 'editing' : 'read-only';
       // #200: reflect the server's exclude_geojson as a persistent
       // rendering-disabled banner. It outranks the informational `no_anchor` notice
@@ -556,6 +563,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           noAccess: s.access_denied,
           serverError: s.server_error,
         },
+        // #218: the open remote project's id, for the in-project revision-history entry.
+        remoteProjectId: s.project_id,
       };
     }),
 
@@ -584,7 +593,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   // Reset `busy` too: a hand-off verb in flight when the project closes/switches
   // would otherwise leave a freshly-opened project's status button disabled until
   // that verb's `finally` runs (its `apply*` no-op safely, guarded on `link`). (N2)
-  clearLink: () => set({ link: null, divergence: null, banner: null, busy: false }),
+  clearLink: () => set({ link: null, remoteProjectId: null, divergence: null, banner: null, busy: false }),
 
   applyStartEditing: (r) =>
     set((state) => {

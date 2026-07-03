@@ -32,6 +32,8 @@ interface SystemTableProps {
   onRemoveMissing: (filePath: string) => void;
   /** Pull + open a purely-remote SpeleoDB project row (#218). */
   onOpenRemote: (summary: SpeleoProjectSummary) => void;
+  /** Open the read-only revision-history view for a remote row (#218). */
+  onViewHistory: (projectId: string, projectName: string) => void;
 }
 
 interface ColumnDef {
@@ -96,6 +98,7 @@ export function SystemTable({
   onContextMenu,
   onRemoveMissing,
   onOpenRemote,
+  onViewHistory,
 }: SystemTableProps) {
   const { t } = useTranslation();
   const { formatLength } = useProjectStatFormatters();
@@ -211,17 +214,30 @@ export function SystemTable({
                   {t('globalView.recent.remote.onSpeleoDb')}
                 </td>
                 <td className={cellClass}>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpenRemote(item.summary);
-                    }}
-                    className="text-xs text-accent hover:underline"
-                    data-testid={`system-row-remote-open-${item.projectId}`}
-                  >
-                    {t('speleodb.browser.open')}
-                  </button>
+                  <div className="flex items-center justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onViewHistory(item.projectId, item.summary.name);
+                      }}
+                      className="text-xs text-text-secondary hover:underline"
+                      data-testid={`system-row-remote-history-${item.projectId}`}
+                    >
+                      {t('speleodb.revisions.action')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenRemote(item.summary);
+                      }}
+                      className="text-xs text-accent hover:underline"
+                      data-testid={`system-row-remote-open-${item.projectId}`}
+                    >
+                      {t('speleodb.browser.open')}
+                    </button>
+                  </div>
                 </td>
               </tr>
             );

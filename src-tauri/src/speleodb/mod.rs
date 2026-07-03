@@ -33,7 +33,7 @@ pub use models::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoAdoptResult, SpeleoCollaborator,
     SpeleoCollaborators, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
     SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
-    SpeleoPublishResult, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption,
+    SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption,
     SpeleoUserSuggestion, StartEditingResult, UpdateResult, Visibility,
 };
 

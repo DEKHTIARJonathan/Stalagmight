@@ -24,7 +24,8 @@ use crate::speleodb::{
     DoneResult, Permission, PushResult, SpeleoAdoptResult, SpeleoCollaborators, SpeleoDbAction,
     SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
     SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
-    SpeleoSessionStatus, SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, UpdateResult,
+    SpeleoRevision, SpeleoSessionStatus, SpeleoTeamOption, SpeleoUserSuggestion,
+    StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -187,6 +188,18 @@ pub async fn speleodb_release_lock(
     project_id: String,
 ) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, move |s| s.speleodb_release_lock(project_id)).await
+}
+
+/// [#218] Read a project's revision history for the read-only history view:
+/// `GET /projects/{id}/revisions/`. Takes an arbitrary project id (a GlobalView
+/// remote row, or the open project) and returns the commit chain projected to
+/// [`SpeleoRevision`] DTOs. Permission-free read; no lock required.
+#[tauri::command]
+pub async fn speleodb_get_revisions(
+    app: AppHandle,
+    project_id: String,
+) -> Result<Vec<SpeleoRevision>, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_get_revisions(project_id)).await
 }
 
 /// Set the open project's server-side `exclude_geojson` flag (#200

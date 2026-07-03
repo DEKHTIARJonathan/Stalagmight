@@ -67,7 +67,7 @@ use stalagmight_lib::speleodb::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoAdoptResult, SpeleoCollaborator,
     SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
     SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
-    SpeleoPublishParams, SpeleoPublishResult, SpeleoSessionStatus, SpeleoTeamGrant,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant,
     SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -299,6 +299,8 @@ fn main() {
     export::<SpeleoOpenResult>(&out_dir);
     // #214 adopt-Ariane result (import + link + type-flip outcome)
     export::<SpeleoAdoptResult>(&out_dir);
+    // #218 revision-history view: one projected commit
+    export::<SpeleoRevision>(&out_dir);
     export::<SpeleoSessionStatus>(&out_dir);
     export::<SpeleoDbAction>(&out_dir);
     export::<SpeleoErrorDto>(&out_dir);
@@ -498,6 +500,7 @@ fn main() {
         "SpeleoLoginResult",
         "SpeleoOpenResult",
         "SpeleoAdoptResult",
+        "SpeleoRevision",
         "SpeleoSessionStatus",
         "SpeleoDbAction",
         "SpeleoErrorDto",

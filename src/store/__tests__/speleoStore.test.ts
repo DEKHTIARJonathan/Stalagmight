@@ -23,6 +23,7 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   exclude_geojson: false,
   force_editing: false,
   allow_force_edit: false,
+  project_id: null,
   ...o,
 });
 

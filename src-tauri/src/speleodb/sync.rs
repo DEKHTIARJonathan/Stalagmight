@@ -429,6 +429,8 @@ mod tests {
             id: id.to_string(),
             parent_ids: parents.iter().map(|s| (*s).to_string()).collect(),
             author_email: email.to_string(),
+            authored_date: None,
+            message: None,
         }
     }
 

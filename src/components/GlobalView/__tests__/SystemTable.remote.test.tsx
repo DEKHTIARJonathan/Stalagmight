@@ -20,7 +20,9 @@ const SUMMARY: SpeleoProjectSummary = {
 
 const REMOTE_ITEM: RecentListItem = { kind: 'remote', projectId: 'p1', summary: SUMMARY };
 
-function renderTable(onOpenRemote = vi.fn()) {
+function renderTable(overrides: { onOpenRemote?: ReturnType<typeof vi.fn>; onViewHistory?: ReturnType<typeof vi.fn> } = {}) {
+  const onOpenRemote = overrides.onOpenRemote ?? vi.fn();
+  const onViewHistory = overrides.onViewHistory ?? vi.fn();
   render(
     <SystemTable
       items={[REMOTE_ITEM]}
@@ -37,9 +39,10 @@ function renderTable(onOpenRemote = vi.fn()) {
       onContextMenu={vi.fn()}
       onRemoveMissing={vi.fn()}
       onOpenRemote={onOpenRemote}
+      onViewHistory={onViewHistory}
     />,
   );
-  return onOpenRemote;
+  return { onOpenRemote, onViewHistory };
 }
 
 describe('SystemTable remote row (#218)', () => {
@@ -50,8 +53,14 @@ describe('SystemTable remote row (#218)', () => {
   });
 
   it('Open pulls the project via onOpenRemote', async () => {
-    const onOpenRemote = renderTable();
+    const { onOpenRemote } = renderTable();
     await userEvent.click(screen.getByTestId('system-row-remote-open-p1'));
     expect(onOpenRemote).toHaveBeenCalledWith(SUMMARY);
+  });
+
+  it('History opens the revision view via onViewHistory', async () => {
+    const { onViewHistory } = renderTable();
+    await userEvent.click(screen.getByTestId('system-row-remote-history-p1'));
+    expect(onViewHistory).toHaveBeenCalledWith('p1', 'Remote Cave');
   });
 });

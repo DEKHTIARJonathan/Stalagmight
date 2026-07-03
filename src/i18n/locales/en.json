@@ -2729,6 +2729,16 @@
         "failed": "Could not start editing without the lock"
       }
     },
+    "revisions": {
+      "title": "Revision history - {{name}}",
+      "action": "History",
+      "menuItem": "Revision history",
+      "loading": "Loading revisions…",
+      "empty": "This project has no revisions yet.",
+      "failed": "Could not load the revision history",
+      "merge": "merge",
+      "unknownAuthor": "unknown author"
+    },
     "editBar": {
       "someone": "someone else",
       "toasts": {

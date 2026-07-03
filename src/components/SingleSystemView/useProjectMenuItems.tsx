@@ -11,6 +11,7 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore, isMapReadOnly } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
@@ -30,6 +31,7 @@ import {
   DatabaseIcon,
   PencilIcon,
   LockIcon,
+  ListIcon,
 } from '../common/icons';
 
 interface UseProjectMenuItemsArgs {
@@ -52,6 +54,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   const toggleDisplay = useUIStore((s) => s.toggleDisplay);
   // SpeleoDB submenu (T2d) - only for a remote project.
   const speleoLink = useSpeleoStore((s) => s.link);
+  // #218: the open remote project's id + name, for the revision-history menu entry.
+  const remoteProjectId = useSpeleoStore((s) => s.remoteProjectId);
+  const projectName = useProjectStore((s) => s.project?.name ?? '');
   // The signed-in session gates "Publish to SpeleoDB" (a local project can only be
   // published while logged in).
   const speleoSession = useSpeleoStore((s) => s.session);
@@ -176,6 +181,22 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
                     void update();
                   },
                 },
+                // #218: read-only revision history for the open remote project.
+                ...(remoteProjectId
+                  ? [
+                      {
+                        id: 'speleodb-menu-revisions',
+                        label: t('speleodb.revisions.menuItem'),
+                        icon: <ListIcon size={sz} />,
+                        iconColor: MENU_ICON_COLORS.projectDetails,
+                        onClick: () =>
+                          openDialog('speleodb-revisions', {
+                            projectId: remoteProjectId,
+                            projectName,
+                          }),
+                      },
+                    ]
+                  : []),
                 // #213: optimistic force-edit - edit WITHOUT the lock, behind the
                 // `allow_force_edit` opt-in (hidden otherwise) and a big-red confirm.
                 // Only offered while read-only; a force-editor uses Reconnect above.
@@ -289,5 +310,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showDevStats, toggleDisplay, mapReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoBusy, startEditing, update, done]);
+  }, [t, openDialog, showDevStats, toggleDisplay, mapReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, remoteProjectId, projectName, speleoSession, speleoBusy, startEditing, update, done]);
 }

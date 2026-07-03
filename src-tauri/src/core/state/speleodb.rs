@@ -16,7 +16,7 @@ use crate::speleodb::client;
 // 401 auto-drop (auth_error_drops_token).
 use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
-use crate::speleodb::models::SpeleoProjectSummary;
+use crate::speleodb::models::{SpeleoProjectSummary, SpeleoRevision};
 use crate::speleodb::sync::{self, FenceOutcome, PushPlan, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
@@ -543,6 +543,7 @@ impl AppState {
                     exclude_geojson: false,
                     force_editing: self.force_editing(),
                     allow_force_edit: self.speleodb_allow_force_edit(),
+                    project_id: None,
                 });
             }
             Err(e) => return Err(local_dto(e)),
@@ -652,6 +653,9 @@ impl AppState {
             // `remote_state` (RemoteAhead/Conflict); offline it stays Unknown (skipped).
             force_editing: self.force_editing(),
             allow_force_edit: self.speleodb_allow_force_edit(),
+            // #218: the open remote project's id, so the in-project menu can open its
+            // revision history without a separate id lookup.
+            project_id: Some(link.project_id.clone()),
         })
     }
 
@@ -1781,6 +1785,26 @@ impl AppState {
         )
         .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
         Ok(())
+    }
+
+    /// [#218] The project's revision history for the read-only history view:
+    /// `GET /projects/{id}/revisions/`, projected to [`SpeleoRevision`] DTOs (no
+    /// token, only the display fields). Takes an arbitrary project id (a GlobalView
+    /// remote row need not be the open project), so it validates the id at the trust
+    /// boundary exactly like `speleodb_release_lock`, then reuses the same server-head
+    /// fetch the sync path uses. Server order is preserved (newest first); an empty
+    /// repo yields an empty list. No lock required (reading history is permission-free).
+    pub(crate) fn speleodb_get_revisions(
+        &self,
+        project_id: String,
+    ) -> Result<Vec<SpeleoRevision>, SpeleoErrorDto> {
+        validate_project_id(&project_id).map_err(local_dto)?;
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+        let (_, commits) = self
+            .speleodb_server_head(&endpoint, &token, insecure_http, &project_id)
+            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        Ok(commits.into_iter().map(SpeleoRevision::from).collect())
     }
 
     /// [#206] GET the open remote project's authoritative metadata so the Project
@@ -3051,6 +3075,8 @@ mod tests {
             id: "tip-sha".to_owned(),
             parent_ids: vec!["base-sha".to_owned()],
             author_email: "me@x".to_owned(),
+            authored_date: None,
+            message: None,
         }];
         let (tip, _) = head_with_empty_retry(Some("base-sha"), || {
             calls.set(calls.get() + 1);
@@ -3113,6 +3139,8 @@ mod tests {
             id: "tip-sha".to_owned(),
             parent_ids: vec!["base-sha".to_owned()],
             author_email: "me@x".to_owned(),
+            authored_date: None,
+            message: None,
         }];
         let (tip, _) = head_with_empty_retry(Some("base-sha"), || {
             calls.set(calls.get() + 1);
@@ -3134,11 +3162,15 @@ mod tests {
                 id: "a".to_owned(),
                 parent_ids: vec![],
                 author_email: "me@x".to_owned(),
+                authored_date: None,
+                message: None,
             },
             crate::speleodb::models::RevisionCommit {
                 id: "b".to_owned(),
                 parent_ids: vec![],
                 author_email: "me@x".to_owned(),
+                authored_date: None,
+                message: None,
             },
         ];
         let (tip, commits) = head_with_empty_retry(Some("base-sha"), || {

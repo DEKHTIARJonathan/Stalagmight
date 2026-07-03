@@ -178,6 +178,13 @@ export default function GlobalView() {
     },
     [openRemote, showToast],
   );
+  // #218: open the read-only revision-history view for a remote project row.
+  const handleViewHistory = useCallback(
+    (projectId: string, projectName: string) => {
+      openDialog('speleodb-revisions', { projectId, projectName });
+    },
+    [openDialog],
+  );
   const handleConfirmAdopt = useCallback(async () => {
     if (!pendingAdopt) return;
     const summary = pendingAdopt;
@@ -866,6 +873,7 @@ export default function GlobalView() {
                   onContextMenu={handleContextMenu}
                   onRemoveMissing={handleRemoveFromRecent}
                   onOpenRemote={(summary) => void handleOpenRemote(summary)}
+                  onViewHistory={handleViewHistory}
                 />
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -896,6 +904,7 @@ export default function GlobalView() {
                         )}
                         busy={remoteBusy}
                         onOpen={(summary) => void handleOpenRemote(summary)}
+                        onViewHistory={handleViewHistory}
                       />
                     ) : (
                       <MissingSystemCard
