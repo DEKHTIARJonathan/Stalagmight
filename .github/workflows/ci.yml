@@ -10,10 +10,10 @@ name: CI
 on:
   push:
     branches: [master]
-    paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**', 'e2e-playwright/**']
+    paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**', 'e2e/agent/**', 'e2e-playwright/**']
   pull_request:
     branches: [master]
-    paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**', 'e2e-playwright/**']
+    paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**', 'e2e/agent/**', 'e2e-playwright/**']
 
 # Cancel superseded runs on the same ref (e.g. rapid pushes to a PR).
 concurrency:

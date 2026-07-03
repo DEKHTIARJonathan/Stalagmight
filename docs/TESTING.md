@@ -29,6 +29,7 @@ app** end-to-end (webview + Rust), but it runs nowhere automatically.
 | Playwright E2E | Playwright | mocked IPC | UI flows (`e2e-playwright/`) | Fast |
 | WebdriverIO E2E | WebdriverIO + tauri-driver | real Tauri app | Full real-app tests (`e2e/legacy/`, **on-demand only**) | Slow (real backend) |
 | Backend Unit | Rust `#[test]` | — | Rust logic tests | Fast |
+| Agent harness | MCP + WebdriverIO | real Tauri app | LLM-agent-driven exploration, stress scenarios, bug repro (`e2e/agent/`, **on-demand**, Node 22) | Slow (real backend) |
 
 The Vitest unit + component tiers are gated in CI (the `check` job) as of #107;
 the Playwright smoke/nightly split and the WDIO quarantine to `e2e/legacy/`
@@ -44,6 +45,7 @@ the Playwright suite is split into two tiers:
 | **Smoke** | ~50 critical-path specs tagged `@smoke` | pre-push hook + `e2e-smoke.yml` on every PR/push | `pnpm test:ui:smoke` |
 | **Nightly / full** | the entire Playwright suite | `nightly-e2e.yml` on a schedule (+ `workflow_dispatch`) | `pnpm test:ui` |
 | **On-demand** | WebdriverIO real-app suite | manual only | `./scripts/wdio.sh` |
+| **On-demand** | Agent harness (MCP + WDIO, real app) - see [Agent Harness](agent-harness.md) | manual only, Node 22 | `pnpm agent:smoke` / `pnpm agent:scenarios` |
 
 Guidelines:
 
