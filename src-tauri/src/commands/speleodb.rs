@@ -190,9 +190,8 @@ pub async fn speleodb_release_lock(
     run_blocking(app, move |s| s.speleodb_release_lock(project_id)).await
 }
 
-/// [#218] Read a project's revision history for the read-only history view:
-/// `GET /projects/{id}/revisions/`. Takes an arbitrary project id (a GlobalView
-/// remote row, or the open project) and returns the commit chain projected to
+/// [#218] Read a project's revision history for the Project Settings history view:
+/// `GET /projects/{id}/revisions/`. Returns the commit chain projected to
 /// [`SpeleoRevision`] DTOs. Permission-free read; no lock required.
 #[tauri::command]
 pub async fn speleodb_get_revisions(
@@ -200,6 +199,24 @@ pub async fn speleodb_get_revisions(
     project_id: String,
 ) -> Result<Vec<SpeleoRevision>, SpeleoErrorDto> {
     run_blocking(app, move |s| s.speleodb_get_revisions(project_id)).await
+}
+
+/// [#218] Restore the open remote project's working copy to a past revision:
+/// download the dump AT `hexsha` and replace the working copy, stamped as unpushed
+/// edits on top of the current server HEAD (a git-forward restore; the user pushes
+/// to persist). Returns the local path for the FE to reload, like an open. The FE
+/// gates this on holding the lock and confirms with an unsaved-changes safeguard.
+#[tauri::command]
+pub async fn speleodb_restore_revision(
+    app: AppHandle,
+    project_id: String,
+    project_name: String,
+    hexsha: String,
+) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
+    run_blocking(app, move |s| {
+        s.speleodb_restore_revision(project_id, project_name, hexsha)
+    })
+    .await
 }
 
 /// Set the open project's server-side `exclude_geojson` flag (#200

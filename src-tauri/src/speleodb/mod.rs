@@ -85,6 +85,12 @@ pub(crate) enum SpeleoDbError {
     /// route traversal at the trust boundary.
     #[error("invalid SpeleoDB project id")]
     InvalidProjectId,
+    /// [#218] The revision SHA supplied over IPC (revision restore) was not a
+    /// valid git hex object id. Guards the download-at-hash request-URL
+    /// interpolation against route traversal at the trust boundary, exactly like
+    /// [`SpeleoDbError::InvalidProjectId`].
+    #[error("invalid SpeleoDB revision id")]
+    InvalidRevision,
     // [Track A] #187: the endpoint scheme/host failed the http private-network
     // policy (public `http://`, a missing/unknown scheme, or an unresolvable
     // host). Non-retryable by construction — `tls::enforce` errors before any

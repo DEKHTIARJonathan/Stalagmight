@@ -10,8 +10,6 @@ interface RemoteSystemCardProps {
   lock: SpeleoLockInfo;
   /** Pull + open this remote project (shared `useOpenRemoteProject` flow). */
   onOpen: (summary: SpeleoProjectSummary) => void;
-  /** Open the read-only revision-history view for this project (#218). */
-  onViewHistory: (projectId: string, projectName: string) => void;
   /** Disable actions while an open/adopt is in flight. */
   busy?: boolean;
 }
@@ -27,7 +25,6 @@ export default function RemoteSystemCard({
   summary,
   lock,
   onOpen,
-  onViewHistory,
   busy = false,
 }: RemoteSystemCardProps) {
   const { t } = useTranslation();
@@ -53,18 +50,7 @@ export default function RemoteSystemCard({
         <SpeleoRecentInfo info={lock} name={summary.name} />
       </div>
 
-      <div className="mt-3 pt-3 border-t border-border flex items-center justify-between gap-2">
-        <button
-          type="button"
-          onClick={(e: MouseEvent) => {
-            e.stopPropagation();
-            onViewHistory(summary.id, summary.name);
-          }}
-          className="text-xs text-text-secondary hover:underline"
-          data-testid={`system-card-remote-history-${summary.id}`}
-        >
-          {t('speleodb.revisions.action')}
-        </button>
+      <div className="mt-3 pt-3 border-t border-border flex items-center justify-end gap-2">
         <Button
           variant="primary"
           onClick={(e: MouseEvent) => {

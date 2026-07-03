@@ -2730,14 +2730,25 @@
       }
     },
     "revisions": {
-      "title": "Revision history - {{name}}",
-      "action": "History",
-      "menuItem": "Revision history",
+      "title": "Revision history",
       "loading": "Loading revisions…",
       "empty": "This project has no revisions yet.",
       "failed": "Could not load the revision history",
       "merge": "merge",
+      "current": "Current",
+      "restore": "Restore",
+      "restoreNeedsLock": "Start editing to restore a revision",
       "unknownAuthor": "unknown author"
+    },
+    "restore": {
+      "title": "Restore revision {{sha}}",
+      "body": "This replaces your working copy of \"{{name}}\" with the contents of revision {{sha}}.",
+      "consequence": "The restore is kept as unsaved edits on top of the current version; push to make it the project's latest. Your project history is not rewritten.",
+      "unsavedWarning": "You have unsaved changes that will be discarded.",
+      "confirmButton": "Restore revision",
+      "restoring": "Restoring…",
+      "doneToast": "Restored to revision {{sha}}. Push to make it the latest.",
+      "failed": "Could not restore the revision"
     },
     "editBar": {
       "someone": "someone else",

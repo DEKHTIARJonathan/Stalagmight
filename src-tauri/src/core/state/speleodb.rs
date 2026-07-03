@@ -161,6 +161,20 @@ pub(super) fn validate_project_id(project_id: &str) -> Result<(), SpeleoDbError>
         .map_err(|_| SpeleoDbError::InvalidProjectId)
 }
 
+/// [#218] Validate a git commit SHA supplied over IPC (revision restore) before it
+/// is interpolated into the download-at-hash URL. A git object id is 7..=40 lowercase
+/// or uppercase hex digits (the `/revisions/` endpoint returns full 40-hex ids; a
+/// short prefix is also accepted). Rejecting anything else closes the route-traversal
+/// vector at the trust boundary, mirroring [`validate_project_id`].
+pub(super) fn validate_hexsha(hexsha: &str) -> Result<(), SpeleoDbError> {
+    let len = hexsha.len();
+    if (7..=40).contains(&len) && hexsha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(SpeleoDbError::InvalidRevision)
+    }
+}
+
 /// #202: how long a lock stays "verified" before a lock-held edit re-verifies it.
 /// A continuously-active editor therefore issues at most ~3 re-verify requests/hr;
 /// an idle/AFK session issues zero (the check is edit-triggered, never a timer).
@@ -1807,6 +1821,113 @@ impl AppState {
         Ok(commits.into_iter().map(SpeleoRevision::from).collect())
     }
 
+    /// [#218] Restore the open remote project's working copy to a past revision.
+    /// Download the project tree AT `hexsha` (the server's `FileDownloadAtHashView`),
+    /// replace the cached `.stalx`, and re-stamp the hand-off link so the restored
+    /// tree is carried as UNPUSHED edits on top of the CURRENT server HEAD.
+    ///
+    /// This is a git-FORWARD restore, not a server-side reset: SpeleoDB exposes no
+    /// revert endpoint, so BASE stays at the true server HEAD and `has_unpushed_edits`
+    /// is set true. The user reviews the restored tree, then the normal push / Done
+    /// flow (which holds the lock) lands the old content as a NEW commit — project
+    /// history is never rewritten. Mirrors [`Self::speleodb_open_project`] (same
+    /// download → classify → extract → stamp pipeline, same cache path) but pinned to
+    /// `hexsha` and stamped dirty. Both ids are validated at the trust boundary before
+    /// the download URL is built; the FE gates the action on holding the lock.
+    /// Returns the local path for the FE to reload, exactly like a pull.
+    pub(crate) fn speleodb_restore_revision(
+        &self,
+        project_id: String,
+        project_name: String,
+        hexsha: String,
+    ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
+        validate_project_id(&project_id).map_err(local_dto)?;
+        validate_hexsha(&hexsha).map_err(local_dto)?;
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+
+        let zip = self
+            .speleodb_handle_auth(
+                Endpoint::DownloadDump,
+                client::download_dump_at_hash(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &project_id,
+                    &hexsha,
+                ),
+            )
+            .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
+
+        // Open the dump once: list entries (to classify) and extract the chosen
+        // `.stalx` from the same parsed archive (identical to the pull path).
+        let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
+        let entry =
+            classify_dump_entry(&dump.entry_paths().map_err(local_dto)?).map_err(local_dto)?;
+
+        let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
+        // Carry the user's local view toggles across the download-replace, same as a
+        // re-pull (display_settings are stripped from the server copy).
+        let preserved_view = preserved_display_settings(&dest);
+        dump.extract_entry_to(&entry, &dest).map_err(local_dto)?;
+
+        // BASE = the CURRENT server HEAD (NOT the restored revision): the restored
+        // tree is an unpushed edit ON TOP of HEAD, so a push creates a forward commit.
+        // Same best-effort resolution as the pull path; on failure BASE is left None
+        // and the first push / Start editing fast-forwards to reconcile.
+        let base_sha = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
+            Ok(history) => sync::tip_of(&history.commits).map(str::to_owned),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    project_id = %project_id,
+                    purpose = "resolve server HEAD on restore",
+                    "speleodb_restore_revision: could not resolve server HEAD; leaving BASE unset"
+                );
+                None
+            }
+        };
+
+        // Stamp the hand-off link with the dirty bit SET: the restored tree differs
+        // from HEAD until the user pushes. `last_edit_at` gets `now` (a restore IS an
+        // edit) so the g7 push-start comparison treats it like any other local edit.
+        match crate::persistence::Database::open_existing(&dest) {
+            Ok(db) => {
+                restore_display_settings(&db, &preserved_view);
+                let link = crate::models::SpeleoLink {
+                    endpoint,
+                    project_id: project_id.clone(),
+                    project_name,
+                    base_commit_sha: base_sha,
+                    has_unpushed_edits: true,
+                    last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
+                    last_verify_at: None,
+                };
+                if let Err(e) = db.save_speleo_link(Some(&link)) {
+                    tracing::warn!(
+                        error = %e,
+                        project_id = %project_id,
+                        purpose = "stamp SpeleoDB hand-off link on restore",
+                        "speleodb_restore_revision: failed to stamp speleo_link; project may open local-only"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    project_id = %project_id,
+                    purpose = "stamp SpeleoDB hand-off link on restore",
+                    "speleodb_restore_revision: could not reopen extracted .stalx to stamp speleo_link"
+                );
+            }
+        }
+
+        Ok(SpeleoOpenResult {
+            local_path: dest.to_string_lossy().into_owned(),
+            concurrent_session: false,
+        })
+    }
+
     /// [#206] GET the open remote project's authoritative metadata so the Project
     /// Settings tab can prefill the current server truth. No lock required (reading
     /// metadata is permission-free); routed through the auth handler so a dead token
@@ -2779,9 +2900,9 @@ mod tests {
         auth_error_drops_token, build_create_body, build_patch_body, classify_dump_entry,
         clear_snapshot_dirty, coord_json, head_with_empty_retry, lock_held_by_me,
         preserved_display_settings, resolve_endpoint, restore_display_settings, reverify_due,
-        validate_project_id, visibility_label, whoami_indicates_dead_token, Endpoint, PushOutcome,
-        SpeleoDbSession, SpeleoProjectMetadataPatch, SpeleoPublishParams, Visibility,
-        REVERIFY_INTERVAL_SECS,
+        validate_hexsha, validate_project_id, visibility_label, whoami_indicates_dead_token,
+        Endpoint, PushOutcome, SpeleoDbSession, SpeleoProjectMetadataPatch, SpeleoPublishParams,
+        Visibility, REVERIFY_INTERVAL_SECS,
     };
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
@@ -3202,6 +3323,9 @@ mod tests {
         //        local project (#207)
         //     4. speleodb_adopt_ariane - stamp BASE = the server tip when minting the
         //        link for an adopted Ariane project (#214); same trigger as pull.
+        //     5. speleodb_restore_revision - stamp BASE = the CURRENT server tip (NOT
+        //        the restored revision) when re-minting the link on a revision restore
+        //        (#218); the restored tree rides as an unpushed edit on top of HEAD.
         let src = include_str!("speleodb.rs");
         let prod = src
             .split("#[cfg(test)]")
@@ -3214,8 +3338,8 @@ mod tests {
         );
         assert_eq!(
             prod.matches("base_commit_sha:").count(),
-            4,
-            "unexpected BASE stamp count (sanctioned: open-on-pull, fast-forward restamp, publish-create, adopt-ariane)"
+            5,
+            "unexpected BASE stamp count (sanctioned: open-on-pull, fast-forward restamp, publish-create, adopt-ariane, revision-restore)"
         );
     }
 
@@ -3781,6 +3905,30 @@ mod tests {
                     validate_project_id(bad),
                     Err(SpeleoDbError::InvalidProjectId)
                 ),
+                "expected {bad:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_hexsha_accepts_git_ids_rejects_traversal() {
+        // #218 restore: a full 40-hex commit id and a shorter prefix both pass.
+        assert!(validate_hexsha("0123456789abcdef0123456789abcdef01234567").is_ok());
+        assert!(validate_hexsha("abc1234").is_ok());
+        assert!(validate_hexsha("ABCDEF0").is_ok()); // upper-case hex accepted
+                                                     // Anything that could reshape the download-at-hash URL is rejected before
+                                                     // it is interpolated into the path (route traversal / injection).
+        for bad in [
+            "",
+            "abc123",                                    // 6 chars: below the 7-min
+            "0123456789abcdef0123456789abcdef012345678", // 41 chars: over the 40-max
+            "abc123g",                                   // non-hex digit
+            "../../etc",
+            "abc/1234",
+            "abc 1234",
+        ] {
+            assert!(
+                matches!(validate_hexsha(bad), Err(SpeleoDbError::InvalidRevision)),
                 "expected {bad:?} to be rejected"
             );
         }

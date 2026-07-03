@@ -457,6 +457,38 @@ pub(crate) fn download_dump(
     Ok(body)
 }
 
+/// [#218] `GET /api/v2/projects/{id}/download/dump/{hexsha}/` — download the
+/// project's tree AT a specific past commit (the server's `FileDownloadAtHashView`)
+/// as a ZIP, for the revision-restore flow. Identical wire shape to
+/// [`download_dump`] (same `Endpoint::DownloadDump` contract/metrics, same read
+/// retry) but pinned to `hexsha` rather than HEAD. The caller validates `hexsha`
+/// at the trust boundary before it reaches this URL interpolation.
+pub(crate) fn download_dump_at_hash(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    hexsha: &str,
+) -> Result<Vec<u8>, SpeleoDbError> {
+    let url = api_url(
+        base,
+        &format!("projects/{project_id}/download/dump/{hexsha}/"),
+    );
+    let auth = bearer(token);
+
+    let (status, body) = with_retry(base, insecure_http, true, Endpoint::DownloadDump, || {
+        let resp = agent()
+            .get(&url)
+            .header("Authorization", auth.as_str())
+            .call()?;
+        read_status_body(resp)
+    })?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    Ok(body)
+}
+
 /// Parse a 2xx body into a [`Project`] (the shape every write endpoint returns).
 fn parse_project(body: &[u8], context: &str) -> Result<Project, SpeleoDbError> {
     serde_json::from_slice(body).map_err(|e| SpeleoDbError::Parse(format!("{context}: {e}")))
@@ -1121,10 +1153,10 @@ mod tests {
 
     use super::{
         add_team_permission, add_user_permission, api_url, bearer, build_upload_parts,
-        clean_transport, delete_project, list_teams, list_user_autocomplete, list_user_permissions,
-        mime_for, parse_error_message, parse_upload_auto_response, remove_team_permission,
-        remove_user_permission, set_user_permission, with_retry, Endpoint, RevisionHistory,
-        UserInfo,
+        clean_transport, delete_project, download_dump_at_hash, list_teams, list_user_autocomplete,
+        list_user_permissions, mime_for, parse_error_message, parse_upload_auto_response,
+        remove_team_permission, remove_user_permission, set_user_permission, with_retry, Endpoint,
+        RevisionHistory, UserInfo,
     };
     use crate::speleodb::{Permission, SpeleoDbError};
 
@@ -1917,6 +1949,24 @@ mod tests {
         assert!(
             wire.starts_with(&format!("DELETE /api/v2/projects/{WIRE_PID}/ ")),
             "project delete is a bare DELETE on the project, no detail suffix: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_download_at_hash_pins_the_revision_sha() {
+        // #218 restore: the at-hash download interpolates the revision SHA into the
+        // path so the server serves that commit's tree (FileDownloadAtHashView), not
+        // HEAD. A missing/misplaced SHA would silently restore the wrong revision.
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        let _ = download_dump_at_hash(&base, "tok", false, WIRE_PID, "abc1234");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!(
+                "GET /api/v2/projects/{WIRE_PID}/download/dump/abc1234/ "
+            )),
+            "at-hash download GETs the dump pinned to the revision SHA: {wire}"
         );
     }
 }

@@ -142,6 +142,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_release_lock",
     "command.speleodb_remove_collaborator",
     "command.speleodb_remove_team",
+    "command.speleodb_restore_revision",
     "command.speleodb_search_users",
     "command.speleodb_session",
     "command.speleodb_set_collaborator",
@@ -243,7 +244,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-force-edit",
     "action.dialog.speleodb-close",
     "action.dialog.speleodb-no-permission",
-    "action.dialog.speleodb-revisions",
+    "action.dialog.speleodb-restore",
     "action.dialog.publish-to-speleodb",
     "action.dialog.split-section",
     "action.dialog.swap-comments",
@@ -304,7 +305,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-force-edit",
     "dialog-cancel.speleodb-close",
     "dialog-cancel.speleodb-no-permission",
-    "dialog-cancel.speleodb-revisions",
+    "dialog-cancel.speleodb-restore",
     "dialog-cancel.publish-to-speleodb",
     "dialog-cancel.split-section",
     "dialog-cancel.swap-comments",
@@ -391,7 +392,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-force-edit",
     "dwell.dialog.speleodb-close",
     "dwell.dialog.speleodb-no-permission",
-    "dwell.dialog.speleodb-revisions",
+    "dwell.dialog.speleodb-restore",
     "dwell.dialog.publish-to-speleodb",
     "dwell.dialog.split-section",
     "dwell.dialog.swap-comments",
@@ -529,7 +530,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-force-edit",
     "active-dwell.dialog.speleodb-close",
     "active-dwell.dialog.speleodb-no-permission",
-    "active-dwell.dialog.speleodb-revisions",
+    "active-dwell.dialog.speleodb-restore",
     "active-dwell.dialog.publish-to-speleodb",
     "active-dwell.dialog.split-section",
     "active-dwell.dialog.swap-comments",
@@ -844,10 +845,12 @@ mod tests {
         //       .speleodb-force-edit = 643.
         //   + 1 SpeleoDB revision-history command (#218):
         //       command.speleodb_get_revisions = 644.
-        //   + 4 speleodb-revisions dialog events (#218):
+        //   + 1 SpeleoDB revision-restore command (#218):
+        //       command.speleodb_restore_revision = 645.
+        //   + 4 speleodb-restore dialog events (#218):
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
-        //       .speleodb-revisions = 648.
-        assert_eq!(EVENT_NAMES.len(), 648);
+        //       .speleodb-restore = 649.
+        assert_eq!(EVENT_NAMES.len(), 649);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
