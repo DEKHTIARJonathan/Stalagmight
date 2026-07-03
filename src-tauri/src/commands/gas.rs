@@ -26,9 +26,11 @@ pub async fn compute_gas_reach_field(
     let cylinders = cylinders
         .into_iter()
         .map(|c| {
-            // `new` re-validates the numerics and resets `enabled` to true, so carry the
-            // frontend's enabled flag across (serde already defaulted a missing one to true).
-            let enabled = c.enabled;
+            // `new` re-validates the numerics and resets the non-constructor fields, so carry
+            // the frontend's `enabled` + `usable_gas_bar` across (serde already defaulted any
+            // missing ones). `usable_gas_bar` is otherwise unbounded here — the engine clamps it
+            // to `[0, fill]` per cylinder before budgeting, so a stray value can't over-state reach.
+            let (enabled, usable_gas_bar) = (c.enabled, c.usable_gas_bar);
             Cylinder::new(
                 c.water_volume_l,
                 c.rated_pressure_bar,
@@ -39,6 +41,7 @@ pub async fn compute_gas_reach_field(
             )
             .map(|mut cyl| {
                 cyl.enabled = enabled;
+                cyl.usable_gas_bar = usable_gas_bar;
                 cyl
             })
         })

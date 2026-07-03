@@ -19,15 +19,22 @@ import {
 import { PositiveNumberField } from '../common/PositiveNumberField';
 import type { GasUnits, ReservePreset } from '../../types/ipc.generated';
 
-const RESERVE_PRESETS: readonly ReservePreset[] = ['all_thirds', 'one_stage', 'two_stage'];
+const RESERVE_PRESETS: readonly ReservePreset[] = [
+  'all_thirds',
+  'one_stage',
+  'two_stage',
+  'free',
+];
 const UNIT_OPTIONS: readonly GasUnits[] = ['metric', 'imperial'];
 
 /** Stage cylinders a strategy requires in the rig — mirrors the Rust `required_stages`
- *  (gas.rs). The Half-Minus strategies are greyed until the diver carries that many stages. */
+ *  (gas.rs). The Half-Minus strategies are greyed until the diver carries that many stages;
+ *  Free (#245) needs none (the diver sets each tank's usable gas by hand). */
 const REQUIRED_STAGES: Record<ReservePreset, number> = {
   all_thirds: 0,
   one_stage: 1,
   two_stage: 2,
+  free: 0,
 };
 
 /**

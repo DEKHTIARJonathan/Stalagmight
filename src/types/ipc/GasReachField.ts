@@ -2,4 +2,4 @@
 import type { RouteLeg } from "./RouteLeg";
 import type { StationRef } from "./StationRef";
 
-export interface GasReachField { station_refs: Array<StationRef>, gas_to_reach: Array<number | null>, reachable: Array<boolean>, turn_frontier: Array<StationRef>, max_reachable_gas: number, budget_litres: number, route: Array<RouteLeg>, stage_drop_refs: Array<StationRef>, final_turn_ref: StationRef | null, backgas_turn_bar: number | null, stage_drop_bars: Array<number>, route_line_length_m: number, route_max_depth_m: number | null, route_avg_depth_m: number | null, }
+export interface GasReachField { station_refs: Array<StationRef>, gas_to_reach: Array<number | null>, reachable: Array<boolean>, turn_frontier: Array<StationRef>, max_reachable_gas: number, budget_litres: number, route: Array<RouteLeg>, stage_drop_refs: Array<StationRef>, final_turn_ref: StationRef | null, backgas_turn_bar: number | null, stage_drop_bars: Array<number>, cylinder_usable_bars: Array<number>, route_line_length_m: number, route_max_depth_m: number | null, route_avg_depth_m: number | null, }

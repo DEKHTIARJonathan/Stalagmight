@@ -57,7 +57,9 @@ pub enum GasUnits {
 }
 
 /// Reserve preset (PRD §5.1). All-thirds is the safe default; the 1-/2-stage presets are
-/// pushy and advanced-gated in the UI.
+/// pushy and advanced-gated in the UI. `Free` (#245) hands the diver full manual control: the
+/// engine ignores the reserve rules and budgets exactly the per-cylinder usable gas the user
+/// types (`Cylinder::usable_gas_bar`) — for planned/tech divers who compute their own reserves.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -66,6 +68,7 @@ pub enum ReservePreset {
     AllThirds,
     OneStage,
     TwoStage,
+    Free,
 }
 
 /// Editable reserve constants (PRD §5.1) — kept out of the engine as named, tunable values

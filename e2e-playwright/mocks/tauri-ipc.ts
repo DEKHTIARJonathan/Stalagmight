@@ -1299,9 +1299,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               fill_bar?: number;
               water_volume_l?: number;
               rated_pressure_bar?: number;
+              enabled?: boolean;
+              usable_gas_bar?: number;
             }>;
             const requested = gasConfig.default_reserve ?? 'all_thirds';
-            const stageCyls = cylinders.filter((c) => c.role === 'stage');
+            // Disabled tanks (#245) are excluded from the gauges/drops, mirroring the engine.
+            const stageCyls = cylinders.filter((c) => c.role === 'stage' && c.enabled !== false);
             const required = requested === 'two_stage' ? 2 : requested === 'one_stage' ? 1 : 0;
             const effective = stageCyls.length >= required ? requested : 'all_thirds';
             const dropCount = effective === 'two_stage' ? 2 : effective === 'one_stage' ? 1 : 0;
@@ -1381,7 +1384,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 route_line_length_m > 0 ? depthLenSum / route_line_length_m : routePts[0].z;
             }
 
-            const backCyls = cylinders.filter((c) => c.role === 'back_gas');
+            const backCyls = cylinders.filter((c) => c.role === 'back_gas' && c.enabled !== false);
             const sumWv = backCyls.reduce((s, c) => s + (c.water_volume_l ?? 0), 0);
             const frac = effective === 'two_stage' ? 1 / 6 : effective === 'one_stage' ? 1 / 4 : 1 / 3;
             const backgas_turn_bar =
@@ -1403,6 +1406,30 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     return Math.min(basis, 0.5 * (basis + reserve));
                   })
                 : [];
+            // Per-row usable bar (#245), aligned 1:1 with INPUT cylinders (disabled/non-budget = 0).
+            // The mock ignores the Z derate, so deliverable/water-vol ≈ fill. Rust unit tests pin
+            // the exact math; this just gives the table shape-correct values.
+            const isBudget = (r?: string) => r === 'back_gas' || r === 'stage';
+            let enabledStageI = 0;
+            const cylinder_usable_bars = cylinders.map((c) => {
+              if (c.enabled === false) return 0;
+              const fill = c.fill_bar ?? 0;
+              const rated = c.rated_pressure_bar ?? fill;
+              const basis = gasConfig.conservative_tank_gas !== false ? Math.min(fill, rated) : fill;
+              if (effective === 'free') {
+                return isBudget(c.role) ? Math.max(0, Math.min(c.usable_gas_bar ?? 0, fill)) : 0;
+              }
+              if (effective === 'all_thirds') {
+                return isBudget(c.role) ? fill / 3 : 0;
+              }
+              if (c.role === 'back_gas') return frac * fill;
+              if (c.role === 'stage') {
+                const counted = enabledStageI < required;
+                enabledStageI += 1;
+                return counted ? Math.max(0, 0.5 * (basis - reserve)) : 0;
+              }
+              return 0;
+            });
             return {
               station_refs: stations.map((s) => s.station_ref),
               gas_to_reach,
@@ -1415,6 +1442,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               final_turn_ref,
               backgas_turn_bar,
               stage_drop_bars,
+              cylinder_usable_bars,
               route_line_length_m,
               route_max_depth_m,
               route_avg_depth_m,

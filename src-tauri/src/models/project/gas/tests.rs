@@ -282,6 +282,122 @@ fn gas_reach_field_disabled_stage_falls_back_off_staged_strategy() {
 }
 
 #[test]
+fn gas_free_budget_sums_user_usable_gas_and_gauges_match() {
+    // Free (#245): budget = Σ (deliverable(fill) − deliverable(fill − usable)); at fill 90 / usable
+    // 30 the pressures are < 100 bar so Z == 1 and it reduces to usable × water-vol.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder {
+        usable_gas_bar: 30.0,
+        ..Cylinder::new(
+            24.0,
+            232.0,
+            90.0,
+            TankMaterial::Steel,
+            CylRole::BackGas,
+            None,
+        )
+        .unwrap()
+    };
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::Free,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg], &cfg);
+    assert!(
+        (field.budget_litres - 30.0 * 24.0).abs() < 1e-6,
+        "Free budget = usable × water-vol at Z == 1"
+    );
+    // The column echoes the diver's chosen usable bar; the turn gauge is fill − usable.
+    assert_eq!(field.cylinder_usable_bars, vec![30.0]);
+    assert!((field.backgas_turn_bar.unwrap() - 60.0).abs() < 1e-6);
+}
+
+#[test]
+fn gas_free_clamps_usable_over_fill() {
+    // A usable allowance larger than the tank holds is clamped to the fill — it can never credit
+    // more than the whole cylinder (the unsafe over-stating direction, §6).
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder {
+        usable_gas_bar: 500.0, // absurd — clamped to fill (90)
+        ..Cylinder::new(
+            24.0,
+            232.0,
+            90.0,
+            TankMaterial::Steel,
+            CylRole::BackGas,
+            None,
+        )
+        .unwrap()
+    };
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::Free,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg], &cfg);
+    assert!(
+        (field.budget_litres - 90.0 * 24.0).abs() < 1e-6,
+        "clamped usable = whole tank (fill × water-vol at Z == 1)"
+    );
+    assert_eq!(field.cylinder_usable_bars, vec![90.0]);
+}
+
+#[test]
+fn gas_cylinder_usable_bars_match_gauges_and_align_with_input() {
+    // The per-row usable-bar column equals `fill − turn/drop` (so it can't drift from the gauges)
+    // and is aligned 1:1 with the INPUT rows: a disabled tank and a non-budget role read 0.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        24.0,
+        232.0,
+        90.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let disabled = Cylinder {
+        enabled: false,
+        ..bg.clone()
+    };
+    let deco = Cylinder::new(
+        6.0,
+        207.0,
+        90.0,
+        TankMaterial::Aluminium,
+        CylRole::Deco,
+        None,
+    )
+    .unwrap();
+    let field = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        &[bg, disabled, deco],
+        &GasConfig::default(),
+    );
+    assert_eq!(
+        field.cylinder_usable_bars.len(),
+        3,
+        "one entry per input row"
+    );
+    let turn = field.backgas_turn_bar.unwrap();
+    // All-thirds back gas: usable = fill − turn = ⅓ fill (Z == 1 at 90 bar).
+    assert!((field.cylinder_usable_bars[0] - (90.0 - turn)).abs() < 1e-6);
+    assert!((field.cylinder_usable_bars[0] - 90.0 / 3.0).abs() < 1e-6);
+    assert!(
+        field.cylinder_usable_bars[1].abs() < 1e-12,
+        "disabled row = 0"
+    );
+    assert!(
+        field.cylinder_usable_bars[2].abs() < 1e-12,
+        "deco (non-budget) row = 0"
+    );
+}
+
+#[test]
 fn penetration_budget_all_thirds_is_usable_over_three() {
     let bg = Cylinder::new(
         11.1,

@@ -44,12 +44,13 @@ impl Project {
         cylinders: &[Cylinder],
         gas_config: &GasConfig,
     ) -> GasReachField {
-        // Disabled tanks (#245) are excluded from EVERY gas computation — budget, gauges,
-        // stage drops. Filter once here so no downstream helper has to know about `enabled`;
-        // rig (vec) order is preserved, so "stage 1/2" still means the first/second enabled
-        // Stage cylinder.
-        let cylinders: Vec<Cylinder> = cylinders.iter().filter(|c| c.enabled).cloned().collect();
-        let cylinders = cylinders.as_slice();
+        // Disabled tanks (#245) are excluded from EVERY gas computation — budget, gauges, stage
+        // drops. Filter once here so no downstream helper has to know about `enabled`; rig (vec)
+        // order is preserved, so "stage 1/2" still means the first/second enabled Stage cylinder.
+        // The ORIGINAL `cylinders` (all rows, order intact) is kept only for the per-row
+        // `cylinder_usable_bars` display column, which zeroes disabled rows itself.
+        let active: Vec<Cylinder> = cylinders.iter().filter(|c| c.enabled).cloned().collect();
+        let active = active.as_slice();
 
         let stations = self.compute_station_coordinates();
         let n = stations.len();
@@ -110,7 +111,7 @@ impl Project {
         };
 
         let budget_litres = penetration_budget(
-            cylinders,
+            active,
             gas_config.default_reserve,
             &gas_config.reserve_profile,
             gas_config.conservative_tank_gas,
@@ -178,15 +179,36 @@ impl Project {
             .filter(|&i| reachable[i])
             .or(deepest);
 
+        // The strategy actually applied (a stage-short staged request falls back to All-thirds;
+        // Free and All-thirds never fall back). Drives the drops AND the gauges so they agree.
+        let conservative = gas_config.conservative_tank_gas;
+        let effective = effective_preset(active, gas_config.default_reserve);
+
+        // Per-stage drop gauges + cumulative IN-gas thresholds. Staged (Half-Minus) presets read
+        // them from the reserve rules; Free reads the diver's per-stage usable directly; All-thirds
+        // has no stage drops. `thresholds` places the drop markers along the route below.
+        let (stage_drop_bars, thresholds) = match effective {
+            ReservePreset::Free => free_stage_drops(active, conservative),
+            _ => {
+                let bars = stage_drop_pressures(
+                    active,
+                    effective,
+                    gas_config.reserve_profile.stage_reserve_bar,
+                    conservative,
+                );
+                let thresholds = stage_drop_thresholds(
+                    active,
+                    gas_config.default_reserve,
+                    &gas_config.reserve_profile,
+                    conservative,
+                );
+                (bars, thresholds)
+            }
+        };
+
         // Planned route to the target (for the highlight + final turn) — populated for ANY strategy
-        // when something is reachable. Per-stage drop points are placed on it only for a staged
-        // strategy (`thresholds` is empty for All-thirds / a fell-back staged rig → no drops).
-        let thresholds = stage_drop_thresholds(
-            cylinders,
-            gas_config.default_reserve,
-            &gas_config.reserve_profile,
-            gas_config.conservative_tank_gas,
-        );
+        // when something is reachable. Per-stage drop points are placed on it only where a threshold
+        // exists (empty for All-thirds / a fell-back staged rig / a Free rig with no stage usable).
         let (route_refs, stage_drop_refs, final_turn_ref) =
             staged_route(route_target, &pred, &gas_in, &station_refs, &thresholds);
         let route = self.route_legs(&route_refs);
@@ -218,19 +240,20 @@ impl Project {
         let (route_line_length_m, route_max_depth_m, route_avg_depth_m) =
             route_metrics(&route_pts, &route_swim);
 
-        // Readout gauges — computed here so the UI never re-derives the budget math. Both honour the
-        // conservative cap + normalized reserve + stage-count fallback (the effective strategy).
-        let effective = effective_preset(cylinders, gas_config.default_reserve);
-        let backgas_turn_bar = backgas_turn_pressure(
-            cylinders,
-            backgas_fraction(effective),
-            gas_config.conservative_tank_gas,
-        );
-        let stage_drop_bars = stage_drop_pressures(
+        // Back-gas turn gauge — computed here so the UI never re-derives the budget math; honours the
+        // conservative cap + effective strategy. Free averages the diver's per-tank turn directly.
+        let backgas_turn_bar = match effective {
+            ReservePreset::Free => free_backgas_turn(active),
+            _ => backgas_turn_pressure(active, backgas_fraction(effective), conservative),
+        };
+
+        // Per-row "usable gas" column (#245) — over the ORIGINAL cylinders (all rows), so disabled
+        // and non-budget rows read 0 and the frontend maps it 1:1 to the table by index.
+        let cylinder_usable_bars = cylinder_usable_bars(
             cylinders,
             effective,
             gas_config.reserve_profile.stage_reserve_bar,
-            gas_config.conservative_tank_gas,
+            conservative,
         );
 
         GasReachField {
@@ -245,6 +268,7 @@ impl Project {
             final_turn_ref,
             backgas_turn_bar,
             stage_drop_bars,
+            cylinder_usable_bars,
             route_line_length_m,
             route_max_depth_m,
             route_avg_depth_m,
@@ -371,10 +395,50 @@ fn route_metrics(pts: &[Coordinates], swim: &[bool]) -> (f64, Option<f64>, Optio
 /// (the §5.1 "advanced gate").
 fn required_stages(preset: ReservePreset) -> usize {
     match preset {
-        ReservePreset::AllThirds => 0,
+        // Free needs no stages — it budgets the diver's per-cylinder usable gas directly, so
+        // like All-thirds it never falls back (required_stages 0 ⇒ effective_preset keeps it).
+        ReservePreset::AllThirds | ReservePreset::Free => 0,
         ReservePreset::OneStage => 1,
         ReservePreset::TwoStage => 2,
     }
+}
+
+/// Conservative-capped fill (bar) — the pressure basis every strategy computes drops/usable from.
+/// The "call-it-an-80" cap (§5.3) treats an overfill as its rated capacity; precise mode uses the
+/// real fill.
+fn cyl_basis(c: &Cylinder, conservative: bool) -> f64 {
+    if conservative {
+        c.fill_bar.min(c.rated_pressure_bar)
+    } else {
+        c.fill_bar
+    }
+}
+
+/// Free-strategy IN gas for one cylinder (litres): the Z-derated span from full down to the diver's
+/// chosen turn pressure `fill − usable_gas_bar`. The usable bar is clamped to `[0, basis]` so a
+/// stray/over-large input can never credit more than the tank holds (the unsafe direction, §6).
+/// Mirrors `stage_in_gas`'s basis-scale deliverable arithmetic.
+fn free_in_gas(c: &Cylinder, conservative: bool) -> f64 {
+    let basis = cyl_basis(c, conservative);
+    let u = c.usable_gas_bar.clamp(0.0, basis);
+    let full = deliverable_gas(basis, c.water_volume_l, c.rated_pressure_bar, conservative);
+    let held = deliverable_gas(
+        basis - u,
+        c.water_volume_l,
+        c.rated_pressure_bar,
+        conservative,
+    );
+    (full - held).max(0.0)
+}
+
+/// Free-strategy penetration budget (litres): the sum of each enabled budget-role (back-gas /
+/// stage) cylinder's user-chosen IN gas. Dil-out / bailout / deco are excluded as elsewhere.
+fn free_budget(cylinders: &[Cylinder], conservative: bool) -> f64 {
+    cylinders
+        .iter()
+        .filter(|c| matches!(c.role, CylRole::BackGas | CylRole::Stage))
+        .map(|c| free_in_gas(c, conservative))
+        .sum()
 }
 
 /// The strategy actually applied: the requested preset when the rig carries enough `Stage`
@@ -396,7 +460,9 @@ fn effective_preset(cylinders: &[Cylinder], preset: ReservePreset) -> ReservePre
 /// sixths as the stages carry more of the penetration.
 fn backgas_fraction(preset: ReservePreset) -> f64 {
     match preset {
-        ReservePreset::AllThirds => 1.0 / 3.0,
+        // Free has no single back-gas fraction (the diver sets each tank's usable directly), so
+        // its turn gauge is computed separately and never calls this; ⅓ is a harmless placeholder.
+        ReservePreset::AllThirds | ReservePreset::Free => 1.0 / 3.0,
         ReservePreset::OneStage => 0.25,
         ReservePreset::TwoStage => 1.0 / 6.0,
     }
@@ -468,6 +534,107 @@ fn stage_drop_pressures(
         .collect()
 }
 
+/// Per-cylinder penetration allowance (bar), one entry per INPUT cylinder (original order) for the
+/// "usable gas" table column (#245). Disabled tanks and non-budget roles are `0.0`. Computed as
+/// `fill − turn/drop` so the column can never drift from the gauges/budget: a back-gas tank shows
+/// its strategy fraction of usable (`frac · deliverable ÷ water-vol`, matching `backgas_turn`), a
+/// counted stage its Half-Minus IN half (`(basis − reserve)/2`, matching its drop), an uncounted
+/// stage `0`. Under **Free** it echoes the diver's own clamped input. `enabled_stage_i` counts only
+/// enabled Stage cylinders, so "counted" tracks the same first-N-enabled-stages the budget uses.
+fn cylinder_usable_bars(
+    cylinders: &[Cylinder],
+    effective: ReservePreset,
+    reserve_bar: f64,
+    conservative: bool,
+) -> Vec<f64> {
+    let needed = required_stages(effective);
+    let mut enabled_stage_i = 0usize;
+    cylinders
+        .iter()
+        .map(|c| {
+            if !c.enabled {
+                return 0.0;
+            }
+            let deliverable_bar = deliverable_gas(
+                c.fill_bar,
+                c.water_volume_l,
+                c.rated_pressure_bar,
+                conservative,
+            ) / c.water_volume_l;
+            let basis = cyl_basis(c, conservative);
+            match effective {
+                ReservePreset::Free => match c.role {
+                    CylRole::BackGas | CylRole::Stage => c.usable_gas_bar.clamp(0.0, c.fill_bar),
+                    _ => 0.0,
+                },
+                // Thirds counts back gas AND stages at ⅓ (both are in `usable_oc_gas`).
+                ReservePreset::AllThirds => match c.role {
+                    CylRole::BackGas | CylRole::Stage => (1.0 / 3.0) * deliverable_bar,
+                    _ => 0.0,
+                },
+                ReservePreset::OneStage | ReservePreset::TwoStage => match c.role {
+                    CylRole::BackGas => backgas_fraction(effective) * deliverable_bar,
+                    CylRole::Stage => {
+                        let counted = enabled_stage_i < needed;
+                        enabled_stage_i += 1;
+                        if counted {
+                            (0.5 * (basis - reserve_bar)).max(0.0)
+                        } else {
+                            0.0
+                        }
+                    }
+                    _ => 0.0,
+                },
+            }
+        })
+        .collect()
+}
+
+/// Free-strategy back-gas turn gauge (bar): the volume-weighted mean of each enabled back-gas
+/// tank's chosen turn pressure `fill − usable_gas_bar` (clamped). `None` when the rig carries no
+/// back gas — matching [`backgas_turn_pressure`].
+fn free_backgas_turn(cylinders: &[Cylinder]) -> Option<f64> {
+    let back: Vec<&Cylinder> = cylinders
+        .iter()
+        .filter(|c| matches!(c.role, CylRole::BackGas))
+        .collect();
+    let sum_wv: f64 = back.iter().map(|c| c.water_volume_l).sum();
+    if sum_wv <= 0.0 {
+        return None;
+    }
+    let turn = back
+        .iter()
+        .map(|c| {
+            let u = c.usable_gas_bar.clamp(0.0, c.fill_bar);
+            (c.fill_bar - u) * c.water_volume_l
+        })
+        .sum::<f64>()
+        / sum_wv;
+    Some(turn.max(0.0))
+}
+
+/// Free-strategy per-stage drop gauges: `(drop_bars, cumulative_thresholds)`. Each enabled stage
+/// with a positive usable allowance is dropped where that gas is spent — drop pressure `fill −
+/// usable`, cumulative IN-gas threshold (litres). Stages with no allowance yield no drop.
+fn free_stage_drops(cylinders: &[Cylinder], conservative: bool) -> (Vec<f64>, Vec<f64>) {
+    let mut bars = Vec::new();
+    let mut thresholds = Vec::new();
+    let mut acc = 0.0;
+    for c in cylinders
+        .iter()
+        .filter(|c| matches!(c.role, CylRole::Stage))
+    {
+        let u = c.usable_gas_bar.clamp(0.0, c.fill_bar);
+        if u <= 0.0 {
+            continue;
+        }
+        acc += free_in_gas(c, conservative);
+        bars.push((c.fill_bar - u).max(0.0));
+        thresholds.push(acc);
+    }
+    (bars, thresholds)
+}
+
 /// One-way IN penetration budget (litres), PRD §5.1 — the gas a diver may consume on the way
 /// in before turning. The strategies:
 /// - **All-thirds**: ⅓ of every back-gas + stage cylinder's deliverable gas (= ⅓ of total).
@@ -520,6 +687,7 @@ fn penetration_budget(
 
     match preset {
         ReservePreset::AllThirds => all_thirds(),
+        ReservePreset::Free => free_budget(cylinders, conservative),
         ReservePreset::OneStage => back_gas(0.25) + stage_in(stages[0]),
         ReservePreset::TwoStage => {
             back_gas(1.0 / 6.0) + stages[..2].iter().map(|&c| stage_in(c)).sum::<f64>()

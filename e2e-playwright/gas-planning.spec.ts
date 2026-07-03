@@ -346,6 +346,74 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toBeVisible();
   });
 
+  test('a cylinder can be disabled — the row dims and it drops out of the plan (#245) @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
+    const firstRow = page.locator('[data-testid="gas-cylinder-row"]').first();
+    const toggle = firstRow.locator('[data-testid="gas-cylinder-enabled"]');
+    await expect(toggle).toBeChecked();
+    await toggle.uncheck();
+    // The row shows its disabled state, and the store carries the flag through to the engine.
+    await expect(firstRow).toHaveAttribute('data-enabled', 'false');
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (
+                window as unknown as {
+                  __E2E_TEST__: {
+                    gasPlanStore: { getState: () => { cylinders: Array<{ enabled: boolean }> } };
+                  };
+                }
+              ).__E2E_TEST__.gasPlanStore.getState().cylinders[0].enabled,
+          ),
+        { timeout: 2000 },
+      )
+      .toBe(false);
+  });
+
+  test('the Free strategy makes the usable-gas column editable per cylinder (#245) @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
+    // Under a reserve strategy the usable column is READ-ONLY (engine-computed).
+    await expect(page.locator('[data-testid="gas-cylinder-usable-readonly"]').first()).toBeVisible();
+    await expect(page.locator('[data-testid="gas-cylinder-usable"]')).toHaveCount(0);
+
+    // Free needs no stages, so it applies immediately (no advanced gate) and flips the column
+    // to an editable field per budget-role cylinder.
+    await page.locator('[data-testid="gas-reserve-free"]').click();
+    await expect(page.locator('[data-testid="gas-reserve-free"]')).toHaveClass(/ring-accent/);
+    const usable = page.locator('[data-testid="gas-cylinder-usable"]').first();
+    await expect(usable).toBeVisible();
+
+    // Typing a usable value stores it on the cylinder (metric mock ⇒ bar 1:1).
+    await usable.fill('80');
+    await usable.blur();
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (
+                window as unknown as {
+                  __E2E_TEST__: {
+                    gasPlanStore: {
+                      getState: () => { cylinders: Array<{ usable_gas_bar: number }> };
+                    };
+                  };
+                }
+              ).__E2E_TEST__.gasPlanStore.getState().cylinders[0].usable_gas_bar,
+          ),
+        { timeout: 2000 },
+      )
+      .toBe(80);
+  });
+
   test('Plan right-click offers gas route picks, not the survey menu; Set as endpoint stores it @smoke', async ({
     page,
   }) => {
