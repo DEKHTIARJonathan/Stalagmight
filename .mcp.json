@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "stalagmight-app": {
+      "command": "pnpm",
+      "args": ["exec", "tsx", "e2e/agent/mcp/server.ts"]
+    }
+  }
+}

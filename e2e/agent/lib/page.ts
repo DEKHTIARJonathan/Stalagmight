@@ -58,7 +58,7 @@ export async function evalInApp<T = unknown>(
     (fnBody: string, fnArgs: unknown[], done: (r: unknown) => void) => {
       try {
         // eslint-disable-next-line no-new-func
-        const fn = new Function(`return (async (...args) => { ${fnBody} })(...arguments)`)();
+        const fn = new Function(`return (async (...args) => { ${fnBody} });`)();
         Promise.resolve(fn.apply(null, fnArgs))
           .then((value: unknown) => done({ value }))
           .catch((err: unknown) => done({ __agentError: String(err) }));

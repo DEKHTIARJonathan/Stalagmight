@@ -93,6 +93,10 @@ export class AppSession {
     return this.recorderInstance?.dir ?? '';
   }
 
+  get hasRecorder(): boolean {
+    return this.recorderInstance !== null;
+  }
+
   /** The app's isolated XDG_DATA_HOME (crash markers/logs live under here). */
   get profileDataDir(): string | null {
     return this.profileDataHome;
