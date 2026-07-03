@@ -50,6 +50,7 @@ export function useSpeleoActions(): SpeleoActions {
   const setBusy = useSpeleoStore((s) => s.setBusy);
   const showToast = useUIStore((s) => s.showToast);
   const loadProject = useProjectStore((s) => s.loadProject);
+  const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
   const applyStartEditing = useSpeleoStore((s) => s.applyStartEditing);
   const applyUpdate = useSpeleoStore((s) => s.applyUpdate);
   const applyDone = useSpeleoStore((s) => s.applyDone);
@@ -106,9 +107,13 @@ export function useSpeleoActions(): SpeleoActions {
           showToast(t('speleodb.editBar.toasts.editing'), 'speleodb-editing');
           break;
         case 'fast_forwarded':
-          // Backend swapped the tree; reload so the view matches (loadProject
-          // re-seeds the link status → editing).
+          // Backend swapped the tree; reload so the view matches. loadProject
+          // short-circuits when the backend reopened the SAME path (its "already
+          // open" guard returns without re-reading), so pull the swapped geometry +
+          // link state in explicitly - otherwise the old tree stays on screen.
           await loadProject(result.local_path);
+          await refreshProjectState();
+          await refreshLinkStatus();
           break;
         case 'locked_by':
           showToast(
@@ -130,7 +135,7 @@ export function useSpeleoActions(): SpeleoActions {
       bumpPoll();
       setBusy(false);
     }
-  }, [applyStartEditing, loadProject, showToast, t, handleError, setBusy, bumpPoll]);
+  }, [applyStartEditing, loadProject, refreshProjectState, refreshLinkStatus, showToast, t, handleError, setBusy, bumpPoll]);
 
   const forceEdit = useCallback(async () => {
     setBusy(true);
@@ -159,7 +164,12 @@ export function useSpeleoActions(): SpeleoActions {
           showToast(t('speleodb.editBar.toasts.upToDate'), 'speleodb-up-to-date');
           break;
         case 'fast_forwarded':
+          // See startEditing: the FF reload swapped the tree in the backend, but
+          // loadProject short-circuits on the reopened path - pull geometry + link
+          // state in so Update actually resets the view to the new tip.
           await loadProject(result.local_path);
+          await refreshProjectState();
+          await refreshLinkStatus();
           break;
         case 'divergence_needed':
           break;
@@ -170,7 +180,7 @@ export function useSpeleoActions(): SpeleoActions {
       bumpPoll();
       setBusy(false);
     }
-  }, [applyUpdate, loadProject, showToast, t, handleError, setBusy, bumpPoll]);
+  }, [applyUpdate, loadProject, refreshProjectState, refreshLinkStatus, showToast, t, handleError, setBusy, bumpPoll]);
 
   const push = useCallback(
     async (message?: string | null): Promise<PushResult | null> => {
