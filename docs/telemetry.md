@@ -179,7 +179,7 @@ final state's accumulated time before sending.
 **Same-key no-op**: Calling `setDwellState` with the same key is a no-op —
 prevents timer resets from redundant calls.
 
-### SpeleoDB traffic — `speleodb-api.<kind>.*` (#210, F1)
+### SpeleoDB traffic - `speleodb-api.<kind>.*` (#210, F1)
 
 Every SpeleoDB HTTP call is instrumented at the Rust client's single choke
 points (`client::with_retry` and `client::send_json_request`) so we can size the
@@ -190,7 +190,7 @@ latency). Emitted from the backend via `TelemetryCollector::track`, so they land
 in the global `project_seq 0` bucket.
 
 **No PII, by construction.** The only dimensions are the endpoint *kind*, the
-outcome class, and a latency bucket — never a host, project id, email, token, or
+outcome class, and a latency bucket - never a host, project id, email, token, or
 file bytes. That is all sizing load / flagging abuse needs.
 
 `<kind>` is one of the `speleodb::metrics::Endpoint` labels: `login`,
@@ -200,11 +200,11 @@ file bytes. That is all sizing load / flagging abuse needs.
 `autocomplete`.
 
 ```
-speleodb-api.<kind>.ok                  — completed exchange (2xx/3xx, incl. 304)
-speleodb-api.<kind>.client-error        — 4xx
-speleodb-api.<kind>.server-error        — 5xx
-speleodb-api.<kind>.network-error       — transport failure (DNS/timeout/reset)
-speleodb-api.<kind>.latency.<bucket>    — one hit per attempt, in its duration bucket
+speleodb-api.<kind>.ok                  - completed exchange (2xx/3xx, incl. 304)
+speleodb-api.<kind>.client-error        - 4xx
+speleodb-api.<kind>.server-error        - 5xx
+speleodb-api.<kind>.network-error       - transport failure (DNS/timeout/reset)
+speleodb-api.<kind>.latency.<bucket>    - one hit per attempt, in its duration bucket
 ```
 
 **Count** is implicit: the four outcome counters sum to the call count for that

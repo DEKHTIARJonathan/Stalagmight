@@ -2,24 +2,24 @@
 //!
 //! Every SpeleoDB HTTP call funnels through [`client::with_retry`](super::client),
 //! the single choke point a new method cannot forget. This module turns each
-//! attempt through that choke point into three no-PII telemetry dimensions —
-//! **count**, **latency**, and **outcome** — so the backend can size the server
+//! attempt through that choke point into three no-PII telemetry dimensions -
+//! **count**, **latency**, and **outcome** - so the backend can size the server
 //! load Stalagmight causes and spot a runaway poll/retry loop *before* it reaches
 //! the server (§4.11 F1). The payload never carries a host, project id, email,
 //! token, or file bytes: only the endpoint *kind*, the outcome class, and a
 //! latency bucket.
 //!
 //! Wire shape (following the flat `{name: count}` payload and the `dwell.<state>`
-//! precedent — the wire cannot carry a computed percentile, so latency is a
+//! precedent - the wire cannot carry a computed percentile, so latency is a
 //! histogram of bucket counters the backend reconstructs p50/p95 from):
-//! - `speleodb-api.<kind>.<outcome>` — one increment per attempt; the four
+//! - `speleodb-api.<kind>.<outcome>` - one increment per attempt; the four
 //!   outcome counters sum to the call count for that endpoint.
-//! - `speleodb-api.<kind>.latency.<bucket>` — one increment per attempt, in the
+//! - `speleodb-api.<kind>.latency.<bucket>` - one increment per attempt, in the
 //!   bucket the attempt's wall-clock duration falls into.
 //!
 //! Recorded **per HTTP attempt**, not per logical call: an idempotent read that
 //! retries a transient 5xx hits the server more than once, and each hit is real
-//! load — so a retry storm shows up as inflated counts + latency, which is the
+//! load - so a retry storm shows up as inflated counts + latency, which is the
 //! whole point (abuse detection). Backoff sleeps between attempts are excluded
 //! (the timer wraps only the attempt itself).
 
@@ -36,7 +36,7 @@ use crate::telemetry::TelemetryCollector;
 ///
 /// [`Endpoint::ALL`] backs the `every_speleodb_endpoint_has_traffic_events`
 /// registry coverage test: add a variant here and CI fails until its ten event
-/// names are registered — the "a new method cannot forget" guarantee (F1).
+/// names are registered - the "a new method cannot forget" guarantee (F1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Endpoint {
     Login,
@@ -88,7 +88,7 @@ impl Endpoint {
     ];
 
     /// The stable wire label for this endpoint (the `<kind>` in the event name).
-    /// Kebab-case, no PII — purely the endpoint class.
+    /// Kebab-case, no PII - purely the endpoint class.
     pub(crate) fn kind(self) -> &'static str {
         match self {
             Endpoint::Login => "login",
@@ -138,11 +138,11 @@ impl Outcome {
         &["ok", "client-error", "server-error", "network-error"];
 
     /// Classify a completed HTTP response by status class. A transport failure
-    /// never reaches here — it is [`Outcome::NetworkError`] at the call site.
+    /// never reaches here - it is [`Outcome::NetworkError`] at the call site.
     pub(crate) fn from_status(status: u16) -> Self {
         match status {
             // 2xx success and 3xx (incl. 304 unchanged) are a completed exchange,
-            // not an error condition — count them as `ok`.
+            // not an error condition - count them as `ok`.
             200..=399 => Outcome::Ok,
             400..=499 => Outcome::ClientError,
             // 5xx and anything else non-transport is a server-side failure.

@@ -77,10 +77,10 @@ fn bearer(token: &str) -> String {
 /// retrying transient failures with backoff.
 ///
 /// `base` + `insecure_http` are threaded so [`super::tls::enforce`] runs once at
-/// the top — the single chokepoint a new method cannot forget (#187 step 5). The
+/// the top - the single chokepoint a new method cannot forget (#187 step 5). The
 /// same chokepoint carries the #210 traffic instrumentation: `endpoint` labels
 /// each attempt so [`super::metrics::record`] emits its count + latency + outcome
-/// (a new method cannot forget that either — it must pass an [`Endpoint`]).
+/// (a new method cannot forget that either - it must pass an [`Endpoint`]).
 ///
 /// The closure returns `(status, body)`. With `http_status_as_error(false)` every
 /// `Err` is transport-level (DNS, timeout, connection reset, mid-body read).
@@ -112,7 +112,7 @@ fn with_retry(
             std::thread::sleep(delay);
         }
         // #210: time each attempt (the backoff sleep above is excluded) and
-        // record it as one server hit — a retried 5xx really re-hits the server,
+        // record it as one server hit - a retried 5xx really re-hits the server,
         // so counting per attempt is what makes a retry storm legible.
         let started = std::time::Instant::now();
         let result = attempt();
@@ -839,7 +839,7 @@ fn send_json_request(
         .header("Content-Type", "application/json")
         .body(payload.to_string())
         .map_err(|e| SpeleoDbError::Parse(format!("build request: {e}")))?;
-    // #210: this write bypasses `with_retry`, so record its one attempt here — the
+    // #210: this write bypasses `with_retry`, so record its one attempt here - the
     // same count + latency + outcome the retry-loop chokepoint emits. Time and
     // classify the FULL attempt (dial + status + body read), exactly as
     // `with_retry`'s timed closure does, so latency covers the body read and a

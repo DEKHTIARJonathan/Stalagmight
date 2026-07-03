@@ -140,7 +140,7 @@ fn is_localhost(host: &str) -> bool {
 /// which endpoint or how many requests.
 static UNENCRYPTED_NOTICE_EMITTED: AtomicBool = AtomicBool::new(false);
 
-/// Return `true` exactly once — on the first call for a given `flag` — and
+/// Return `true` exactly once - on the first call for a given `flag` - and
 /// `false` on every later call. Factored out so the "once" semantics are
 /// unit-testable with a fresh local flag, without a global or a log capture.
 fn latch_once(flag: &AtomicBool) -> bool {
@@ -164,7 +164,7 @@ fn notice_unencrypted_once(endpoint: &str) {
 
 /// Enforce the http/https transport policy for `endpoint`. See the module docs.
 ///
-/// - `https://` → `Ok(())` immediately (no resolution, no notice — it is encrypted).
+/// - `https://` → `Ok(())` immediately (no resolution, no notice - it is encrypted).
 /// - `http://` → allowed only if every resolved address is private/loopback/
 ///   link-local (or `insecure_http` is set, which lifts the scheme block only);
 ///   the first allowed http connection of the session emits a one-time notice.
@@ -180,7 +180,7 @@ pub(crate) fn enforce(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoD
         Some("http") => {
             let allowed = if insecure_http {
                 // The persisted override lifts ONLY the public-http scheme block
-                // (D-B10) — TLS cert verification on https is untouched.
+                // (D-B10) - TLS cert verification on https is untouched.
                 true
             } else if uri.host().is_some_and(is_localhost) {
                 // localhost / *.localhost are loopback by convention (no DNS).
@@ -197,7 +197,7 @@ pub(crate) fn enforce(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoD
                         .all(|ip| is_private(classify_addr(ip)))
             };
             if allowed {
-                // Any allowed http is plaintext — notice once per session (E3).
+                // Any allowed http is plaintext - notice once per session (E3).
                 notice_unencrypted_once(endpoint);
                 Ok(())
             } else {
@@ -284,12 +284,12 @@ mod tests {
 
     #[test]
     fn enforce_http_private_allowed() {
-        // A literal private IP resolves to itself — no DNS needed. Acceptance
+        // A literal private IP resolves to itself - no DNS needed. Acceptance
         // (#187): `10.10.0.220` AND `[::1]` are both accepted under the policy.
         assert!(enforce("http://10.10.0.220:8000", false).is_ok());
         assert!(enforce("http://127.0.0.1:8000", false).is_ok());
         assert!(enforce("http://192.168.1.50", false).is_ok());
-        // IPv6 loopback literal, with and without a port — the bracketed
+        // IPv6 loopback literal, with and without a port - the bracketed
         // authority must resolve to `::1` and classify as Loopback.
         assert!(enforce("http://[::1]:8000", false).is_ok());
         assert!(enforce("http://[::1]", false).is_ok());

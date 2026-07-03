@@ -550,7 +550,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     // (`ok`/`client-error`/`server-error`/`network-error`, which sum to the call
     // count) plus a latency histogram (`latency.<bucket>`) the backend
     // reconstructs p50/p95 from. NO PII: only the endpoint kind, the outcome
-    // class, and a latency bucket ever leave the app — never a host, project id,
+    // class, and a latency bucket ever leave the app - never a host, project id,
     // email, token, or file bytes. Recorded per HTTP attempt at the
     // `client::with_retry` / `client::send_json_request` chokepoints (a retried
     // 5xx re-hits the server, so counting per attempt is what makes a retry storm
@@ -864,7 +864,7 @@ mod tests {
 
     /// Every SpeleoDB endpoint kind (#210, F1) must have its full traffic-event
     /// set registered: four outcome counters + one counter per latency bucket.
-    /// Mirrors `every_tile_provider_has_consumption_events` — add an `Endpoint`
+    /// Mirrors `every_tile_provider_has_consumption_events` - add an `Endpoint`
     /// variant and this fails until its ten names land in `EVENT_NAMES`. Also
     /// asserts the reverse: no orphan `speleodb-api.*` name the generator cannot
     /// produce (a typo, or a renamed/removed kind), so the vocabulary can't drift
@@ -881,7 +881,7 @@ mod tests {
                 let event = format!("speleodb-api.{kind}.{outcome}");
                 assert!(
                     registered.contains(event.as_str()),
-                    "endpoint '{kind}' missing outcome event '{event}' — add it to EVENT_NAMES"
+                    "endpoint '{kind}' missing outcome event '{event}' - add it to EVENT_NAMES"
                 );
                 expected.insert(event);
             }
@@ -889,7 +889,7 @@ mod tests {
                 let event = format!("speleodb-api.{kind}.latency.{bucket}");
                 assert!(
                     registered.contains(event.as_str()),
-                    "endpoint '{kind}' missing latency event '{event}' — add it to EVENT_NAMES"
+                    "endpoint '{kind}' missing latency event '{event}' - add it to EVENT_NAMES"
                 );
                 expected.insert(event);
             }
@@ -898,7 +898,7 @@ mod tests {
             if name.starts_with("speleodb-api.") {
                 assert!(
                     expected.contains(*name),
-                    "orphan speleodb-api event '{name}' — not produced by Endpoint::ALL \
+                    "orphan speleodb-api event '{name}' - not produced by Endpoint::ALL \
                      x Outcome::ALL x LATENCY_BUCKETS; remove it or fix the kind/label"
                 );
             }

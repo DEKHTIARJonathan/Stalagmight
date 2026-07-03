@@ -295,7 +295,7 @@ acceptance item maps to concrete tests across `speleodb::live_tests` (client) an
 
 Note on "regenerated GeoJSON": the render is a server-side `ProjectGeoJSON`
 served via the **OGC API** (`gis-ogc/.../collections/<sha>_(points\|lines)/items`),
-**not** a file committed to the dump tree — so it is asserted by the render-compat
+**not** a file committed to the dump tree - so it is asserted by the render-compat
 tests reading the render back, not by inspecting the ZIP. (This is the mechanism
 #219/#220 aim to retire.) The self-contained-dump test locates the `.stalx` by its
 suffix, never the hard-coded `misc/project.stalx` path, per the verified contract.
