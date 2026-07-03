@@ -4,6 +4,14 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { fileURLToPath } from 'url';
+import {
+  binaryPath,
+  cargoTargetDir,
+  macWrapperPath,
+  applyWorkerEnv,
+  clearRecentProjects,
+} from './e2e/lib/env';
+import { checkDisplayAvailable, startXvfb as startXvfbServer } from './e2e/lib/display';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,13 +32,7 @@ const defaultCoverageDir = path.join(__dirname, 'docs', 'coverage', 'raw', 'wdio
 // Detect platform and set appropriate binary path
 const isWindows = process.platform === 'win32';
 const isMacOS = process.platform === 'darwin';
-const binaryName = isWindows ? 'stalagmight.exe' : 'stalagmight';
-// Use CARGO_TARGET_DIR from tauri config (~/.cargo_build)
-const cargoTargetDir = process.env.CARGO_TARGET_DIR || path.join(os.homedir(), '.cargo_build');
-const binaryPath = path.join(cargoTargetDir, 'debug', binaryName);
-// macOS: use a wrapper that delays the [webdriver] port announcement by 500ms,
-// giving the Tauri window time to be created before tauri-wd creates a session.
-const macWrapperPath = path.join(__dirname, 'e2e', 'mac-app-wrapper.mjs');
+// binaryName / cargoTargetDir / binaryPath / macWrapperPath are imported from e2e/lib/env.
 const DEFAULT_MAX_INSTANCES = Math.max(1, Math.min(4, os.cpus().length));
 
 function readEnvInt(name: string, fallback: number): number {
@@ -91,99 +93,21 @@ const xvfbDisplays = [
   ':96',
 ].filter((value): value is string => Boolean(value));
 
-// Check if display is available (Linux only — macOS always has Quartz)
-function checkDisplayAvailable(): boolean {
-  if (isWindows) return true;
-  if (isMacOS) return true;
-
-  // Check for DISPLAY environment variable
-  if (process.env.DISPLAY) return true;
-
-  // Check for Wayland
-  if (process.env.WAYLAND_DISPLAY) return true;
-
-  return false;
-}
-
+// checkDisplayAvailable is imported from e2e/lib/display.
+// Thin wrapper over the shared startXvfb: preserve the wdio-side behavior of
+// tracking the module-global xvfbProcess and setting process.env.DISPLAY.
 async function startXvfb(): Promise<boolean> {
   if (isWindows) return true;
   if (process.env.DISPLAY || process.env.WAYLAND_DISPLAY) return true;
   if (xvfbProcess) return true;
-
-  try {
-    execSync('which Xvfb', { stdio: 'ignore' });
-  } catch {
-    return false;
-  }
-
-  for (const display of xvfbDisplays) {
-    const child = spawn('Xvfb', [display, '-screen', '0', xvfbScreen, '-ac', '-nolisten', 'tcp'], {
-      stdio: 'ignore',
-    });
-
-    const started = await new Promise<boolean>((resolve) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          resolve(child.exitCode === null);
-        }
-      }, 250);
-
-      child.once('error', () => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          resolve(false);
-        }
-      });
-
-      child.once('exit', () => {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timer);
-          resolve(false);
-        }
-      });
-    });
-
-    if (started) {
-      xvfbProcess = child;
-      process.env.DISPLAY = display;
-      return true;
-    }
-  }
-
-  return false;
+  const handle = await startXvfbServer(xvfbDisplays, xvfbScreen);
+  if (!handle) return false;
+  xvfbProcess = handle.proc;
+  process.env.DISPLAY = handle.display;
+  return true;
 }
 
-// Clear recent projects from config to ensure clean test state
-function clearRecentProjects(): void {
-  let configPath: string;
-  if (isWindows) {
-    const configRoot = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-    configPath = path.join(configRoot, 'stalagmight', 'config.toml');
-  } else if (isMacOS) {
-    // macOS `directories` crate uses ~/Library/Application Support/ (ignores XDG)
-    const home = process.env.HOME || os.homedir();
-    configPath = path.join(home, 'Library', 'Application Support', 'stalagmight', 'config.toml');
-  } else {
-    const configRoot = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-    configPath = path.join(configRoot, 'stalagmight', 'config.toml');
-  }
-
-  if (fs.existsSync(configPath)) {
-    try {
-      let content = fs.readFileSync(configPath, 'utf-8');
-      // Replace recent_projects with empty array
-      content = content.replace(/recent_projects\s*=\s*\[[\s\S]*?\]/, 'recent_projects = []');
-      fs.writeFileSync(configPath, content);
-      console.log('Cleared recent projects from config for clean test state');
-    } catch (error) {
-      console.warn('Failed to clear recent projects:', error);
-    }
-  }
-}
+// clearRecentProjects and applyWorkerEnv are imported from e2e/lib/env.
 
 function parseWorkerId(cid: string): number {
   const parts = cid.split('-').map((part) => Number.parseInt(part, 10));
@@ -209,50 +133,6 @@ function getTestLabel(test: { title?: string; parent?: { title?: string } | stri
     : test.parent?.title || 'suite';
   const title = test.title || 'test';
   return `${parentTitle}-${title}`;
-}
-
-function applyWorkerEnv(root: string): void {
-  if (isWindows) {
-    const appData = path.join(root, 'appdata');
-    const localAppData = path.join(root, 'localappdata');
-    const tmp = path.join(root, 'tmp');
-    fs.mkdirSync(appData, { recursive: true });
-    fs.mkdirSync(localAppData, { recursive: true });
-    fs.mkdirSync(tmp, { recursive: true });
-    process.env.APPDATA = appData;
-    process.env.LOCALAPPDATA = localAppData;
-    process.env.TEMP = tmp;
-    process.env.TMP = tmp;
-  } else if (isMacOS) {
-    // macOS `directories` crate ignores XDG — it reads ~/Library/Application Support/
-    // Override HOME so each worker gets isolated config/data paths
-    const home = path.join(root, 'home');
-    const libAppSupport = path.join(home, 'Library', 'Application Support');
-    const libCaches = path.join(home, 'Library', 'Caches');
-    const tmp = path.join(root, 'tmp');
-    fs.mkdirSync(libAppSupport, { recursive: true });
-    fs.mkdirSync(libCaches, { recursive: true });
-    fs.mkdirSync(tmp, { recursive: true });
-    process.env.HOME = home;
-    process.env.TMPDIR = tmp;
-    process.env.TEMP = tmp;
-    process.env.TMP = tmp;
-  } else {
-    const config = path.join(root, 'config');
-    const data = path.join(root, 'data');
-    const cache = path.join(root, 'cache');
-    const tmp = path.join(root, 'tmp');
-    fs.mkdirSync(config, { recursive: true });
-    fs.mkdirSync(data, { recursive: true });
-    fs.mkdirSync(cache, { recursive: true });
-    fs.mkdirSync(tmp, { recursive: true });
-    process.env.XDG_CONFIG_HOME = config;
-    process.env.XDG_DATA_HOME = data;
-    process.env.XDG_CACHE_HOME = cache;
-    process.env.TMPDIR = tmp;
-    process.env.TEMP = tmp;
-    process.env.TMP = tmp;
-  }
 }
 
 export const config: Options.Testrunner = {
