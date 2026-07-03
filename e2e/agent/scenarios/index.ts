@@ -4,8 +4,25 @@
  * The caller (the run_scenario MCP tool) does a full oracle sweep afterwards.
  */
 import { makeContext, type Scenario, type ScenarioMetrics, type ScenarioTarget } from './framework';
+import { seedLargeProject } from './seedLargeProject';
+import { undoRedoChurn } from './undoRedoChurn';
+import { dialogCycling } from './dialogCycling';
+import { toolSwitchSpam } from './toolSwitchSpam';
+import { mapStorm } from './mapStorm';
+import { saveUnderChurn } from './saveUnderChurn';
+import { importRepeatedly } from './importRepeatedly';
+import { rapidProjectCycle } from './rapidProjectCycle';
 
-const SCENARIOS: Scenario[] = [];
+const SCENARIOS: Scenario[] = [
+  seedLargeProject,
+  undoRedoChurn,
+  dialogCycling,
+  toolSwitchSpam,
+  mapStorm,
+  saveUnderChurn,
+  importRepeatedly,
+  rapidProjectCycle,
+];
 
 const REGISTRY: Record<string, Scenario> = Object.fromEntries(SCENARIOS.map((s) => [s.name, s]));
 
