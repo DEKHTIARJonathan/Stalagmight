@@ -274,3 +274,28 @@ two-account tier ran too). This also confirms the loop-UI DTO additions
 (`Project.exclude_geojson`, `ProjectMetadata.speleodb_project_id`) still parse real
 server responses. Run single-threaded because `live_release_all_locks_releases_held`
 clears account-wide locks and must not race lock-holding tests.
+
+## F2 live-suite acceptance coverage (#212)
+
+The env-gated live round-trip / render-compat / negative suite (F2) is the
+`#[ignore]` + `DEV_SPELEODB_*` model above (the issue's `SPELEODB_TEST_URL` name
+predates the adopted `DEV_SPELEODB_URL` convention; the CI/offline-green
+guarantee comes from `#[ignore]`, so those runs never touch the box). Each #212
+acceptance item maps to concrete tests across `speleodb::live_tests` (client) and
+`core::state::speleodb` orchestration live tests:
+
+| #212 criterion | Covering test(s) |
+|----------------|------------------|
+| Skips when the box is absent; CI/offline stay green | `#[ignore]` on every live test + `live_env()`/`orch_env()` early-return when `DEV_SPELEODB_*` is unset |
+| Round-trip tree shape + 2nd-checkout pull matches | `live_round_trip_seed_pull_open` (seed → pull a fresh checkout → open self-contained), `live_orch_start_editing_edit_done_advances_base` (full start→edit→done loop, BASE advances), `live_orch_pushed_dump_is_self_contained_without_sidecars` (server dump = one `.stalx` located by suffix + `ariane.tml` at root + no sqlite sidecar; re-opens carrying the pushed edit) |
+| Render-compat: `ProjectGeoJSON` + OGC feature counts; no-anchor → no render + D2 | `live_render_compat_georef_generates_geojson` (OGC `<sha>_points`=1 / `<sha>_lines`=2), `live_render_compat_no_anchor_records_geojson_state` (0/0 START → 404 render → D2 "may be stale") |
+| Negative: 403-no-mutex | `live_upload_without_mutex_returns_403` (push while `active_mutex` is unheld → `UserOwnsProjectMutex` → 403) |
+| Negative: 400-contended, locked-by via re-GET (not string parse) | `live_acquire_contended_returns_400`, `live_lock_holder_reflects_other_user`, `live_orch_start_editing_reports_locked_by_other_account` |
+| Negative: stale push → fence trips, no clobber | `live_orch_update_diverges_when_dirty_and_tip_moved` (dirty + moved tip → `DivergenceNeeded`, dirty bit preserved), `live_orch_start_editing_diverges_on_unreconcilable_base` (unreconcilable BASE → divergence prompt + lock released, no overwrite) |
+
+Note on "regenerated GeoJSON": the render is a server-side `ProjectGeoJSON`
+served via the **OGC API** (`gis-ogc/.../collections/<sha>_(points\|lines)/items`),
+**not** a file committed to the dump tree — so it is asserted by the render-compat
+tests reading the render back, not by inspecting the ZIP. (This is the mechanism
+#219/#220 aim to retire.) The self-contained-dump test locates the `.stalx` by its
+suffix, never the hard-coded `misc/project.stalx` path, per the verified contract.

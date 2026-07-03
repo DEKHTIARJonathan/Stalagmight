@@ -1034,6 +1034,63 @@ mod live_tests {
         }
     }
 
+    /// F2 (#212) negative: a `PUT upload/auto/` by a writer who does **not** hold
+    /// the project mutex is rejected with HTTP **403**. The upload view is gated by
+    /// `[SDB_WriteAccess, UserOwnsProjectMutex]` (verified in `~/src/cave/SpeleoDB`
+    /// `api/v2/views/file.py` + `permissions.py`): the superuser has write access,
+    /// so `SDB_WriteAccess` passes, but with no `active_mutex` held
+    /// `UserOwnsProjectMutex.has_object_permission` returns `False` → DRF 403. This
+    /// is the server half of the client's "hold the lock before you push" contract
+    /// (`acquire_lock` first); the production push path never uploads unlocked.
+    #[test]
+    #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
+    #[expect(
+        clippy::expect_used,
+        clippy::print_stderr,
+        reason = "ignored live integration test"
+    )]
+    fn live_upload_without_mutex_returns_403() {
+        let Some((url, email, password)) = live_env() else {
+            eprintln!(
+                "skipping live_upload_without_mutex: set DEV_SPELEODB_URL / _EMAIL / _PASSWORD"
+            );
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let name = format!("stalagmight-nomutex-{}", uuid::Uuid::new_v4());
+        let project_id = client::create_project(&url, &token, false, &name)
+            .expect("create project")
+            .id;
+        let _cleanup = ProjectCleanup {
+            url: &url,
+            token: &token,
+            id: project_id.clone(),
+        };
+
+        // Deliberately DO NOT acquire the mutex. Seed a real .stalx (+ .tml sidecar)
+        // so the ONLY thing stopping the push is the missing lock.
+        let fixture = std::path::Path::new(SEED_FIXTURE);
+        assert!(fixture.exists(), "seed fixture missing: {SEED_FIXTURE}");
+        let tml_dir = tempfile::tempdir().expect("tml tempdir");
+        let tml_sidecar = tml_dir.path().join("ariane.tml");
+        std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
+
+        let err = client::upload_auto(
+            &url,
+            &token,
+            false,
+            &project_id,
+            fixture,
+            &tml_sidecar,
+            "push without holding the mutex",
+        )
+        .expect_err("an upload without the mutex must be rejected");
+        assert!(
+            matches!(&err, SpeleoDbError::Status { status: 403, .. }),
+            "push without holding the mutex should be HTTP 403 (UserOwnsProjectMutex), got: {err:?}"
+        );
+    }
+
     // ── L15 / L16: the AUTO catch-all `.stalx` coupling + drift canary ──────
 
     /// L15: a `.stalx` pushed through `upload/auto` is stored **verbatim** by the
