@@ -4511,6 +4511,7 @@ dependencies = [
  "keyring",
  "libc",
  "nalgebra",
+ "percent-encoding",
  "proj4rs",
  "quick-xml 0.37.5",
  "resvg",

@@ -24,7 +24,7 @@ use crate::speleodb::{
     DoneResult, Permission, PushResult, SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto,
     SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
     SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
-    SpeleoSessionStatus, SpeleoTeamOption, StartEditingResult, UpdateResult,
+    SpeleoSessionStatus, SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -310,6 +310,16 @@ pub async fn speleodb_remove_team(
 #[tauri::command]
 pub async fn speleodb_list_teams(app: AppHandle) -> Result<Vec<SpeleoTeamOption>, SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_list_teams).await
+}
+
+/// Autocomplete users by email/name substring for the add-collaborator typeahead.
+/// Returns [] below the server's 3-char minimum.
+#[tauri::command]
+pub async fn speleodb_search_users(
+    app: AppHandle,
+    query: String,
+) -> Result<Vec<SpeleoUserSuggestion>, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_search_users(query)).await
 }
 
 /// Release the lock on the linked project (own lock, or an ADMIN force-release of

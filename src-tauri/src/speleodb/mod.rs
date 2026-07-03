@@ -31,8 +31,8 @@ pub use models::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoCollaborator, SpeleoCollaborators,
     SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
     SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
-    SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, StartEditingResult, UpdateResult,
-    Visibility,
+    SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
+    StartEditingResult, UpdateResult, Visibility,
 };
 
 /// Errors from the SpeleoDB client and dump handling.

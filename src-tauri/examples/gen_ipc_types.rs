@@ -68,7 +68,7 @@ use stalagmight_lib::speleodb::{
     SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
     SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
     SpeleoPublishResult, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption,
-    StartEditingResult, UpdateResult, Visibility,
+    SpeleoUserSuggestion, StartEditingResult, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -319,6 +319,7 @@ fn main() {
     export::<SpeleoTeamGrant>(&out_dir);
     export::<SpeleoCollaborators>(&out_dir);
     export::<SpeleoTeamOption>(&out_dir);
+    export::<SpeleoUserSuggestion>(&out_dir);
 
     let export_list = [
         "CommandResult",
@@ -512,6 +513,7 @@ fn main() {
         "SpeleoTeamGrant",
         "SpeleoCollaborators",
         "SpeleoTeamOption",
+        "SpeleoUserSuggestion",
     ];
 
     let mut generated =

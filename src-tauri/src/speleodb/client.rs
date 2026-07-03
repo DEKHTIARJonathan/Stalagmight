@@ -21,11 +21,12 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
 
 use super::models::{
     Commit, Permission, Project, RevisionHistory, Team, TeamPermission, TeamPermissionList,
-    UserPermission, UserPermissionList,
+    UserAutocomplete, UserPermission, UserPermissionList,
 };
 use super::SpeleoDbError;
 
@@ -1014,6 +1015,34 @@ pub(crate) fn list_teams(
     serde_json::from_slice(&body).map_err(|e| SpeleoDbError::Parse(format!("teams: {e}")))
 }
 
+/// `GET /api/v2/user/autocomplete/?query=<substr>` - up to 10 users whose email or
+/// name contains `query` (the server requires >= 3 chars; the caller guards that).
+/// Backs the add-collaborator email typeahead (#215). A GET, so retry-safe. The
+/// query is percent-encoded so spaces / `@` / `&` in a partial name or email cannot
+/// break the URL.
+pub(crate) fn list_user_autocomplete(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    query: &str,
+) -> Result<Vec<UserAutocomplete>, SpeleoDbError> {
+    let encoded = utf8_percent_encode(query, NON_ALPHANUMERIC);
+    let url = api_url(base, &format!("user/autocomplete/?query={encoded}"));
+    let auth = bearer(token);
+    let (status, body) = with_retry(base, insecure_http, true, || {
+        let resp = agent()
+            .get(&url)
+            .header("Authorization", auth.as_str())
+            .call()?;
+        read_status_body(resp)
+    })?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    serde_json::from_slice(&body)
+        .map_err(|e| SpeleoDbError::Parse(format!("user autocomplete: {e}")))
+}
+
 /// Test-only convenience: grant `email` the given `level` string on the project.
 /// Drives the two-account live tests' collaborator setup; the production path is
 /// [`add_user_permission`] (typed `Permission`). The dev box is a private address,
@@ -1047,8 +1076,8 @@ mod tests {
 
     use super::{
         add_team_permission, add_user_permission, api_url, bearer, build_upload_parts,
-        clean_transport, delete_project, list_teams, list_user_permissions, mime_for,
-        parse_error_message, parse_upload_auto_response, remove_team_permission,
+        clean_transport, delete_project, list_teams, list_user_autocomplete, list_user_permissions,
+        mime_for, parse_error_message, parse_upload_auto_response, remove_team_permission,
         remove_user_permission, set_user_permission, with_retry, RevisionHistory, UserInfo,
     };
     use crate::speleodb::{Permission, SpeleoDbError};
@@ -1778,6 +1807,21 @@ mod tests {
         assert!(
             wire.starts_with("GET /api/v2/teams/ "),
             "the teams picker/name-map GET: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_user_autocomplete_get_percent_encodes_query() {
+        // A partial name with a space must be percent-encoded into the query string
+        // (a raw space would produce an invalid request line / truncated query).
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        let _ = list_user_autocomplete(&base, "tok", false, "jo di");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with("GET /api/v2/user/autocomplete/?query=jo%20di "),
+            "GET the autocomplete endpoint with a percent-encoded query: {wire}"
         );
     }
 

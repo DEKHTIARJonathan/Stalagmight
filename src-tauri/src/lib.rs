@@ -1292,6 +1292,7 @@ pub fn run() {
             commands::speleodb::speleodb_set_team,
             commands::speleodb::speleodb_remove_team,
             commands::speleodb::speleodb_list_teams,
+            commands::speleodb::speleodb_search_users,
             commands::speleodb::speleodb_release_current_lock,
             commands::speleodb::speleodb_delete_project,
             // Section commands

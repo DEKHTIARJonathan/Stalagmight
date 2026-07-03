@@ -120,6 +120,39 @@ describe('SpeleoProjectAdmin', () => {
     });
   });
 
+  it('autocompletes the collaborator email and fills it on pick', async () => {
+    seed('ADMIN');
+    invokeIpcMock.mockImplementation((cmd: string, args?: { query?: string }) => {
+      if (cmd === 'speleodb_list_collaborators') return Promise.resolve(ROSTER);
+      if (cmd === 'speleodb_list_teams') return Promise.resolve([]);
+      if (cmd === 'speleodb_search_users') {
+        // The debounce means only the settled 3-char query reaches the server.
+        expect(args?.query).toBe('ali');
+        return Promise.resolve([{ email: 'alice@x.com', label: 'Alice Diver <alice@x.com>' }]);
+      }
+      return Promise.resolve(ROSTER);
+    });
+    render(<SpeleoProjectAdmin />);
+    const input = await screen.findByTestId('speleodb-collaborators-add-email');
+    await userEvent.type(input, 'ali');
+    const suggestion = await screen.findByTestId('speleodb-collaborators-suggestion-alice@x.com');
+    expect(suggestion).toHaveTextContent('Alice Diver <alice@x.com>');
+    await userEvent.click(suggestion);
+    expect(input).toHaveValue('alice@x.com');
+    // Picking closes the dropdown (and does not re-open it for the filled value).
+    expect(screen.queryByTestId('speleodb-collaborators-suggestions')).toBeNull();
+  });
+
+  it('does not query autocomplete below the 3-char minimum', async () => {
+    seed('ADMIN');
+    render(<SpeleoProjectAdmin />);
+    const input = await screen.findByTestId('speleodb-collaborators-add-email');
+    await userEvent.type(input, 'al');
+    // Give the debounce window time to (not) fire.
+    await new Promise((r) => window.setTimeout(r, 350));
+    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_search_users')).toBe(false);
+  });
+
   it('changes and removes another user with the right payloads', async () => {
     seed('ADMIN');
     render(<SpeleoProjectAdmin />);

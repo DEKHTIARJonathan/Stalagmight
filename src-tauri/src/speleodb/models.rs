@@ -178,6 +178,15 @@ pub(crate) struct Team {
     pub(crate) name: String,
 }
 
+/// One autocomplete suggestion from the bare-array `GET /api/v2/user/autocomplete/`
+/// (#215): a user matched by email/name substring. The server pre-formats `label`
+/// as "Name <email>"; `name` is ignored (folded into `label`).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct UserAutocomplete {
+    pub(crate) email: String,
+    pub(crate) label: String,
+}
+
 /// IPC-facing summary of a project for the spike dialog's list. Derived from
 /// [`Project`]; carries only display fields — never a token or raw API detail.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -278,6 +287,14 @@ pub struct SpeleoTeamGrant {
 pub struct SpeleoTeamOption {
     pub id: String,
     pub name: String,
+}
+
+/// [#215] One suggestion for the add-collaborator email typeahead: the exact
+/// `email` to grant, plus the server's "Name <email>" `label` to display.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoUserSuggestion {
+    pub email: String,
+    pub label: String,
 }
 
 /// [#215] The full collaborator roster for the linked project (individual users +

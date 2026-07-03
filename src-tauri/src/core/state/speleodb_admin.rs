@@ -16,7 +16,7 @@ use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::{
     Permission, SpeleoCollaborator, SpeleoCollaborators, SpeleoDbError, SpeleoErrorDto,
-    SpeleoTeamGrant, SpeleoTeamOption,
+    SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
 };
 
 /// Map a local (non-endpoint) [`SpeleoDbError`] - a lock-resolution / not-linked
@@ -238,6 +238,39 @@ impl AppState {
         )
         .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
         self.speleodb_list_collaborators()
+    }
+
+    /// [#215] Autocomplete users by email/name substring for the add-collaborator
+    /// email typeahead. Returns an empty list for a query below the server's 3-char
+    /// minimum, so the FE can call on each keystroke without provoking a 400. Needs
+    /// only the session token - not an open project - but it is only reachable from
+    /// the admin tab, so it resolves the same endpoint/token as the other methods.
+    pub(crate) fn speleodb_search_users(
+        &self,
+        query: String,
+    ) -> Result<Vec<SpeleoUserSuggestion>, SpeleoErrorDto> {
+        let q = query.trim();
+        if q.chars().count() < 3 {
+            return Ok(Vec::new());
+        }
+        let (endpoint, token) = self.speleodb_active_token().map_err(admin_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+        // `/user/autocomplete/` is authenticated-only with no per-object permission,
+        // so (like the whoami chokepoint) a 403 there is the dead-token signal -
+        // `Endpoint::User` maps it to ReLogin, which is the correct action.
+        let users = self
+            .speleodb_handle_auth(
+                Endpoint::User,
+                client::list_user_autocomplete(&endpoint, &token, insecure_http, q),
+            )
+            .map_err(|e| dto_for_error(Endpoint::User, &e))?;
+        Ok(users
+            .into_iter()
+            .map(|u| SpeleoUserSuggestion {
+                email: u.email,
+                label: u.label,
+            })
+            .collect())
     }
 
     /// [#215] The teams the signed-in user belongs to, for the add-team picker.

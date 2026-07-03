@@ -3727,6 +3727,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { users: [], teams: [] };
           case 'speleodb_list_teams':
             return [];
+          case 'speleodb_search_users':
+            return [];
           case 'speleodb_get_project_metadata':
           case 'speleodb_patch_project':
             // Deterministic project metadata for the #206 settings tab. patch echoes

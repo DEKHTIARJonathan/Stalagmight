@@ -189,3 +189,4 @@ export * from './ipc/SpeleoCollaborator';
 export * from './ipc/SpeleoTeamGrant';
 export * from './ipc/SpeleoCollaborators';
 export * from './ipc/SpeleoTeamOption';
+export * from './ipc/SpeleoUserSuggestion';
