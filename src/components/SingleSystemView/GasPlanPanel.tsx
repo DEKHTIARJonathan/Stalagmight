@@ -53,11 +53,13 @@ export function GasPlanPanel() {
     cylinders,
     gasConfig,
     reachField,
+    stageDropOverrides,
     pushyAck,
     setOrigin,
     setDiver,
     setGasConfig,
     setPushyAck,
+    setStageDropOverride,
   } = useGasPlanStore(
     useShallow((s) => ({
       origin: s.origin,
@@ -65,11 +67,13 @@ export function GasPlanPanel() {
       cylinders: s.cylinders,
       gasConfig: s.gasConfig,
       reachField: s.reachField,
+      stageDropOverrides: s.stageDropOverrides,
       pushyAck: s.pushyAck,
       setOrigin: s.setOrigin,
       setDiver: s.setDiver,
       setGasConfig: s.setGasConfig,
       setPushyAck: s.setPushyAck,
+      setStageDropOverride: s.setStageDropOverride,
     }))
   );
   // A staged strategy the user selected but hasn't yet acknowledged (inline advanced gate).
@@ -122,9 +126,15 @@ export function GasPlanPanel() {
     ? reachField.stage_drop_bars.map((bar, i) => ({
         bar,
         distance: reachField.stage_drop_distances_m[i] ?? null,
+        // Dragged deeper than the safe drop (#246): breathing into reserve — flagged red. The
+        // engine is the single source of truth for this, same as the pressure.
+        overReserve: reachField.stage_drop_over_reserve[i] === true,
+        // Whether the diver moved this drop (so we offer a reset back to the strategy spot).
+        overridden: stageDropOverrides[i] != null,
       }))
     : [];
   const hasStageDrops = stageDrops.length > 0;
+  const anyOverReserve = stageDrops.some((d) => d.overReserve);
 
   // Route metrics (backend single source of truth), shown once a real route is known. Gate on the
   // route having at least one LEG — not just final_turn_ref — so a degenerate single-station route
@@ -387,10 +397,22 @@ export function GasPlanPanel() {
                 <Fragment key={i}>
                   <dt className="opacity-70">
                     {t('gasPanel.readout.stageDropPressure', { n: i + 1 })}
+                    {drop.overridden && (
+                      <button
+                        type="button"
+                        data-testid={`gas-readout-stage${i + 1}-reset`}
+                        className="ml-1 text-[10px] underline opacity-70 hover:opacity-100"
+                        onClick={() => setStageDropOverride(i, null)}
+                        title={t('gasPanel.readout.resetDropHint')}
+                      >
+                        {t('gasPanel.readout.resetDrop')}
+                      </button>
+                    )}
                   </dt>
                   <dd
                     data-testid={`gas-readout-stage${i + 1}-drop`}
-                    className="text-right font-mono"
+                    data-over-reserve={String(drop.overReserve)}
+                    className={`text-right font-mono ${drop.overReserve ? 'text-error' : ''}`}
                   >
                     {formatPressure(drop.bar, units)}
                     {drop.distance != null && (
@@ -402,6 +424,14 @@ export function GasPlanPanel() {
                   </dd>
                 </Fragment>
               ))}
+              {anyOverReserve && (
+                <div
+                  data-testid="gas-readout-over-reserve-warning"
+                  className="col-span-2 text-error"
+                >
+                  {t('gasPanel.readout.overReserveWarning')}
+                </div>
+              )}
               <dt className="opacity-70">{t('gasPanel.readout.budget')}</dt>
               <dd data-testid="gas-readout-budget" className="text-right font-mono">
                 {formatVolume(reachField.budget_litres, units)}

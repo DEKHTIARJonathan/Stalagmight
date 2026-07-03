@@ -15,7 +15,8 @@ const fakeField = (): GasReachField => ({
   final_turn_ref: null,
   backgas_turn_bar: null,
   stage_drop_bars: [],
-    stage_drop_distances_m: [],
+  stage_drop_over_reserve: [],
+  stage_drop_distances_m: [],
   cylinder_usable_bars: [],
   route_line_length_m: 0,
   route_max_depth_m: null,
@@ -79,5 +80,44 @@ describe('gasPlanStore', () => {
     expect(useGasPlanStore.getState().pushyAck).toBe(true);
     useGasPlanStore.getState().reset();
     expect(useGasPlanStore.getState().pushyAck).toBe(false);
+  });
+
+  it('setStageDropOverride pins a drop by index and pads sparse slots with null (#246)', () => {
+    const ref = { section_id: 1, station_index: 3 };
+    useGasPlanStore.getState().setStageDropOverride(1, ref);
+    // Index 0 was never set, so it pads with null; index 1 holds the pinned station.
+    expect(useGasPlanStore.getState().stageDropOverrides).toEqual([null, ref]);
+    // A negative index is a no-op (never grows the array).
+    useGasPlanStore.getState().setStageDropOverride(-1, ref);
+    expect(useGasPlanStore.getState().stageDropOverrides).toEqual([null, ref]);
+    // Passing null resets that drop back to the strategy default.
+    useGasPlanStore.getState().setStageDropOverride(1, null);
+    expect(useGasPlanStore.getState().stageDropOverrides).toEqual([null, null]);
+  });
+
+  it('setStageDropOverride does NOT null reachField (markers stay put during refetch) (#246)', () => {
+    useGasPlanStore.getState().setReachField(fakeField());
+    useGasPlanStore.getState().setStageDropOverride(0, { section_id: 1, station_index: 2 });
+    expect(useGasPlanStore.getState().reachField).not.toBeNull();
+  });
+
+  it.each([
+    ['setOrigin', () => useGasPlanStore.getState().setOrigin({ section_id: 1, station_index: 0 })],
+    ['setEndpoint', () => useGasPlanStore.getState().setEndpoint({ section_id: 1, station_index: 5 })],
+    ['setDiver', () => useGasPlanStore.getState().setDiver({ rmv_l_per_min: 18, label: null })],
+    ['setCylinders', () => useGasPlanStore.getState().setCylinders([])],
+    ['setGasConfig', () => useGasPlanStore.getState().setGasConfig({ ...defaultConfig.gas })],
+  ])('%s clears stageDropOverrides (a reshuffled rig invalidates pinned drops) (#246)', (_n, mutate) => {
+    useGasPlanStore.getState().setStageDropOverride(0, { section_id: 1, station_index: 2 });
+    expect(useGasPlanStore.getState().stageDropOverrides).toHaveLength(1);
+    mutate();
+    expect(useGasPlanStore.getState().stageDropOverrides).toEqual([]);
+  });
+
+  it('reset clears stageDropOverrides (no leak across plan sessions) (#246)', () => {
+    useGasPlanStore.getState().setStageDropOverride(0, { section_id: 1, station_index: 2 });
+    expect(useGasPlanStore.getState().stageDropOverrides).toHaveLength(1);
+    useGasPlanStore.getState().reset();
+    expect(useGasPlanStore.getState().stageDropOverrides).toEqual([]);
   });
 });

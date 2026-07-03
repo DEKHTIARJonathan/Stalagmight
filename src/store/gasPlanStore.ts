@@ -39,6 +39,11 @@ interface GasPlanState {
   gasConfig: GasConfig;
   /** Latest reachability field from the backend (null until fetched / after any input change). */
   reachField: GasReachField | null;
+  /** Per-stage drop overrides (#246), aligned by drop index with the field's `stage_drop_refs`:
+   *  the route station the diver dragged each ▼ marker to (`null` = strategy default). Cleared
+   *  whenever the rig / config / origin / endpoint changes (which reshuffles the drops), exactly
+   *  like `reachField`. Passed to `compute_gas_reach_field` so the backend recomputes the plan. */
+  stageDropOverrides: (StationRef | null)[];
   /** Session-only: the user accepted the advanced (staged) reserve presets. Cleared by
    *  `reset()` — on Plan sub-mode exit AND on every project load (`applyDisplaySettings`) — so
    *  a fresh project (or a re-entry) re-prompts. Never persisted. */
@@ -51,13 +56,24 @@ interface GasPlanState {
   setGasConfig: (gasConfig: GasConfig) => void;
   setReachField: (reachField: GasReachField | null) => void;
   setPushyAck: (ack: boolean) => void;
+  /** Pin (or, with `null`, reset) stage `index`'s drop to a route station. Does NOT null
+   *  `reachField`, so the existing drop markers stay put during the ms-fast refetch instead of
+   *  flickering; the fetch effect depends on `stageDropOverrides` and swaps the field in on arrival. */
+  setStageDropOverride: (index: number, ref: StationRef | null) => void;
   /** Restore defaults (called from uiStore.exitGasPlan on sub-mode exit). */
   reset: () => void;
 }
 
 const initialState = (): Pick<
   GasPlanState,
-  'origin' | 'endpoint' | 'diver' | 'cylinders' | 'gasConfig' | 'reachField' | 'pushyAck'
+  | 'origin'
+  | 'endpoint'
+  | 'diver'
+  | 'cylinders'
+  | 'gasConfig'
+  | 'reachField'
+  | 'stageDropOverrides'
+  | 'pushyAck'
 > => ({
   origin: null,
   endpoint: null,
@@ -67,6 +83,7 @@ const initialState = (): Pick<
   // mutates the shared compiled default through an aliased object reference.
   gasConfig: structuredClone(defaultConfig.gas),
   reachField: null,
+  stageDropOverrides: [],
   pushyAck: false,
 });
 
@@ -76,13 +93,23 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   // Each input setter clears the cached field so stale reachable colors aren't
   // shown under the new inputs' legend while the refetch is in flight (mirrors
   // setDistanceGradientOrigin).
-  setOrigin: (origin) => set({ origin, reachField: null }),
-  setEndpoint: (endpoint) => set({ endpoint, reachField: null }),
-  setDiver: (diver) => set({ diver, reachField: null }),
-  setCylinders: (cylinders) => set({ cylinders, reachField: null }),
-  setGasConfig: (gasConfig) => set({ gasConfig, reachField: null }),
+  // These inputs reshuffle the drops (a different rig / route / budget), so any pinned drop
+  // overrides no longer line up — clear them alongside the stale field.
+  setOrigin: (origin) => set({ origin, reachField: null, stageDropOverrides: [] }),
+  setEndpoint: (endpoint) => set({ endpoint, reachField: null, stageDropOverrides: [] }),
+  setDiver: (diver) => set({ diver, reachField: null, stageDropOverrides: [] }),
+  setCylinders: (cylinders) => set({ cylinders, reachField: null, stageDropOverrides: [] }),
+  setGasConfig: (gasConfig) => set({ gasConfig, reachField: null, stageDropOverrides: [] }),
   setReachField: (reachField) => set({ reachField }),
   setPushyAck: (pushyAck) => set({ pushyAck }),
+  setStageDropOverride: (index, ref) =>
+    set((s) => {
+      if (index < 0) return {};
+      const next = s.stageDropOverrides.slice();
+      while (next.length <= index) next.push(null);
+      next[index] = ref;
+      return { stageDropOverrides: next };
+    }),
 
   reset: () => set(initialState()),
 }));
