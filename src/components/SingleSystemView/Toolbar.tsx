@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useUIStore, type ToolType } from '../../store/uiStore';
+import { useUIStore, isMapReadOnly, type ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button, IconButton } from '../common/Button';
 import {
@@ -169,9 +169,9 @@ export default function Toolbar({
   // the mutating tools + Import exactly like closure-adjusted mode (T2a). The
   // backend edit gate is the real enforcement; this is the visual parity.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  const geometryReadOnly =
-    useUIStore((s) => s.geometryMode === 'closureAdjusted' || s.appMode !== 'survey') ||
-    speleoReadOnly;
+  // isMapReadOnly covers the closure-adjusted view AND Plan/Export (#243); the
+  // SpeleoDB lock read-only composes on top.
+  const geometryReadOnly = useUIStore(isMapReadOnly) || speleoReadOnly;
   // Survey shows the full toolbar; Plan/Export show only the non-mutating tools.
   const toolbarItems = appMode === 'survey' ? TOOLBAR_ITEMS : READ_ONLY_TOOLBAR_ITEMS;
 
@@ -194,41 +194,43 @@ export default function Toolbar({
         {/* SpeleoDB status button (#204/T2c) - right of the hamburger; hidden for
             local projects. One click drives the single-writer hand-off. */}
         <SpeleoStatusButton />
-        {/* In fullscreen table mode the left slot shows the "Back to Map" button
-            (the relabeled shrink button) instead of Import; both Save/Export/Close
-            live in the hamburger now. Import and Undo/Redo are survey-only (#243):
-            Plan/Export are read-only workspaces, so the mutating file/history
-            controls are HIDDEN there (not merely disabled) — undoing under the
-            read-only map would mutate the survey out from under it. */}
-        {dataTableFullScreen ? (
-          <Button
-            icon={
-              <span style={{ color: 'var(--o)' } as CSSProperties}>
-                <ShrinkIcon size={16} />
-              </span>
-            }
-            onClick={() => { setSource('toolbar'); exitDataTableFullScreen(); }}
-            size="sm"
-            className="sh-tool ml-1"
-            style={{ '--o': toolAccentVar('pan') } as CSSProperties}
-            data-testid="toolbar-map-view-button"
-          >
-            {t('dataTable.fullScreen.exit')}
-          </Button>
-        ) : appMode === 'survey' ? (
-          <Button
-            onClick={() => onImport()}
-            disabled={placementModeActive || geometryReadOnly}
-            size="sm"
-            className="ml-1"
-            icon={showToolbarIcons ? <span style={{ color: 'var(--sh-comment)' }}><DownloadIcon size={18} /></span> : undefined}
-            data-testid="toolbar-import-button"
-          >
-            {t('common.actions.import')}
-          </Button>
-        ) : null}
+        {/* Import and Undo/Redo are survey-only (#243): Plan/Export are read-only
+            workspaces, so the mutating file/history controls are HIDDEN there (not
+            merely disabled) - undoing under the read-only map would mutate the survey
+            out from under it. One `appMode === 'survey'` wrapper so the file and
+            history halves can't drift apart. Fullscreen-table mode is a survey
+            sub-state (entering Plan/Export force-exits it via setAppMode ->
+            exitDataTableFullScreen, and only a survey-mounted control sets it), so the
+            "Back to Map" button lives inside this same gate, swapped in for Import. */}
         {appMode === 'survey' && (
           <>
+            {dataTableFullScreen ? (
+              <Button
+                icon={
+                  <span style={{ color: 'var(--o)' } as CSSProperties}>
+                    <ShrinkIcon size={16} />
+                  </span>
+                }
+                onClick={() => { setSource('toolbar'); exitDataTableFullScreen(); }}
+                size="sm"
+                className="sh-tool ml-1"
+                style={{ '--o': toolAccentVar('pan') } as CSSProperties}
+                data-testid="toolbar-map-view-button"
+              >
+                {t('dataTable.fullScreen.exit')}
+              </Button>
+            ) : (
+              <Button
+                onClick={() => onImport()}
+                disabled={placementModeActive || geometryReadOnly}
+                size="sm"
+                className="ml-1"
+                icon={showToolbarIcons ? <span style={{ color: 'var(--sh-comment)' }}><DownloadIcon size={18} /></span> : undefined}
+                data-testid="toolbar-import-button"
+              >
+                {t('common.actions.import')}
+              </Button>
+            )}
             <div className="w-px h-6 bg-border mx-2" />
             <UndoHistoryDropdown
               mode="undo"

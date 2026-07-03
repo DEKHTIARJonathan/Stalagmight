@@ -13,7 +13,7 @@
  * (outside React), like the rest of the open/import routing.
  */
 import { useProjectStore } from '../store/projectStore';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, isMapReadOnly } from '../store/uiStore';
 import { pickAndRoute } from './openOrImport';
 import { newProjectGuarded } from './projectActions';
 import { quitApp } from './quit';
@@ -40,10 +40,10 @@ export function runFileShortcutAction(action: FileShortcutAction): void {
       break;
     case 'import_dmp': {
       const hasProject = !!useProjectStore.getState().project;
-      // The closure-adjusted view (#70) is read-only — imports add sections. Skip
-      // even opening the picker (routeOpenedFile also guards). Only meaningful
-      // with a project open; GlobalView has none.
-      if (hasProject && useUIStore.getState().geometryMode === 'closureAdjusted') return;
+      // The read-only map (#70 closure-adjusted view, or #243 Plan/Export) rejects
+      // imports — they add sections. Skip even opening the picker (routeOpenedFile
+      // also guards). Only meaningful with a project open; GlobalView has none.
+      if (hasProject && isMapReadOnly(useUIStore.getState())) return;
       setProjectActionSource('keyboard');
       // With a project open the picker is scoped to DMP only (the sole additive
       // in-project import); with none, every importable format is offered plus a

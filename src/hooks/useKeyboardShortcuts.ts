@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useRef } from 'react';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, isMapReadOnly } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
@@ -423,10 +423,7 @@ export function useKeyboardShortcuts() {
         // GUARD: read-only — no deletes in the closure-adjusted view OR in Plan/Export
         // (which can fall back to geometryMode 'measured' on a no-closures project, so
         // the appMode check is load-bearing).
-        {
-          const ro = useUIStore.getState();
-          if (ro.geometryMode === 'closureAdjusted' || ro.appMode !== 'survey') return;
-        }
+        if (isMapReadOnly(useUIStore.getState())) return;
         // GUARD: No delete for pan/zoom tools
         const currentToolDel = useUIStore.getState().activeTool;
         if (isNonInteractiveTool(currentToolDel)) return;
@@ -698,8 +695,9 @@ export function useKeyboardShortcuts() {
         case 'import_dmp':
           event.preventDefault();
           // Shared routing (toolbar Import + drag-drop + GlobalView Ctrl+I): the
-          // helper applies the closure-adjusted read-only guard and scopes the
-          // picker to DMP-only while a project is open.
+          // helper applies the read-only-map guard (closure-adjusted view or
+          // Plan/Export, #243) and scopes the picker to DMP-only while a project
+          // is open.
           runFileShortcutAction('import_dmp');
           break;
 

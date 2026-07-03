@@ -51,6 +51,19 @@ export const APP_MODE_DEFAULT: AppMode = 'survey';
 /** Geometry mode used before any saved preference exists (first run). */
 export const GEOMETRY_MODE_DEFAULT: GeometryMode = 'measured';
 
+/**
+ * The survey map is read-only whenever the closure-adjusted geometry is shown OR
+ * we're in a non-survey workspace (Plan/Export). Both terms are load-bearing:
+ * Plan/Export force `closureAdjusted`, but that auto-reverts to `measured` on a
+ * project with no eligible closures (see MapCanvas), so `appMode` is the robust
+ * authority — a `geometryMode`-only check leaks mutations (import, undo) into the
+ * read-only workspaces (#243, the #225 bug class). One predicate so the many
+ * gate sites can't drift.
+ */
+export function isMapReadOnly(state: Pick<UIStore, 'geometryMode' | 'appMode'>): boolean {
+  return state.geometryMode === 'closureAdjusted' || state.appMode !== 'survey';
+}
+
 export type DmpImportWizardPhase = 'init' | 'suggesting' | 'manual_placing' | 'placing' | 'done';
 
 export type DetailPanelTab = 'details' | 'warnings';

@@ -5,7 +5,7 @@ import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/p
 import type { GasReachField } from '../../types/ipc.generated';
 import type { BatchCommand, ProjectWarning } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
-import { useUIStore, type Selection } from '../../store/uiStore';
+import { useUIStore, isMapReadOnly, type Selection } from '../../store/uiStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
 import { isMutatingTool } from '../../utils/toolUtils';
@@ -196,6 +196,12 @@ function MapCanvas() {
   const gasZeroDatumMarkersRef = useRef<maplibregl.Marker[]>([]);
   const gasDropMarkersRef = useRef<maplibregl.Marker[]>([]);
   const gasFinalTurnMarkerRef = useRef<maplibregl.Marker | null>(null);
+  // Keyboard-picking a turn marker nulls reachField (setEndpoint), which tears down
+  // every turn marker incl. the focused one; when the recomputed field rebuilds them,
+  // focus would be stranded on <body>. Remember the picked ref so the rebuild can
+  // restore focus to its new marker element — the a11y feature would otherwise lose
+  // the AT user's place on every pick (#243).
+  const pendingTurnFocusRef = useRef<StationRef | null>(null);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
@@ -1951,7 +1957,7 @@ function MapCanvas() {
     }
   }, [showGasPlan, gasReachField, project, mapLoaded, surveyLayerRef]);
 
-  // Highlight the picked route over the survey (#233): solid swum legs + dashed jumps.
+  // Highlight the picked route over the survey (#233): full-opacity swum legs + faded jumps (#243).
   useEffect(() => {
     if (!surveyLayerRef.current || !mapLoaded) return;
     if (showGasPlan && gasReachField && project) {
@@ -2094,6 +2100,9 @@ function MapCanvas() {
       el.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
+          // Keyboard pick: setEndpoint will rebuild every marker, so record which
+          // one to re-focus once the recomputed field lands (see restore below).
+          pendingTurnFocusRef.current = ref;
           pick();
         }
       });
@@ -2109,6 +2118,18 @@ function MapCanvas() {
       gasTurnMarkersRef.current.push(
         new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(mapInst)
       );
+      // Restore keyboard focus to the marker the AT user just activated: after the
+      // pick's recompute rebuilt the frontier, the picked ref is still a turn
+      // candidate (reachability is independent of the chosen endpoint), so its new
+      // element gets focus and the user keeps their place.
+      if (
+        pendingTurnFocusRef.current &&
+        pendingTurnFocusRef.current.section_id === ref.section_id &&
+        pendingTurnFocusRef.current.station_index === ref.station_index
+      ) {
+        el.focus();
+        pendingTurnFocusRef.current = null;
+      }
     }
     return () => {
       for (const m of gasTurnMarkersRef.current) m.remove();
@@ -2263,10 +2284,7 @@ function MapCanvas() {
   // A remote SpeleoDB project opened without the write lock is read-only too, so
   // drop a mutating tool back to select on open (mirrors closure-adjusted).
   useEffect(() => {
-    if (
-      (geometryMode === 'closureAdjusted' || appMode !== 'survey' || speleoReadOnly) &&
-      isMutatingTool(activeTool)
-    ) {
+    if ((isMapReadOnly({ geometryMode, appMode }) || speleoReadOnly) && isMutatingTool(activeTool)) {
       setActiveTool('select');
     }
   }, [geometryMode, appMode, speleoReadOnly, activeTool, setActiveTool]);
