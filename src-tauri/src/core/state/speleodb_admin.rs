@@ -1,0 +1,325 @@
+//! [#215] SpeleoDB "full Project Settings" admin orchestration: collaborator
+//! management (per-user and per-team), in-app lock release, and project delete.
+//!
+//! Split out of `core/state/speleodb.rs` (which is frozen at the file-size ratchet
+//! warn line) into a sibling `impl AppState` block. Every method operates on the
+//! OPEN linked project - resolving the endpoint/token/`insecure_http` and the
+//! persisted link exactly like the #206 metadata methods - and is permission-gated
+//! only in the UI; the server's 401/403 is the real enforcement (an ADMIN-only
+//! write returns 403 for a non-admin, surfaced verbatim). No lock is required:
+//! permissions/locks/delete are all mutex-free (the edit lock governs only the
+//! survey `.stalx`).
+
+use super::speleodb::validate_project_id;
+use super::AppState;
+use crate::speleodb::client;
+use crate::speleodb::contract::{dto_for_error, Endpoint};
+use crate::speleodb::{
+    Permission, SpeleoCollaborator, SpeleoCollaborators, SpeleoDbError, SpeleoErrorDto,
+    SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
+};
+
+/// Map a local (non-endpoint) [`SpeleoDbError`] - a lock-resolution / not-linked
+/// failure raised before any HTTP call - into the IPC error DTO. Mirrors
+/// `speleodb::local_dto` (private to that module): the endpoint is irrelevant for a
+/// pre-request error, so `User` is a neutral choice for the typed-action mapping.
+fn admin_dto(err: SpeleoDbError) -> SpeleoErrorDto {
+    dto_for_error(Endpoint::User, &err)
+}
+
+impl AppState {
+    /// Resolve the `(link, endpoint, token, insecure_http)` tuple every admin call
+    /// needs: the open project's persisted link plus the active session, or an IPC
+    /// error DTO when there is no remote project / no usable token.
+    fn speleodb_admin_context(
+        &self,
+    ) -> Result<(crate::models::SpeleoLink, String, String, bool), SpeleoErrorDto> {
+        let link = self.speleodb_open_link().map_err(admin_dto)?;
+        // Route-traversal guard on the persisted project_id before it reaches any
+        // `projects/{id}/...` URL (the same check `speleodb_validated_link` runs for
+        // the edit verbs; reused so this entry point can't forget it).
+        validate_project_id(&link.project_id).map_err(admin_dto)?;
+        let (endpoint, token) = self.speleodb_active_token().map_err(admin_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+        Ok((link, endpoint, token, insecure_http))
+    }
+
+    /// [#215] The linked project's collaborator roster: individual users and teams.
+    /// GETs the user + team permission lists, resolves each team UUID to a display
+    /// name against the caller's `GET /teams/` (best-effort; falls back to the raw
+    /// UUID), and flags the signed-in user's own row (`is_self`) so the FE can
+    /// disable self-directed actions. Requires READ_ONLY+ (the server 403s below).
+    pub(crate) fn speleodb_list_collaborators(
+        &self,
+    ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+
+        let users_raw = self
+            .speleodb_handle_auth(
+                Endpoint::GetProject,
+                client::list_user_permissions(&endpoint, &token, insecure_http, &link.project_id),
+            )
+            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+
+        let teams_raw = self
+            .speleodb_handle_auth(
+                Endpoint::GetProject,
+                client::list_team_permissions(&endpoint, &token, insecure_http, &link.project_id),
+            )
+            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+
+        // Best-effort team name map: a failure to list teams must not sink the whole
+        // roster - each unresolved team just displays as its UUID (still removable).
+        let team_names: std::collections::HashMap<String, String> =
+            client::list_teams(&endpoint, &token, insecure_http)
+                .map(|teams| teams.into_iter().map(|t| (t.id, t.name)).collect())
+                .unwrap_or_default();
+
+        // Case-insensitive self-match (SpeleoDB emails are compared case-folded).
+        let self_email = self
+            .speleodb_session_status()
+            .ok()
+            .and_then(|s| s.user_email)
+            .map(|e| e.to_ascii_lowercase());
+
+        let users = users_raw
+            .into_iter()
+            .map(|p| {
+                let is_self = self_email.as_deref() == Some(p.user.to_ascii_lowercase().as_str());
+                SpeleoCollaborator {
+                    email: p.user,
+                    permission: p.level,
+                    is_self,
+                }
+            })
+            .collect();
+
+        let teams = teams_raw
+            .into_iter()
+            .map(|p| SpeleoTeamGrant {
+                team_name: team_names
+                    .get(&p.team)
+                    .cloned()
+                    .unwrap_or_else(|| p.team.clone()),
+                team_id: p.team,
+                permission: p.level,
+            })
+            .collect();
+
+        Ok(SpeleoCollaborators { users, teams })
+    }
+
+    /// [#215] Grant `email` a permission `level` on the linked project (ADMIN).
+    /// Returns the refreshed roster (server truth - a re-POST reactivates a
+    /// soft-deleted grant, so re-reading is the honest reflection).
+    pub(crate) fn speleodb_add_collaborator(
+        &self,
+        email: String,
+        permission: Permission,
+    ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        self.speleodb_handle_auth(
+            Endpoint::ManageProject,
+            client::add_user_permission(
+                &endpoint,
+                &token,
+                insecure_http,
+                &link.project_id,
+                &email,
+                permission,
+            ),
+        )
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
+        self.speleodb_list_collaborators()
+    }
+
+    /// [#215] Change an existing collaborator's permission level (ADMIN).
+    pub(crate) fn speleodb_set_collaborator(
+        &self,
+        email: String,
+        permission: Permission,
+    ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        self.speleodb_handle_auth(
+            Endpoint::ManageProject,
+            client::set_user_permission(
+                &endpoint,
+                &token,
+                insecure_http,
+                &link.project_id,
+                &email,
+                permission,
+            ),
+        )
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
+        self.speleodb_list_collaborators()
+    }
+
+    /// [#215] Remove a collaborator (soft-delete server-side, ADMIN).
+    pub(crate) fn speleodb_remove_collaborator(
+        &self,
+        email: String,
+    ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        self.speleodb_handle_auth(
+            Endpoint::ManageProject,
+            client::remove_user_permission(
+                &endpoint,
+                &token,
+                insecure_http,
+                &link.project_id,
+                &email,
+            ),
+        )
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
+        self.speleodb_list_collaborators()
+    }
+
+    /// [#215] Grant a team a permission `level` on the linked project (ADMIN). The
+    /// server rejects `ADMIN` for a team; the FE omits it from the team picker.
+    pub(crate) fn speleodb_add_team(
+        &self,
+        team_id: String,
+        permission: Permission,
+    ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        self.speleodb_handle_auth(
+            Endpoint::ManageProject,
+            client::add_team_permission(
+                &endpoint,
+                &token,
+                insecure_http,
+                &link.project_id,
+                &team_id,
+                permission,
+            ),
+        )
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
+        self.speleodb_list_collaborators()
+    }
+
+    /// [#215] Change a team's permission level (ADMIN).
+    pub(crate) fn speleodb_set_team(
+        &self,
+        team_id: String,
+        permission: Permission,
+    ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        self.speleodb_handle_auth(
+            Endpoint::ManageProject,
+            client::set_team_permission(
+                &endpoint,
+                &token,
+                insecure_http,
+                &link.project_id,
+                &team_id,
+                permission,
+            ),
+        )
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
+        self.speleodb_list_collaborators()
+    }
+
+    /// [#215] Revoke a team's access (soft-delete server-side, ADMIN).
+    pub(crate) fn speleodb_remove_team(
+        &self,
+        team_id: String,
+    ) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        self.speleodb_handle_auth(
+            Endpoint::ManageProject,
+            client::remove_team_permission(
+                &endpoint,
+                &token,
+                insecure_http,
+                &link.project_id,
+                &team_id,
+            ),
+        )
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
+        self.speleodb_list_collaborators()
+    }
+
+    /// [#215] Autocomplete users by email/name substring for the add-collaborator
+    /// email typeahead. Returns an empty list for a query below the server's 3-char
+    /// minimum, so the FE can call on each keystroke without provoking a 400. Needs
+    /// only the session token - not an open project - but it is only reachable from
+    /// the admin tab, so it resolves the same endpoint/token as the other methods.
+    pub(crate) fn speleodb_search_users(
+        &self,
+        query: String,
+    ) -> Result<Vec<SpeleoUserSuggestion>, SpeleoErrorDto> {
+        let q = query.trim();
+        if q.chars().count() < 3 {
+            return Ok(Vec::new());
+        }
+        let (endpoint, token) = self.speleodb_active_token().map_err(admin_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+        // `/user/autocomplete/` is authenticated-only with no per-object permission,
+        // so (like the whoami chokepoint) a 403 there is the dead-token signal -
+        // `Endpoint::User` maps it to ReLogin, which is the correct action.
+        let users = self
+            .speleodb_handle_auth(
+                Endpoint::User,
+                client::list_user_autocomplete(&endpoint, &token, insecure_http, q),
+            )
+            .map_err(|e| dto_for_error(Endpoint::User, &e))?;
+        Ok(users
+            .into_iter()
+            .map(|u| SpeleoUserSuggestion {
+                email: u.email,
+                label: u.label,
+            })
+            .collect())
+    }
+
+    /// [#215] The teams the signed-in user belongs to, for the add-team picker.
+    pub(crate) fn speleodb_list_teams(&self) -> Result<Vec<SpeleoTeamOption>, SpeleoErrorDto> {
+        let (_link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        let teams = self
+            .speleodb_handle_auth(
+                Endpoint::GetProject,
+                client::list_teams(&endpoint, &token, insecure_http),
+            )
+            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+        Ok(teams
+            .into_iter()
+            .map(|t| SpeleoTeamOption {
+                id: t.id,
+                name: t.name,
+            })
+            .collect())
+    }
+
+    /// [#215] Release the lock on the OPEN linked project. The server releases the
+    /// caller's own lock, or - for an ADMIN - force-releases another user's held
+    /// lock (single endpoint; role decided server-side). A recovery action for a
+    /// stuck lock: it does NOT push, so the FE warns when the caller holds it. The
+    /// FE re-probes link status afterward to reflect the freed lock.
+    pub(crate) fn speleodb_release_current_lock(&self) -> Result<(), SpeleoErrorDto> {
+        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        self.speleodb_handle_auth(
+            Endpoint::Release,
+            client::release_lock(&endpoint, &token, insecure_http, &link.project_id),
+        )
+        .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
+        Ok(())
+    }
+
+    /// [#215] Delete the OPEN linked project on SpeleoDB (soft-delete, ADMIN), then
+    /// drop the local link so the app stops treating it as remote. The server delete
+    /// does not require releasing the lock first; the subsequent unlink's best-effort
+    /// lock release just no-ops against the now-deleted project. The FE closes the
+    /// Settings dialog and navigates away on success.
+    pub(crate) fn speleodb_delete_project(&self) -> Result<(), SpeleoErrorDto> {
+        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        self.speleodb_handle_auth(
+            Endpoint::ManageProject,
+            client::delete_project(&endpoint, &token, insecure_http, &link.project_id),
+        )
+        .map_err(|e| dto_for_error(Endpoint::ManageProject, &e))?;
+        // Now local-only: drop the persisted link + reopen the edit gate (reuses the
+        // shared unlink path so it can't drift from the menu Unlink action).
+        self.speleodb_unlink()
+    }
+}

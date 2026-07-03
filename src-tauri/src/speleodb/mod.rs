@@ -28,9 +28,10 @@ pub(crate) mod tls;
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::SpeleoDbAction;
 pub use models::{
-    DoneResult, Permission, PushResult, RemoteState, SpeleoErrorDto, SpeleoLinkStatus,
-    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
-    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoSessionStatus,
+    DoneResult, Permission, PushResult, RemoteState, SpeleoCollaborator, SpeleoCollaborators,
+    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
+    SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
+    SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
     StartEditingResult, UpdateResult, Visibility,
 };
 
@@ -257,7 +258,7 @@ mod live_tests {
     impl Drop for ProjectCleanup<'_> {
         #[expect(clippy::print_stderr, reason = "ignored live integration test cleanup")]
         fn drop(&mut self) {
-            if let Err(e) = client::delete_project(self.url, self.token, &self.id) {
+            if let Err(e) = client::delete_project(self.url, self.token, false, &self.id) {
                 eprintln!("cleanup: failed to delete test project {}: {e:?}", self.id);
             }
         }

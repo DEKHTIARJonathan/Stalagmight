@@ -3711,7 +3711,24 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'speleodb_release_all_locks':
           case 'speleodb_release_lock':
           case 'speleodb_set_exclude_geojson':
+          // #215 lock release + delete: no payload.
+          case 'speleodb_release_current_lock':
+          case 'speleodb_delete_project':
             return null;
+          // #215 collaborator management: the roster (users + teams). The mutating
+          // commands echo the refreshed roster; the picker lists no teams by default.
+          case 'speleodb_list_collaborators':
+          case 'speleodb_add_collaborator':
+          case 'speleodb_set_collaborator':
+          case 'speleodb_remove_collaborator':
+          case 'speleodb_add_team':
+          case 'speleodb_set_team':
+          case 'speleodb_remove_team':
+            return { users: [], teams: [] };
+          case 'speleodb_list_teams':
+            return [];
+          case 'speleodb_search_users':
+            return [];
           case 'speleodb_get_project_metadata':
           case 'speleodb_patch_project':
             // Deterministic project metadata for the #206 settings tab. patch echoes

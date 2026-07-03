@@ -1283,6 +1283,18 @@ pub fn run() {
             commands::speleodb::speleodb_get_project_metadata,
             commands::speleodb::speleodb_patch_project,
             commands::speleodb::speleodb_publish,
+            // SpeleoDB full Project Settings: collaborators + lock release + delete (#215)
+            commands::speleodb::speleodb_list_collaborators,
+            commands::speleodb::speleodb_add_collaborator,
+            commands::speleodb::speleodb_set_collaborator,
+            commands::speleodb::speleodb_remove_collaborator,
+            commands::speleodb::speleodb_add_team,
+            commands::speleodb::speleodb_set_team,
+            commands::speleodb::speleodb_remove_team,
+            commands::speleodb::speleodb_list_teams,
+            commands::speleodb::speleodb_search_users,
+            commands::speleodb::speleodb_release_current_lock,
+            commands::speleodb::speleodb_delete_project,
             // Section commands
             commands::section::create_section,
             commands::section::update_section,

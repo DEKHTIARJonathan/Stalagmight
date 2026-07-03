@@ -21,9 +21,13 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
 
-use super::models::{Commit, Project, RevisionHistory};
+use super::models::{
+    Commit, Permission, Project, RevisionHistory, Team, TeamPermission, TeamPermissionList,
+    UserAutocomplete, UserPermission, UserPermissionList,
+};
 use super::SpeleoDbError;
 
 /// Global per-request timeout for reads. Larger than the tile timeout because a
@@ -755,20 +759,20 @@ fn post_no_body_project(
     parse_project(&body, context)
 }
 
-/// Test-only: `DELETE /api/v2/projects/{id}/` — soft-delete the project (server
-/// deactivates it; a cron purges after 30 days). Used to clean up the per-run
-/// test project. Does not require releasing the lock first.
-#[cfg(test)]
+/// `DELETE /api/v2/projects/{id}/` - soft-delete the project (the server
+/// deactivates it and a cron purges after ~30 days), returning `()` on success.
+/// DELETE is idempotent (deleting an already-deleted project is a no-op/404), so a
+/// transient-transport retry is safe. Consumed by #215's Delete-project action and
+/// the live tests' per-run cleanup. Does not require releasing the lock first.
 pub(crate) fn delete_project(
     base: &str,
     token: &str,
+    insecure_http: bool,
     project_id: &str,
 ) -> Result<(), SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/"));
     let auth = bearer(token);
-    // DELETE is idempotent (deleting an already-deleted project is a no-op/404),
-    // so a retry on a transient transport error is safe.
-    let (status, body) = with_retry(base, false, true, || {
+    let (status, body) = with_retry(base, insecure_http, true, || {
         let resp = agent()
             .delete(&url)
             .header("Authorization", auth.as_str())
@@ -781,10 +785,268 @@ pub(crate) fn delete_project(
     Ok(())
 }
 
-/// Test-only: `POST /api/v2/projects/{id}/permission/user/detail/` — grant
-/// `email` the permission `level` (`"WEB_VIEWER"` / `"READ_ONLY"` /
-/// `"READ_AND_WRITE"`) on the project. Drives the two-account live tests'
-/// collaborator setup.
+/// Send `payload` as a JSON body with an arbitrary `method` to `suffix`, enforcing
+/// the http private-network policy first ([`super::tls::enforce`], the #187
+/// chokepoint); a 2xx maps to `Ok(())`. The collaborator permission-detail
+/// endpoints (#215) are non-idempotent writes routed here: they run exactly once
+/// (no retry, matching every other SDB write), AND the `remove` variants are a
+/// DELETE-with-body - which ureq's typestate `.delete()` builder cannot express -
+/// so all three verbs go through `Agent::run` with an explicit `http::Request`.
+fn send_json_request(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    method: http::Method,
+    suffix: &str,
+    payload: &serde_json::Value,
+) -> Result<(), SpeleoDbError> {
+    // #187: block public `http://` / scheme-less endpoints before any dial (the
+    // same gate `with_retry` runs; these writes bypass the retry loop, never it).
+    super::tls::enforce(base, insecure_http)?;
+    let url = api_url(base, suffix);
+    let request = http::Request::builder()
+        .method(method)
+        .uri(url)
+        .header("Authorization", bearer(token))
+        .header("Content-Type", "application/json")
+        .body(payload.to_string())
+        .map_err(|e| SpeleoDbError::Parse(format!("build request: {e}")))?;
+    let resp = agent()
+        .run(request)
+        .map_err(|e| SpeleoDbError::Transport(clean_transport(&e.to_string())))?;
+    let (status, body) = read_status_body(resp)
+        .map_err(|e| SpeleoDbError::Transport(clean_transport(&e.to_string())))?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    Ok(())
+}
+
+/// `GET /api/v2/projects/{id}/permissions/user/` - list the project's active
+/// per-user permission grants (#215). A GET, so retry-safe; requires READ_ONLY+
+/// server-side (403 below that). Only the `permissions[]` array is consumed.
+pub(crate) fn list_user_permissions(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+) -> Result<Vec<UserPermission>, SpeleoDbError> {
+    let url = api_url(base, &format!("projects/{project_id}/permissions/user/"));
+    let auth = bearer(token);
+    let (status, body) = with_retry(base, insecure_http, true, || {
+        let resp = agent()
+            .get(&url)
+            .header("Authorization", auth.as_str())
+            .call()?;
+        read_status_body(resp)
+    })?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    let list: UserPermissionList = serde_json::from_slice(&body)
+        .map_err(|e| SpeleoDbError::Parse(format!("user permissions: {e}")))?;
+    Ok(list.permissions)
+}
+
+/// `POST /api/v2/projects/{id}/permission/user/detail/` `{user, level}` - grant a
+/// collaborator a permission level (#215). ADMIN-gated server-side.
+pub(crate) fn add_user_permission(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    email: &str,
+    level: Permission,
+) -> Result<(), SpeleoDbError> {
+    send_json_request(
+        base,
+        token,
+        insecure_http,
+        http::Method::POST,
+        &format!("projects/{project_id}/permission/user/detail/"),
+        &serde_json::json!({ "user": email, "level": level }),
+    )
+}
+
+/// `PUT /api/v2/projects/{id}/permission/user/detail/` `{user, level}` - change an
+/// existing collaborator's permission level (#215). ADMIN-gated server-side.
+pub(crate) fn set_user_permission(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    email: &str,
+    level: Permission,
+) -> Result<(), SpeleoDbError> {
+    send_json_request(
+        base,
+        token,
+        insecure_http,
+        http::Method::PUT,
+        &format!("projects/{project_id}/permission/user/detail/"),
+        &serde_json::json!({ "user": email, "level": level }),
+    )
+}
+
+/// `DELETE /api/v2/projects/{id}/permission/user/detail/` with body `{user}` -
+/// remove a collaborator (soft, #215). ADMIN-gated server-side.
+pub(crate) fn remove_user_permission(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    email: &str,
+) -> Result<(), SpeleoDbError> {
+    send_json_request(
+        base,
+        token,
+        insecure_http,
+        http::Method::DELETE,
+        &format!("projects/{project_id}/permission/user/detail/"),
+        &serde_json::json!({ "user": email }),
+    )
+}
+
+/// `GET /api/v2/projects/{id}/permissions/team/` - list the project's active
+/// per-team permission grants (#215). A GET, so retry-safe.
+pub(crate) fn list_team_permissions(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+) -> Result<Vec<TeamPermission>, SpeleoDbError> {
+    let url = api_url(base, &format!("projects/{project_id}/permissions/team/"));
+    let auth = bearer(token);
+    let (status, body) = with_retry(base, insecure_http, true, || {
+        let resp = agent()
+            .get(&url)
+            .header("Authorization", auth.as_str())
+            .call()?;
+        read_status_body(resp)
+    })?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    let list: TeamPermissionList = serde_json::from_slice(&body)
+        .map_err(|e| SpeleoDbError::Parse(format!("team permissions: {e}")))?;
+    Ok(list.permissions)
+}
+
+/// `POST /api/v2/projects/{id}/permission/team/detail/` `{team, level}` - grant a
+/// team a permission level (#215). ADMIN-gated; the server rejects `ADMIN` for a
+/// team (teams may only hold WEB_VIEWER / READ_ONLY / READ_AND_WRITE).
+pub(crate) fn add_team_permission(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    team_id: &str,
+    level: Permission,
+) -> Result<(), SpeleoDbError> {
+    send_json_request(
+        base,
+        token,
+        insecure_http,
+        http::Method::POST,
+        &format!("projects/{project_id}/permission/team/detail/"),
+        &serde_json::json!({ "team": team_id, "level": level }),
+    )
+}
+
+/// `PUT /api/v2/projects/{id}/permission/team/detail/` `{team, level}` - change a
+/// team's permission level (#215). ADMIN-gated; no `ADMIN` for teams.
+pub(crate) fn set_team_permission(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    team_id: &str,
+    level: Permission,
+) -> Result<(), SpeleoDbError> {
+    send_json_request(
+        base,
+        token,
+        insecure_http,
+        http::Method::PUT,
+        &format!("projects/{project_id}/permission/team/detail/"),
+        &serde_json::json!({ "team": team_id, "level": level }),
+    )
+}
+
+/// `DELETE /api/v2/projects/{id}/permission/team/detail/` with body `{team}` -
+/// revoke a team's access (soft, #215). ADMIN-gated server-side.
+pub(crate) fn remove_team_permission(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    project_id: &str,
+    team_id: &str,
+) -> Result<(), SpeleoDbError> {
+    send_json_request(
+        base,
+        token,
+        insecure_http,
+        http::Method::DELETE,
+        &format!("projects/{project_id}/permission/team/detail/"),
+        &serde_json::json!({ "team": team_id }),
+    )
+}
+
+/// `GET /api/v2/teams/` - the authenticated user's teams (a bare JSON array), for
+/// the add-team picker and to resolve a team-permission UUID to a display name
+/// (#215). A GET, so retry-safe.
+pub(crate) fn list_teams(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+) -> Result<Vec<Team>, SpeleoDbError> {
+    let url = api_url(base, "teams/");
+    let auth = bearer(token);
+    let (status, body) = with_retry(base, insecure_http, true, || {
+        let resp = agent()
+            .get(&url)
+            .header("Authorization", auth.as_str())
+            .call()?;
+        read_status_body(resp)
+    })?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    serde_json::from_slice(&body).map_err(|e| SpeleoDbError::Parse(format!("teams: {e}")))
+}
+
+/// `GET /api/v2/user/autocomplete/?query=<substr>` - up to 10 users whose email or
+/// name contains `query` (the server requires >= 3 chars; the caller guards that).
+/// Backs the add-collaborator email typeahead (#215). A GET, so retry-safe. The
+/// query is percent-encoded so spaces / `@` / `&` in a partial name or email cannot
+/// break the URL.
+pub(crate) fn list_user_autocomplete(
+    base: &str,
+    token: &str,
+    insecure_http: bool,
+    query: &str,
+) -> Result<Vec<UserAutocomplete>, SpeleoDbError> {
+    let encoded = utf8_percent_encode(query, NON_ALPHANUMERIC);
+    let url = api_url(base, &format!("user/autocomplete/?query={encoded}"));
+    let auth = bearer(token);
+    let (status, body) = with_retry(base, insecure_http, true, || {
+        let resp = agent()
+            .get(&url)
+            .header("Authorization", auth.as_str())
+            .call()?;
+        read_status_body(resp)
+    })?;
+    if !(200..300).contains(&status) {
+        return Err(status_error(status, &body));
+    }
+    serde_json::from_slice(&body)
+        .map_err(|e| SpeleoDbError::Parse(format!("user autocomplete: {e}")))
+}
+
+/// Test-only convenience: grant `email` the given `level` string on the project.
+/// Drives the two-account live tests' collaborator setup; the production path is
+/// [`add_user_permission`] (typed `Permission`). The dev box is a private address,
+/// so `insecure_http = false` is fine here.
 #[cfg(test)]
 pub(crate) fn grant_permission(
     base: &str,
@@ -793,25 +1055,14 @@ pub(crate) fn grant_permission(
     email: &str,
     level: &str,
 ) -> Result<(), SpeleoDbError> {
-    let url = api_url(
+    send_json_request(
         base,
+        token,
+        false,
+        http::Method::POST,
         &format!("projects/{project_id}/permission/user/detail/"),
-    );
-    let auth = bearer(token);
-    let payload = serde_json::json!({ "user": email, "level": level }).to_string();
-    // Non-idempotent write: run once so a mid-response failure can't double-submit.
-    let (status, body) = with_retry(base, false, false, || {
-        let resp = agent()
-            .post(&url)
-            .header("Authorization", auth.as_str())
-            .header("Content-Type", "application/json")
-            .send(payload.as_str())?;
-        read_status_body(resp)
-    })?;
-    if !(200..300).contains(&status) {
-        return Err(status_error(status, &body));
-    }
-    Ok(())
+        &serde_json::json!({ "user": email, "level": level }),
+    )
 }
 
 #[cfg(test)]
@@ -824,10 +1075,12 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        api_url, bearer, build_upload_parts, clean_transport, mime_for, parse_error_message,
-        parse_upload_auto_response, with_retry, RevisionHistory, UserInfo,
+        add_team_permission, add_user_permission, api_url, bearer, build_upload_parts,
+        clean_transport, delete_project, list_teams, list_user_autocomplete, list_user_permissions,
+        mime_for, parse_error_message, parse_upload_auto_response, remove_team_permission,
+        remove_user_permission, set_user_permission, with_retry, RevisionHistory, UserInfo,
     };
-    use crate::speleodb::SpeleoDbError;
+    use crate::speleodb::{Permission, SpeleoDbError};
 
     #[test]
     fn revisions_payload_decodes_verified_v2_field_names() {
@@ -1375,5 +1628,213 @@ mod tests {
             "each file is a repeated `artifact` part"
         );
         assert_eq!(parts.message, "msg");
+    }
+
+    // --- #215 collaborator/team permission + delete wire contract ---------------
+    //
+    // These pin the exact method + path + JSON body each new client fn puts on the
+    // wire, against the same LoopbackStub the multipart test uses. The load-bearing
+    // case is the DELETE-with-body: ureq's typestate `.delete()` builder cannot
+    // carry a body, so the remove-* fns hand-build an `http::Request` and go through
+    // `Agent::run`. If that body were ever dropped (a ureq bump, or a refactor back
+    // to `.delete()`), the server would receive a target-less DELETE and 400 - so
+    // asserting `{"user"}` / `{"team"}` actually reaches the socket is the point.
+    // The stub replies `{}`; the fns that return `()` treat 200 as success, so we
+    // assert the returned `Ok(())` too (the ones that parse a body are ignored - we
+    // only care about the request bytes).
+    const WIRE_PID: &str = "11111111-1111-1111-1111-111111111111";
+
+    #[test]
+    fn loopback_remove_user_permission_is_delete_with_user_body() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        remove_user_permission(&base, "tok", false, WIRE_PID, "bob@example.com")
+            .expect("200 -> Ok(())");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!(
+                "DELETE /api/v2/projects/{WIRE_PID}/permission/user/detail/ "
+            )),
+            "singular `permission/user/detail/` DELETE, not the plural list path: {wire}"
+        );
+        assert!(
+            wire.to_ascii_lowercase()
+                .contains("content-type: application/json"),
+            "carries a JSON content-type: {wire}"
+        );
+        assert!(
+            wire.contains(r#""user":"bob@example.com""#),
+            "the DELETE body identifies the target user on the wire: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_remove_team_permission_is_delete_with_team_body() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        remove_team_permission(&base, "tok", false, WIRE_PID, "team-uuid-9")
+            .expect("200 -> Ok(())");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!(
+                "DELETE /api/v2/projects/{WIRE_PID}/permission/team/detail/ "
+            )),
+            "singular `permission/team/detail/` DELETE: {wire}"
+        );
+        assert!(
+            wire.contains(r#""team":"team-uuid-9""#),
+            "the DELETE body identifies the target team on the wire: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_add_user_permission_is_post_with_user_and_level() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        add_user_permission(
+            &base,
+            "tok",
+            false,
+            WIRE_PID,
+            "bob@example.com",
+            Permission::ReadOnly,
+        )
+        .expect("200 -> Ok(())");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!(
+                "POST /api/v2/projects/{WIRE_PID}/permission/user/detail/ "
+            )),
+            "POST to the singular detail path: {wire}"
+        );
+        assert!(
+            wire.contains(r#""user":"bob@example.com""#),
+            "user on wire: {wire}"
+        );
+        assert!(
+            wire.contains(r#""level":"READ_ONLY""#),
+            "the typed Permission serializes to its wire label: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_set_user_permission_is_put() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        set_user_permission(
+            &base,
+            "tok",
+            false,
+            WIRE_PID,
+            "bob@example.com",
+            Permission::ReadAndWrite,
+        )
+        .expect("200 -> Ok(())");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!(
+                "PUT /api/v2/projects/{WIRE_PID}/permission/user/detail/ "
+            )),
+            "a level change is a PUT: {wire}"
+        );
+        assert!(
+            wire.contains(r#""level":"READ_AND_WRITE""#),
+            "new level on wire: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_add_team_permission_is_post_with_team_and_level() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        add_team_permission(
+            &base,
+            "tok",
+            false,
+            WIRE_PID,
+            "team-uuid-9",
+            Permission::ReadOnly,
+        )
+        .expect("200 -> Ok(())");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!(
+                "POST /api/v2/projects/{WIRE_PID}/permission/team/detail/ "
+            )),
+            "team grant POST: {wire}"
+        );
+        assert!(
+            wire.contains(r#""team":"team-uuid-9""#),
+            "team on wire: {wire}"
+        );
+        assert!(
+            wire.contains(r#""level":"READ_ONLY""#),
+            "level on wire: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_list_user_permissions_is_get_plural_path() {
+        // The list path is PLURAL (`permissions/user/`), distinct from the singular
+        // write path (`permission/user/detail/`) - a mismatch would 404 the roster.
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        // Stub replies `{}` -> `permissions` defaults to [] -> Ok(empty). We only
+        // assert the request bytes.
+        let _ = list_user_permissions(&base, "tok", false, WIRE_PID);
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!(
+                "GET /api/v2/projects/{WIRE_PID}/permissions/user/ "
+            )),
+            "plural `permissions/user/` GET: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_list_teams_is_get_teams() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        let _ = list_teams(&base, "tok", false);
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with("GET /api/v2/teams/ "),
+            "the teams picker/name-map GET: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_user_autocomplete_get_percent_encodes_query() {
+        // A partial name with a space must be percent-encoded into the query string
+        // (a raw space would produce an invalid request line / truncated query).
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        let _ = list_user_autocomplete(&base, "tok", false, "jo di");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with("GET /api/v2/user/autocomplete/?query=jo%20di "),
+            "GET the autocomplete endpoint with a percent-encoded query: {wire}"
+        );
+    }
+
+    #[test]
+    fn loopback_delete_project_is_bare_delete() {
+        let mut stub = LoopbackStub::start(vec![200]);
+        let base = stub.base.clone();
+        delete_project(&base, "tok", false, WIRE_PID).expect("200 -> Ok(())");
+        stub.join();
+        let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
+        assert!(
+            wire.starts_with(&format!("DELETE /api/v2/projects/{WIRE_PID}/ ")),
+            "project delete is a bare DELETE on the project, no detail suffix: {wire}"
+        );
     }
 }

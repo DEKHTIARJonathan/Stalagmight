@@ -21,10 +21,10 @@ use crate::core::AppState;
 // `err.action`. The orchestration `AppState::speleodb_*` methods build the DTO at
 // the call site where the endpoint is known.
 use crate::speleodb::{
-    DoneResult, PushResult, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
-    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
-    SpeleoPublishParams, SpeleoPublishResult, SpeleoSessionStatus, StartEditingResult,
-    UpdateResult,
+    DoneResult, Permission, PushResult, SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto,
+    SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
+    SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
+    SpeleoSessionStatus, SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -231,4 +231,107 @@ pub async fn speleodb_publish(
     params: SpeleoPublishParams,
 ) -> Result<SpeleoPublishResult, SpeleoErrorDto> {
     run_blocking(app, move |s| s.speleodb_publish(params)).await
+}
+
+// [#215] Full Project Settings: collaborator management (per-user + per-team), in-app
+// lock release, and project delete. All operate on the OPEN linked project and are
+// permission-gated only in the UI; the server 401/403 is the real enforcement.
+
+/// List the linked project's collaborator roster (individual users + teams). No
+/// lock; requires READ_ONLY+ server-side.
+#[tauri::command]
+pub async fn speleodb_list_collaborators(
+    app: AppHandle,
+) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_list_collaborators).await
+}
+
+/// Grant a collaborator (by email) a permission level on the linked project
+/// (ADMIN). Returns the refreshed roster (server truth).
+#[tauri::command]
+pub async fn speleodb_add_collaborator(
+    app: AppHandle,
+    email: String,
+    permission: Permission,
+) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_add_collaborator(email, permission)).await
+}
+
+/// Change an existing collaborator's permission level (ADMIN).
+#[tauri::command]
+pub async fn speleodb_set_collaborator(
+    app: AppHandle,
+    email: String,
+    permission: Permission,
+) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_set_collaborator(email, permission)).await
+}
+
+/// Remove a collaborator from the linked project (ADMIN; soft-delete server-side).
+#[tauri::command]
+pub async fn speleodb_remove_collaborator(
+    app: AppHandle,
+    email: String,
+) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_remove_collaborator(email)).await
+}
+
+/// Grant a team a permission level on the linked project (ADMIN; teams cannot hold
+/// ADMIN). Returns the refreshed roster.
+#[tauri::command]
+pub async fn speleodb_add_team(
+    app: AppHandle,
+    team_id: String,
+    permission: Permission,
+) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_add_team(team_id, permission)).await
+}
+
+/// Change a team's permission level on the linked project (ADMIN).
+#[tauri::command]
+pub async fn speleodb_set_team(
+    app: AppHandle,
+    team_id: String,
+    permission: Permission,
+) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_set_team(team_id, permission)).await
+}
+
+/// Revoke a team's access to the linked project (ADMIN; soft-delete server-side).
+#[tauri::command]
+pub async fn speleodb_remove_team(
+    app: AppHandle,
+    team_id: String,
+) -> Result<SpeleoCollaborators, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_remove_team(team_id)).await
+}
+
+/// List the teams the signed-in user belongs to, for the add-team picker.
+#[tauri::command]
+pub async fn speleodb_list_teams(app: AppHandle) -> Result<Vec<SpeleoTeamOption>, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_list_teams).await
+}
+
+/// Autocomplete users by email/name substring for the add-collaborator typeahead.
+/// Returns [] below the server's 3-char minimum.
+#[tauri::command]
+pub async fn speleodb_search_users(
+    app: AppHandle,
+    query: String,
+) -> Result<Vec<SpeleoUserSuggestion>, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_search_users(query)).await
+}
+
+/// Release the lock on the linked project (own lock, or an ADMIN force-release of
+/// another user's lock). Does not push; a recovery action for a stuck lock.
+#[tauri::command]
+pub async fn speleodb_release_current_lock(app: AppHandle) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_release_current_lock).await
+}
+
+/// Delete the linked project on SpeleoDB (ADMIN; soft-delete), then unlink locally
+/// so the app stops treating it as remote.
+#[tauri::command]
+pub async fn speleodb_delete_project(app: AppHandle) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_delete_project).await
 }

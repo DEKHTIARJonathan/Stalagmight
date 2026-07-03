@@ -119,10 +119,15 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.set_shot_reference",
     "command.set_station_comment",
     "command.set_zero_datum",
+    "command.speleodb_add_collaborator",
+    "command.speleodb_add_team",
+    "command.speleodb_delete_project",
     "command.speleodb_done",
     "command.speleodb_get_project_metadata",
     "command.speleodb_link_status",
+    "command.speleodb_list_collaborators",
     "command.speleodb_list_projects",
+    "command.speleodb_list_teams",
     "command.speleodb_login",
     "command.speleodb_logout",
     "command.speleodb_open_project",
@@ -130,9 +135,15 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_publish",
     "command.speleodb_push",
     "command.speleodb_release_all_locks",
+    "command.speleodb_release_current_lock",
     "command.speleodb_release_lock",
+    "command.speleodb_remove_collaborator",
+    "command.speleodb_remove_team",
+    "command.speleodb_search_users",
     "command.speleodb_session",
+    "command.speleodb_set_collaborator",
     "command.speleodb_set_exclude_geojson",
+    "command.speleodb_set_team",
     "command.speleodb_start_editing",
     "command.speleodb_take_remote",
     "command.speleodb_unlink",
@@ -621,7 +632,13 @@ mod tests {
         //   + 4 publish-to-speleodb dialog events (#207):
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .publish-to-speleodb = 456.
-        assert_eq!(EVENT_NAMES.len(), 456);
+        //   + 10 SpeleoDB full Project Settings commands (#215):
+        //       command.speleodb_{list_collaborators,add_collaborator,set_collaborator,
+        //       remove_collaborator,add_team,set_team,remove_team,list_teams,
+        //       release_current_lock,delete_project} = 466.
+        //   + 1 SpeleoDB collaborator autocomplete command (#215 follow-up):
+        //       command.speleodb_search_users = 467.
+        assert_eq!(EVENT_NAMES.len(), 467);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -69,6 +69,12 @@ pub(crate) enum Endpoint {
     UploadAuto,
     // [P1] #207 speleodb_publish constructs CreateProject (auth handler + dto_for_error).
     CreateProject,
+    // [#215] Collaborator/team permission writes + project delete. A write (not
+    // read, not idempotent): a 403 is a Fence (no admin/write grant, not read-only
+    // access), a 5xx is StayDirty (never auto-retried - these are non-idempotent
+    // POST/PUT/DELETE). Falls through the `403 => Fence` / `500..=599 => StayDirty`
+    // arms of `map_status` by being absent from both `is_read` and `is_idempotent`.
+    ManageProject,
 }
 
 impl Endpoint {
@@ -200,6 +206,17 @@ mod tests {
         assert_eq!(map_status(Endpoint::Acquire, 400), SpeleoDbAction::Fatal);
         assert_eq!(map_status(Endpoint::Acquire, 403), SpeleoDbAction::Fence);
         assert_eq!(map_status(Endpoint::UploadAuto, 403), SpeleoDbAction::Fence);
+        // [#215] The admin writes (collaborator/team perms + delete) are write-shaped:
+        // 403 = Fence (no write/admin grant), 5xx = StayDirty (non-idempotent, never
+        // auto-retried) - NOT ReadOnly/Retry (which GetProject, a read, would give).
+        assert_eq!(
+            map_status(Endpoint::ManageProject, 403),
+            SpeleoDbAction::Fence
+        );
+        assert_eq!(
+            map_status(Endpoint::ManageProject, 503),
+            SpeleoDbAction::StayDirty
+        );
         assert_eq!(
             map_status(Endpoint::UploadAuto, 304),
             SpeleoDbAction::UpToDate
@@ -283,6 +300,7 @@ mod tests {
             Endpoint::Acquire,
             Endpoint::Release,
             Endpoint::CreateProject,
+            Endpoint::ManageProject,
         ] {
             for status in [500, 502, 503] {
                 assert_eq!(
