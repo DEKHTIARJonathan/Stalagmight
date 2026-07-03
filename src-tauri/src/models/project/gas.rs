@@ -36,6 +36,13 @@ impl Project {
     /// Contract: `gas_config` is assumed normalized (`GasConfig::normalize` — finite/positive
     /// speeds); a non-positive in-speed defensively yields an all-unreachable field rather
     /// than dividing by zero.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no-override convenience entry; prod calls _with_overrides, tests call this"
+        )
+    )]
     pub(crate) fn compute_gas_reach_field(
         &self,
         origin: Option<&StationRef>,
@@ -43,6 +50,39 @@ impl Project {
         diver: &Diver,
         cylinders: &[Cylinder],
         gas_config: &GasConfig,
+    ) -> GasReachField {
+        self.compute_gas_reach_field_with_overrides(
+            origin,
+            endpoint,
+            diver,
+            cylinders,
+            gas_config,
+            &[],
+        )
+    }
+
+    /// As [`Self::compute_gas_reach_field`], but with per-stage **drop overrides** (#246): the diver
+    /// drags a stage's ▼ drop marker to a route station, and `stage_drop_overrides[k]` pins stage
+    /// `k`'s drop there (aligned 1:1 with `stage_drop_refs` / `stage_drop_bars`; `None` = keep the
+    /// strategy default; over-long / unresolvable refs fall through to the default).
+    ///
+    /// A pinned drop redefines how much of that stage is breathed IN: the litres consumed to reach
+    /// the pinned station (`gas_in[S] − cumulative-at-prior-drop`), hard-clamped to `[0, tank-empty]`.
+    /// The penetration budget becomes `base + Σ(actual − safe)`, so a drop dragged **shallower**
+    /// strands surplus stage gas (budget shrinks → reach shortens) and one dragged **deeper** breathes
+    /// into reserve (budget grows → reach extends, flagged `stage_drop_over_reserve`). Non-overridden
+    /// downstream drops keep their safe pressure but shift position as the cumulative shifts; the
+    /// back-gas turn pressure is independent of the stage drops and is unchanged. The reach math stays
+    /// exact-litres (from the graph); only the moved drop's readout pressure is inverted from the Z
+    /// curve. With an empty `stage_drop_overrides` this is byte-identical to the no-override field.
+    pub(crate) fn compute_gas_reach_field_with_overrides(
+        &self,
+        origin: Option<&StationRef>,
+        endpoint: Option<&StationRef>,
+        diver: &Diver,
+        cylinders: &[Cylinder],
+        gas_config: &GasConfig,
+        stage_drop_overrides: &[Option<StationRef>],
     ) -> GasReachField {
         // Disabled tanks (#245) are excluded from EVERY gas computation — budget, gauges, stage
         // drops. Filter once here so no downstream helper has to know about `enabled`; rig (vec)
@@ -110,17 +150,53 @@ impl Project {
             Self::dijkstra_with_preds(&adj, &roots)
         };
 
-        let budget_litres = penetration_budget(
+        // The strategy actually applied (a stage-short staged request falls back to All-thirds; Free
+        // and All-thirds never fall back). Drives the drops AND the gauges so they agree.
+        let conservative = gas_config.conservative_tank_gas;
+        let effective = effective_preset(active, gas_config.default_reserve);
+
+        // Per-stage drop plans (safe IN gas, physical cap, default drop pressure) for the effective
+        // strategy — the building blocks the override recompute (#246) reads. Empty for All-thirds
+        // and any fell-back staged rig, so those strategies have no drops to override.
+        let plans = stage_drop_plans(
+            active,
+            effective,
+            gas_config.reserve_profile.stage_reserve_bar,
+            conservative,
+        );
+        // Resolve each per-drop override (a StationRef the diver dragged the marker to) to a station
+        // index; an unresolvable / off-graph ref falls through to the strategy default in `apply`.
+        let resolved_overrides: Vec<Option<usize>> = stage_drop_overrides
+            .iter()
+            .map(|o| {
+                o.and_then(|r| {
+                    let key: StationKey = r.into();
+                    self.resolve_key(&key)
+                        .and_then(|sr| station_index.get(&sr).copied())
+                })
+            })
+            .collect();
+
+        // Base penetration budget (litres), then fold in the override deltas: the cumulative stage
+        // thresholds, per-drop readout bars, over-reserve flags, and the budget change all come out of
+        // one walk over the plans. `apply` returns the STRATEGY defaults untouched for an empty
+        // override list, so this stays byte-identical to the no-override field.
+        let base_budget = penetration_budget(
             active,
             gas_config.default_reserve,
             &gas_config.reserve_profile,
-            gas_config.conservative_tank_gas,
+            conservative,
         );
+        let (thresholds, stage_drop_bars, stage_drop_over_reserve, budget_delta) =
+            apply_stage_drop_overrides(&plans, &resolved_overrides, &gas_in, conservative);
         // A pathological-but-valid cylinder (huge finite fill × volume) can overflow deliverable_gas
         // to a non-finite budget; treat that as all-unreachable (0.0) rather than leaking NaN/Inf to
-        // the gauge readout. The staged paths already `.max(0.0)`-guard; this mirrors them.
+        // the gauge readout. The staged paths already `.max(0.0)`-guard; this mirrors them. The
+        // override budget is always `≥ back-gas ≥ 0` (every contribution is `≥ 0`), so the `.max(0.0)`
+        // is only a finite-guard floor — a shallow drag can never drive the budget negative.
+        let budget_litres = base_budget + budget_delta;
         let budget_litres = if budget_litres.is_finite() {
-            budget_litres
+            budget_litres.max(0.0)
         } else {
             0.0
         };
@@ -178,33 +254,6 @@ impl Project {
             })
             .filter(|&i| reachable[i])
             .or(deepest);
-
-        // The strategy actually applied (a stage-short staged request falls back to All-thirds;
-        // Free and All-thirds never fall back). Drives the drops AND the gauges so they agree.
-        let conservative = gas_config.conservative_tank_gas;
-        let effective = effective_preset(active, gas_config.default_reserve);
-
-        // Per-stage drop gauges + cumulative IN-gas thresholds. Staged (Half-Minus) presets read
-        // them from the reserve rules; Free reads the diver's per-stage usable directly; All-thirds
-        // has no stage drops. `thresholds` places the drop markers along the route below.
-        let (stage_drop_bars, thresholds) = match effective {
-            ReservePreset::Free => free_stage_drops(active, conservative),
-            _ => {
-                let bars = stage_drop_pressures(
-                    active,
-                    effective,
-                    gas_config.reserve_profile.stage_reserve_bar,
-                    conservative,
-                );
-                let thresholds = stage_drop_thresholds(
-                    active,
-                    gas_config.default_reserve,
-                    &gas_config.reserve_profile,
-                    conservative,
-                );
-                (bars, thresholds)
-            }
-        };
 
         // Planned route to the target (for the highlight + final turn) — populated for ANY strategy
         // when something is reachable. Per-stage drop points are placed on it only where a threshold
@@ -275,6 +324,7 @@ impl Project {
             final_turn_ref,
             backgas_turn_bar,
             stage_drop_bars,
+            stage_drop_over_reserve,
             stage_drop_distances_m,
             cylinder_usable_bars,
             route_line_length_m,
@@ -395,6 +445,160 @@ fn stage_drop_distances(
 /// it must not count toward route distance or depth.
 fn is_swim_leg(a: &StationRef, b: &StationRef) -> bool {
     a.section_id == b.section_id && a.station_index.abs_diff(b.station_index) == 1
+}
+
+/// One stage's drop, as the override recompute (#246) needs it. `safe_in_litres` is the strategy's
+/// IN gas off this stage (Half-Minus half / Free usable span); `phys_cap_litres` is its FULL
+/// deliverable (breathing it to empty — the hard clamp a deeper drag can't cross); `default_bar` is
+/// the un-dragged drop-pressure gauge. The `fill/water/rated/basis` fields let a moved drop invert
+/// its litres-consumed back to a pressure on the conservative-capped basis scale.
+struct StageDropPlan {
+    safe_in_litres: f64,
+    phys_cap_litres: f64,
+    default_bar: f64,
+    water_volume_l: f64,
+    rated_pressure_bar: f64,
+    basis: f64,
+}
+
+/// Per-drop plans for the effective strategy, in stage order, aligned 1:1 with the drops the field
+/// exposes. Staged (Half-Minus) counts the first `required_stages` stages; Free takes every enabled
+/// stage with a positive usable allowance (skipping the rest, exactly as the drops did before);
+/// All-thirds and a fell-back staged rig have none. This is the single producer of the strategy
+/// defaults the override walk starts from, so drops/thresholds/bars can never diverge from it.
+fn stage_drop_plans(
+    cylinders: &[Cylinder],
+    effective: ReservePreset,
+    reserve_bar: f64,
+    conservative: bool,
+) -> Vec<StageDropPlan> {
+    let stages: Vec<&Cylinder> = cylinders
+        .iter()
+        .filter(|c| matches!(c.role, CylRole::Stage))
+        .collect();
+    let plan_for = |c: &Cylinder, safe_in_litres: f64, default_bar: f64| {
+        let basis = cyl_basis(c, conservative);
+        StageDropPlan {
+            safe_in_litres,
+            phys_cap_litres: deliverable_gas(
+                basis,
+                c.water_volume_l,
+                c.rated_pressure_bar,
+                conservative,
+            ),
+            default_bar,
+            water_volume_l: c.water_volume_l,
+            rated_pressure_bar: c.rated_pressure_bar,
+            basis,
+        }
+    };
+    match effective {
+        ReservePreset::Free => stages
+            .iter()
+            .filter_map(|&c| {
+                let u = free_usable_bar(c, conservative);
+                if u <= 0.0 {
+                    return None;
+                }
+                Some(plan_for(
+                    c,
+                    free_in_gas(c, conservative),
+                    (c.fill_bar - u).max(0.0),
+                ))
+            })
+            .collect(),
+        ReservePreset::OneStage | ReservePreset::TwoStage => {
+            let needed = required_stages(effective);
+            if stages.len() < needed {
+                return Vec::new();
+            }
+            stages[..needed]
+                .iter()
+                .map(|&c| {
+                    let basis = cyl_basis(c, conservative);
+                    plan_for(
+                        c,
+                        stage_in_gas(c, reserve_bar, conservative),
+                        (0.5 * (basis + reserve_bar)).clamp(0.0, basis),
+                    )
+                })
+                .collect()
+        }
+        ReservePreset::AllThirds => Vec::new(),
+    }
+}
+
+/// A drop dragged over-reserve is one whose actual IN gas exceeds the safe half by more than this
+/// (litres) — a slop floor so graph rounding at exactly the default station never false-flags red.
+const OVER_RESERVE_EPS_LITRES: f64 = 1e-6;
+
+/// Fold the per-drop overrides (#246) into the drops, in ONE cumulative walk. Returns
+/// `(cumulative_thresholds, drop_bars, over_reserve, budget_delta_litres)`:
+/// - `cumulative_thresholds[k]` (litres) is where drop `k` lands on the route (fed to `staged_route`).
+/// - `drop_bars[k]` is the readout pressure — the strategy default, or (when overridden) the tank
+///   pressure left after breathing the litres consumed to the pinned station, inverted from the Z
+///   curve so it matches the gas the reach actually spent.
+/// - `over_reserve[k]` is true only for a drag DEEPER than the safe point (breathing into reserve).
+/// - `budget_delta_litres` is `Σ(actual − safe)`, added to the base budget to move the reach.
+///
+/// A pinned station's contribution is `gas_in[S] − effective-cumulative-so-far`, hard-clamped to
+/// `[0, phys_cap]` — so dragging past tank-empty snaps the drop back to the empty point, and dragging
+/// a drop shallower than the one before it contributes 0 (drops the stage full) rather than going
+/// negative. An unresolved / off-graph / non-finite override falls through to the strategy default.
+fn apply_stage_drop_overrides(
+    plans: &[StageDropPlan],
+    overrides: &[Option<usize>],
+    gas_in: &[f64],
+    conservative: bool,
+) -> (Vec<f64>, Vec<f64>, Vec<bool>, f64) {
+    let mut thresholds = Vec::with_capacity(plans.len());
+    let mut bars = Vec::with_capacity(plans.len());
+    let mut over = Vec::with_capacity(plans.len());
+    let mut eff_cum = 0.0_f64;
+    let mut delta = 0.0_f64;
+    for (k, p) in plans.iter().enumerate() {
+        let pinned = overrides
+            .get(k)
+            .copied()
+            .flatten()
+            .filter(|&si| gas_in.get(si).is_some_and(|g| g.is_finite()));
+        let (contribution, bar, is_over) = match pinned {
+            Some(si) => {
+                let contribution = (gas_in[si] - eff_cum).clamp(0.0, p.phys_cap_litres);
+                (
+                    contribution,
+                    drop_pressure_for_contribution(p, contribution, conservative),
+                    contribution > p.safe_in_litres + OVER_RESERVE_EPS_LITRES,
+                )
+            }
+            None => (p.safe_in_litres, p.default_bar, false),
+        };
+        delta += contribution - p.safe_in_litres;
+        eff_cum += contribution;
+        thresholds.push(eff_cum);
+        bars.push(bar.max(0.0));
+        over.push(is_over);
+    }
+    (thresholds, bars, over, delta)
+}
+
+/// Invert the Z-derated deliverable curve to the tank pressure (bar) left after breathing
+/// `contribution` litres off a stage from full (its conservative-capped `basis`). `deliverable_gas`
+/// is monotone non-decreasing over `[0, basis]`, so ~50 bisection halvings converge to sub-microbar.
+/// Exact w.r.t. the Z model, so a moved drop's readout matches the gas the reach recompute spent.
+fn drop_pressure_for_contribution(p: &StageDropPlan, contribution: f64, conservative: bool) -> f64 {
+    let target_held = (p.phys_cap_litres - contribution).max(0.0);
+    let (mut lo, mut hi) = (0.0_f64, p.basis.max(0.0));
+    for _ in 0..50 {
+        let mid = 0.5 * (lo + hi);
+        if deliverable_gas(mid, p.water_volume_l, p.rated_pressure_bar, conservative) < target_held
+        {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
 }
 
 /// Physical metrics of the planned route from its ordered station coordinates and a per-leg swim
@@ -614,40 +818,6 @@ fn backgas_turn_pressure(cylinders: &[Cylinder], frac: f64, conservative: bool) 
     Some((avg_start - frac * usable / sum_wv).max(0.0))
 }
 
-/// Per-stage Half-Minus drop pressure gauge (bar), one per counted stage of `preset` (in rig order).
-/// `drop = (basis + reserve)/2` with `basis` the conservative-capped fill — mirrors `stage_in_gas`
-/// so the gauge matches where the engine drops the stage. Empty when `preset` counts no stages
-/// (All-thirds) or the rig is stage-short (the caller passes the effective preset).
-fn stage_drop_pressures(
-    cylinders: &[Cylinder],
-    preset: ReservePreset,
-    reserve_bar: f64,
-    conservative: bool,
-) -> Vec<f64> {
-    let needed = required_stages(preset);
-    if needed == 0 {
-        return Vec::new();
-    }
-    let stages: Vec<&Cylinder> = cylinders
-        .iter()
-        .filter(|c| matches!(c.role, CylRole::Stage))
-        .collect();
-    if stages.len() < needed {
-        return Vec::new();
-    }
-    stages[..needed]
-        .iter()
-        .map(|c| {
-            let basis = if conservative {
-                c.fill_bar.min(c.rated_pressure_bar)
-            } else {
-                c.fill_bar
-            };
-            (0.5 * (basis + reserve_bar)).clamp(0.0, basis)
-        })
-        .collect()
-}
-
 /// Per-cylinder penetration allowance (bar), one entry per INPUT cylinder (original order) for the
 /// "usable gas" table column (#245). Disabled tanks and non-budget roles are `0.0`. Computed as
 /// `fill − turn/drop` so the column can never drift from the gauges/budget: a back-gas tank shows
@@ -733,31 +903,6 @@ fn free_backgas_turn(cylinders: &[Cylinder], conservative: bool) -> Option<f64> 
         .sum::<f64>()
         / sum_wv;
     Some(turn.max(0.0))
-}
-
-/// Free-strategy per-stage drop gauges: `(drop_bars, cumulative_thresholds)`. Each enabled stage
-/// with a positive usable allowance is dropped where that gas is spent — drop pressure `fill −
-/// usable`, cumulative IN-gas threshold (litres). Stages with no allowance yield no drop.
-fn free_stage_drops(cylinders: &[Cylinder], conservative: bool) -> (Vec<f64>, Vec<f64>) {
-    let mut bars = Vec::new();
-    let mut thresholds = Vec::new();
-    let mut acc = 0.0;
-    for c in cylinders
-        .iter()
-        .filter(|c| matches!(c.role, CylRole::Stage))
-    {
-        // Clamp to `basis` (same ceiling as the budget's `free_in_gas`) so the drop gauge agrees
-        // with the credited gas on an overfilled tank under conservative; a NaN input sanitizes to
-        // 0 so it takes the skip below rather than pushing a bogus drop.
-        let u = free_usable_bar(c, conservative);
-        if u <= 0.0 {
-            continue;
-        }
-        acc += free_in_gas(c, conservative);
-        bars.push((c.fill_bar - u).max(0.0));
-        thresholds.push(acc);
-    }
-    (bars, thresholds)
 }
 
 /// One-way IN penetration budget (litres), PRD §5.1 — the gas a diver may consume on the way
@@ -847,38 +992,6 @@ fn stage_in_gas(c: &Cylinder, reserve_bar: f64, conservative: bool) -> f64 {
     let drop = (0.5 * (basis + reserve_bar)).clamp(0.0, basis);
     let held = deliverable_gas(drop, c.water_volume_l, c.rated_pressure_bar, conservative);
     (full - held).max(0.0)
-}
-
-/// Cumulative stage IN-gas thresholds (litres) along the penetration route for a **staged**
-/// (Half-Minus) strategy: element `k` = the total IN gas consumed by the time stage `k` is
-/// dropped (Σ of `stage_in_gas` over stages `0..=k`, rig/vec order). The diver drops stage `k`
-/// where cumulative gas-to-reach first reaches `thresholds[k]`. Empty for All-thirds and for any
-/// rig that lacks the required stages (falls back to All-thirds — no staged drops).
-fn stage_drop_thresholds(
-    cylinders: &[Cylinder],
-    preset: ReservePreset,
-    profile: &ReserveProfile,
-    conservative: bool,
-) -> Vec<f64> {
-    let needed = required_stages(preset);
-    if needed == 0 {
-        return Vec::new();
-    }
-    let stages: Vec<&Cylinder> = cylinders
-        .iter()
-        .filter(|c| matches!(c.role, CylRole::Stage))
-        .collect();
-    if stages.len() < needed {
-        return Vec::new();
-    }
-    let mut acc = 0.0;
-    stages[..needed]
-        .iter()
-        .map(|&c| {
-            acc += stage_in_gas(c, profile.stage_reserve_bar, conservative);
-            acc
-        })
-        .collect()
 }
 
 /// Total usable **open-circuit** breathing gas (litres) across the diver's back-gas + stage
