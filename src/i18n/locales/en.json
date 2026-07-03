@@ -2221,7 +2221,6 @@
       "computing": "Computing…"
     },
     "map": {
-      "dropTooltip": "Drop stage {{n}} here",
       "dropDraggableTooltip": "Stage {{n}} drop — drag or arrow-key to move; Delete to reset",
       "dropOverReserveTooltip": "Stage {{n}} drop — moved past reserve (breathing into reserve gas)",
       "dropAria": "Stage {{n}} drop point — drag or use arrow keys to move it along the route, Delete to reset",

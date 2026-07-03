@@ -166,8 +166,11 @@ impl Project {
         );
         // Resolve each per-drop override (a StationRef the diver dragged the marker to) to a station
         // index; an unresolvable / off-graph ref falls through to the strategy default in `apply`.
+        // Only the first `plans.len()` entries can ever affect a drop, so cap the (frontend-sized)
+        // input there — a stray-long list can't cost unbounded `resolve_key` scans.
         let resolved_overrides: Vec<Option<usize>> = stage_drop_overrides
             .iter()
+            .take(plans.len())
             .map(|o| {
                 o.and_then(|r| {
                     let key: StationKey = r.into();
@@ -188,7 +191,7 @@ impl Project {
             conservative,
         );
         let (thresholds, stage_drop_bars, stage_drop_over_reserve, budget_delta) =
-            apply_stage_drop_overrides(&plans, &resolved_overrides, &gas_in, conservative);
+            apply_stage_drop_overrides(&plans, &resolved_overrides, &gas_in, &pred, conservative);
         // A pathological-but-valid cylinder (huge finite fill × volume) can overflow deliverable_gas
         // to a non-finite budget; treat that as all-unreachable (0.0) rather than leaking NaN/Inf to
         // the gauge readout. The staged paths already `.max(0.0)`-guard; this mirrors them. The
@@ -529,7 +532,7 @@ fn stage_drop_plans(
 }
 
 /// A drop dragged over-reserve is one whose actual IN gas exceeds the safe half by more than this
-/// (litres) — a slop floor so graph rounding at exactly the default station never false-flags red.
+/// (litres) — a slop floor against float noise once we've already excluded the default station.
 const OVER_RESERVE_EPS_LITRES: f64 = 1e-6;
 
 /// Fold the per-drop overrides (#246) into the drops, in ONE cumulative walk. Returns
@@ -545,24 +548,49 @@ const OVER_RESERVE_EPS_LITRES: f64 = 1e-6;
 /// `[0, phys_cap]` — so dragging past tank-empty snaps the drop back to the empty point, and dragging
 /// a drop shallower than the one before it contributes 0 (drops the stage full) rather than going
 /// negative. An unresolved / off-graph / non-finite override falls through to the strategy default.
+///
+/// ⚠ Pin-to-the-default-station is a NO-OP. `staged_route` renders the default ▼ at the first route
+/// station whose `gas_in ≥ threshold`, so that station's `gas_in` usually OVERSHOOTS the sub-station
+/// threshold. Reading the override as `gas_in[station] − eff_cum` there would fabricate an
+/// over-reserve plan and extend the reach on a mere jiggle / release-in-place (the unsafe direction).
+/// `pred` (the shortest-path tree) lets us recognise that station — it's the first on its route whose
+/// gas clears the default threshold while its parent's doesn't — and reproduce the un-dragged default.
 fn apply_stage_drop_overrides(
     plans: &[StageDropPlan],
     overrides: &[Option<usize>],
     gas_in: &[f64],
+    pred: &[usize],
     conservative: bool,
 ) -> (Vec<f64>, Vec<f64>, Vec<bool>, f64) {
     let mut thresholds = Vec::with_capacity(plans.len());
     let mut bars = Vec::with_capacity(plans.len());
     let mut over = Vec::with_capacity(plans.len());
     let mut eff_cum = 0.0_f64;
+    // Cumulative UN-overridden threshold — the strategy's own drop point for each stage, used only to
+    // recognise a pin to that default station (the root's tree-parent reads gas 0).
+    let mut default_cum = 0.0_f64;
     let mut delta = 0.0_f64;
+    let pred_gas = |si: usize| -> f64 {
+        pred.get(si)
+            .copied()
+            .filter(|&p| p != usize::MAX)
+            .and_then(|p| gas_in.get(p).copied())
+            .unwrap_or(0.0)
+    };
     for (k, p) in plans.iter().enumerate() {
+        default_cum += p.safe_in_litres;
         let pinned = overrides
             .get(k)
             .copied()
             .flatten()
             .filter(|&si| gas_in.get(si).is_some_and(|g| g.is_finite()));
         let (contribution, bar, is_over) = match pinned {
+            // Pinned to the stage's OWN default drop station (first station past the default
+            // threshold — its tree-parent is still below it): reproduce the un-dragged default so a
+            // jiggle / release-in-place can't fabricate over-reserve or extend the reach.
+            Some(si) if gas_in[si] >= default_cum && pred_gas(si) < default_cum => {
+                (p.safe_in_litres, p.default_bar, false)
+            }
             Some(si) => {
                 let contribution = (gas_in[si] - eff_cum).clamp(0.0, p.phys_cap_litres);
                 (
@@ -584,8 +612,10 @@ fn apply_stage_drop_overrides(
 
 /// Invert the Z-derated deliverable curve to the tank pressure (bar) left after breathing
 /// `contribution` litres off a stage from full (its conservative-capped `basis`). `deliverable_gas`
-/// is monotone non-decreasing over `[0, basis]`, so ~50 bisection halvings converge to sub-microbar.
-/// Exact w.r.t. the Z model, so a moved drop's readout matches the gas the reach recompute spent.
+/// is monotone non-decreasing over `[0, basis]` for every realistic fill (the `p / Z(p)` curve only
+/// turns over above ~714 bar — ~2× any real cylinder — where a non-conservative fill could pick a
+/// wrong root; that mis-reports only this DISPLAY gauge, never the litres-exact reach). ~50 bisection
+/// halvings converge to sub-microbar, and at `contribution == safe` it inverts back to `default_bar`.
 fn drop_pressure_for_contribution(p: &StageDropPlan, contribution: f64, conservative: bool) -> f64 {
     let target_held = (p.phys_cap_litres - contribution).max(0.0);
     let (mut lo, mut hi) = (0.0_f64, p.basis.max(0.0));

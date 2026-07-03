@@ -959,6 +959,9 @@ test.describe('Gas planning', () => {
     await expect
       .poll(async () => (await lastGasReachOverrides(page)).some((r) => r != null), { timeout: 3000 })
       .toBe(true);
+    // a11y: focus survives the recompute — the rebuilt ▼ marker regains focus so an AT user can
+    // chain nudges (regression guard for the stale-field-rebuild focus loss the review caught).
+    await expect(page.locator('[data-testid="gas-drop-marker"]').first()).toBeFocused();
     // The readout offers a per-drop reset; clicking it clears the override and the field recomputes.
     const reset = page.locator('[data-testid="gas-readout-stage1-reset"]');
     await expect(reset).toBeVisible();

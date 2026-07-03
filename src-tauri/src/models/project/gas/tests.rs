@@ -1325,6 +1325,118 @@ fn gas_reach_field_override_shifts_downstream_drop_keeping_it_safe() {
 }
 
 #[test]
+fn gas_reach_field_override_to_default_station_is_a_no_op() {
+    // Pinning the drop to its OWN default-rendered station reproduces the un-dragged field. The
+    // default ▼ sits at station 2 (staged_route rounds the 600 L threshold up to the 800 L station),
+    // so reading the override as gas_in[2]=800 would fabricate over-reserve + extend the reach on a
+    // jiggle / release-in-place — the unsafe direction the review caught. `apply` must no-op it.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let (bg, stage, cfg) = override_rig();
+    let sec = origin.section_id;
+    let base = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        &[bg.clone(), stage.clone()],
+        &cfg,
+    );
+    assert_eq!(base.stage_drop_refs, vec![StationRef::new(sec, 2)]);
+    let overrides = vec![Some(StationRef::new(sec, 2))];
+    let f = project.compute_gas_reach_field_with_overrides(
+        Some(&origin),
+        None,
+        &diver,
+        &[bg, stage],
+        &cfg,
+        &overrides,
+    );
+    assert_eq!(f, base);
+}
+
+#[test]
+fn gas_reach_field_override_unresolvable_ref_falls_through_to_default() {
+    // A Some(ref) that resolves to no station (index past the section) is dropped by the
+    // `resolve_key`/`station_index` miss, so the field equals the un-overridden default.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let (bg, stage, cfg) = override_rig();
+    let sec = origin.section_id;
+    let base = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        &[bg.clone(), stage.clone()],
+        &cfg,
+    );
+    let overrides = vec![Some(StationRef::new(sec, 9999))];
+    let f = project.compute_gas_reach_field_with_overrides(
+        Some(&origin),
+        None,
+        &diver,
+        &[bg, stage],
+        &cfg,
+        &overrides,
+    );
+    assert_eq!(f, base);
+}
+
+#[test]
+fn gas_reach_field_override_downstream_shallower_than_cumulative_drops_full() {
+    // TwoStage: pin stage 0 DEEP (station 2, over-reserve, cumulative 800 L), then pin stage 1
+    // SHALLOWER than that cumulative (station 1, gas 300 L < 800). Stage 1's contribution clamps to
+    // 0 — it is dropped FULL (bar back at its 70-bar fill), never negative — and is not over-reserve.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        82.5,
+        232.0,
+        80.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage0 = Cylinder::new(
+        10.0,
+        207.0,
+        90.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let stage1 = Cylinder::new(
+        10.0,
+        207.0,
+        70.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::TwoStage,
+        ..GasConfig::default()
+    };
+    let sec = origin.section_id;
+    let overrides = vec![Some(StationRef::new(sec, 2)), Some(StationRef::new(sec, 1))];
+    let f = project.compute_gas_reach_field_with_overrides(
+        Some(&origin),
+        None,
+        &diver,
+        &[bg, stage0, stage1],
+        &cfg,
+        &overrides,
+    );
+    assert_eq!(f.stage_drop_over_reserve, vec![true, false]);
+    assert!(
+        (f.stage_drop_bars[1] - 70.0).abs() < 1e-3,
+        "stage 1 dropped full at its 70-bar fill"
+    );
+}
+
+#[test]
 fn gas_reach_field_all_thirds_has_route_and_final_turn_but_no_drops() {
     // All-thirds has the route highlight + final turn (to the deepest reachable station) like any
     // strategy, but NO per-stage drops (those are staged-only).

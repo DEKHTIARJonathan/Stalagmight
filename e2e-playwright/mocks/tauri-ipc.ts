@@ -1362,8 +1362,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               : [];
             // Apply per-stage drop overrides (#246): pin a drop to its dragged station and flag it
             // over-reserve when that station sits DEEPER (more gas-to-reach) than the strategy drop.
-            // Exact recompute is Rust-tested; the mock just moves the ref + sets the flag so the drag
-            // UI (marker colour, reset button, panel warning) has something deterministic to assert.
+            // ⚠ This is a DELIBERATELY simplified stand-in, NOT the engine's rule: the engine flags
+            // over-reserve on `contribution > safe_in_litres` (with a pin-to-default no-op) and folds
+            // the budget/turn/reach; the mock only moves the ref + sets a station-depth flag and keeps
+            // the budget fixed. So the e2e asserts UI WIRING (colour, reset, warning) only — the flag
+            // semantics + the recompute math are covered by the Rust unit tests, which are the source
+            // of truth. A pin-to-default is a no-op here too (same station ⇒ not deeper ⇒ not flagged).
             const stageOverrides = (args?.stageDropOverrides ?? []) as Array<{
               section_id: number;
               station_index: number;
