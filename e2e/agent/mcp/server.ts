@@ -10,6 +10,7 @@ import { LogCursor, type LogLevel } from '../lib/logs';
 import { invokeInApp, evalInApp, capJson } from '../lib/page';
 import { newOracleState, runSweep, type OracleState } from '../lib/oracles';
 import { listScenarios, runScenario } from '../scenarios';
+import { fixturePath, DEFAULT_FIXTURE } from '../scenarios/common';
 import {
   waitForAppReady,
   waitForUiIdle,
@@ -496,6 +497,76 @@ define('map_click', 'Click a geographic point on the map canvas (lngLat -> pixel
   ),
 );
 
+// ----------------------------------------------------------------- seeding
+
+define(
+  'seed',
+  'Seed a project: open a fixture (.stalx), open a fractal fixture, or create a basic empty project. Fixtures resolve under e2e/fixtures/.',
+  {
+    mode: z.enum(['fixture', 'fractal', 'basic']),
+    name: z.string().optional(),
+    projectName: z.string().optional(),
+  },
+  (args) =>
+    run(
+      'seed',
+      args,
+      async () => {
+        if (args.mode === 'basic') {
+          const res = await session.exclusive(() =>
+            callStoreAction(session.browser, 'project', 'createProject', [args.projectName ?? 'harness-project']),
+          );
+          return { result: { mode: 'basic', result: res } };
+        }
+        const fixture = args.name ?? (args.mode === 'fractal' ? 'fractal_plant_iter2.stalx' : DEFAULT_FIXTURE);
+        const p = fixturePath(fixture);
+        const res = await session.exclusive(() =>
+          callStoreAction(session.browser, 'project', 'openProject', [p]),
+        );
+        return { result: { mode: args.mode, fixture, result: res }, resolved: { path: p } };
+      },
+      { digest: true, sweep: true },
+    ),
+);
+
+// -------------------------------------------------------------- escape hatch: driver script
+
+define(
+  'driver_script',
+  'Run a Node-context async function body with browser/ipc/evalInApp/readStore/callAction/log in scope, under the session mutex, for tight stress loops (one MCP call per action is ~100x too slow). Returns the value (JSON-capped).',
+  { script: z.string(), timeoutMs: z.number().optional() },
+  (args) =>
+    run(
+      'driver_script',
+      args,
+      async () => {
+        const timeoutMs = args.timeoutMs ?? 60000;
+        const value = await session.exclusive(async () => {
+          const helpers = {
+            browser: session.browser,
+            ipc: (c: string, a?: Record<string, unknown>) => invokeInApp(session.browser, c, a),
+            evalInApp: (b: string, a?: unknown[]) => evalInApp(session.browser, b, a ?? []),
+            readStore: (s: StoreName, p?: string) => readStore(session.browser, s, p ?? null),
+            callAction: (s: StoreName, act: string, a?: unknown[]) =>
+              callStoreAction(session.browser, s, act, a ?? []),
+            log: (m: unknown) => {
+              if (session.hasRecorder) session.recorder.event('driver-log', { message: String(m) });
+            },
+          };
+          // eslint-disable-next-line no-new-func
+          const fn = new Function(
+            'helpers',
+            `return (async () => { const { browser, ipc, evalInApp, readStore, callAction, log } = helpers; ${args.script} })();`,
+          );
+          return withTimeout(fn(helpers) as Promise<unknown>, timeoutMs);
+        });
+        if (value === TIMED_OUT) throw new Error(`driver_script timed out after ${timeoutMs}ms`);
+        return { result: capJson(value, 16384) };
+      },
+      { sweep: true },
+    ),
+);
+
 // ------------------------------------------------------------- oracles + scenarios
 
 define(
@@ -551,6 +622,19 @@ define(
 );
 
 // -------------------------------------------------------------- helpers
+
+const TIMED_OUT = Symbol('timed-out');
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 async function clickWithOptions(
   b: AppSession['browser'],

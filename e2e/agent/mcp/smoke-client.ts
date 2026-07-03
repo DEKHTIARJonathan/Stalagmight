@@ -57,9 +57,10 @@ async function main(): Promise<void> {
       'screenshot', 'store_state', 'logs', 'wait_for',
       'click', 'type_text', 'press_keys', 'eval', 'ipc',
       'store_action', 'map_view', 'map_click',
+      'seed', 'driver_script', 'check_problems', 'run_scenario',
     ];
     const missing = expected.filter((n) => !names.includes(n));
-    check(`tools/list has all ${expected.length} core tools`, missing.length === 0, missing.length ? { missing } : names.length);
+    check(`tools/list has all ${expected.length} tools`, missing.length === 0, missing.length ? { missing } : names.length);
 
     if (!withLifecycle) {
       check('lifecycle skipped (AGENT_MCP_SMOKE_LIFECYCLE=0)', true);
@@ -117,6 +118,16 @@ async function main(): Promise<void> {
 
     const respondsAfterPanic = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
     check('app survives thread panic (still responds)', respondsAfterPanic?.value === 'global');
+
+    // seed + driver_script (do this last: seed opens a project -> single view).
+    const seeded = parseText(await call('seed', { mode: 'fixture' })) as { mode?: string };
+    check('seed opens a fixture project', seeded?.mode === 'fixture', seeded);
+    const seededView = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
+    check('seed switched to single view', seededView?.value === 'single', seededView?.value);
+    const driven = parseText(
+      await call('driver_script', { script: 'const v = await readStore("ui", "view"); return v.value;' }),
+    ) as { value?: unknown };
+    check('driver_script runs with helpers in scope', driven?.value === 'single', driven?.value);
 
     const stopped = parseText(await call('app_stop')) as { stopped?: boolean };
     check('app_stop', stopped?.stopped === true);
