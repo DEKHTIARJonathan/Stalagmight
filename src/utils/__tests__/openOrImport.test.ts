@@ -6,7 +6,7 @@
  * entry-point telemetry source is cleared on every abandon/reject/null/error
  * branch (so it can't mis-attribute a later, unrelated command).
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue({}),
@@ -83,6 +83,57 @@ describe('routeOpenedFile', () => {
     expect(importDmp).toHaveBeenCalledWith('/cave/survey.dmp');
     // No dialog handed off; the parse bailed → source cleared in finally.
     expect(peekProjectActionSource()).toBeUndefined();
+  });
+});
+
+describe('routeOpenedFile — read-only-map import guard (#243)', () => {
+  beforeEach(() => {
+    useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
+  });
+  // Reset the mode so a case that sets Plan/adjusted can't leak into later tests.
+  afterEach(() => {
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
+  });
+
+  it('allows a DMP import in Survey + measured (the editable baseline)', async () => {
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(importDmp).toHaveBeenCalledWith('/cave/survey.dmp');
+    expect(useUIStore.getState().activeDialog).not.toBe('error');
+  });
+
+  it('blocks a DMP import in the closure-adjusted survey view (advise: Measured view)', async () => {
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'closureAdjusted' });
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(importDmp).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBe('error');
+    expect(String(useUIStore.getState().dialogData.message)).toContain('Measured view');
+  });
+
+  // The regression the #243 guard closes: Plan/Export force closureAdjusted, but that
+  // auto-reverts to 'measured' on a no-closures project, so a geometryMode-only guard
+  // would let the import through and mutate the survey under the read-only map.
+  it('blocks a DMP import in Plan even when geometryMode fell back to measured (advise: Survey mode)', async () => {
+    useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(importDmp).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBe('error');
+    expect(String(useUIStore.getState().dialogData.message)).toContain('Survey mode');
+  });
+
+  it('blocks a DMP import in Export (measured fallback) too', async () => {
+    useUIStore.setState({ appMode: 'export', geometryMode: 'measured' });
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(importDmp).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBe('error');
+  });
+
+  it('still opens a native .stalx in Plan (opening a project is not an import)', async () => {
+    useProjectStore.setState({ project: null, isDirty: false });
+    useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
+    await routeOpenedFile('/cave/project.stalx');
+    expect(loadProject).toHaveBeenCalledWith('/cave/project.stalx');
+    expect(useUIStore.getState().activeDialog).not.toBe('error');
   });
 });
 

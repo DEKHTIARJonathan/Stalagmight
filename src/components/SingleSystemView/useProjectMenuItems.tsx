@@ -10,7 +10,7 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
-import { useUIStore } from '../../store/uiStore';
+import { useUIStore, isMapReadOnly } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
@@ -57,10 +57,11 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   // published while logged in).
   const speleoSession = useSpeleoStore((s) => s.session);
   const { busy: speleoBusy, startEditing, update, done } = useSpeleoActions();
-  // The closure-adjusted view is read-only — imports add sections. Disable the
-  // Import item up front (the toolbar Import button and Ctrl+I already do), so the
-  // user isn't sent through a file picker only to be rejected after choosing.
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  // The read-only map (closure-adjusted view, or Plan/Export #243) rejects imports
+  // - they add sections. Disable the Import item up front (the toolbar Import
+  // button and Ctrl+I already do), so the user isn't sent through a file picker
+  // only to be rejected after choosing.
+  const mapReadOnly = useUIStore(isMapReadOnly);
 
   return useMemo(() => {
     const sz = 18;
@@ -213,7 +214,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         label: t('globalView.actions.import'),
         icon: <DownloadIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.import,
-        disabled: geometryReadOnly,
+        disabled: mapReadOnly,
         submenu: [
           // DMP-only filter (dmpImportFilters, no "All Files"): with a project
           // open, an unrelated file — notably a `.stalx` — must NOT be pickable
@@ -269,5 +270,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showToast, showDevStats, toggleDisplay, geometryReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoBusy, startEditing, update, done]);
+  }, [t, openDialog, showToast, showDevStats, toggleDisplay, mapReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoBusy, startEditing, update, done]);
 }

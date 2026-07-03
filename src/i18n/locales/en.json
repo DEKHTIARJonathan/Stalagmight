@@ -2201,7 +2201,8 @@
     "map": {
       "dropTooltip": "Drop stage {{n}} here",
       "finalTurnTooltip": "Turn around here",
-      "turnMarkerTooltip": "Right-click to set as endpoint"
+      "turnMarkerTooltip": "Click to set as endpoint",
+      "turnMarkerAria": "Candidate route endpoint — activate to set as endpoint"
     }
   },
   "modeCarousel": {

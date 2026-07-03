@@ -22,7 +22,7 @@
  */
 import { open } from '@tauri-apps/plugin-dialog';
 import { useProjectStore } from '../store/projectStore';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, isMapReadOnly } from '../store/uiStore';
 import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openOrImportFilters, IMPORTABLE_EXTENSIONS } from './fileDialogs';
@@ -66,16 +66,21 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
   let handedOff = false;
 
   try {
-    // Importing into an open project adds sections (a mutation). The closure-
-    // adjusted view (#70) is read-only, so reject an import while it's active.
-    // Centralized here so every caller (toolbar, Ctrl+I, drag-drop) shares it.
-    // Scoped to recognized importable files so an unsupported/unknown extension
+    // Importing into an open project adds sections (a mutation). The read-only map
+    // (#70 closure-adjusted view, or #243 Plan/Export) rejects an import while
+    // active. Centralized here so every caller (toolbar, Ctrl+I, drag-drop) shares
+    // it. Scoped to recognized importable files so an unsupported/unknown extension
     // still falls through to the accurate "Unsupported file type" error below
     // (opening a native .stalx project is not an import, so it's exempt too).
-    if (isImportable && hasProject && ui.geometryMode === 'closureAdjusted') {
+    if (isImportable && hasProject && isMapReadOnly(ui)) {
+      // Tailor the fix-it advice to the active read-only cause: a Plan/Export user
+      // must return to Survey; the closure-adjusted survey user switches the view.
       ui.openDialog('error', {
         title: 'Import',
-        message: 'Switch to the Measured view to import — the closure-adjusted view is read-only.',
+        message:
+          ui.appMode !== 'survey'
+            ? 'Switch to Survey mode to import — the Plan and Export workspaces are read-only.'
+            : 'Switch to the Measured view to import — the closure-adjusted view is read-only.',
       });
       return;
     }

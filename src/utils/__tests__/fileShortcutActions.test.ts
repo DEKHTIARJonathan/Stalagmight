@@ -5,10 +5,16 @@
  * the unsaved-changes dialog when a dirty project is open, and open the
  * new-project dialog directly otherwise.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue({}),
+}));
+
+// Spy on the picker so the read-only guard can be asserted without touching dialogs.
+const pickAndRouteMock = vi.fn();
+vi.mock('../openOrImport', () => ({
+  pickAndRoute: (...args: unknown[]) => pickAndRouteMock(...args),
 }));
 
 import { runFileShortcutAction } from '../fileShortcutActions';
@@ -37,5 +43,43 @@ describe('runFileShortcutAction("new_file")', () => {
     runFileShortcutAction('new_file');
     expect(useUIStore.getState().activeDialog).toBe('unsaved-changes');
     expect(useUIStore.getState().dialogData).toMatchObject({ pendingNewProject: true });
+  });
+});
+
+describe('runFileShortcutAction("import_dmp") — read-only-map guard (#243)', () => {
+  beforeEach(() => {
+    pickAndRouteMock.mockClear();
+    useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
+  });
+  afterEach(() => {
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
+  });
+
+  it('opens the picker in Survey + measured (the editable baseline)', () => {
+    runFileShortcutAction('import_dmp');
+    expect(pickAndRouteMock).toHaveBeenCalled();
+  });
+
+  // Ctrl+I is the third import route the #243 guard had to cover; Plan/Export force
+  // closureAdjusted, which falls back to measured on a no-closures project — so a
+  // geometryMode-only check would open the picker under the read-only map.
+  it('skips the picker in Plan even when geometryMode fell back to measured', () => {
+    useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
+    runFileShortcutAction('import_dmp');
+    expect(pickAndRouteMock).not.toHaveBeenCalled();
+  });
+
+  it('skips the picker in the closure-adjusted survey view', () => {
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'closureAdjusted' });
+    runFileShortcutAction('import_dmp');
+    expect(pickAndRouteMock).not.toHaveBeenCalled();
+  });
+
+  it('opens the picker with NO project (GlobalView) regardless of mode — the guard is project-scoped', () => {
+    useProjectStore.setState({ project: null, isDirty: false });
+    useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
+    runFileShortcutAction('import_dmp');
+    expect(pickAndRouteMock).toHaveBeenCalled();
   });
 });
