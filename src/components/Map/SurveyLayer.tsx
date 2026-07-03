@@ -105,8 +105,8 @@ export default class SurveyLayer {
   // Hitbox layers for improved click detection
   private stationsHitboxLayerId = 'survey-stations-hitbox';
   private shotsHitboxLayerId = 'survey-shots-hitbox';
-  // Gas route highlight (#233): the picked penetration route drawn over the survey — solid for
-  // swum legs, dashed for jumps (a separate layer since line-dasharray can't be data-driven).
+  // Gas route highlight (#233): the picked penetration route drawn over the survey — one line
+  // layer, swum legs at full opacity and jump legs faded via a data-driven line-opacity (#243).
   private gasRouteLayerId = 'survey-gas-route';
 
   // Base zoom-density filters for label layers (set at init, restored when clearing reference filter)
@@ -1842,8 +1842,9 @@ export default class SurveyLayer {
 
   /**
    * Apply the gas route highlight (#233): the picked penetration route drawn over the survey —
-   * swum legs solid, jump legs dashed. Has its own GeoJSON source (survives `setData()`); the legs
-   * are stored so `applyFeaturesToSources` re-pushes them after a feature rebuild. `[]` clears it.
+   * swum legs at full opacity, jump legs faded (#243). Has its own GeoJSON source (survives
+   * `setData()`); the legs are stored so `applyFeaturesToSources` re-pushes them after a feature
+   * rebuild. `[]` clears it.
    */
   setGasRoute(legs: RouteLeg[]): void {
     this.gasRouteLegs = legs;

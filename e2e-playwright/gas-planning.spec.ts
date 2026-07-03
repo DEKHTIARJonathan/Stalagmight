@@ -57,16 +57,42 @@ async function waitForMapLoaded(page: Page): Promise<void> {
     .toBe(true);
 }
 
+type StationRefLite = { section_id: number; station_index: number };
+
 type E2EWindow = {
   __E2E_TEST__?: {
     uiStore: {
       getState: () => { appMode: string; activeTool: string; setActiveTool: (t: string) => void };
+    };
+    gasPlanStore: {
+      getState: () => {
+        endpoint: StationRefLite | null;
+        reachField: { turn_frontier: StationRefLite[] } | null;
+      };
     };
   };
 };
 
 async function appMode(page: Page): Promise<string> {
   return page.evaluate(() => (window as unknown as E2EWindow).__E2E_TEST__?.uiStore.getState().appMode ?? '');
+}
+
+/** The gas plan's chosen route endpoint (null if unset). Shared so the endpoint-pick
+ *  specs don't each re-spell the `__E2E_TEST__.gasPlanStore` cast. `?? null` keeps a
+ *  `.not.toBeNull()` assertion honest — a missing hook reads null, not undefined. */
+async function gasEndpoint(page: Page): Promise<StationRefLite | null> {
+  return page.evaluate(
+    () => (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().endpoint ?? null,
+  );
+}
+
+/** The reachable turn-frontier refs, in the order the map markers are built from. */
+async function turnFrontier(page: Page): Promise<StationRefLite[]> {
+  return page.evaluate(
+    () =>
+      (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().reachField
+        ?.turn_frontier ?? [],
+  );
 }
 
 async function activeTool(page: Page): Promise<string> {
@@ -354,15 +380,7 @@ test.describe('Gas planning', () => {
     // Picking the endpoint stores it in the gas plan store and closes the menu.
     await page.getByText('Set as endpoint').click();
     await expect(page.getByText('Set as endpoint')).toHaveCount(0);
-    const endpoint = await page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __E2E_TEST__: { gasPlanStore: { getState: () => { endpoint: unknown } } };
-          }
-        ).__E2E_TEST__.gasPlanStore.getState().endpoint,
-    );
-    expect(endpoint).not.toBeNull();
+    expect(await gasEndpoint(page)).not.toBeNull();
   });
 
   test('right-clicking a turn-frontier dot opens the Plan menu and sets the endpoint @smoke', async ({
@@ -377,54 +395,56 @@ test.describe('Gas planning', () => {
     await page.locator('[data-testid="gas-turn-marker"]').first().click({ button: 'right' });
     await expect(page.getByText('Set as endpoint')).toBeVisible();
     await page.getByText('Set as endpoint').click();
-    const endpoint = await page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __E2E_TEST__: { gasPlanStore: { getState: () => { endpoint: unknown } } };
-          }
-        ).__E2E_TEST__.gasPlanStore.getState().endpoint,
-    );
-    expect(endpoint).not.toBeNull();
+    expect(await gasEndpoint(page)).not.toBeNull();
   });
 
-  test('left-clicking a turn-frontier dot selects it as the route endpoint @smoke', async ({
+  test('left-clicking a turn-frontier dot selects THAT station as the route endpoint @smoke', async ({
     page,
   }) => {
     await enterMode(page, 'plan');
     await expect
       .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
       .toBeGreaterThan(0);
+    // Capture which station the first marker represents (markers are built in
+    // turn_frontier order), so we assert the pick set THAT ref — a wrong-ref bug
+    // (all markers picking the same station, or an off-by-one) would slip past a
+    // mere "endpoint is non-null" check.
+    const expected = (await turnFrontier(page))[0];
+    expect(expected).toBeTruthy();
     // A single left click sets the endpoint directly — no menu round-trip (#243).
     await page.locator('[data-testid="gas-turn-marker"]').first().click();
-    await expect
-      .poll(
-        () =>
-          page.evaluate(
-            () =>
-              (
-                window as unknown as {
-                  __E2E_TEST__: { gasPlanStore: { getState: () => { endpoint: unknown } } };
-                }
-              ).__E2E_TEST__.gasPlanStore.getState().endpoint,
-          ),
-        { timeout: 2000 },
-      )
-      .not.toBeNull();
+    await expect.poll(() => gasEndpoint(page), { timeout: 2000 }).toEqual(expected);
     // And it must not have opened the context menu.
     await expect(page.getByText('Set as endpoint')).toHaveCount(0);
   });
 
-  test('undo/redo shortcuts are inert in Plan (read-only guard parity with the hidden buttons)', async ({
+  test('keyboard-activating a turn-frontier dot (Enter) selects it and preserves focus (#243 a11y)', async ({
     page,
   }) => {
     await enterMode(page, 'plan');
-    await page.evaluate(() =>
-      (
-        window as unknown as { __MOCK_RESET_UNDO_REDO_CALLS__: () => void }
-      ).__MOCK_RESET_UNDO_REDO_CALLS__(),
-    );
-    await page.keyboard.press('Control+z');
+    await expect
+      .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
+      .toBeGreaterThan(0);
+    await page.locator('[data-testid="gas-turn-marker"]').first().focus();
+    await page.keyboard.press('Enter');
+    // Enter picks the endpoint (keyboard parity with the left click)…
+    await expect.poll(() => gasEndpoint(page), { timeout: 2000 }).not.toBeNull();
+    // …and focus is NOT stranded on <body>: setEndpoint tears down every marker, so
+    // the rebuild must re-focus the picked marker or the AT user loses their place.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () => document.activeElement?.getAttribute('data-testid') ?? document.body.tagName,
+          ),
+        { timeout: 2000 },
+      )
+      .toBe('gas-turn-marker');
+  });
+
+  test('undo/redo shortcuts are inert in Plan AND Export (read-only guard parity with the hidden buttons) @smoke', async ({
+    page,
+  }) => {
     const getCalls = () =>
       page.evaluate(
         () =>
@@ -432,14 +452,60 @@ test.describe('Gas planning', () => {
             window as unknown as { __MOCK_GET_UNDO_REDO_CALLS__: () => string[] }
           ).__MOCK_GET_UNDO_REDO_CALLS__(),
       );
+
+    await enterMode(page, 'plan');
+    await page.evaluate(() =>
+      (
+        window as unknown as { __MOCK_RESET_UNDO_REDO_CALLS__: () => void }
+      ).__MOCK_RESET_UNDO_REDO_CALLS__(),
+    );
+    await page.keyboard.press('Control+z');
+    await page.keyboard.press('Control+y');
     expect(await getCalls()).toEqual([]);
 
-    // The exact-equality below is the injection-proof step: a guard leak in Plan would
-    // arrive long before this poll settles and turn the array into ['undo','undo'],
-    // while the survey call proves the recorder itself is live (no vacuous green).
+    // Export is guarded by the same `appMode !== 'survey'` term, not a plan-specific
+    // check — pin it so a refactor to `=== 'plan'` can't silently re-open Export.
+    await enterMode(page, 'export');
+    await page.keyboard.press('Control+z');
+    await page.keyboard.press('Control+y');
+    expect(await getCalls()).toEqual([]);
+
+    // Survey positive control + injection proof: both fire here, so the []s above
+    // reflect the guard (not a dead keystroke path), and a guard leak in Plan/Export
+    // would have shown up as extra entries before this exact-equality settles.
     await enterMode(page, 'survey');
     await page.keyboard.press('Control+z');
-    await expect.poll(getCalls, { timeout: 2000 }).toEqual(['undo']);
+    await page.keyboard.press('Control+y');
+    await expect.poll(getCalls, { timeout: 2000 }).toEqual(['undo', 'redo']);
+  });
+
+  test('Ctrl+I import is blocked in Plan but works in Survey (read-only-map guard, #243) @smoke', async ({
+    page,
+  }) => {
+    const openCount = () =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as { __MOCK_GET_DIALOG_OPEN_COUNT__: () => number }
+          ).__MOCK_GET_DIALOG_OPEN_COUNT__(),
+      );
+
+    await enterMode(page, 'plan');
+    await page.evaluate(() =>
+      (
+        window as unknown as { __MOCK_RESET_DIALOG_OPEN_COUNT__: () => void }
+      ).__MOCK_RESET_DIALOG_OPEN_COUNT__(),
+    );
+    // The default seed has no eligible closures, so Plan's forced closureAdjusted
+    // reverts to measured — the exact trap a geometryMode-only guard would miss.
+    await page.keyboard.press('Control+i');
+    expect(await openCount()).toBe(0);
+
+    // Survey positive control: the picker DOES open, proving the recorder is live and
+    // the 0 above is the guard, not a broken keybinding.
+    await enterMode(page, 'survey');
+    await page.keyboard.press('Control+i');
+    await expect.poll(openCount, { timeout: 2000 }).toBeGreaterThan(0);
   });
 
   test('the planned route renders as a highlighted overlay @smoke', async ({ page }) => {
@@ -465,6 +531,24 @@ test.describe('Gas planning', () => {
         { timeout: 4000 },
       )
       .toBeGreaterThan(0);
+
+    // Jump legs are FADED, not dashed (#243): one line layer, opacity driven by a
+    // data expression on `isJump`. Pin the expression so reverting to a constant
+    // opacity (or typo-ing the property) — which MapLibre evaluates silently — fails.
+    const opacity = await page.evaluate(() => {
+      const map = (
+        window as unknown as {
+          __stalagmight_map__?: { getPaintProperty: (l: string, p: string) => unknown };
+        }
+      ).__stalagmight_map__;
+      try {
+        return JSON.stringify(map?.getPaintProperty('survey-gas-route', 'line-opacity'));
+      } catch {
+        return '';
+      }
+    });
+    expect(opacity).toContain('isJump');
+    expect(opacity).toContain('0.45');
   });
 
   test('carousel switches Survey/Plan/Export; Plan is read-only; Export has controls @smoke', async ({

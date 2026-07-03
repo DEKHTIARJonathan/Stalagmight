@@ -268,6 +268,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_RESET_UNDO_REDO_CALLS__ = () => {
         undoRedoCalls = [];
       };
+      // Counts native file-picker opens so a spec can prove the read-only-map guard
+      // blocks Import (Ctrl+I) in Plan/Export before the picker even opens (#243).
+      // Incremented inside the dialog `open` mock below (same init-script closure).
+      let dialogOpenCount = 0;
+      (window as unknown as Record<string, unknown>).__MOCK_GET_DIALOG_OPEN_COUNT__ = () => dialogOpenCount;
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_DIALOG_OPEN_COUNT__ = () => {
+        dialogOpenCount = 0;
+      };
       (window as unknown as Record<string, unknown>).__MOCK_SET_ORPHAN_SUGGESTIONS__ = (suggestions: unknown[]) => {
         mockOrphanPlacementSuggestions = Array.isArray(suggestions) ? [...suggestions] : [];
       };
@@ -3109,6 +3117,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           // Plugin commands
           case 'plugin:dialog|open':
+            // Count picker opens so a spec can prove the read-only-map guard (#243)
+            // blocks Import before the picker even opens.
+            dialogOpenCount += 1;
             // Return a mock file path for testing
             return '/mock/test-survey.dmp';
           case 'plugin:dialog|save':
