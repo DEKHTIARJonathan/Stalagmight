@@ -2,4 +2,4 @@
 import type { CylRole } from "./CylRole";
 import type { TankMaterial } from "./TankMaterial";
 
-export interface Cylinder { water_volume_l: number, rated_pressure_bar: number, fill_bar: number, material: TankMaterial, role: CylRole, label: string | null, }
+export interface Cylinder { water_volume_l: number, rated_pressure_bar: number, fill_bar: number, material: TankMaterial, role: CylRole, label: string | null, enabled: boolean, usable_gas_bar: number, }

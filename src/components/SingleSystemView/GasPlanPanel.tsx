@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useGasPlanStore } from '../../store/gasPlanStore';
@@ -19,15 +19,22 @@ import {
 import { PositiveNumberField } from '../common/PositiveNumberField';
 import type { GasUnits, ReservePreset } from '../../types/ipc.generated';
 
-const RESERVE_PRESETS: readonly ReservePreset[] = ['all_thirds', 'one_stage', 'two_stage'];
+const RESERVE_PRESETS: readonly ReservePreset[] = [
+  'all_thirds',
+  'one_stage',
+  'two_stage',
+  'free',
+];
 const UNIT_OPTIONS: readonly GasUnits[] = ['metric', 'imperial'];
 
 /** Stage cylinders a strategy requires in the rig — mirrors the Rust `required_stages`
- *  (gas.rs). The Half-Minus strategies are greyed until the diver carries that many stages. */
+ *  (gas.rs). The Half-Minus strategies are greyed until the diver carries that many stages;
+ *  Free (#245) needs none (the diver sets each tank's usable gas by hand). */
 const REQUIRED_STAGES: Record<ReservePreset, number> = {
   all_thirds: 0,
   one_stage: 1,
   two_stage: 2,
+  free: 0,
 };
 
 /**
@@ -90,8 +97,11 @@ export function GasPlanPanel() {
     ? formatStationId(origin.section_id, origin.station_index)
     : t('gasPanel.origin.entrance');
 
-  const turnCount = reachField ? reachField.turn_frontier.length : null;
-  const stageCount = cylinders.filter((c) => c.role === 'stage').length;
+  // Count only ENABLED stages: the engine filters disabled tanks before counting stages
+  // (gas.rs `active`), so a disabled stage must not keep a staged strategy selectable here or the
+  // panel would show a staged plan + its reserve control while the engine has fallen back to
+  // All-thirds (#245 UI/backend parity — this drives the button-enable, isStaged, and re-check).
+  const stageCount = cylinders.filter((c) => c.role === 'stage' && c.enabled).length;
   const strategy = gasConfig.default_reserve;
   // Effective staged state: a staged strategy AND the rig actually carries enough stages. Mirrors
   // the backend's stage-count fallback, so removing stages after selecting a staged strategy hides
@@ -105,8 +115,16 @@ export function GasPlanPanel() {
   // the normalized reserve, and the stage-count fallback, so the panel can't drift from the
   // reachable overlay. `stage_drop_bars` has one entry per counted stage of the effective strategy.
   const backgasTurn = reachField ? reachField.backgas_turn_bar : null;
-  const stage1Drop = reachField?.stage_drop_bars[0] ?? null;
-  const stage2Drop = reachField?.stage_drop_bars[1] ?? null;
+  // Per-stage drops (pressure + swum distance from origin), aligned 1:1; one readout row each — any
+  // number of stages (Free is uncapped). When drops exist the diver switches to back gas after
+  // dropping the stages, so the back-gas gauge reads "switch pressure", not "turn pressure".
+  const stageDrops = reachField
+    ? reachField.stage_drop_bars.map((bar, i) => ({
+        bar,
+        distance: reachField.stage_drop_distances_m[i] ?? null,
+      }))
+    : [];
+  const hasStageDrops = stageDrops.length > 0;
 
   // Route metrics (backend single source of truth), shown once a real route is known. Gate on the
   // route having at least one LEG — not just final_turn_ref — so a degenerate single-station route
@@ -117,10 +135,13 @@ export function GasPlanPanel() {
   const routeMaxDepth = reachField?.route_max_depth_m ?? null;
   const routeAvgDepth = reachField?.route_avg_depth_m ?? null;
 
-  // Selecting a staged strategy routes through an inline advanced acknowledgment the first time
-  // per session; All-thirds and an already-acked strategy apply immediately.
+  // Advanced strategies route through an inline acknowledgment the first time per session: the
+  // staged (Half-Minus) presets AND Free, which lets the diver set reserves by hand (incl. a
+  // zero-reserve plan), so it's at least as advanced as the staged ones. All-thirds and an
+  // already-acked strategy apply immediately.
+  const isAdvancedPreset = (preset: ReservePreset) => REQUIRED_STAGES[preset] > 0 || preset === 'free';
   const selectPreset = (preset: ReservePreset) => {
-    if (REQUIRED_STAGES[preset] > 0 && !pushyAck) {
+    if (isAdvancedPreset(preset) && !pushyAck) {
       setPendingPushy(preset);
       return;
     }
@@ -142,6 +163,12 @@ export function GasPlanPanel() {
     setGasConfig({
       ...gasConfig,
       reserve_profile: { ...gasConfig.reserve_profile, stage_reserve_bar: n },
+    });
+  const safetyMarginBar = gasConfig.reserve_profile.all_thirds_safety_margin_bar;
+  const setSafetyMargin = (n: number) =>
+    setGasConfig({
+      ...gasConfig,
+      reserve_profile: { ...gasConfig.reserve_profile, all_thirds_safety_margin_bar: n },
     });
 
   return (
@@ -301,6 +328,23 @@ export function GasPlanPanel() {
               </span>
             </div>
           )}
+          {strategy === 'all_thirds' && (
+            <div className="flex items-center gap-2 pt-1" title={t('gasPanel.reserve.safetyMarginHint')}>
+              <span className="text-xs opacity-70">{t('gasPanel.reserve.safetyMarginLabel')}</span>
+              <PositiveNumberField
+                value={pressureToDisplay(safetyMarginBar, units)}
+                onCommit={(n) => setSafetyMargin(pressureFromDisplay(n, units))}
+                step={units === 'imperial' ? 5 : 1}
+                displayPrecision={0}
+                allowZero
+                className="w-20 bg-transparent border border-border rounded px-2 py-1"
+                testId="gas-safety-margin-input"
+              />
+              <span className="text-xs opacity-70">
+                {t(units === 'imperial' ? 'gasPanel.tanks.psi' : 'gasPanel.tanks.bar')}
+              </span>
+            </div>
+          )}
         </section>
 
         {/* Units */}
@@ -329,26 +373,35 @@ export function GasPlanPanel() {
           <SectionLabel>{t('gasPanel.readout.label')}</SectionLabel>
           {reachField ? (
             <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
-              <dt className="opacity-70">{t('gasPanel.readout.backgasTurnPressure')}</dt>
+              <dt className="opacity-70">
+                {t(
+                  hasStageDrops
+                    ? 'gasPanel.readout.backgasSwitchPressure'
+                    : 'gasPanel.readout.backgasTurnPressure'
+                )}
+              </dt>
               <dd data-testid="gas-readout-backgas-turn" className="text-right font-mono">
                 {backgasTurn != null ? formatPressure(backgasTurn, units) : '--'}
               </dd>
-              {stage1Drop != null && (
-                <>
-                  <dt className="opacity-70">{t('gasPanel.readout.stage1DropPressure')}</dt>
-                  <dd data-testid="gas-readout-stage1-drop" className="text-right font-mono">
-                    {formatPressure(stage1Drop, units)}
+              {stageDrops.map((drop, i) => (
+                <Fragment key={i}>
+                  <dt className="opacity-70">
+                    {t('gasPanel.readout.stageDropPressure', { n: i + 1 })}
+                  </dt>
+                  <dd
+                    data-testid={`gas-readout-stage${i + 1}-drop`}
+                    className="text-right font-mono"
+                  >
+                    {formatPressure(drop.bar, units)}
+                    {drop.distance != null && (
+                      <span className="opacity-60">
+                        {' @ '}
+                        {formatGasLength(drop.distance, units)}
+                      </span>
+                    )}
                   </dd>
-                </>
-              )}
-              {stage2Drop != null && (
-                <>
-                  <dt className="opacity-70">{t('gasPanel.readout.stage2DropPressure')}</dt>
-                  <dd data-testid="gas-readout-stage2-drop" className="text-right font-mono">
-                    {formatPressure(stage2Drop, units)}
-                  </dd>
-                </>
-              )}
+                </Fragment>
+              ))}
               <dt className="opacity-70">{t('gasPanel.readout.budget')}</dt>
               <dd data-testid="gas-readout-budget" className="text-right font-mono">
                 {formatVolume(reachField.budget_litres, units)}
@@ -393,10 +446,6 @@ export function GasPlanPanel() {
                   )}
                 </>
               )}
-              <dt className="opacity-70">{t('gasPanel.readout.turnPoints')}</dt>
-              <dd data-testid="gas-readout-turns" className="text-right font-mono">
-                {turnCount}
-              </dd>
             </dl>
           ) : (
             <p className="text-xs opacity-60">{t('gasPanel.readout.computing')}</p>

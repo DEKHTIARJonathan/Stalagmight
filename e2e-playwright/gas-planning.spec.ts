@@ -341,9 +341,162 @@ test.describe('Gas planning', () => {
     await expect
       .poll(() => page.locator('[data-testid="gas-final-turn-marker"]').count(), { timeout: 3000 })
       .toBeGreaterThan(0);
-    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Stage 1 drop pressure');
+    await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Stage 1 drop');
     // The per-stage reserve input appears for a staged strategy (default 30 bar).
     await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toBeVisible();
+  });
+
+  test('a cylinder can be disabled — the row dims and it drops out of the plan (#245) @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
+    const firstRow = page.locator('[data-testid="gas-cylinder-row"]').first();
+    const toggle = firstRow.locator('[data-testid="gas-cylinder-enabled"]');
+    await expect(toggle).toBeChecked();
+    await toggle.uncheck();
+    // The row shows its disabled state, and the store carries the flag through to the engine.
+    await expect(firstRow).toHaveAttribute('data-enabled', 'false');
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (
+                window as unknown as {
+                  __E2E_TEST__: {
+                    gasPlanStore: { getState: () => { cylinders: Array<{ enabled: boolean }> } };
+                  };
+                }
+              ).__E2E_TEST__.gasPlanStore.getState().cylinders[0].enabled,
+          ),
+        { timeout: 2000 },
+      )
+      .toBe(false);
+  });
+
+  test('disabling the only stage drops the staged reserve control (UI/backend parity #245) @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
+    // Carry one stage and select the (acked) 1-stage strategy → the stage-reserve control shows.
+    await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
+    await page.locator('[data-testid="gas-cylinder-role"]').last().selectOption('stage');
+    await page.locator('[data-testid="gas-reserve-one_stage"]').click();
+    await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
+    await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toBeVisible();
+
+    // Disable that stage. The engine counts only ENABLED stages, so it falls back to All-thirds;
+    // the panel must mirror that — the staged-only reserve control disappears and the 1-stage
+    // button greys out (before the fix, stageCount counted the disabled stage and both stayed live).
+    await page
+      .locator('[data-testid="gas-cylinder-row"]')
+      .last()
+      .locator('[data-testid="gas-cylinder-enabled"]')
+      .uncheck();
+    await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="gas-reserve-one_stage"]')).toBeDisabled();
+  });
+
+  test('the Free strategy makes the usable-gas column editable per cylinder (#245) @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
+    // Under a reserve strategy the usable column is READ-ONLY (engine-computed).
+    await expect(page.locator('[data-testid="gas-cylinder-usable-readonly"]').first()).toBeVisible();
+    await expect(page.locator('[data-testid="gas-cylinder-usable"]')).toHaveCount(0);
+
+    // Free is advanced (manual reserves, incl. zero-reserve), so it routes through the advanced
+    // acknowledgment the first time — then flips the column to an editable field per budget-role tank.
+    await page.locator('[data-testid="gas-reserve-free"]').click();
+    await expect(page.locator('[data-testid="gas-pushy-ack"]')).toBeVisible();
+    await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
+    await expect(page.locator('[data-testid="gas-reserve-free"]')).toHaveClass(/ring-accent/);
+    const usable = page.locator('[data-testid="gas-cylinder-usable"]').first();
+    await expect(usable).toBeVisible();
+
+    // Typing a usable value stores it on the cylinder (metric mock ⇒ bar 1:1).
+    const usableOf = (i: number) =>
+      page.evaluate(
+        (idx) =>
+          (
+            window as unknown as {
+              __E2E_TEST__: {
+                gasPlanStore: { getState: () => { cylinders: Array<{ usable_gas_bar: number }> } };
+              };
+            }
+          ).__E2E_TEST__.gasPlanStore.getState().cylinders[idx].usable_gas_bar,
+        i,
+      );
+    await usable.fill('80');
+    await usable.blur();
+    await expect.poll(() => usableOf(0), { timeout: 2000 }).toBe(80);
+
+    // A diver must be able to zero out a tank's usable in Free (#245 bug: the field rejected 0).
+    await usable.fill('0');
+    await usable.blur();
+    await expect.poll(() => usableOf(0), { timeout: 2000 }).toBe(0);
+  });
+
+  test('readout: no Turn points row; backgas label switches; stage drops show distance (#245) @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    const readout = page.locator('[data-testid="gas-readout"]');
+    await expect(readout).toBeVisible({ timeout: 3000 });
+    // "Turn points" row is removed.
+    await expect(readout).not.toContainText('Turn points');
+    // All-thirds (default, no stages): the back-gas gauge reads "turn pressure".
+    await expect(readout).toContainText('Backgas turn pressure');
+    await expect(readout).not.toContainText('Backgas switch pressure');
+
+    // Add a stage + select the staged strategy → the gauge flips to "switch pressure", and the
+    // stage-drop row shows both a pressure and a distance ("… @ …m").
+    await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
+    await page.locator('[data-testid="gas-cylinder-role"]').last().selectOption('stage');
+    await page.locator('[data-testid="gas-reserve-one_stage"]').click();
+    await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
+    await expect(readout).toContainText('Backgas switch pressure');
+    await expect(readout).not.toContainText('Backgas turn pressure');
+    await expect(page.locator('[data-testid="gas-readout-stage1-drop"]')).toContainText('@');
+  });
+
+  test('All-thirds safety margin input appears only in thirds and round-trips to config (#245) @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    // The margin input shows only for All-thirds (the default); the staged reserve input does not.
+    const margin = page.locator('[data-testid="gas-safety-margin-input"]');
+    await expect(margin).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toHaveCount(0);
+
+    // The mock budget is a fixed 1500 regardless of margin (cylinders are ignored there), so assert
+    // the input round-trips into the config instead — the budget math is unit-tested in Rust.
+    await margin.fill('20');
+    await margin.blur();
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (
+                window as unknown as {
+                  __E2E_TEST__: {
+                    gasPlanStore: {
+                      getState: () => {
+                        gasConfig: { reserve_profile: { all_thirds_safety_margin_bar: number } };
+                      };
+                    };
+                  };
+                }
+              ).__E2E_TEST__.gasPlanStore.getState().gasConfig.reserve_profile
+                .all_thirds_safety_margin_bar,
+          ),
+        { timeout: 2000 },
+      )
+      .toBe(20);
   });
 
   test('Plan right-click offers gas route picks, not the survey menu; Set as endpoint stores it @smoke', async ({

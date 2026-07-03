@@ -18,6 +18,10 @@ use crate::models::StationRef;
 
 use super::physics::{cylinder_gas_volume, sac_to_rmv};
 
+fn default_true() -> bool {
+    true
+}
+
 /// Cylinder construction material. Hints role suitability — steel ≈ negative buoyancy →
 /// back gas; aluminium ≈ neutral → fine as a stage — but it is guidance, never a hard
 /// rule (PRD §5.3).
@@ -108,6 +112,19 @@ pub struct Cylinder {
     pub material: TankMaterial,
     pub role: CylRole,
     pub label: Option<String>,
+    /// Whether this cylinder is carried on THIS dive (#245). A disabled tank stays in the
+    /// table (greyed) but is excluded from every gas computation — budget, gauges, drops —
+    /// so a diver can toggle rig variants without deleting rows. `#[serde(default)]` = `true`,
+    /// so a plan/config saved before this field loads with all tanks enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Under the **Free** strategy (#245) this is the diver's manually-chosen penetration
+    /// allowance (bar) — the gas they'll breathe off this tank on the way IN before turning.
+    /// The engine budgets exactly this (Z-derated span from `fill` down to `fill − usable_gas_bar`).
+    /// Ignored by every other strategy, which COMPUTE the usable bar from the reserve rules and
+    /// report it back on `GasReachField::cylinder_usable_bars`. `#[serde(default)]` = `0.0`.
+    #[serde(default)]
+    pub usable_gas_bar: f64,
 }
 
 impl Cylinder {
@@ -137,6 +154,8 @@ impl Cylinder {
             material,
             role,
             label,
+            enabled: true,
+            usable_gas_bar: 0.0,
         })
     }
 
@@ -206,6 +225,17 @@ pub struct GasReachField {
     pub backgas_turn_bar: Option<f64>,
     /// Per-stage Half-Minus drop pressure gauge (bar), one per counted stage; empty for All-thirds.
     pub stage_drop_bars: Vec<f64>,
+    /// Swum distance (metres) from the origin to each stage-drop station, aligned with
+    /// `stage_drop_refs` / `stage_drop_bars`, for the Plan readout (#245). Same swum-distance basis
+    /// as `route_line_length_m`. Empty when there are no stage drops.
+    pub stage_drop_distances_m: Vec<f64>,
+    /// Per-cylinder penetration allowance (bar) the engine used, aligned 1:1 with the INPUT
+    /// cylinder order (disabled tanks and non-budget roles are `0.0`) so the table can show a
+    /// "usable gas" value per row (#245). Under the reserve presets these are engine-COMPUTED
+    /// (`fill − turn/drop`): a back-gas tank shows its strategy fraction of usable, a counted
+    /// stage its Half-Minus IN half; under **Free** they echo the diver's clamped input. The
+    /// single source of truth for the column, so it can never drift from the budget/gauges.
+    pub cylinder_usable_bars: Vec<f64>,
     /// Swum line length of the planned route (metres): the one-way penetration distance, summed as
     /// 3-D slope segments over the route's real shot legs (zero-distance merge/closure ties
     /// excluded), origin→turnaround. This is the *swum* distance, not the on-screen highlight length

@@ -285,6 +285,7 @@ export const defaultConfig: Config = {
     default_reserve: 'all_thirds',
     reserve_profile: {
       stage_reserve_bar: 30,
+      all_thirds_safety_margin_bar: 0,
       recalc_hold_stage2_bar: 100,
       recalc_hold_stage1_bar: 70,
     },

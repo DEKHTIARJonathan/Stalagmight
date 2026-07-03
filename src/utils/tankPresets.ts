@@ -49,5 +49,10 @@ export function cylinderFromPreset(p: TankPreset): Cylinder {
     material: p.material,
     role: p.role,
     label: p.label,
+    // A freshly-added tank is carried by default (#245); the user can toggle it off.
+    enabled: true,
+    // Usable gas starts at 0; the reserve strategies compute it, and the Free strategy lets the
+    // diver set it per cylinder.
+    usable_gas_bar: 0,
   };
 }
