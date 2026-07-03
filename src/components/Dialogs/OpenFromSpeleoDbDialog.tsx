@@ -7,7 +7,9 @@ import { invokeIpc } from '../../utils/ipc';
 import { speleoErrorAction, humanizeSpeleoError } from '../../utils/speleoError';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { AlertDialog } from './AlertDialog';
 import type {
+  SpeleoAdoptResult,
   SpeleoOpenResult,
   SpeleoProjectSummary,
   SpeleoSessionStatus,
@@ -39,6 +41,9 @@ export default function OpenFromSpeleoDbDialog() {
   const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // #214: an Ariane (.tml-only) project the user is being asked to adopt. Set when
+  // speleodb_open_project reports SpeleoDbAction::Adopt; cleared on confirm/cancel.
+  const [pendingAdopt, setPendingAdopt] = useState<SpeleoProjectSummary | null>(null);
 
   const refreshProjects = async (isCancelled: () => boolean = () => false) => {
     const list = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
@@ -106,6 +111,14 @@ export default function OpenFromSpeleoDbDialog() {
         latestCommitSha: project.latest_commit_sha ?? null,
       });
     } catch (e) {
+      // #214: an Ariane (.tml-only) project routes here (backend returns
+      // SpeleoDbAction::Adopt, not a hard error). Offer the one-time adoption flow
+      // via a confirm dialog instead of surfacing an error.
+      if (speleoErrorAction(e) === 'Adopt') {
+        setPendingAdopt(project);
+        setBusy(false);
+        return;
+      }
       setError(humanizeSpeleoError(e, t('speleodb.errors.openFailed')));
       if (speleoErrorAction(e) === 'ReLogin') {
         clearSession();
@@ -132,9 +145,53 @@ export default function OpenFromSpeleoDbDialog() {
     if (!loaded.success) useSpeleoStore.getState().clearLink();
   };
 
+  // #214: adopt the pending Ariane (.tml-only) project. Downloads + imports the
+  // ariane.tml into a new .stalx, links it, and flips the server type; then reloads
+  // the adopted project (read-only-remote, like a pull) and notes the outcome.
+  const handleAdopt = async (project: SpeleoProjectSummary) => {
+    setPendingAdopt(null);
+    setBusy(true);
+    setError(null);
+    let result: SpeleoAdoptResult;
+    try {
+      result = await invokeIpc<SpeleoAdoptResult>('speleodb_adopt_ariane', {
+        projectId: project.id,
+        projectName: project.name,
+        latestCommitSha: project.latest_commit_sha ?? null,
+      });
+    } catch (e) {
+      setError(humanizeSpeleoError(e, t('speleodb.errors.adoptFailed')));
+      if (speleoErrorAction(e) === 'ReLogin') {
+        clearSession();
+        setPhase('logged-out');
+      }
+      setBusy(false);
+      return;
+    }
+    if (result.concurrent_session) {
+      showToast(t('speleodb.browser.concurrentSession'), 'speleodb-concurrent-session');
+    }
+    setLinkOnOpen({ permission: project.permission });
+    closeDialog();
+    const loaded = await loadProject(result.local_path);
+    if (!loaded.success) {
+      useSpeleoStore.getState().clearLink();
+      return;
+    }
+    // Post-adoption notice: Stalagmight now owns edits. When the server type could
+    // not be flipped (no write access), say so - the user can still edit locally.
+    showToast(
+      result.type_flipped
+        ? t('speleodb.adopt.doneToast')
+        : t('speleodb.adopt.doneToastNoWrite'),
+      'speleodb-adopted',
+    );
+  };
+
   const goToLogin = () => openDialog('settings', { initialCategory: 'speleodb' });
 
   return (
+    <>
     <DialogWrapper
       title={t('speleodb.browser.title')}
       onClose={closeDialog}
@@ -243,5 +300,34 @@ export default function OpenFromSpeleoDbDialog() {
         )}
       </div>
     </DialogWrapper>
+    {pendingAdopt && (
+      <AlertDialog
+        open
+        title={t('speleodb.adopt.confirmTitle')}
+        onClose={() => setPendingAdopt(null)}
+        data-testid="speleodb-adopt-confirm"
+        actions={
+          <>
+            <Button onClick={() => setPendingAdopt(null)} data-testid="speleodb-adopt-cancel">
+              {t('common.actions.cancel')}
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => void handleAdopt(pendingAdopt)}
+              data-primary-action=""
+              data-testid="speleodb-adopt-confirm-btn"
+            >
+              {t('speleodb.adopt.confirmButton')}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-2 text-sm text-text-secondary">
+          <p>{t('speleodb.adopt.confirmBody', { name: pendingAdopt.name })}</p>
+          <p>{t('speleodb.adopt.confirmConsequence')}</p>
+        </div>
+      </AlertDialog>
+    )}
+    </>
   );
 }

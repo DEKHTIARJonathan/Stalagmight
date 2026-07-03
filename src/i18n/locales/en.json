@@ -2689,7 +2689,16 @@
     "errors": {
       "loginFailed": "Login to SpeleoDB failed",
       "openFailed": "Unable to open the project",
-      "listFailed": "Could not load projects"
+      "listFailed": "Could not load projects",
+      "adoptFailed": "Could not adopt the Ariane project"
+    },
+    "adopt": {
+      "confirmTitle": "Adopt this Ariane project?",
+      "confirmBody": "\"{{name}}\" is an Ariane (.tml) project. Adopting it imports its survey into a new Stalagmight file and links it to this SpeleoDB project.",
+      "confirmConsequence": "The project type on SpeleoDB is changed to \"other\", and from now on only Stalagmight edits are recognized - later Ariane (.tml) edits are disregarded. This cannot be undone.",
+      "confirmButton": "Adopt",
+      "doneToast": "Project adopted. Start editing, then Done, to push it to SpeleoDB.",
+      "doneToastNoWrite": "Project adopted locally, but its SpeleoDB type could not be changed (you may not have write access)."
     },
     "editBar": {
       "someone": "someone else",
