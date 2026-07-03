@@ -43,6 +43,12 @@ pub enum SpeleoDbAction {
     /// An idempotent 5xx that the transport already retried + exhausted; the FE
     /// may offer a manual retry.
     Retry,
+    /// The opened project is an Ariane (`.tml`-only) project with no `.stalx`: the
+    /// FE should offer the one-time C2 adoption flow (#214) instead of surfacing a
+    /// hard error. NOT derived from an HTTP status — it is the local
+    /// [`SpeleoDbError::AdoptAriane`] dump classification crossing the same typed
+    /// action channel so the FE never branches on message text.
+    Adopt,
     /// Unmapped / 422 / 4xx we do not model — surface, fail closed.
     Fatal,
 }
@@ -166,9 +172,13 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
         // Transport is already fully framed ("Network error talking to SpeleoDB: …").
         SpeleoDbError::Transport(_) => (SpeleoDbAction::Retry, None, err.to_string()),
         SpeleoDbError::NotAuthenticated => (SpeleoDbAction::ReLogin, None, err.to_string()),
+        // Ariane (`.tml`-only) project: not a failure, a routing signal. The FE
+        // offers the one-time C2 adoption flow (#214) on `action == Adopt` rather
+        // than toasting the message.
+        SpeleoDbError::AdoptAriane => (SpeleoDbAction::Adopt, None, err.to_string()),
         // InsecureEndpoint / NoEndpoint / MissingCredentials / Parse / EmptyDump /
-        // AdoptAriane / AmbiguousDump / Io / InvalidProjectId - all fail closed;
-        // their Display is already user-facing.
+        // AmbiguousDump / Io / InvalidProjectId - all fail closed; their Display is
+        // already user-facing.
         _ => (SpeleoDbAction::Fatal, None, err.to_string()),
     };
     SpeleoErrorDto {
@@ -391,6 +401,12 @@ mod tests {
             dto_for_error(Endpoint::User, &SpeleoDbError::InvalidProjectId).action,
             SpeleoDbAction::Fatal
         );
+        // AdoptAriane is a routing signal, not a failure: it must map to the typed
+        // `Adopt` action (never `Fatal`) so the FE offers the C2 adoption flow (#214)
+        // instead of toasting the message. Carries no HTTP status.
+        let adopt = dto_for_error(Endpoint::DownloadDump, &SpeleoDbError::AdoptAriane);
+        assert_eq!(adopt.action, SpeleoDbAction::Adopt);
+        assert_eq!(adopt.status, None);
     }
 
     #[test]

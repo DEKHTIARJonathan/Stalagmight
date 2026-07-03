@@ -30,11 +30,11 @@ pub(crate) mod tls;
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::SpeleoDbAction;
 pub use models::{
-    DoneResult, Permission, PushResult, RemoteState, SpeleoCollaborator, SpeleoCollaborators,
-    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
-    SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
-    SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
-    StartEditingResult, UpdateResult, Visibility,
+    DoneResult, Permission, PushResult, RemoteState, SpeleoAdoptResult, SpeleoCollaborator,
+    SpeleoCollaborators, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
+    SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
+    SpeleoPublishResult, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption,
+    SpeleoUserSuggestion, StartEditingResult, UpdateResult, Visibility,
 };
 
 /// Errors from the SpeleoDB client and dump handling.
@@ -69,8 +69,10 @@ pub(crate) enum SpeleoDbError {
     /// The dump contained no openable project and no Ariane sidecar.
     #[error("the project dump contained nothing to open")]
     EmptyDump,
-    /// The dump held an `ariane.tml` but no `.stalx` — route to adoption (#214).
-    #[error("the project is an Ariane (.tml) project; adoption is not yet supported (#214)")]
+    /// The dump held an `ariane.tml` but no `.stalx` — route to the one-time C2
+    /// adoption flow (#214). Surfaced to the FE as `SpeleoDbAction::Adopt`, not a
+    /// hard error.
+    #[error("this is an Ariane (.tml) project; adopt it to edit it in Stalagmight")]
     AdoptAriane,
     /// The dump held more than one `.stalx` — ambiguous; fail closed.
     #[error("SpeleoDB contained multiple ambiguous .stalx files: {}", .0.join(", "))]
@@ -122,6 +124,10 @@ mod tests {
         assert_eq!(
             SpeleoDbError::EmptyDump.to_string(),
             "the project dump contained nothing to open"
+        );
+        assert_eq!(
+            SpeleoDbError::AdoptAriane.to_string(),
+            "this is an Ariane (.tml) project; adopt it to edit it in Stalagmight"
         );
         assert_eq!(
             SpeleoDbError::InvalidProjectId.to_string(),

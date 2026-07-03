@@ -64,10 +64,10 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    DoneResult, Permission, PushResult, RemoteState, SpeleoCollaborator, SpeleoCollaborators,
-    SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
-    SpeleoPublishResult, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption,
+    DoneResult, Permission, PushResult, RemoteState, SpeleoAdoptResult, SpeleoCollaborator,
+    SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
+    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption,
     SpeleoUserSuggestion, StartEditingResult, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -297,6 +297,8 @@ fn main() {
     export::<SpeleoProjectSummary>(&out_dir);
     export::<SpeleoLoginResult>(&out_dir);
     export::<SpeleoOpenResult>(&out_dir);
+    // #214 adopt-Ariane result (import + link + type-flip outcome)
+    export::<SpeleoAdoptResult>(&out_dir);
     export::<SpeleoSessionStatus>(&out_dir);
     export::<SpeleoDbAction>(&out_dir);
     export::<SpeleoErrorDto>(&out_dir);
@@ -495,6 +497,7 @@ fn main() {
         "SpeleoProjectSummary",
         "SpeleoLoginResult",
         "SpeleoOpenResult",
+        "SpeleoAdoptResult",
         "SpeleoSessionStatus",
         "SpeleoDbAction",
         "SpeleoErrorDto",

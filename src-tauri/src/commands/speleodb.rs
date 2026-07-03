@@ -21,8 +21,8 @@ use crate::core::AppState;
 // `err.action`. The orchestration `AppState::speleodb_*` methods build the DTO at
 // the call site where the endpoint is known.
 use crate::speleodb::{
-    DoneResult, Permission, PushResult, SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto,
-    SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
+    DoneResult, Permission, PushResult, SpeleoAdoptResult, SpeleoCollaborators, SpeleoDbAction,
+    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
     SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
     SpeleoSessionStatus, SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, UpdateResult,
 };
@@ -85,6 +85,24 @@ pub async fn speleodb_open_project(
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     run_blocking(app, move |s| {
         s.speleodb_open_project(project_id, project_name, latest_commit_sha)
+    })
+    .await
+}
+
+/// [#214] Adopt an Ariane (`.tml`-only) project: import its `ariane.tml`, save a
+/// new `.stalx` into the cache, link it, and best-effort flip the server `type`
+/// ariane→other. The frontend calls this (after a user confirm) when
+/// `speleodb_open_project` reported `SpeleoDbAction::Adopt`, then reloads
+/// `local_path` through the normal `open_project` flow (read-only-remote).
+#[tauri::command]
+pub async fn speleodb_adopt_ariane(
+    app: AppHandle,
+    project_id: String,
+    project_name: String,
+    latest_commit_sha: Option<String>,
+) -> Result<SpeleoAdoptResult, SpeleoErrorDto> {
+    run_blocking(app, move |s| {
+        s.speleodb_adopt_ariane(project_id, project_name, latest_commit_sha)
     })
     .await
 }

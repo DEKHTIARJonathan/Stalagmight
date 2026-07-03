@@ -20,10 +20,10 @@ use crate::speleodb::models::SpeleoProjectSummary;
 use crate::speleodb::sync::{self, FenceOutcome, PushPlan, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
-    DoneResult, PushResult, RemoteState, SpeleoDbError, SpeleoErrorDto, SpeleoLinkStatus,
-    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
-    SpeleoPublishParams, SpeleoPublishResult, SpeleoSessionStatus, StartEditingResult,
-    UpdateResult, Visibility,
+    DoneResult, PushResult, RemoteState, SpeleoAdoptResult, SpeleoDbError, SpeleoErrorDto,
+    SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
+    SpeleoProjectMetadataPatch, SpeleoPublishParams, SpeleoPublishResult, SpeleoSessionStatus,
+    StartEditingResult, UpdateResult, Visibility,
 };
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
@@ -206,7 +206,7 @@ fn local_dto(err: SpeleoDbError) -> SpeleoErrorDto {
 fn classify_dump_entry(names: &[String]) -> Result<String, SpeleoDbError> {
     match dump::classify(names) {
         DumpClassification::Stalx(path) => Ok(path),
-        DumpClassification::AdoptAriane => Err(SpeleoDbError::AdoptAriane),
+        DumpClassification::AdoptAriane(_) => Err(SpeleoDbError::AdoptAriane),
         DumpClassification::NothingToOpen => Err(SpeleoDbError::EmptyDump),
         DumpClassification::AmbiguousStalx(paths) => Err(SpeleoDbError::AmbiguousDump(paths)),
     }
@@ -1062,6 +1062,197 @@ impl AppState {
             local_path: dest.to_string_lossy().into_owned(),
             concurrent_session,
         })
+    }
+
+    /// [#214] Adopt an Ariane (`.tml`-only) SpeleoDB project: the ONE sanctioned
+    /// server-`.tml` read, a one-time bootstrap (never an ongoing reconcile).
+    /// Download the dump, import its `ariane.tml` through the existing TML importer,
+    /// save a new `.stalx` at the same cache path a pull would use, stamp the
+    /// hand-off link, and best-effort flip the server project `type` ariane→other.
+    ///
+    /// The FE calls this only after `speleodb_open_project` surfaced
+    /// `SpeleoDbAction::Adopt` and the user confirmed. Like a pull, it does NOT push;
+    /// the adopted `.stalx` is marked dirty (`has_unpushed_edits = true`) so the
+    /// first Start-editing → Done pushes it and makes the server `.stalx`-canonical.
+    /// Adoption replaces the open `AppState` project (the FE runs its usual
+    /// unsaved-changes guard first, exactly as for any open); the webview then
+    /// reloads `local_path`, which opens read-only-remote (`is_remote`, #191).
+    pub(crate) fn speleodb_adopt_ariane(
+        &self,
+        project_id: String,
+        project_name: String,
+        latest_commit_sha: Option<String>,
+    ) -> Result<SpeleoAdoptResult, SpeleoErrorDto> {
+        validate_project_id(&project_id).map_err(local_dto)?;
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+
+        // Download the dump (routed through the auth handler like the pull, so a dead
+        // token forces re-login).
+        let zip = self
+            .speleodb_handle_auth(
+                Endpoint::DownloadDump,
+                client::download_dump(&endpoint, &token, insecure_http, &project_id),
+            )
+            .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
+
+        // Classify authoritatively. Only proceed for a genuine Ariane-only dump; if a
+        // `.stalx` has since appeared (a stale `type_tag`, a TOCTOU race with another
+        // writer), refuse and tell the user to reopen normally rather than clobber it.
+        let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
+        let tml_entry = match dump::classify(&dump.entry_paths().map_err(local_dto)?) {
+            DumpClassification::AdoptAriane(tml) => tml,
+            DumpClassification::Stalx(_) => {
+                return Err(local_dto(SpeleoDbError::Parse(
+                    "this project now has a Stalagmight file on the server; reopen it normally"
+                        .to_owned(),
+                )));
+            }
+            DumpClassification::NothingToOpen => return Err(local_dto(SpeleoDbError::EmptyDump)),
+            DumpClassification::AmbiguousStalx(paths) => {
+                return Err(local_dto(SpeleoDbError::AmbiguousDump(paths)));
+            }
+        };
+
+        // Extract the `ariane.tml` to a scratch file beside the cache `.stalx`, import
+        // it, then remove the scratch file. The importer needs a path on disk.
+        let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
+        let tml_scratch = dest.with_file_name("adopt-source.tml");
+        dump.extract_entry_to(&tml_entry, &tml_scratch)
+            .map_err(local_dto)?;
+        let adopt = self.adopt_import_and_save(&tml_scratch, &dest, project_name.clone());
+        // Best-effort scratch cleanup regardless of import outcome.
+        let _ = std::fs::remove_file(&tml_scratch);
+        adopt?;
+
+        // Stamp BASE = the server's TRUE HEAD (revision-topology leaf), mirroring the
+        // pull (see `speleodb_open_project`): fetch revisions directly (NOT via the
+        // auth handler) so a spurious 401 on this best-effort stamp can't auto-drop the
+        // session mid-adopt; fall back to the caller-supplied SHA on failure.
+        let base_sha = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
+            Ok(history) => sync::tip_of(&history.commits)
+                .map(str::to_owned)
+                .or(latest_commit_sha),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    project_id = %project_id,
+                    purpose = "resolve server HEAD on adopt",
+                    "speleodb_adopt_ariane: could not resolve server HEAD; using list latest_commit"
+                );
+                latest_commit_sha
+            }
+        };
+
+        // Stamp the hand-off link onto the saved `.stalx`. `has_unpushed_edits = true`:
+        // the adopted `.stalx` is content the server does not have yet, so the first
+        // Start-editing → Done pushes it (BASE == tip → UpToDate, no false divergence).
+        match crate::persistence::Database::open_existing(&dest) {
+            Ok(db) => {
+                let link = crate::models::SpeleoLink {
+                    endpoint: endpoint.clone(),
+                    project_id: project_id.clone(),
+                    project_name,
+                    base_commit_sha: base_sha,
+                    has_unpushed_edits: true,
+                    last_edit_at: None,
+                    last_verify_at: None,
+                };
+                if let Err(e) = db.save_speleo_link(Some(&link)) {
+                    tracing::warn!(
+                        error = %e,
+                        project_id = %project_id,
+                        purpose = "stamp SpeleoDB hand-off link on adopt",
+                        "speleodb_adopt_ariane: failed to stamp speleo_link; project will open local-only"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    project_id = %project_id,
+                    purpose = "stamp SpeleoDB hand-off link on adopt",
+                    "speleodb_adopt_ariane: could not reopen adopted .stalx to stamp speleo_link"
+                );
+            }
+        }
+
+        // Best-effort flip the server project `type` ariane→other (READ_AND_WRITE).
+        // Called directly (NOT via the auth handler) so a spurious 401/403 on this last
+        // step can't auto-drop the session AFTER the project is already adopted locally.
+        // A permission failure (READ_ONLY user) is the expected `type_flipped = false`.
+        let type_flipped =
+            match client::patch_project(&endpoint, &token, insecure_http, &project_id, r#"{"type":"other"}"#) {
+                Ok(_) => true,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        project_id = %project_id,
+                        purpose = "flip SpeleoDB project type ariane->other on adopt",
+                        "speleodb_adopt_ariane: type flip failed (likely no write access); adopted locally"
+                    );
+                    false
+                }
+            };
+
+        // Concurrent same-account session notice (mirrors the pull, #193 b8).
+        let concurrent_session = {
+            let holder = self.speleodb_lock_holder(&endpoint, &token, insecure_http, &project_id);
+            self.speleodb_my_email()
+                .is_some_and(|me| sync::concurrent_session_notice(holder.as_deref(), &me))
+        };
+
+        Ok(SpeleoAdoptResult {
+            local_path: dest.to_string_lossy().into_owned(),
+            type_flipped,
+            concurrent_session,
+        })
+    }
+
+    /// Import an extracted `ariane.tml` into a fresh project and save it as a new
+    /// `.stalx` at `dest`. Split out of [`Self::speleodb_adopt_ariane`] so the pure
+    /// create → import → save pipeline is separable from the network/link steps.
+    ///
+    /// Reuses the existing importer defaults (`include_excluded = false`,
+    /// `comments_on_stations = true`) — the same settings the collab `.tml`
+    /// round-trip and the FE import dialog use, so adoption yields the identical
+    /// survey a manual TML import would. Overwrites any stale cache `.stalx`
+    /// (re-adoption is a clean re-pull, like the pull path).
+    fn adopt_import_and_save(
+        &self,
+        tml_path: &Path,
+        dest: &Path,
+        project_name: String,
+    ) -> Result<(), SpeleoErrorDto> {
+        // Re-adoption overwrites: remove a stale cache `.stalx` so create reserves the
+        // exact cache path (it auto-renames around an existing file otherwise).
+        let _ = std::fs::remove_file(dest);
+
+        self.do_create_project_full(project_name, None, None, Some(dest.to_path_buf()), true)
+            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+
+        let tml = crate::parsers::tml::parse_tml(tml_path)
+            .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;
+        let (sections, closures) =
+            crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true)
+                .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;
+        let imported =
+            self.execute_import_sections(sections, closures, None, Vec::new(), Vec::new());
+        if !imported.success {
+            return Err(local_dto(SpeleoDbError::Parse(format!(
+                "could not import the Ariane .tml: {}",
+                imported.error.unwrap_or_else(|| "unknown error".to_owned())
+            ))));
+        }
+
+        let saved = crate::commands::project::save_project_impl(self, Some(dest.to_path_buf()), false);
+        if !saved.success {
+            return Err(local_dto(SpeleoDbError::Io(format!(
+                "could not save the adopted project: {}",
+                saved.error.unwrap_or_else(|| "unknown error".to_owned())
+            ))));
+        }
+        Ok(())
     }
 
     /// Forget the local token (keychain + in-memory) and clear the session. The

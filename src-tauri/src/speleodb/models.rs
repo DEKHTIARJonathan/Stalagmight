@@ -358,6 +358,21 @@ pub struct SpeleoOpenResult {
     pub concurrent_session: bool,
 }
 
+/// [#214] Result of adopting an Ariane (`.tml`-only) project: the imported
+/// `.stalx` now lives at `local_path` (the webview reloads it through the normal
+/// `open_project` flow, read-only-remote). `type_flipped` reports whether the
+/// server project `type` was successfully PATCHed ariane→other; when `false` the
+/// adoption still succeeded locally (the user likely lacks write access) and the
+/// webview says so.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct SpeleoAdoptResult {
+    pub local_path: String,
+    pub type_flipped: bool,
+    /// Same meaning as [`SpeleoOpenResult::concurrent_session`]: a write lock held
+    /// by THIS account at adopt time (a second same-account session).
+    pub concurrent_session: bool,
+}
+
 /// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write
 /// lock and reconciling the open project against the server. A discriminated
 /// union (`kind`) the webview branches on. Errors (no permission, anomalies,

@@ -171,6 +171,7 @@ export * from './ipc/Permission';
 export * from './ipc/SpeleoProjectSummary';
 export * from './ipc/SpeleoLoginResult';
 export * from './ipc/SpeleoOpenResult';
+export * from './ipc/SpeleoAdoptResult';
 export * from './ipc/SpeleoSessionStatus';
 export * from './ipc/SpeleoDbAction';
 export * from './ipc/SpeleoErrorDto';
