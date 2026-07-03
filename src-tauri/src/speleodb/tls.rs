@@ -22,7 +22,7 @@
 //! that resolves private at check-time and public at connect-time (TOCTOU /
 //! DNS rebinding) is explicitly accepted as out of scope.
 
-use std::net::{IpAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -46,61 +46,51 @@ fn is_private(class: AddrClass) -> bool {
     !matches!(class, AddrClass::Public)
 }
 
-/// Classify an IP address into the #187 policy buckets. Pure — this is the
-/// unit-test seam (D-T-unit): the literal ranges are exercised directly without
-/// any DNS or socket I/O.
+/// Classify an IP address into the #187 policy buckets. Pure (no DNS or socket
+/// I/O), so it is the unit-test seam (D-T-unit). Delegates the actual range
+/// checks to the standard library's audited predicates rather than hand-rolled
+/// bit math, so this security-sensitive boundary can't drift from the RFC set.
 ///
-/// IPv4: `127.0.0.0/8`→Loopback; `10/8`,`172.16/12`,`192.168/16`→Private;
-/// `169.254/16`→LinkLocal; everything else→Public.
-/// IPv6: `::1`→Loopback; `fc00::/7`→Private; `fe80::/10`→LinkLocal; else Public.
+/// IPv4: `is_loopback` (127/8) -> Loopback; `is_private` (10/8, 172.16/12,
+/// 192.168/16) -> Private; `is_link_local` (169.254/16) -> LinkLocal; else Public.
+/// IPv6: `is_loopback` (::1) -> Loopback; `is_unique_local` (fc00::/7) -> Private;
+/// `is_unicast_link_local` (fe80::/10) -> LinkLocal; else Public.
 /// An IPv4-mapped IPv6 address is unwrapped to its v4 form first, closing the
 /// `::ffff:8.8.8.8` bypass.
 fn classify_addr(ip: IpAddr) -> AddrClass {
     match ip {
-        IpAddr::V4(v4) => classify_v4(v4.octets()),
-        IpAddr::V6(v6) => {
-            // IPv4-mapped (`::ffff:a.b.c.d`) must be classified by its v4 range,
-            // not treated as an opaque public v6 address.
-            if let Some(mapped) = v6.to_ipv4_mapped() {
-                classify_v4(mapped.octets())
-            } else {
-                classify_v6(v6.segments())
-            }
-        }
+        IpAddr::V4(v4) => classify_v4(v4),
+        // IPv4-mapped (`::ffff:a.b.c.d`) must be classified by its v4 range,
+        // not treated as an opaque public v6 address.
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(mapped) => classify_v4(mapped),
+            None => classify_v6(v6),
+        },
     }
 }
 
-fn classify_v4(o: [u8; 4]) -> AddrClass {
-    match o {
-        // 127.0.0.0/8
-        [127, ..] => AddrClass::Loopback,
-        // 10.0.0.0/8
-        [10, ..] => AddrClass::Private,
-        // 172.16.0.0/12  (172.16 – 172.31)
-        [172, b, ..] if (16..=31).contains(&b) => AddrClass::Private,
-        // 192.168.0.0/16
-        [192, 168, ..] => AddrClass::Private,
-        // 169.254.0.0/16
-        [169, 254, ..] => AddrClass::LinkLocal,
-        _ => AddrClass::Public,
+fn classify_v4(v4: Ipv4Addr) -> AddrClass {
+    if v4.is_loopback() {
+        AddrClass::Loopback
+    } else if v4.is_private() {
+        AddrClass::Private
+    } else if v4.is_link_local() {
+        AddrClass::LinkLocal
+    } else {
+        AddrClass::Public
     }
 }
 
-fn classify_v6(seg: [u16; 8]) -> AddrClass {
-    // ::1
-    if seg == [0, 0, 0, 0, 0, 0, 0, 1] {
-        return AddrClass::Loopback;
+fn classify_v6(v6: Ipv6Addr) -> AddrClass {
+    if v6.is_loopback() {
+        AddrClass::Loopback
+    } else if v6.is_unique_local() {
+        AddrClass::Private
+    } else if v6.is_unicast_link_local() {
+        AddrClass::LinkLocal
+    } else {
+        AddrClass::Public
     }
-    let first = seg[0];
-    // fc00::/7  (first 7 bits == 1111110x → 0xFC00..=0xFDFF)
-    if (first & 0xFE00) == 0xFC00 {
-        return AddrClass::Private;
-    }
-    // fe80::/10 (first 10 bits == 1111111010 → 0xFE80..=0xFEBF)
-    if (first & 0xFFC0) == 0xFE80 {
-        return AddrClass::LinkLocal;
-    }
-    AddrClass::Public
 }
 
 /// Resolve the URI's authority to the address set the agent will dial.
