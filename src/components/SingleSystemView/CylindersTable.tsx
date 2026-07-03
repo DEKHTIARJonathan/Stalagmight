@@ -127,6 +127,7 @@ export function CylindersTable() {
                     }}
                     step={units === 'imperial' ? 50 : 5}
                     displayPrecision={0}
+                    allowZero
                     className="w-20 bg-transparent border border-border rounded px-1 py-0.5"
                     ariaLabel={t('gasPanel.tanks.usableAria', { tank: tankName })}
                     testId="gas-cylinder-usable"

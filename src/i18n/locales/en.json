@@ -2152,6 +2152,8 @@
       "freeHint": "Set the usable gas for each cylinder yourself.",
       "needsStages": "Add {{count}} stage cylinder(s) to your rig to use this strategy.",
       "stageReserveLabel": "Stage reserve",
+      "safetyMarginLabel": "Safety margin",
+      "safetyMarginHint": "Extra gas held back from every cylinder on top of thirds — a conservatism knob for teams of two or specific caves.",
       "advancedTitle": "Advanced gas strategy",
       "advancedBody": "Use only if you're trained to balance gas across back gas and stages.",
       "advancedConfirm": "I understand",
@@ -2195,8 +2197,8 @@
     "readout": {
       "label": "Plan",
       "backgasTurnPressure": "Backgas turn pressure",
-      "stage1DropPressure": "Stage 1 drop pressure",
-      "stage2DropPressure": "Stage 2 drop pressure",
+      "backgasSwitchPressure": "Backgas switch pressure",
+      "stageDropPressure": "Stage {{n}} drop",
       "budget": "Turn budget",
       "maxPenetration": "Gas to farthest point",
       "maxPenetrationHint": "Gas consumed to reach the deepest in-budget station (a volume, not a distance).",
@@ -2204,7 +2206,6 @@
       "routeDistanceHint": "One-way swum line distance from the origin to the turnaround (the sum of the route's legs).",
       "maxDepth": "Max depth",
       "avgDepth": "Average depth",
-      "turnPoints": "Turn points",
       "computing": "Computing…"
     },
     "map": {

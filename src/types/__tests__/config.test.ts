@@ -205,6 +205,7 @@ describe('defaultConfig structure', () => {
       expect(defaultConfig.gas.dpv).toBeNull();
       expect(defaultConfig.gas.reserve_profile).toEqual({
         stage_reserve_bar: 30,
+        all_thirds_safety_margin_bar: 0,
         recalc_hold_stage2_bar: 100,
         recalc_hold_stage1_bar: 70,
       });

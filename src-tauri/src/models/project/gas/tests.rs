@@ -381,6 +381,66 @@ fn gas_free_display_clamps_to_basis_not_fill_on_overfill() {
 }
 
 #[test]
+fn gas_free_places_a_drop_for_every_stage_with_usable() {
+    // Free has no 2-stage cap (unlike Half-Minus): a 3rd/Nth stage with a positive usable must get
+    // its own drop point. Long descent so all three cumulative thresholds are reachable.
+    let mut project = Project::new("Gas".to_string(), None);
+    let sec = project
+        .add_section(SectionData {
+            shots: (0..8)
+                .map(|i| make_shot(50.0, f64::from(i), f64::from(i) + 1.0))
+                .collect(),
+            ..Default::default()
+        })
+        .id;
+    let origin = StationRef::new(sec, 0);
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        24.0,
+        232.0,
+        90.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = || Cylinder {
+        usable_gas_bar: 40.0,
+        ..Cylinder::new(
+            11.0,
+            207.0,
+            90.0,
+            TankMaterial::Aluminium,
+            CylRole::Stage,
+            None,
+        )
+        .unwrap()
+    };
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::Free,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        &[bg, stage(), stage(), stage()],
+        &cfg,
+    );
+    assert_eq!(
+        field.stage_drop_bars.len(),
+        3,
+        "one drop gauge per stage with usable (no 2-stage cap in Free)"
+    );
+    assert_eq!(field.stage_drop_refs.len(), 3, "one drop marker per stage");
+    assert_eq!(
+        field.stage_drop_distances_m.len(),
+        3,
+        "one drop distance per stage"
+    );
+}
+
+#[test]
 fn gas_free_nonfinite_usable_sanitizes_to_zero() {
     // A non-finite usable (NaN / ±inf — serde_json can't carry it today, but a future non-JSON path
     // might) must sanitize to 0 in every Free path, never poisoning the budget / turn / column with
@@ -542,6 +602,51 @@ fn gas_cylinder_usable_bars_match_gauges_and_align_with_input() {
         field.cylinder_usable_bars[2].abs() < 1e-12,
         "deco (non-budget) row = 0"
     );
+}
+
+#[test]
+fn gas_all_thirds_safety_margin_shrinks_budget_and_column() {
+    // The All-thirds safety margin (#245) holds back `margin` bar more per cylinder (Z==1 at 90 bar).
+    // back-gas 24 L @ 90: thirds usable = 90×24/3 = 720 L; margin 15 bar holds 15×24 = 360 L more →
+    // budget 360, column 15 bar (usable/wv), turn = 90 − 360/24 = 75 (vs 60 / 720 at margin 0).
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        24.0,
+        232.0,
+        90.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let plain = GasConfig::default();
+    let with_margin = GasConfig {
+        reserve_profile: ReserveProfile {
+            all_thirds_safety_margin_bar: 15.0,
+            ..ReserveProfile::default()
+        },
+        ..GasConfig::default()
+    };
+    let base = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg.clone()], &plain);
+    let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg], &with_margin);
+    assert!(
+        (base.budget_litres - 720.0).abs() < 1e-6,
+        "margin 0 = plain thirds (unchanged)"
+    );
+    assert!(
+        (field.budget_litres - 360.0).abs() < 1e-6,
+        "margin 15 shrinks the budget"
+    );
+    assert!(
+        (field.cylinder_usable_bars[0] - 15.0).abs() < 1e-6,
+        "column = usable/water-vol"
+    );
+    assert!(
+        (field.backgas_turn_bar.unwrap() - 75.0).abs() < 1e-6,
+        "turn rises with the margin"
+    );
+    assert!((base.backgas_turn_bar.unwrap() - 60.0).abs() < 1e-6);
 }
 
 #[test]
@@ -1101,9 +1206,10 @@ fn gas_reach_field_endpoint_selects_the_route_for_drops() {
 }
 
 #[test]
-fn gas_reach_field_threshold_past_deepest_yields_fewer_drops() {
-    // TwoStage whose budget only reaches the FIRST drop threshold → one ▼, not two (the
-    // staged_route filter_map drops a threshold beyond the deepest reachable station).
+fn gas_reach_field_threshold_past_deepest_clamps_drop_to_turnaround() {
+    // TwoStage whose budget only reaches the FIRST drop threshold: the 2nd threshold is past the
+    // deepest reachable station, so its drop clamps to the turnaround (you turn still carrying that
+    // stage). Every stage keeps a drop, so stage_drop_refs stays aligned 1:1 with the gauges.
     let (project, origin) = linear_descent_project(); // gas 0/300/800/1500
     let diver = Diver::new(20.0, None).unwrap();
     let bg = Cylinder::new(
@@ -1128,7 +1234,8 @@ fn gas_reach_field_threshold_past_deepest_yields_fewer_drops() {
     };
     // stage_in = (70−30)/2 × 10 = 200; thresholds 200, 400. ⅙ back gas = 600/6 = 100. budget = 500
     // → reaches station 1 (300), not station 2 (800). drop1 at station 1 (≥200); drop2 (≥400) is
-    // past the deepest reachable gas (300) → no second drop.
+    // past the deepest reachable gas (300) → clamps to the turnaround (station 1). Two drops, both
+    // aligned with the two stage gauges.
     let cfg = GasConfig {
         default_reserve: ReservePreset::TwoStage,
         ..GasConfig::default()
@@ -1138,7 +1245,17 @@ fn gas_reach_field_threshold_past_deepest_yields_fewer_drops() {
     let sec = origin.section_id;
     assert!((field.budget_litres - 500.0).abs() < 1e-6);
     assert_eq!(field.final_turn_ref, Some(StationRef::new(sec, 1)));
-    assert_eq!(field.stage_drop_refs, vec![StationRef::new(sec, 1)]);
+    assert_eq!(
+        field.stage_drop_refs,
+        vec![StationRef::new(sec, 1), StationRef::new(sec, 1)],
+        "both drops present; the unreachable 2nd clamps to the turnaround"
+    );
+    assert_eq!(
+        field.stage_drop_bars.len(),
+        2,
+        "gauges aligned with the drops"
+    );
+    assert_eq!(field.stage_drop_distances_m.len(), 2);
 }
 
 #[test]

@@ -239,11 +239,17 @@ impl Project {
         );
         let (route_line_length_m, route_max_depth_m, route_avg_depth_m) =
             route_metrics(&route_pts, &route_swim);
+        // Per-stage drop DISTANCE (metres, swum from origin), aligned with `stage_drop_refs`, for the
+        // Plan readout — same swum-distance basis as `route_line_length_m`.
+        let stage_drop_distances_m =
+            stage_drop_distances(&route_refs, &route_pts, &route_swim, &stage_drop_refs);
 
         // Back-gas turn gauge — computed here so the UI never re-derives the budget math; honours the
         // conservative cap + effective strategy. Free averages the diver's per-tank turn directly.
+        let margin = gas_config.reserve_profile.all_thirds_safety_margin_bar;
         let backgas_turn_bar = match effective {
             ReservePreset::Free => free_backgas_turn(active, conservative),
+            ReservePreset::AllThirds => all_thirds_backgas_turn(active, margin, conservative),
             _ => backgas_turn_pressure(active, backgas_fraction(effective), conservative),
         };
 
@@ -253,6 +259,7 @@ impl Project {
             cylinders,
             effective,
             gas_config.reserve_profile.stage_reserve_bar,
+            margin,
             conservative,
         );
 
@@ -268,6 +275,7 @@ impl Project {
             final_turn_ref,
             backgas_turn_bar,
             stage_drop_bars,
+            stage_drop_distances_m,
             cylinder_usable_bars,
             route_line_length_m,
             route_max_depth_m,
@@ -303,9 +311,11 @@ impl Project {
 /// predecessor tree from the route target (the user-selected endpoint, else the deepest in-budget
 /// station) back to its root, reverses to give the route origin→target, then for each cumulative
 /// stage threshold (litres) finds the first route station whose gas-to-reach reaches it (the
-/// diver's likely drop point). A threshold past the target — cave shorter than the staged gas —
-/// simply yields no drop. Returns `(route_refs, stage_drop_refs, final_turn_ref)`; all empty/None
-/// when there is no reachable target.
+/// diver's likely drop point). A threshold past the target — the cave is shorter than the staged
+/// gas, so the stage isn't fully breathed before turning — clamps its drop to the turnaround (you
+/// carry/drop it there), so EVERY threshold yields exactly one drop and `stage_drop_refs` stays
+/// aligned 1:1 with the per-stage gauges. Returns `(route_refs, stage_drop_refs, final_turn_ref)`;
+/// all empty/None when there is no reachable target.
 fn staged_route(
     target: Option<usize>,
     pred: &[usize],
@@ -331,17 +341,51 @@ fn staged_route(
 
     let route_refs: Vec<StationRef> = chain.iter().map(|&i| station_refs[i]).collect();
     // gas-to-reach increases monotonically root→target along the tree path, so the first station
-    // at/after a threshold is the drop point.
+    // at/after a threshold is the drop point. A threshold beyond the target's reach clamps to the
+    // target (the turnaround), so every stage gets a drop and the gauges stay aligned.
     let stage_drop_refs: Vec<StationRef> = thresholds
         .iter()
-        .filter_map(|&t| {
+        .map(|&t| {
             chain
                 .iter()
                 .find(|&&i| gas_in[i] >= t)
-                .map(|&i| station_refs[i])
+                .map_or(station_refs[target], |&i| station_refs[i])
         })
         .collect();
     (route_refs, stage_drop_refs, Some(station_refs[target]))
+}
+
+/// Swum distance (metres) from the route origin to each stage-drop station, aligned with
+/// `stage_drop_refs`. Walks the ordered route accumulating 3-D segment lengths over swum legs only
+/// (ties excluded, exactly like `route_metrics`), then reads the cumulative distance at each drop
+/// station's position on the route. A drop not on the route (shouldn't happen — drops come from the
+/// route chain) reads 0. Backend-computed so the Plan readout never re-derives it.
+fn stage_drop_distances(
+    route_refs: &[StationRef],
+    pts: &[Coordinates],
+    swim: &[bool],
+    drops: &[StationRef],
+) -> Vec<f64> {
+    let mut cum = vec![0.0_f64; pts.len()];
+    for i in 1..pts.len() {
+        let seg = if swim.get(i - 1).copied().unwrap_or(true) {
+            let (a, b) = (pts[i - 1], pts[i]);
+            ((b.x - a.x).powi(2) + (b.y - a.y).powi(2) + (b.z - a.z).powi(2)).sqrt()
+        } else {
+            0.0
+        };
+        cum[i] = cum[i - 1] + seg;
+    }
+    drops
+        .iter()
+        .map(|d| {
+            route_refs
+                .iter()
+                .position(|r| r == d)
+                .and_then(|j| cum.get(j).copied())
+                .unwrap_or(0.0)
+        })
+        .collect()
 }
 
 /// A route leg is a real **swum** leg — a shot (including a reference/jump shot the diver swims) —
@@ -453,6 +497,64 @@ fn free_budget(cylinders: &[Cylinder], conservative: bool) -> f64 {
         .sum()
 }
 
+/// Gas (litres) the All-thirds safety margin (#245) holds back from one cylinder: the deliverable in
+/// the top `margin_bar` of the conservative-capped tank. 0 when the margin is 0.
+fn all_thirds_margin_litres(c: &Cylinder, margin_bar: f64, conservative: bool) -> f64 {
+    if margin_bar <= 0.0 {
+        return 0.0;
+    }
+    let basis = cyl_basis(c, conservative);
+    let full = deliverable_gas(basis, c.water_volume_l, c.rated_pressure_bar, conservative);
+    let held = deliverable_gas(
+        (basis - margin_bar).max(0.0),
+        c.water_volume_l,
+        c.rated_pressure_bar,
+        conservative,
+    );
+    (full - held).max(0.0)
+}
+
+/// One budget-role cylinder's All-thirds usable IN gas (litres): ⅓ of its deliverable gas, less the
+/// safety margin, clamped ≥ 0. At `margin_bar == 0` this is exactly ⅓ · deliverable (plain thirds),
+/// so the default path is unchanged.
+fn all_thirds_usable_litres(c: &Cylinder, margin_bar: f64, conservative: bool) -> f64 {
+    let deliverable = deliverable_gas(
+        c.fill_bar,
+        c.water_volume_l,
+        c.rated_pressure_bar,
+        conservative,
+    );
+    (deliverable / 3.0 - all_thirds_margin_litres(c, margin_bar, conservative)).max(0.0)
+}
+
+/// All-thirds back-gas turn gauge (bar) with the safety margin folded in: the volume-weighted start
+/// gauge less the back-gas usable IN gas expressed as a common-gauge drop. At `margin_bar == 0` it
+/// equals `backgas_turn_pressure(.., 1/3, ..)`.
+fn all_thirds_backgas_turn(
+    cylinders: &[Cylinder],
+    margin_bar: f64,
+    conservative: bool,
+) -> Option<f64> {
+    let back: Vec<&Cylinder> = cylinders
+        .iter()
+        .filter(|c| matches!(c.role, CylRole::BackGas))
+        .collect();
+    let sum_wv: f64 = back.iter().map(|c| c.water_volume_l).sum();
+    if sum_wv <= 0.0 {
+        return None;
+    }
+    let avg_start = back
+        .iter()
+        .map(|c| c.fill_bar * c.water_volume_l)
+        .sum::<f64>()
+        / sum_wv;
+    let usable: f64 = back
+        .iter()
+        .map(|c| all_thirds_usable_litres(c, margin_bar, conservative))
+        .sum();
+    Some((avg_start - usable / sum_wv).max(0.0))
+}
+
 /// The strategy actually applied: the requested preset when the rig carries enough `Stage`
 /// cylinders, else All-thirds (the fallback `penetration_budget` already takes). The gauges key off
 /// this so a stage-short staged request shows All-thirds numbers, matching the budget + map.
@@ -557,6 +659,7 @@ fn cylinder_usable_bars(
     cylinders: &[Cylinder],
     effective: ReservePreset,
     reserve_bar: f64,
+    margin_bar: f64,
     conservative: bool,
 ) -> Vec<f64> {
     let needed = required_stages(effective);
@@ -582,9 +685,12 @@ fn cylinder_usable_bars(
                     CylRole::BackGas | CylRole::Stage => free_usable_bar(c, conservative),
                     _ => 0.0,
                 },
-                // Thirds counts back gas AND stages at ⅓ (both are in `usable_oc_gas`).
+                // Thirds counts back gas AND stages at ⅓ (both are in `usable_oc_gas`), less the
+                // safety margin — expressed as bar so the column equals what the budget credits.
                 ReservePreset::AllThirds => match c.role {
-                    CylRole::BackGas | CylRole::Stage => (1.0 / 3.0) * deliverable_bar,
+                    CylRole::BackGas | CylRole::Stage => {
+                        all_thirds_usable_litres(c, margin_bar, conservative) / c.water_volume_l
+                    }
                     _ => 0.0,
                 },
                 ReservePreset::OneStage | ReservePreset::TwoStage => match c.role {
@@ -677,7 +783,18 @@ fn penetration_budget(
     profile: &ReserveProfile,
     conservative: bool,
 ) -> f64 {
-    let all_thirds = || usable_oc_gas(cylinders, conservative) / 3.0;
+    // All-thirds = ⅓ of each budget-role cylinder's deliverable, less the safety margin (0 by
+    // default, so this is plain thirds). The margin is All-thirds-only — a fell-back staged rig is
+    // now effectively All-thirds, so it inherits the margin too.
+    let all_thirds = || {
+        cylinders
+            .iter()
+            .filter(|c| matches!(c.role, CylRole::BackGas | CylRole::Stage))
+            .map(|c| {
+                all_thirds_usable_litres(c, profile.all_thirds_safety_margin_bar, conservative)
+            })
+            .sum::<f64>()
+    };
 
     let stages: Vec<&Cylinder> = cylinders
         .iter()
@@ -768,7 +885,16 @@ fn stage_drop_thresholds(
 /// cylinders. Dil-out / bailout / deco roles are excluded (CCR / deco, not OC penetration gas
 /// — §5.3/§5.5). Every cylinder is Z-derated via [`deliverable_gas`] (real-gas correction is
 /// always applied); `conservative` additionally caps an overfilled tank to its rated capacity
-/// (the "call-it-an-80" community convention, §5.3).
+/// (the "call-it-an-80" community convention, §5.3). Retained as a tested building block — the
+/// All-thirds budget now sums per-cylinder `all_thirds_usable_litres` (to fold in the safety margin),
+/// so this is exercised only by tests.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "tested building block; budget now sums per-cylinder"
+    )
+)]
 fn usable_oc_gas(cylinders: &[Cylinder], conservative: bool) -> f64 {
     cylinders
         .iter()

@@ -225,6 +225,10 @@ pub struct GasReachField {
     pub backgas_turn_bar: Option<f64>,
     /// Per-stage Half-Minus drop pressure gauge (bar), one per counted stage; empty for All-thirds.
     pub stage_drop_bars: Vec<f64>,
+    /// Swum distance (metres) from the origin to each stage-drop station, aligned with
+    /// `stage_drop_refs` / `stage_drop_bars`, for the Plan readout (#245). Same swum-distance basis
+    /// as `route_line_length_m`. Empty when there are no stage drops.
+    pub stage_drop_distances_m: Vec<f64>,
     /// Per-cylinder penetration allowance (bar) the engine used, aligned 1:1 with the INPUT
     /// cylinder order (disabled tanks and non-budget roles are `0.0`) so the table can show a
     /// "usable gas" value per row (#245). Under the reserve presets these are engine-COMPUTED

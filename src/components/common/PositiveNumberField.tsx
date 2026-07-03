@@ -30,6 +30,7 @@ export function PositiveNumberField({
   className,
   ariaLabel,
   testId,
+  allowZero = false,
 }: {
   value: number;
   onCommit: (n: number) => void;
@@ -38,6 +39,8 @@ export function PositiveNumberField({
   className?: string;
   ariaLabel?: string;
   testId?: string;
+  /** Accept 0 as a valid committed value (e.g. a cylinder's Free usable gas), not just > 0. */
+  allowZero?: boolean;
 }) {
   const [draft, setDraft] = useState(() => formatDraft(value, displayPrecision));
   const [focused, setFocused] = useState(false);
@@ -59,7 +62,7 @@ export function PositiveNumberField({
         const text = e.target.value;
         setDraft(text); // allow empty / intermediate so the field stays deletable
         const n = Number(text);
-        if (Number.isFinite(n) && n > 0) onCommit(n);
+        if (Number.isFinite(n) && (allowZero ? n >= 0 : n > 0)) onCommit(n);
       }}
       className={className}
       aria-label={ariaLabel}

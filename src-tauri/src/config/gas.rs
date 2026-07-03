@@ -31,6 +31,16 @@ fn default_stage_reserve_bar() -> f64 {
     30.0
 }
 
+fn default_all_thirds_safety_margin_bar() -> f64 {
+    0.0
+}
+
+/// Upper bound on the All-thirds safety margin (bar). A margin only ever SHRINKS usable gas (the
+/// safe direction), so the high side is merely capped for sanity; per-cylinder the engine clamps
+/// the resulting usable at 0, so an over-large margin just zeroes a small tank rather than crediting
+/// negative gas.
+const MAX_ALL_THIRDS_SAFETY_MARGIN_BAR: f64 = 200.0;
+
 /// Upper bound on the per-stage reserve. A LARGER reserve only shrinks a stage's usable IN gas
 /// (`(fill − reserve)/2`) — the *safe* direction — so the high side is merely capped for sanity,
 /// not rejected; the genuinely unsafe direction is a *negative* reserve (it would drop the stage
@@ -83,6 +93,11 @@ pub enum ReservePreset {
 pub struct ReserveProfile {
     #[serde(default = "default_stage_reserve_bar")]
     pub stage_reserve_bar: f64,
+    /// Extra gas (bar) held back from EVERY budget-role cylinder under **All-thirds** (#245), on top
+    /// of the thirds reserve — a diver-set conservatism knob for teams of two or specific caves.
+    /// Default 0 (plain thirds). Only ever shrinks usable gas (the safe direction).
+    #[serde(default = "default_all_thirds_safety_margin_bar")]
+    pub all_thirds_safety_margin_bar: f64,
     #[serde(default = "default_recalc_hold_stage2_bar")]
     pub recalc_hold_stage2_bar: f64,
     #[serde(default = "default_recalc_hold_stage1_bar")]
@@ -93,6 +108,7 @@ impl Default for ReserveProfile {
     fn default() -> Self {
         Self {
             stage_reserve_bar: default_stage_reserve_bar(),
+            all_thirds_safety_margin_bar: default_all_thirds_safety_margin_bar(),
             recalc_hold_stage2_bar: default_recalc_hold_stage2_bar(),
             recalc_hold_stage1_bar: default_recalc_hold_stage1_bar(),
         }
@@ -217,6 +233,13 @@ impl GasConfig {
             p.stage_reserve_bar = default_stage_reserve_bar();
         } else if p.stage_reserve_bar > MAX_STAGE_RESERVE_BAR {
             p.stage_reserve_bar = MAX_STAGE_RESERVE_BAR;
+        }
+        // All-thirds safety margin: a NEGATIVE margin would ADD usable gas (over-state reach, the
+        // unsafe direction) so reset it to 0; a large one only shrinks usable (safe) so just cap it.
+        if !p.all_thirds_safety_margin_bar.is_finite() || p.all_thirds_safety_margin_bar < 0.0 {
+            p.all_thirds_safety_margin_bar = default_all_thirds_safety_margin_bar();
+        } else if p.all_thirds_safety_margin_bar > MAX_ALL_THIRDS_SAFETY_MARGIN_BAR {
+            p.all_thirds_safety_margin_bar = MAX_ALL_THIRDS_SAFETY_MARGIN_BAR;
         }
         if !p.recalc_hold_stage2_bar.is_finite() || p.recalc_hold_stage2_bar < 0.0 {
             p.recalc_hold_stage2_bar = default_recalc_hold_stage2_bar();

@@ -168,6 +168,7 @@ fn test_gas_config_normalize_clamps_reserve_profile() {
     let mut config = GasConfig {
         reserve_profile: ReserveProfile {
             stage_reserve_bar: -5.0,
+            all_thirds_safety_margin_bar: -3.0, // negative → adds gas (unsafe) → reset to 0
             recalc_hold_stage2_bar: f64::NAN,
             recalc_hold_stage1_bar: 80.0, // valid → kept
         },
@@ -175,6 +176,7 @@ fn test_gas_config_normalize_clamps_reserve_profile() {
     };
     config.normalize();
     assert_eq!(config.reserve_profile.stage_reserve_bar, 30.0);
+    assert_eq!(config.reserve_profile.all_thirds_safety_margin_bar, 0.0);
     assert_eq!(config.reserve_profile.recalc_hold_stage2_bar, 100.0);
     assert_eq!(config.reserve_profile.recalc_hold_stage1_bar, 80.0);
 }

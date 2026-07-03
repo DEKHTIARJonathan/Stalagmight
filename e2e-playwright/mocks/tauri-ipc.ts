@@ -1291,7 +1291,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Rust; the mock just produces plausible, shape-correct values for the UI wiring.
             const gasConfig = (args?.gasConfig ?? {}) as {
               default_reserve?: string;
-              reserve_profile?: { stage_reserve_bar?: number };
+              reserve_profile?: { stage_reserve_bar?: number; all_thirds_safety_margin_bar?: number };
               conservative_tank_gas?: boolean;
             };
             const cylinders = (args?.cylinders ?? []) as Array<{
@@ -1337,7 +1337,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ? stations[deepestIdx].station_ref
                 : null;
             const final_turn_ref = targetRef;
-            const stage_drop_refs = dropCount > 0 ? reachableRefs.slice(1, 1 + dropCount) : [];
+            // Drop stages: staged presets drop their first `dropCount` enabled stages; Free drops
+            // every enabled stage with a positive usable (no cap). Each gets a ref, clamped to the
+            // turnaround when the route is shorter — mirroring the engine so refs/bars/distances align.
+            const dropSourceStages =
+              effective === 'free'
+                ? stageCyls.filter((c) => (c.usable_gas_bar ?? 0) > 0)
+                : stageCyls.slice(0, dropCount);
+            const stage_drop_refs = reachableRefs.length
+              ? dropSourceStages.map(
+                  (_c, i) => reachableRefs[Math.min(i + 1, reachableRefs.length - 1)],
+                )
+              : [];
             // Route legs to the target (consecutive reachable stations; the real graph path is
             // exercised in Rust). is_jump stays false — the seeded e2e sections carry no jumps.
             const route =
@@ -1384,28 +1395,48 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 route_line_length_m > 0 ? depthLenSum / route_line_length_m : routePts[0].z;
             }
 
+            const margin = gasConfig.reserve_profile?.all_thirds_safety_margin_bar ?? 0;
             const backCyls = cylinders.filter((c) => c.role === 'back_gas' && c.enabled !== false);
             const sumWv = backCyls.reduce((s, c) => s + (c.water_volume_l ?? 0), 0);
             const frac = effective === 'two_stage' ? 1 / 6 : effective === 'one_stage' ? 1 / 4 : 1 / 3;
+            const avgStart =
+              sumWv > 0
+                ? backCyls.reduce((s, c) => s + (c.fill_bar ?? 0) * (c.water_volume_l ?? 0), 0) / sumWv
+                : 0;
+            // All-thirds turn rises by the safety margin (mock ignores Z: turn = avgStart·(1−⅓)+margin).
             const backgas_turn_bar =
               sumWv > 0
-                ? Math.max(
-                    0,
-                    (backCyls.reduce((s, c) => s + (c.fill_bar ?? 0) * (c.water_volume_l ?? 0), 0) /
-                      sumWv) *
-                      (1 - frac),
-                  )
+                ? Math.max(0, avgStart * (1 - frac) + (effective === 'all_thirds' ? margin : 0))
                 : null;
-            const stage_drop_bars =
-              dropCount > 0
-                ? stageCyls.slice(0, dropCount).map((c) => {
-                    const fill = c.fill_bar ?? 0;
-                    const rated = c.rated_pressure_bar ?? fill;
-                    const basis =
-                      gasConfig.conservative_tank_gas !== false ? Math.min(fill, rated) : fill;
-                    return Math.min(basis, 0.5 * (basis + reserve));
-                  })
-                : [];
+            const stage_drop_bars = dropSourceStages.map((c) => {
+              const fill = c.fill_bar ?? 0;
+              const rated = c.rated_pressure_bar ?? fill;
+              const basis = gasConfig.conservative_tank_gas !== false ? Math.min(fill, rated) : fill;
+              if (effective === 'free') {
+                const u = Math.max(0, Math.min(c.usable_gas_bar ?? 0, basis));
+                return Math.max(0, fill - u);
+              }
+              return Math.min(basis, 0.5 * (basis + reserve));
+            });
+            // Cumulative swum distance to each drop ref along the route (aligned with stage_drop_refs).
+            const cumDist: number[] = [];
+            {
+              let acc = 0;
+              for (let i = 0; i < routePts.length; i += 1) {
+                if (i > 0) {
+                  const a = routePts[i - 1];
+                  const b = routePts[i];
+                  acc += Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+                }
+                cumDist.push(acc);
+              }
+            }
+            const stage_drop_distances_m = stage_drop_refs.map((d) => {
+              const j = routeRefsOrdered.findIndex(
+                (r) => r.section_id === d.section_id && r.station_index === d.station_index,
+              );
+              return j >= 0 ? (cumDist[j] ?? 0) : 0;
+            });
             // Per-row usable bar (#245), aligned 1:1 with INPUT cylinders (disabled/non-budget = 0).
             // The mock ignores the Z derate, so deliverable/water-vol ≈ fill. Rust unit tests pin
             // the exact math; this just gives the table shape-correct values.
@@ -1422,7 +1453,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 return isBudget(c.role) ? Math.max(0, Math.min(c.usable_gas_bar ?? 0, basis)) : 0;
               }
               if (effective === 'all_thirds') {
-                return isBudget(c.role) ? fill / 3 : 0;
+                // ⅓ less the safety margin (mock ignores Z), clamped ≥ 0 — mirrors the engine.
+                return isBudget(c.role) ? Math.max(0, fill / 3 - margin) : 0;
               }
               if (c.role === 'back_gas') return frac * fill;
               if (c.role === 'stage') {
@@ -1444,6 +1476,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               final_turn_ref,
               backgas_turn_bar,
               stage_drop_bars,
+              stage_drop_distances_m,
               cylinder_usable_bars,
               route_line_length_m,
               route_max_depth_m,
@@ -2580,6 +2613,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 default_reserve: 'all_thirds',
                 reserve_profile: {
                   stage_reserve_bar: 30,
+                  all_thirds_safety_margin_bar: 0,
                   recalc_hold_stage2_bar: 100,
                   recalc_hold_stage1_bar: 70,
                 },
@@ -2836,6 +2870,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 default_reserve: 'all_thirds',
                 reserve_profile: {
                   stage_reserve_bar: 30,
+                  all_thirds_safety_margin_bar: 0,
                   recalc_hold_stage2_bar: 100,
                   recalc_hold_stage1_bar: 70,
                 },

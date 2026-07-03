@@ -36,6 +36,7 @@ describe('buildGasReachFeatureState', () => {
     final_turn_ref: null,
     backgas_turn_bar: null,
     stage_drop_bars: [],
+    stage_drop_distances_m: [],
     cylinder_usable_bars: [],
     route_line_length_m: 0,
     route_max_depth_m: null,
