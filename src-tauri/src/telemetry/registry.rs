@@ -54,6 +54,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.create_section",
     "command.create_section_and_merge",
     "command.create_shot",
+    "command.debug_trigger_panic",
     "command.delete_dive_plan",
     "command.delete_last_shot_and_section",
     "command.delete_section",
@@ -78,6 +79,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.get_project_state",
     "command.get_project_warnings",
     "command.get_recent_logs",
+    "command.get_recent_logs_since",
     "command.get_redo_stack",
     "command.get_rigid_connected_section_ids",
     "command.get_section",
@@ -856,7 +858,9 @@ mod tests {
         //       .speleodb-restore = 649.
         //   + 4 dive-plan (.plnx) commands (#244):
         //       command.{list,load,save,delete}_dive_plan = 653.
-        assert_eq!(EVENT_NAMES.len(), 653);
+        //   + 2 agent-harness observability commands:
+        //       command.get_recent_logs_since + command.debug_trigger_panic = 655.
+        assert_eq!(EVENT_NAMES.len(), 655);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

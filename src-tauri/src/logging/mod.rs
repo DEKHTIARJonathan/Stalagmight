@@ -1,19 +1,62 @@
+pub mod panic_hook;
+
 use anyhow::Result;
+use serde::Serialize;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use ts_rs::TS;
 
 /// Maximum number of log entries kept in the ring buffer.
 const RING_BUFFER_CAPACITY: usize = 500;
 
+/// Monotonic sequence counter for ring-buffer entries. Lets a caller ask for
+/// "everything after seq N" (`get_recent_logs_since`) so a checkpoint-based
+/// consumer (the agent harness) can detect new lines without content-diffing.
+static LOG_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// One entry in the in-memory ring buffer: a formatted log line plus a
+/// monotonic sequence number and a wall-clock timestamp (ms since the epoch).
+#[derive(Clone, Debug, Serialize, TS)]
+pub struct RingLogEntry {
+    pub seq: u64,
+    pub ts_ms: i64,
+    pub line: String,
+}
+
+/// Result of `get_recent_logs_since`: ring entries newer than the requested
+/// checkpoint, the newest sequence number now present, and whether the ring
+/// rotated past the checkpoint (so some entries were lost between checks).
+#[derive(Clone, Debug, Default, Serialize, TS)]
+pub struct LogsSince {
+    pub entries: Vec<RingLogEntry>,
+    pub latest_seq: u64,
+    pub dropped: bool,
+}
+
 /// Global ring buffer for recent log entries, readable by the `get_recent_logs` command.
-static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<String>>>> = OnceLock::new();
+static LOG_BUFFER: OnceLock<Arc<Mutex<VecDeque<RingLogEntry>>>> = OnceLock::new();
+
+/// Append a formatted line to a ring buffer, minting a fresh sequence number and
+/// timestamp and evicting the oldest entry when full. Shared by the tracing
+/// layer and the frontend-log bridge so both paths stay consistent.
+fn push_line_to(buffer: &Mutex<VecDeque<RingLogEntry>>, line: String) {
+    if let Ok(mut buf) = buffer.lock() {
+        let seq = LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+        let ts_ms = chrono::Utc::now().timestamp_millis();
+        if buf.len() >= RING_BUFFER_CAPACITY {
+            buf.pop_front();
+        }
+        buf.push_back(RingLogEntry { seq, ts_ms, line });
+    }
+}
 
 /// A tracing `Layer` that captures formatted log lines into a shared ring buffer.
 struct RingBufferLayer {
-    buffer: Arc<Mutex<VecDeque<String>>>,
+    buffer: Arc<Mutex<VecDeque<RingLogEntry>>>,
 }
 
 impl<S> tracing_subscriber::Layer<S> for RingBufferLayer
@@ -95,12 +138,7 @@ where
             line.push('}');
         }
 
-        if let Ok(mut buf) = self.buffer.lock() {
-            if buf.len() >= RING_BUFFER_CAPACITY {
-                buf.pop_front();
-            }
-            buf.push_back(line);
-        }
+        push_line_to(&self.buffer, line);
     }
 }
 
@@ -151,23 +189,49 @@ pub fn init() -> Option<WorkerGuard> {
 }
 
 /// Return recent log entries from the in-memory ring buffer.
+///
+/// Signature preserved (bare lines) so the in-app debug dialog is unaffected;
+/// checkpoint-aware consumers use `get_recent_logs_since`.
 pub fn get_recent_logs() -> Vec<String> {
     LOG_BUFFER
         .get()
         .and_then(|buf| buf.lock().ok())
-        .map(|buf| buf.iter().cloned().collect())
+        .map(|buf| buf.iter().map(|e| e.line.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// Pure core of `get_recent_logs_since`, split out so the checkpoint/`dropped`
+/// logic can be unit-tested against a hand-built buffer (the real one is a
+/// process-global `OnceLock` that cannot be re-initialised in tests).
+fn logs_since_from(buf: &VecDeque<RingLogEntry>, after_seq: u64) -> LogsSince {
+    let latest_seq = buf.back().map_or(0, |e| e.seq);
+    let oldest_seq = buf.front().map_or(0, |e| e.seq);
+    // If the oldest entry we still hold is newer than after_seq + 1, the ring
+    // rotated past the checkpoint and some entries were lost between checks.
+    let dropped = after_seq > 0 && oldest_seq > after_seq + 1;
+    let entries: Vec<RingLogEntry> = buf.iter().filter(|e| e.seq > after_seq).cloned().collect();
+    LogsSince {
+        entries,
+        latest_seq,
+        dropped,
+    }
+}
+
+/// Return ring-buffer entries newer than `after_seq`, the newest sequence number
+/// now present, and a `dropped` flag set when the ring rotated past the
+/// checkpoint. Pass `after_seq = 0` to get everything currently buffered.
+pub fn get_recent_logs_since(after_seq: u64) -> LogsSince {
+    LOG_BUFFER
+        .get()
+        .and_then(|buf| buf.lock().ok())
+        .map(|buf| logs_since_from(&buf, after_seq))
         .unwrap_or_default()
 }
 
 /// Push a pre-formatted log line into the ring buffer (used for frontend console logs).
 pub fn push_to_buffer(line: String) {
     if let Some(buf) = LOG_BUFFER.get() {
-        if let Ok(mut buf) = buf.lock() {
-            if buf.len() >= RING_BUFFER_CAPACITY {
-                buf.pop_front();
-            }
-            buf.push_back(line);
-        }
+        push_line_to(buf, line);
     }
 }
 
@@ -324,6 +388,67 @@ mod tests {
 
         assert!(!first.exists());
         assert!(!second.exists());
+    }
+
+    #[test]
+    fn push_line_mints_monotonic_seq_and_line() {
+        let buffer = Mutex::new(VecDeque::new());
+        push_line_to(&buffer, "a".to_string());
+        push_line_to(&buffer, "b".to_string());
+        let buf = buffer.lock().expect("lock");
+        assert_eq!(buf.len(), 2);
+        assert!(buf[1].seq > buf[0].seq, "seq must be strictly increasing");
+        assert_eq!(buf[0].line, "a");
+        assert_eq!(buf[1].line, "b");
+    }
+
+    #[test]
+    fn logs_since_returns_only_newer_entries() {
+        let mut buf = VecDeque::new();
+        for seq in 3..=6 {
+            buf.push_back(RingLogEntry {
+                seq,
+                ts_ms: 0,
+                line: format!("l{seq}"),
+            });
+        }
+        let since = logs_since_from(&buf, 4);
+        assert_eq!(
+            since.entries.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![5, 6]
+        );
+        assert_eq!(since.latest_seq, 6);
+        assert!(!since.dropped);
+    }
+
+    #[test]
+    fn logs_since_flags_dropped_when_ring_rotated_past_checkpoint() {
+        // Oldest retained seq is 7, but the caller last saw seq 4, so seqs 5 and
+        // 6 were evicted before this read: report the gap.
+        let mut buf = VecDeque::new();
+        for seq in 7..=9 {
+            buf.push_back(RingLogEntry {
+                seq,
+                ts_ms: 0,
+                line: format!("l{seq}"),
+            });
+        }
+        let since = logs_since_from(&buf, 4);
+        assert!(since.dropped);
+        assert_eq!(since.latest_seq, 9);
+    }
+
+    #[test]
+    fn logs_since_zero_checkpoint_never_flags_dropped() {
+        let mut buf = VecDeque::new();
+        buf.push_back(RingLogEntry {
+            seq: 100,
+            ts_ms: 0,
+            line: "x".to_string(),
+        });
+        let since = logs_since_from(&buf, 0);
+        assert!(!since.dropped);
+        assert_eq!(since.entries.len(), 1);
     }
 
     #[test]
