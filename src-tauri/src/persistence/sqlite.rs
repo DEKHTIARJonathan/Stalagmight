@@ -40,7 +40,11 @@ use std::path::Path;
 /// most recent accepted edit; #193 guardrail-7 push-start comparison). Added in
 /// BOTH `init_schema` and `migrate_schema` (a conditional `ALTER` for existing v9
 /// tables, mirroring the shot-uuid pattern); carried forward by the fence.
-const SCHEMA_VERSION: i32 = 11;
+///
+/// v12 adds the `markers` table (survey markers placed along shots) and the
+/// `next_marker_id` column on `project` (monotonic ID counter). Both appear in
+/// `init_schema` and `migrate_schema`.
+const SCHEMA_VERSION: i32 = 12;
 
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///

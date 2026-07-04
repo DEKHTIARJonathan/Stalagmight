@@ -3563,7 +3563,7 @@ fn init_schema_creates_speleo_link_v11() {
         )
         .unwrap();
     assert_eq!(exists, 1, "init_schema created speleo_link");
-    assert_eq!(db.get_user_version().unwrap(), 11, "stamped at v11");
+    assert_eq!(db.get_user_version().unwrap(), 12, "stamped at v12");
 }
 
 #[test]
@@ -3606,7 +3606,7 @@ fn migrate_creates_speleo_link_on_legacy_v8() {
         )
         .unwrap();
     assert_eq!(exists, 1, "migrate_schema recreated speleo_link");
-    assert_eq!(db.get_user_version().unwrap(), 11, "bumped to v11");
+    assert_eq!(db.get_user_version().unwrap(), 12, "bumped to v12");
 }
 
 #[test]
@@ -3864,7 +3864,7 @@ fn migrate_v9_dirty_speleo_link_backfills_last_edit_at() {
     );
     assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
     assert!(link.has_unpushed_edits, "existing row preserved");
-    assert_eq!(db.get_user_version().unwrap(), 11);
+    assert_eq!(db.get_user_version().unwrap(), 12);
 }
 
 #[test]
@@ -3974,7 +3974,7 @@ fn migrate_v10_speleo_link_adds_last_verify_at() {
     );
     assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
     assert!(link.has_unpushed_edits, "existing dirty bit preserved");
-    assert_eq!(db.get_user_version().unwrap(), 11);
+    assert_eq!(db.get_user_version().unwrap(), 12);
 }
 
 #[test]
@@ -4075,7 +4075,7 @@ fn speleo_link_survives_open_then_fast_path_reopen() {
     // First open_existing: already at HEAD, fast-path early return.
     {
         let db = Database::open_existing(&path).unwrap();
-        assert_eq!(db.get_user_version().unwrap(), 11);
+        assert_eq!(db.get_user_version().unwrap(), 12);
         assert!(db.load_speleo_link().unwrap().is_some());
     }
     // Second reopen: still intact, dirty bit preserved.

@@ -23,6 +23,21 @@ pub enum MarkerDirection {
     TowardEnd,
 }
 
+/// Partial update applied to an existing marker.
+///
+/// Each field is `Some` only when the caller wants to change that field.
+/// `direction` uses a nested `Option`: `Some(Some(d))` sets a direction,
+/// `Some(None)` clears it, `None` leaves it unchanged.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export_to = "bindings/MarkerUpdates.ts")]
+pub struct MarkerUpdates {
+    pub position: Option<f32>,
+    pub marker_type: Option<MarkerType>,
+    pub color: Option<String>,
+    pub text: Option<String>,
+    pub direction: Option<Option<MarkerDirection>>,
+}
+
 /// A survey marker placed at a position along a shot.
 ///
 /// Markers are project-level entities (stored in `Project.markers`) that
