@@ -503,9 +503,17 @@ impl AppState {
         diver: &Diver,
         cylinders: &[Cylinder],
         gas_config: &GasConfig,
+        stage_drop_overrides: &[Option<StationRef>],
     ) -> Option<GasReachField> {
         let project = self.get_project_state()?;
-        Some(project.compute_gas_reach_field(origin, endpoint, diver, cylinders, gas_config))
+        Some(project.compute_gas_reach_field_with_overrides(
+            origin,
+            endpoint,
+            diver,
+            cylinders,
+            gas_config,
+            stage_drop_overrides,
+        ))
     }
 
     /// Shortest along-cave-line distance + traversed shots between two ruler

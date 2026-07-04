@@ -2208,6 +2208,9 @@
       "backgasTurnPressure": "Backgas turn pressure",
       "backgasSwitchPressure": "Backgas switch pressure",
       "stageDropPressure": "Stage {{n}} drop",
+      "resetDrop": "reset",
+      "resetDropHint": "Move this stage drop back to its strategy-computed point.",
+      "overReserveWarning": "A drop was moved past its reserve; the plan breathes into stage reserve gas.",
       "budget": "Turn budget",
       "maxPenetration": "Gas to farthest point",
       "maxPenetrationHint": "Gas consumed to reach the deepest in-budget station (a volume, not a distance).",
@@ -2218,7 +2221,9 @@
       "computing": "Computing…"
     },
     "map": {
-      "dropTooltip": "Drop stage {{n}} here",
+      "dropDraggableTooltip": "Stage {{n}} drop: drag or arrow-key to move; Delete to reset",
+      "dropOverReserveTooltip": "Stage {{n}} drop: moved past reserve (breathing into reserve gas)",
+      "dropAria": "Stage {{n}} drop point: drag or use arrow keys to move it along the route, Delete to reset",
       "finalTurnTooltip": "Turn around here",
       "turnMarkerTooltip": "Click to set as endpoint",
       "turnMarkerAria": "Candidate route endpoint — activate to set as endpoint"

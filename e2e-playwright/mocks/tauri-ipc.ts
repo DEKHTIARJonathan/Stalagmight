@@ -1256,6 +1256,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'compute_gas_reach_field': {
+            // Record every call's inputs so drag e2e can assert the dragged station was sent as a
+            // per-stage override (#246). Keyed on the camelCase arg the frontend actually invokes with.
+            {
+              const win = window as unknown as Record<string, unknown>;
+              const calls = (win.__MOCK_GAS_REACH_CALLS__ as unknown[]) ?? [];
+              calls.push({
+                stageDropOverrides: args?.stageDropOverrides ?? [],
+                endpoint: args?.endpoint ?? null,
+              });
+              win.__MOCK_GAS_REACH_CALLS__ = calls;
+            }
             // Gas reachable-frontier field (#38). No real graph in the mock —
             // synthesize a field from each station's mock x-coordinate (origin at
             // x=0) so the overlay + legend + turn markers have finite values to
@@ -1349,6 +1360,33 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   (_c, i) => reachableRefs[Math.min(i + 1, reachableRefs.length - 1)],
                 )
               : [];
+            // Apply per-stage drop overrides (#246): pin a drop to its dragged station and flag it
+            // over-reserve when that station sits DEEPER (more gas-to-reach) than the strategy drop.
+            // ⚠ This is a DELIBERATELY simplified stand-in, NOT the engine's rule: the engine flags
+            // over-reserve on `contribution > safe_in_litres` (with a pin-to-default no-op) and folds
+            // the budget/turn/reach; the mock only moves the ref + sets a station-depth flag and keeps
+            // the budget fixed. So the e2e asserts UI WIRING (colour, reset, warning) only; the flag
+            // semantics + the recompute math are covered by the Rust unit tests, which are the source
+            // of truth. A pin-to-default is a no-op here too (same station ⇒ not deeper ⇒ not flagged).
+            const stageOverrides = (args?.stageDropOverrides ?? []) as Array<{
+              section_id: number;
+              station_index: number;
+            } | null>;
+            const gasAtRef = (r: { section_id: number; station_index: number }) => {
+              const idx = stations.findIndex(
+                (s) =>
+                  s.station_ref.section_id === r.section_id &&
+                  s.station_ref.station_index === r.station_index,
+              );
+              return idx >= 0 ? gas_to_reach[idx] : 0;
+            };
+            const stage_drop_over_reserve = stage_drop_refs.map((defRef, i) => {
+              const ov = stageOverrides[i];
+              if (ov == null || defRef == null) return false;
+              const over = gasAtRef(ov) > gasAtRef(defRef);
+              stage_drop_refs[i] = ov;
+              return over;
+            });
             // Route legs to the target (consecutive reachable stations; the real graph path is
             // exercised in Rust). is_jump stays false — the seeded e2e sections carry no jumps.
             const route =
@@ -1476,6 +1514,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               final_turn_ref,
               backgas_turn_bar,
               stage_drop_bars,
+              stage_drop_over_reserve,
               stage_drop_distances_m,
               cylinder_usable_bars,
               route_line_length_m,

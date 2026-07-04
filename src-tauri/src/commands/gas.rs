@@ -19,6 +19,11 @@ pub async fn compute_gas_reach_field(
     diver: Diver,
     cylinders: Vec<Cylinder>,
     gas_config: GasConfig,
+    // Per-stage drop overrides (#246), aligned 1:1 with the field's `stage_drop_refs`: the station
+    // the diver dragged each ▼ marker to (`None` = keep the strategy default). The frontend always
+    // sends it (empty when nothing is dragged); the engine clamps each pinned drop before it can
+    // move the budget, so a stray ref can only fall through to the default.
+    stage_drop_overrides: Vec<Option<StationRef>>,
 ) -> Result<Option<GasReachField>, String> {
     // Re-validate through the guarding constructors — a NaN/zero RMV or cylinder from the
     // frontend would otherwise reach the engine and poison the field.
@@ -58,6 +63,7 @@ pub async fn compute_gas_reach_field(
             &diver,
             &cylinders,
             &gas_config,
+            &stage_drop_overrides,
         )
     })
     .await

@@ -141,6 +141,50 @@ async function enterMode(page: Page, mode: 'survey' | 'plan' | 'export'): Promis
   await page.locator(`[data-testid="mode-${mode}"]`).click();
 }
 
+/** Enter Plan, add a stage, select + acknowledge the 1-stage strategy → one ▼ drop marker + route. */
+async function setupOneStageDrop(page: Page): Promise<void> {
+  await enterMode(page, 'plan');
+  await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible({ timeout: 3000 });
+  await page.selectOption('[data-testid="gas-add-tank"]', 'al80');
+  await page.locator('[data-testid="gas-cylinder-role"]').last().selectOption('stage');
+  const oneStage = page.locator('[data-testid="gas-reserve-one_stage"]');
+  await expect(oneStage).toBeEnabled();
+  await oneStage.click();
+  await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
+  await expect
+    .poll(() => page.locator('[data-testid="gas-drop-marker"]').count(), { timeout: 3000 })
+    .toBeGreaterThan(0);
+}
+
+/** The store's per-stage drop overrides (#246). */
+async function stageDropOverrides(page: Page): Promise<Array<StationRefLite | null>> {
+  return page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __E2E_TEST__?: {
+            gasPlanStore: {
+              getState: () => { stageDropOverrides: Array<StationRefLite | null> };
+            };
+          };
+        }
+      ).__E2E_TEST__?.gasPlanStore.getState().stageDropOverrides ?? [],
+  );
+}
+
+/** The `stage_drop_overrides` argument the LAST compute_gas_reach_field call was invoked with. */
+async function lastGasReachOverrides(page: Page): Promise<Array<StationRefLite | null>> {
+  return page.evaluate(() => {
+    const calls =
+      (
+        window as unknown as {
+          __MOCK_GAS_REACH_CALLS__?: Array<{ stageDropOverrides: Array<StationRefLite | null> }>;
+        }
+      ).__MOCK_GAS_REACH_CALLS__ ?? [];
+    return calls.length ? calls[calls.length - 1].stageDropOverrides : [];
+  });
+}
+
 test.describe('Gas planning', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
@@ -898,5 +942,58 @@ test.describe('Gas planning', () => {
     await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).toContain('gasReach');
     await expect.poll(() => anyStationHasGasReach(page), { timeout: 3000 }).toBe(true);
     await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible();
+  });
+
+  test('a stage drop is keyboard-movable - ArrowLeft pins it, sends an override, reset clears it (#246) @smoke', async ({
+    page,
+  }) => {
+    await setupOneStageDrop(page);
+    const marker = page.locator('[data-testid="gas-drop-marker"]').first();
+    await marker.focus();
+    // Nudge one route station SHALLOWER - deterministic (the default drop is never at the origin).
+    await page.keyboard.press('ArrowLeft');
+    // The store pins the drop AND the backend is re-invoked with the override (the full-recompute wiring).
+    await expect
+      .poll(async () => (await stageDropOverrides(page)).some((r) => r != null), { timeout: 3000 })
+      .toBe(true);
+    await expect
+      .poll(async () => (await lastGasReachOverrides(page)).some((r) => r != null), { timeout: 3000 })
+      .toBe(true);
+    // a11y: focus survives the recompute - the rebuilt ▼ marker regains focus so an AT user can
+    // chain nudges (regression guard for the stale-field-rebuild focus loss the review caught).
+    await expect(page.locator('[data-testid="gas-drop-marker"]').first()).toBeFocused();
+    // The readout offers a per-drop reset; clicking it clears the override and the field recomputes.
+    const reset = page.locator('[data-testid="gas-readout-stage1-reset"]');
+    await expect(reset).toBeVisible();
+    await reset.click();
+    await expect
+      .poll(async () => (await stageDropOverrides(page)).every((r) => r == null), { timeout: 3000 })
+      .toBe(true);
+    await expect(reset).toHaveCount(0);
+  });
+
+  test('dragging a stage drop deeper flags it over-reserve (red marker + panel warning) (#246)', async ({
+    page,
+  }) => {
+    await setupOneStageDrop(page);
+    const marker = page.locator('[data-testid="gas-drop-marker"]').first();
+    const finalTurn = page.locator('[data-testid="gas-final-turn-marker"]').first();
+    const from = await marker.boundingBox();
+    const to = await finalTurn.boundingBox();
+    expect(from).not.toBeNull();
+    expect(to).not.toBeNull();
+    // Drag the ▼ onto the deepest (final-turn) station - deeper than its computed drop => over-reserve.
+    await page.mouse.move(from!.x + from!.width / 2, from!.y + from!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(to!.x + to!.width / 2, to!.y + to!.height / 2, { steps: 12 });
+    await page.mouse.up();
+    // The recomputed field marks the drop over-reserve → the marker turns red and the panel warns.
+    await expect
+      .poll(
+        () => page.locator('[data-testid="gas-drop-marker"][data-over-reserve="true"]').count(),
+        { timeout: 3000 },
+      )
+      .toBeGreaterThan(0);
+    await expect(page.locator('[data-testid="gas-readout-over-reserve-warning"]')).toBeVisible();
   });
 });

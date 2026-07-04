@@ -202,6 +202,10 @@ function MapCanvas() {
   // restore focus to its new marker element — the a11y feature would otherwise lose
   // the AT user's place on every pick (#243).
   const pendingTurnFocusRef = useRef<StationRef | null>(null);
+  // Same story for a keyboard-nudged / reset ▼ drop marker (#246): the recompute rebuilds every
+  // drop marker, so remember the drop INDEX (stable across the move - the ref itself shifts) to
+  // restore focus to its rebuilt element.
+  const pendingDropFocusRef = useRef<number | null>(null);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
@@ -457,8 +461,10 @@ function MapCanvas() {
     cylinders: gasCylinders,
     gasConfig: gasPlanConfig,
     reachField: gasReachField,
+    stageDropOverrides: gasStageDropOverrides,
     setReachField: setGasReachField,
     setOrigin: setGasOrigin,
+    setStageDropOverride: setGasStageDropOverride,
   } = useGasPlanStore(
     useShallow((s) => ({
       origin: s.origin,
@@ -467,8 +473,10 @@ function MapCanvas() {
       cylinders: s.cylinders,
       gasConfig: s.gasConfig,
       reachField: s.reachField,
+      stageDropOverrides: s.stageDropOverrides,
       setReachField: s.setReachField,
       setOrigin: s.setOrigin,
+      setStageDropOverride: s.setStageDropOverride,
     }))
   );
 
@@ -1924,13 +1932,16 @@ function MapCanvas() {
         diver: gasDiver,
         cylinders: gasCylinders,
         gasConfig: gasPlanConfig,
+        // Per-stage drop overrides (#246): the station each ▼ marker was dragged to. Empty when
+        // nothing is dragged; the backend clamps each pin before it can move the budget.
+        stageDropOverrides: gasStageDropOverrides,
       },
       { purpose: 'gas reachable-frontier field', fields: { origin: gasOrigin ?? 'entrance' } }
     )
       .then((field) => { if (!cancelled) setGasReachField(field); })
       .catch((e) => console.warn('[gas-plan] field fetch failed', e));
     return () => { cancelled = true; };
-  }, [showGasPlan, gasOrigin, gasEndpoint, gasDiver, gasCylinders, gasPlanConfig, project?.modified_at, setGasReachField]);
+  }, [showGasPlan, gasOrigin, gasEndpoint, gasDiver, gasCylinders, gasPlanConfig, gasStageDropOverrides, project?.modified_at, setGasReachField]);
 
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
@@ -2189,7 +2200,10 @@ function MapCanvas() {
   // Staged-strategy route markers (#233): a ▼ drop marker where each stage is dropped along the
   // deepest-penetration route, plus a distinct final-turn marker where the back-gas leg runs out.
   // The backend leaves `stage_drop_refs`/`final_turn_ref` empty for All-thirds, so these only
-  // appear for the Half-Minus strategies. Plan mode only; bounded by the stage count (≤2).
+  // appear for the Half-Minus / Free strategies. Plan mode only; bounded by the stage count.
+  // Each ▼ is user-movable (#246): drag it (or arrow-key nudge it) to a route station and the
+  // backend recomputes the whole plan; it turns red when dragged over-reserve; Delete/dbl-click
+  // resets it to the strategy-computed spot.
   useEffect(() => {
     for (const m of gasDropMarkersRef.current) m.remove();
     gasDropMarkersRef.current = [];
@@ -2208,21 +2222,142 @@ function MapCanvas() {
         : null;
     };
 
+    // Ordered route stations (origin → turn) for snapping a dragged drop + the keyboard nudge.
+    const firstLeg = gasReachField.route[0];
+    const routeRefs: StationRef[] = firstLeg
+      ? [firstLeg.from, ...gasReachField.route.map((l) => l.to)]
+      : [];
+    // Snap a dropped position to the nearest route station in SCREEN space. Project each station
+    // FRESH at drag-end (not from a snapshot captured when the effect ran) so a pan/zoom between
+    // build and drag can't snap to the wrong station; screen space keeps it accurate at any zoom.
+    const snapToRoute = (lngLat: maplibregl.LngLat): StationRef | null => {
+      const p = mapInst.project(lngLat);
+      let best: StationRef | null = null;
+      let bestD = Infinity;
+      for (const r of routeRefs) {
+        const ll = lngLatFor(r);
+        if (!ll) continue;
+        const sp = mapInst.project(ll);
+        const d = (sp.x - p.x) ** 2 + (sp.y - p.y) ** 2;
+        if (d < bestD) {
+          bestD = d;
+          best = r;
+        }
+      }
+      return best;
+    };
+
     gasReachField.stage_drop_refs.forEach((ref, i) => {
       const lngLat = lngLatFor(ref);
       if (!lngLat) return;
+      const overReserve = gasReachField.stage_drop_over_reserve[i] === true;
+      // Read the override fresh from the store: this effect rebuilds on the recomputed FIELD (not on
+      // the override write, see the deps note), so the store is the current source at rebuild time.
+      const overridden = useGasPlanStore.getState().stageDropOverrides[i] != null;
       const el = document.createElement('div');
       el.setAttribute('data-testid', 'gas-drop-marker');
-      el.title = t('gasPanel.map.dropTooltip', { n: i + 1 });
-      el.style.cssText = 'line-height:0;pointer-events:none;filter:drop-shadow(0 0 1px rgba(0,0,0,0.6));';
-      // Downward triangle = "drop the stage here".
+      el.setAttribute('data-drop-index', String(i));
+      el.setAttribute('data-over-reserve', String(overReserve));
+      el.setAttribute('data-overridden', String(overridden));
+      // A slider along the route: draggable with the mouse, nudged one station with the arrow keys,
+      // reset with Delete/Escape. valuemin/max/now expose the position on the route to AT.
+      el.setAttribute('role', 'slider');
+      el.setAttribute('tabindex', '0');
+      el.setAttribute('aria-label', t('gasPanel.map.dropAria', { n: i + 1 }));
+      const curIndex = routeRefs.findIndex(
+        (r) => r.section_id === ref.section_id && r.station_index === ref.station_index
+      );
+      el.setAttribute('aria-valuemin', '0');
+      el.setAttribute('aria-valuemax', String(Math.max(0, routeRefs.length - 1)));
+      el.setAttribute('aria-valuenow', String(curIndex < 0 ? 0 : curIndex));
+      el.title = overReserve
+        ? t('gasPanel.map.dropOverReserveTooltip', { n: i + 1 })
+        : t('gasPanel.map.dropDraggableTooltip', { n: i + 1 });
+      el.style.cssText =
+        'line-height:0;cursor:grab;touch-action:none;filter:drop-shadow(0 0 1px rgba(0,0,0,0.6));';
+      // Downward triangle = "drop the stage here"; red when the diver dragged it over-reserve (#246).
+      const fill = overReserve ? '#d64545' : '#e08a1e';
       el.innerHTML =
         '<svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">' +
-        '<path d="M3 6h18L12 20z" fill="#e08a1e" stroke="#ffffff" stroke-width="1.5" ' +
+        `<path d="M3 6h18L12 20z" fill="${fill}" stroke="#ffffff" stroke-width="1.5" ` +
         'stroke-linejoin="round"/></svg>';
-      gasDropMarkersRef.current.push(
-        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(mapInst)
-      );
+      const marker = new maplibregl.Marker({ element: el, draggable: true })
+        .setLngLat(lngLat)
+        .addTo(mapInst);
+      marker.on('dragstart', () => {
+        el.style.cursor = 'grabbing';
+      });
+      marker.on('dragend', () => {
+        el.style.cursor = 'grab';
+        const snapped = snapToRoute(marker.getLngLat());
+        // Released in place (or nothing to snap to): put the marker back and DON'T churn an override
+        // a jiggle shouldn't create a redundant pin (which would show a reset button) or refetch.
+        if (
+          !snapped ||
+          (snapped.section_id === ref.section_id && snapped.station_index === ref.station_index)
+        ) {
+          marker.setLngLat(lngLat);
+          return;
+        }
+        // Snap the drop to the nearest route station and let the backend recompute.
+        setGasStageDropOverride(i, snapped);
+      });
+      // Keyboard: nudge one route station deeper (Right/Up) or shallower (Left/Down); reset the drop
+      // to its strategy-computed spot with Delete / Backspace / Escape.
+      const nudge = (delta: number) => {
+        if (routeRefs.length === 0) return;
+        // Start from the pending override if it's still on the route (so rapid presses before the
+        // recompute lands compose), else from the rendered drop's position.
+        const pending = useGasPlanStore.getState().stageDropOverrides[i];
+        const pendingIdx = pending
+          ? routeRefs.findIndex(
+              (r) => r.section_id === pending.section_id && r.station_index === pending.station_index
+            )
+          : -1;
+        const from = pendingIdx >= 0 ? pendingIdx : curIndex < 0 ? 0 : curIndex;
+        const j = Math.min(routeRefs.length - 1, Math.max(0, from + delta));
+        if (j === from) return;
+        const target = routeRefs[j];
+        if (!target) return;
+        pendingDropFocusRef.current = i;
+        setGasStageDropOverride(i, target);
+      };
+      const resetDrop = () => {
+        if (useGasPlanStore.getState().stageDropOverrides[i] == null) return false;
+        pendingDropFocusRef.current = i;
+        setGasStageDropOverride(i, null);
+        return true;
+      };
+      // stopPropagation so the drop's own keys don't also trigger document-level map shortcuts.
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          e.stopPropagation();
+          nudge(1);
+        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          e.stopPropagation();
+          nudge(-1);
+        } else if (e.key === 'Backspace' || e.key === 'Delete' || e.key === 'Escape') {
+          // Only swallow the key when there's actually an override to reset, so a bare Escape
+          // still bubbles (e.g. to clear a selection) when the drop is at its default.
+          if (resetDrop()) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }
+      });
+      // Double-click resets a moved drop to its strategy-computed spot (mouse affordance).
+      el.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        resetDrop();
+      });
+      if (pendingDropFocusRef.current === i) {
+        el.focus();
+        pendingDropFocusRef.current = null;
+      }
+      gasDropMarkersRef.current.push(marker);
     });
 
     const finalRef = gasReachField.final_turn_ref;
@@ -2247,7 +2382,12 @@ function MapCanvas() {
       gasFinalTurnMarkerRef.current?.remove();
       gasFinalTurnMarkerRef.current = null;
     };
-  }, [showGasPlan, gasReachField, activeStations, gpsOrigin, mapLoaded, t]);
+    // NB: intentionally NOT keyed on `gasStageDropOverrides`: rebuild the ▼ markers only when the
+    // recomputed FIELD lands (mirrors the turn markers). Keying on the override would rebuild against
+    // the still-stale field first, consuming `pendingDropFocusRef` before the recompute and losing
+    // keyboard focus; overrides are read fresh from the store where needed. The fetch effect above
+    // IS keyed on the overrides, so a pin/reset always re-fetches and lands here via `gasReachField`.
+  }, [showGasPlan, gasReachField, setGasStageDropOverride, activeStations, gpsOrigin, mapLoaded, t]);
 
   // Lazily fetch closure-adjusted geometry when the adjusted view is active and
   // we don't have it yet (first switch, or after an edit invalidated it). The
