@@ -2,6 +2,7 @@ import type { Map as MaplibreMap, MapMouseEvent, ExpressionSpecification } from 
 import type maplibregl from 'maplibre-gl';
 import type {
   LoopClosure,
+  Marker,
   Section,
   SectionId,
   ShotId,
@@ -105,6 +106,8 @@ export default class SurveyLayer {
   private shotCommentsLayerId = 'survey-shot-comments';
   private loopClosuresLayerId = 'survey-loop-closures';
   private dragClosuresLayerId = 'survey-drag-loop-closures';
+  private markersLayerId = 'survey-markers';
+  private markerLabelsLayerId = 'survey-marker-labels';
   private ghostShotsLayerId = 'survey-ghost-shots';
   private ghostStationsLayerId = 'survey-ghost-stations';
   private ghostMergeLayerId = 'survey-ghost-merge';
@@ -189,6 +192,7 @@ export default class SurveyLayer {
     sections: Section[];
     stations: Station[];
     loopClosures: LoopClosure[] | undefined;
+    markers: Marker[] | undefined;
     gpsOrigin: GpsOrigin | null;
     showDepthGradient: boolean;
     depthRange: DepthRange;
@@ -290,6 +294,7 @@ export default class SurveyLayer {
   private cachedSections: Section[] = [];
   private cachedStations: Station[] = [];
   private cachedLoopClosures: LoopClosure[] | undefined;
+  private cachedMarkers: Marker[] | undefined;
   private cachedPrecision: DecimalPrecision | undefined;
 
   // Lazy label sources. shot-labels and station-labels both have minzoom 14
@@ -504,6 +509,15 @@ export default class SurveyLayer {
       },
     });
 
+    // Markers point source
+    this.map.addSource(this.sourceId + '-markers', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    });
+
     // Gas route highlight line source (#233): one LineString per route leg, `isJump` flagged.
     this.map.addSource(this.sourceId + '-gas-route', {
       type: 'geojson',
@@ -693,6 +707,41 @@ export default class SurveyLayer {
         'line-opacity': 0.8,
         'line-dasharray': [6, 4], // Dashed line pattern for loop closures
       },
+    });
+
+    // Markers circle layer -- positioned at the interpolated point along a shot
+    this.map.addLayer({
+      id: this.markersLayerId,
+      type: 'circle',
+      source: this.sourceId + '-markers',
+      paint: {
+        'circle-radius': 6,
+        'circle-color': ['get', 'color'],
+        'circle-stroke-width': 2,
+        'circle-stroke-color': this.themeColors.strokeColor,
+        'circle-opacity': 1,
+      },
+    });
+
+    // Marker text labels -- only shown when the marker has non-empty text
+    this.map.addLayer({
+      id: this.markerLabelsLayerId,
+      type: 'symbol',
+      source: this.sourceId + '-markers',
+      layout: {
+        'text-field': ['get', 'text'],
+        'text-font': ['Open Sans Regular'],
+        'text-size': 11,
+        'text-offset': [0, -1.4],
+        'text-anchor': 'bottom',
+        'text-allow-overlap': false,
+      },
+      paint: {
+        'text-color': ['get', 'color'],
+        'text-halo-color': this.themeColors.textHaloAlt,
+        'text-halo-width': 1.5,
+      },
+      filter: ['!=', ['get', 'text'], ''],
     });
 
     // Shots layer (lines) - uses feature-state for hover/selection
@@ -1337,6 +1386,7 @@ export default class SurveyLayer {
           this.cachedPrecision,
           this.showIssueSeverity,
           this.cachedWarnings,
+          this.cachedMarkers,
         );
       }
     };
@@ -3874,7 +3924,8 @@ export default class SurveyLayer {
     depthRange: DepthRange = { min: 0, max: 50 },
     precision?: DecimalPrecision,
     showIssueSeverity: boolean = false,
-    warnings: ProjectWarning[] = []
+    warnings: ProjectWarning[] = [],
+    markers?: Marker[],
   ) {
     // Overwrite the pending args — last-call-wins is correct because the
     // builder is deterministic in its inputs; coalescing equivalent calls
@@ -3883,6 +3934,7 @@ export default class SurveyLayer {
       sections,
       stations,
       loopClosures,
+      markers,
       gpsOrigin: gpsOrigin ?? null,
       showDepthGradient,
       depthRange,
@@ -3914,6 +3966,7 @@ export default class SurveyLayer {
         args.precision,
         args.showIssueSeverity,
         args.warnings,
+        args.markers,
       );
       return;
     }
@@ -3938,6 +3991,7 @@ export default class SurveyLayer {
         args.precision,
         args.showIssueSeverity,
         args.warnings,
+        args.markers,
       );
     });
   }
@@ -3957,6 +4011,7 @@ export default class SurveyLayer {
     precision: DecimalPrecision | undefined,
     showIssueSeverity: boolean = false,
     warnings: ProjectWarning[] = [],
+    markers: Marker[] | undefined = undefined,
   ): Promise<void> {
     if (!hasLiveStyle(this.map)) return;
     this.coalescedUpdateCallsSinceLastFlush = 0;
@@ -3968,6 +4023,7 @@ export default class SurveyLayer {
     this.cachedSections = sections;
     this.cachedStations = stations;
     this.cachedLoopClosures = loopClosures;
+    this.cachedMarkers = markers;
     if (precision !== undefined) this.cachedPrecision = precision;
 
     const zoom = hasLiveStyle(this.map) ? this.map.getZoom() : 0;
@@ -4008,6 +4064,7 @@ export default class SurveyLayer {
       features = await buildSurveyFeaturesAsync({
         surveyData,
         loopClosures,
+        markers,
         gpsOrigin: this.gpsOrigin,
         showDepthGradient: this.showDepthGradient,
         depthRange: this.depthRange,
@@ -4027,6 +4084,7 @@ export default class SurveyLayer {
         this.themeColors,
         this.cachedPrecision,
         buildOptions,
+        markers,
       );
     }
     recordPerfTiming('buildFeatures (async)', performance.now() - tBuildStart);
@@ -4052,6 +4110,7 @@ export default class SurveyLayer {
     precision?: DecimalPrecision,
     showIssueSeverity: boolean = false,
     warnings: ProjectWarning[] = [],
+    markers?: Marker[],
   ): void {
     // Cancel any pending coalesced flush so we don't re-run with stale args.
     this.updateScheduled = false;
@@ -4074,6 +4133,7 @@ export default class SurveyLayer {
       precision,
       showIssueSeverity,
       warnings,
+      markers,
     );
   }
 
@@ -4087,6 +4147,7 @@ export default class SurveyLayer {
     precision: DecimalPrecision | undefined,
     showIssueSeverity: boolean = false,
     warnings: ProjectWarning[] = [],
+    markers: Marker[] | undefined = undefined,
   ): void {
     // Early bail when the map is gone or its style has been torn down — the
     // coalescer's queueMicrotask can race with MapCanvas unmount → map.remove(),
@@ -4108,6 +4169,7 @@ export default class SurveyLayer {
     this.cachedSections = sections;
     this.cachedStations = stations;
     this.cachedLoopClosures = loopClosures;
+    this.cachedMarkers = markers;
     if (precision !== undefined) this.cachedPrecision = precision;
 
     // Decide whether labels should be materialized based on current zoom.
@@ -4138,7 +4200,8 @@ export default class SurveyLayer {
       this.depthRange,
       this.themeColors,
       this.cachedPrecision,
-      { buildLabels, showIssueSeverity, issueSeverity }
+      { buildLabels, showIssueSeverity, issueSeverity },
+      markers,
     );
     this.applyFeaturesToSources(features);
   }
@@ -4159,6 +4222,7 @@ export default class SurveyLayer {
       sectionLabelFeatures,
       stationLabelFeatures,
       loopClosureFeatures,
+      markerFeatures,
     } = features;
 
     // Build section→featureId lookup maps for O(1) hover highlighting
@@ -4249,6 +4313,15 @@ export default class SurveyLayer {
         features: loopClosureFeatures,
       });
       recordFeatureCount('survey-loop-closures', loopClosureFeatures.length);
+    }
+
+    const markersSource = this.map.getSource(this.sourceId + '-markers');
+    if (markersSource && 'setData' in markersSource) {
+      (markersSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: markerFeatures,
+      });
+      recordFeatureCount('survey-markers', markerFeatures.length);
     }
 
     // setData() clears all feature-state — reset tracking and re-apply
@@ -4346,6 +4419,14 @@ export default class SurveyLayer {
       this.map.setPaintProperty(this.ghostMergeLayerId, 'circle-color', colors.selectHighlight);
       this.map.setPaintProperty(this.ghostMergeLayerId, 'circle-stroke-color', colors.strokeColor);
     }
+    // Marker circle stroke
+    if (this.map.getLayer(this.markersLayerId)) {
+      this.map.setPaintProperty(this.markersLayerId, 'circle-stroke-color', colors.strokeColor);
+    }
+    // Marker label halo
+    if (this.map.getLayer(this.markerLabelsLayerId)) {
+      this.map.setPaintProperty(this.markerLabelsLayerId, 'text-halo-color', colors.textHaloAlt);
+    }
     // Station highlight (snap color)
     if (this.map.getLayer(this.stationsHighlightLayerId)) {
       this.map.setPaintProperty(this.stationsHighlightLayerId, 'circle-color', colors.snapColor);
@@ -4372,7 +4453,8 @@ export default class SurveyLayer {
         this.depthRange,
         this.cachedPrecision,
         this.showIssueSeverity,
-        this.cachedWarnings
+        this.cachedWarnings,
+        this.cachedMarkers,
       );
     }
   }

@@ -1834,8 +1834,8 @@ function MapCanvas() {
         activeStations,
         // Closure overlays are drawn from the active coordinates, so an adjusted
         // (closed) loop collapses to a zero-length, invisible line, while a loop
-        // that wasn't closed — an ineligible/deferred closure, or a component whose
-        // solve fell back to measured — stays visible. Pass closures in both modes
+        // that wasn't closed -- an ineligible/deferred closure, or a component whose
+        // solve fell back to measured -- stays visible. Pass closures in both modes
         // rather than hiding them wholesale, so the adjusted view doesn't look
         // resolved when some loops are still open.
         project.loop_closures,
@@ -1844,7 +1844,8 @@ function MapCanvas() {
         depthRange,
         precision,
         effectiveIssueSeverity,
-        severityWarnings
+        severityWarnings,
+        project.markers,
       );
     }
   }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, effectiveIssueSeverity, severityWarnings]);
