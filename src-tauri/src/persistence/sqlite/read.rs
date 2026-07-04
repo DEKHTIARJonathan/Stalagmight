@@ -597,6 +597,8 @@ impl Database {
             station_merges,
             zero_datums,
             loop_closures,
+            markers: Vec::new(),
+            next_marker_id: 1,
             section_offsets,
             station_offsets,
             station_comments,
