@@ -126,7 +126,7 @@ export function GasPlanPanel() {
     ? reachField.stage_drop_bars.map((bar, i) => ({
         bar,
         distance: reachField.stage_drop_distances_m[i] ?? null,
-        // Dragged deeper than the safe drop (#246): breathing into reserve — flagged red. The
+        // Dragged deeper than the safe drop (#246): breathing into reserve, flagged red. The
         // engine is the single source of truth for this, same as the pressure.
         overReserve: reachField.stage_drop_over_reserve[i] === true,
         // Whether the diver moved this drop (so we offer a reset back to the strategy spot).

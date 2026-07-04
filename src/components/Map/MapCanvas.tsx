@@ -203,7 +203,7 @@ function MapCanvas() {
   // the AT user's place on every pick (#243).
   const pendingTurnFocusRef = useRef<StationRef | null>(null);
   // Same story for a keyboard-nudged / reset ▼ drop marker (#246): the recompute rebuilds every
-  // drop marker, so remember the drop INDEX (stable across the move — the ref itself shifts) to
+  // drop marker, so remember the drop INDEX (stable across the move - the ref itself shifts) to
   // restore focus to its rebuilt element.
   const pendingDropFocusRef = useRef<number | null>(null);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
@@ -2252,7 +2252,7 @@ function MapCanvas() {
       if (!lngLat) return;
       const overReserve = gasReachField.stage_drop_over_reserve[i] === true;
       // Read the override fresh from the store: this effect rebuilds on the recomputed FIELD (not on
-      // the override write — see the deps note), so the store is the current source at rebuild time.
+      // the override write, see the deps note), so the store is the current source at rebuild time.
       const overridden = useGasPlanStore.getState().stageDropOverrides[i] != null;
       const el = document.createElement('div');
       el.setAttribute('data-testid', 'gas-drop-marker');
@@ -2291,7 +2291,7 @@ function MapCanvas() {
         el.style.cursor = 'grab';
         const snapped = snapToRoute(marker.getLngLat());
         // Released in place (or nothing to snap to): put the marker back and DON'T churn an override
-        // — a jiggle shouldn't create a redundant pin (which would show a reset button) or refetch.
+        // a jiggle shouldn't create a redundant pin (which would show a reset button) or refetch.
         if (
           !snapped ||
           (snapped.section_id === ref.section_id && snapped.station_index === ref.station_index)
@@ -2382,7 +2382,7 @@ function MapCanvas() {
       gasFinalTurnMarkerRef.current?.remove();
       gasFinalTurnMarkerRef.current = null;
     };
-    // NB: intentionally NOT keyed on `gasStageDropOverrides` — rebuild the ▼ markers only when the
+    // NB: intentionally NOT keyed on `gasStageDropOverrides`: rebuild the ▼ markers only when the
     // recomputed FIELD lands (mirrors the turn markers). Keying on the override would rebuild against
     // the still-stale field first, consuming `pendingDropFocusRef` before the recompute and losing
     // keyboard focus; overrides are read fresh from the store where needed. The fetch effect above

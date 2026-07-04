@@ -944,13 +944,13 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible();
   });
 
-  test('a stage drop is keyboard-movable — ArrowLeft pins it, sends an override, reset clears it (#246) @smoke', async ({
+  test('a stage drop is keyboard-movable - ArrowLeft pins it, sends an override, reset clears it (#246) @smoke', async ({
     page,
   }) => {
     await setupOneStageDrop(page);
     const marker = page.locator('[data-testid="gas-drop-marker"]').first();
     await marker.focus();
-    // Nudge one route station SHALLOWER — deterministic (the default drop is never at the origin).
+    // Nudge one route station SHALLOWER - deterministic (the default drop is never at the origin).
     await page.keyboard.press('ArrowLeft');
     // The store pins the drop AND the backend is re-invoked with the override (the full-recompute wiring).
     await expect
@@ -959,7 +959,7 @@ test.describe('Gas planning', () => {
     await expect
       .poll(async () => (await lastGasReachOverrides(page)).some((r) => r != null), { timeout: 3000 })
       .toBe(true);
-    // a11y: focus survives the recompute — the rebuilt ▼ marker regains focus so an AT user can
+    // a11y: focus survives the recompute - the rebuilt ▼ marker regains focus so an AT user can
     // chain nudges (regression guard for the stale-field-rebuild focus loss the review caught).
     await expect(page.locator('[data-testid="gas-drop-marker"]').first()).toBeFocused();
     // The readout offers a per-drop reset; clicking it clears the override and the field recomputes.
@@ -982,7 +982,7 @@ test.describe('Gas planning', () => {
     const to = await finalTurn.boundingBox();
     expect(from).not.toBeNull();
     expect(to).not.toBeNull();
-    // Drag the ▼ onto the deepest (final-turn) station — deeper than its computed drop ⇒ over-reserve.
+    // Drag the ▼ onto the deepest (final-turn) station - deeper than its computed drop => over-reserve.
     await page.mouse.move(from!.x + from!.width / 2, from!.y + from!.height / 2);
     await page.mouse.down();
     await page.mouse.move(to!.x + to!.width / 2, to!.y + to!.height / 2, { steps: 12 });

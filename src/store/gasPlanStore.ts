@@ -94,7 +94,7 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   // shown under the new inputs' legend while the refetch is in flight (mirrors
   // setDistanceGradientOrigin).
   // These inputs reshuffle the drops (a different rig / route / budget), so any pinned drop
-  // overrides no longer line up — clear them alongside the stale field.
+  // overrides no longer line up, clear them alongside the stale field.
   setOrigin: (origin) => set({ origin, reachField: null, stageDropOverrides: [] }),
   setEndpoint: (endpoint) => set({ endpoint, reachField: null, stageDropOverrides: [] }),
   setDiver: (diver) => set({ diver, reachField: null, stageDropOverrides: [] }),
@@ -102,14 +102,17 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   setGasConfig: (gasConfig) => set({ gasConfig, reachField: null, stageDropOverrides: [] }),
   setReachField: (reachField) => set({ reachField }),
   setPushyAck: (pushyAck) => set({ pushyAck }),
-  setStageDropOverride: (index, ref) =>
+  setStageDropOverride: (index, ref) => {
+    // Guard BEFORE set so a stray negative index is a true no-op (returning {} from the updater
+    // would still merge a fresh state object and wake subscribers for nothing).
+    if (index < 0) return;
     set((s) => {
-      if (index < 0) return {};
       const next = s.stageDropOverrides.slice();
       while (next.length <= index) next.push(null);
       next[index] = ref;
       return { stageDropOverrides: next };
-    }),
+    });
+  },
 
   reset: () => set(initialState()),
 }));

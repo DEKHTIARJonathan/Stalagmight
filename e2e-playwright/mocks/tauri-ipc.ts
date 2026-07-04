@@ -1365,7 +1365,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // ⚠ This is a DELIBERATELY simplified stand-in, NOT the engine's rule: the engine flags
             // over-reserve on `contribution > safe_in_litres` (with a pin-to-default no-op) and folds
             // the budget/turn/reach; the mock only moves the ref + sets a station-depth flag and keeps
-            // the budget fixed. So the e2e asserts UI WIRING (colour, reset, warning) only — the flag
+            // the budget fixed. So the e2e asserts UI WIRING (colour, reset, warning) only; the flag
             // semantics + the recompute math are covered by the Rust unit tests, which are the source
             // of truth. A pin-to-default is a no-op here too (same station ⇒ not deeper ⇒ not flagged).
             const stageOverrides = (args?.stageDropOverrides ?? []) as Array<{
