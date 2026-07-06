@@ -1,7 +1,8 @@
 # Dive-plan persistence (`.plnx`): design
 
-Issue: #244 (part of #38, Planning mode). Status: **DESIGN SETTLED** (all three
-forks in section 11 resolved 2026-07-06). Ready for Phase 1 (section 13).
+Issue: #244 (part of #38, Planning mode). Status: **IMPLEMENTED** (Phases 1-4 on
+`feat/244-plnx-dive-plan-persistence`; all local gates green). Pending: `/pre-pr`
+review + dev-app eyeball before the PR.
 
 ## 1. Goal
 
