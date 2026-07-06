@@ -17,6 +17,7 @@ import {
   speedToDisplay,
 } from '../../utils/formatGas';
 import { PositiveNumberField } from '../common/PositiveNumberField';
+import { DivePlanBar } from './DivePlanBar';
 import type { GasUnits, ReservePreset } from '../../types/ipc.generated';
 
 const RESERVE_PRESETS: readonly ReservePreset[] = [
@@ -192,6 +193,8 @@ export function GasPlanPanel() {
       </div>
 
       <div className="p-3 space-y-4">
+        {/* Previous dive plans (#244): save / load / delete named plans */}
+        <DivePlanBar />
         {/* Origin */}
         <section className="space-y-1">
           <SectionLabel>{t('gasPanel.origin.label')}</SectionLabel>

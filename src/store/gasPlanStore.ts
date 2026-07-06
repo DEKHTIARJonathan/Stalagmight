@@ -2,8 +2,15 @@ import { create } from 'zustand';
 
 import { defaultConfig } from '../types/config';
 import { TANK_PRESETS, cylinderFromPreset } from '../utils/tankPresets';
-import type { Cylinder, Diver, GasConfig, GasReachField } from '../types/ipc.generated';
+import type {
+  Cylinder,
+  Diver,
+  DivePlanSnapshot,
+  GasConfig,
+  GasReachField,
+} from '../types/ipc.generated';
 import type { StationRef } from '../types/project';
+import { divePlanSnapshotOf, divePlanSnapshotsEqual } from '../utils/divePlan';
 
 /**
  * Gas & route-planning sub-mode state (#38, Phase 1). Runtime-only — never
@@ -44,6 +51,12 @@ interface GasPlanState {
    *  whenever the rig / config / origin / endpoint changes (which reshuffles the drops), exactly
    *  like `reachField`. Passed to `compute_gas_reach_field` so the backend recomputes the plan. */
   stageDropOverrides: (StationRef | null)[];
+  /** #244: id of the currently-loaded saved plan, or null when the working inputs are an
+   *  unsaved exploration. Set on load; cleared on reset and when the loaded plan is deleted. */
+  loadedPlanId: number | null;
+  /** #244: the snapshot as loaded / as of the last successful Save. The baseline the dirty
+   *  check compares the live inputs against (see `selectIsPlanDirty`). */
+  loadedPlanBaseline: DivePlanSnapshot | null;
   /** Session-only: the user accepted the advanced (staged) reserve presets. Cleared by
    *  `reset()` — on Plan sub-mode exit AND on every project load (`applyDisplaySettings`) — so
    *  a fresh project (or a re-entry) re-prompts. Never persisted. */
@@ -60,6 +73,15 @@ interface GasPlanState {
    *  `reachField`, so the existing drop markers stay put during the ms-fast refetch instead of
    *  flickering; the fetch effect depends on `stageDropOverrides` and swaps the field in on arrival. */
   setStageDropOverride: (index: number, ref: StationRef | null) => void;
+  /** #244: apply a loaded plan's snapshot to the inputs and mark it the clean baseline.
+   *  Sets all six gas inputs at once (the reach-field effect recomputes) and nulls the
+   *  cached field so a stale overlay never shows under the new plan. */
+  applyLoadedPlan: (planId: number, snapshot: DivePlanSnapshot) => void;
+  /** #244: after a successful Save / Save as, rebind the baseline to the current inputs
+   *  (so `selectIsPlanDirty` reads false) under the given plan id. */
+  markPlanSaved: (planId: number) => void;
+  /** #244: forget the loaded plan (e.g. it was deleted) without touching the inputs. */
+  clearLoadedPlan: () => void;
   /** Restore defaults (called from uiStore.exitGasPlan on sub-mode exit). */
   reset: () => void;
 }
@@ -73,6 +95,8 @@ const initialState = (): Pick<
   | 'gasConfig'
   | 'reachField'
   | 'stageDropOverrides'
+  | 'loadedPlanId'
+  | 'loadedPlanBaseline'
   | 'pushyAck'
 > => ({
   origin: null,
@@ -84,6 +108,8 @@ const initialState = (): Pick<
   gasConfig: structuredClone(defaultConfig.gas),
   reachField: null,
   stageDropOverrides: [],
+  loadedPlanId: null,
+  loadedPlanBaseline: null,
   pushyAck: false,
 });
 
@@ -114,5 +140,28 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
     });
   },
 
+  applyLoadedPlan: (planId, snapshot) =>
+    set({
+      origin: snapshot.origin,
+      endpoint: snapshot.endpoint,
+      diver: snapshot.diver,
+      cylinders: snapshot.cylinders,
+      gasConfig: snapshot.gas_config,
+      stageDropOverrides: snapshot.stage_drop_overrides,
+      reachField: null,
+      loadedPlanId: planId,
+      loadedPlanBaseline: snapshot,
+    }),
+  markPlanSaved: (planId) =>
+    set((s) => ({ loadedPlanId: planId, loadedPlanBaseline: divePlanSnapshotOf(s) })),
+  clearLoadedPlan: () => set({ loadedPlanId: null, loadedPlanBaseline: null }),
+
   reset: () => set(initialState()),
 }));
+
+/** #244: true when a plan is loaded and the live inputs diverge from its saved
+ *  baseline. A never-saved exploration (`loadedPlanId === null`) is never dirty. */
+export function selectIsPlanDirty(s: GasPlanState): boolean {
+  if (s.loadedPlanId === null || s.loadedPlanBaseline === null) return false;
+  return !divePlanSnapshotsEqual(divePlanSnapshotOf(s), s.loadedPlanBaseline);
+}

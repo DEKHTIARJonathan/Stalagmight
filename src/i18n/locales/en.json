@@ -2233,7 +2233,24 @@
     "aria": "Workspace mode",
     "survey": "Survey",
     "plan": "Plan",
-    "export": "Export"
+    "export": "Export",
+    "discardPlanPrompt": "Discard unsaved changes to this dive plan?"
+  },
+  "divePlanBar": {
+    "label": "Previous dive plans",
+    "choose": "Load a saved plan...",
+    "empty": "No saved plans yet",
+    "save": "Save",
+    "saveAs": "Save as...",
+    "delete": "Delete",
+    "discard": "Discard",
+    "unsavedBadge": "Unsaved",
+    "namePlaceholder": "Plan name",
+    "needsSavedProject": "Save the project before saving dive plans.",
+    "deleteConfirm": "Delete \"{{name}}\"?",
+    "discardConfirm": "Discard unsaved changes to \"{{name}}\"?",
+    "staleRefs_one": "{{count}} station this plan referenced no longer exists; it has been cleared.",
+    "staleRefs_other": "{{count}} stations this plan referenced no longer exist; they have been cleared."
   },
   "planTables": {
     "tabs": {

@@ -5,6 +5,7 @@ import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import { useSpeleoStore } from './store/speleoStore';
+import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
 import { invokeIpc } from './utils/ipc';
 import { extractFilename } from './utils/path';
 import { routeOpenedFile } from './utils/openOrImport';
@@ -124,10 +125,15 @@ function App() {
     return false;
   }, [activeDialog, dialogData]);
 
-  // Show confirmation dialog when closing the app during import
+  // Guard the app close during an import, OR with unsaved dive-plan edits (#244).
+  // selectIsPlanDirty is only true while a loaded plan has diverged inputs (leaving
+  // Plan mode resets the gas store), so no appMode check is needed here.
+  const planDirty = useGasPlanStore(selectIsPlanDirty);
   useBeforeUnload(
-    isImportInProgress,
-    'Import is in progress. Discard all import data and close?'
+    isImportInProgress || planDirty,
+    isImportInProgress
+      ? 'Import is in progress. Discard all import data and close?'
+      : 'You have unsaved changes to this dive plan. Discard and close?'
   );
 
   useEffect(() => {
