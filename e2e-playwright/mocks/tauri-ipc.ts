@@ -270,6 +270,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         mockDivePlanClock = 0;
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_DIVE_PLANS__ = () => [...mockDivePlans];
+      // Give the open project a file path (a saved project) so dive-plan save/list is
+      // enabled — the bar gates on file_path. Call refreshProjectState() after to pick it up.
+      (window as unknown as Record<string, unknown>).__MOCK_SET_PROJECT_PATH__ = (
+        path: string | null,
+      ) => {
+        projectPath = path;
+        if (currentProject) currentProject.file_path = path;
+      };
       (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ = () => [...trackImportedFileCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ = () => {
         trackImportedFileCalls = [];
