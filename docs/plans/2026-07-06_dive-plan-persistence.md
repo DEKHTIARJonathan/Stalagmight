@@ -1,7 +1,7 @@
 # Dive-plan persistence (`.plnx`): design
 
-Issue: #244 (part of #38, Planning mode). Status: **DESIGN. Implementation held**
-until the open forks in section 11 are settled.
+Issue: #244 (part of #38, Planning mode). Status: **DESIGN SETTLED** (all three
+forks in section 11 resolved 2026-07-06). Ready for Phase 1 (section 13).
 
 ## 1. Goal
 
@@ -174,19 +174,49 @@ humanization. Strict isolation - a plan write must **not**:
 It is an independent write to an independent sibling. A failed `.plnx` write returns
 a humanized error to the panel and changes nothing about the project.
 
-## 8. Save lifecycle & close-guard (fork - section 11)
+## 8. Save lifecycle & close-guard (DECIDED: dirty-tracked)
 
-Recommendation: **eager, on-demand only. No dirty tracking, no close-guard for
-plans.** The Plan panel is an exploration surface meant to be fiddled freely
-(origin, cylinders, drops). Plans are deliberate **named snapshots** taken by an
-explicit Save / Save as... click, not a live document. Loading a plan and then
-tweaking inputs does not make the plan "dirty"; the working inputs are cheap,
-session-only state. The `.stalx` survey-data close-guard is entirely untouched.
+Decision: **plans are dirty-tracked with a close-guard.** A loaded plan establishes
+a baseline; when the live inputs diverge from it, the plan is dirty, and the app
+guards against silently losing those edits.
 
-This keeps the feature orthogonal to the data-safety machinery. The alternative
-(treat a loaded+modified plan as a dirty document with a close/switch guard) adds
-real complexity and conflates exploration with a persisted document; deferred
-unless we find users expect it.
+Store additions (`gasPlanStore`):
+- `loadedPlanId: number | null` - the currently-selected plan (null = unsaved
+  working state / no plan loaded).
+- `loadedPlanBaseline: DivePlanSnapshot | null` - the snapshot as loaded, or as of
+  the last successful Save.
+- derived `isPlanDirty = loadedPlanId != null && !snapshotEquals(currentInputs,
+  loadedPlanBaseline)`, where `currentInputs = {origin, endpoint, diver, cylinders,
+  gasConfig, stage_drop_overrides}` and `snapshotEquals` is a small structural
+  deep-equality helper (the tuple is plain serde data).
+
+Transitions:
+- **Load** a plan: apply its snapshot to the inputs, set `loadedPlanId` +
+  `loadedPlanBaseline` to it (clean).
+- **Save**: write, then set `loadedPlanBaseline = currentInputs` (clean again).
+- **Save as...**: insert, set `loadedPlanId = new id`, baseline = current (clean).
+- **Any input setter**: baseline unchanged, so `isPlanDirty` recomputes to true.
+
+Guard triggers (reuse the existing close-guard machinery - `useBeforeUnload` + the
+confirm dialog - do not build a parallel one):
+- **Switch plan** in the dropdown while dirty -> confirm "Discard unsaved changes to
+  '<name>'?" before loading the other plan.
+- **Leave Plan mode / switch project / close the app** while dirty -> the plan-dirty
+  flag is OR'd into the same close-guard the survey `modified_at` dirty already
+  feeds, so the user is warned before the session inputs (and the unsaved plan
+  edits) are reset.
+- **Delete** the loaded plan: the existing delete-confirm already covers it.
+
+Scope: the guard fires only for a **loaded** plan whose inputs diverged
+(`loadedPlanId != null`). A never-saved exploration (`loadedPlanId == null`) is the
+same disposable session state Plan mode already has, and is not guarded - guarding
+every Plan-mode exit would nag. ("You have an unsaved new plan" protection for the
+no-plan-loaded case is a later heuristic if wanted; deferred.)
+
+Independence from `.stalx`: plan-dirty is a **separate** signal from survey dirty.
+Saving a plan never touches survey `modified_at`; editing the survey never makes a
+plan dirty. They converge only at the shared close-guard prompt, which now warns on
+either.
 
 ## 9. UI surface
 
@@ -230,15 +260,15 @@ Per the add-a-command checklist: register each in `lib.rs generate_handler!`, ad
 IPC structs to the `gen_ipc_types` exports (both the `export::<T>` call and the
 barrel) and `pnpm gen:ipc-types`. Tauri camelCase arg keys map to snake_case.
 
-## 11. Open forks (decisions needed before build)
+## 11. Forks (resolved 2026-07-06)
 
-1. **Save lifecycle** - eager on-demand, no close-guard (recommended, section 8) vs
-   dirty-tracked with a close/switch guard.
-2. **Save-As carries plans?** - v1 fresh/empty `.plnx` on Save-As (recommended,
-   section 5) vs copy the plan set to the new sibling. (Cross-project identity guard
-   via `created_at` is recommended regardless.)
-3. **Snapshot scope** - full `GasConfig` (recommended, section 2, reproduces exact
-   parameters) vs a plan-specific subset that inherits the current global config.
+1. **Save lifecycle** -> **dirty-tracked with a close-guard** (section 8). Plans are
+   guarded documents, not throwaway snapshots.
+2. **Save-As carries plans?** -> **fresh/empty `.plnx` on Save-As** (section 5);
+   `created_at` identity guard applies regardless. Carry-on-Save-As deferred.
+3. **Snapshot scope** -> **full `GasConfig`** (section 2); a loaded plan reproduces
+   the exact parameters it was computed under, session-only (no global-config
+   write-back).
 
 ## 12. Test plan (adversarial-first)
 
@@ -258,14 +288,15 @@ barrel) and `pnpm gen:ipc-types`. Tauri camelCase arg keys map to snake_case.
   per the deferred-save test precedent).
 - **Delete**: removing a row leaves the others intact and the file valid.
 
-## 13. Implementation phases (held until section 11 settled)
+## 13. Implementation phases
 
 1. Backend: `.plnx` schema + I/O helper (open/init/atomic-write, identity meta) +
    the four commands + snapshot model + Rust tests.
 2. IPC types + regen; registry entries + count bump.
-3. Frontend: `gasPlanStore` load/apply, the plans bar UI, Save/Save-as/Delete
-   dialogs, stale-ref warning surfacing.
-4. E2E: mock the four commands; dropdown + save/load/delete + stale-ref-warning
-   specs. Vitest for the store apply logic.
+3. Frontend: `gasPlanStore` load/apply + plan-dirty tracking (`loadedPlanId`,
+   `loadedPlanBaseline`, `isPlanDirty`, `snapshotEquals`); the plans bar UI;
+   Save/Save-as/Delete dialogs; stale-ref warning surfacing; close-guard OR-in.
+4. E2E: mock the four commands; dropdown + save/load/delete + stale-ref-warning +
+   dirty-guard specs. Vitest for the store apply + dirty-equality logic.
 
 Each phase small and committed; PR held for review per project policy.
