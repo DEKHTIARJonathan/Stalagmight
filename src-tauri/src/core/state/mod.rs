@@ -11,6 +11,7 @@ mod command_station;
 mod commands;
 mod config;
 mod display_settings;
+mod dive_plan;
 mod import_tracking;
 mod project_create;
 mod project_io;

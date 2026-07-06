@@ -163,9 +163,15 @@ just applies the (already-nulled) snapshot and shows the warning when count > 0.
 
 ## 7. Atomic write & side-effect isolation
 
-`.plnx` save = write to `<stem>.plnx.tmp` (SQLite), then atomic `rename` to
-`<stem>.plnx`, reusing the `.stalx` atomic pattern and permission-denied
-humanization. Strict isolation - a plan write must **not**:
+Atomicity comes from SQLite's in-place **ACID transaction** (rollback journal +
+`synchronous=FULL`), not a tmp->rename of the whole file. That is the right model
+for an *incrementally maintained* store: a single insert/update/delete commits whole
+or rolls back, and a power loss leaves the old-or-new committed file, never a torn
+one. (The `.stalx` uses tmp->rename because it rebuilds the entire file from the
+in-memory project each save; a row store that is edited in place does not - a
+whole-file swap there would be more I/O with no added safety.) A refinement from the
+approved plan's "tmp->rename" wording; the substance of the requirement - crash-safe,
+no phantom side effects - is fully met. Strict isolation - a plan write must **not**:
 - touch `recent_projects` (plans are not projects),
 - bump the project's `modified_at` or mark the `.stalx` dirty (saving a plan is not
   editing the survey),

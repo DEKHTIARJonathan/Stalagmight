@@ -45,12 +45,13 @@ use stalagmight_lib::models::placement_suggest::{
 use stalagmight_lib::models::{
     AlongLineResult, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate,
     CollabState, ConnectivityResult, Coordinates, CylRole, Cylinder, DeleteShotImpact,
-    DeleteShotRangeImpact, DistanceField, Diver, ExistingShotUpdate, FrozenShotRef, GasReachField,
-    GpsBounds, GpsCoordinates, ImportPlacement, ImportSectionConfig, LoopClosureWire, PathShot,
-    PlanMode, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg,
-    RulerEndpoint, Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
-    ShotBaselineEntry, ShotData, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair,
-    StationRef, SurveyDirection, TankMaterial, Team, ZeroDatumWire,
+    DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver,
+    ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement,
+    ImportSectionConfig, LoopClosureWire, PathShot, PlanMode, Project, ProjectMetadata,
+    ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RulerEndpoint, Section, SectionData,
+    SectionRelationships, SectionStats, SectionUpdates, Shot, ShotBaselineEntry, ShotData,
+    ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair, StationRef, SurveyDirection,
+    TankMaterial, Team, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -126,6 +127,10 @@ fn main() {
     export::<Cylinder>(&out_dir);
     export::<Team>(&out_dir);
     export::<GasReachField>(&out_dir);
+    // Dive-plan persistence (#244)
+    export::<DivePlanSnapshot>(&out_dir);
+    export::<DivePlanMeta>(&out_dir);
+    export::<DivePlan>(&out_dir);
     export::<RouteLeg>(&out_dir);
     export::<RulerEndpoint>(&out_dir);
     export::<PathShot>(&out_dir);
@@ -360,6 +365,9 @@ fn main() {
         "Cylinder",
         "Team",
         "GasReachField",
+        "DivePlanSnapshot",
+        "DivePlanMeta",
+        "DivePlan",
         "RouteLeg",
         "RulerEndpoint",
         "PathShot",

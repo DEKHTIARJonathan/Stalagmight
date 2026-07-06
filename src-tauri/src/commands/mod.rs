@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod collab;
 pub mod config;
+pub mod dive_plan;
 pub mod export;
 pub mod gas;
 pub mod history;

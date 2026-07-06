@@ -54,6 +54,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.create_section",
     "command.create_section_and_merge",
     "command.create_shot",
+    "command.delete_dive_plan",
     "command.delete_last_shot_and_section",
     "command.delete_section",
     "command.delete_shot",
@@ -90,8 +91,10 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.import_dmp",
     "command.import_sections",
     "command.list_backups",
+    "command.list_dive_plans",
     "command.list_recent_projects",
     "command.load_display_settings",
+    "command.load_dive_plan",
     "command.load_project_full",
     "command.merge_projects",
     "command.merge_stations",
@@ -115,6 +118,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.resolve_warning",
     "command.restore_from_backup",
     "command.save_display_setting",
+    "command.save_dive_plan",
     "command.save_project",
     "command.set_shot_reference",
     "command.set_station_comment",
@@ -850,7 +854,9 @@ mod tests {
         //   + 4 speleodb-restore dialog events (#218):
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .speleodb-restore = 649.
-        assert_eq!(EVENT_NAMES.len(), 649);
+        //   + 4 dive-plan (.plnx) commands (#244):
+        //       command.{list,load,save,delete}_dive_plan = 653.
+        assert_eq!(EVENT_NAMES.len(), 653);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
