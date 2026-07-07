@@ -126,8 +126,9 @@ function App() {
   }, [activeDialog, dialogData]);
 
   // Guard the app close during an import, OR with unsaved dive-plan edits (#244).
-  // selectIsPlanDirty is only true while a loaded plan has diverged inputs (leaving
-  // Plan mode resets the gas store), so no appMode check is needed here.
+  // The gas store persists across mode switches now, so a dirty (loaded + diverged)
+  // plan stays dirty in any mode — closing loses those edits regardless of the current
+  // mode, so the close guard is correct without an appMode check.
   const planDirty = useGasPlanStore(selectIsPlanDirty);
   useBeforeUnload(
     isImportInProgress || planDirty,

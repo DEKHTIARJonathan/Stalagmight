@@ -80,13 +80,16 @@ export function GasPlanPanel() {
   // A staged strategy the user selected but hasn't yet acknowledged (inline advanced gate).
   const [pendingPushy, setPendingPushy] = useState<ReservePreset | null>(null);
 
-  // Seed the working gas config from the live PERSISTED app config when Plan mode
-  // opens (this panel mounts on entry), falling back to the compiled defaults when no
-  // config is loaded. Mount-only so a later unrelated config change doesn't clobber
-  // in-mode edits. Display units follow the app-wide MASTER units (Settings ▸ Units):
-  // feet ⇒ imperial, so an imperial app opens an imperial gas panel (the in-panel
-  // toggle still overrides for the session).
+  // Seed the working gas config from the live PERSISTED app config the FIRST time Plan
+  // mode opens this session, falling back to the compiled defaults when no config is
+  // loaded. Gated on the store's `hydrated` flag: this panel remounts on every mode
+  // switch, and re-seeding would clobber a loaded plan / working inputs now that the gas
+  // store persists across mode switches (#244). Cleared on project load, so a new session
+  // re-seeds. Display units follow the app-wide MASTER units (Settings ▸ Units): feet ⇒
+  // imperial, so an imperial app opens an imperial gas panel (the in-panel toggle still
+  // overrides for the session).
   useEffect(() => {
+    if (useGasPlanStore.getState().hydrated) return;
     const cfg = useProjectStore.getState().config;
     const masterImperial = cfg?.units?.length === 'feet';
     // Deep-clone the seed so editing the working config never mutates the live persisted
@@ -95,6 +98,7 @@ export function GasPlanPanel() {
       ...structuredClone(cfg?.gas ?? defaultConfig.gas),
       units: masterImperial ? 'imperial' : 'metric',
     });
+    useGasPlanStore.getState().markHydrated();
   }, [setGasConfig]);
 
   const units = gasConfig.units;

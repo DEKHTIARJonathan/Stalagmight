@@ -182,4 +182,14 @@ describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
     expect(useGasPlanStore.getState().loadedPlanId).toBeNull();
     expect(useGasPlanStore.getState().loadedPlanBaseline).toBeNull();
   });
+
+  it('markHydrated sets the session seed flag; reset clears it (re-seed on new session)', () => {
+    // Gates the panel's one-time config seed so re-entering Plan mode does not clobber
+    // a loaded plan / working inputs (the store persists across mode switches now).
+    expect(useGasPlanStore.getState().hydrated).toBe(false);
+    useGasPlanStore.getState().markHydrated();
+    expect(useGasPlanStore.getState().hydrated).toBe(true);
+    useGasPlanStore.getState().reset();
+    expect(useGasPlanStore.getState().hydrated).toBe(false);
+  });
 });

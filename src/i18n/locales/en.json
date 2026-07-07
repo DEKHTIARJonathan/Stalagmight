@@ -2233,8 +2233,7 @@
     "aria": "Workspace mode",
     "survey": "Survey",
     "plan": "Plan",
-    "export": "Export",
-    "discardPlanPrompt": "Discard unsaved changes to this dive plan?"
+    "export": "Export"
   },
   "divePlanBar": {
     "label": "Previous dive plans",

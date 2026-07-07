@@ -58,9 +58,13 @@ interface GasPlanState {
    *  check compares the live inputs against (see `selectIsPlanDirty`). */
   loadedPlanBaseline: DivePlanSnapshot | null;
   /** Session-only: the user accepted the advanced (staged) reserve presets. Cleared by
-   *  `reset()` — on Plan sub-mode exit AND on every project load (`applyDisplaySettings`) — so
-   *  a fresh project (or a re-entry) re-prompts. Never persisted. */
+   *  `reset()` on every project load (`applyDisplaySettings`), so a fresh project re-prompts.
+   *  Never persisted. */
   pushyAck: boolean;
+  /** #244: the working gas config has been seeded from the persisted app config for this
+   *  session. Gates the panel's one-time seed so re-ENTERING Plan mode does not re-seed and
+   *  clobber a loaded plan / working inputs. Cleared by `reset()` (project load / new session). */
+  hydrated: boolean;
 
   setOrigin: (origin: StationRef | null) => void;
   setEndpoint: (endpoint: StationRef | null) => void;
@@ -69,6 +73,8 @@ interface GasPlanState {
   setGasConfig: (gasConfig: GasConfig) => void;
   setReachField: (reachField: GasReachField | null) => void;
   setPushyAck: (ack: boolean) => void;
+  /** #244: mark the gas config seeded for this session (see `hydrated`). */
+  markHydrated: () => void;
   /** Pin (or, with `null`, reset) stage `index`'s drop to a route station. Does NOT null
    *  `reachField`, so the existing drop markers stay put during the ms-fast refetch instead of
    *  flickering; the fetch effect depends on `stageDropOverrides` and swaps the field in on arrival. */
@@ -98,6 +104,7 @@ const initialState = (): Pick<
   | 'loadedPlanId'
   | 'loadedPlanBaseline'
   | 'pushyAck'
+  | 'hydrated'
 > => ({
   origin: null,
   endpoint: null,
@@ -111,6 +118,7 @@ const initialState = (): Pick<
   loadedPlanId: null,
   loadedPlanBaseline: null,
   pushyAck: false,
+  hydrated: false,
 });
 
 export const useGasPlanStore = create<GasPlanState>((set) => ({
@@ -128,6 +136,7 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   setGasConfig: (gasConfig) => set({ gasConfig, reachField: null, stageDropOverrides: [] }),
   setReachField: (reachField) => set({ reachField }),
   setPushyAck: (pushyAck) => set({ pushyAck }),
+  markHydrated: () => set({ hydrated: true }),
   setStageDropOverride: (index, ref) => {
     // Guard BEFORE set so a stray negative index is a true no-op (returning {} from the updater
     // would still merge a fresh state object and wake subscribers for nothing).

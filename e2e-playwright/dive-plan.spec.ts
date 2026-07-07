@@ -217,6 +217,32 @@ test.describe('Dive-plan persistence (#244)', () => {
     expect(await diverRmv(page)).toBe(25); // B's snapshot restored
   });
 
+  test('a loaded plan persists across mode switches (Plan -> Survey/Export -> Plan) @smoke', async ({
+    page,
+  }) => {
+    await giveProjectAPath(page);
+    await enterPlan(page);
+    await setDiverRmv(page, 17);
+    await saveAs(page, 'Persist me');
+    const id = await loadedPlanId(page);
+    expect(id).not.toBeNull();
+
+    // Plan -> Survey -> Plan: the panel unmounts, but the store keeps the plan.
+    await page.locator('[data-testid="mode-survey"]').click();
+    await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);
+    await enterPlan(page);
+    expect(await loadedPlanId(page)).toBe(id);
+    expect(await diverRmv(page)).toBe(17);
+
+    // Plan -> Export -> Plan: same.
+    await page.locator('[data-testid="mode-export"]').click();
+    await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);
+    await enterPlan(page);
+    expect(await loadedPlanId(page)).toBe(id);
+    expect(await diverRmv(page)).toBe(17);
+    await expect(page.locator('[data-testid="dive-plan-select"]')).toHaveValue(String(id));
+  });
+
   test('deleting the loaded plan removes it @smoke', async ({ page }) => {
     await giveProjectAPath(page);
     await enterPlan(page);

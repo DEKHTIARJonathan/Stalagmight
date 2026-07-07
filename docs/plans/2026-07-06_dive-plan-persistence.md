@@ -204,26 +204,32 @@ Transitions:
 - **Save as...**: insert, set `loadedPlanId = new id`, baseline = current (clean).
 - **Any input setter**: baseline unchanged, so `isPlanDirty` recomputes to true.
 
-Guard triggers (reuse the existing close-guard machinery - `useBeforeUnload` + the
-confirm dialog - do not build a parallel one):
-- **Switch plan** in the dropdown while dirty -> confirm "Discard unsaved changes to
-  '<name>'?" before loading the other plan.
-- **Leave Plan mode / switch project / close the app** while dirty -> the plan-dirty
-  flag is OR'd into the same close-guard the survey `modified_at` dirty already
-  feeds, so the user is warned before the session inputs (and the unsaved plan
-  edits) are reset.
-- **Delete** the loaded plan: the existing delete-confirm already covers it.
+Guard triggers (reuse the existing `useBeforeUnload` machinery - do not build a
+parallel one):
+- **Switch plan** in the dropdown while dirty -> an inline "Discard unsaved changes to
+  '<name>'?" confirm before loading the other plan (kept inline in the bar, not a
+  registered dialog).
+- **Close the app** while dirty -> the plan-dirty flag is OR'd into the same
+  `useBeforeUnload` guard the import flow uses.
+- **Delete** the loaded plan: an inline delete-confirm covers it.
+
+⚠ **Revision (2026-07-06): the gas store PERSISTS across mode switches.** Originally
+the store was reset on leaving Plan mode (inherited from the #38 mode reframe), so a
+"leave Plan mode while dirty" guard was planned. That reset is **removed**: a loaded
+plan (and the working inputs) now survive Plan <-> Survey <-> Export within a session -
+the overlay is appMode-gated, so it hides outside Plan without needing a store reset.
+The store is emptied only on **project load / new session** (`applyDisplaySettings`). A
+one-time `hydrated` flag gates the panel's config seed so re-entering Plan does not
+re-seed and clobber the persisted inputs. Consequently the **mode-switch discard guard
+is dropped** (nothing is lost switching modes); only app-close and plan-switch remain.
 
 Scope: the guard fires only for a **loaded** plan whose inputs diverged
-(`loadedPlanId != null`). A never-saved exploration (`loadedPlanId == null`) is the
-same disposable session state Plan mode already has, and is not guarded - guarding
-every Plan-mode exit would nag. ("You have an unsaved new plan" protection for the
-no-plan-loaded case is a later heuristic if wanted; deferred.)
+(`loadedPlanId != null`). A never-saved exploration (`loadedPlanId == null`) is not
+guarded.
 
 Independence from `.stalx`: plan-dirty is a **separate** signal from survey dirty.
 Saving a plan never touches survey `modified_at`; editing the survey never makes a
-plan dirty. They converge only at the shared close-guard prompt, which now warns on
-either.
+plan dirty. They converge only at the shared close-guard, which warns on either.
 
 ## 9. UI surface
 
