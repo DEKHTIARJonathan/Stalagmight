@@ -159,3 +159,41 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Debug Gates](docs/debug-gates.md) | Where dev-only logs / asserts / profile harnesses live, and how to turn them on |
 | [macOS Build](docs/macos-build.md) | macOS build scripts and known issues |
 | [Agent Harness](docs/agent-harness.md) | LLM-agent harness (MCP + WebdriverIO) to drive the real app: tools, oracles, stress scenarios, replay + repro reports. Runs under Node 22. |
+
+## 🧭 Model routing — delegate by default
+*From the ops audit: the main thread plans, adjudicates, and handles escalations —
+it should not run implementation inline. Delegate to the model-pinned agent roster
+in `~/.claude/agents/`:*
+
+- Implementation from an approved plan → **`implementer`** (Sonnet)
+- Test/build runs + failure triage → **`test-runner`** (Haiku)
+- Discovery / "what calls X" / grep sweeps / PR-CI status → **`explorer`** (Haiku)
+- First-pass code review → **`reviewer`** (Sonnet); escalate design-sensitive or
+  uncertain findings → **`senior`** (Opus)
+
+Keep on the main thread (flagship): system architecture & undo/redo command
+semantics, IPC security surface, async-staleness / identity-guard design, migration
+& persistence schema, review synthesis & adjudication.
+**Up-tier tripwires:** 2 failed attempts · touches persistence/undo/IPC contract ·
+ambiguous invariants · security-sensitive input. **Down-tier:** spec + tests exist,
+blast radius ≤ 2 files.
+
+## 🚧 Generation-time gates (before writing code, not only at review)
+*Prevention is cheaper than a 10-agent fanout finding it — apply these while
+writing, so the `implementer` gets them for free (from the ops audit, T1 + T6).*
+
+**Invariants that must NOT silently change** — state them in any change contract:
+undo/redo integrity · `modified_at` touch/dirty semantics · IPC type compatibility
+(`src/types/ipc` is GENERATED — regen via `pnpm gen:ipc-types`, never hand-edit) ·
+`section_id`/`shot_id` immutability · atomic saves (temp `.stalx.tmp` → rename).
+
+**Async boundary checklist** — for every new async IPC call or event handler that
+mutates or paints, answer in the plan BEFORE coding:
+1. **Identity** — what request-time identity is captured? Quote the tuple
+   (`projectIdentityKey` = created_at + modified_at + path; or a load token).
+2. **Staleness** — on reply, what comparison drops a stale response after
+   undo/redo, reset, or project switch? (Geometry-readiness is a *separate*
+   guard — the measured→adjusted swap doesn't bump `modified_at`.)
+3. **Reentry** — can the trigger fire twice concurrently? Last-write-wins or queue?
+4. **Failure** — the error path sets what UI state, and does it fail safe (a
+   backend guard, not just a disabled button)?

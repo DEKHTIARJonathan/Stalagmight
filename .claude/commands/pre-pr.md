@@ -21,6 +21,17 @@ review the riskiest files first and report what it didn't reach.
 Launch the **subagents below in parallel** with the Task tool (issue them in a
 single message so they run concurrently).
 
+**Model routing (cost-controlled — keep judgment on the flagship).** Launch lens
+finders **Subagents 1–8 on Sonnet**: pass `model: "sonnet"` to the Task tool (or
+use a `model: sonnet` project agent). Their job is *guided verification* against
+fixed checklists — Sonnet does that well and cheaply, and the Opus main thread no
+longer pays flagship prices for ten cold context discoveries. **Subagent 9 (goal
+& guarantee trace) stays on the flagship (Opus)** — it is the cross-cutting
+P1-catcher and must NOT be down-tiered. **Subagent 10** runs the bundled
+`/code-review` with its own effort control (unchanged). **Synthesis (you, in the
+main thread) stays on the flagship.** If a specific lens visibly degrades on
+Sonnet, up-tier that one lens alone — per-lens model choice is what this allows.
+
 **Brief finders blind to author intent — this is load-bearing.** Give each subagent
 ONLY the diff/scope above + the files to read. Do NOT tell them what the change "is
 trying to do," why it's correct, or that any part is safe — author framing biases
@@ -47,7 +58,7 @@ Give every subagent this shared contract:
 > If you find nothing, name the riskiest part of the change in your area, exactly what
 > would break it, then verify-or-flag it per above. Highest-signal findings first.
 
-Subagents 1–8 each own exactly one numbered lens:
+Subagents 1–8 each own exactly one numbered lens (**run all eight on Sonnet** — see Model routing above):
 
 **Subagent 1 — State invalidation & lifecycle** ← our #1 source of real bugs
 - Cached external state (snap markers, ruler readout, warning identity, clipboard
@@ -136,7 +147,7 @@ Subagents 1–8 each own exactly one numbered lens:
 **Subagent 8 — Security** (going open-source — assume hostile input)
 - Input validation, path traversal, `unsafe` Rust, secret handling, no PII in telemetry.
 
-**Subagent 9 — Goal & guarantee trace** (end-to-end; cross-cutting, not lens-bound)
+**Subagent 9 — Goal & guarantee trace** (end-to-end; cross-cutting, not lens-bound — **stays on the flagship/Opus**)
 - From the DIFF ALONE infer what user-facing guarantee the change must deliver
   (data-safety, close/unsaved guard, persistence, undo, UI↔backend parity), then
   trace each guarantee end-to-end: **trigger → state written → consumer that reads
@@ -175,3 +186,20 @@ Wait for all subagents, then merge:
 4. **🟢 Nits** — terse.
 5. **Coverage** — which lenses ran, what each reviewed / skipped / couldn't verify, and
    the `/code-review` subagent's verdict shown alongside the lens verdicts.
+
+## Log the run (instrumentation — one line per review)
+After printing the verdict, append **exactly one JSON line** to
+`.claude/review-log.jsonl` (create the file if absent; never rewrite it — use a
+`>>` redirect). This is the data that later tells us which lenses earn their keep.
+Shape:
+
+```json
+{"date":"<YYYY-MM-DD>","branch":"<git branch>","verdict":"block|nits|needs-work","findings":[{"lens":<1-10>,"severity":"red|yellow|green","file":"<path:line>","verified":true}],"lenses_skipped":[{"lens":8,"why":"no security trigger"}]}
+```
+
+- Fill `date` from `date -u +%F` and `branch` from `git rev-parse --abbrev-ref HEAD`.
+- Include every 🔴/🟡 finding (🟢 optional); set `verified:true` only for findings
+  actually traced in code, `false` for ASSUMED/unverified.
+- Record any lens that did not run (e.g. security not triggered, a lens you couldn't
+  reach on a large diff) in `lenses_skipped` with a short `why`.
+- Keep it to one physical line so the file stays valid JSONL.
