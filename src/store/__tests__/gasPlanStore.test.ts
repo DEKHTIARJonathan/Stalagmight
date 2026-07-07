@@ -159,7 +159,8 @@ describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
     useGasPlanStore.getState().applyLoadedPlan(1, snapshot);
     useGasPlanStore.getState().setDiver({ rmv_l_per_min: 15, label: null });
     expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(true);
-    useGasPlanStore.getState().markPlanSaved(1);
+    // markPlanSaved takes the exact persisted snapshot (the current inputs here) as the baseline.
+    useGasPlanStore.getState().markPlanSaved(1, divePlanSnapshotOf(useGasPlanStore.getState()));
     expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
     expect(useGasPlanStore.getState().loadedPlanId).toBe(1);
   });

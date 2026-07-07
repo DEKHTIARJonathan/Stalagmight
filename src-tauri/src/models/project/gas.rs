@@ -103,8 +103,14 @@ impl Project {
                 let key: StationKey = (*r).into();
                 self.resolve_key(&key)
                     .and_then(|sr| station_index.get(&sr).copied())
-                    .into_iter()
-                    .collect()
+                    .map_or_else(
+                        // A set-but-unresolvable origin (e.g. its station was deleted while a
+                        // dive plan stayed loaded across a Survey edit, #244) falls back to the
+                        // entrance rather than an all-unreachable field — matching the `None`
+                        // (entrance) case and the endpoint's own deepest-in-budget fallback.
+                        || self.zero_datum_roots(&station_index),
+                        |i| vec![i],
+                    )
             }
             None => self.zero_datum_roots(&station_index),
         };

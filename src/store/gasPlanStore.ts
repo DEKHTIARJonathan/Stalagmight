@@ -83,12 +83,14 @@ interface GasPlanState {
    *  Sets all six gas inputs at once (the reach-field effect recomputes) and nulls the
    *  cached field so a stale overlay never shows under the new plan. */
   applyLoadedPlan: (planId: number, snapshot: DivePlanSnapshot) => void;
-  /** #244: after a successful Save / Save as, rebind the baseline to the current inputs
-   *  (so `selectIsPlanDirty` reads false) under the given plan id. */
-  markPlanSaved: (planId: number) => void;
+  /** #244: after a successful Save / Save as, rebind the baseline to the EXACT snapshot that
+   *  was persisted (passed in, not re-derived - so an edit made during the async save can't
+   *  read clean-but-stale) under the given plan id. */
+  markPlanSaved: (planId: number, baseline: DivePlanSnapshot) => void;
   /** #244: forget the loaded plan (e.g. it was deleted) without touching the inputs. */
   clearLoadedPlan: () => void;
-  /** Restore defaults (called from uiStore.exitGasPlan on sub-mode exit). */
+  /** Restore defaults. Called from `applyDisplaySettings` on project load / new session
+   *  (NOT on a mode switch - the plan persists across mode switches now, #244). */
   reset: () => void;
 }
 
@@ -161,8 +163,8 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
       loadedPlanId: planId,
       loadedPlanBaseline: snapshot,
     }),
-  markPlanSaved: (planId) =>
-    set((s) => ({ loadedPlanId: planId, loadedPlanBaseline: divePlanSnapshotOf(s) })),
+  markPlanSaved: (planId, baseline) =>
+    set({ loadedPlanId: planId, loadedPlanBaseline: baseline }),
   clearLoadedPlan: () => set({ loadedPlanId: null, loadedPlanBaseline: null }),
 
   reset: () => set(initialState()),

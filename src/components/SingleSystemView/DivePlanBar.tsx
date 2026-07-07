@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { selectIsPlanDirty, useGasPlanStore } from '../../store/gasPlanStore';
@@ -42,6 +42,9 @@ export function DivePlanBar() {
   const hasPath = useProjectStore((s) => Boolean(s.project?.file_path));
   // created_at is the stable project identity; changing project => refetch.
   const projectCreatedAt = useProjectStore((s) => s.project?.created_at ?? null);
+  // The backend targets the .plnx sibling of file_path; a project Save-As moves it in place,
+  // so the loaded plan + dropdown must re-key to the new location (#244).
+  const projectFilePath = useProjectStore((s) => s.project?.file_path ?? null);
 
   const [plans, setPlans] = useState<DivePlanMeta[]>([]);
   const [pending, setPending] = useState<Pending>({ kind: 'none' });
@@ -56,19 +59,36 @@ export function DivePlanBar() {
       .catch((e: unknown) => setError(String(e)));
   }, []);
 
-  // Refetch on mount (panel mounts when Plan mode opens) and on project switch.
+  // Refetch on mount (panel mounts when Plan mode opens) and whenever the project's identity
+  // or .plnx location changes. On an actual CHANGE (project switch / Save-As) the loaded plan is
+  // stale, so drop it - but NOT on a fresh mount (a fresh ref reads null), so the plan survives
+  // a Plan<->Survey<->Export re-entry (#244). project switch also resets the store upstream.
+  const prevProjectKeyRef = useRef<string | null>(null);
   useEffect(() => {
+    const key = `${projectCreatedAt ?? ''}|${projectFilePath ?? ''}`;
+    if (prevProjectKeyRef.current !== null && prevProjectKeyRef.current !== key) {
+      clearLoadedPlan();
+      setStaleCount(0);
+    }
+    prevProjectKeyRef.current = key;
     refresh();
-  }, [refresh, projectCreatedAt]);
+  }, [refresh, clearLoadedPlan, projectCreatedAt, projectFilePath]);
 
   const loadedName = plans.find((p) => p.id === loadedPlanId)?.name ?? null;
+
+  // The gas store mutations below (apply/markSaved/clear) survive an unmount, so a reply that
+  // resolves after the user opened ANOTHER project would corrupt the new project's store.
+  // Capture the project identity at request time and drop the mutation if it moved (#244).
+  const projectKey = () => useProjectStore.getState().project?.created_at ?? null;
 
   const doLoad = useCallback(
     async (id: number) => {
       setError(null);
       setBusy(true);
+      const key = projectKey();
       try {
         const plan = await loadDivePlan(id);
+        if (projectKey() !== key) return; // project switched mid-flight
         applyLoadedPlan(id, plan.snapshot);
         setStaleCount(plan.stale_ref_count);
       } catch (e) {
@@ -99,13 +119,14 @@ export function DivePlanBar() {
     if (loadedPlanId === null || loadedName === null) return;
     setError(null);
     setBusy(true);
+    const key = projectKey();
+    // Capture the exact snapshot once so the persisted bytes and the new dirty-baseline agree
+    // even if the user edits a field during the async save (#244).
+    const snap = divePlanSnapshotOf(useGasPlanStore.getState());
     try {
-      const meta = await saveDivePlan(
-        loadedPlanId,
-        loadedName,
-        divePlanSnapshotOf(useGasPlanStore.getState())
-      );
-      markPlanSaved(meta.id);
+      const meta = await saveDivePlan(loadedPlanId, loadedName, snap);
+      if (projectKey() !== key) return;
+      markPlanSaved(meta.id, snap);
       refresh();
     } catch (e) {
       setError(String(e));
@@ -119,9 +140,12 @@ export function DivePlanBar() {
     if (!name) return;
     setError(null);
     setBusy(true);
+    const key = projectKey();
+    const snap = divePlanSnapshotOf(useGasPlanStore.getState());
     try {
-      const meta = await saveDivePlan(null, name, divePlanSnapshotOf(useGasPlanStore.getState()));
-      markPlanSaved(meta.id);
+      const meta = await saveDivePlan(null, name, snap);
+      if (projectKey() !== key) return;
+      markPlanSaved(meta.id, snap);
       setSaveAsName('');
       setPending({ kind: 'none' });
       refresh();
@@ -136,8 +160,10 @@ export function DivePlanBar() {
     if (loadedPlanId === null) return;
     setError(null);
     setBusy(true);
+    const key = projectKey();
     try {
       await deleteDivePlan(loadedPlanId);
+      if (projectKey() !== key) return;
       clearLoadedPlan();
       setPending({ kind: 'none' });
       setStaleCount(0);

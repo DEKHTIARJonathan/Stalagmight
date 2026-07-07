@@ -313,3 +313,41 @@ barrel) and `pnpm gen:ipc-types`. Tauri camelCase arg keys map to snake_case.
    dirty-guard specs. Vitest for the store apply + dirty-equality logic.
 
 Each phase small and committed; PR held for review per project policy.
+
+## 14. Pre-PR review outcome (2026-07-06)
+
+A 10-lens adversarial `/pre-pr` ran on the implemented change. Fixed in-branch:
+
+- **Stable-anchor persistence (headline):** the on-disk form is now
+  `PersistedDivePlanSnapshot` (station refs as `StationKey`/`AfterShot(uuid)`),
+  canonicalized via `Project::key_for_ref` on save and re-resolved via `resolve_key`
+  on load. A saved plan tracks the SAME physical station across survey edits instead
+  of silently rebinding to whatever is at the old positional index (the class the
+  codebase eliminates everywhere else). Regression test: a ref follows its station
+  across a shot deletion.
+- **CI-failing test:** `uiStore.gasMutualExclusion` updated to the new persist-across-
+  modes contract (it pinned the removed reset-on-Survey).
+- **Project-switch race:** the bar captures project identity at request time and drops
+  the store mutation if the project moved mid-flight (was: an in-flight load/save could
+  corrupt the next project's gas store).
+- **Unresolvable-origin fallback:** the gas engine now degrades a set-but-unresolvable
+  origin to the entrance (like `None`) instead of an all-unreachable field - fixes the
+  all-grey map when a loaded plan's origin is deleted in Survey and Plan is re-entered.
+- **Save-As desync:** the bar re-keys the dropdown + drops the loaded plan when the
+  project's `file_path` changes (a project Save-As moves the `.plnx` sibling).
+- **Save rebaseline race:** the dirty baseline is the exact persisted snapshot, not
+  re-derived after the async save.
+- **Nits:** plan-name length cap (200); `busy_timeout` on the `.plnx` connection;
+  stale reset/exitGasPlan doc comment. New Rust tests: ownership Fresh/Owned/Foreign,
+  key round-trip, shot-deletion tracking, dangling-anchor stale count, engine fallback.
+
+Deferred (low-severity hardening / follow-ups, backend already fails safe):
+- Humanize permission-denied on `.plnx` open (cosmetic; `.stalx` does it).
+- `PlnxStore::open` writes schema before the ownership probe (idempotent at v1;
+  single-user desktop).
+- Foreign-sibling should DISABLE Save-as in the UI (today it errors after the click).
+- A poisoned plan's silent recompute failure should surface a banner (engine-safe).
+- Ownership keyed on `created_at` alone: file copies share identity; renaming only the
+  `.stalx` orphans the `.plnx`. Documented caveat.
+- `stale_ref_count > 0` UI-warning branch lacks e2e coverage (the mock returns 0).
+- Save mid-project-switch TOCTOU on the backend (frontend store mutation is guarded).

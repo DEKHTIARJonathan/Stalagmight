@@ -46,6 +46,9 @@ impl PlnxStore {
         // Crash-safe in-place writes; ignore pragma failures (defaults are already safe).
         let _ = conn.pragma_update(None, "journal_mode", "DELETE");
         let _ = conn.pragma_update(None, "synchronous", "FULL");
+        // Two overlapping saves each open their own connection; wait briefly for the lock
+        // instead of surfacing an immediate SQLITE_BUSY as "could not save".
+        let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
         let store = Self { conn };
         store.init_schema()?;
         store.set_user_version(PLNX_SCHEMA_VERSION)?;

@@ -59,17 +59,18 @@ describe('Plan mode ↔ color-overlay mutual exclusion (#38)', () => {
     expect(useUIStore.getState().appMode).toBe('survey');
   });
 
-  it('returning to Survey restores the prior geometry mode and resets the gasPlanStore', () => {
+  it('returning to Survey restores the prior geometry mode and KEEPS the gas plan (#244)', () => {
     // Enter Plan from a closure-adjusted survey view: the forced closureAdjusted is the
     // same value, but on exit the saved survey value must come back (here: closureAdjusted).
     useUIStore.setState({ geometryMode: 'closureAdjusted' });
     useUIStore.getState().setAppMode('plan');
     useGasPlanStore.getState().setOrigin({ section_id: 2, station_index: 1 });
-    expect(useGasPlanStore.getState().origin).not.toBeNull();
     useUIStore.getState().setAppMode('survey');
     expect(useUIStore.getState().appMode).toBe('survey');
     expect(useUIStore.getState().geometryMode).toBe('closureAdjusted');
-    expect(useGasPlanStore.getState().origin).toBeNull();
+    // The gas plan PERSISTS across mode switches now (#244); it is emptied only on a project
+    // load (applyDisplaySettings), not on leaving Plan. (Was previously reset here.)
+    expect(useGasPlanStore.getState().origin).toEqual({ section_id: 2, station_index: 1 });
   });
 
   it('exitGasPlan returns to Survey from Plan and from Export', () => {
