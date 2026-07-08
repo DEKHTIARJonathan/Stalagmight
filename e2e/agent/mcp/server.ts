@@ -377,16 +377,45 @@ define(
         const b = session.browser;
         const selector = args.testid ? `[data-testid="${args.testid}"]` : args.selector;
         return session.exclusive(async () => {
+          let method: 'keys' | 'paste' = 'keys';
+          let verified: boolean | null = null;
           if (selector) {
             const el = b.$(selector);
             await el.waitForDisplayed({ timeout: 5000 });
             if (args.clear) await el.clearValue();
             await el.setValue(args.text);
+            // WebKitWebDriver can coalesce rapid repeated keystrokes ("8000"
+            // arriving as "800"), silently corrupting input. Verify the value
+            // landed; on mismatch fall back to a synthetic paste through the
+            // native value setter + input event (React-compatible).
+            const landed = (await el.getValue().catch(() => null)) as string | null;
+            if (typeof landed === 'string') {
+              verified = landed === args.text;
+              if (!verified) {
+                method = 'paste';
+                await evalInApp(
+                  b,
+                  `
+                  const el = document.querySelector(args[0]);
+                  if (!el) return false;
+                  const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+                  const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+                  setter.call(el, args[1]);
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                  return true;
+                `,
+                  [selector, args.text],
+                );
+                const after = (await el.getValue().catch(() => null)) as string | null;
+                verified = after === args.text;
+              }
+            }
           } else {
             await b.keys(args.text.split(''));
           }
           if (args.submit) await b.keys(['Enter']);
-          return { result: { typed: true }, resolved: { selector } };
+          return { result: { typed: true, method, verified }, resolved: { selector } };
         });
       },
       { digest: true, sweep: true },
