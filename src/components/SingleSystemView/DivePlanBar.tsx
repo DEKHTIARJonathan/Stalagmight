@@ -1,0 +1,374 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useShallow } from 'zustand/react/shallow';
+import { selectIsPlanDirty, useGasPlanStore } from '../../store/gasPlanStore';
+import { useProjectStore } from '../../store/projectStore';
+import { divePlanSnapshotOf } from '../../utils/divePlan';
+import {
+  deleteDivePlan,
+  listDivePlans,
+  loadDivePlan,
+  saveDivePlan,
+} from '../../utils/divePlanApi';
+import type { DivePlanMeta } from '../../types/ipc.generated';
+
+/** Inline confirm/prompt state for the bar (kept inline to avoid registering a new
+ *  dialog type + its telemetry events; #244). */
+type Pending =
+  | { kind: 'none' }
+  | { kind: 'saveAs' }
+  | { kind: 'delete' }
+  | { kind: 'switch'; id: number };
+
+/**
+ * "Previous dive plans" bar (#244) at the top of the Plan-mode gas panel: a
+ * dropdown to load a saved plan plus Save / Save as... / Delete. A plan is the
+ * `compute_gas_reach_field` input tuple; loading applies it to `gasPlanStore` and
+ * the existing MapCanvas effect recomputes the overlay. Dirty tracking + the
+ * app-close and mode-switch guards live in the store / App / ModeCarousel.
+ */
+export function DivePlanBar() {
+  const { t } = useTranslation();
+  const { loadedPlanId, applyLoadedPlan, markPlanSaved, clearLoadedPlan } = useGasPlanStore(
+    useShallow((s) => ({
+      loadedPlanId: s.loadedPlanId,
+      applyLoadedPlan: s.applyLoadedPlan,
+      markPlanSaved: s.markPlanSaved,
+      clearLoadedPlan: s.clearLoadedPlan,
+    }))
+  );
+  const isDirty = useGasPlanStore(selectIsPlanDirty);
+  // The .plnx sits next to the .stalx, so plans need a saved project (a file path).
+  const hasPath = useProjectStore((s) => Boolean(s.project?.file_path));
+  // created_at is the stable project identity; changing project => refetch.
+  const projectCreatedAt = useProjectStore((s) => s.project?.created_at ?? null);
+  // The backend targets the .plnx sibling of file_path; a project Save-As moves it in place,
+  // so the loaded plan + dropdown must re-key to the new location (#244).
+  const projectFilePath = useProjectStore((s) => s.project?.file_path ?? null);
+
+  const [plans, setPlans] = useState<DivePlanMeta[]>([]);
+  const [pending, setPending] = useState<Pending>({ kind: 'none' });
+  const [saveAsName, setSaveAsName] = useState('');
+  const [staleCount, setStaleCount] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(() => {
+    listDivePlans()
+      .then(setPlans)
+      .catch((e: unknown) => setError(String(e)));
+  }, []);
+
+  // Refetch on mount (panel mounts when Plan mode opens) and whenever the project's identity
+  // or .plnx location changes. On an actual CHANGE (project switch / Save-As) the loaded plan is
+  // stale, so drop it - but NOT on a fresh mount (a fresh ref reads null), so the plan survives
+  // a Plan<->Survey<->Export re-entry (#244). project switch also resets the store upstream.
+  const prevProjectKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${projectCreatedAt ?? ''}|${projectFilePath ?? ''}`;
+    if (prevProjectKeyRef.current !== null && prevProjectKeyRef.current !== key) {
+      clearLoadedPlan();
+      setStaleCount(0);
+    }
+    prevProjectKeyRef.current = key;
+    refresh();
+  }, [refresh, clearLoadedPlan, projectCreatedAt, projectFilePath]);
+
+  const loadedName = plans.find((p) => p.id === loadedPlanId)?.name ?? null;
+
+  // The gas store mutations below (apply/markSaved/clear) survive an unmount, so a reply that
+  // resolves after the user opened ANOTHER project would corrupt the new project's store.
+  // Capture the project identity at request time and drop the mutation if it moved (#244).
+  // Composite key (mirrors prevProjectKeyRef above): created_at alone doesn't change on a
+  // Save-As, but the .plnx sibling path is derived from file_path, so a Save-As mid-flight
+  // must also be treated as a project-identity change here.
+  const projectKey = () => {
+    const p = useProjectStore.getState().project;
+    return `${p?.created_at ?? ''}|${p?.file_path ?? ''}`;
+  };
+
+  const doLoad = useCallback(
+    async (id: number) => {
+      setError(null);
+      setBusy(true);
+      const key = projectKey();
+      try {
+        const plan = await loadDivePlan(id);
+        if (projectKey() !== key) return; // project switched mid-flight
+        applyLoadedPlan(id, plan.snapshot);
+        setStaleCount(plan.stale_ref_count);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [applyLoadedPlan]
+  );
+
+  const onSelect = (value: string) => {
+    setError(null);
+    setPending({ kind: 'none' });
+    if (value === '') {
+      setStaleCount(0);
+      return;
+    }
+    const id = Number(value);
+    if (id === loadedPlanId) return;
+    // Guard losing unsaved edits to the currently-loaded plan (#244).
+    if (isDirty) {
+      setPending({ kind: 'switch', id });
+    } else {
+      void doLoad(id);
+    }
+  };
+
+  const doSave = useCallback(async () => {
+    if (loadedPlanId === null || loadedName === null) return;
+    setError(null);
+    setBusy(true);
+    const key = projectKey();
+    // Capture the exact snapshot once so the persisted bytes and the new dirty-baseline agree
+    // even if the user edits a field during the async save (#244).
+    const snap = divePlanSnapshotOf(useGasPlanStore.getState());
+    try {
+      const meta = await saveDivePlan(loadedPlanId, loadedName, snap);
+      if (projectKey() !== key) return;
+      markPlanSaved(meta.id, snap);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [loadedPlanId, loadedName, markPlanSaved, refresh]);
+
+  const doSaveAs = useCallback(async () => {
+    const name = saveAsName.trim();
+    if (!name) return;
+    setError(null);
+    setBusy(true);
+    const key = projectKey();
+    const snap = divePlanSnapshotOf(useGasPlanStore.getState());
+    try {
+      const meta = await saveDivePlan(null, name, snap);
+      if (projectKey() !== key) return;
+      markPlanSaved(meta.id, snap);
+      setSaveAsName('');
+      setPending({ kind: 'none' });
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [saveAsName, markPlanSaved, refresh]);
+
+  const doDelete = useCallback(async () => {
+    if (loadedPlanId === null) return;
+    setError(null);
+    setBusy(true);
+    const key = projectKey();
+    try {
+      await deleteDivePlan(loadedPlanId);
+      if (projectKey() !== key) return;
+      clearLoadedPlan();
+      setPending({ kind: 'none' });
+      setStaleCount(0);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [loadedPlanId, clearLoadedPlan, refresh]);
+
+  const canSave = loadedPlanId !== null && loadedName !== null && isDirty && hasPath && !busy;
+  const canSaveAs = hasPath && !busy;
+  const canDelete = loadedPlanId !== null && !busy;
+
+  return (
+    <section className="space-y-1" data-testid="dive-plan-bar">
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-medium opacity-80" htmlFor="dive-plan-select">
+          {t('divePlanBar.label')}
+        </label>
+        {loadedPlanId !== null && isDirty && (
+          <span className="text-xs text-warning" data-testid="dive-plan-dirty">
+            {t('divePlanBar.unsavedBadge')}
+          </span>
+        )}
+      </div>
+
+      <div className="flex items-center gap-1">
+        <select
+          id="dive-plan-select"
+          data-testid="dive-plan-select"
+          className="flex-1 min-w-0 bg-input border border-border rounded px-2 py-1 text-sm"
+          value={loadedPlanId !== null ? String(loadedPlanId) : ''}
+          onChange={(e) => onSelect(e.target.value)}
+          disabled={busy}
+        >
+          <option value="">
+            {plans.length === 0 ? t('divePlanBar.empty') : t('divePlanBar.choose')}
+          </option>
+          {plans.map((p) => (
+            <option key={p.id} value={String(p.id)}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          data-testid="dive-plan-save"
+          className="px-2 py-1 text-xs rounded border border-border hover:bg-panel disabled:opacity-40 disabled:cursor-not-allowed"
+          onClick={() => void doSave()}
+          disabled={!canSave}
+          title={hasPath ? undefined : t('divePlanBar.needsSavedProject')}
+        >
+          {t('divePlanBar.save')}
+        </button>
+        <button
+          type="button"
+          data-testid="dive-plan-save-as"
+          className="px-2 py-1 text-xs rounded border border-border hover:bg-panel disabled:opacity-40 disabled:cursor-not-allowed"
+          onClick={() => {
+            setError(null);
+            setPending({ kind: 'saveAs' });
+            setSaveAsName('');
+          }}
+          disabled={!canSaveAs}
+          title={hasPath ? undefined : t('divePlanBar.needsSavedProject')}
+        >
+          {t('divePlanBar.saveAs')}
+        </button>
+        <button
+          type="button"
+          data-testid="dive-plan-delete"
+          className="px-2 py-1 text-xs rounded border border-border hover:bg-panel disabled:opacity-40 disabled:cursor-not-allowed"
+          onClick={() => {
+            setError(null);
+            setPending({ kind: 'delete' });
+          }}
+          disabled={!canDelete}
+        >
+          {t('divePlanBar.delete')}
+        </button>
+      </div>
+
+      {!hasPath && (
+        <p className="text-xs opacity-70" data-testid="dive-plan-needs-save">
+          {t('divePlanBar.needsSavedProject')}
+        </p>
+      )}
+
+      {pending.kind === 'saveAs' && (
+        <div className="flex items-center gap-1" data-testid="dive-plan-save-as-row">
+          <input
+            type="text"
+            data-testid="dive-plan-name-input"
+            className="flex-1 min-w-0 bg-input border border-border rounded px-2 py-1 text-sm"
+            placeholder={t('divePlanBar.namePlaceholder')}
+            value={saveAsName}
+            onChange={(e) => setSaveAsName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void doSaveAs();
+              if (e.key === 'Escape') setPending({ kind: 'none' });
+            }}
+            autoFocus
+          />
+          <button
+            type="button"
+            data-testid="dive-plan-save-as-confirm"
+            className="px-2 py-1 text-xs rounded border border-border hover:bg-panel disabled:opacity-40"
+            onClick={() => void doSaveAs()}
+            disabled={saveAsName.trim() === '' || busy}
+          >
+            {t('divePlanBar.save')}
+          </button>
+          <button
+            type="button"
+            className="px-2 py-1 text-xs rounded border border-border hover:bg-panel"
+            onClick={() => setPending({ kind: 'none' })}
+          >
+            {t('common.actions.cancel')}
+          </button>
+        </div>
+      )}
+
+      {pending.kind === 'delete' && (
+        <div
+          className="flex items-center justify-between gap-2 p-2 rounded bg-warning-10 border border-warning-30 text-warning text-xs"
+          data-testid="dive-plan-delete-confirm"
+        >
+          <span>{t('divePlanBar.deleteConfirm', { name: loadedName ?? '' })}</span>
+          <span className="flex gap-1 shrink-0">
+            <button
+              type="button"
+              data-testid="dive-plan-delete-confirm-yes"
+              className="px-2 py-0.5 rounded border border-warning-30 hover:bg-warning-10"
+              onClick={() => void doDelete()}
+            >
+              {t('divePlanBar.delete')}
+            </button>
+            <button
+              type="button"
+              className="px-2 py-0.5 rounded border border-border hover:bg-panel"
+              onClick={() => setPending({ kind: 'none' })}
+            >
+              {t('common.actions.cancel')}
+            </button>
+          </span>
+        </div>
+      )}
+
+      {pending.kind === 'switch' && (
+        <div
+          className="flex items-center justify-between gap-2 p-2 rounded bg-warning-10 border border-warning-30 text-warning text-xs"
+          data-testid="dive-plan-switch-confirm"
+        >
+          <span>{t('divePlanBar.discardConfirm', { name: loadedName ?? '' })}</span>
+          <span className="flex gap-1 shrink-0">
+            <button
+              type="button"
+              data-testid="dive-plan-switch-confirm-yes"
+              className="px-2 py-0.5 rounded border border-warning-30 hover:bg-warning-10"
+              onClick={() => {
+                const { id } = pending;
+                setPending({ kind: 'none' });
+                void doLoad(id);
+              }}
+            >
+              {t('divePlanBar.discard')}
+            </button>
+            <button
+              type="button"
+              className="px-2 py-0.5 rounded border border-border hover:bg-panel"
+              onClick={() => setPending({ kind: 'none' })}
+            >
+              {t('common.actions.cancel')}
+            </button>
+          </span>
+        </div>
+      )}
+
+      {staleCount > 0 && (
+        <p
+          className="text-xs p-2 rounded bg-warning-10 border border-warning-30 text-warning"
+          data-testid="dive-plan-stale-warning"
+        >
+          {t('divePlanBar.staleRefs', { count: staleCount })}
+        </p>
+      )}
+
+      {error && (
+        <p className="text-xs text-error" data-testid="dive-plan-error">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}

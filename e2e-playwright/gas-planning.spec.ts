@@ -236,7 +236,8 @@ test.describe('Gas planning', () => {
     // A station carries a numeric `gasReach` feature-state.
     await expect.poll(() => anyStationHasGasReach(page), { timeout: 3000 }).toBe(true);
 
-    // Back to Survey → panel + legend gone, paint restored, store reset.
+    // Back to Survey → panel + legend gone, gas paint restored (the overlay is
+    // appMode-gated; the gas store itself persists across mode switches, #244).
     await enterMode(page, 'survey');
     expect(await appMode(page)).toBe('survey');
     await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);

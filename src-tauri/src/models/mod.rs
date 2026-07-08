@@ -1,4 +1,5 @@
 pub mod collab;
+pub mod dive_plan;
 pub mod geo;
 pub mod id_stride;
 pub mod placement_suggest;
@@ -10,6 +11,7 @@ pub mod station;
 pub mod warning;
 
 pub use collab::*;
+pub use dive_plan::*;
 pub use geo::*;
 pub use id_stride::*;
 pub use placement_suggest::*;

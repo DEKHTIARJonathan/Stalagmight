@@ -1290,8 +1290,10 @@ export const useUIStore = create<UIStore>((set) => ({
     if (s.appMode === mode) return;
     if (mode === 'survey') {
       // Returning to Survey: restore the geometry mode we had before entering
-      // Plan/Export, and reset the (transient) gas plan so its overlay/inputs
-      // can't linger in the editable survey workspace.
+      // Plan/Export. The gas overlay + markers are appMode-gated (they clear when
+      // appMode leaves 'plan'), so we do NOT reset the gas store here — the loaded
+      // plan / working inputs PERSIST across mode switches within a session (#244).
+      // A new session / project switch still empties it (the reset on project load).
       const restore = prePlanGeometryMode ?? GEOMETRY_MODE_DEFAULT;
       prePlanGeometryMode = null;
       // Restore the Survey display flags captured on entry so Plan/Export tweaks
@@ -1299,7 +1301,6 @@ export const useUIStore = create<UIStore>((set) => ({
       const displayRestore = prePlanDisplay ?? {};
       prePlanDisplay = null;
       set({ appMode: 'survey', geometryMode: restore, ...displayRestore, ...MEASURE_CLEARED });
-      useGasPlanStore.getState().reset();
       return;
     }
     // Entering Plan or Export. Both show the read-only closure map, so:
@@ -1335,10 +1336,11 @@ export const useUIStore = create<UIStore>((set) => ({
       // Plan also pins the bottom Dock open so the Cylinders/Profile tabs are visible
       // without hunting for a closed dock.
       set({ dataTableOpen: true, dataTableMode: 'pin' });
-    } else {
-      // Export has no gas inputs — clear any plan state so nothing strands.
-      useGasPlanStore.getState().reset();
     }
+    // Export shows the read-only map + export stub. We do NOT reset the gas store on
+    // entry: the overlay is appMode-gated (hidden outside Plan) and a loaded plan must
+    // survive a Plan -> Export -> Plan round-trip within a session (#244). The gas store
+    // is emptied only on project load.
   },
   exitGasPlan: () => {
     if (useUIStore.getState().appMode === 'survey') return;

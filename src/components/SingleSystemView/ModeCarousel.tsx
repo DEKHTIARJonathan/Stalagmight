@@ -9,6 +9,11 @@ const MODES: readonly AppMode[] = ['survey', 'plan', 'export'];
  * over a read-only closure map), or Export (read-only closure map + export stub).
  * Lives in the Toolbar's center slot — the active *tool* is already shown by the
  * highlighted toolbar button, so the center is free for the mode switch.
+ *
+ * No discard-on-switch guard: the gas store now persists across mode switches (#244),
+ * so leaving Plan mode loses nothing (the overlay is appMode-gated and a loaded plan
+ * stays loaded). Unsaved-plan edits are still guarded at app close (App) and when
+ * loading a different plan (DivePlanBar).
  */
 export function ModeCarousel({ disabled = false }: { disabled?: boolean }) {
   const { t } = useTranslation();

@@ -241,6 +241,21 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Records execute_walls_import args (esp. selectedSurveys) so the Walls
       // import dialog spec can assert the select-all→null / explicit-index path.
       let wallsImportCalls: Array<Record<string, unknown>> = [];
+      // Dive-plan (.plnx) mock store (#244): an in-memory list of saved plans for the
+      // open project. Reset per test via __MOCK_RESET_DIVE_PLANS__.
+      let mockDivePlans: Array<{
+        id: number;
+        name: string;
+        created_at: string;
+        updated_at: string;
+        snapshot: unknown;
+      }> = [];
+      let mockDivePlanNextId = 1;
+      let mockDivePlanClock = 0;
+      const nextDivePlanStamp = () => {
+        mockDivePlanClock += 1;
+        return `2026-07-06T10:00:${String(mockDivePlanClock).padStart(2, '0')}Z`;
+      };
 
       (window as unknown as Record<string, unknown>).__MOCK_SET_CHECK_DUPLICATE_RESULT__ = (result: boolean) => {
         mockCheckDuplicateResult = result;
@@ -248,6 +263,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_GET_WALLS_IMPORT_CALLS__ = () => [...wallsImportCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_WALLS_IMPORT_CALLS__ = () => {
         wallsImportCalls = [];
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_DIVE_PLANS__ = () => {
+        mockDivePlans = [];
+        mockDivePlanNextId = 1;
+        mockDivePlanClock = 0;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_GET_DIVE_PLANS__ = () => [...mockDivePlans];
+      // Give the open project a file path (a saved project) so dive-plan save/list is
+      // enabled — the bar gates on file_path. Call refreshProjectState() after to pick it up.
+      (window as unknown as Record<string, unknown>).__MOCK_SET_PROJECT_PATH__ = (
+        path: string | null,
+      ) => {
+        projectPath = path;
+        if (currentProject) currentProject.file_path = path;
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ = () => [...trackImportedFileCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ = () => {
@@ -1255,6 +1284,70 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
           }
 
+          // Dive-plan persistence (#244). An in-memory mirror of the .plnx store.
+          case 'list_dive_plans':
+            return mockDivePlans.map((p) => ({
+              id: p.id,
+              name: p.name,
+              created_at: p.created_at,
+              updated_at: p.updated_at,
+            }));
+          case 'load_dive_plan': {
+            const found = mockDivePlans.find((p) => p.id === args?.id);
+            if (!found) throw new Error('That dive plan no longer exists.');
+            return {
+              meta: {
+                id: found.id,
+                name: found.name,
+                created_at: found.created_at,
+                updated_at: found.updated_at,
+              },
+              snapshot: found.snapshot,
+              stale_ref_count: 0,
+            };
+          }
+          case 'save_dive_plan': {
+            const id = (args?.id ?? null) as number | null;
+            const name = args?.name as string;
+            const snapshot = args?.snapshot;
+            const stamp = nextDivePlanStamp();
+            if (id === null) {
+              const plan = {
+                id: mockDivePlanNextId,
+                name,
+                created_at: stamp,
+                updated_at: stamp,
+                snapshot,
+              };
+              mockDivePlanNextId += 1;
+              mockDivePlans.push(plan);
+              return {
+                id: plan.id,
+                name: plan.name,
+                created_at: plan.created_at,
+                updated_at: plan.updated_at,
+              };
+            }
+            const existing = mockDivePlans.find((p) => p.id === id);
+            if (!existing) throw new Error('That dive plan no longer exists.');
+            existing.name = name;
+            existing.updated_at = stamp;
+            existing.snapshot = snapshot;
+            return {
+              id: existing.id,
+              name: existing.name,
+              created_at: existing.created_at,
+              updated_at: existing.updated_at,
+            };
+          }
+          case 'delete_dive_plan': {
+            const before = mockDivePlans.length;
+            mockDivePlans = mockDivePlans.filter((p) => p.id !== args?.id);
+            if (mockDivePlans.length === before) {
+              throw new Error('That dive plan no longer exists.');
+            }
+            return null;
+          }
           case 'compute_gas_reach_field': {
             // Record every call's inputs so drag e2e can assert the dragged station was sent as a
             // per-stage override (#246). Keyed on the camelCase arg the frontend actually invokes with.

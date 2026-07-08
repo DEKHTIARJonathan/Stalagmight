@@ -2189,3 +2189,30 @@ fn gas_reach_field_none_origin_seeds_from_zero_datums() {
     assert!(field_gas(&field, origin).abs() < EPS); // gas to reach the seed datum is 0
     assert!(field.reachable.iter().all(|&r| r)); // huge budget → all reachable from the datum
 }
+
+#[test]
+fn gas_reach_field_unresolvable_origin_falls_back_to_entrance() {
+    // A set-but-unresolvable origin (e.g. a dive plan stayed loaded across a Survey edit that
+    // deleted its origin station, #244) must degrade to the entrance, NOT an all-unreachable
+    // field. Without the fallback this returns empty roots → the whole map greys out.
+    let (mut project, origin) = linear_descent_project();
+    project.zero_datums.push(ZeroDatum {
+        station_ref: origin.into(),
+        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    });
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let ghost = StationRef::new(origin.section_id + 999, 0); // section that does not exist
+    let field =
+        project.compute_gas_reach_field(Some(&ghost), None, &diver, &[big], &GasConfig::default());
+    assert!(field.reachable.iter().all(|&r| r)); // fell back to the entrance, not all-grey
+    assert!(field_gas(&field, origin).abs() < EPS);
+}

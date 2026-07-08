@@ -2,8 +2,15 @@ import { create } from 'zustand';
 
 import { defaultConfig } from '../types/config';
 import { TANK_PRESETS, cylinderFromPreset } from '../utils/tankPresets';
-import type { Cylinder, Diver, GasConfig, GasReachField } from '../types/ipc.generated';
+import type {
+  Cylinder,
+  Diver,
+  DivePlanSnapshot,
+  GasConfig,
+  GasReachField,
+} from '../types/ipc.generated';
 import type { StationRef } from '../types/project';
+import { divePlanSnapshotOf, divePlanSnapshotsEqual } from '../utils/divePlan';
 
 /**
  * Gas & route-planning sub-mode state (#38, Phase 1). Runtime-only — never
@@ -44,10 +51,20 @@ interface GasPlanState {
    *  whenever the rig / config / origin / endpoint changes (which reshuffles the drops), exactly
    *  like `reachField`. Passed to `compute_gas_reach_field` so the backend recomputes the plan. */
   stageDropOverrides: (StationRef | null)[];
+  /** #244: id of the currently-loaded saved plan, or null when the working inputs are an
+   *  unsaved exploration. Set on load; cleared on reset and when the loaded plan is deleted. */
+  loadedPlanId: number | null;
+  /** #244: the snapshot as loaded / as of the last successful Save. The baseline the dirty
+   *  check compares the live inputs against (see `selectIsPlanDirty`). */
+  loadedPlanBaseline: DivePlanSnapshot | null;
   /** Session-only: the user accepted the advanced (staged) reserve presets. Cleared by
-   *  `reset()` — on Plan sub-mode exit AND on every project load (`applyDisplaySettings`) — so
-   *  a fresh project (or a re-entry) re-prompts. Never persisted. */
+   *  `reset()` on every project load (`applyDisplaySettings`), so a fresh project re-prompts.
+   *  Never persisted. */
   pushyAck: boolean;
+  /** #244: the working gas config has been seeded from the persisted app config for this
+   *  session. Gates the panel's one-time seed so re-ENTERING Plan mode does not re-seed and
+   *  clobber a loaded plan / working inputs. Cleared by `reset()` (project load / new session). */
+  hydrated: boolean;
 
   setOrigin: (origin: StationRef | null) => void;
   setEndpoint: (endpoint: StationRef | null) => void;
@@ -56,11 +73,24 @@ interface GasPlanState {
   setGasConfig: (gasConfig: GasConfig) => void;
   setReachField: (reachField: GasReachField | null) => void;
   setPushyAck: (ack: boolean) => void;
+  /** #244: mark the gas config seeded for this session (see `hydrated`). */
+  markHydrated: () => void;
   /** Pin (or, with `null`, reset) stage `index`'s drop to a route station. Does NOT null
    *  `reachField`, so the existing drop markers stay put during the ms-fast refetch instead of
    *  flickering; the fetch effect depends on `stageDropOverrides` and swaps the field in on arrival. */
   setStageDropOverride: (index: number, ref: StationRef | null) => void;
-  /** Restore defaults (called from uiStore.exitGasPlan on sub-mode exit). */
+  /** #244: apply a loaded plan's snapshot to the inputs and mark it the clean baseline.
+   *  Sets all six gas inputs at once (the reach-field effect recomputes) and nulls the
+   *  cached field so a stale overlay never shows under the new plan. */
+  applyLoadedPlan: (planId: number, snapshot: DivePlanSnapshot) => void;
+  /** #244: after a successful Save / Save as, rebind the baseline to the EXACT snapshot that
+   *  was persisted (passed in, not re-derived - so an edit made during the async save can't
+   *  read clean-but-stale) under the given plan id. */
+  markPlanSaved: (planId: number, baseline: DivePlanSnapshot) => void;
+  /** #244: forget the loaded plan (e.g. it was deleted) without touching the inputs. */
+  clearLoadedPlan: () => void;
+  /** Restore defaults. Called from `applyDisplaySettings` on project load / new session
+   *  (NOT on a mode switch - the plan persists across mode switches now, #244). */
   reset: () => void;
 }
 
@@ -73,7 +103,10 @@ const initialState = (): Pick<
   | 'gasConfig'
   | 'reachField'
   | 'stageDropOverrides'
+  | 'loadedPlanId'
+  | 'loadedPlanBaseline'
   | 'pushyAck'
+  | 'hydrated'
 > => ({
   origin: null,
   endpoint: null,
@@ -84,7 +117,10 @@ const initialState = (): Pick<
   gasConfig: structuredClone(defaultConfig.gas),
   reachField: null,
   stageDropOverrides: [],
+  loadedPlanId: null,
+  loadedPlanBaseline: null,
   pushyAck: false,
+  hydrated: false,
 });
 
 export const useGasPlanStore = create<GasPlanState>((set) => ({
@@ -102,6 +138,7 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   setGasConfig: (gasConfig) => set({ gasConfig, reachField: null, stageDropOverrides: [] }),
   setReachField: (reachField) => set({ reachField }),
   setPushyAck: (pushyAck) => set({ pushyAck }),
+  markHydrated: () => set({ hydrated: true }),
   setStageDropOverride: (index, ref) => {
     // Guard BEFORE set so a stray negative index is a true no-op (returning {} from the updater
     // would still merge a fresh state object and wake subscribers for nothing).
@@ -114,5 +151,28 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
     });
   },
 
+  applyLoadedPlan: (planId, snapshot) =>
+    set({
+      origin: snapshot.origin,
+      endpoint: snapshot.endpoint,
+      diver: snapshot.diver,
+      cylinders: snapshot.cylinders,
+      gasConfig: snapshot.gas_config,
+      stageDropOverrides: snapshot.stage_drop_overrides,
+      reachField: null,
+      loadedPlanId: planId,
+      loadedPlanBaseline: snapshot,
+    }),
+  markPlanSaved: (planId, baseline) =>
+    set({ loadedPlanId: planId, loadedPlanBaseline: baseline }),
+  clearLoadedPlan: () => set({ loadedPlanId: null, loadedPlanBaseline: null }),
+
   reset: () => set(initialState()),
 }));
+
+/** #244: true when a plan is loaded and the live inputs diverge from its saved
+ *  baseline. A never-saved exploration (`loadedPlanId === null`) is never dirty. */
+export function selectIsPlanDirty(s: GasPlanState): boolean {
+  if (s.loadedPlanId === null || s.loadedPlanBaseline === null) return false;
+  return !divePlanSnapshotsEqual(divePlanSnapshotOf(s), s.loadedPlanBaseline);
+}

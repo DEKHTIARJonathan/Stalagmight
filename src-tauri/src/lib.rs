@@ -1243,6 +1243,11 @@ pub fn run() {
             commands::cache::get_tile_providers,
             // Gas planning (#38)
             commands::gas::compute_gas_reach_field,
+            // Dive-plan persistence (#244, .plnx sibling)
+            commands::dive_plan::list_dive_plans,
+            commands::dive_plan::load_dive_plan,
+            commands::dive_plan::save_dive_plan,
+            commands::dive_plan::delete_dive_plan,
             // Project commands
             commands::project::create_project,
             commands::project::update_project_settings,

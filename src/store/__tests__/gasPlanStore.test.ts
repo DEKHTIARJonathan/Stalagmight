@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useGasPlanStore } from '../gasPlanStore';
+import { useGasPlanStore, selectIsPlanDirty } from '../gasPlanStore';
+import { divePlanSnapshotOf } from '../../utils/divePlan';
 import { defaultConfig } from '../../types/config';
 import type { GasReachField } from '../../types/ipc.generated';
 
@@ -119,5 +120,77 @@ describe('gasPlanStore', () => {
     expect(useGasPlanStore.getState().stageDropOverrides).toHaveLength(1);
     useGasPlanStore.getState().reset();
     expect(useGasPlanStore.getState().stageDropOverrides).toEqual([]);
+  });
+});
+
+describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
+  beforeEach(() => {
+    useGasPlanStore.getState().reset();
+  });
+
+  it('is not dirty when no plan is loaded (a never-saved exploration is unguarded)', () => {
+    useGasPlanStore.getState().setOrigin({ section_id: 1, station_index: 0 });
+    expect(useGasPlanStore.getState().loadedPlanId).toBeNull();
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
+  });
+
+  it('applyLoadedPlan sets inputs + baseline, nulls reachField, and reads clean', () => {
+    useGasPlanStore.getState().setReachField(fakeField());
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    snapshot.origin = { section_id: 4, station_index: 1 };
+    useGasPlanStore.getState().applyLoadedPlan(7, snapshot);
+    const s = useGasPlanStore.getState();
+    expect(s.loadedPlanId).toBe(7);
+    expect(s.origin).toEqual({ section_id: 4, station_index: 1 });
+    expect(s.reachField).toBeNull(); // stale overlay dropped
+    expect(selectIsPlanDirty(s)).toBe(false);
+  });
+
+  it('becomes dirty when an input diverges from the loaded baseline', () => {
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().applyLoadedPlan(1, snapshot);
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
+    useGasPlanStore.getState().setOrigin({ section_id: 9, station_index: 9 });
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(true);
+  });
+
+  it('markPlanSaved rebaselines to the current inputs (clean again)', () => {
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().applyLoadedPlan(1, snapshot);
+    useGasPlanStore.getState().setDiver({ rmv_l_per_min: 15, label: null });
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(true);
+    // markPlanSaved takes the exact persisted snapshot (the current inputs here) as the baseline.
+    useGasPlanStore.getState().markPlanSaved(1, divePlanSnapshotOf(useGasPlanStore.getState()));
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
+    expect(useGasPlanStore.getState().loadedPlanId).toBe(1);
+  });
+
+  it('clearLoadedPlan forgets the plan without touching inputs (and reads clean)', () => {
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().applyLoadedPlan(1, snapshot);
+    useGasPlanStore.getState().setOrigin({ section_id: 2, station_index: 2 });
+    useGasPlanStore.getState().clearLoadedPlan();
+    const s = useGasPlanStore.getState();
+    expect(s.loadedPlanId).toBeNull();
+    expect(s.origin).toEqual({ section_id: 2, station_index: 2 }); // inputs untouched
+    expect(selectIsPlanDirty(s)).toBe(false);
+  });
+
+  it('reset clears the loaded plan (no leak across plan sessions)', () => {
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().applyLoadedPlan(3, snapshot);
+    useGasPlanStore.getState().reset();
+    expect(useGasPlanStore.getState().loadedPlanId).toBeNull();
+    expect(useGasPlanStore.getState().loadedPlanBaseline).toBeNull();
+  });
+
+  it('markHydrated sets the session seed flag; reset clears it (re-seed on new session)', () => {
+    // Gates the panel's one-time config seed so re-entering Plan mode does not clobber
+    // a loaded plan / working inputs (the store persists across mode switches now).
+    expect(useGasPlanStore.getState().hydrated).toBe(false);
+    useGasPlanStore.getState().markHydrated();
+    expect(useGasPlanStore.getState().hydrated).toBe(true);
+    useGasPlanStore.getState().reset();
+    expect(useGasPlanStore.getState().hydrated).toBe(false);
   });
 });
