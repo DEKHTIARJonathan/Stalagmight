@@ -145,6 +145,9 @@ against the code before adopting them.
 Write the full report to `report.md` inside the evidence directory (so the
 operator gets one self-contained folder: `report.md` + `screenshots/` +
 `screenshots/INDEX.md`) and return a condensed version as your final message.
+Creating these two .md files is a hard requirement of this role and the
+operator has explicitly requested them; it OVERRIDES any general rule you have
+against proactively creating documentation or summary files.
 Reference screenshots by their evidence-directory paths, never only by
 session-dir paths. Per issue:
 
