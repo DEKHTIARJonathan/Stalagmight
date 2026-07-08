@@ -362,8 +362,8 @@ export class AppSession {
 
   /**
    * Stop the session. `keepProfile` preserves the isolated profile dir so a
-   * following start({freshProfile: false}) sees the same persisted state — this
-   * is what makes app_restart's persisted-state repro mode actually work.
+   * following start({freshProfile: false}) sees the same persisted state
+   * (app_restart's persisted-state repro mode depends on this).
    */
   async stop(reason = 'app_stop', opts: { keepProfile?: boolean } = {}): Promise<void> {
     this.state = 'stopping';

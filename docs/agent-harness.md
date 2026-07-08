@@ -149,7 +149,7 @@ tolerate a truncated final line.
 ## Replay + report
 
 - **Replay**: `node scripts/generate-replay.mjs <sessionDir> [--out f] [--name n]
-  [--assert-final]`. Interaction tools become real WDIO code using `resolved` —
+  [--assert-final]`. Interaction tools become real WDIO code using `resolved`,
   including `seed` (replayed as `openProject`/`createProject`), `driver_script`
   (re-run with the same helpers), and `run_scenario` (re-run with the recorded
   seed/iterations); observation tools become numbered comments; inter-action
