@@ -40,34 +40,42 @@ export const mapStorm: Scenario = {
 
     const [lng, lat] = base.center;
     let maxJumpMs = 0;
-    for (let i = 0; i < iterations; i++) {
-      const dx = (ctx.rng() - 0.5) * 0.02;
-      const dy = (ctx.rng() - 0.5) * 0.02;
-      const zoom = 10 + ctx.rng() * 8;
-      const bearing = ctx.rng() * 360;
-      const t0 = Date.now();
-      const alive = await ctx.eval<boolean>(
-        `
-        const m = window.__stalagmight_map__;
-        if (!m) return false;
-        m.jumpTo({ center: args[0], zoom: args[1], bearing: args[2] });
-        return true;
-      `,
-        [[lng + dx, lat + dy], zoom, bearing],
-      );
-      maxJumpMs = Math.max(maxJumpMs, Date.now() - t0);
-      ctx.metric('jumps');
-      if (!alive) throw new Error(`map instance disappeared at jump ${i}`);
+    let probeMax = 0;
+    try {
+      for (let i = 0; i < iterations; i++) {
+        const dx = (ctx.rng() - 0.5) * 0.02;
+        const dy = (ctx.rng() - 0.5) * 0.02;
+        const zoom = 10 + ctx.rng() * 8;
+        const bearing = ctx.rng() * 360;
+        const t0 = Date.now();
+        const alive = await ctx.eval<boolean>(
+          `
+          const m = window.__stalagmight_map__;
+          if (!m) return false;
+          m.jumpTo({ center: args[0], zoom: args[1], bearing: args[2] });
+          return true;
+        `,
+          [[lng + dx, lat + dy], zoom, bearing],
+        );
+        maxJumpMs = Math.max(maxJumpMs, Date.now() - t0);
+        ctx.metric('jumps');
+        if (!alive) throw new Error(`map instance disappeared at jump ${i}`);
+      }
+    } finally {
+      // Always stop the probe: a thrown step must not leave a rAF loop running
+      // in the page for the rest of the session.
+      const probe = await ctx
+        .eval<{ max: number }>(`
+          if (window.__rafProbe) window.__rafProbe.running = false;
+          const max = window.__rafProbe ? window.__rafProbe.max : 0;
+          delete window.__rafProbe;
+          return { max };
+        `)
+        .catch(() => ({ max: 0 }));
+      probeMax = probe.max;
     }
-
-    const probe = await ctx.eval<{ max: number }>(`
-      if (window.__rafProbe) window.__rafProbe.running = false;
-      const max = window.__rafProbe ? window.__rafProbe.max : 0;
-      delete window.__rafProbe;
-      return { max };
-    `);
     ctx.setMetric('maxJumpMs', maxJumpMs);
-    ctx.setMetric('maxRafGapMs', Math.round(probe.max));
-    ctx.log(`${iterations} jumps; maxJumpMs=${maxJumpMs} maxRafGapMs=${Math.round(probe.max)}`);
+    ctx.setMetric('maxRafGapMs', Math.round(probeMax));
+    ctx.log(`${iterations} jumps; maxJumpMs=${maxJumpMs} maxRafGapMs=${Math.round(probeMax)}`);
   },
 };

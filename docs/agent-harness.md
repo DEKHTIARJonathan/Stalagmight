@@ -83,7 +83,7 @@ Interaction (each runs a cheap oracle sweep after; findings ride the result unde
 | `map_view(set?)` | Read or set the MapLibre view (center/zoom/bearing). |
 | `map_click(lngLat, button?)` | Geo point -> `map.project()` -> canvas-relative pointer. |
 | `seed(mode, name?, projectName?)` | Open a fixture / fractal fixture (`e2e/fixtures/`), or create a basic empty project. |
-| `driver_script(script, timeoutMs?)` | Node-context async body with `browser`/`ipc`/`evalInApp`/`readStore`/`callAction`/`log` in scope, under the mutex, for tight loops (one MCP call per action is too slow). |
+| `driver_script(script, timeoutMs?)` | Node-context async body with `browser`/`ipc`/`evalInApp`/`readStore`/`callAction`/`log` in scope, under the mutex, for tight loops (one MCP call per action is too slow). On timeout the helpers (and the `browser` proxy) are disabled so a still-running body cannot keep driving the app outside the mutex. |
 
 Oracles + scenarios:
 
@@ -149,11 +149,14 @@ tolerate a truncated final line.
 ## Replay + report
 
 - **Replay**: `node scripts/generate-replay.mjs <sessionDir> [--out f] [--name n]
-  [--assert-final]`. Interaction tools become real WDIO code using `resolved`;
-  observation tools become numbered comments; inter-action gaps > 250ms become
-  bounded pauses; `--assert-final` turns the last `store_state` into a hard
-  expect. Run via `REPLAY_SPEC=<file> pnpm test:e2e:replay` (spreads the base
-  wdio config; single instance, no retries). Curated replays live under
+  [--assert-final]`. Interaction tools become real WDIO code using `resolved` —
+  including `seed` (replayed as `openProject`/`createProject`), `driver_script`
+  (re-run with the same helpers), and `run_scenario` (re-run with the recorded
+  seed/iterations); observation tools become numbered comments; inter-action
+  gaps > 250ms become bounded pauses; `--assert-final` turns the last
+  `store_state` into a hard expect (skipped if the recorded value was
+  truncated). Run via `REPLAY_SPEC=<file> pnpm test:e2e:replay` (spreads the
+  base wdio config; single instance, no retries). Curated replays live under
   `e2e/agent/replays/`.
 - **Report**: `node scripts/generate-repro-report.mjs <sessionDir>` ->
   `report.md` (steps, environment, oracle findings, evidence paths), with

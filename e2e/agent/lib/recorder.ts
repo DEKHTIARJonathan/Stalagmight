@@ -6,8 +6,9 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 
-const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..', '..');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const ARTIFACTS_ROOT = path.join(repoRoot, '.agent-artifacts', 'sessions');
 const RETAIN_SESSIONS = 20;
 

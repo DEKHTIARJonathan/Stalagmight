@@ -1,6 +1,7 @@
 // hygiene MUST be first: it silences wdio + routes console.* off stdout before
 // webdriverio (imported transitively via ./session) can log there.
 import './hygiene';
+import * as fs from 'fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -100,18 +101,31 @@ async function run(
     const envelope: Record<string, unknown> =
       result && typeof result === 'object' ? { ...(result as Record<string, unknown>) } : { value: result };
     if (opts.sweep) {
-      try {
-        const sweep = await runSweep(session, oracleState, {
-          recorder: session.hasRecorder ? session.recorder : undefined,
-        });
-        if (sweep.newFindings.length) envelope.oracle = { worst: sweep.worst, findings: sweep.newFindings };
-      } catch {
-        // The sweep is best-effort; never fail the action because of it.
-      }
+      const oracle = await sweepBestEffort();
+      if (oracle) envelope.oracle = oracle;
     }
     return textResult(envelope);
   } catch (err) {
-    return errorResult(asMessage(err));
+    // A failed action is the highest-signal moment for the oracle (the failure
+    // may BE the crash), so sweep on the error path too.
+    const payload: Record<string, unknown> = { error: asMessage(err) };
+    if (opts.sweep) {
+      const oracle = await sweepBestEffort();
+      if (oracle) payload.oracle = oracle;
+    }
+    return { content: [{ type: 'text', text: JSON.stringify(payload) }], isError: true };
+  }
+}
+
+/** Cheap sweep that never throws; returns an `oracle` block or null. */
+async function sweepBestEffort(): Promise<{ worst: unknown; findings: unknown[] } | null> {
+  try {
+    const sweep = await runSweep(session, oracleState, {
+      recorder: session.hasRecorder ? session.recorder : undefined,
+    });
+    return sweep.newFindings.length ? { worst: sweep.worst, findings: sweep.newFindings } : null;
+  } catch {
+    return null;
   }
 }
 
@@ -170,8 +184,11 @@ define(
   { freshProfile: z.boolean().optional() },
   async (args) => {
     try {
-      await session.stop('app_restart');
-      const res = await session.start({ build: 'skip', freshProfile: args.freshProfile ?? false });
+      const fresh = args.freshProfile ?? false;
+      // Keep the profile dir across the stop unless a fresh one was requested;
+      // this is what makes "restart with persisted state" actually persist.
+      await session.stop('app_restart', { keepProfile: !fresh });
+      const res = await session.start({ build: 'skip', freshProfile: fresh });
       oracleState = newOracleState();
       logCursor = new LogCursor(session.browser);
       await logCursor.checkpoint().catch(() => undefined);
@@ -520,6 +537,9 @@ define(
         }
         const fixture = args.name ?? (args.mode === 'fractal' ? 'fractal_plant_iter2.stalx' : DEFAULT_FIXTURE);
         const p = fixturePath(fixture);
+        if (!fs.existsSync(p)) {
+          throw new Error(`fixture not found: ${p} (fixtures live under e2e/fixtures/)`);
+        }
         const res = await session.exclusive(() =>
           callStoreAction(session.browser, 'project', 'openProject', [p]),
         );
@@ -542,13 +562,40 @@ define(
       async () => {
         const timeoutMs = args.timeoutMs ?? 60000;
         const value = await session.exclusive(async () => {
+          // A promise cannot be killed: on timeout the script body keeps
+          // running even though the mutex is released. Fence every helper
+          // (and the browser proxy) so a timed-out script cannot keep driving
+          // the app concurrently with later tool calls.
+          let expired = false;
+          const fence = () => {
+            if (expired) throw new Error('driver_script timed out; its helpers are disabled');
+          };
           const helpers = {
-            browser: session.browser,
-            ipc: (c: string, a?: Record<string, unknown>) => invokeInApp(session.browser, c, a),
-            evalInApp: (b: string, a?: unknown[]) => evalInApp(session.browser, b, a ?? []),
-            readStore: (s: StoreName, p?: string) => readStore(session.browser, s, p ?? null),
-            callAction: (s: StoreName, act: string, a?: unknown[]) =>
-              callStoreAction(session.browser, s, act, a ?? []),
+            browser: new Proxy(session.browser, {
+              get(target, prop) {
+                fence();
+                const v = Reflect.get(target, prop) as unknown;
+                return typeof v === 'function'
+                  ? (v as (...a: unknown[]) => unknown).bind(target)
+                  : v;
+              },
+            }),
+            ipc: (c: string, a?: Record<string, unknown>) => {
+              fence();
+              return invokeInApp(session.browser, c, a);
+            },
+            evalInApp: (b: string, a?: unknown[]) => {
+              fence();
+              return evalInApp(session.browser, b, a ?? []);
+            },
+            readStore: (s: StoreName, p?: string) => {
+              fence();
+              return readStore(session.browser, s, p ?? null);
+            },
+            callAction: (s: StoreName, act: string, a?: unknown[]) => {
+              fence();
+              return callStoreAction(session.browser, s, act, a ?? []);
+            },
             log: (m: unknown) => {
               if (session.hasRecorder) session.recorder.event('driver-log', { message: String(m) });
             },
@@ -558,9 +605,14 @@ define(
             'helpers',
             `return (async () => { const { browser, ipc, evalInApp, readStore, callAction, log } = helpers; ${args.script} })();`,
           );
-          return withTimeout(fn(helpers) as Promise<unknown>, timeoutMs);
+          const raced = await withTimeout(fn(helpers) as Promise<unknown>, timeoutMs);
+          if (raced === TIMED_OUT) {
+            expired = true;
+            if (session.hasRecorder) session.recorder.event('driver-script-timeout', { timeoutMs });
+            throw new Error(`driver_script timed out after ${timeoutMs}ms (helpers disabled)`);
+          }
+          return raced;
         });
-        if (value === TIMED_OUT) throw new Error(`driver_script timed out after ${timeoutMs}ms`);
         return { result: capJson(value, 16384) };
       },
       { sweep: true },
@@ -575,16 +627,21 @@ define(
   {},
   async () => {
     try {
-      const sweep = await runSweep(session, oracleState, {
-        full: true,
-        recorder: session.hasRecorder ? session.recorder : undefined,
+      const result = await record('check_problems', {}, async () => {
+        const sweep = await runSweep(session, oracleState, {
+          full: true,
+          recorder: session.hasRecorder ? session.recorder : undefined,
+        });
+        return {
+          result: {
+            ok: sweep.worst === null,
+            worst: sweep.worst,
+            findings: sweep.findings,
+            newFindings: sweep.newFindings,
+          },
+        };
       });
-      return textResult({
-        ok: sweep.worst === null,
-        worst: sweep.worst,
-        findings: sweep.findings,
-        newFindings: sweep.newFindings,
-      });
+      return textResult(result);
     } catch (err) {
       return errorResult(asMessage(err));
     }
@@ -597,13 +654,17 @@ define(
   { name: z.string(), seed: z.number().optional(), iterations: z.number().optional() },
   async (args) => {
     try {
-      const metrics = await runScenario(args.name, session, {
-        seed: args.seed,
-        iterations: args.iterations,
-        log: (m) => {
-          if (session.hasRecorder) session.recorder.event('scenario-log', { scenario: args.name, message: m });
-        },
-      });
+      // record() puts the scenario run in actions.jsonl so replays and repro
+      // reports include it (a scenario is a mutating action, not observation).
+      const metrics = await record('run_scenario', args, async () => ({
+        result: await runScenario(args.name, session, {
+          seed: args.seed,
+          iterations: args.iterations,
+          log: (m) => {
+            if (session.hasRecorder) session.recorder.event('scenario-log', { scenario: args.name, message: m });
+          },
+        }),
+      }));
       const sweep = await runSweep(session, oracleState, {
         full: true,
         recorder: session.hasRecorder ? session.recorder : undefined,
@@ -648,16 +709,21 @@ async function clickWithOptions(
     for (const m of mods) key.down(m);
     await key.perform();
   }
-  const pointer = b
-    .action('pointer', { parameters: { pointerType: 'mouse' } })
-    .down({ button })
-    .up({ button });
-  if (double) pointer.down({ button }).up({ button });
-  await pointer.perform();
-  if (mods.length) {
-    const up = b.action('key');
-    for (const m of mods) up.up(m);
-    await up.perform();
+  try {
+    const pointer = b
+      .action('pointer', { parameters: { pointerType: 'mouse' } })
+      .down({ button })
+      .up({ button });
+    if (double) pointer.down({ button }).up({ button });
+    await pointer.perform();
+  } finally {
+    // Always release modifiers, or a failed click leaves e.g. Control held
+    // down for every subsequent action in the session.
+    if (mods.length) {
+      const up = b.action('key');
+      for (const m of mods) up.up(m);
+      await up.perform().catch(() => undefined);
+    }
   }
 }
 

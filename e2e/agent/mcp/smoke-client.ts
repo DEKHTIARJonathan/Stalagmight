@@ -14,8 +14,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 
-const serverPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), 'server.ts');
+const serverPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'server.ts');
 const withLifecycle = process.env.AGENT_MCP_SMOKE_LIFECYCLE !== '0';
 
 interface ToolText {

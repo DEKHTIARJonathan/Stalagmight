@@ -13,7 +13,13 @@ import { remote, type Browser } from 'webdriverio';
 import { binaryPath, isolatedEnv } from '../lib/env';
 import { checkDisplayAvailable, startXvfb, type XvfbHandle } from '../lib/display';
 import { checkBuildFreshness, buildApp } from './lib/build';
-import { findFreePort, isPidAlive, recordPid, reapPidsFromFile } from './lib/procs';
+import {
+  findFreePort,
+  isPidAlive,
+  recordPid,
+  reapPidsFromFile,
+  waitForPortListening,
+} from './lib/procs';
 import { Recorder, ARTIFACTS_ROOT } from './lib/recorder';
 import { waitForAppReady, waitForE2EHooks, disableOnboardingGuides } from './lib/waiters';
 
@@ -183,11 +189,13 @@ export class AppSession {
     this.state = 'launching';
 
     // 2. Display.
-    if (checkDisplayAvailable() && !opts.headed) {
-      this.display = process.env.DISPLAY ?? ':0';
-    } else if (checkDisplayAvailable() && opts.headed) {
+    if (checkDisplayAvailable()) {
       this.display = process.env.DISPLAY ?? ':0';
     } else {
+      if (opts.headed) {
+        this.state = 'idle';
+        throw new Error('headed:true requested but no DISPLAY is available');
+      }
       this.xvfb = await startXvfb(XVFB_DISPLAYS, '1280x720x24');
       if (!this.xvfb) {
         this.state = 'idle';
@@ -196,12 +204,19 @@ export class AppSession {
       this.display = this.xvfb.display;
     }
 
-    // 3. Isolated profile.
+    // 3. Isolated profile. A profile kept alive by stop(keepProfile) is reused
+    // when freshProfile=false; a fresh start discards any kept one first.
     this.sessionId = timestampId();
     this.recorderInstance = new Recorder(this.sessionId);
-    this.profileRoot = freshProfile
-      ? fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-agent-'))
-      : (this.profileRoot ?? fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-agent-')));
+    if (freshProfile && this.profileRoot) {
+      try {
+        fs.rmSync(this.profileRoot, { recursive: true, force: true });
+      } catch {
+        // Best-effort.
+      }
+      this.profileRoot = null;
+    }
+    this.profileRoot = this.profileRoot ?? fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-agent-'));
     const profileEnv = isolatedEnv(this.profileRoot);
     this.profileDataHome = profileEnv.XDG_DATA_HOME ?? profileEnv.HOME ?? this.profileRoot;
 
@@ -242,8 +257,16 @@ export class AppSession {
       }
     });
 
-    // Give tauri-driver a moment to bind before attaching.
-    await new Promise((r) => setTimeout(r, 2000));
+    // Wait for tauri-driver to actually accept connections before attaching
+    // (a fixed sleep is both slower and flakier on a loaded box).
+    const bound = await waitForPortListening(this.driverPort, 15000, () => !this.driverAlive());
+    if (!bound) {
+      await this.stop('driver-bind-timeout');
+      throw new Error(
+        `tauri-driver did not start listening on port ${this.driverPort} within 15s ` +
+          `(see tauri-driver.log in the session dir)`,
+      );
+    }
 
     // 6. Attach. Mirror wdio.conf.ts's capabilities exactly (no browserName;
     // tauri-driver reads the non-standard tauri:options).
@@ -337,7 +360,12 @@ export class AppSession {
     return Boolean(this.driver && this.driver.pid && isPidAlive(this.driver.pid));
   }
 
-  async stop(reason = 'app_stop'): Promise<void> {
+  /**
+   * Stop the session. `keepProfile` preserves the isolated profile dir so a
+   * following start({freshProfile: false}) sees the same persisted state — this
+   * is what makes app_restart's persisted-state repro mode actually work.
+   */
+  async stop(reason = 'app_stop', opts: { keepProfile?: boolean } = {}): Promise<void> {
     this.state = 'stopping';
     if (this.browserInstance) {
       try {
@@ -375,12 +403,14 @@ export class AppSession {
       }
       this.xvfb = null;
     }
-    if (this.profileRoot) {
+    if (this.profileRoot && !opts.keepProfile) {
       try {
         fs.rmSync(this.profileRoot, { recursive: true, force: true });
       } catch {
         // Best-effort.
       }
+      this.profileRoot = null;
+      this.profileDataHome = null;
     }
     this.recorderInstance?.sessionEnd(reason);
     this.state = 'idle';

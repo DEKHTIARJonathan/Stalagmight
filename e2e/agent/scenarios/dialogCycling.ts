@@ -18,17 +18,29 @@ export const dialogCycling: Scenario = {
 
     for (let i = 0; i < iterations; i++) {
       const dialog = DIALOGS[i % DIALOGS.length];
-      const residue = await ctx.eval<string | null>(
+      // Yield two animation frames after open and after close so React actually
+      // commits (mounts then unmounts) the dialog subtree; a synchronous
+      // open+close in one task would batch to a no-op render and test nothing.
+      const cycle = await ctx.eval<{ opened: string | null; residue: string | null }>(
         `
-        const ui = window.__E2E_TEST__.uiStore.getState();
-        ui.openDialog(args[0]);
-        ui.closeDialog();
-        return window.__E2E_TEST__.uiStore.getState().activeDialog;
+        const raf = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const ui = () => window.__E2E_TEST__.uiStore.getState();
+        ui().openDialog(args[0]);
+        await raf();
+        const opened = ui().activeDialog;
+        ui().closeDialog();
+        await raf();
+        return { opened, residue: ui().activeDialog };
       `,
         [dialog],
       );
       ctx.metric('cycles');
-      if (residue !== null) throw new Error(`dialog ${dialog} left activeDialog=${residue} after close`);
+      if (cycle.opened !== dialog) {
+        throw new Error(`openDialog(${dialog}) left activeDialog=${cycle.opened}`);
+      }
+      if (cycle.residue !== null) {
+        throw new Error(`dialog ${dialog} left activeDialog=${cycle.residue} after close`);
+      }
     }
 
     const nodesAfter = await ctx.eval<number>('return document.querySelectorAll("*").length;');

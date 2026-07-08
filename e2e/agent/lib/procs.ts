@@ -26,6 +26,35 @@ export async function findFreePort(base: number, span = 10): Promise<number> {
   throw new Error(`No free port found in [${base}, ${base + span})`);
 }
 
+/**
+ * Wait until something is accepting connections on 127.0.0.1:`port`. Polls with
+ * a connect() probe (never binds, so it cannot race the server for the port).
+ * `giveUp` lets the caller abort early (e.g. the server process already died).
+ */
+export async function waitForPortListening(
+  port: number,
+  timeoutMs = 15000,
+  giveUp?: () => boolean,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (giveUp?.()) return false;
+    // eslint-disable-next-line no-await-in-loop
+    const listening = await new Promise<boolean>((resolve) => {
+      const sock = net.connect({ port, host: '127.0.0.1' });
+      sock.once('connect', () => {
+        sock.destroy();
+        resolve(true);
+      });
+      sock.once('error', () => resolve(false));
+    });
+    if (listening) return true;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return false;
+}
+
 /** True if `pid` is alive (owned by us or not). */
 export function isPidAlive(pid: number): boolean {
   try {

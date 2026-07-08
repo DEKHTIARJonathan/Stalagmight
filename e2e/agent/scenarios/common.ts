@@ -5,9 +5,10 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import type { ScenarioContext } from './framework';
 
-const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..', '..');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 export const DEFAULT_FIXTURE = 'fractal_plant_iter2.stalx';
 

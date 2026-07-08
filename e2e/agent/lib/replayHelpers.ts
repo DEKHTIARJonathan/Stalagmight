@@ -6,9 +6,12 @@
  * replays from harness refactors.
  */
 import type { Browser } from 'webdriverio';
+import { invokeInApp, evalInApp } from './page';
+import { readStore, callStoreAction, type StoreName } from './stores';
+import { runScenario } from '../scenarios';
 
-export { invokeInApp as ipc, evalInApp } from './page';
-export { callStoreAction as storeAction } from './stores';
+export { invokeInApp as ipc, evalInApp };
+export { callStoreAction as storeAction };
 
 /** Click at a canvas-relative pixel (for map/canvas features with no DOM node). */
 export async function clickAt(
@@ -28,4 +31,41 @@ export async function clickAt(
 /** Bounded pause between replayed actions (recorded inter-action gaps, capped). */
 export async function pause(browser: Browser, ms: number): Promise<void> {
   await browser.pause(Math.max(0, Math.min(ms, 2000)));
+}
+
+/**
+ * Re-run a recorded driver_script body with the same helpers in scope it had
+ * live (browser/ipc/evalInApp/readStore/callAction/log). The spec runs
+ * single-threaded, so no mutex is needed here.
+ */
+export async function driverScript(browser: Browser, script: string): Promise<unknown> {
+  const helpers = {
+    browser,
+    ipc: (c: string, a?: Record<string, unknown>) => invokeInApp(browser, c, a),
+    evalInApp: (b: string, a?: unknown[]) => evalInApp(browser, b, a ?? []),
+    readStore: (s: StoreName, p?: string) => readStore(browser, s, p ?? null),
+    callAction: (s: StoreName, act: string, a?: unknown[]) =>
+      callStoreAction(browser, s, act, a ?? []),
+    log: (_m: unknown) => undefined,
+  };
+  // eslint-disable-next-line no-new-func
+  const fn = new Function(
+    'helpers',
+    `return (async () => { const { browser, ipc, evalInApp, readStore, callAction, log } = helpers; ${script} })();`,
+  );
+  return fn(helpers) as Promise<unknown>;
+}
+
+/**
+ * Re-run a recorded stress scenario with the recorded seed/iterations. The
+ * scenarios are seeded-PRNG deterministic, so the replayed interaction stream
+ * matches the recorded one.
+ */
+export async function runScenarioReplay(
+  browser: Browser,
+  name: string,
+  seed?: number,
+  iterations?: number,
+): Promise<void> {
+  await runScenario(name, { browser, exclusive: (fn) => fn() }, { seed, iterations });
 }

@@ -8,9 +8,10 @@
 import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { binaryPath, cargoTargetDir } from '../../lib/env';
 
-const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..', '..');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 // Source inputs whose changes should invalidate the built binary.
 const SOURCE_DIRS = ['src', path.join('src-tauri', 'src')];
@@ -86,9 +87,12 @@ export function checkBuildFreshness(): Freshness {
  */
 export function buildApp(onLog?: (line: string) => void): void {
   onLog?.('Building Tauri debug app (VITE_E2E=1, --no-bundle)...');
+  // Build output goes to stderr (fd 2), NEVER inherited stdout: under the MCP
+  // server, stdout is the JSON-RPC stream and any build chatter (pnpm/vite log
+  // to stdout) would corrupt the protocol framing.
   execSync('pnpm tauri build --debug --no-bundle', {
     cwd: repoRoot,
-    stdio: 'inherit',
+    stdio: ['ignore', 2, 2],
     env: {
       ...process.env,
       VITE_E2E: '1',

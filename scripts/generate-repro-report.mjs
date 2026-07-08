@@ -87,7 +87,10 @@ const title = getFlag('--title') || `Agent-found issue in session ${start.sessio
 const summary = getFlag('--summary') || '_Describe the bug in one or two sentences._';
 
 // Compact step list: mutating actions only.
-const MUTATING = new Set(['click', 'type_text', 'press_keys', 'eval', 'ipc', 'store_action', 'map_click', 'map_view']);
+const MUTATING = new Set([
+  'click', 'type_text', 'press_keys', 'eval', 'ipc', 'store_action', 'map_click', 'map_view',
+  'seed', 'driver_script', 'run_scenario',
+]);
 const steps = actions
   .filter((a) => MUTATING.has(a.tool))
   .map((a) => {
@@ -174,7 +177,14 @@ function describeAction(a) {
     case 'press_keys':
       return JSON.stringify(p.keys ?? []);
     case 'eval':
+    case 'driver_script':
       return `\`${String(p.script ?? '').slice(0, 60).replace(/\n/g, ' ')}\``;
+    case 'seed':
+      return p.mode === 'basic'
+        ? `basic project "${p.projectName ?? 'harness-project'}"`
+        : `open ${p.mode === 'fractal' ? 'fractal ' : ''}fixture ${p.name ?? '(default)'}`;
+    case 'run_scenario':
+      return `${p.name} (seed=${p.seed ?? 1}${p.iterations != null ? `, iterations=${p.iterations}` : ''})`;
     case 'ipc':
       return `${p.command}(${JSON.stringify(p.args ?? {})})`;
     case 'store_action':
