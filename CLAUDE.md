@@ -162,14 +162,14 @@ Update `CHANGELOG.md` every time a new version is tagged.
 
 ## 🧭 Model routing — delegate by default
 *From the ops audit: the main thread plans, adjudicates, and handles escalations —
-it should not run implementation inline. Delegate to the model-pinned agent roster
-in `~/.claude/agents/`:*
+it should not run implementation inline. Delegate execution to Task subagents by
+tier (if your setup defines named agents for these roles, use them):*
 
-- Implementation from an approved plan → **`implementer`** (Sonnet)
-- Test/build runs + failure triage → **`test-runner`** (Haiku)
-- Discovery / "what calls X" / grep sweeps / PR-CI status → **`explorer`** (Haiku)
-- First-pass code review → **`reviewer`** (Sonnet); escalate design-sensitive or
-  uncertain findings → **`senior`** (Opus)
+- Implementation from an approved plan → a **Sonnet** subagent
+- Test/build runs + failure triage, and codebase discovery ("what calls X", grep
+  sweeps, PR/CI status) → a **Haiku** subagent
+- First-pass code review → a **Sonnet** subagent; escalate design-sensitive or
+  uncertain findings → an **Opus** subagent
 
 Keep on the main thread (flagship): system architecture & undo/redo command
 semantics, IPC security surface, async-staleness / identity-guard design, migration
@@ -180,7 +180,7 @@ blast radius ≤ 2 files.
 
 ## 🚧 Generation-time gates (before writing code, not only at review)
 *Prevention is cheaper than a 10-agent fanout finding it — apply these while
-writing, so the `implementer` gets them for free (from the ops audit, T1 + T6).*
+writing, so whoever implements — you or a subagent — gets them for free (ops audit, T1 + T6).*
 
 **Invariants that must NOT silently change** — state them in any change contract:
 undo/redo integrity · `modified_at` touch/dirty semantics · IPC type compatibility
