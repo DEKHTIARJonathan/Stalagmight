@@ -49,6 +49,15 @@ hazards over long runs.
     every tool through the protocol, self-tests the crash oracle).
   - `pnpm agent:scenarios` - runs all 8 stress scenarios once at small n.
   - `pnpm agent:mcp` - run the server standalone (for an external MCP client).
+  - `pnpm agent:bridge <dir>` - file-based access to the same server for plain
+    shells and subagents without an MCP client: append JSON tool calls to
+    `<dir>/requests.jsonl`, read responses from `<dir>/responses.jsonl`
+    (protocol documented in `e2e/agent/mcp/bridge.ts`).
+- Agent definitions: `.claude/agents/app-tester.md` (Opus; end-to-end feature
+  testing playbook: happy path, edge cases, UI at multiple window sizes and
+  zoom levels, per-issue code analysis, structured report) and
+  `.claude/agents/code-analyst.md` (Opus, read-only; per-issue root-cause
+  analysis it spawns).
 
 ## Tools
 

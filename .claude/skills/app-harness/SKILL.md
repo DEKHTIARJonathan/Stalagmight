@@ -14,6 +14,13 @@ repro report.
 Runtime requirement: the server must run under **Node 22** (the repo `.nvmrc`).
 On Node 23+ `app_start` fails with `UND_ERR_INVALID_ARG`; run `nvm use` first.
 
+If the `stalagmight-app` MCP tools are not available in your session (server
+disconnected), use the file bridge instead: `pnpm agent:bridge <dir>` in the
+background, wait for `<dir>/ready`, then append JSON tool calls to
+`<dir>/requests.jsonl` and poll `<dir>/responses.jsonl` (protocol in
+`e2e/agent/mcp/bridge.ts`). For feature-level test requests, prefer spawning
+the `app-tester` agent (`.claude/agents/app-tester.md`) over testing inline.
+
 ## Start here
 
 1. `app_start` (build `auto`; it rebuilds only if the source is newer than the

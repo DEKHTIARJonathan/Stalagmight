@@ -198,7 +198,9 @@ export class AppSession {
       }
       this.display = process.env.DISPLAY ?? ':0';
     } else {
-      this.xvfb = await startXvfb(XVFB_DISPLAYS, '1280x720x24');
+      // 1920x1080 screen so window-size testing has headroom up to full HD
+      // (the app window starts smaller; resizing is capped by the screen).
+      this.xvfb = await startXvfb(XVFB_DISPLAYS, '1920x1080x24');
       if (this.xvfb) {
         this.display = this.xvfb.display;
       } else if (checkDisplayAvailable()) {

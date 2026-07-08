@@ -36,6 +36,7 @@
     "agent:smoke": "tsx e2e/agent/smoke.ts",
     "agent:scenarios": "tsx e2e/agent/scenarios-smoke.ts",
     "agent:mcp": "tsx e2e/agent/mcp/server.ts",
+    "agent:bridge": "tsx e2e/agent/mcp/bridge.ts",
     "agent:mcp:smoke": "tsx e2e/agent/mcp/smoke-client.ts",
     "agent:replay:gen": "node scripts/generate-replay.mjs",
     "agent:report": "node scripts/generate-repro-report.mjs",
