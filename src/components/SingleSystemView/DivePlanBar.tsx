@@ -79,7 +79,13 @@ export function DivePlanBar() {
   // The gas store mutations below (apply/markSaved/clear) survive an unmount, so a reply that
   // resolves after the user opened ANOTHER project would corrupt the new project's store.
   // Capture the project identity at request time and drop the mutation if it moved (#244).
-  const projectKey = () => useProjectStore.getState().project?.created_at ?? null;
+  // Composite key (mirrors prevProjectKeyRef above): created_at alone doesn't change on a
+  // Save-As, but the .plnx sibling path is derived from file_path, so a Save-As mid-flight
+  // must also be treated as a project-identity change here.
+  const projectKey = () => {
+    const p = useProjectStore.getState().project;
+    return `${p?.created_at ?? ''}|${p?.file_path ?? ''}`;
+  };
 
   const doLoad = useCallback(
     async (id: number) => {
@@ -102,9 +108,11 @@ export function DivePlanBar() {
 
   const onSelect = (value: string) => {
     setError(null);
-    setStaleCount(0);
     setPending({ kind: 'none' });
-    if (value === '') return;
+    if (value === '') {
+      setStaleCount(0);
+      return;
+    }
     const id = Number(value);
     if (id === loadedPlanId) return;
     // Guard losing unsaved edits to the currently-loaded plan (#244).
@@ -175,7 +183,7 @@ export function DivePlanBar() {
     }
   }, [loadedPlanId, clearLoadedPlan, refresh]);
 
-  const canSave = loadedPlanId !== null && isDirty && hasPath && !busy;
+  const canSave = loadedPlanId !== null && loadedName !== null && isDirty && hasPath && !busy;
   const canSaveAs = hasPath && !busy;
   const canDelete = loadedPlanId !== null && !busy;
 

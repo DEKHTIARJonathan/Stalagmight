@@ -44,15 +44,29 @@ enum Ownership {
     Foreign,
 }
 
-fn ownership(store: &PlnxStore, ctx: &PlnxContext) -> Result<Ownership, String> {
-    let stored = store
-        .stored_project_created_at()
-        .map_err(|e| format!("Could not read the dive-plan file: {e}"))?;
-    Ok(match stored {
+/// Classify a stored identity (or its absence) against the open project's identity. Pure
+/// so both the pre-open probe path and (if ever needed) a post-open path share one
+/// classifier.
+fn classify_ownership(stored: Option<String>, ctx: &PlnxContext) -> Ownership {
+    match stored {
         None => Ownership::Fresh,
         Some(s) if s == ctx.project_created_at => Ownership::Owned,
         Some(_) => Ownership::Foreign,
-    })
+    }
+}
+
+/// Determine ownership of the `.plnx` at `ctx.path` WITHOUT ever opening it via
+/// [`PlnxStore::open`] (which unconditionally initializes schema + `user_version`) -
+/// every command must resolve ownership before opening, so a `Foreign` file is never
+/// mutated (#244 Copilot finding). A non-existent file is `Fresh` (nothing to protect;
+/// the write paths create it via `PlnxStore::open`).
+fn probe_ownership(ctx: &PlnxContext) -> Result<Ownership, String> {
+    if !ctx.path.exists() {
+        return Ok(Ownership::Fresh);
+    }
+    let stored = PlnxStore::probe_stored_project_created_at(&ctx.path)
+        .map_err(|e| format!("Could not read the dive-plan file: {e}"))?;
+    Ok(classify_ownership(stored, ctx))
 }
 
 fn to_meta(m: PlnxMeta) -> DivePlanMeta {
@@ -151,11 +165,11 @@ impl AppState {
         if !ctx.path.exists() {
             return Ok(Vec::new());
         }
-        let store =
-            PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
-        if ownership(&store, &ctx)? == Ownership::Foreign {
+        if probe_ownership(&ctx)? == Ownership::Foreign {
             return Ok(Vec::new());
         }
+        let store =
+            PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
         let rows = store
             .list()
             .map_err(|e| format!("Could not read dive plans: {e}"))?;
@@ -169,11 +183,11 @@ impl AppState {
         if !ctx.path.exists() {
             return Err("That dive plan no longer exists.".to_string());
         }
-        let store =
-            PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
-        if ownership(&store, &ctx)? == Ownership::Foreign {
+        if probe_ownership(&ctx)? == Ownership::Foreign {
             return Err("These dive plans belong to a different project.".to_string());
         }
+        let store =
+            PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
         let row = store
             .get(id)
             .map_err(|e| format!("Could not read the dive plan: {e}"))?
@@ -204,6 +218,18 @@ impl AppState {
         if name.chars().count() > MAX_PLAN_NAME_CHARS {
             return Err("That dive-plan name is too long.".to_string());
         }
+        // Resolve ownership BEFORE opening the store: opening unconditionally initializes
+        // schema/user_version, which must never happen to a Foreign file (#244 Copilot
+        // finding). Fresh vs Owned is stable across the subsequent open() (identity is only
+        // ever stamped, never changed by opening), so the probed value is still valid once
+        // we open below.
+        let ownership_before_open = probe_ownership(&ctx)?;
+        if ownership_before_open == Ownership::Foreign {
+            return Err(
+                "A dive-plan file for a different project already exists next to this project."
+                    .to_string(),
+            );
+        }
         // Canonicalize positional refs to stable keys against the live project BEFORE
         // writing, so the plan survives later survey edits (#2).
         let persisted = self.to_persisted(&snapshot)?;
@@ -211,17 +237,10 @@ impl AppState {
             .map_err(|e| format!("Could not serialize the dive plan: {e}"))?;
         let store =
             PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
-        match ownership(&store, &ctx)? {
-            Ownership::Foreign => {
-                return Err(
-                    "A dive-plan file for a different project already exists next to this project."
-                        .to_string(),
-                );
-            }
-            Ownership::Fresh => store
+        if ownership_before_open == Ownership::Fresh {
+            store
                 .ensure_identity(&ctx.project_created_at, &ctx.project_name)
-                .map_err(|e| format!("Could not initialize the dive-plan file: {e}"))?,
-            Ownership::Owned => {}
+                .map_err(|e| format!("Could not initialize the dive-plan file: {e}"))?;
         }
         let now = Utc::now().to_rfc3339();
         let sv = DIVE_PLAN_SCHEMA_VERSION as i32;
@@ -243,11 +262,11 @@ impl AppState {
         if !ctx.path.exists() {
             return Err("That dive plan no longer exists.".to_string());
         }
-        let store =
-            PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
-        if ownership(&store, &ctx)? == Ownership::Foreign {
+        if probe_ownership(&ctx)? == Ownership::Foreign {
             return Err("These dive plans belong to a different project.".to_string());
         }
+        let store =
+            PlnxStore::open(&ctx.path).map_err(|e| format!("Could not open dive plans: {e}"))?;
         if !store
             .delete(id)
             .map_err(|e| format!("Could not delete the dive plan: {e}"))?
@@ -323,6 +342,7 @@ mod tests {
     )]
     use super::*;
     use crate::models::{SectionData, ShotData, StationAnchor};
+    use tempfile::TempDir;
 
     fn make_shot() -> ShotData {
         ShotData {
@@ -354,12 +374,108 @@ mod tests {
     }
 
     #[test]
-    fn ownership_reads_fresh_owned_foreign() {
-        let store = PlnxStore::in_memory().unwrap();
-        assert!(ownership(&store, &ctx("A")).unwrap() == Ownership::Fresh);
-        store.ensure_identity("A", "P").unwrap();
-        assert!(ownership(&store, &ctx("A")).unwrap() == Ownership::Owned);
-        assert!(ownership(&store, &ctx("B")).unwrap() == Ownership::Foreign);
+    fn classify_ownership_reads_fresh_owned_foreign() {
+        assert!(classify_ownership(None, &ctx("A")) == Ownership::Fresh);
+        assert!(classify_ownership(Some("A".to_string()), &ctx("A")) == Ownership::Owned);
+        assert!(classify_ownership(Some("A".to_string()), &ctx("B")) == Ownership::Foreign);
+    }
+
+    #[test]
+    fn probe_ownership_matches_classify_ownership_against_a_real_file() {
+        let dir = std::env::temp_dir().join(format!("plnx_ownership_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("owned.plnx");
+        let _ = std::fs::remove_file(&path);
+
+        // No file yet => Fresh.
+        let ctx_a = PlnxContext {
+            path: path.clone(),
+            project_created_at: "A".to_string(),
+            project_name: "P".to_string(),
+        };
+        assert!(probe_ownership(&ctx_a).unwrap() == Ownership::Fresh);
+
+        // Stamp it as "A"'s file (via the normal open+ensure_identity path).
+        {
+            let store = PlnxStore::open(&path).unwrap();
+            store.ensure_identity("A", "P").unwrap();
+        }
+        assert!(probe_ownership(&ctx_a).unwrap() == Ownership::Owned);
+
+        let ctx_b = PlnxContext {
+            path,
+            project_created_at: "B".to_string(),
+            project_name: "P".to_string(),
+        };
+        assert!(probe_ownership(&ctx_b).unwrap() == Ownership::Foreign);
+
+        let _ = std::fs::remove_file(dir.join("owned.plnx"));
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// Regression guard for the Copilot #256 finding: every command called
+    /// `PlnxStore::open()` (which unconditionally runs `init_schema` +
+    /// `set_user_version`) BEFORE checking ownership, so a `Foreign` `.plnx` (one
+    /// stamped with a different project's identity) got its schema/pragma silently
+    /// touched before being rejected. Proves the fix by asserting the file's bytes
+    /// are bit-for-bit unchanged after every command rejects it.
+    ///
+    /// Prove-via-injection: reverting the `probe_ownership`-before-`open` guard in
+    /// `list_dive_plans`/`load_dive_plan`/`save_dive_plan`/`delete_dive_plan` (i.e.
+    /// restoring the old open-then-check order) makes this test fail the final byte
+    /// comparison, since `PlnxStore::open` on an already-v1-schema file still issues
+    /// a `PRAGMA user_version = 1` write even when the value doesn't change.
+    #[test]
+    fn foreign_plnx_is_never_opened_by_the_dive_plan_commands() {
+        let temp = TempDir::new().unwrap();
+        let stalx = temp.path().join("cave.stalx");
+        let plnx_path = temp.path().join("cave.plnx");
+
+        // A .plnx belonging to a DIFFERENT project ("Owner"), with a plan in it.
+        {
+            let store = PlnxStore::open(&plnx_path).unwrap();
+            store
+                .ensure_identity("2020-01-01T00:00:00Z", "Owner")
+                .unwrap();
+            store
+                .insert("Owner's plan", "2020-01-01T00:00:00Z", 1, "{}")
+                .unwrap();
+        }
+        let bytes_before = std::fs::read(&plnx_path).unwrap();
+
+        let state = AppState::new().unwrap();
+        let mut project = Project::new("Mine".to_string(), None);
+        project.file_path = Some(stalx);
+        // Project::new stamps a fresh created_at (now), which differs from the
+        // "2020-01-01T00:00:00Z" stamped above => Foreign.
+        *state.project.lock().unwrap() = Some(project);
+
+        let list = state.list_dive_plans().unwrap();
+        assert!(
+            list.is_empty(),
+            "a Foreign file's plans must never be listed"
+        );
+
+        let load_err = state.load_dive_plan(1).unwrap_err();
+        assert!(load_err.contains("different project"), "got: {load_err}");
+
+        let snapshot: DivePlanSnapshot = serde_json::from_str("{}").unwrap();
+        let save_err = state
+            .save_dive_plan(None, "New".to_string(), snapshot)
+            .unwrap_err();
+        assert!(save_err.contains("different project"), "got: {save_err}");
+
+        let delete_err = state.delete_dive_plan(1).unwrap_err();
+        assert!(
+            delete_err.contains("different project"),
+            "got: {delete_err}"
+        );
+
+        let bytes_after = std::fs::read(&plnx_path).unwrap();
+        assert_eq!(
+            bytes_before, bytes_after,
+            "a Foreign .plnx must not be mutated by ANY dive-plan command"
+        );
     }
 
     #[test]

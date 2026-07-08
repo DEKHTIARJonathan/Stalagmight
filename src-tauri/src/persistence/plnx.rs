@@ -103,6 +103,42 @@ impl PlnxStore {
         }
     }
 
+    /// Read-only identity probe: opens `path` (creating an empty file handle if it does
+    /// not exist yet - `Connection::open` always creates the file, but never a table)
+    /// and reads the stamped project identity WITHOUT calling [`init_schema`](Self::init_schema)
+    /// or [`set_user_version`](Self::set_user_version) - safe to call on a `.plnx` that may
+    /// belong to a different project, since ownership must be resolved BEFORE anything is
+    /// ever allowed to mutate a `Foreign` file (#244 Copilot finding: `open()` unconditionally
+    /// initializes schema/pragma before ownership was checked).
+    ///
+    /// Returns `Ok(None)` when the file has no `plnx_meta` table yet (schema never
+    /// initialized - a pre-schema or brand-new file) or no row 1 in it (a `Fresh` file
+    /// that reached [`init_schema`](Self::init_schema) but not
+    /// [`ensure_identity`](Self::ensure_identity)). Only the "no such table" case is
+    /// swallowed; any other SQLite error (corruption, I/O, permissions) propagates.
+    pub fn probe_stored_project_created_at(path: &Path) -> Result<Option<String>> {
+        let conn = Connection::open(path).context("Failed to open dive-plan file")?;
+        match conn.query_row(
+            "SELECT project_created_at FROM plnx_meta WHERE id = 1",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        ) {
+            Ok(v) => Ok(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            // No `plnx_meta` table yet (schema was never initialized on this file) - not
+            // owned by anyone. rusqlite surfaces "no such table" as a SqliteFailure whose
+            // extended code is SQLITE_ERROR with no more specific sub-code, so match on the
+            // message rather than the code (verified against rusqlite 0.31 in the guard test
+            // below); any other SqliteFailure message (corruption, I/O) still propagates.
+            Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
+                if msg.contains("no such table") =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Stamp the file's project identity if it is not stamped yet (a no-op once set,
     /// so re-saving never rewrites it).
     pub fn ensure_identity(&self, project_created_at: &str, project_name: &str) -> Result<()> {
@@ -299,6 +335,66 @@ mod tests {
             store.stored_project_created_at().unwrap().as_deref(),
             Some("2026-01-01T00:00:00Z")
         );
+    }
+
+    #[test]
+    fn probe_stored_project_created_at_on_a_never_opened_file_is_none_and_does_not_init_schema() {
+        let dir = std::env::temp_dir().join(format!("plnx_probe_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("probe.plnx");
+        let _ = std::fs::remove_file(&path);
+
+        // The file does not exist yet at all - Connection::open creates an empty sqlite
+        // file with no tables and user_version 0.
+        assert_eq!(
+            PlnxStore::probe_stored_project_created_at(&path).unwrap(),
+            None
+        );
+
+        // The probe must NOT have run init_schema/set_user_version: reopening via a real
+        // Connection shows user_version is still 0 and no dive_plans/plnx_meta tables exist.
+        let conn = Connection::open(&path).unwrap();
+        let user_version: i32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(user_version, 0, "probe must not touch user_version");
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('dive_plans', 'plnx_meta')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 0, "probe must not create any tables");
+        drop(conn);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn probe_stored_project_created_at_on_a_stamped_file_reads_it_without_mutating() {
+        let dir = std::env::temp_dir().join(format!("plnx_probe_test2_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("probe_stamped.plnx");
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let store = PlnxStore::open(&path).unwrap();
+            store
+                .ensure_identity("2026-01-01T00:00:00Z", "Cave A")
+                .unwrap();
+        }
+
+        assert_eq!(
+            PlnxStore::probe_stored_project_created_at(&path)
+                .unwrap()
+                .as_deref(),
+            Some("2026-01-01T00:00:00Z")
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]
