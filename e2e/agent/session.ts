@@ -188,20 +188,28 @@ export class AppSession {
 
     this.state = 'launching';
 
-    // 2. Display.
-    if (checkDisplayAvailable()) {
+    // 2. Display. headed:true shows the window on the real desktop; the
+    // default is a throwaway Xvfb EVEN IF a desktop display exists, so agent
+    // runs never pop a window or steal focus while someone is working.
+    if (opts.headed) {
+      if (!checkDisplayAvailable()) {
+        this.state = 'idle';
+        throw new Error('headed:true requested but no display (DISPLAY/WAYLAND_DISPLAY) is available');
+      }
       this.display = process.env.DISPLAY ?? ':0';
     } else {
-      if (opts.headed) {
-        this.state = 'idle';
-        throw new Error('headed:true requested but no DISPLAY is available');
-      }
       this.xvfb = await startXvfb(XVFB_DISPLAYS, '1280x720x24');
-      if (!this.xvfb) {
+      if (this.xvfb) {
+        this.display = this.xvfb.display;
+      } else if (checkDisplayAvailable()) {
+        process.stderr.write(
+          '[agent] WARNING: Xvfb unavailable; falling back to the real display (the app window WILL be visible).\n',
+        );
+        this.display = process.env.DISPLAY ?? ':0';
+      } else {
         this.state = 'idle';
         throw new Error('no display available and Xvfb could not start');
       }
-      this.display = this.xvfb.display;
     }
 
     // 3. Isolated profile. A profile kept alive by stop(keepProfile) is reused
@@ -228,6 +236,20 @@ export class AppSession {
     const driverLog = fs.createWriteStream(path.join(this.recorder.dir, 'tauri-driver.log'), {
       flags: 'a',
     });
+    const driverEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      ...profileEnv,
+      DISPLAY: this.display,
+      STALAGMIGHT_TEST_HOOKS: '1',
+      RUST_BACKTRACE: '1',
+    };
+    if (this.xvfb) {
+      // Pin GTK to the X11 backend on the virtual display. With WAYLAND_DISPLAY
+      // set (a Wayland desktop), GTK prefers Wayland and would render the
+      // "headless" app onto the real compositor, ignoring DISPLAY entirely.
+      driverEnv.GDK_BACKEND = 'x11';
+      delete driverEnv.WAYLAND_DISPLAY;
+    }
     this.driver = spawn(
       'tauri-driver',
       ['--port', String(this.driverPort), '--native-port', String(this.nativePort)],
@@ -238,13 +260,7 @@ export class AppSession {
         // WebKitWebDriver daemon it spawns.
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          ...profileEnv,
-          DISPLAY: this.display,
-          STALAGMIGHT_TEST_HOOKS: '1',
-          RUST_BACKTRACE: '1',
-        },
+        env: driverEnv,
       },
     );
     if (this.driver.pid) recordPid(this.pidFile(), this.driver.pid);

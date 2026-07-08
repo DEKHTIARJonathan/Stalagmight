@@ -56,7 +56,7 @@ Lifecycle:
 
 | Tool | Purpose |
 |---|---|
-| `app_start(build?, headed?, freshProfile?)` | Build if stale, launch, attach, verify hooks. `build`: auto/skip/force. |
+| `app_start(build?, headed?, freshProfile?)` | Build if stale, launch, attach, verify hooks. `build`: auto/skip/force. Default is headless on Xvfb even when a desktop display exists (no window pops up, no focus stealing); `headed: true` shows the window on the real display. |
 | `app_stop` | Close app + driver, reap the process group. |
 | `app_restart(freshProfile?=false)` | Restart keeping the profile (persisted-state repros). |
 | `app_status` | Liveness: state, uptime, driverAlive, sessionDir, node. |
@@ -183,8 +183,10 @@ Gitignored; the 20 newest sessions are kept.
 - `app_start` fails `UND_ERR_INVALID_ARG` -> you are on Node 23+; use Node 22.
 - `window.__E2E_TEST__ not present` -> the binary was built without `VITE_E2E=1`;
   rerun `app_start` with `build: "force"`.
-- No display -> the session starts Xvfb automatically; pass `headed: true` only
-  when a real `DISPLAY` is available.
+- The window never appears on screen -> that is the default: sessions run on a
+  throwaway Xvfb even when a desktop display exists (GDK is pinned to X11 there,
+  since a Wayland-preferring GTK would otherwise render to the real compositor).
+  Pass `headed: true` to watch the app live on the real display.
 - Orphan `tauri-driver` / `WebKitWebDriver` after an unclean server kill -> the
   next `app_start` scoped-reaps PIDs recorded in each session's `pids` file
   (verified by `/proc/<pid>/comm`); it never broadly `pkill`s.

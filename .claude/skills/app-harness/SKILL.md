@@ -18,6 +18,8 @@ On Node 23+ `app_start` fails with `UND_ERR_INVALID_ARG`; run `nvm use` first.
 
 1. `app_start` (build `auto`; it rebuilds only if the source is newer than the
    binary). Returns the session dir under `.agent-artifacts/sessions/<id>/`.
+   Runs invisibly on Xvfb by default; pass `headed: true` only if the user asks
+   to watch the app live on their desktop.
 2. Harness doctor (do this once per new session so you trust the oracle):
    call `ipc` with `{ command: "debug_trigger_panic", args: { delayMs: 50 } }`,
    then poll `check_problems` until you see a `crash-marker` finding with
