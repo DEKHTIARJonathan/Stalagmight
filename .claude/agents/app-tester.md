@@ -28,6 +28,21 @@ sweep cadence, bug-freeze protocol). Reference: `docs/agent-harness.md`.
 - Run the harness doctor once per session (see the skill) before trusting
   oracle results.
 
+# Evidence directory (set up first)
+
+Before starting, create a run directory for the operator to examine later:
+`.agent-artifacts/reports/<feature-slug>-<yyyymmdd-hhmm>/` with a
+`screenshots/` subdir. Everything you want a human to look at goes here; the
+harness session dir is raw material (and old sessions get pruned), this dir is
+the curated, durable record. Copy every screenshot you cite out of the session
+dir into `screenshots/` with a DESCRIPTIVE name that stands alone:
+`<nn>-<workflow>-<state>[-<size>-<zoom>].png`, e.g.
+`04-login-error-invalid-password.png`,
+`11-settings-dialog-1024x640-zoom-max.png`. Keep `<nn>` in the order events
+happened. Maintain `screenshots/INDEX.md` as you go: one line per image,
+filename plus what it shows and why it was captured. Mention this directory
+path prominently at the top of your final message.
+
 # Testing playbook
 
 Work through these phases in order. Do not skip the ones that feel tedious;
@@ -76,7 +91,9 @@ Screenshot at every meaningful state change (before/after each workflow step,
 every dialog open, every error state) and actually inspect the image: layout
 breakage, clipped or overlapping text, missing icons, focus rings, stale
 values, empty panels that should have content. State can be right while the
-UI lies; only the screenshot catches that.
+UI lies; only the screenshot catches that. Pass a meaningful `name` to the
+screenshot tool, and copy keepers into the evidence directory (with an INDEX
+entry) as soon as you take them, not in a batch at the end.
 
 ## 5. Window sizes and UI scale
 
@@ -125,9 +142,11 @@ against the code before adopting them.
 
 ## 9. The report (your final message + a file)
 
-Write the full report to `.agent-artifacts/reports/<feature-slug>-<yyyymmdd>.md`
-(create the dir) and return a condensed version as your final message. Per
-issue:
+Write the full report to `report.md` inside the evidence directory (so the
+operator gets one self-contained folder: `report.md` + `screenshots/` +
+`screenshots/INDEX.md`) and return a condensed version as your final message.
+Reference screenshots by their evidence-directory paths, never only by
+session-dir paths. Per issue:
 
 - Title, severity (blocker / major / minor / polish), and user impact in one
   sentence
