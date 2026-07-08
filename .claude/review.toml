@@ -1,0 +1,89 @@
+# Sample shared review config for preflight.py + review_pack.py.
+#
+# This is a REFERENCE sample (Stalagmight-flavored), not wired into any repo.
+# To use it in a project, copy it to that repo's `.claude/review.toml` and adjust
+# the globs. Both tools read it: preflight.py uses [[landmine]]/[[command]],
+# review_pack.py uses [risk]. Absent config → generic built-ins only.
+#
+# Encodes the Layer-0 landmines from the ops audit (review_efficiency.md §2).
+# The generic built-ins (focused tests, debugger;, leaked keys, rust unsafe) run
+# regardless; add --no-builtin to preflight.py to run only these project rules.
+
+# --- Landmines: scanned against ADDED diff lines within `paths` -------------
+
+[[landmine]]
+name = "ipc-generated-edited"
+paths = ["src/types/ipc/**", "src/types/ipc.generated.ts"]
+pattern = "."                       # any added line in a generated file
+severity = "fail"
+message = "Hand-edited generated IPC types — run `pnpm gen:ipc-types` and commit the output."
+
+[[landmine]]
+name = "console-log-in-map-hooks"
+paths = ["src/components/Map/**", "src/hooks/**"]
+pattern = "console\\.log"
+severity = "flag"
+message = "Use debugLog() instead of console.log in Map/hooks."
+
+[[landmine]]
+name = "playwright-waitfortimeout"
+paths = ["e2e/**"]
+pattern = "waitForTimeout"
+severity = "flag"
+message = "Avoid waitForTimeout in e2e — prefer web-first assertions (flake source)."
+
+[[landmine]]
+name = "rust-unsafe"
+paths = ["src-tauri/**/*.rs"]
+pattern = "\\bunsafe\\s*\\{"         # regex fallback when ast-grep is absent
+severity = "security-trigger"
+message = "New unsafe block — set the security trigger (Layer-2 L8 must run)."
+engine = "ast-grep"
+ast_grep_pattern = "unsafe { $$$ }"
+ast_grep_lang = "rust"
+
+[[landmine]]
+name = "path-file-dialog"
+paths = ["src-tauri/**/*.rs"]
+pattern = "(FileDialog|rfd::|dialog::blocking|std::fs::(read|write|remove)|PathBuf::from)"
+severity = "security-trigger"
+message = "New file-dialog / path / fs handling — security review should look (path traversal, symlinks)."
+
+[[landmine]]
+name = "telemetry-field-change"
+paths = ["src-tauri/**/telemetry*", "src/**/telemetry*", "src/**/*telemetry*"]
+pattern = "(EVENT_NAMES|event_name|telemetry_field|#\\[serde\\(rename)"
+severity = "flag"
+message = "Telemetry event/field surface changed — verify the string-keyed consumers and the dashboard."
+
+# --- Risk classification: used by review_pack.py to bucket changed files ----
+
+[risk]
+high = [
+  "src-tauri/**/persistence*", "src-tauri/**/save*", "src-tauri/**/*undo*",
+  "src-tauri/**/migrat*", "src/types/ipc*", "src/types/ipc.generated.ts",
+  "src-tauri/**/*geometry*", "src/components/Map/**", "**/*.sql",
+]
+medium = [
+  "src-tauri/**/state*", "src/store/**", "src/hooks/**",
+  "src-tauri/**/telemetry*", "e2e/**",
+]
+
+# --- Optional deterministic commands: run only with `preflight.py --run-commands` ---
+# These already gate in CI; running locally just moves the failure earlier.
+
+[[command]]
+label = "rustfmt"
+run = "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+severity = "fail"
+
+[[command]]
+label = "clippy"
+run = "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets"
+severity = "fail"
+timeout = 600
+
+[[command]]
+label = "rust-file-size-ratchet"
+run = "pnpm lint:rust-file-size"
+severity = "fail"

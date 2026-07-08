@@ -16,6 +16,19 @@ no PR branch). Read enough surrounding code to judge correctness; keep findings
 scoped to the change + its blast radius. If the diff is large, tell each subagent to
 review the riskiest files first and report what it didn't reach.
 
+## Shared review pack (generate once, hand to every finder)
+
+Before fanning out, build the pack (vendored, stdlib-only Python ≥3.11):
+`python3 scripts/review/review_pack.py --base master -o /tmp/stalagmight-review-pack.md`
+and give every subagent the pack path in its brief. It contains the Layer-0
+FLAGS (deterministic landmines from `.claude/review.toml`), risk-bucketed file
+list, signature skeletons, a consumer map for changed public symbols, and the
+diff — computed once instead of ten times. The pack is **mechanically
+generated, so it carries no author intent**: blind briefing is preserved.
+Finders read the pack first, then open only the files it points at. If the
+pre-flight FLAGS show a ⛔ `fail`, stop and report before spending any finder.
+If the tool is missing, finders derive scope themselves as before.
+
 ## How to run it — fan out, then synthesize
 
 Launch the **subagents below in parallel** with the Task tool (issue them in a
@@ -194,7 +207,7 @@ After printing the verdict, append **exactly one JSON line** to
 Shape:
 
 ```json
-{"date":"<YYYY-MM-DD>","branch":"<git branch>","verdict":"block|nits|needs-work","findings":[{"lens":<1-10>,"severity":"red|yellow|green","file":"<path:line>","verified":true}],"lenses_skipped":[{"lens":8,"why":"no security trigger"}]}
+{"date":"<YYYY-MM-DD>","branch":"<git branch>","verdict":"block|nits|needs-work","findings":[{"lens":<1-10>,"severity":"red|yellow|green","file":"<path:line>","verified":true}],"lenses_run":[1,2,3,4,5,6,7,9,10],"lenses_skipped":[{"lens":8,"why":"no security trigger"}]}
 ```
 
 - Fill `date` from `date -u +%F` and `branch` from `git rev-parse --abbrev-ref HEAD`.
@@ -202,4 +215,7 @@ Shape:
   actually traced in code, `false` for ASSUMED/unverified.
 - Record any lens that did not run (e.g. security not triggered, a lens you couldn't
   reach on a large diff) in `lenses_skipped` with a short `why`.
+- List every lens that actually ran in `lenses_run` — a lens that ran and found
+  NOTHING is exactly the retire/merge signal this log exists to capture; without
+  it, ran-clean and never-ran are indistinguishable.
 - Keep it to one physical line so the file stays valid JSONL.

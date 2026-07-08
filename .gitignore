@@ -74,3 +74,8 @@ CLAUDE.local.md
 
 # Agent harness per-session artifacts (screenshots, action logs, state snapshots)
 .agent-artifacts/
+
+# per-contributor /pre-pr instrumentation — local by policy (#257)
+.claude/review-log.jsonl
+# python bytecode from scripts/review tooling
+__pycache__/
