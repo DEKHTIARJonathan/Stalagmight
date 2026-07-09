@@ -118,8 +118,9 @@ export function SpeleoStatusButton() {
 
   // `editState === 'editing'` is the single source of truth for "we hold the lock
   // and may edit" (the backend enforces hold-lock ⟹ edit-enabled). `lockedByOther`
-  // is derived once in the store (a read-only project with a holder is held by
-  // another), so a released lock can't still read as ours.
+  // is derived once in the store (a resolved holder that isn't us - true even while
+  // force-editing, where editState is 'editing' but we hold no lock; ws12), so a
+  // released lock can't still read as ours.
   const lockedByOther = link.lockedByOther;
   const conflict = divergence !== null || link.remoteState === 'conflict';
   // Known view-only grant (WEB_VIEWER / READ_ONLY). A null permission is "unknown"

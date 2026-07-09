@@ -48,7 +48,7 @@ import { recordPerfTiming } from './memoryProbe';
  * ALREADY_OPEN signal (the path is already the live project). Tauri delivers
  * command errors as a JSON string or an object; match either shape.
  */
-function isAlreadyOpen(e: unknown): boolean {
+export function isAlreadyOpen(e: unknown): boolean {
   if (typeof e === 'string') return e.includes('ALREADY_OPEN');
   if (typeof e === 'object' && e !== null) {
     return (e as Record<string, unknown>).code === 'ALREADY_OPEN';

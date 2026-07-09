@@ -158,7 +158,8 @@ pub(crate) fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
 /// - `Status { status, message }` → `map_status(endpoint, status)`, `status: Some`.
 /// - `Transport` (network/timeout, post-retry) → `Retry`, `status: None`.
 /// - `NotAuthenticated` → `ReLogin` (no usable token).
-/// - `InsecureEndpoint` and every other local error → `Fatal`, `status: None`.
+/// - `InsecureEndpoint` / `MalformedEndpoint` and every other local error →
+///   `Fatal`, `status: None`.
 pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto {
     let (action, status, message) = match err {
         // Status: carry the parsed human detail WITHOUT the "SpeleoDB returned HTTP
@@ -176,9 +177,9 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
         // offers the one-time C2 adoption flow (#214) on `action == Adopt` rather
         // than toasting the message.
         SpeleoDbError::AdoptAriane => (SpeleoDbAction::Adopt, None, err.to_string()),
-        // InsecureEndpoint / NoEndpoint / MissingCredentials / Parse / EmptyDump /
-        // AmbiguousDump / Io / InvalidProjectId - all fail closed; their Display is
-        // already user-facing.
+        // InsecureEndpoint / MalformedEndpoint / NoEndpoint / MissingCredentials /
+        // Parse / EmptyDump / AmbiguousDump / Io / InvalidProjectId - all fail
+        // closed; their Display is already user-facing.
         _ => (SpeleoDbAction::Fatal, None, err.to_string()),
     };
     SpeleoErrorDto {
