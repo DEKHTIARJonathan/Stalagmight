@@ -9,11 +9,11 @@ import type { TFunction } from 'i18next';
 import {
   FilePlusIcon,
   FolderOpenIcon,
-  DownloadIcon,
   SettingsIcon,
   BugIcon,
   QuitIcon,
 } from './icons';
+import { SpeleoBadgedIcon } from './SpeleoBadgedIcon';
 import { MENU_ICON_COLORS } from './menuColors';
 import { setProjectActionSource, type SourceName } from '../../utils/telemetry';
 import { quitApp } from '../../utils/quit';
@@ -106,8 +106,13 @@ export function openFromSpeleoDbMenuItem(
   return {
     id: 'open-from-speleodb-button',
     label: t('globalView.actions.openFromSpeleoDb'),
-    icon: <DownloadIcon size={ICON_SIZE} />,
-    iconColor: MENU_ICON_COLORS.open,
+    icon: (
+      <SpeleoBadgedIcon
+        badge={<FolderOpenIcon size={11} />}
+        badgeColor="text-blue-400"
+        size={ICON_SIZE}
+      />
+    ),
     onClick: actions.onOpen,
   };
 }

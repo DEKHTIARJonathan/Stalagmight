@@ -107,9 +107,18 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
         path: singleProject.file_path,
         name: singleProject.name,
         collabEnabled: singleProject.collab_enabled,
+        // A remote (SpeleoDB) recent is only a local cache copy; deleting it leaves
+        // the project on the server, so the dialog frames it as "local copy".
+        isRemote: singleProject.is_remote,
       });
     }
-  }, [singleProject?.file_path, singleProject?.name, singleProject?.collab_enabled, openDialog]);
+  }, [
+    singleProject?.file_path,
+    singleProject?.name,
+    singleProject?.collab_enabled,
+    singleProject?.is_remote,
+    openDialog,
+  ]);
 
   // Rename the selected (not-necessarily-open) project's display name.
   const startEditName = useCallback(() => {
@@ -443,9 +452,18 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
                 variant="danger"
                 className="w-full"
                 data-testid="metadata-delete-button"
-                aria-label={t('globalView.metadata.actions.deleteProjectAria', { name: singleProject.name })}
+                aria-label={t(
+                  singleProject.is_remote
+                    ? 'globalView.metadata.actions.deleteLocalCopyAria'
+                    : 'globalView.metadata.actions.deleteProjectAria',
+                  { name: singleProject.name },
+                )}
               >
-                {t('globalView.metadata.actions.deleteProject')}
+                {t(
+                  singleProject.is_remote
+                    ? 'globalView.metadata.actions.deleteLocalCopy'
+                    : 'globalView.metadata.actions.deleteProject',
+                )}
               </Button>
             </div>
           </div>

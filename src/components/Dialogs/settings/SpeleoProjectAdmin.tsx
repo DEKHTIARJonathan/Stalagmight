@@ -1,30 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SettingsSection } from './SettingsSection';
 import { SpeleoRevisionHistory } from './SpeleoRevisionHistory';
 import { Button } from '../../common/Button';
+import { SpeleoUserAutocomplete } from '../../common/SpeleoUserAutocomplete';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
-import { permissionAtLeast } from '../../../utils/speleoPermission';
-import type {
-  Permission,
-  SpeleoCollaborators,
-  SpeleoTeamOption,
-  SpeleoUserSuggestion,
-} from '../../../types/ipc.generated';
-
-// The add-collaborator email typeahead queries the server on a short debounce; the
-// backend ignores queries under this length (matches the server's 3-char minimum).
-const AUTOCOMPLETE_MIN_CHARS = 3;
-const AUTOCOMPLETE_DEBOUNCE_MS = 250;
-
-// Levels a USER collaborator can be granted. Teams may never hold ADMIN (the
-// server rejects it), so the team picker omits it.
-const USER_LEVELS: readonly Permission[] = ['WEB_VIEWER', 'READ_ONLY', 'READ_AND_WRITE', 'ADMIN'];
-const TEAM_LEVELS: readonly Permission[] = ['WEB_VIEWER', 'READ_ONLY', 'READ_AND_WRITE'];
+import { permissionAtLeast, USER_LEVELS, TEAM_LEVELS } from '../../../utils/speleoPermission';
+import type { Permission, SpeleoCollaborators, SpeleoTeamOption } from '../../../types/ipc.generated';
 
 const inputClass =
   'w-full px-2 py-1 bg-background border border-border rounded text-sm disabled:opacity-60';
@@ -58,13 +44,6 @@ export function SpeleoProjectAdmin() {
   const [newTeamId, setNewTeamId] = useState('');
   const [newTeamLevel, setNewTeamLevel] = useState<Permission>('READ_ONLY');
 
-  // Add-collaborator email typeahead (server-backed, debounced).
-  const [suggestions, setSuggestions] = useState<SpeleoUserSuggestion[]>([]);
-  // Set when the email was just filled by PICKING a suggestion, so the debounce
-  // effect skips the search that the resulting value change would otherwise fire
-  // (which would immediately re-open the dropdown over the chosen entry).
-  const suppressSearch = useRef(false);
-
   const [releasing, setReleasing] = useState(false);
   const [confirmName, setConfirmName] = useState('');
   const [deleting, setDeleting] = useState(false);
@@ -89,44 +68,6 @@ export function SpeleoProjectAdmin() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  // Server-backed autocomplete for the add-collaborator email, debounced. Only an
-  // admin can add, so only an admin queries. A stale in-flight response is dropped
-  // (the cleanup flips `cancelled`), and a pick suppresses the follow-up search.
-  useEffect(() => {
-    if (!canManage) return;
-    if (suppressSearch.current) {
-      suppressSearch.current = false;
-      return;
-    }
-    const query = newEmail.trim();
-    if (query.length < AUTOCOMPLETE_MIN_CHARS) {
-      setSuggestions([]);
-      return;
-    }
-    let cancelled = false;
-    const handle = setTimeout(() => {
-      invokeIpc<SpeleoUserSuggestion[]>('speleodb_search_users', { query })
-        .then((r) => {
-          if (!cancelled) setSuggestions(r);
-        })
-        .catch(() => {
-          // A failed lookup just yields no suggestions; the field stays free-text.
-          if (!cancelled) setSuggestions([]);
-        });
-    }, AUTOCOMPLETE_DEBOUNCE_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(handle);
-    };
-  }, [newEmail, canManage]);
-
-  // Fill the email from a picked suggestion and close the dropdown.
-  const pickSuggestion = useCallback((email: string) => {
-    suppressSearch.current = true;
-    setNewEmail(email);
-    setSuggestions([]);
-  }, []);
 
   // Run a roster mutation, folding the returned server-truth roster back in. All
   // errors surface as a toast; the roster is left untouched on failure.
@@ -369,45 +310,18 @@ export function SpeleoProjectAdmin() {
         {canManage && (
           <div className="mt-3 pt-3 border-t border-border space-y-2">
             <div className="flex items-center gap-2">
-              <div className="relative flex-1">
-                <input
-                  type="email"
-                  value={newEmail}
-                  disabled={busy}
-                  placeholder={t('speleodb.collaborators.emailPlaceholder')}
-                  onChange={(e) => setNewEmail(e.target.value)}
-                  // Let a suggestion click register before the blur closes the list.
-                  onBlur={() => window.setTimeout(() => setSuggestions([]), 150)}
-                  className={inputClass}
-                  role="combobox"
-                  aria-expanded={suggestions.length > 0}
-                  aria-autocomplete="list"
-                  aria-label={t('speleodb.collaborators.addUser')}
-                  data-testid="speleodb-collaborators-add-email"
-                />
-                {suggestions.length > 0 && (
-                  <ul
-                    className="absolute z-10 mt-1 w-full max-h-48 overflow-auto bg-background border border-border rounded shadow-lg"
-                    data-testid="speleodb-collaborators-suggestions"
-                  >
-                    {suggestions.map((s) => (
-                      <li key={s.email}>
-                        <button
-                          type="button"
-                          // mousedown fires before the input's blur; preventing its
-                          // default keeps focus so the click below still lands.
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => pickSuggestion(s.email)}
-                          className="w-full text-left px-2 py-1 text-sm truncate hover:bg-surface"
-                          data-testid={`speleodb-collaborators-suggestion-${s.email}`}
-                        >
-                          {s.label}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+              <SpeleoUserAutocomplete
+                value={newEmail}
+                onChange={setNewEmail}
+                disabled={busy}
+                enabled={canManage}
+                className={inputClass}
+                placeholder={t('speleodb.collaborators.emailPlaceholder')}
+                ariaLabel={t('speleodb.collaborators.addUser')}
+                inputTestId="speleodb-collaborators-add-email"
+                listTestId="speleodb-collaborators-suggestions"
+                suggestionTestIdPrefix="speleodb-collaborators-suggestion"
+              />
               <select
                 value={newLevel}
                 disabled={busy}

@@ -1311,13 +1311,18 @@ fn test_list_recent_projects_includes_saved() {
 }
 
 #[test]
-fn test_remove_from_recent_projects_fails_missing() {
+fn test_remove_from_recent_projects_absent_is_idempotent_success() {
+    // "Remove from recent" means "ensure this path is absent", so removing a path
+    // that was never in the list is a NO-OP SUCCESS, not a failure. Returning a
+    // failure used to strand a zombie "missing" row that the frontend (whose config
+    // copy can lag the trimmed backend list) could never clear, because it only
+    // refreshes the recents on success.
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
             let missing = PathBuf::from("/tmp/does-not-exist.stalx");
             let result = project::remove_from_recent_projects(state(&app), missing);
-            assert_failure_contains(&result, "Project not found");
+            assert_success(&result);
         });
     });
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
@@ -602,6 +602,72 @@ export default function GlobalView() {
   // panel stays gated on loaded projects, since missing rows aren't selectable.)
   const hasRecentItems = listItems.length > 0;
 
+  // Progressive header condensation: when the grid header can't fit without
+  // overflowing (it never wraps - the buttons are nowrap), drop text in a fixed
+  // priority order to reclaim width:
+  //   1. the "Stalagmight" brand
+  //   2. the New Project / Open+Import button labels (icon only)
+  //   3. the Map / List toggle labels (icon only)
+  // Mirrors the SingleSystemView Toolbar's collapse (reset-on-resize + step-up in a
+  // layout effect so every step settles before paint), but the fit test here is a
+  // plain grid overflow rather than a centered-carousel collision.
+  const HEADER_CONDENSE_MAX = 3;
+  const [headerCondense, setHeaderCondense] = useState(0);
+  const headerCondenseRef = useRef(0);
+  const [headerMeasureWidth, setHeaderMeasureWidth] = useState(0);
+  const headerRef = useRef<HTMLElement>(null);
+  const setHeaderCondenseBoth = useCallback((n: number) => {
+    headerCondenseRef.current = n;
+    setHeaderCondense(n);
+  }, []);
+
+  // Re-run the fit on a window/panel resize.
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!header) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (w != null) setHeaderMeasureWidth(w);
+    });
+    ro.observe(header);
+    return () => ro.disconnect();
+  }, []);
+
+  // Reset to the full layout whenever the available width OR the natural content
+  // width changes, so the step-up pass re-collapses from scratch (this is how the
+  // header EXPANDS again when space is freed). Declared before the step-up effect.
+  useLayoutEffect(() => {
+    if (headerCondenseRef.current !== 0) setHeaderCondenseBoth(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    headerMeasureWidth,
+    showToolbarIcons,
+    hasRecentItems,
+    speleoLoggedIn,
+    activeTab,
+    recentProjects.length,
+    gpsProjectCount,
+    hasGpsProjects,
+    t,
+  ]);
+
+  // Step-up: while the header overflows its width, drop one more label (priority
+  // order above). The guard skips the stale render right after a reset.
+  useLayoutEffect(() => {
+    if (headerCondense !== headerCondenseRef.current) return;
+    const header = headerRef.current;
+    // Not laid out / zero-size test env: skip until real geometry exists.
+    if (!header || header.clientWidth === 0) return;
+    const overflowing = header.scrollWidth > header.clientWidth + 1;
+    if (overflowing && headerCondenseRef.current < HEADER_CONDENSE_MAX) {
+      setHeaderCondenseBoth(headerCondenseRef.current + 1);
+    }
+  });
+
+  const brandCondensed = headerCondense >= 1;
+  const actionsCondensed = headerCondense >= 2;
+  const tabsCondensed = headerCondense >= 3;
+
   // Hamburger menu contents. The New/Open/Settings/Debug/Quit rows are shared
   // with the in-project menu (appMenuItems); only the Import submenu differs
   // (the start screen offers every new-project format). Memoized so AppMenu's
@@ -609,7 +675,11 @@ export default function GlobalView() {
   const menuItems: AppMenuItem[] = useMemo(
     () => [
       ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
-      openFromSpeleoDbMenuItem(t, { onOpen: () => openDialog('open-from-speleodb') }),
+      // "Open from SpeleoDB" needs a signed-in session (the browser lists the
+      // caller's remote projects), so hide it when logged out.
+      ...(speleoLoggedIn
+        ? [openFromSpeleoDbMenuItem(t, { onOpen: () => openDialog('open-from-speleodb') })]
+        : []),
       {
         id: 'global-import-menu-button',
         label: t('globalView.actions.import'),
@@ -632,32 +702,43 @@ export default function GlobalView() {
       { id: 'app-menu-sep-2', label: '', separator: true },
       quitMenuItem(t),
     ],
-    [t, handleNewProject, handleOpenProject, openDialog],
+    [t, handleNewProject, handleOpenProject, openDialog, speleoLoggedIn],
   );
 
   return (
     <div data-testid="global-view" className="h-full flex flex-col">
       {/* Header — left: menu + primary actions, center: title, right: Map|List toggle */}
-      <header className="grid grid-cols-[1fr_auto_1fr] items-center px-4 py-3 border-b border-border">
+      <header ref={headerRef} className="grid grid-cols-[1fr_auto_1fr] items-center px-4 py-3 border-b border-border">
         <div className="flex items-center gap-3 justify-self-start">
           <AppMenu items={menuItems} aria-label={t('globalView.menu.aria')} />
           <Button
             data-testid="new-project-button"
+            className="whitespace-nowrap"
             onClick={() => { setProjectActionSource('toolbar'); handleNewProject(); }}
-            icon={showToolbarIcons ? <span style={{ color: MENU_ICON_COLORS.new }}><FilePlusIcon size={16} /></span> : undefined}
+            // The icon is forced on when condensed (icon-only) so the button is never empty.
+            icon={showToolbarIcons || actionsCondensed ? <span style={{ color: MENU_ICON_COLORS.new }}><FilePlusIcon size={16} /></span> : undefined}
+            aria-label={actionsCondensed ? t('globalView.actions.newProject') : undefined}
+            title={actionsCondensed ? t('globalView.actions.newProject') : undefined}
           >
-            {t('globalView.actions.newProject')}
+            {actionsCondensed ? null : t('globalView.actions.newProject')}
           </Button>
           <Button
             data-testid="global-open-import-button"
+            className="whitespace-nowrap"
             onClick={() => { setProjectActionSource('toolbar'); handleOpenOrImport(); }}
-            icon={showToolbarIcons ? <span style={{ color: MENU_ICON_COLORS.open }}><FolderOpenIcon size={16} /></span> : undefined}
+            icon={showToolbarIcons || actionsCondensed ? <span style={{ color: MENU_ICON_COLORS.open }}><FolderOpenIcon size={16} /></span> : undefined}
+            aria-label={actionsCondensed ? t('globalView.actions.openOrImport') : undefined}
+            title={actionsCondensed ? t('globalView.actions.openOrImport') : undefined}
           >
-            {t('globalView.actions.openOrImport')}
+            {actionsCondensed ? null : t('globalView.actions.openOrImport')}
           </Button>
         </div>
 
-        <h1 className="text-xl font-bold justify-self-center">Stalagmight</h1>
+        {/* Keep the <h1> element (grid needs its 3rd/center child to stay aligned)
+            but drop its text at the first condensation stage. */}
+        <h1 className="text-xl font-bold justify-self-center whitespace-nowrap">
+          {brandCondensed ? '' : 'Stalagmight'}
+        </h1>
 
         <div className="flex items-center gap-2 justify-self-end">
           {hasRecentItems && (
@@ -669,31 +750,39 @@ export default function GlobalView() {
               <button
                 type="button"
                 aria-pressed={activeTab === 'map'}
+                aria-label={tabsCondensed ? t('globalView.tabs.map') : undefined}
+                title={tabsCondensed ? t('globalView.tabs.map') : undefined}
                 data-testid="globalview-view-toggle-map"
                 onClick={() => handleSwitchTab('map')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
+                className={`flex items-center gap-1.5 whitespace-nowrap px-3 py-1.5 text-sm font-medium transition-colors ${
                   activeTab === 'map'
                     ? 'bg-accent text-accent-on'
                     : 'text-text-secondary hover:text-text hover:bg-panel'
                 }`}
               >
-                {showToolbarIcons && <MapIcon size={16} />}
-                {t('globalView.tabs.map')}
-                {hasGpsProjects ? ` (${formatNumber(gpsProjectCount)})` : ''}
+                {(showToolbarIcons || tabsCondensed) && <MapIcon size={16} />}
+                {!tabsCondensed && (
+                  <>
+                    {t('globalView.tabs.map')}
+                    {hasGpsProjects ? ` (${formatNumber(gpsProjectCount)})` : ''}
+                  </>
+                )}
               </button>
               <button
                 type="button"
                 aria-pressed={activeTab === 'list'}
+                aria-label={tabsCondensed ? t('globalView.tabs.list') : undefined}
+                title={tabsCondensed ? t('globalView.tabs.list') : undefined}
                 data-testid="globalview-view-toggle-list"
                 onClick={() => handleSwitchTab('list')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border-l border-border transition-colors ${
+                className={`flex items-center gap-1.5 whitespace-nowrap px-3 py-1.5 text-sm font-medium border-l border-border transition-colors ${
                   activeTab === 'list'
                     ? 'bg-accent text-accent-on'
                     : 'text-text-secondary hover:text-text hover:bg-panel'
                 }`}
               >
-                {showToolbarIcons && <ListIcon size={16} />}
-                {t('globalView.tabs.list')} ({formatNumber(recentProjects.length)})
+                {(showToolbarIcons || tabsCondensed) && <ListIcon size={16} />}
+                {!tabsCondensed && <>{t('globalView.tabs.list')} ({formatNumber(recentProjects.length)})</>}
               </button>
             </div>
           )}
@@ -1043,23 +1132,33 @@ export default function GlobalView() {
               })
               : t('globalView.contextMenu.remove')}
           </button>
-          {selectedCount <= 1 && contextMenu.projectPath && (
+          {selectedCount <= 1 && contextMenu.projectPath && (() => {
+            // A remote (SpeleoDB) recent is only a local cache copy, so both the label
+            // and the confirm dialog frame the delete as "local copy" (matches the
+            // details-panel button).
+            const ctxProj = recentProjects.find((p) => p.file_path === contextMenu.projectPath);
+            return (
             <>
               <div className="border-t border-border my-1" />
               <button
                 className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 text-error flex items-center gap-2"
                 onClick={() => {
-                  const proj = recentProjects.find((p) => p.file_path === contextMenu.projectPath);
-                  openDialog('delete-project', { path: contextMenu.projectPath, name: proj?.name, collabEnabled: proj?.collab_enabled });
+                  openDialog('delete-project', {
+                    path: contextMenu.projectPath,
+                    name: ctxProj?.name,
+                    collabEnabled: ctxProj?.collab_enabled,
+                    isRemote: ctxProj?.is_remote,
+                  });
                   setContextMenu((prev) => ({ ...prev, visible: false }));
                 }}
                 role="menuitem"
                 data-testid="context-menu-delete"
               >
-                {t('globalView.contextMenu.delete')}
+                {t(ctxProj?.is_remote ? 'globalView.contextMenu.deleteLocalCopy' : 'globalView.contextMenu.delete')}
               </button>
             </>
-          )}
+            );
+          })()}
         </div>
       )}
 
