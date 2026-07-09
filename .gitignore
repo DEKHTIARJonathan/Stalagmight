@@ -70,6 +70,7 @@ telemetry-worker/.wrangler/
 # Claude Code local/runtime state (machine-specific; must not be tracked)
 .claude/*.lock
 .claude/settings.local.json
+CLAUDE.local.md
 
 # Agent harness per-session artifacts (screenshots, action logs, state snapshots)
 .agent-artifacts/
