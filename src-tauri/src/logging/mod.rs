@@ -257,17 +257,29 @@ pub fn cleanup_logs(max_size_mb: u32) -> Result<()> {
     cleanup_logs_in_dir(&log_dir, max_size_bytes)
 }
 
-/// Clean up old `.log` files in `log_dir` if their total size exceeds `max_size_bytes`.
-/// Deletes oldest files first. Extracted for cross-platform testability
-/// (`log_directory()` relies on platform-specific paths).
+/// Clean up old `.log` files and `crash-*.json` panic markers in `log_dir` if
+/// their total size exceeds `max_size_bytes`. Deletes oldest files first.
+/// Crash markers are included because the panic hook writes one per backend
+/// panic in ALL builds; without this sweep they accumulate unbounded in the
+/// user's data dir (nothing else ever deletes them). Extracted for
+/// cross-platform testability (`log_directory()` relies on platform paths).
 fn cleanup_logs_in_dir(log_dir: &std::path::Path, max_size_bytes: u64) -> Result<()> {
     if !log_dir.exists() {
         return Ok(());
     }
 
+    let is_crash_marker = |p: &std::path::Path| {
+        p.extension().is_some_and(|ext| ext == "json")
+            && p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("crash-"))
+    };
     let mut entries: Vec<_> = std::fs::read_dir(log_dir)?
         .filter_map(std::result::Result::ok)
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "log"))
+        .filter(|e| {
+            let p = e.path();
+            p.extension().is_some_and(|ext| ext == "log") || is_crash_marker(&p)
+        })
         .collect();
 
     // Sort by modification time, oldest first
@@ -466,5 +478,53 @@ mod tests {
 
         assert!(log_dir.join("first.log").exists());
         assert!(log_dir.join("second.log").exists());
+    }
+
+    #[test]
+    fn cleanup_logs_in_dir_sweeps_crash_markers_but_not_other_json() {
+        let dir = TempDir::new().expect("temp dir");
+        let log_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create log dir");
+
+        // The panic hook writes crash-<pid>-<ts>.json beside the logs in ALL
+        // builds; the sweep must bound them (they used to accumulate forever).
+        // An unrelated .json in the same dir must be left alone.
+        let marker = log_dir.join("crash-1234-1751970000000.json");
+        let other = log_dir.join("settings-backup.json");
+        std::fs::write(&marker, b"{\"message\":\"panic\"}").expect("write marker");
+        std::fs::write(&other, b"{}").expect("write other");
+
+        cleanup_logs_in_dir(&log_dir, 0).expect("cleanup logs");
+
+        assert!(!marker.exists(), "crash marker must be swept");
+        assert!(other.exists(), "unrelated json must be untouched");
+    }
+
+    #[test]
+    fn ring_buffer_evicts_oldest_at_capacity() {
+        // Push past capacity: the ring must stay bounded and retain the NEWEST
+        // entries with seq order intact (the eviction path was untested).
+        let buffer = Mutex::new(VecDeque::new());
+        let total = RING_BUFFER_CAPACITY + 25;
+        for i in 0..total {
+            push_line_to(&buffer, format!("line-{i}"));
+        }
+        let buf = buffer.lock().expect("lock");
+        assert_eq!(buf.len(), RING_BUFFER_CAPACITY, "ring must be bounded");
+        assert_eq!(
+            buf.back().expect("newest").line,
+            format!("line-{}", total - 1),
+            "newest entry retained"
+        );
+        assert_eq!(
+            buf.front().expect("oldest").line,
+            format!("line-{}", total - RING_BUFFER_CAPACITY),
+            "oldest entries evicted in order"
+        );
+        assert!(
+            buf.back().expect("newest").seq - buf.front().expect("oldest").seq
+                == (RING_BUFFER_CAPACITY as u64) - 1,
+            "seq stays dense across eviction"
+        );
     }
 }
