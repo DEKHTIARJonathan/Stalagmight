@@ -1046,19 +1046,22 @@ pub fn generate_svg_string_with_stations(
         .filter(|(_, s)| s.is_zero_datum)
         .map(|(i, _)| i)
         .collect();
-    let star_r = px(STAR_OUTER_PX);
     // Shared label-occupancy boxes (viewBox units): seeded with zero-datum
     // stars, then appended to by pen-distance labels (Pass 3) and station
-    // labels (Pass 4) so all three mutually dodge.
+    // labels (Pass 4) so all three mutually dodge. Only seeded when at least
+    // one label pass will read it (skip the filter + allocation otherwise).
     let mut placed: Vec<(f64, f64, f64, f64)> = Vec::new();
-    for &i in &zero_datum_indices {
-        let s = &stations[i];
-        placed.push((
-            s.coordinates.x - star_r,
-            -s.coordinates.y - star_r,
-            star_r * 2.0,
-            star_r * 2.0,
-        ));
+    if options.show_penetration_labels || options.show_station_labels {
+        let star_r = px(STAR_OUTER_PX);
+        for &i in &zero_datum_indices {
+            let s = &stations[i];
+            placed.push((
+                s.coordinates.x - star_r,
+                -s.coordinates.y - star_r,
+                star_r * 2.0,
+                star_r * 2.0,
+            ));
+        }
     }
 
     // Pass 3: penetration-distance labels at each thick segment's deepest
@@ -1174,7 +1177,7 @@ pub fn generate_svg_string_with_stations(
 
     // Pass 4: station-index labels at survey-leg endpoints (degree 1) and
     // junctions (degree >= 3) of the drawn passage. `point_uf` collapses ONLY
-    // colocated stations (merges + aligned closures) into one physical point —
+    // colocated stations (merges + aligned closures) into one physical point,
     // NOT shot-connected chains (the segment `uf` above does that and is
     // therefore unusable for per-station degree). Degree counts NON-reference
     // shots incident to the point (reference/jump shots are diver shortcuts,
@@ -3423,6 +3426,70 @@ mod tests {
         assert!(
             group_tag.contains(r##"fill="#000000""##),
             "station labels should stay black regardless of color_mode: {svg}"
+        );
+    }
+
+    #[test]
+    fn station_labels_exclude_reference_only_shots() {
+        // A survey whose only connection is a reference (jump) shot has no
+        // physical-passage endpoints or junctions: reference shots are
+        // excluded from the degree count, so every station stays degree 0 and
+        // nothing is labeled. If that exclusion regressed, both ends of the
+        // jump would read as degree-1 endpoints and a group would appear.
+        let mut project = Project::new("Jump".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Jump".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![make_shot(10.0, 90.0, true)],
+            ..Default::default()
+        });
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_station_labels: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains(r#"class="station-labels""#),
+            "reference-only survey should produce no station labels: {svg}"
+        );
+    }
+
+    #[test]
+    fn station_and_penetration_labels_share_collision_space() {
+        // With a zero datum plus both label passes enabled, Pass 3
+        // (penetration) and Pass 4 (station) write into the same shared
+        // `placed` occupancy list that was hoisted above Pass 3. Exercise that
+        // combined path: both groups render and the export does not panic on
+        // the shared vector. (The other station-label tests have no zero datum,
+        // so Pass 3 is inert and this interaction is otherwise untested.)
+        let mut project = project_with_one_ref_separator();
+        let section_id = project.sections[0].id;
+        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
+        project
+            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .unwrap();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 1,
+                show_penetration_labels: true,
+                color_mode: ColorMode::None,
+                show_station_labels: true,
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains(r#"class="pen-distance""#),
+            "penetration labels should render: {svg}"
+        );
+        assert!(
+            svg.contains(r#"class="station-labels""#),
+            "station labels should render alongside penetration labels: {svg}"
         );
     }
 }
