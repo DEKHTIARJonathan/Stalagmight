@@ -3170,10 +3170,34 @@ function MapCanvas() {
   // Fit to survey bounds using transformed coordinates
   const fitToBounds = useCallback((options?: { snap?: boolean }) => {
     // Frame the *active* (drawn) geometry — adjusted in the closure-adjusted view.
-    if (!map.current || activeStations.length === 0) return;
+    if (!map.current) return;
 
-    const coords = activeStations.map((s) => s.coordinates);
-    const bounds = getBounds(coords);
+    // Prefer the SoA `stationCoords` typed array (stride-3 [x,y,z,…]) so the
+    // fit computes X/Y bounds without materializing the ~89k-object lazy
+    // `activeStations` view — this callback runs on every load via the
+    // requestFitToBounds effect. Fall back to `activeStations` only when
+    // surveyData isn't available yet (unusual early-init paths).
+    let bounds: { minX: number; maxX: number; minY: number; maxY: number };
+    const coordsArr = activeSurveyData?.stationCoords;
+    if (coordsArr && coordsArr.length > 0) {
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      for (let i = 0; i + 2 < coordsArr.length; i += 3) {
+        const x = coordsArr[i]!;
+        const y = coordsArr[i + 1]!;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+      bounds = { minX, maxX, minY, maxY };
+    } else {
+      if (activeStations.length === 0) return;
+      const coords = activeStations.map((s) => s.coordinates);
+      bounds = getBounds(coords);
+    }
 
     // Transform bounds to map coordinates
     const sw = metersToMapCoords(bounds.minX, bounds.minY, gpsOrigin);
@@ -3197,7 +3221,7 @@ function MapCanvas() {
       maxZoom: 20,
       ...(options?.snap ? { animate: false } : { duration: animationDuration }),
     });
-  }, [activeStations, gpsOrigin, calcPadding, config]);
+  }, [activeStations, activeSurveyData, gpsOrigin, calcPadding, config]);
 
   // Fit to a specific section's bounds
   const fitToSection = useCallback(

@@ -236,6 +236,66 @@ export function findStationGlobalIndex(
 }
 
 /**
+ * Build a read-only, lazily-materialized `Station[]` view over a
+ * `SurveyData`.
+ *
+ * Numeric index access (`view[i]`) calls `getStation(data, i)`, `.length`
+ * reports `data.stationCount`, and the standard read-only `Array` methods
+ * (`find`, `filter`, `map`, `some`, `forEach`, `slice`, `for…of`,
+ * `entries`) work because they read `length` and indices back through the
+ * proxy traps. `Array.isArray(view)` is `true` (the proxy target is a real
+ * array), so array-producing methods (`map`/`filter`/`slice`) return real
+ * arrays.
+ *
+ * Memory intent: no `Station` object is retained. Each index access
+ * materializes a fresh object, so a full pass (e.g. fit-to-bounds)
+ * produces garbage-collectable temporaries instead of a persistent
+ * ~89 k-object array that duplicates `stationCoords` / `stationSectionIds`
+ * / `stationIndices` (the eager `Station[]` the binary loader used to
+ * build). The proxy is read-only — the app never mutates the store
+ * `stations` array — so no write/mutate traps are provided.
+ */
+export function lazyStationArray(data: SurveyData): Station[] {
+  // Empty target: holds no slots, so no per-station memory. `length` and
+  // indices are served entirely by the traps below.
+  const target: Station[] = [];
+
+  /** Parse a property key as a canonical array index, else null. Mirrors
+   *  the ECMAScript "array index" definition (non-negative integer with
+   *  no leading zeros / other noise), so `'01'`, `'1.0'`, `'-1'`, `'x'`
+   *  fall through to the ordinary property path. */
+  const asIndex = (prop: string): number | null => {
+    const n = Number(prop);
+    if (!Number.isInteger(n) || n < 0) return null;
+    if (String(n) !== prop) return null;
+    return n;
+  };
+
+  const handler: ProxyHandler<Station[]> = {
+    get(t, prop, receiver) {
+      if (prop === 'length') return data.stationCount;
+      if (typeof prop === 'string') {
+        const idx = asIndex(prop);
+        if (idx !== null) {
+          return idx < data.stationCount ? getStation(data, idx) : undefined;
+        }
+      }
+      return Reflect.get(t, prop, receiver);
+    },
+    has(t, prop) {
+      if (prop === 'length') return true;
+      if (typeof prop === 'string') {
+        const idx = asIndex(prop);
+        if (idx !== null) return idx < data.stationCount;
+      }
+      return Reflect.has(t, prop);
+    },
+  };
+
+  return new Proxy(target, handler);
+}
+
+/**
  * Construct `SurveyData` from the legacy `Project.sections[].shots[]` +
  * `Station[]` shape that `refreshProjectState` still returns (it pulls
  * via JSON IPC, not the binary `load_project_full_binary` route).
