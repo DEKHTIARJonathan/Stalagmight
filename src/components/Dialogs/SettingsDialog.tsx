@@ -352,11 +352,20 @@ export default function SettingsDialog() {
 
   // Active (selected) category — initialCategory from dialogData (e.g. from "Customize shortcuts" link)
   const dialogData = useUIStore((s) => s.dialogData);
-  const [activeCategory, setActiveCategory] = useState<SettingsCategory>(
-    (dialogData?.initialCategory as SettingsCategory) || 'general'
-  );
-  // Focused category index for roving tabindex
-  const [focusedIndex, setFocusedIndex] = useState(0);
+  const initialCategory = (dialogData?.initialCategory as SettingsCategory) || 'general';
+  const [activeCategory, setActiveCategory] = useState<SettingsCategory>(initialCategory);
+  // Focused category index for roving tabindex. Seed it from the active category,
+  // not a hardcoded 0: opening to a non-default category (e.g. the "Log in ->
+  // SpeleoDB settings" link) otherwise left a stray focus ring on "General"
+  // (agent-harness campaign ws02/ws18).
+  const [focusedIndex, setFocusedIndex] = useState(() => {
+    const idx = CATEGORIES.findIndex((c) => c.id === initialCategory);
+    return idx >= 0 ? idx : 0;
+  });
+  // Re-entrancy guard: Save runs an async commit; without this, rapid clicks
+  // fire N commits (N logout/login requests) since isDirty/pendingAuth don't
+  // clear until it resolves (agent-harness campaign ws20).
+  const [isSaving, setIsSaving] = useState(false);
 
   // Local config copy for editing
   const [localConfig, setLocalConfig] = useState<Config | null>(config);
@@ -476,40 +485,47 @@ export default function SettingsDialog() {
   // an auth failure the config is already saved; we surface the error in the
   // SpeleoDB panel and keep the dialog open for a retry.
   const commitSettings = useCallback(async (): Promise<boolean> => {
-    if (!localConfig) return false;
-    if (isDirty) {
-      // Guarantee the SpeleoDB poll interval is in range no matter how it was
-      // entered - a below-floor value whose validation error was cleared when the
-      // panel unmounted on a category switch, or a hand-set out-of-range one. The
-      // backend re-clamps the floor on load, but clamp BOTH ends here so an invalid
-      // value can never be persisted in the first place (fix 13).
-      const clamped: Config = {
-        ...localConfig,
-        speleodb: {
-          ...localConfig.speleodb,
-          poll_interval_seconds: clamp(
-            localConfig.speleodb.poll_interval_seconds,
-            MIN_POLL_INTERVAL_SECONDS,
-            MAX_POLL_INTERVAL_SECONDS,
-          ),
-        },
-      };
-      const result = await updateConfig(clamped);
-      if (!result.success) return false;
-    }
-    if (hasPendingAuth) {
-      const kind = pendingAuth?.kind;
-      const auth = await applyPendingAuth(localConfig.speleodb.endpoint);
-      if (!auth.ok) {
-        setAuthError(
-          humanizeSpeleoError(auth.error, kind === 'login' ? t('speleodb.errors.loginFailed') : undefined),
-        );
-        setActiveCategory('speleodb');
-        return false;
+    // Re-entrancy guard (ws20): a second Save while the first is in flight would
+    // fire a duplicate config write + login/logout request.
+    if (!localConfig || isSaving) return false;
+    setIsSaving(true);
+    try {
+      if (isDirty) {
+        // Guarantee the SpeleoDB poll interval is in range no matter how it was
+        // entered - a below-floor value whose validation error was cleared when the
+        // panel unmounted on a category switch, or a hand-set out-of-range one. The
+        // backend re-clamps the floor on load, but clamp BOTH ends here so an invalid
+        // value can never be persisted in the first place (fix 13).
+        const clamped: Config = {
+          ...localConfig,
+          speleodb: {
+            ...localConfig.speleodb,
+            poll_interval_seconds: clamp(
+              localConfig.speleodb.poll_interval_seconds,
+              MIN_POLL_INTERVAL_SECONDS,
+              MAX_POLL_INTERVAL_SECONDS,
+            ),
+          },
+        };
+        const result = await updateConfig(clamped);
+        if (!result.success) return false;
       }
+      if (hasPendingAuth) {
+        const kind = pendingAuth?.kind;
+        const auth = await applyPendingAuth(localConfig.speleodb.endpoint);
+        if (!auth.ok) {
+          setAuthError(
+            humanizeSpeleoError(auth.error, kind === 'login' ? t('speleodb.errors.loginFailed') : undefined),
+          );
+          setActiveCategory('speleodb');
+          return false;
+        }
+      }
+      return true;
+    } finally {
+      setIsSaving(false);
     }
-    return true;
-  }, [localConfig, isDirty, hasPendingAuth, pendingAuth, updateConfig, applyPendingAuth, setAuthError, t]);
+  }, [localConfig, isSaving, isDirty, hasPendingAuth, pendingAuth, updateConfig, applyPendingAuth, setAuthError, t]);
 
   // Save settings
   const handleSave = useCallback(async () => {
@@ -713,10 +729,10 @@ export default function SettingsDialog() {
                 <Button
                   variant="primary"
                   onClick={handleSave}
-                  disabled={(!isDirty && !hasPendingAuth) || hasAnyError}
+                  disabled={(!isDirty && !hasPendingAuth) || hasAnyError || isSaving}
                   data-testid="settings-save-button"
                 >
-                  {t('common.actions.save')}
+                  {isSaving ? t('status.saving') : t('common.actions.save')}
                 </Button>
               </div>
             </div>
@@ -744,10 +760,10 @@ export default function SettingsDialog() {
             <Button
               variant="primary"
               onClick={handleSaveAndClose}
-              disabled={hasAnyError}
+              disabled={hasAnyError || isSaving}
               data-testid="unsaved-save"
             >
-              {t('common.actions.save')}
+              {isSaving ? t('status.saving') : t('common.actions.save')}
             </Button>
           </>
         }

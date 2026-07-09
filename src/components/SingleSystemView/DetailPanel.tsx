@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
 import { WarningResolution } from './WarningResolution';
@@ -621,8 +622,15 @@ function StationDetail({ station }: { station: Station }) {
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnStation: s.triggerCenterOnStation, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredShot: s.setHoveredShot, setHoveredSectionId: s.setHoveredSectionId }))
   );
   const precision = useDecimalPrecision();
-  // Closure-adjusted view is read-only: disable mutation controls (edits happen in measured view).
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  // Mutation controls are disabled when the closure-adjusted view is active (edits
+  // happen in measured view) OR when the SpeleoDB project is read-only (no write
+  // lock). The Toolbar/SectionsPanel/ContextMenu already compose selectSpeleoReadOnly;
+  // the detail panel's edit/delete controls must too, or they stay live on a
+  // read-only project and only fail at the backend (agent-harness campaign ws07).
+  // Both hooks are called unconditionally (rules of hooks), then combined.
+  const geometryModeReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
+  const geometryReadOnly = geometryModeReadOnly || speleoReadOnly;
   const distanceGradientOrigin = useUIStore((s) => s.distanceGradientOrigin);
   const showDistanceGradient = useUIStore((s) => s.showDistanceGradient);
   // Show the active geometry's coordinates so inspection matches the map; falls

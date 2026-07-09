@@ -158,9 +158,11 @@ fn notice_unencrypted_once(endpoint: &str) {
 /// - `http://` → allowed only if every resolved address is private/loopback/
 ///   link-local (or `insecure_http` is set, which lifts the scheme block only);
 ///   the first allowed http connection of the session emits a one-time notice.
-/// - missing / unknown scheme → `Err(InsecureEndpoint)`.
+/// - missing / unknown scheme, or an unparseable URL → `Err(MalformedEndpoint)`
+///   (a typo the insecure-http toggle cannot fix; kept distinct from
+///   `InsecureEndpoint` so the message doesn't point at that toggle - ws02).
 pub(crate) fn enforce(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoDbError> {
-    let uri = Uri::from_str(endpoint).map_err(|_| SpeleoDbError::InsecureEndpoint {
+    let uri = Uri::from_str(endpoint).map_err(|_| SpeleoDbError::MalformedEndpoint {
         endpoint: endpoint.to_owned(),
     })?;
 
@@ -196,8 +198,10 @@ pub(crate) fn enforce(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoD
                 })
             }
         }
-        // D-B19: require an explicit, known scheme — never silently rewrite.
-        _ => Err(SpeleoDbError::InsecureEndpoint {
+        // D-B19: require an explicit, known scheme — never silently rewrite. A
+        // missing/unknown scheme is a malformed URL (a typo), not a security
+        // policy block, so the toggle-hinting InsecureEndpoint would mislead (ws02).
+        _ => Err(SpeleoDbError::MalformedEndpoint {
             endpoint: endpoint.to_owned(),
         }),
     }
@@ -308,13 +312,15 @@ mod tests {
 
     #[test]
     fn enforce_missing_scheme_rejected() {
-        // No scheme: refuse rather than guess http/https (D-B19).
+        // No scheme: refuse rather than guess http/https (D-B19). A missing/unknown
+        // scheme is MalformedEndpoint (a typo), NOT InsecureEndpoint - the message
+        // must not point at the insecure-http toggle, which cannot fix it (ws02).
         let err = enforce("10.10.0.220:8000", false).expect_err("missing scheme must be rejected");
-        assert!(matches!(err, SpeleoDbError::InsecureEndpoint { .. }));
+        assert!(matches!(err, SpeleoDbError::MalformedEndpoint { .. }));
         // An unknown scheme is likewise rejected.
         assert!(matches!(
             enforce("ftp://10.10.0.220", false),
-            Err(SpeleoDbError::InsecureEndpoint { .. })
+            Err(SpeleoDbError::MalformedEndpoint { .. })
         ));
     }
 
@@ -331,12 +337,13 @@ mod tests {
     fn enforce_insecure_http_bypasses_public_block() {
         // With the override set, a public http host is allowed (scheme block
         // lifted) — but a missing scheme is STILL rejected (the override only
-        // relaxes the http policy, not the require-explicit-scheme rule).
+        // relaxes the http policy, not the require-explicit-scheme rule), now as
+        // MalformedEndpoint (the typo the toggle cannot fix).
         assert!(enforce("http://8.8.8.8", true).is_ok());
         assert!(enforce("http://example.com", true).is_ok());
         assert!(matches!(
             enforce("10.10.0.220:8000", true),
-            Err(SpeleoDbError::InsecureEndpoint { .. })
+            Err(SpeleoDbError::MalformedEndpoint { .. })
         ));
     }
 }

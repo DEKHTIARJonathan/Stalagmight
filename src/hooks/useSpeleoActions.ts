@@ -279,15 +279,21 @@ export function useSpeleoActions(): SpeleoActions {
   const takeRemote = useCallback(async (): Promise<boolean> => {
     setBusy(true);
     try {
-      // Backend re-pulls + resets the tree to the server tip and returns the
-      // reloaded path; loadProject re-seeds the link status (→ read-only).
-      const localPath = await invokeIpc<string>('speleodb_take_remote');
-      // If the reload was superseded (the user opened another project mid-pull),
-      // don't claim success: the backend reset already happened, but the view the
-      // caller thinks it reloaded is not showing. Skip the toast + return false so
-      // the divergence dialog doesn't close over a project the user left.
-      const { success } = await loadProject(localPath);
-      if (!success) return false;
+      // Backend re-pulls + resets the tree to the server tip IN PLACE (close +
+      // reopen), discarding the local edits. It stays the same open path, so
+      // loadProject would short-circuit on the "already open" guard WITHOUT
+      // re-reading - leaving the just-discarded edits on screen under a success
+      // toast (agent-harness campaign ws15). Pull the swapped geometry + link
+      // state in explicitly, exactly as update()'s fast_forwarded arm and restore
+      // do. Clear the (section_id, station_index)-keyed selection first: the reset
+      // tree may not carry it.
+      await invokeIpc<string>('speleodb_take_remote');
+      clearSelection();
+      await refreshProjectState();
+      // The reset tree can differ structurally from the diverged one on screen;
+      // re-scan so the integrity banner reflects the server version (fire-and-forget).
+      void useProjectStore.getState().checkProjectIntegrity();
+      await refreshLinkStatus();
       showToast(t('speleodb.editBar.toasts.tookRemote'), 'speleodb-took-remote');
       return true;
     } catch (e) {
@@ -297,7 +303,16 @@ export function useSpeleoActions(): SpeleoActions {
       bumpPoll();
       setBusy(false);
     }
-  }, [loadProject, showToast, t, handleError, setBusy, bumpPoll]);
+  }, [
+    clearSelection,
+    refreshProjectState,
+    refreshLinkStatus,
+    showToast,
+    t,
+    handleError,
+    setBusy,
+    bumpPoll,
+  ]);
 
   return { busy, startEditing, forceEdit, update, push, done, takeRemote };
 }
