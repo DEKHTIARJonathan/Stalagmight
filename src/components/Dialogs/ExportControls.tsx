@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useId } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { saveDialog } from '../../utils/fileDialogs';
 import { useProjectStore } from '../../store/projectStore';
@@ -66,6 +66,9 @@ export default function ExportControls({
 
   const [isExporting, setIsExporting] = useState(false);
   const [labelsOptionsExpanded, setLabelsOptionsExpanded] = useState(false);
+  // Unique per-instance id: ExportControls renders in both the panel and the
+  // dialog, so a fixed id would duplicate in the DOM and break the ARIA link.
+  const labelsRegionId = useId();
   const [exportProgress, setExportProgress] = useState<LoadingProgressPayload | null>(null);
   const [showTmlUnanchoredWarning, setShowTmlUnanchoredWarning] = useState(false);
   const [tmlDiscardedSections, setTmlDiscardedSections] = useState<
@@ -371,7 +374,7 @@ export default function ExportControls({
                   className="flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary w-full text-left"
                   data-testid="export-labels-options-toggle"
                   aria-expanded={labelsOptionsExpanded}
-                  aria-controls="export-labels-options-content"
+                  aria-controls={labelsRegionId}
                 >
                   <ChevronRightIcon
                     size={12}
@@ -382,7 +385,7 @@ export default function ExportControls({
                 {labelsOptionsExpanded && (
                   <div
                     className="mt-2 space-y-2"
-                    id="export-labels-options-content"
+                    id={labelsRegionId}
                     data-testid="export-labels-options-content"
                   >
                     <label className="flex items-center gap-2 text-sm">

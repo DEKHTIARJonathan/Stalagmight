@@ -1760,16 +1760,23 @@ fn place_near(
 }
 
 /// Nine candidate `(dx, dy)` offsets at distance `offset` from a station:
-/// `primary` first, then four ± `step` fallback pairs rotating outward.
-/// Mirrors the placement order Pass 3/4 used before [`place_near`] existed.
+/// `primary` first, then ± `step` fallback directions rotating outward (the
+/// mirror is dropped at the step where + and - coincide). 8 distinct candidates
+/// for the callers' pi/4 step. Mirrors the order Pass 3/4 used before
+/// [`place_near`] existed.
 fn radial_offsets(primary: f64, step: f64, offset: f64) -> Vec<(f64, f64)> {
-    let mut out = Vec::with_capacity(9);
+    let mut out = Vec::with_capacity(8);
     out.push((offset * primary.cos(), offset * primary.sin()));
     for k in 1..=4 {
         let a = primary + (k as f64) * step;
         out.push((offset * a.cos(), offset * a.sin()));
-        let b = primary - (k as f64) * step;
-        out.push((offset * b.cos(), offset * b.sin()));
+        // With the callers' step (pi/4), k == 4 makes primary - k*step point the
+        // same way as primary + k*step (both primary +/- pi), so add the mirror
+        // only for k < 4 to drop that duplicate direction. 8 distinct candidates.
+        if k < 4 {
+            let b = primary - (k as f64) * step;
+            out.push((offset * b.cos(), offset * b.sin()));
+        }
     }
     out
 }
