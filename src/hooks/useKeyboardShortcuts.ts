@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { useUIStore, isMapReadOnly } from '../store/uiStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
 import { useProjectStore } from '../store/projectStore';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
@@ -422,8 +423,12 @@ export function useKeyboardShortcuts() {
         }
         // GUARD: read-only — no deletes in the closure-adjusted view OR in Plan/Export
         // (which can fall back to geometryMode 'measured' on a no-closures project, so
-        // the appMode check is load-bearing).
+        // the appMode check is load-bearing), OR on a read-only SpeleoDB project (no
+        // write lock). Without the SpeleoDB check, Delete opens the destructive
+        // confirm dialog on a read-only project and only no-ops at the backend
+        // (agent-harness campaign ws07).
         if (isMapReadOnly(useUIStore.getState())) return;
+        if (selectSpeleoReadOnly(useSpeleoStore.getState())) return;
         // GUARD: No delete for pan/zoom tools
         const currentToolDel = useUIStore.getState().activeTool;
         if (isNonInteractiveTool(currentToolDel)) return;

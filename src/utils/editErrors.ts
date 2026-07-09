@@ -33,3 +33,16 @@ export function isReverifyDivergedError(error?: string | null): boolean {
 /** User-facing message shown when a read-only project rejects an edit. */
 export const READ_ONLY_EDIT_NOTICE =
   'This project is open read-only - click Start editing to acquire the lock.';
+
+/**
+ * Map a raw `CommandResult.error` to a user-facing string: the read-only edit
+ * gate (`EDIT_DISABLED: ...`) becomes the friendly notice; anything else passes
+ * through (or the caller's fallback when absent). Use this at any dialog/inline
+ * error sink that renders `result.error` verbatim, so a blocked edit never shows
+ * the raw internal code (agent-harness campaign ws07: EditStationDialog leaked
+ * "EDIT_DISABLED: Set comment on station 0:2 is disabled: ...").
+ */
+export function humanizeEditError(error: string | null | undefined, fallback: string): string {
+  if (isEditDisabledError(error)) return READ_ONLY_EDIT_NOTICE;
+  return error ?? fallback;
+}

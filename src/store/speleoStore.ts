@@ -549,15 +549,16 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           // last-known permission rather than blanking the gate on a transient miss.
           permission: s.permission ?? state.link?.permission ?? null,
           lockHolder: s.lock_holder,
-          // Read-only + a resolved holder ⟹ someone else holds it (the backend
-          // gives us the gate when the lock is ours). Derived PURELY from this
-          // poll's (editState, lockHolder), with NO "preserve prior" carry: once the
-          // other holder releases (a later poll resolves no holder) the button stops
-          // reading "locked by other" instead of sticking orange until a poll both
-          // reaches the server AND happens to resolve a holder (fix 7). A transient
-          // offline poll may briefly drop it to read-only; the next poll re-resolves,
-          // and the backend gate stays the real enforcement.
-          lockedByOther: editState !== 'editing' && !!s.lock_holder,
+          // Someone else holds it ⟺ there is a resolved holder AND it is not us.
+          // We hold the lock only when edit-enabled WITHOUT force-editing (a
+          // force-editor is edit-enabled but holds NO lock). Deriving from
+          // lock_holder independent of edit state - not `editState !== 'editing'` -
+          // makes this agree with applyStartEditing's locked_by writer during a
+          // force-edit (both true), so the force-edit banner's holder name no longer
+          // reverts to generic text on the next poll (agent-harness campaign ws12).
+          // Still PURELY this poll's fields (no "preserve prior" carry): once the
+          // holder releases, a later poll resolves no holder and the flag clears.
+          lockedByOther: !!s.lock_holder && !(s.edit_enabled && !s.force_editing),
           hasUnpushedEdits: s.has_unpushed_edits,
           // #213: force-edit (edit-enabled WITHOUT a held lock) is backend-authoritative
           // and reported every poll; a reconnect that acquires the lock clears it there.

@@ -67,7 +67,9 @@ pub(crate) enum SpeleoDbError {
     #[error("invalid response from SpeleoDB: {0}")]
     Parse(String),
     /// The dump contained no openable project and no Ariane sidecar.
-    #[error("the project dump contained nothing to open")]
+    #[error(
+        "This SpeleoDB project has no survey file yet. Upload a Stalagmight (.stalx) or an Ariane (.tml) file to it first, then open it."
+    )]
     EmptyDump,
     /// The dump held an `ariane.tml` but no `.stalx` - route to the one-time C2
     /// adoption flow (#214). Surfaced to the FE as `SpeleoDbAction::Adopt`, not a
@@ -75,7 +77,10 @@ pub(crate) enum SpeleoDbError {
     #[error("this is an Ariane (.tml) project; adopt it to edit it in Stalagmight")]
     AdoptAriane,
     /// The dump held more than one `.stalx` — ambiguous; fail closed.
-    #[error("SpeleoDB contained multiple ambiguous .stalx files: {}", .0.join(", "))]
+    #[error(
+        "This SpeleoDB project contains more than one Stalagmight file ({}), so it is not clear which one to open. Remove the extra file(s) on SpeleoDB, leaving a single one, then open it.",
+        .0.join(", ")
+    )]
     AmbiguousDump(Vec<String>),
     /// A local filesystem error while extracting/writing.
     #[error("filesystem error: {0}")]
@@ -91,12 +96,22 @@ pub(crate) enum SpeleoDbError {
     /// [`SpeleoDbError::InvalidProjectId`].
     #[error("invalid SpeleoDB revision id")]
     InvalidRevision,
-    // [Track A] #187: the endpoint scheme/host failed the http private-network
-    // policy (public `http://`, a missing/unknown scheme, or an unresolvable
-    // host). Non-retryable by construction — `tls::enforce` errors before any
-    // request attempt, so `with_retry` never loops on it.
-    #[error("refusing to use an insecure SpeleoDB endpoint: {endpoint}")]
+    // [Track A] #187: a syntactically valid `http://` endpoint failed the
+    // private-network policy (public address, or an unresolvable host). The
+    // "Allow insecure HTTP" toggle CAN lift the public-address block, so the
+    // message points at it. Non-retryable by construction — `tls::enforce` errors
+    // before any request attempt, so `with_retry` never loops on it. Distinct
+    // from `MalformedEndpoint` (a typo the toggle cannot fix) so the two do not
+    // share one misleading message (agent-harness campaign ws02).
+    #[error(
+        "Refusing to send credentials over plaintext http to a public SpeleoDB endpoint: {endpoint}. If you trust this connection, enable \"Allow insecure HTTP\" in Settings."
+    )]
     InsecureEndpoint { endpoint: String },
+    /// The endpoint could not be parsed as a URL, or has a missing/unknown
+    /// scheme. This is a typo, not a security policy decision, so the message
+    /// does NOT mention the insecure-http toggle (which cannot fix it).
+    #[error("\"{endpoint}\" is not a valid SpeleoDB URL. Include http:// or https:// and check for typos.")]
+    MalformedEndpoint { endpoint: String },
     /// [P1] No open remote SpeleoDB project to act on (start editing / done /
     /// update require one). Fails closed (Fatal).
     #[error("no open SpeleoDB project")]
@@ -129,7 +144,7 @@ mod tests {
         );
         assert_eq!(
             SpeleoDbError::EmptyDump.to_string(),
-            "the project dump contained nothing to open"
+            "This SpeleoDB project has no survey file yet. Upload a Stalagmight (.stalx) or an Ariane (.tml) file to it first, then open it."
         );
         assert_eq!(
             SpeleoDbError::AdoptAriane.to_string(),
@@ -150,20 +165,30 @@ mod tests {
         assert_eq!(
             SpeleoDbError::AmbiguousDump(vec!["a.stalx".to_owned(), "b.stalx".to_owned()])
                 .to_string(),
-            "SpeleoDB contained multiple ambiguous .stalx files: a.stalx, b.stalx"
+            "This SpeleoDB project contains more than one Stalagmight file (a.stalx, b.stalx), so it is not clear which one to open. Remove the extra file(s) on SpeleoDB, leaving a single one, then open it."
         );
         assert_eq!(
             SpeleoDbError::Transport("Connection refused".to_owned()).to_string(),
             "Network error talking to SpeleoDB: Connection refused"
         );
         // [Track A] #187: the insecure-endpoint message is the human-facing
-        // surface for a blocked public-http / scheme-less endpoint; pin it.
+        // surface for a blocked public-http endpoint; pin it. It hints the
+        // "Allow insecure HTTP" toggle, which can lift THIS block.
         assert_eq!(
             SpeleoDbError::InsecureEndpoint {
                 endpoint: "http://example.com".to_owned(),
             }
             .to_string(),
-            "refusing to use an insecure SpeleoDB endpoint: http://example.com"
+            "Refusing to send credentials over plaintext http to a public SpeleoDB endpoint: http://example.com. If you trust this connection, enable \"Allow insecure HTTP\" in Settings."
+        );
+        // ws02: a malformed / scheme-less endpoint is distinct from InsecureEndpoint
+        // and must NOT mention the toggle (which cannot fix a typo).
+        assert_eq!(
+            SpeleoDbError::MalformedEndpoint {
+                endpoint: "10.10.0.220:8000".to_owned(),
+            }
+            .to_string(),
+            "\"10.10.0.220:8000\" is not a valid SpeleoDB URL. Include http:// or https:// and check for typos."
         );
     }
 }

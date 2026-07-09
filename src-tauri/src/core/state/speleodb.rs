@@ -855,25 +855,23 @@ impl AppState {
         whoami_indicates_dead_token(&client::fetch_user_email(&endpoint, &token, insecure_http))
     }
 
-    /// Persist the authoritative account email - never the token - so a later
-    /// silent rehydrate can key the keychain lookup by (endpoint, email) after a
-    /// restart. The email is only known once login resolves it, so it can't ride
-    /// the Settings config the way the endpoint does.
-    ///
-    /// The **endpoint is deliberately NOT persisted here**: it is a user-facing
-    /// Settings field owned by the config-staging flow, persisted only when the
-    /// Settings dialog's Save runs (`updateConfig`). Writing it as a login side
-    /// effect meant a "Log in now" test - or any login - leaked the endpoint into
-    /// the saved config behind the dialog's back, surviving a Cancel/Undo, and
-    /// also risked leaking the `DEV_SPELEODB_URL` dev box. Best-effort; a failure
-    /// is logged, not fatal.
-    fn speleodb_persist_email(&self, email: &str) {
+    /// Persist the authoritative account email AND the endpoint login resolved to
+    /// - never the token - so a later silent rehydrate keys the keychain lookup by
+    /// the SAME (endpoint, email) the token was stored under. The endpoint MUST be
+    /// persisted (ws19): the token is stored under the login-time endpoint (which
+    /// may be a dialog override typed but not Saved) while `rehydrate` resolves it
+    /// from config, so without this a custom-endpoint user who logs in without
+    /// pressing Save is silently logged out next launch (token present, wrong
+    /// lookup key). A successful "Log in now" is a real committed login (ws05/ws19),
+    /// so committing its endpoint is correct. Best-effort; a failure is logged.
+    fn speleodb_persist_account(&self, endpoint: &str, email: &str) {
         let Ok(mut config) = self.config.lock() else {
             return;
         };
         config.speleodb.email = Some(email.to_owned());
+        config.speleodb.endpoint = Some(endpoint.to_owned());
         if let Err(e) = config.save() {
-            tracing::warn!(error = %e, "failed to persist SpeleoDB account email to config");
+            tracing::warn!(error = %e, "failed to persist SpeleoDB account (email + endpoint) to config");
         }
     }
 
@@ -956,7 +954,7 @@ impl AppState {
             tier == crate::speleodb::auth::TokenTier::Keychain
         };
 
-        self.speleodb_persist_email(&email);
+        self.speleodb_persist_account(&endpoint, &email);
 
         Ok(SpeleoLoginResult {
             user_email: email,
@@ -1266,6 +1264,16 @@ impl AppState {
             self.speleodb_my_email()
                 .is_some_and(|me| sync::concurrent_session_notice(holder.as_deref(), &me))
         };
+
+        // Close the project left open by `do_create_project_full` inside
+        // `adopt_import_and_save`. The FE opens the adopted `.stalx` next (a genuine
+        // first open); if we leave it open here, that load hits the "already open"
+        // guard and the FE short-circuits to an empty view with no feedback
+        // (agent-harness campaign ws10). Mirrors the restore/fast-forward reload,
+        // which also drops the live handle before the FE reads the swapped tree. The
+        // link + type flip above already persisted to disk, so nothing below needs
+        // the in-memory project.
+        self.close_project();
 
         Ok(SpeleoAdoptResult {
             local_path: dest.to_string_lossy().into_owned(),

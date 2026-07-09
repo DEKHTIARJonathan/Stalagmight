@@ -153,4 +153,34 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
     expect(refreshProjectState).toHaveBeenCalled();
     expect(refreshLinkStatus).toHaveBeenCalled();
   });
+
+  it('takeRemote pulls the swapped tree in place WITHOUT loadProject (ws15)', async () => {
+    // Take-remote resets the tree to the server tip in place (same open path), so
+    // loadProject would short-circuit on the "already open" guard and leave the
+    // just-discarded local edits on screen under a success toast. It must instead
+    // clearSelection + refreshProjectState + refreshLinkStatus and never call
+    // loadProject. Deleting those refresh calls (reintroducing the ws15 stale-tree
+    // paint) makes this fail.
+    const loadProject = vi.fn(async () => ({ success: true }));
+    const refreshProjectState = vi.fn(async () => {});
+    const refreshLinkStatus = vi.fn(async () => {});
+    const clearSelection = vi.fn();
+    useProjectStore.setState({ loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useSpeleoStore.setState({ refreshLinkStatus });
+    useUIStore.setState({ showToast: vi.fn(), clearSelection });
+    invokeIpcMock.mockResolvedValue('/z.stalx');
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.takeRemote();
+    });
+
+    expect(outcome).toBe(true);
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_take_remote');
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(clearSelection).toHaveBeenCalled();
+    expect(refreshProjectState).toHaveBeenCalled();
+    expect(refreshLinkStatus).toHaveBeenCalled();
+  });
 });

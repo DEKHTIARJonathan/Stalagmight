@@ -831,8 +831,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       } catch (e) {
         const error = parseLoadError(e);
 
-        // Handle ALREADY_OPEN specially - not an error, just switch view
+        // Handle ALREADY_OPEN specially - not an error, just switch view. The
+        // backend already holds this path open, so there is nothing to load.
+        // Defense-in-depth: if the store does NOT already hold that project (a
+        // first open that landed on an already-open backend, e.g. adopt before its
+        // close_project fix), pull the backend's live state in rather than showing
+        // an empty view (agent-harness campaign ws10). When the store already has
+        // the project this is a plain view switch, as before.
         if (error.code === 'ALREADY_OPEN') {
+          if (!get().project) {
+            await get().refreshProjectState();
+          }
           useUIStore.getState().setView('single');
           get().resetLoading();
           await get().refreshUndoState();

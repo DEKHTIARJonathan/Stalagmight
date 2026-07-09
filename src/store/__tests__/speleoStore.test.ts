@@ -133,6 +133,18 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().link?.lockedByOther).toBe(false);
     });
 
+    it('force-editing (edit-enabled WITHOUT a lock) + a holder ⟹ lockedByOther (ws12)', () => {
+      // A force-editor is edit_enabled but holds NO lock, so a resolved holder is
+      // someone else. Deriving from lock_holder + "do we actually hold it" (not
+      // editState alone) keeps this true across polls, so the force-edit banner's
+      // holder name no longer reverts to generic text on the next poll.
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(status({ edit_enabled: true, force_editing: true, lock_holder: 'a@b' }));
+      expect(useSpeleoStore.getState().link?.lockedByOther).toBe(true);
+      expect(useSpeleoStore.getState().link?.lockHolder).toBe('a@b');
+    });
+
     it('clears a prior lockedByOther once a later poll resolves no holder (fix 7)', () => {
       // Someone else held it, then released: the next poll reports no holder, and the
       // flag must drop (no "preserve prior" carry keeping the button stuck orange).

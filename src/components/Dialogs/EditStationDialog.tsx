@@ -8,6 +8,7 @@ import { DialogWrapper } from './DialogWrapper';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
+import { humanizeEditError } from '../../utils/editErrors';
 import type { GpsCoordinates } from '../../types/project';
 import type { StationRef } from '../../types/project';
 
@@ -114,14 +115,14 @@ export default function EditStationDialog() {
         });
 
         if (!result.success) {
-          setError(result.error ?? 'Failed to set zero datum');
+          setError(humanizeEditError(result.error, 'Failed to set zero datum'));
           return;
         }
       } else if (wasZeroDatum && !willBeZeroDatum) {
         // Removing zero datum
         const result = await removeZeroDatum(stationRef);
         if (!result.success) {
-          setError(result.error ?? 'Failed to remove zero datum');
+          setError(humanizeEditError(result.error, 'Failed to remove zero datum'));
           return;
         }
       } else if (wasZeroDatum && willBeZeroDatum) {
@@ -142,7 +143,7 @@ export default function EditStationDialog() {
           });
 
           if (!result.success) {
-            setError(result.error ?? 'Failed to update zero datum');
+            setError(humanizeEditError(result.error, 'Failed to update zero datum'));
             return;
           }
         }
@@ -156,7 +157,7 @@ export default function EditStationDialog() {
           comment.trim() || null
         );
         if (!commentResult.success) {
-          setError(commentResult.error ?? 'Failed to update comment');
+          setError(humanizeEditError(commentResult.error, 'Failed to update comment'));
           return;
         }
       }

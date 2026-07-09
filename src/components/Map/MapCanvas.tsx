@@ -280,6 +280,11 @@ function MapCanvas() {
   // T2b: a remote SpeleoDB project opened without the write lock shows a
   // top-left read-only badge, mirroring the closure-adjusted view-only badge.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
+  // Who holds the lock, so the read-only badge can name them instead of only
+  // saying "read-only" (agent-harness campaign ws12: the badge was the one
+  // persistent on-screen surface and it never said who was editing).
+  const speleoLockedByOther = useSpeleoStore((s) => s.link?.lockedByOther ?? false);
+  const speleoLockHolder = useSpeleoStore((s) => s.link?.lockHolder ?? null);
   const setGeometryMode = useUIStore((s) => s.setGeometryMode);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
 
@@ -3968,7 +3973,11 @@ function MapCanvas() {
             data-testid="speleodb-readonly-banner"
           >
             <LockIcon size={13} />
-            <span className="text-accent font-medium">{t('speleodb.map.readOnlyBadge')}</span>
+            <span className="text-accent font-medium">
+              {speleoLockedByOther && speleoLockHolder
+                ? t('speleodb.map.lockedByBadge', { email: speleoLockHolder })
+                : t('speleodb.map.readOnlyBadge')}
+            </span>
           </div>
         )}
       </div>

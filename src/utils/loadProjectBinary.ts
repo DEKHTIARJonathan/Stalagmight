@@ -15,6 +15,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { decode as msgpackDecode } from '@msgpack/msgpack';
+import { debugLog } from './debugLog';
 import type { LoadProjectFullResult } from '../types/ipc/LoadProjectFullResult';
 import type { Project } from '../types/ipc/Project';
 import type { CollabState } from '../types/ipc/CollabState';
@@ -41,6 +42,19 @@ import {
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../types/survey-data';
 import { recordPerfTiming } from './memoryProbe';
+
+/**
+ * True when a raw `load_project_full_binary` rejection is the backend's
+ * ALREADY_OPEN signal (the path is already the live project). Tauri delivers
+ * command errors as a JSON string or an object; match either shape.
+ */
+export function isAlreadyOpen(e: unknown): boolean {
+  if (typeof e === 'string') return e.includes('ALREADY_OPEN');
+  if (typeof e === 'object' && e !== null) {
+    return (e as Record<string, unknown>).code === 'ALREADY_OPEN';
+  }
+  return false;
+}
 
 /**
  * Extended result type that carries both the legacy LoadProjectFullResult
@@ -138,7 +152,16 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
   try {
     raw = await invoke<ArrayBuffer>('load_project_full_binary', { path });
   } catch (e) {
-    console.error('[loadProjectFullBinary] IPC failed:', e);
+    // ALREADY_OPEN is not a failure: it is the expected signal when the backend
+    // already holds this exact path open (an in-place fast-forward / restore /
+    // take-remote swap), which loadProject's caller catches and recovers from.
+    // Logging it at error level pollutes the ring/telemetry with a non-problem
+    // (agent-harness campaign ws06/ws14/ws16). Keep the rethrow; downgrade the log.
+    if (isAlreadyOpen(e)) {
+      debugLog('[loadProjectFullBinary] backend reports ALREADY_OPEN (handled by caller):', e);
+    } else {
+      console.error('[loadProjectFullBinary] IPC failed:', e);
+    }
     throw e;
   }
   const tInvokeDone = performance.now();

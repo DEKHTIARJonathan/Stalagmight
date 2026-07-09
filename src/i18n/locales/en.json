@@ -630,7 +630,7 @@
         "help": "Where to keep your login token. The OS keychain is always tried first.",
         "aria": "Token storage fallback",
         "options": {
-          "sessionOnly": "This session only",
+          "sessionOnly": "In memory only (used if the keychain is unavailable)",
           "plaintext": "Plaintext file (less secure)"
         },
         "plaintextWarning": "If the keychain is unavailable, your token will be written to a plaintext file on disk (readable only by your user). Prefer keeping it in memory for this session unless you understand the risk."
@@ -654,7 +654,7 @@
         "memoryOnly": "Token kept in memory only (no keychain) - it won't survive a restart.",
         "logout": "Log out",
         "willSignOut": "You'll be signed out when you press Save.",
-        "willSignIn": "Log in now to check your details, or they'll be applied when you press Save.",
+        "willSignIn": "Log in now signs you in immediately and saves this connection. Otherwise your changes apply when you press Save.",
         "replacesSession": "This will replace your current session ({{email}}).",
         "undo": "Undo",
         "email": "Email",
@@ -2664,7 +2664,8 @@
   },
   "speleodb": {
     "map": {
-      "readOnlyBadge": "SpeleoDB · read-only"
+      "readOnlyBadge": "SpeleoDB · read-only",
+      "lockedByBadge": "SpeleoDB · locked by {{email}}"
     },
     "button": {
       "unlocked": "Read-only - click to start editing (acquire the lock)",
@@ -2672,7 +2673,7 @@
       "editingClean": "You hold the lock - click to release it",
       "forceEditing": "Editing WITHOUT the lock - your changes can't be merged until you reconnect. Click to reconnect.",
       "forceEditingLockedBy": "Editing WITHOUT the lock ({{email}} holds it) - click to reconnect and reconcile",
-      "lockedByOther": "Being edited by {{email}} - click to pull the latest",
+      "lockedByOther": "Being edited by {{email}} - click to try to start editing (works once they release the lock)",
       "remoteAhead": "SpeleoDB has newer changes - click to pull",
       "conflict": "Local and remote have diverged - click to resolve",
       "viewOnly": "Read-only access - click to refresh from SpeleoDB",

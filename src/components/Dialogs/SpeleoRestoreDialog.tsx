@@ -4,6 +4,7 @@ import { Button } from '../common/Button';
 import { AlertDialog } from './AlertDialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { useRestoreRevision } from '../../hooks/useRestoreRevision';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 
@@ -23,6 +24,12 @@ export default function SpeleoRestoreDialog() {
   const closeDialog = useUIStore((s) => s.closeDialog);
   const dialogData = useUIStore((s) => s.dialogData);
   const isDirty = useProjectStore((s) => s.isDirty);
+  // Restore overwrites the working tree. Warn about losing work whenever there
+  // is any: unsaved (isDirty) OR saved-but-not-pushed (hasUnpushedEdits). Gating
+  // on isDirty alone missed autosaved-but-unpushed edits, which restore also
+  // discards, with no warning (agent-harness campaign ws16).
+  const hasUnpushedEdits = useSpeleoStore((s) => s.link?.hasUnpushedEdits ?? false);
+  const hasWorkToLose = isDirty || hasUnpushedEdits;
   const restoreRevision = useRestoreRevision();
 
   const projectId = typeof dialogData.projectId === 'string' ? dialogData.projectId : '';
@@ -78,7 +85,7 @@ export default function SpeleoRestoreDialog() {
       <div className="space-y-2 text-sm text-text-secondary">
         <p>{t('speleodb.restore.body', { sha: shortSha, name: projectName })}</p>
         <p>{t('speleodb.restore.consequence')}</p>
-        {isDirty && (
+        {hasWorkToLose && (
           <p className="text-warning" data-testid="speleodb-restore-unsaved-warning">
             {t('speleodb.restore.unsavedWarning')}
           </p>

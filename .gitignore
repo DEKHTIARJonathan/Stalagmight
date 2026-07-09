@@ -73,3 +73,7 @@ telemetry-worker/.wrangler/
 
 # Agent harness per-session artifacts (screenshots, action logs, state snapshots)
 .agent-artifacts/
+
+# Machine-local pnpm Node pin (use-node-version); the repo pins the toolchain via
+# corepack + packageManager, so a local .npmrc must never be tracked.
+.npmrc

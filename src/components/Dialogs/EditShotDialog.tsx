@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
+import { humanizeEditError } from '../../utils/editErrors';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -113,7 +114,7 @@ export default function EditShotDialog() {
         trackDialogComplete('edit-shot');
         closeDialog();
       } else {
-        setError(result.error ?? 'Failed to update shot');
+        setError(humanizeEditError(result.error, 'Failed to update shot'));
       }
     } catch (e) {
       setError(getErrorMessage(e, 'Failed to update shot'));

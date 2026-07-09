@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   EDIT_DISABLED,
   EDIT_REVERIFY_DIVERGED,
+  READ_ONLY_EDIT_NOTICE,
+  humanizeEditError,
   isEditDisabledError,
   isReverifyDivergedError,
 } from '../editErrors';
@@ -22,6 +24,23 @@ describe('isEditDisabledError', () => {
 
   it('only matches at the start of the string (mirrors the backend prefix)', () => {
     expect(isEditDisabledError(`prefix ${EDIT_DISABLED}`)).toBe(false);
+  });
+});
+
+describe('humanizeEditError', () => {
+  it('replaces a raw EDIT_DISABLED rejection with the friendly notice', () => {
+    expect(
+      humanizeEditError(`${EDIT_DISABLED}: Set comment on station 0:2 is disabled: read-only.`, 'fallback'),
+    ).toBe(READ_ONLY_EDIT_NOTICE);
+  });
+
+  it('passes an unrelated error through unchanged', () => {
+    expect(humanizeEditError('Disk full', 'fallback')).toBe('Disk full');
+  });
+
+  it('uses the fallback when the error is null or undefined', () => {
+    expect(humanizeEditError(null, 'fallback')).toBe('fallback');
+    expect(humanizeEditError(undefined, 'fallback')).toBe('fallback');
   });
 });
 

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { humanizeEditError } from '../../utils/editErrors';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { getThemeColor } from '../../utils/themeColors';
@@ -276,7 +277,7 @@ export default function EditSectionDialog() {
       });
 
       if (!sectionResult.success) {
-        setError(sectionResult.error ?? 'Failed to update section');
+        setError(humanizeEditError(sectionResult.error, 'Failed to update section'));
         return;
       }
 
@@ -288,7 +289,7 @@ export default function EditSectionDialog() {
       for (const shot of deletedShots.reverse()) {
         const result = await deleteShot(sectionId, shot.id);
         if (!result.success) {
-          setError(result.error ?? 'Failed to delete shot');
+          setError(humanizeEditError(result.error, 'Failed to delete shot'));
           return;
         }
       }
@@ -315,7 +316,7 @@ export default function EditSectionDialog() {
             temperature: original.temperature ?? null,
           });
           if (!result.success) {
-            setError(result.error ?? 'Failed to update shot');
+            setError(humanizeEditError(result.error, 'Failed to update shot'));
             return;
           }
         }
@@ -343,7 +344,7 @@ export default function EditSectionDialog() {
         };
         const result = await createShot(sectionId, shotData);
         if (!result.success) {
-          setError(result.error ?? 'Failed to create shot');
+          setError(humanizeEditError(result.error, 'Failed to create shot'));
           return;
         }
       }
