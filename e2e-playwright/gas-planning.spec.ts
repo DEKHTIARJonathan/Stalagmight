@@ -821,8 +821,20 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="export-mode-preview"]')).toBeVisible();
     await expect(panel.getByTestId('export-type-image')).toBeChecked();
 
-    // Customize controls: the penetration-labels toggle + the Color dropdown, which
-    // offers the depth/distance/section gradients that match the survey map.
+    // The label/color controls live in a collapsible "Comments & Labels Options"
+    // section, collapsed by default to keep the panel uncluttered. Expand it.
+    await expect(panel.getByTestId('export-show-labels')).toHaveCount(0);
+    await panel.getByTestId('export-labels-options-toggle').click();
+
+    // The full label toggle set is present (mirrors the Display tab's group),
+    // alongside the penetration toggle and the Color dropdown.
+    await expect(panel.getByTestId('export-show-section-names')).toBeVisible();
+    await expect(panel.getByTestId('export-show-station-labels')).toBeVisible();
+    await expect(panel.getByTestId('export-show-station-comments')).toBeVisible();
+    await expect(panel.getByTestId('export-show-shot-comments')).toBeVisible();
+    await expect(panel.getByTestId('export-show-shot-data')).toBeVisible();
+    // The penetration-labels toggle + the Color dropdown, which offers the
+    // depth/distance/section gradients that match the survey map.
     await expect(panel.getByTestId('export-show-labels')).toBeVisible();
     const colorSelect = panel.getByTestId('export-color-mode');
     await expect(colorSelect).toBeVisible();

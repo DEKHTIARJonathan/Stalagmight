@@ -79,6 +79,27 @@ fn sanitize_hex_color(color: &str) -> &str {
     }
 }
 
+/// Escapes the five XML metacharacters so user free-text (section names,
+/// station/shot comments) is safe to write into SVG `<text>` content. Without
+/// this, a comment containing `&`, `<`, or `>` (all legal, common free text)
+/// produces invalid XML that fails resvg/svg2pdf parsing on the PNG/PDF paths,
+/// or injects sibling markup into the raw `.svg` (which has no parse gate). The
+/// numeric labels (penetration, station index, shot data) need no escaping.
+fn escape_xml_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 // --- Shot color gradients (mirror the live survey map) ----------------------
 // The map computes these colors in the FRONTEND (src/utils/colors.ts +
 // distanceGradient.ts), NOT via the orphaned Rust DepthPreset. To match on
@@ -1342,7 +1363,11 @@ pub fn generate_svg_string_with_stations(
                         );
                         opened = true;
                     }
-                    let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
+                    let _ = writeln!(
+                        svg,
+                        r#"<text x="{lx:.2}" y="{ly:.2}">{t}</text>"#,
+                        t = escape_xml_text(&text),
+                    );
                     placed.push(bb);
                 }
             }
@@ -1366,6 +1391,7 @@ pub fn generate_svg_string_with_stations(
             let mut seen: HashSet<StationRef> = HashSet::new();
             let mut sum_x = 0.0;
             let mut sum_y = 0.0;
+            let mut summed = 0u32;
             for (i, shot) in section.shots.iter().enumerate() {
                 if shot.is_reference {
                     continue;
@@ -1374,18 +1400,21 @@ pub fn generate_svg_string_with_stations(
                     StationRef::new(section.id, i as u32),
                     StationRef::new(section.id, (i + 1) as u32),
                 ] {
+                    // Average only the points we actually resolved, so a missing
+                    // lookup can't dilute the centroid toward the world origin.
                     if seen.insert(sr) {
                         if let Some(s) = station_by_ref.get(&sr) {
                             sum_x += s.coordinates.x;
                             sum_y += -s.coordinates.y;
+                            summed += 1;
                         }
                     }
                 }
             }
-            if seen.is_empty() {
+            if summed == 0 {
                 continue;
             }
-            let count = seen.len() as f64;
+            let count = f64::from(summed);
             let cx = sum_x / count;
             let cy = sum_y / count;
             let text = section
@@ -1405,7 +1434,11 @@ pub fn generate_svg_string_with_stations(
                     );
                     opened = true;
                 }
-                let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
+                let _ = writeln!(
+                    svg,
+                    r#"<text x="{lx:.2}" y="{ly:.2}">{t}</text>"#,
+                    t = escape_xml_text(&text),
+                );
                 placed.push(bb);
             }
         }
@@ -1427,19 +1460,32 @@ pub fn generate_svg_string_with_stations(
         let y1 = -to.coordinates.y;
         ((x0 + x1) * 0.5, (y0 + y1) * 0.5, (y1 - y0).atan2(x1 - x0))
     }
-    fn perpendicular_offsets(dir: f64, offset: f64) -> [(f64, f64); 2] {
+    // Candidate offsets for a shot-midpoint label: the two perpendicular sides
+    // first (closest, cleanest), then the same two farther out, then a compass
+    // ring as a last resort. Richer than a bare 2-candidate perpendicular so a
+    // dense passage drops far fewer labels before giving up (matches the
+    // 9-candidate budget the station/section passes get).
+    fn shot_offsets(dir: f64, offset: f64) -> Vec<(f64, f64)> {
         let a = dir + std::f64::consts::FRAC_PI_2;
         let b = dir - std::f64::consts::FRAC_PI_2;
-        [
-            (offset * a.cos(), offset * a.sin()),
-            (offset * b.cos(), offset * b.sin()),
-        ]
+        let mut out = Vec::with_capacity(12);
+        out.push((offset * a.cos(), offset * a.sin()));
+        out.push((offset * b.cos(), offset * b.sin()));
+        out.push((1.8 * offset * a.cos(), 1.8 * offset * a.sin()));
+        out.push((1.8 * offset * b.cos(), 1.8 * offset * b.sin()));
+        for k in 0..8 {
+            let g = (k as f64) * std::f64::consts::FRAC_PI_4;
+            out.push((offset * g.cos(), offset * g.sin()));
+        }
+        out
     }
 
     // Pass 6: shot-data labels (azimuth/length/depth) at each non-reference
-    // shot's screen midpoint, mirroring the live map's shot label exactly
-    // (see `features.ts`): `{azimuth_in:.1}° {length:.1}m {depth:.1}m`, where
-    // depth is the mean of the two endpoint stations' z (no sign flip).
+    // shot's screen midpoint, matching the live map's shot label
+    // (see `features.ts`): `{azimuth_in} {length}m {depth}m`, where depth is the
+    // mean of the two endpoint stations' z (no sign flip). Precision is fixed at
+    // 1 decimal (the app's default decimal_precision for all three); the
+    // per-project precision config is not threaded into the exporter yet.
     if options.show_shot_data {
         let label_size = px(PEN_LABEL_PX);
         let halo = px(PEN_LABEL_HALO_PX);
@@ -1466,7 +1512,7 @@ pub fn generate_svg_string_with_stations(
                 );
                 let text_w = char_w * text.chars().count() as f64;
                 let text_h = label_size;
-                let offsets = perpendicular_offsets(dir, offset);
+                let offsets = shot_offsets(dir, offset);
                 if let Some((lx, ly, bb)) =
                     place_near(mid_x, mid_y, &offsets, text_w, text_h, &placed)
                 {
@@ -1516,7 +1562,7 @@ pub fn generate_svg_string_with_stations(
                 let (mid_x, mid_y, dir) = shot_label_anchor(from, to);
                 let text_w = char_w * text.chars().count() as f64;
                 let text_h = label_size;
-                let offsets = perpendicular_offsets(dir, offset);
+                let offsets = shot_offsets(dir, offset);
                 if let Some((lx, ly, bb)) =
                     place_near(mid_x, mid_y, &offsets, text_w, text_h, &placed)
                 {
@@ -1529,7 +1575,11 @@ pub fn generate_svg_string_with_stations(
                         );
                         opened = true;
                     }
-                    let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
+                    let _ = writeln!(
+                        svg,
+                        r#"<text x="{lx:.2}" y="{ly:.2}">{t}</text>"#,
+                        t = escape_xml_text(&text),
+                    );
                     placed.push(bb);
                 }
             }
@@ -3723,11 +3773,16 @@ mod tests {
             "merged point must not ALSO render at Branch:0's own (unmerged) position \
              near the origin -- that would mean the point_uf dedup regressed: {svg}"
         );
-        // The Branch's own free endpoint (index 2) is labeled separately,
+        // The Branch's own free endpoint (Branch:2) is labeled separately,
         // confirming the fixture built a real second leg rather than a stub.
+        // Assert by POSITION (x near 0, Branch's north-running column) so this
+        // can't be satisfied by Main's own interior station 2 at x=20 -- that
+        // substring-only check was vacuous once every station is labeled.
         assert!(
-            svg.contains(">2</text>"),
-            "branch free endpoint should be labeled: {svg}"
+            labels
+                .iter()
+                .any(|(x, _, text)| text == "2" && x.abs() < 1.0),
+            "branch free endpoint (Branch:2, x≈0) should be labeled: {svg}"
         );
     }
 
@@ -3820,24 +3875,6 @@ mod tests {
     }
 
     // ---- Section names, station/shot comments, shot data (#240 follow-up) --
-
-    fn make_shot_with_depth(
-        length: f64,
-        azimuth: f64,
-        depth_in: f64,
-        depth_out: f64,
-        is_reference: bool,
-    ) -> ShotData {
-        ShotData {
-            azimuth_in: azimuth,
-            azimuth_out: azimuth,
-            length,
-            depth_in,
-            depth_out,
-            is_reference,
-            ..Default::default()
-        }
-    }
 
     #[test]
     fn section_names_present_with_custom_name_and_id_fallback() {
@@ -3987,6 +4024,89 @@ mod tests {
     }
 
     #[test]
+    fn user_text_labels_are_xml_escaped_and_parse() {
+        // Section names, station comments, and shot comments are user free-text
+        // written into SVG <text>. A raw '&' / '<' / '>' would produce invalid
+        // XML (resvg/svg2pdf fail on the PNG/PDF paths) or inject sibling markup
+        // into the raw .svg. Verify each sink in isolation (so the three labels
+        // can't collision-drop each other) that the escaped forms appear, no
+        // injected element survives, and the whole document still parses.
+        let parses = |svg: &str| Tree::from_str(svg, &Options::default()).is_ok();
+
+        // Section name.
+        let mut p = Project::new("Test".to_string(), None);
+        p.add_section(SectionData {
+            name: Some("Sump & <Gallery>".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![make_shot(10.0, 90.0, false)],
+            ..Default::default()
+        });
+        let svg = generate_svg_string(
+            &p,
+            &ExportImageOptions {
+                show_section_names: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains("Sump &amp; &lt;Gallery&gt;"),
+            "section name must be XML-escaped: {svg}"
+        );
+        assert!(parses(&svg), "section-name SVG must parse: {svg}");
+
+        // Station comment carrying a full injection payload.
+        let mut p = three_shot_line_project();
+        let sid = p.sections[0].id;
+        p.station_comments.insert(
+            StationRef::new(sid, 1).into(),
+            "a & b </text><script>x".to_string(),
+        );
+        let svg = generate_svg_string(
+            &p,
+            &ExportImageOptions {
+                show_station_comments: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains("a &amp; b &lt;/text&gt;&lt;script&gt;x"),
+            "station comment must be XML-escaped: {svg}"
+        );
+        assert!(
+            !svg.contains("<script>"),
+            "no injected <script> element may survive: {svg}"
+        );
+        assert!(parses(&svg), "station-comment SVG must parse: {svg}");
+
+        // Shot comment.
+        let mut p = Project::new("Test".to_string(), None);
+        p.add_section(SectionData {
+            name: Some("Trunk".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![ShotData {
+                comment: Some("tight & silty".to_string()),
+                ..make_shot(10.0, 90.0, false)
+            }],
+            ..Default::default()
+        });
+        let svg = generate_svg_string(
+            &p,
+            &ExportImageOptions {
+                show_shot_comments: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains("tight &amp; silty"),
+            "shot comment must be XML-escaped: {svg}"
+        );
+        assert!(parses(&svg), "shot-comment SVG must parse: {svg}");
+    }
+
+    #[test]
     fn station_comments_absent_when_disabled() {
         let mut project = three_shot_line_project();
         let section_id = project.sections[0].id;
@@ -4117,10 +4237,22 @@ mod tests {
     #[test]
     fn shot_data_exact_text_matches_live_map_format() {
         let mut project = Project::new("Test".to_string(), None);
+        // azimuth_in (42.5) differs from azimuth_out (55.0) so asserting "42.5"
+        // pins the label to azimuth_IN specifically -- it can't pass on
+        // azimuth_out or the wraparound average_azimuth() (~48.7) the geometry
+        // solver uses elsewhere.
         project.add_section(SectionData {
             name: Some("Trunk".to_string()),
             color: "#000000".to_string(),
-            shots: vec![make_shot_with_depth(12.3, 42.5, 3.0, 5.0, false)],
+            shots: vec![ShotData {
+                azimuth_in: 42.5,
+                azimuth_out: 55.0,
+                length: 12.3,
+                depth_in: 3.0,
+                depth_out: 5.0,
+                is_reference: false,
+                ..Default::default()
+            }],
             ..Default::default()
         });
         let svg = generate_svg_string(
@@ -4137,7 +4269,7 @@ mod tests {
         );
         assert!(
             svg.contains(">42.5\u{00b0} 12.3m 4.0m</text>"),
-            "shot-data text should be azimuth/length/mean-depth to 1 decimal: {svg}"
+            "shot-data text should be azimuth_in/length/mean-depth to 1 decimal: {svg}"
         );
     }
 
