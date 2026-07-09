@@ -201,21 +201,46 @@ Wait for all subagents, then merge:
    the `/code-review` subagent's verdict shown alongside the lens verdicts.
 
 ## Log the run (instrumentation — one line per review)
-After printing the verdict, append **exactly one JSON line** to
-`.claude/review-log.jsonl` (create the file if absent; never rewrite it — use a
-`>>` redirect). This is the data that later tells us which lenses earn their keep.
-Shape:
+After printing the verdict, log the run by invoking the vendored script rather
+than appending a line by hand — it validates the record, resolves the repo
+root itself (so it works regardless of cwd), and appends exactly one JSON line
+to `.claude/review-log.jsonl` (creating the file if absent; it never rewrites
+existing content). Record shape:
 
 ```json
 {"date":"<YYYY-MM-DD>","branch":"<git branch>","verdict":"block|nits|needs-work","findings":[{"lens":<1-10>,"severity":"red|yellow|green","file":"<path:line>","verified":true}],"lenses_run":[1,2,3,4,5,6,7,9,10],"lenses_skipped":[{"lens":8,"why":"no security trigger"}]}
 ```
 
-- Fill `date` from `date -u +%F` and `branch` from `git rev-parse --abbrev-ref HEAD`.
+Invoke it as:
+
+```
+python3 scripts/review/log_run.py '<json>'
+```
+
+For long records, pipe JSON on stdin instead (avoids shell quoting/length
+limits):
+
+```
+echo '<json>' | python3 scripts/review/log_run.py
+```
+
+- `date` and `branch` are optional — the script fills them (today's UTC date,
+  `git rev-parse --abbrev-ref HEAD`, or a short commit sha if HEAD is detached)
+  if omitted, but must match if you provide them.
 - Include every 🔴/🟡 finding (🟢 optional); set `verified:true` only for findings
   actually traced in code, `false` for ASSUMED/unverified.
 - Record any lens that did not run (e.g. security not triggered, a lens you couldn't
-  reach on a large diff) in `lenses_skipped` with a short `why`.
+  reach on a large diff) in `lenses_skipped` with a short `why`. This key may be
+  omitted from the input (defaults to `[]`), but the script always writes it to
+  the logged line, so every record on disk has the full schema.
 - List every lens that actually ran in `lenses_run` — a lens that ran and found
   NOTHING is exactly the retire/merge signal this log exists to capture; without
   it, ran-clean and never-ran are indistinguishable.
-- Keep it to one physical line so the file stays valid JSONL.
+- **The script's exit code tells you what went wrong, if anything:**
+  - `0` — logged. The review is not considered logged until you see this.
+  - `1` — the record was rejected (bad verdict, out-of-range lens, unknown key,
+    malformed JSON, etc.) and the log file was left untouched. Fix the record
+    and re-run.
+  - `2` — an environment problem (not run from inside the repo, no stdin
+    piped, git itself failed), not a content problem — the record may be
+    fine. Fix how you're invoking the script and re-run.
