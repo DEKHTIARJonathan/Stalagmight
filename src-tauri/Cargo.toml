@@ -102,6 +102,15 @@ keyring = { version = "3", default-features = false, features = ["apple-native"]
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
+# Vendored, minimally-patched wry so the Linux WebKit web process returns freed
+# memory to the OS. The patch adds `WebKitMemoryPressureSettings` (read from
+# `STALAGMIGHT_WEBKIT_MEM_*` env vars set in `lib.rs` `run()`) to the WebContext
+# it constructs; `memory-pressure-settings` is a construct-only property so it
+# cannot be set from application code. See `vendor/wry/MODIFICATIONS.md`. With the
+# env vars unset this copy behaves exactly like upstream wry 0.53.5.
+[patch.crates-io]
+wry = { path = "vendor/wry" }
+
 [profile.dev]
 # Backtraces still show file:line; skipping full debug info halves the link step.
 debug = "line-tables-only"
