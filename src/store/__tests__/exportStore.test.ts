@@ -21,6 +21,7 @@ describe('exportStore', () => {
       branching_threshold: 2,
       show_penetration_labels: true,
       color_mode: 'none',
+      show_station_labels: false,
     });
   });
 

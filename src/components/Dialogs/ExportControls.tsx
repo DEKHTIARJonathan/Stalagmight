@@ -376,6 +376,20 @@ export default function ExportControls({
                   />
                   <span>Penetration-distance labels</span>
                 </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={imageOptions.show_station_labels}
+                    onChange={(e) =>
+                      onImageOptionsChange({
+                        ...imageOptions,
+                        show_station_labels: e.target.checked,
+                      })
+                    }
+                    data-testid="export-show-station-labels"
+                  />
+                  <span>Station labels (endpoints &amp; junctions)</span>
+                </label>
                 <div className={svgSelected ? 'opacity-50' : ''}>
                   <label
                     htmlFor="export-color-mode"
