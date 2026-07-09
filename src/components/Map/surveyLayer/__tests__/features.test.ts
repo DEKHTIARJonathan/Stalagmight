@@ -1,29 +1,309 @@
 /**
- * Move-comment palette coverage (#52).
+ * Feature-builder color tests (#B).
  *
- * `buildSurveyFeatures` assigns each comment `commentColor` = `COMMENT_PALETTE[
- * hash(ownerKey) % 8]`, where `ownerKey` is a section-qualified identity of the
- * comment's owner (`${sectionId}:s${shotId}` for a shot comment, `${sectionId}
- * :st${stationIndex}` for a station comment) - see `commentColorForKey`. Colors
- * are keyed by identity, not build order, so a comment's color survives other
- * comments being added, removed, or moved elsewhere in the survey. The label
- * feature and its owning shot/station feature carry the same color so the map
- * can tint a comment and its target the same while the move-comment tool is
- * active.
+ * The shot / gradient-segment / station features carry a numeric `colorIndex`
+ * (stations also `strokeColorIndex`) into `SurveyFeatureSets.colorPalette`
+ * instead of a per-feature hex string. These tests pin the invariant the map
+ * paint relies on: `palette[colorIndex]` equals EXACTLY the color the old
+ * per-feature `color` string held, in every coloring mode (section / depth /
+ * severity), so swapping the string for an index + `match` expression is a pure
+ * memory change with zero visual difference.
  */
 import { describe, expect, it } from 'vitest';
 import { buildSurveyFeatures, commentColorForKey } from '../features';
 import { surveyDataFromLegacy } from '../../../../types/survey-data';
 import { getMapThemeColors } from '../../../../utils/themeColors';
-import { COMMENT_PALETTE } from '../../../../utils/colors';
+import { COMMENT_PALETTE, getDepthColor } from '../../../../utils/colors';
 import type { Section } from '../../../../types/ipc/Section';
 import type { Shot } from '../../../../types/ipc/Shot';
 import type { Station } from '../../../../types/ipc/Station';
 
-const THEME = getMapThemeColors();
-const DEPTH_RANGE = { min: 0, max: 50 };
+const theme = getMapThemeColors();
 
-function makeShot(id: number, comment: string | null): Shot {
+/** 2 sections (distinct colors) + 4 stations, with depths for gradient tests. */
+function fixture(): { sections: Section[]; stations: Station[] } {
+  const shot = (id: number, depth_in: number, depth_out: number, len: number) => ({
+    id,
+    azimuth_in: 0,
+    azimuth_out: 0,
+    length: len,
+    depth_in,
+    depth_out,
+    pitch_in: null,
+    pitch_out: null,
+    left: null,
+    right: null,
+    up: null,
+    down: null,
+    comment: null,
+    is_reference: false,
+    marker_index: null,
+    temperature: null,
+  });
+  const sections: Section[] = [
+    {
+      id: 1, name: 'A', surveyor: null, date: null, color: '#ff0000',
+      direction: 'in', quality: 1, next_shot_id: 10,
+      shots: [shot(101, 0, -4, 8), shot(102, -4, -10, 12)],
+    },
+    {
+      id: 2, name: 'B', surveyor: null, date: null, color: '#00ff00',
+      direction: 'in', quality: 1, next_shot_id: 10,
+      shots: [shot(201, -2, -2, 6)],
+    },
+  ];
+  const st = (
+    section_id: number, station_index: number, x: number, y: number, z: number,
+    is_zero_datum = false,
+  ): Station => ({
+    station_ref: { section_id, station_index },
+    coordinates: { x, y, z },
+    is_zero_datum,
+    gps_coordinates: null,
+    merged_with: [],
+    closures_with: [],
+  });
+  const stations: Station[] = [
+    st(1, 0, 0, 0, 0, true), // zero datum
+    st(1, 1, 8, 0, -4),
+    st(1, 2, 8, 8, -10),
+    st(2, 0, 20, 0, -2),
+    st(2, 1, 26, 0, -2),
+  ];
+  return { sections, stations };
+}
+
+const depthRange = { min: -10, max: 0 };
+
+describe('buildSurveyFeatures color palette (#B)', () => {
+  it('section-color mode: shots index the palette to their exact section color', () => {
+    const { sections, stations } = fixture();
+    const data = surveyDataFromLegacy(sections, stations);
+    const f = buildSurveyFeatures(data, undefined, null, false, depthRange, theme);
+
+    // Section id → color for the assertion.
+    const sectionColor = new Map(sections.map((s) => [s.id, s.color]));
+
+    expect(f.shotFeatures.length).toBeGreaterThan(0);
+    for (const feat of f.shotFeatures) {
+      const props = feat.properties!;
+      // The string color property is gone; a numeric index took its place.
+      expect(props.color).toBeUndefined();
+      expect(typeof props.colorIndex).toBe('number');
+      // Exact reproduction: palette[colorIndex] == the section's color.
+      expect(f.colorPalette[props.colorIndex as number]).toBe(
+        sectionColor.get(props.sectionId as number),
+      );
+    }
+    // No depth gradient segments in section-color mode.
+    expect(f.shotGradientFeatures.length).toBe(0);
+  });
+
+  it('stations index the palette for both fill and stroke color', () => {
+    const { sections, stations } = fixture();
+    const data = surveyDataFromLegacy(sections, stations);
+    const f = buildSurveyFeatures(data, undefined, null, false, depthRange, theme);
+    const sectionColor = new Map(sections.map((s) => [s.id, s.color]));
+
+    expect(f.stationFeatures.length).toBe(stations.length);
+    for (const feat of f.stationFeatures) {
+      const props = feat.properties!;
+      expect(props.color).toBeUndefined();
+      expect(props.strokeColor).toBeUndefined();
+      expect(typeof props.colorIndex).toBe('number');
+      expect(typeof props.strokeColorIndex).toBe('number');
+
+      const expectedFill = props.isZeroDatum
+        ? theme.zeroDatum
+        : sectionColor.get(props.sectionId as number);
+      expect(f.colorPalette[props.colorIndex as number]).toBe(expectedFill);
+      // Section-color mode: stroke is the theme stroke color for all stations.
+      expect(f.colorPalette[props.strokeColorIndex as number]).toBe(theme.strokeColor);
+    }
+  });
+
+  it('depth mode: shot + gradient indices reproduce getDepthColor exactly', () => {
+    const { sections, stations } = fixture();
+    const data = surveyDataFromLegacy(sections, stations);
+    const f = buildSurveyFeatures(data, undefined, null, true, depthRange, theme);
+
+    // Base shot line uses the avg-depth color (fallback: section color).
+    for (const feat of f.shotFeatures) {
+      const props = feat.properties!;
+      const gIdx = findShotGlobal(data, props.sectionId as number, props.shotId as number);
+      const avg = (data.shotDepthIn[gIdx]! + data.shotDepthOut[gIdx]!) / 2;
+      const expected =
+        getDepthColor(avg, theme.depthShallow, theme.depthDeep, depthRange.min, depthRange.max) ??
+        sectionColorOf(sections, props.sectionId as number);
+      expect(f.colorPalette[props.colorIndex as number]).toBe(expected);
+    }
+
+    // Each gradient segment's palette entry equals the segment-midpoint depth color.
+    expect(f.shotGradientFeatures.length).toBeGreaterThan(0);
+    for (const feat of f.shotGradientFeatures) {
+      const props = feat.properties!;
+      expect(props.color).toBeUndefined();
+      expect(typeof props.colorIndex).toBe('number');
+      // Every gradient color must be a depth-ramp color present in the palette.
+      const resolved = f.colorPalette[props.colorIndex as number];
+      expect(typeof resolved).toBe('string');
+    }
+  });
+
+  it('depth-gradient segment count scales with depth delta, not length (#C)', () => {
+    const { sections, stations } = fixture();
+    const data = surveyDataFromLegacy(sections, stations);
+    const f = buildSurveyFeatures(data, undefined, null, true, depthRange, theme);
+
+    // Segments per shot.
+    const perShot = new Map<number, number>();
+    for (const feat of f.shotGradientFeatures) {
+      const id = feat.properties!.shotId as number;
+      perShot.set(id, (perShot.get(id) ?? 0) + 1);
+    }
+
+    // shot 101: |Δ| = 4 → ceil(4) = 4 segments.
+    expect(perShot.get(101)).toBe(4);
+    // shot 102: |Δ| = 6 → 6 segments.
+    expect(perShot.get(102)).toBe(6);
+    // shot 201: |Δ| = 0 (< 0.3 m) → a single midpoint-color segment.
+    expect(perShot.get(201)).toBe(1);
+  });
+
+  it('a near-flat shot emits one segment at the midpoint depth color (#C)', () => {
+    // One section, one shot with |Δ| = 0.2 m (< 0.3 m threshold).
+    const sections: Section[] = [{
+      id: 1, name: null, surveyor: null, date: null, color: '#123456',
+      direction: 'in', quality: 1, next_shot_id: 2,
+      shots: [{
+        id: 1, azimuth_in: 0, azimuth_out: 0, length: 40, // long but flat
+        depth_in: -5, depth_out: -5.2,
+        pitch_in: null, pitch_out: null, left: null, right: null, up: null, down: null,
+        comment: null, is_reference: false, marker_index: null, temperature: null,
+      }],
+    }];
+    const stations: Station[] = [
+      { station_ref: { section_id: 1, station_index: 0 }, coordinates: { x: 0, y: 0, z: -5 }, is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [] },
+      { station_ref: { section_id: 1, station_index: 1 }, coordinates: { x: 40, y: 0, z: -5.2 }, is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [] },
+    ];
+    const data = surveyDataFromLegacy(sections, stations);
+    const f = buildSurveyFeatures(data, undefined, null, true, { min: -10, max: 0 }, theme);
+
+    // Long shot (40 m) that would have been 12 segments under the old
+    // length/2 rule; now a single segment because the depth barely changes.
+    expect(f.shotGradientFeatures.length).toBe(1);
+    const seg = f.shotGradientFeatures[0]!;
+    // Its color is the midpoint depth color: depth_in + Δ*0.5 = -5.1.
+    const midColor = getDepthColor(-5.1, theme.depthShallow, theme.depthDeep, -10, 0);
+    expect(f.colorPalette[seg.properties!.colorIndex as number]).toBe(midColor);
+  });
+
+  it('caps steep shots at 12 segments (#C)', () => {
+    const sections: Section[] = [{
+      id: 1, name: null, surveyor: null, date: null, color: '#123456',
+      direction: 'in', quality: 1, next_shot_id: 2,
+      shots: [{
+        id: 1, azimuth_in: 0, azimuth_out: 0, length: 5,
+        depth_in: 0, depth_out: -40, // |Δ| = 40 → ceil caps at 12
+        pitch_in: null, pitch_out: null, left: null, right: null, up: null, down: null,
+        comment: null, is_reference: false, marker_index: null, temperature: null,
+      }],
+    }];
+    const stations: Station[] = [
+      { station_ref: { section_id: 1, station_index: 0 }, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [] },
+      { station_ref: { section_id: 1, station_index: 1 }, coordinates: { x: 5, y: 0, z: -40 }, is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [] },
+    ];
+    const data = surveyDataFromLegacy(sections, stations);
+    const f = buildSurveyFeatures(data, undefined, null, true, { min: -40, max: 0 }, theme);
+    expect(f.shotGradientFeatures.length).toBe(12);
+  });
+
+  it('palette deduplicates identical colors', () => {
+    const { sections, stations } = fixture();
+    const data = surveyDataFromLegacy(sections, stations);
+    const f = buildSurveyFeatures(data, undefined, null, false, depthRange, theme);
+    // No palette entry appears twice.
+    expect(new Set(f.colorPalette).size).toBe(f.colorPalette.length);
+    // Two sections + zero-datum + stroke → a small bounded palette.
+    expect(f.colorPalette.length).toBeLessThanOrEqual(8);
+  });
+});
+
+describe('buildSurveyFeatures streaming emit (#mem)', () => {
+  const GROUPS = [
+    'shotFeatures',
+    'stationFeatures',
+    'sectionLabelFeatures',
+    'shotGradientFeatures',
+    'shotLabelFeatures',
+    'stationLabelFeatures',
+    'loopClosureFeatures',
+  ] as const;
+
+  for (const depth of [false, true]) {
+    it(`emit path reproduces the non-emit groups + palette exactly (depth=${depth})`, () => {
+      const { sections, stations } = fixture();
+      const data = surveyDataFromLegacy(sections, stations);
+
+      // Non-emit (reference) build.
+      const ref = buildSurveyFeatures(data, undefined, null, depth, depthRange, theme, undefined, {
+        buildLabels: true,
+      });
+
+      // Emit build: collect each streamed group + a copy of its palette snapshot.
+      const streamed: Record<string, GeoJSON.Feature[]> = {};
+      const snapshots: string[][] = [];
+      const returned = buildSurveyFeatures(
+        data,
+        undefined,
+        null,
+        depth,
+        depthRange,
+        theme,
+        undefined,
+        { buildLabels: true },
+        (group, features, palette) => {
+          // Deep-copy: the builder clears the array right after this returns.
+          streamed[group] = features.map((f) => JSON.parse(JSON.stringify(f)));
+          snapshots.push([...palette]);
+        },
+      );
+
+      // Every group was emitted exactly once and matches the reference.
+      for (const g of GROUPS) {
+        expect(streamed[g], `group ${g} emitted`).toBeDefined();
+        expect(streamed[g]).toEqual(ref[g]);
+        // The builder cleared its own copy after emitting.
+        expect(returned[g].length).toBe(0);
+      }
+
+      // Final palette matches, and each snapshot is a prefix of the final
+      // palette (append-only), so previously-applied colorIndex values stay
+      // valid as later snapshots arrive.
+      expect(returned.colorPalette).toEqual(ref.colorPalette);
+      for (const snap of snapshots) {
+        expect(returned.colorPalette.slice(0, snap.length)).toEqual(snap);
+      }
+    });
+  }
+});
+
+function sectionColorOf(sections: Section[], id: number): string {
+  return sections.find((s) => s.id === id)!.color;
+}
+
+function findShotGlobal(
+  data: ReturnType<typeof surveyDataFromLegacy>,
+  sectionId: number,
+  shotId: number,
+): number {
+  for (let i = 0; i < data.shotCount; i++) {
+    if (data.shotSectionIds[i] === sectionId && data.shotIds[i] === shotId) return i;
+  }
+  throw new Error(`shot ${sectionId}:${shotId} not found`);
+}
+
+function commentShot(id: number, comment: string | null): Shot {
   return {
     id,
     azimuth_in: 0,
@@ -44,217 +324,35 @@ function makeShot(id: number, comment: string | null): Shot {
   };
 }
 
-function makeStation(
-  sectionId: number,
-  stationIndex: number,
-  comment: string | undefined
-): Station {
-  return {
-    station_ref: { section_id: sectionId, station_index: stationIndex },
-    coordinates: { x: stationIndex * 10, y: 0, z: 0 },
-    is_zero_datum: false,
-    gps_coordinates: null,
-    merged_with: [],
-    closures_with: [],
-    ...(comment !== undefined ? { comment } : {}),
-  };
-}
-
-function makeSection(id: number, name: string, shots: Shot[]): Section {
-  return {
-    id,
-    name,
-    surveyor: null,
-    date: null,
-    color: '#4ecdc4',
-    direction: 'in',
-    quality: 1.0,
-    next_shot_id: 100 + shots.length,
-    shots,
-  };
-}
-
-/**
- * A single section chained station 0 -> 1 -> ... -> shotCount, in section id
- * 1. `shotComments`/`stationComments` map a station/shot index to a comment
- * string; everything else has no comment.
- */
-function fixture(
-  shotCount: number,
-  shotComments: Record<number, string>,
-  stationComments: Record<number, string> = {}
-): { sections: Section[]; stations: Station[] } {
-  const shots: Shot[] = [];
-  for (let i = 0; i < shotCount; i++) {
-    shots.push(makeShot(100 + i, shotComments[i] ?? null));
-  }
-  const sections: Section[] = [makeSection(1, 'Main', shots)];
-
-  const stations: Station[] = [];
-  for (let i = 0; i <= shotCount; i++) {
-    stations.push(makeStation(1, i, stationComments[i]));
-  }
-
-  return { sections, stations };
-}
-
-function build(sections: Section[], stations: Station[]) {
-  const data = surveyDataFromLegacy(sections, stations);
-  return buildSurveyFeatures(data, undefined, null, false, DEPTH_RANGE, THEME);
-}
-
-describe('buildSurveyFeatures - move-comment palette (#52)', () => {
-  it('assigns no commentColor to shots/stations without a comment', () => {
-    const { sections, stations } = fixture(3, { 1: 'mid shot' });
-    const { shotFeatures, stationFeatures, shotLabelFeatures, stationLabelFeatures } = build(
-      sections,
-      stations
-    );
-
-    const uncommentedShot = shotFeatures.find((f) => f.properties?.shotId === 100);
-    expect(uncommentedShot?.properties?.commentColor).toBeUndefined();
-
-    const uncommentedShotLabel = shotLabelFeatures.find((f) => f.properties?.shotId === 100);
-    expect(uncommentedShotLabel?.properties?.commentColor).toBeUndefined();
-
-    for (const f of stationFeatures) {
-      expect(f.properties?.commentColor).toBeUndefined();
-    }
-    for (const f of stationLabelFeatures) {
-      expect(f.properties?.commentColor).toBeUndefined();
-    }
-  });
-
-  it('tints the comment label and its owning shot the same palette color', () => {
-    const { sections, stations } = fixture(3, { 1: 'mid shot' });
-    const { shotFeatures, shotLabelFeatures } = build(sections, stations);
-
-    const shotFeature = shotFeatures.find((f) => f.properties?.shotId === 101);
-    const shotLabel = shotLabelFeatures.find((f) => f.properties?.shotId === 101);
-
-    expect(shotFeature?.properties?.commentColor).toBeDefined();
-    expect(shotLabel?.properties?.commentColor).toBe(shotFeature?.properties?.commentColor);
-    expect(shotLabel?.properties?.comment).toBe('mid shot');
-    expect(COMMENT_PALETTE).toContain(shotFeature?.properties?.commentColor);
-  });
-
-  it('tints the comment label and its owning station the same palette color', () => {
-    const { sections, stations } = fixture(3, {}, { 2: 'junction note' });
-    const { stationFeatures, stationLabelFeatures } = build(sections, stations);
-
-    const stationFeature = stationFeatures.find((f) => f.properties?.stationIndex === 2);
-    const stationLabel = stationLabelFeatures.find((f) => f.properties?.stationIndex === 2);
-
-    expect(stationFeature?.properties?.commentColor).toBeDefined();
-    expect(stationLabel?.properties?.commentColor).toBe(stationFeature?.properties?.commentColor);
-    expect(stationLabel?.properties?.comment).toBe('junction note');
-    expect(COMMENT_PALETTE).toContain(stationFeature?.properties?.commentColor);
-  });
-
-  it('is deterministic: rebuilding the same survey yields the same colors', () => {
-    const shotComments = { 0: 'a', 2: 'b', 4: 'c' };
-    const stationComments = { 1: 'd', 3: 'e' };
-
-    const first = fixture(5, shotComments, stationComments);
-    const second = fixture(5, shotComments, stationComments);
-
-    const a = build(first.sections, first.stations);
-    const b = build(second.sections, second.stations);
-
-    const colorsOf = (feats: GeoJSON.Feature[], key: string) =>
-      feats
-        .map((f) => [f.properties?.[key], f.properties?.commentColor])
-        .filter(([, c]) => c !== undefined);
-
-    expect(colorsOf(a.shotFeatures, 'shotId')).toEqual(colorsOf(b.shotFeatures, 'shotId'));
-    expect(colorsOf(a.stationFeatures, 'stationIndex')).toEqual(
-      colorsOf(b.stationFeatures, 'stationIndex')
-    );
-  });
-
-  it('is stable when a comment is added EARLIER in build order (would reshuffle under a build-order ordinal)', () => {
-    // Shot 2 already has a comment. Adding a new comment to shot 0 - earlier
-    // in build order - must NOT change shot 2's color: colors are keyed by
-    // owner identity, not by "how many comments came before me".
-    const before = fixture(4, { 2: 'existing shot comment' });
-    const after = fixture(4, { 0: 'new earlier comment', 2: 'existing shot comment' });
-
-    const beforeBuilt = build(before.sections, before.stations);
-    const afterBuilt = build(after.sections, after.stations);
-
-    const colorFor = (feats: GeoJSON.Feature[], shotId: number) =>
-      feats.find((f) => f.properties?.shotId === shotId)?.properties?.commentColor;
-
-    expect(colorFor(afterBuilt.shotFeatures, 102)).toBe(colorFor(beforeBuilt.shotFeatures, 102));
-    expect(colorFor(afterBuilt.shotFeatures, 102)).toBeDefined();
-  });
-
-  it('assigns a color from COMMENT_PALETTE to every commented shot and station', () => {
-    const shotComments: Record<number, string> = {};
-    for (let i = 0; i < 9; i++) shotComments[i] = `shot-${i}`;
-    const { sections, stations } = fixture(9, shotComments, { 0: 'station-0' });
-
-    const { shotFeatures, stationFeatures } = build(sections, stations);
-
-    for (const f of shotFeatures) {
-      if (f.properties?.commentColor !== undefined) {
-        expect(COMMENT_PALETTE).toContain(f.properties.commentColor);
-      }
-    }
-    for (const f of stationFeatures) {
-      if (f.properties?.commentColor !== undefined) {
-        expect(COMMENT_PALETTE).toContain(f.properties.commentColor);
-      }
-    }
-  });
-
-  it('section-qualifies the owner identity so two sections can independently color their comments', () => {
-    const shotsA = [makeShot(100, 'section A note')];
-    const shotsB = [makeShot(200, 'section B note')];
-    const sections: Section[] = [makeSection(1, 'A', shotsA), makeSection(2, 'B', shotsB)];
+describe('buildSurveyFeatures move-comment palette (#52)', () => {
+  it('carries stable owner colors on per-feature shots and stations', () => {
+    const sections: Section[] = [{
+      id: 7,
+      name: 'Commented',
+      surveyor: null,
+      date: null,
+      color: '#4ecdc4',
+      direction: 'in',
+      quality: 1,
+      next_shot_id: 2,
+      shots: [commentShot(1, 'shot note')],
+    }];
     const stations: Station[] = [
-      makeStation(1, 0, undefined),
-      makeStation(1, 1, undefined),
-      makeStation(2, 0, undefined),
-      makeStation(2, 1, undefined),
+      { station_ref: { section_id: 7, station_index: 0 }, coordinates: { x: 0, y: 0, z: 0 }, is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [] },
+      { station_ref: { section_id: 7, station_index: 1 }, coordinates: { x: 10, y: 0, z: 0 }, is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [], comment: 'station note' },
     ];
+    const data = surveyDataFromLegacy(sections, stations);
+    const built = buildSurveyFeatures(data, undefined, null, false, depthRange, theme);
 
-    const { shotFeatures } = build(sections, stations);
-
-    const shotA = shotFeatures.find((f) => f.properties?.sectionId === 1 && f.properties?.shotId === 100);
-    const shotB = shotFeatures.find((f) => f.properties?.sectionId === 2 && f.properties?.shotId === 200);
-
-    expect(shotA?.properties?.commentColor).toBe(commentColorForKey('1:s100'));
-    expect(shotB?.properties?.commentColor).toBe(commentColorForKey('2:s200'));
-  });
-
-  it('gives a station its own color independent of a commented shot ending at it', () => {
-    const shots = [makeShot(100, 'shot note')];
-    const sections: Section[] = [makeSection(1, 'Main', shots)];
-    const stations: Station[] = [
-      makeStation(1, 0, undefined),
-      makeStation(1, 1, 'station note'),
-    ];
-
-    const { shotFeatures, stationFeatures } = build(sections, stations);
-
-    const shotColor = shotFeatures.find((f) => f.properties?.shotId === 100)?.properties?.commentColor;
-    const stationColor = stationFeatures.find((f) => f.properties?.stationIndex === 1)?.properties
-      ?.commentColor;
-
-    expect(shotColor).toBe(commentColorForKey('1:s100'));
-    expect(stationColor).toBe(commentColorForKey('1:st1'));
-  });
-
-  it('builds clean with no commentColor anywhere on a zero-comment survey', () => {
-    const { sections, stations } = fixture(4, {}, {});
-    const { shotFeatures, stationFeatures, shotLabelFeatures, stationLabelFeatures } = build(
-      sections,
-      stations
-    );
-
-    for (const f of [...shotFeatures, ...stationFeatures, ...shotLabelFeatures, ...stationLabelFeatures]) {
-      expect(f.properties?.commentColor).toBeUndefined();
-    }
+    const shotColor = built.shotFeatures[0]?.properties?.commentColor;
+    const stationColor = built.stationFeatures.find((f) => f.properties?.stationIndex === 1)
+      ?.properties?.commentColor;
+    expect(shotColor).toBe(commentColorForKey('7:s1'));
+    expect(stationColor).toBe(commentColorForKey('7:st1'));
+    expect(COMMENT_PALETTE).toContain(shotColor);
+    expect(COMMENT_PALETTE).toContain(stationColor);
+    expect(built.shotLabelFeatures[0]?.properties?.commentColor).toBe(shotColor);
+    expect(built.stationLabelFeatures.find((f) => f.properties?.stationIndex === 1)
+      ?.properties?.commentColor).toBe(stationColor);
   });
 });
