@@ -162,14 +162,21 @@ for (let i = 0; i < actions.length; i++) {
       }
       break;
     }
-    case 'driver_script':
-      push(`    await driverScript(browser, ${q(p.script ?? '')});`);
+    case 'driver_script': {
+      // Thread the recorded timeout through so the replay is bounded exactly
+      // like the live run; a step recorded as FAILED (often a timeout) is
+      // tolerated so the replay proceeds past it the way the session did.
+      const dsCall = `driverScript(browser, ${q(p.script ?? '')}${p.timeoutMs != null ? `, ${p.timeoutMs}` : ''})`;
+      if (a.outcome?.ok === false) push(`    await ${dsCall}.catch(() => undefined); // recorded as FAILED`);
+      else push(`    await ${dsCall};`);
       break;
-    case 'run_scenario':
-      push(
-        `    await runScenarioReplay(browser, ${q(p.name)}, ${q(p.seed ?? 1)}, ${p.iterations != null ? p.iterations : 'undefined'});`,
-      );
+    }
+    case 'run_scenario': {
+      const scCall = `runScenarioReplay(browser, ${q(p.name)}, ${q(p.seed ?? 1)}, ${p.iterations != null ? p.iterations : 'undefined'})`;
+      if (a.outcome?.ok === false) push(`    await ${scCall}.catch(() => undefined); // recorded as FAILED`);
+      else push(`    await ${scCall};`);
       break;
+    }
     case 'map_view':
       if (p.set) push(`    await evalInApp(browser, 'const m=window.__stalagmight_map__; if(m) m.jumpTo(args[0]); return true;', [${q(p.set)}]);`);
       else push(`    // [seq ${a.seq}] map_view (read-only)`);

@@ -105,7 +105,10 @@ export class Recorder {
 
   /** Write a PNG (base64) into screenshots/ and return the session-relative path. */
   writeScreenshot(seq: number, name: string, base64: string): string {
-    const file = `${String(seq).padStart(4, '0')}-${name}.png`;
+    // Confine the caller-supplied name to a plain basename: a name containing
+    // separators or `..` segments must not climb out of screenshots/.
+    const safe = path.basename(name).replace(/[^\w.-]+/g, '_') || 'shot';
+    const file = `${String(seq).padStart(4, '0')}-${safe}.png`;
     fs.writeFileSync(path.join(this.screenshotsDir, file), Buffer.from(base64, 'base64'));
     return path.join('screenshots', file);
   }

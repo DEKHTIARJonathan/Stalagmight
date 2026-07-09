@@ -87,7 +87,19 @@ async function main(): Promise<void> {
   };
 
   const pending: BridgeRequest[] = [];
+  // Start reading at EOF: a bridge relaunched against a non-empty bridgeDir
+  // must not re-execute the entire request history (every mutation would run
+  // twice). The protocol's `ready` file tells writers when to start appending,
+  // so anything already in the file predates this bridge instance.
   let offset = 0;
+  try {
+    offset = fs.statSync(reqPath).size;
+    if (offset > 0) {
+      process.stderr.write(`[bridge] skipping ${offset} bytes of pre-existing requests (history)\n`);
+    }
+  } catch {
+    offset = 0;
+  }
   let busy = false;
 
   async function pump(): Promise<void> {

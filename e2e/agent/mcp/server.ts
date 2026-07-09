@@ -56,7 +56,12 @@ async function record<T>(
     const { result, resolved, artifacts } = await fn(seq);
     if (session.hasRecorder) {
       let post: unknown;
-      if (opts.digest) post = await postDigest(session.browser).catch(() => undefined);
+      // Under the command mutex like every other WebDriver call - a raw
+      // browser.execute here was the one path that could interleave with a
+      // concurrent tool's exclusive block.
+      if (opts.digest) {
+        post = await session.exclusive(() => postDigest(session.browser)).catch(() => undefined);
+      }
       session.recorder.action({
         seq,
         ts: new Date().toISOString(),
@@ -117,6 +122,26 @@ async function run(
   }
 }
 
+/**
+ * Reset oracle state and align its ring cursor to the CURRENT ring tail, so
+ * the first post-action sweep only reports lines emitted after this point.
+ * Startup noise (benign boot-time warnings) predates any agent interaction
+ * and must not be attributed to the first tool call - this mirrors what
+ * LogCursor.checkpoint() already does for the `logs` tool.
+ */
+async function resetOracles(): Promise<void> {
+  oracleState = newOracleState();
+  try {
+    const logs = await session.exclusive(() =>
+      invokeInApp<{ latest_seq: number }>(session.browser, 'get_recent_logs_since', { afterSeq: 0 }),
+    );
+    oracleState.logCursor = logs.latest_seq;
+  } catch {
+    // Best-effort: a failed checkpoint only means the first sweep may include
+    // startup lines.
+  }
+}
+
 /** Cheap sweep that never throws; returns an `oracle` block or null. */
 async function sweepBestEffort(): Promise<{ worst: unknown; findings: unknown[] } | null> {
   try {
@@ -131,14 +156,33 @@ async function sweepBestEffort(): Promise<{ worst: unknown; findings: unknown[] 
 
 const server = new McpServer({ name: 'stalagmight-app', version: '0.1.0' });
 
+// The MCP SDK does NOT serialize tool handlers: protocol.js's _onrequest fires
+// each handler via Promise.resolve().then(...) without awaiting it, so a client
+// that pipelines two tool calls runs both handlers concurrently. The session's
+// exclusive() mutex only covers the WebDriver leg inside each handler - the
+// recorder seq allocation, the oracle sweep bookkeeping (oracleState.reported /
+// logCursor / findingCount), and postDigest would still interleave across
+// tools. Serialize WHOLE handlers here so one tool call fully completes
+// (mutation + digest + sweep) before the next begins.
+let toolChain: Promise<unknown> = Promise.resolve();
+
 function define<S extends z.ZodRawShape>(
   name: string,
   description: string,
   schema: S,
   handler: (args: z.infer<z.ZodObject<S>>) => Promise<ToolResult>,
+  opts: { serialize?: boolean } = {},
 ): void {
+  const wrapped =
+    opts.serialize === false
+      ? handler
+      : (args: z.infer<z.ZodObject<S>>): Promise<ToolResult> => {
+          const run = toolChain.then(() => handler(args));
+          toolChain = run.catch(() => undefined);
+          return run;
+        };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  server.registerTool(name, { description, inputSchema: schema }, handler as any);
+  server.registerTool(name, { description, inputSchema: schema }, wrapped as any);
 }
 
 // ---------------------------------------------------------------- lifecycle
@@ -158,7 +202,7 @@ define(
         headed: args.headed,
         freshProfile: args.freshProfile,
       });
-      oracleState = newOracleState();
+      await resetOracles();
       logCursor = new LogCursor(session.browser);
       await logCursor.checkpoint().catch(() => undefined);
       return textResult(res);
@@ -189,7 +233,7 @@ define(
       // this is what makes "restart with persisted state" actually persist.
       await session.stop('app_restart', { keepProfile: !fresh });
       const res = await session.start({ build: 'skip', freshProfile: fresh });
-      oracleState = newOracleState();
+      await resetOracles();
       logCursor = new LogCursor(session.browser);
       await logCursor.checkpoint().catch(() => undefined);
       return textResult(res);
@@ -199,15 +243,24 @@ define(
   },
 );
 
-define('app_status', 'Report session liveness and basic info.', {}, async () => {
-  return textResult({
-    state: session.state,
-    uptimeMs: session.uptimeMs(),
-    driverAlive: session.driverAlive(),
-    sessionDir: session.sessionDir,
-    node: process.versions.node,
-  });
-});
+// serialize:false - a pure in-process read with no WebDriver/recorder/oracle
+// touch, kept unserialized so it stays a usable liveness probe even while a
+// long build or scenario holds the tool chain.
+define(
+  'app_status',
+  'Report session liveness and basic info.',
+  {},
+  async () => {
+    return textResult({
+      state: session.state,
+      uptimeMs: session.uptimeMs(),
+      driverAlive: session.driverAlive(),
+      sessionDir: session.sessionDir,
+      node: process.versions.node,
+    });
+  },
+  { serialize: false },
+);
 
 // ------------------------------------------------------------- observation
 
@@ -634,11 +687,35 @@ define(
             'helpers',
             `return (async () => { const { browser, ipc, evalInApp, readStore, callAction, log } = helpers; ${args.script} })();`,
           );
-          const raced = await withTimeout(fn(helpers) as Promise<unknown>, timeoutMs);
+          const body = fn(helpers) as Promise<unknown>;
+          const raced = await withTimeout(body, timeoutMs);
           if (raced === TIMED_OUT) {
             expired = true;
             if (session.hasRecorder) session.recorder.event('driver-script-timeout', { timeoutMs });
-            throw new Error(`driver_script timed out after ${timeoutMs}ms (helpers disabled)`);
+            // A promise cannot be killed, and the fence only stops NEW helper
+            // calls - an already-awaiting WebDriver command, or a script
+            // driving an unproxied element/action handle, keeps running. Hold
+            // the mutex for a bounded grace so it can settle; if the body is
+            // STILL running after that, poison the session (state 'crashed')
+            // so no later tool call can interleave with it on the same
+            // WebDriver session - only app_restart recovers.
+            const settled = await withTimeout(
+              body.catch(() => undefined),
+              10000,
+            );
+            if (settled === TIMED_OUT) {
+              session.state = 'crashed';
+              if (session.hasRecorder) {
+                session.recorder.event('crash-detected', { reason: 'driver-script-wedged', timeoutMs });
+              }
+              throw new Error(
+                `driver_script timed out after ${timeoutMs}ms and is still running; ` +
+                  'session disabled to prevent concurrent WebDriver traffic - call app_restart',
+              );
+            }
+            throw new Error(
+              `driver_script timed out after ${timeoutMs}ms (body settled during the grace window; helpers disabled)`,
+            );
           }
           return raced;
         });

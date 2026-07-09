@@ -75,7 +75,15 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['src/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
+    // scripts/**/*.test.ts: golden tests for the repo's Node tooling (e.g. the
+    // agent replay/repro generators) so a parser regression there fails
+    // `pnpm test`. Deliberately .ts-only: the standalone *.test.mjs files in
+    // scripts/ are plain node self-test scripts (run via lint:*:test), not
+    // vitest suites.
+    include: [
+      'src/**/*.{test,spec}.?(c|m)[jt]s?(x)',
+      'scripts/**/*.{test,spec}.ts',
+    ],
     exclude: [
       '**/e2e/**',
       '**/e2e-playwright/**',

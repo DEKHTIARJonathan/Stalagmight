@@ -75,6 +75,20 @@ export function pidComm(pid: number): string {
   }
 }
 
+/** Read the process-group id from `/proc/<pid>/stat` (Linux), or 0. */
+export function pidPgid(pid: number): number {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    // The comm field is parenthesised and may itself contain spaces/parens;
+    // fields after the LAST ')' are: state ppid pgrp ...
+    const after = stat.slice(stat.lastIndexOf(')') + 2);
+    const pgrp = Number.parseInt(after.split(' ')[2] ?? '', 10);
+    return Number.isInteger(pgrp) && pgrp > 0 ? pgrp : 0;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Kill each PID listed in `pidFile` whose comm name contains one of
  * `commSubstrings`. Returns the PIDs actually signalled. Best-effort and
@@ -98,7 +112,13 @@ export function reapPidsFromFile(pidFile: string, commSubstrings: string[]): num
     const comm = pidComm(pid);
     if (comm && commSubstrings.some((s) => comm.includes(s))) {
       try {
-        process.kill(pid, 'SIGKILL');
+        // A recorded pid that leads its own process group (tauri-driver is
+        // spawned detached) gets a GROUP kill, so its unrecorded children
+        // (WebKitWebDriver, the app) die with it - killing the leader alone
+        // permanently orphans them when the harness process died without
+        // running stop(). Non-leaders get a plain kill: kill(-pid) for a
+        // non-leader would target whatever unrelated group has pgid == pid.
+        process.kill(pidPgid(pid) === pid ? -pid : pid, 'SIGKILL');
         killed.push(pid);
       } catch {
         // Already gone.

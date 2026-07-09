@@ -36,9 +36,15 @@ export async function pause(browser: Browser, ms: number): Promise<void> {
 /**
  * Re-run a recorded driver_script body with the same helpers in scope it had
  * live (browser/ipc/evalInApp/readStore/callAction/log). The spec runs
- * single-threaded, so no mutex is needed here.
+ * single-threaded, so no mutex is needed here. Bounded by `timeoutMs` exactly
+ * like the live tool, so a script that timed out during recording (an infinite
+ * or slow loop) cannot hang the replay indefinitely.
  */
-export async function driverScript(browser: Browser, script: string): Promise<unknown> {
+export async function driverScript(
+  browser: Browser,
+  script: string,
+  timeoutMs = 60000,
+): Promise<unknown> {
   const helpers = {
     browser,
     ipc: (c: string, a?: Record<string, unknown>) => invokeInApp(browser, c, a),
@@ -53,7 +59,18 @@ export async function driverScript(browser: Browser, script: string): Promise<un
     'helpers',
     `return (async () => { const { browser, ipc, evalInApp, readStore, callAction, log } = helpers; ${script} })();`,
   );
-  return fn(helpers) as Promise<unknown>;
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`replayed driver_script timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([fn(helpers) as Promise<unknown>, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**

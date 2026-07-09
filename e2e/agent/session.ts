@@ -84,6 +84,7 @@ export class AppSession {
   private sessionId = '';
   private startedAtMs = 0;
   private queue: Promise<unknown> = Promise.resolve();
+  private driverLog: fs.WriteStream | null = null;
 
   get browser(): Browser {
     if (!this.browserInstance) throw new Error('no live session (call app_start)');
@@ -167,6 +168,19 @@ export class AppSession {
           'If app_start fails with UND_ERR_INVALID_ARG, switch to Node 22 (nvm use).\n',
       );
     }
+    try {
+      return await this.startInner(opts);
+    } catch (err) {
+      // Any throw after something was spawned (build, Xvfb, tauri-driver,
+      // waitForAppReady, hook/onboarding checks) must not leak the process
+      // group, the Xvfb child, or the temp profile. Failure paths that already
+      // stopped leave state 'idle', which skips the duplicate stop.
+      if (this.state !== 'idle') await this.stop('start-failed');
+      throw err;
+    }
+  }
+
+  private async startInner(opts: StartOptions): Promise<StartResult> {
     const build = opts.build ?? 'auto';
     const freshProfile = opts.freshProfile ?? true;
 
@@ -218,6 +232,14 @@ export class AppSession {
     // when freshProfile=false; a fresh start discards any kept one first.
     this.sessionId = timestampId();
     this.recorderInstance = new Recorder(this.sessionId);
+    // Ownership marker: reapPreviousSessions in ANOTHER harness process skips
+    // session dirs whose owning process is still alive, so starting a second
+    // agent session can never SIGKILL a live sibling's app/driver mid-run.
+    try {
+      fs.writeFileSync(path.join(this.recorderInstance.dir, 'owner'), String(process.pid));
+    } catch {
+      // Best-effort.
+    }
     if (freshProfile && this.profileRoot) {
       try {
         fs.rmSync(this.profileRoot, { recursive: true, force: true });
@@ -235,9 +257,10 @@ export class AppSession {
     this.nativePort = await findFreePort(this.driverPort + 1000);
 
     // 5. tauri-driver, with the isolated env + test hooks (app inherits it).
-    const driverLog = fs.createWriteStream(path.join(this.recorder.dir, 'tauri-driver.log'), {
+    this.driverLog = fs.createWriteStream(path.join(this.recorder.dir, 'tauri-driver.log'), {
       flags: 'a',
     });
+    const driverLog = this.driverLog;
     const driverEnv: NodeJS.ProcessEnv = {
       ...process.env,
       ...profileEnv,
@@ -268,7 +291,14 @@ export class AppSession {
     if (this.driver.pid) recordPid(this.pidFile(), this.driver.pid);
     this.driver.stdout?.on('data', (d: Buffer) => driverLog.write(d));
     this.driver.stderr?.on('data', (d: Buffer) => driverLog.write(d));
+    const driverChild = this.driver;
     this.driver.on('exit', (code) => {
+      // Only the CURRENT driver dying unexpectedly is a crash. A late exit
+      // event from a driver this session already stopped or replaced (e.g. a
+      // SIGKILL-path stop reaps after stop() returned and reset state, or
+      // app_restart already spawned a successor) must not flip a healthy
+      // session to 'crashed' with a bogus crash-detected log line.
+      if (this.driver !== driverChild) return;
       if (this.state !== 'stopping') {
         this.state = 'crashed';
         this.recorderInstance?.event('crash-detected', { reason: 'driver-exit', exitCode: code });
@@ -362,7 +392,21 @@ export class AppSession {
       return;
     }
     for (const name of dirs) {
-      reapPidsFromFile(path.join(ARTIFACTS_ROOT, name, 'pids'), [
+      const dir = path.join(ARTIFACTS_ROOT, name);
+      // Liveness guard: skip sessions whose owning harness process is still
+      // alive - that is a concurrently-running sibling, and reaping its
+      // pidfile would SIGKILL a LIVE session's app/driver mid-run. Our own
+      // pid means an earlier session of this process (we only start from
+      // idle/crashed), whose orphans are safe to reap.
+      try {
+        const owner = Number.parseInt(fs.readFileSync(path.join(dir, 'owner'), 'utf8').trim(), 10);
+        if (Number.isInteger(owner) && owner > 0 && owner !== process.pid && isPidAlive(owner)) {
+          continue;
+        }
+      } catch {
+        // No owner marker (pre-marker session dir): assume dead, reap below.
+      }
+      reapPidsFromFile(path.join(dir, 'pids'), [
         'stalagmight',
         'tauri-driver',
         'WebKitWebDriver',
@@ -387,7 +431,13 @@ export class AppSession {
     this.state = 'stopping';
     if (this.browserInstance) {
       try {
-        await this.browserInstance.deleteSession();
+        // Bounded: an unresponsive driver would otherwise block stop() for the
+        // full webdriverio connectionRetryTimeout (30s) before the group kill
+        // below ever runs.
+        await Promise.race([
+          this.browserInstance.deleteSession(),
+          new Promise((r) => setTimeout(r, 5000)),
+        ]);
       } catch {
         // Session may already be dead.
       }
@@ -409,15 +459,32 @@ export class AppSession {
       }
       this.driver = null;
     }
+    // Close the tauri-driver log stream; without this the fd leaks across
+    // every app_restart cycle for the life of the MCP server process.
+    this.driverLog?.end();
+    this.driverLog = null;
     // Backstop: scoped reap of anything this session recorded, by verified comm.
     if (this.recorderInstance) {
       reapPidsFromFile(this.pidFile(), ['stalagmight', 'tauri-driver', 'WebKitWebDriver']);
     }
     if (this.xvfb) {
+      const xvfbPid = this.xvfb.proc.pid;
       try {
         this.xvfb.proc.kill();
       } catch {
         // Already gone.
+      }
+      // Escalate: nothing reaps a wedged Xvfb across runs, and a leaked one
+      // holds its display slot from the fixed XVFB_DISPLAYS pool forever.
+      if (xvfbPid) {
+        await new Promise((r) => setTimeout(r, 300));
+        if (isPidAlive(xvfbPid)) {
+          try {
+            process.kill(xvfbPid, 'SIGKILL');
+          } catch {
+            // Already gone.
+          }
+        }
       }
       this.xvfb = null;
     }

@@ -13,7 +13,9 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 export const DEFAULT_FIXTURE = 'fractal_plant_iter2.stalx';
 
 export function fixturePath(name: string): string {
-  return path.join(repoRoot, 'e2e', 'fixtures', name);
+  // Confine to a basename so a caller-supplied name cannot resolve outside
+  // e2e/fixtures/ (the seed tool passes this through verbatim).
+  return path.join(repoRoot, 'e2e', 'fixtures', path.basename(name));
 }
 
 export async function hasProject(ctx: ScenarioContext): Promise<boolean> {
