@@ -14604,6 +14604,43 @@ fn test_close_project_clears_all_state() {
     assert_eq!(undo_stack.len(), 0);
 }
 
+#[test]
+fn test_close_project_clears_adjusted_cache() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "ToClose".to_string(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("Sec".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+
+    // Warm the memoized closure-adjusted coordinates cache. For a large project
+    // this is a project-scale allocation (one `Station` per station), so closing
+    // must drop it for RSS to shrink back.
+    assert!(state.get_adjusted_stations().is_some());
+    assert!(
+        state.adjusted_cache.lock().unwrap().is_some(),
+        "adjusted cache should be warm after get_adjusted_stations"
+    );
+
+    let result = state.close_project();
+    assert!(result.success);
+
+    // close_project must free both project-scale in-memory caches. The undo stack
+    // is reloaded from SQLite on the next open, so clearing it here is safe.
+    assert!(
+        state.adjusted_cache.lock().unwrap().is_none(),
+        "adjusted cache must be cleared on close"
+    );
+    assert_eq!(state.undo_stack.lock().unwrap().len(), 0);
+}
+
 // ============================================================================
 // Coverage gap tests: merge_projects edge cases
 // ============================================================================
