@@ -855,20 +855,15 @@ impl AppState {
         whoami_indicates_dead_token(&client::fetch_user_email(&endpoint, &token, insecure_http))
     }
 
-    /// Persist the authoritative account email AND the endpoint that login
-    /// resolved to - never the token - so a later silent rehydrate keys the
-    /// keychain lookup by the SAME (endpoint, email) the token was stored under.
-    ///
-    /// The endpoint MUST be persisted here (agent-harness campaign ws19). The
-    /// token is stored keyed by the login-time endpoint (which may be a dialog
-    /// override typed but not Saved), while `rehydrate` resolves the endpoint from
-    /// config; if login does not write the endpoint, a custom-endpoint user who
-    /// logs in without pressing Save is silently logged out on the next launch
-    /// (token present in the keychain, but looked up under the wrong key). A
-    /// successful "Log in now" is a real committed login, not a preview
-    /// (ws05/ws19), so committing the endpoint the user actually authenticated
-    /// against is correct - it is the server they are now on. Best-effort; a
-    /// failure is logged, not fatal.
+    /// Persist the authoritative account email AND the endpoint login resolved to
+    /// - never the token - so a later silent rehydrate keys the keychain lookup by
+    /// the SAME (endpoint, email) the token was stored under. The endpoint MUST be
+    /// persisted (ws19): the token is stored under the login-time endpoint (which
+    /// may be a dialog override typed but not Saved) while `rehydrate` resolves it
+    /// from config, so without this a custom-endpoint user who logs in without
+    /// pressing Save is silently logged out next launch (token present, wrong
+    /// lookup key). A successful "Log in now" is a real committed login (ws05/ws19),
+    /// so committing its endpoint is correct. Best-effort; a failure is logged.
     fn speleodb_persist_account(&self, endpoint: &str, email: &str) {
         let Ok(mut config) = self.config.lock() else {
             return;
