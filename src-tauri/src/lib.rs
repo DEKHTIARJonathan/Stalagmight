@@ -14,6 +14,10 @@ pub mod telemetry;
 pub mod test_helpers;
 pub mod tile_providers;
 pub mod tilemap_cache;
+/// Linux-only WebKit memory-pressure wiring (see the module docs and
+/// `vendor/wry/MODIFICATIONS.md`).
+#[cfg(target_os = "linux")]
+pub mod webkit_memory;
 
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageFormat};
@@ -1053,6 +1057,15 @@ pub fn run() {
     // Route panics through tracing + a crash-marker file so a crash oracle can
     // detect a backend panic even when a thread panic leaves the app alive.
     logging::panic_hook::install();
+
+    // Export the WebKit memory-pressure environment BEFORE the Tauri builder
+    // runs. On Linux the config-defined window's WebContext is constructed inside
+    // Tauri's setup step (before our own `.setup()` hook), and
+    // `memory-pressure-settings` is a construct-only property, so this must happen
+    // here at the top of `run()`. No-op unless enabled (default on). See
+    // `webkit_memory` and `vendor/wry/MODIFICATIONS.md`.
+    #[cfg(target_os = "linux")]
+    webkit_memory::apply_env_from_config();
 
     #[cfg(not(feature = "e2e"))]
     let builder = tauri::Builder::default();

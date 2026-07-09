@@ -1,4 +1,8 @@
-use super::types::{default_sigma_azimuth_deg, default_sigma_depth_m, default_sigma_length_m};
+use super::types::{
+    default_sigma_azimuth_deg, default_sigma_depth_m, default_sigma_length_m,
+    default_webkit_mem_conservative, default_webkit_mem_limit_mb, default_webkit_mem_poll,
+    default_webkit_mem_strict,
+};
 use super::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
     DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GasConfig, GeneralConfig,
@@ -6,6 +10,7 @@ use super::{
     MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
     ProviderCacheConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
     SpeleoDbConfig, StationConfig, SyntacticHighlightingConfig, UnitsConfig, ValidationConfig,
+    WebkitMemoryConfig,
 };
 
 #[expect(clippy::derivable_impls)]
@@ -25,6 +30,7 @@ impl Default for Config {
             panels: PanelsConfig::default(),
             cache: CacheConfig::default(),
             debug: DebugConfig::default(),
+            webkit_memory: WebkitMemoryConfig::default(),
             global_view: GlobalViewConfig::default(),
             appearance: AppearanceConfig::default(),
             import: ImportConfig::default(),
@@ -33,6 +39,19 @@ impl Default for Config {
             gas: GasConfig::default(),
             speleodb: SpeleoDbConfig::default(),
             legacy_snap: None,
+        }
+    }
+}
+
+impl Default for WebkitMemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            memory_limit_mb: default_webkit_mem_limit_mb(),
+            conservative_threshold: default_webkit_mem_conservative(),
+            strict_threshold: default_webkit_mem_strict(),
+            kill_threshold: 0.0,
+            poll_interval_seconds: default_webkit_mem_poll(),
         }
     }
 }

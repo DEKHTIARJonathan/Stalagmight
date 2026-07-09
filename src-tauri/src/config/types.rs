@@ -26,6 +26,11 @@ pub struct Config {
     pub cache: CacheConfig,
     #[serde(default)]
     pub debug: DebugConfig,
+    /// Linux-only WebKit memory-pressure tuning. Backend-only; `#[ts(skip)]`
+    /// keeps it out of the generated frontend types.
+    #[serde(default)]
+    #[ts(skip)]
+    pub webkit_memory: WebkitMemoryConfig,
     #[serde(default)]
     pub global_view: GlobalViewConfig,
     #[serde(default)]
@@ -393,6 +398,60 @@ pub struct MapDebugConfig {
     /// Log hit detection events to console
     #[serde(default)]
     pub log_hit_detection: bool,
+}
+
+/// Linux-only WebKit memory-pressure tuning.
+///
+/// On Linux (webkitgtk) the WebKit web process never returns freed memory to the
+/// OS without a pressure signal, so its RSS drifts far above live memory. These
+/// settings give the web process a soft memory budget so WebKit's own
+/// `MemoryPressureHandler` reclaims memory (GC-style pauses), with no kernel
+/// cgroup throttling. Applied via the vendored, patched `wry`
+/// (`src-tauri/vendor/wry/MODIFICATIONS.md`), which reads the
+/// `STALAGMIGHT_WEBKIT_MEM_*` environment variables that `lib.rs` `run()` sets
+/// from this config at startup.
+///
+/// Backend-only: the `Config` field is `#[ts(skip)]`, so this never reaches the
+/// frontend. Tune it in `config.toml` or via the environment variables directly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebkitMemoryConfig {
+    /// Master switch. When `false`, no pressure settings are applied and wry
+    /// behaves exactly like upstream.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Soft memory budget for the web process, in MB. The thresholds below are
+    /// fractions of this. `0` disables the feature (same as `enabled = false`).
+    #[serde(default = "default_webkit_mem_limit_mb")]
+    pub memory_limit_mb: u32,
+    /// Fraction of the limit at which WebKit starts a gentle cache release.
+    #[serde(default = "default_webkit_mem_conservative")]
+    pub conservative_threshold: f64,
+    /// Fraction of the limit at which WebKit runs an aggressive, synchronous
+    /// release.
+    #[serde(default = "default_webkit_mem_strict")]
+    pub strict_threshold: f64,
+    /// Fraction of the limit at which the web process is killed. `0.0` = never.
+    #[serde(default)]
+    pub kill_threshold: f64,
+    /// Poll interval in seconds for the pressure handler.
+    #[serde(default = "default_webkit_mem_poll")]
+    pub poll_interval_seconds: f64,
+}
+
+pub fn default_webkit_mem_limit_mb() -> u32 {
+    900
+}
+
+pub fn default_webkit_mem_conservative() -> f64 {
+    0.33
+}
+
+pub fn default_webkit_mem_strict() -> f64 {
+    0.5
+}
+
+pub fn default_webkit_mem_poll() -> f64 {
+    3.0
 }
 
 /// Panel sizes configuration (persisted across sessions)
