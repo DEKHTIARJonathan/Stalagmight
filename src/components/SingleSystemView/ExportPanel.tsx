@@ -23,7 +23,6 @@ export function ExportPanel() {
     >
       <div className="px-3 py-2 border-b border-border shrink-0">
         <h2 className="font-semibold">{t('exportPanel.title')}</h2>
-        <p className="text-xs opacity-70">{t('exportPanel.subtitle')}</p>
       </div>
       <div className="p-3">
         <ExportControls

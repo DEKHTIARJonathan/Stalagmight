@@ -2263,8 +2263,7 @@
     }
   },
   "exportPanel": {
-    "title": "Export",
-    "subtitle": "Export the map image or survey data."
+    "title": "Export"
   },
   "toolbar": {
     "groupAria": "{{group}} tools",

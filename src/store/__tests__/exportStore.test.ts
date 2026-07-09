@@ -22,6 +22,10 @@ describe('exportStore', () => {
       show_penetration_labels: true,
       color_mode: 'none',
       show_station_labels: false,
+      show_section_names: false,
+      show_station_comments: false,
+      show_shot_comments: false,
+      show_shot_data: false,
     });
   });
 
