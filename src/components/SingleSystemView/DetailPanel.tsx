@@ -950,7 +950,9 @@ function computeInclination(depthIn: number, depthOut: number, length: number): 
 function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
   const { t } = useTranslation();
   const { setShotReference } = useProjectStore();
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const geometryModeReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
+  const geometryReadOnly = geometryModeReadOnly || speleoReadOnly;
   const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnShot: s.triggerCenterOnShot, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredSectionId: s.setHoveredSectionId }))
   );
@@ -1167,7 +1169,9 @@ interface SectionDetailProps {
 
 function SectionDetail({ section, stations, totalProjectLength }: SectionDetailProps) {
   const { t } = useTranslation();
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const geometryModeReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
+  const geometryReadOnly = geometryModeReadOnly || speleoReadOnly;
   const { openDialog, setSelection, triggerZoomToSection, announceSelection, setHoveredStation } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerZoomToSection: s.triggerZoomToSection, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation }))
   );
@@ -1551,7 +1555,9 @@ function ClosuresSection({
 }: ClosuresSectionProps) {
   const { t } = useTranslation();
   const removeLoopClosure = useProjectStore((s) => s.removeLoopClosure);
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const geometryModeReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
+  const geometryReadOnly = geometryModeReadOnly || speleoReadOnly;
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
   const [removingClosureId, setRemovingClosureId] = useState<bigint | null>(null);
