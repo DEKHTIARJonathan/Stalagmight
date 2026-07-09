@@ -2,17 +2,31 @@ import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
+import { SpeleoUserAutocomplete } from '../common/SpeleoUserAutocomplete';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { invokeIpc } from '../../utils/ipc';
 import { humanizeSpeleoError, speleoErrorAction } from '../../utils/speleoError';
+import { USER_LEVELS } from '../../utils/speleoPermission';
 import { validateCoordinates } from '../../utils/gps';
 import { reverseGeocodeCountry } from '../../utils/reverseGeocodeCountry';
 import { COUNTRIES } from '../../data/countries';
-import type { SpeleoPublishParams, SpeleoPublishResult, Visibility } from '../../types/ipc.generated';
+import type {
+  Permission,
+  SpeleoCollaborators,
+  SpeleoPublishParams,
+  SpeleoPublishResult,
+  Visibility,
+} from '../../types/ipc.generated';
 
 const inputClass = 'w-full px-2 py-1 bg-background border border-border rounded text-sm';
+
+/** A collaborator queued in the dialog, granted only after the project is created. */
+interface PendingCollaborator {
+  email: string;
+  permission: Permission;
+}
 
 /**
  * Publish the OPEN local project to SpeleoDB (#207). Collects the required metadata
@@ -43,6 +57,33 @@ export default function PublishToSpeleoDbDialog() {
   const [longitude, setLongitude] = useState(firstGps ? String(firstGps.longitude) : '');
   const [publishing, setPublishing] = useState(false);
 
+  // Collaborators to grant AFTER the create succeeds - the project does not exist on
+  // the server yet, so we queue (email, level) pairs here and add them once it is
+  // linked. The email typeahead is session-backed, so it works before publish.
+  const [collaborators, setCollaborators] = useState<PendingCollaborator[]>([]);
+  const [collabEmail, setCollabEmail] = useState('');
+  const [collabLevel, setCollabLevel] = useState<Permission>('READ_ONLY');
+
+  const addCollaborator = useCallback(() => {
+    const email = collabEmail.trim();
+    if (!email) return;
+    setCollaborators((prev) => {
+      // De-dupe on a case-insensitive email; a re-add just updates the level.
+      const lower = email.toLowerCase();
+      const rest = prev.filter((c) => c.email.toLowerCase() !== lower);
+      return [...rest, { email, permission: collabLevel }];
+    });
+    setCollabEmail('');
+  }, [collabEmail, collabLevel]);
+
+  const removeCollaborator = useCallback((email: string) => {
+    setCollaborators((prev) => prev.filter((c) => c.email !== email));
+  }, []);
+
+  const setCollaboratorLevel = useCallback((email: string, permission: Permission) => {
+    setCollaborators((prev) => prev.map((c) => (c.email === email ? { ...c, permission } : c)));
+  }, []);
+
   const latTrim = latitude.trim();
   const lonTrim = longitude.trim();
   const latNum = latTrim === '' ? null : Number(latTrim);
@@ -55,7 +96,15 @@ export default function PublishToSpeleoDbDialog() {
     !bothProvided || (latNum !== null && lonNum !== null && validateCoordinates(latNum, lonNum).valid);
   const coordsValid = coordsPairValid && coordsRangeValid;
 
-  const canPublish = name.trim().length > 0 && country !== '' && coordsValid && !publishing;
+  // SpeleoDB's Project model requires a non-blank description (`blank=False,
+  // null=False`), so an empty one 400s the create before anything is written. Gate
+  // it here as required rather than let Publish silently fail after the click.
+  const canPublish =
+    name.trim().length > 0 &&
+    description.trim().length > 0 &&
+    country !== '' &&
+    coordsValid &&
+    !publishing;
 
   const handlePublish = useCallback(async () => {
     if (!canPublish) return;
@@ -78,11 +127,49 @@ export default function PublishToSpeleoDbDialog() {
       // failed reload must NOT claim success or close over a stale/local view.
       const { success } = await useProjectStore.getState().loadProject(result.local_path);
       if (!success) {
-        showToast(t('speleodb.publish.reloadFailed'), 'speleodb-publish');
+        // Published, but the cache copy could not be reopened. Grants target the OPEN
+        // link, which we no longer have, so any queued collaborators were NOT added -
+        // say so rather than dropping them silently.
+        showToast(
+          collaborators.length > 0
+            ? t('speleodb.publish.reloadFailedWithCollaborators')
+            : t('speleodb.publish.reloadFailed'),
+          'speleodb-publish',
+        );
         return;
       }
-      await useSpeleoStore.getState().refreshLinkStatus();
-      showToast(t('speleodb.publish.success'), 'speleodb-publish');
+      // UI-convergence only: a failure refreshing the link status must NOT flip a
+      // succeeded publish into the error path (the link is already stamped on the
+      // reloaded project), so swallow it.
+      try {
+        await useSpeleoStore.getState().refreshLinkStatus();
+      } catch {
+        // non-fatal; leave the status to the next refresh.
+      }
+
+      // The project is now linked, so `speleodb_add_collaborator` (which targets the
+      // open link) can grant each queued collaborator. Sequential + best-effort: a
+      // failed grant must NOT undo a successful publish, so we collect the failures
+      // and warn, leaving the rest to be finished from Project Settings.
+      const failed: string[] = [];
+      for (const c of collaborators) {
+        try {
+          await invokeIpc<SpeleoCollaborators>('speleodb_add_collaborator', {
+            email: c.email,
+            permission: c.permission,
+          });
+        } catch {
+          failed.push(c.email);
+        }
+      }
+      if (failed.length > 0) {
+        showToast(
+          t('speleodb.publish.collaboratorsPartial', { emails: failed.join(', ') }),
+          'speleodb-publish',
+        );
+      } else {
+        showToast(t('speleodb.publish.success'), 'speleodb-publish');
+      }
       closeDialog();
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), 'speleodb-publish');
@@ -102,6 +189,7 @@ export default function PublishToSpeleoDbDialog() {
     lonTrim,
     latNum,
     lonNum,
+    collaborators,
     showToast,
     closeDialog,
     t,
@@ -112,6 +200,7 @@ export default function PublishToSpeleoDbDialog() {
     description.trim() !== '' ||
     country !== '' ||
     visibility !== 'PRIVATE' ||
+    collaborators.length > 0 ||
     // Include the coordinate pins so entering ONLY a location still prompts on close.
     latTrim !== '' ||
     lonTrim !== '';
@@ -129,7 +218,7 @@ export default function PublishToSpeleoDbDialog() {
 
         <div>
           <label className="block text-sm font-medium text-text-primary mb-1">
-            {t('speleodb.projectSettings.fields.name')}
+            {t('speleodb.projectSettings.fields.name')} <span className="text-error">*</span>
           </label>
           <input
             type="text"
@@ -143,7 +232,7 @@ export default function PublishToSpeleoDbDialog() {
 
         <div>
           <label className="block text-sm font-medium text-text-primary mb-1">
-            {t('speleodb.projectSettings.fields.description')}
+            {t('speleodb.projectSettings.fields.description')} <span className="text-error">*</span>
           </label>
           <textarea
             value={description}
@@ -153,11 +242,16 @@ export default function PublishToSpeleoDbDialog() {
             aria-label={t('speleodb.projectSettings.fields.description')}
             data-testid="publish-to-speleodb-dialog-description"
           />
+          {description.trim() === '' && (
+            <p className="text-error text-xs mt-1" data-testid="publish-to-speleodb-dialog-description-error">
+              {t('speleodb.publish.descriptionRequired')}
+            </p>
+          )}
         </div>
 
         <div>
           <label className="block text-sm font-medium text-text-primary mb-1">
-            {t('speleodb.publish.country')}
+            {t('speleodb.publish.country')} <span className="text-error">*</span>
           </label>
           <select
             value={country}
@@ -226,6 +320,89 @@ export default function PublishToSpeleoDbDialog() {
             {t('speleodb.projectSettings.coordinatesHint')}
           </p>
         )}
+
+        <div className="pt-2 border-t border-border">
+          <label className="block text-sm font-medium text-text-primary mb-1">
+            {t('speleodb.publish.collaborators')}
+          </label>
+          <p className="text-text-secondary text-xs mb-2">
+            {t('speleodb.publish.collaboratorsHint')}
+          </p>
+
+          {collaborators.length > 0 && (
+            <ul className="space-y-1 mb-2" data-testid="publish-to-speleodb-dialog-collaborators">
+              {collaborators.map((c) => (
+                <li
+                  key={c.email}
+                  className="flex items-center gap-2"
+                  data-testid={`publish-to-speleodb-dialog-collab-${c.email}`}
+                >
+                  <span className="flex-1 min-w-0 truncate text-sm">{c.email}</span>
+                  <select
+                    value={c.permission}
+                    disabled={publishing}
+                    onChange={(e) => setCollaboratorLevel(c.email, e.target.value as Permission)}
+                    className="px-1 py-0.5 bg-background border border-border rounded text-xs"
+                    aria-label={t('speleodb.collaborators.levelFor', { name: c.email })}
+                    data-testid={`publish-to-speleodb-dialog-collab-level-${c.email}`}
+                  >
+                    {USER_LEVELS.map((p) => (
+                      <option key={p} value={p}>
+                        {t(`speleodb.collaborators.levels.${p}`)}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={publishing}
+                    onClick={() => removeCollaborator(c.email)}
+                    className="text-error text-xs hover:underline disabled:opacity-60"
+                    data-testid={`publish-to-speleodb-dialog-collab-remove-${c.email}`}
+                  >
+                    {t('speleodb.collaborators.remove')}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="flex items-center gap-2">
+            <SpeleoUserAutocomplete
+              value={collabEmail}
+              onChange={setCollabEmail}
+              disabled={publishing}
+              enabled={!publishing}
+              className={inputClass}
+              placeholder={t('speleodb.collaborators.emailPlaceholder')}
+              ariaLabel={t('speleodb.collaborators.addUser')}
+              inputTestId="publish-to-speleodb-dialog-collab-email"
+              listTestId="publish-to-speleodb-dialog-collab-suggestions"
+              suggestionTestIdPrefix="publish-to-speleodb-dialog-collab-suggestion"
+            />
+            <select
+              value={collabLevel}
+              disabled={publishing}
+              onChange={(e) => setCollabLevel(e.target.value as Permission)}
+              className="px-1 py-1 bg-background border border-border rounded text-sm"
+              aria-label={t('speleodb.collaborators.addLevel')}
+              data-testid="publish-to-speleodb-dialog-collab-add-level"
+            >
+              {USER_LEVELS.map((p) => (
+                <option key={p} value={p}>
+                  {t(`speleodb.collaborators.levels.${p}`)}
+                </option>
+              ))}
+            </select>
+            <Button
+              variant="secondary"
+              disabled={publishing || collabEmail.trim() === ''}
+              onClick={addCollaborator}
+              data-testid="publish-to-speleodb-dialog-collab-add"
+            >
+              {t('speleodb.collaborators.add')}
+            </Button>
+          </div>
+        </div>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={closeDialog} disabled={publishing} data-testid="publish-to-speleodb-dialog-cancel">

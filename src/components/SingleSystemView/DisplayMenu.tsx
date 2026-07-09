@@ -161,7 +161,10 @@ function Category({ label, icon, children }: { label: string; icon?: ReactNode; 
   );
 }
 
-export default function DisplayMenu() {
+export default function DisplayMenu({
+  condensed = false,
+  tight = false,
+}: { condensed?: boolean; tight?: boolean } = {}) {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -327,8 +330,10 @@ export default function DisplayMenu() {
       <button
         ref={buttonRef}
         onClick={() => setIsOpen(!isOpen)}
+        // When tight, keep the LEFT padding (so the eye isn't jammed against the tool
+        // to its left) but squeeze the right padding; the eye<->caret gap tightens too.
         className={`
-          px-3 py-1.5 text-sm rounded transition-colors
+          ${tight ? 'pl-3 pr-1.5 py-1.5' : 'px-3 py-1.5'} text-sm rounded transition-colors
           ${isOpen
             ? 'bg-accent text-accent-on'
             : 'bg-background hover:bg-background-80 text-text-primary'
@@ -337,10 +342,13 @@ export default function DisplayMenu() {
         title={t('displayMenu.title')}
         data-testid="display-menu-button"
         aria-expanded={isOpen}
+        // When condensed the "Display" text is dropped to save toolbar width, so the
+        // button keeps an accessible name via aria-label (eye + caret stay visible).
+        aria-label={condensed ? t('displayMenu.button') : undefined}
       >
-        <span className="flex items-center gap-1">
+        <span className={`flex items-center ${tight ? 'gap-0.5' : 'gap-1'}`}>
           <EyeIcon size={18} />
-          <span>{t('displayMenu.button')}</span>
+          {!condensed && <span>{t('displayMenu.button')}</span>}
           <span className="text-xs">
             {isOpen ? <ChevronUpIcon size={10} /> : <ChevronDownIcon size={10} />}
           </span>

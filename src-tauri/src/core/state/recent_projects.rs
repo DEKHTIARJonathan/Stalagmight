@@ -58,8 +58,21 @@ impl AppState {
         let initial_len = recent.len();
         recent.retain(|p| p != &path);
 
+        // Idempotent forget: "remove from recent" means "ensure this path is not in
+        // the list", so an already-absent entry is SUCCESS, not a failure. The
+        // backend's `config.general.recent_projects` and this in-memory list are kept
+        // in lockstep, but the FRONTEND holds its own config snapshot that can lag them
+        // (e.g. after the backend trimmed an entry past `recent_projects_max`). That
+        // stale snapshot still renders the trimmed path as an unavailable "missing"
+        // card. The frontend only refreshes recents on a success result, so returning a
+        // failure here left that row un-removable forever. Nothing changed on the
+        // backend, so skip the re-save and return success; the caller then re-reads the
+        // (already-correct) backend config and the stale row drops out. (The normal
+        // case — a missing file whose path is still in the list — takes the resave
+        // branch below.)
         if recent.len() == initial_len {
-            return CommandResult::failure("Project not found in recent list".to_string());
+            tracing::debug!(path = ?path, "remove_from_recent: path already absent; treating as success");
+            return CommandResult::success();
         }
 
         // Update config and save

@@ -35,6 +35,11 @@ interface UndoHistoryDropdownProps {
   onSingleAction: () => void;
   /** Test ID prefix for data-testid attributes */
   testId: string;
+  /** Accessible name for the trigger. Needed when `children` is an icon-only
+   *  (condensed) label that carries no text of its own. */
+  ariaLabel?: string;
+  /** Tighten the trigger's padding at the toolbar's final condensation stage. */
+  compact?: boolean;
 }
 
 /** Map command types to icon components (matching toolbar icon style) */
@@ -226,6 +231,8 @@ export default function UndoHistoryDropdown({
   children,
   onSingleAction,
   testId,
+  ariaLabel,
+  compact = false,
 }: UndoHistoryDropdownProps) {
   const { t } = useTranslation();
   const modeLabel = mode === 'undo' ? t('undo.actions.undo') : t('undo.actions.redo');
@@ -847,11 +854,12 @@ export default function UndoHistoryDropdown({
         onClick={handleButtonClick}
         onKeyDown={handleButtonKeyDown}
         disabled={disabled}
+        aria-label={ariaLabel}
         aria-expanded={isOpen}
         aria-haspopup="menu"
         aria-controls={isOpen ? `${menuId}-menu` : undefined}
         className={`
-          px-3 py-1.5 text-sm rounded transition-colors
+          ${compact ? 'px-1.5 py-1' : 'px-3 py-1.5'} text-sm rounded transition-colors
           ${disabled
             ? 'opacity-50 cursor-not-allowed'
             : 'bg-background hover:bg-background-80'

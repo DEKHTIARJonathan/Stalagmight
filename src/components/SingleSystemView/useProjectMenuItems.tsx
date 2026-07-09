@@ -30,6 +30,7 @@ import {
   DatabaseIcon,
   PencilIcon,
   LockIcon,
+  FilePlusIcon,
 } from '../common/icons';
 
 interface UseProjectMenuItemsArgs {
@@ -92,7 +93,11 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
 
     return [
       ...leadingMenuItems(t, { onNewProject: handleNewProject, onOpenProject: handleOpenProject }, 'hamburger'),
-      openFromSpeleoDbMenuItem(t, { onOpen: () => openDialog('open-from-speleodb') }),
+      // "Open from SpeleoDB" needs a signed-in session (it lists the caller's
+      // remote projects), so hide it when logged out.
+      ...(speleoSession?.loggedIn
+        ? [openFromSpeleoDbMenuItem(t, { onOpen: () => openDialog('open-from-speleodb') })]
+        : []),
       // Publish to SpeleoDB - only for a LOCAL project (not already linked) while
       // signed in (a publish needs a session).
       ...(!speleoLink && speleoSession?.loggedIn
@@ -100,7 +105,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
             {
               id: 'publish-to-speleodb-menu',
               label: t('speleodb.publish.menuItem'),
-              icon: <SpeleoDbLogo size={sz} />,
+              icon: (
+                <SpeleoBadgedIcon badge={<FilePlusIcon size={11} />} badgeColor="text-green-400" size={sz} />
+              ),
               onClick: () => openDialog('publish-to-speleodb'),
             },
           ]

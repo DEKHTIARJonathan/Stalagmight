@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, isMapReadOnly, type ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -7,6 +7,8 @@ import {
   ChevronDownIcon,
   DownloadIcon,
   ShrinkIcon,
+  UndoIcon,
+  RedoIcon,
 } from '../common/icons';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
@@ -175,11 +177,125 @@ export default function Toolbar({
   // Survey shows the full toolbar; Plan/Export show only the non-mutating tools.
   const toolbarItems = appMode === 'survey' ? TOOLBAR_ITEMS : READ_ONLY_TOOLBAR_ITEMS;
 
+  // Progressive condensation when the left (file/history) and right (tools/display)
+  // clusters can't clear the absolutely-centered mode carousel. Because the carousel
+  // is position:absolute it doesn't create CSS overflow, so we detect the collision
+  // by measuring rects and drop labels in a fixed priority order:
+  //   1. "Display" text  -> eye + caret only
+  //   2. "Import" text   -> yellow import icon only
+  //   3. Undo/Redo text  -> undo/redo icons only
+  //   4. tighten the padding around the burger / import / undo / redo / eye buttons
+  // The SpeleoStatusButton's presence widens the left cluster, so its visibility
+  // gates re-measurement too.
+  const speleoLinkPresent = useSpeleoStore((s) => s.link != null);
+  const CONDENSE_MAX = 4;
+  const [condense, setCondense] = useState(0);
+  const condenseRef = useRef(0);
+  const [headerWidth, setHeaderWidth] = useState(0);
+  // Header-relative x (px) to center the carousel on, or null to fall back to the
+  // window center (50%) before the first measurement.
+  const [carouselLeft, setCarouselLeft] = useState<number | null>(null);
+  const headerRef = useRef<HTMLElement>(null);
+  const leftRef = useRef<HTMLDivElement>(null);
+  const centerRef = useRef<HTMLDivElement>(null);
+  const rightRef = useRef<HTMLDivElement>(null);
+
+  const setCondenseBoth = useCallback((n: number) => {
+    condenseRef.current = n;
+    setCondense(n);
+  }, []);
+
+  // Track the header's own width so a window/zoom/panel resize re-runs the fit.
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!header) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (w != null) setHeaderWidth(w);
+    });
+    ro.observe(header);
+    return () => ro.disconnect();
+  }, []);
+
+  // Reset to the full layout whenever the available width OR the natural content
+  // width changes, so the step-up pass below re-collapses from scratch (this is how
+  // the toolbar EXPANDS again when space is freed). Runs before the step-up effect.
+  useLayoutEffect(() => {
+    if (condenseRef.current !== 0) setCondenseBoth(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    headerWidth,
+    appMode,
+    dataTableFullScreen,
+    showToolbarIcons,
+    canUndo,
+    canRedo,
+    geometryReadOnly,
+    speleoLinkPresent,
+    t,
+  ]);
+
+  // Measure + fit pass, after each render:
+  //  1. If the carousel can't fit in the free gap between the two clusters, drop one
+  //     more label (priority order above) to widen the gap, until it fits or we're
+  //     at the max.
+  //  2. Otherwise, center the carousel in that free gap so it sits in the empty
+  //     space between the clusters rather than window-centered over a wide cluster
+  //     (which is how "Export" ended up under the tool buttons).
+  // Runs in a layout effect so every step settles before the browser paints (no
+  // flicker). The guard skips the stale render right after a reset, where the
+  // committed DOM is still at the old level but the ref has been forced to 0.
+  useLayoutEffect(() => {
+    if (condense !== condenseRef.current) return;
+    const header = headerRef.current;
+    const left = leftRef.current;
+    const right = rightRef.current;
+    const center = centerRef.current;
+    if (!header || !left || !right || !center) return;
+    const MARGIN = 12;
+    const h = header.getBoundingClientRect();
+    const c = center.getBoundingClientRect();
+    const l = left.getBoundingClientRect();
+    const r = right.getBoundingClientRect();
+    // Not laid out yet (first paint) or a zero-size test env (jsdom): every rect is
+    // 0, so skip until real geometry exists.
+    if (c.width === 0 || h.width === 0) return;
+    // Everything header-relative (style.left is relative to the positioned header).
+    const half = c.width / 2;
+    const leftEdge = l.right - h.left;
+    const rightEdge = r.left - h.left;
+    // The range of carousel centers that keep it clear of both clusters.
+    const minCenter = leftEdge + MARGIN + half;
+    const maxCenter = rightEdge - MARGIN - half;
+    // No such range -> the carousel can't fit the gap; condense one more stage.
+    if (minCenter > maxCenter && condenseRef.current < CONDENSE_MAX) {
+      setCondenseBoth(condenseRef.current + 1);
+      return; // re-measure after the condensed render
+    }
+    // Prefer the window center, but nudge it just enough to stay in the free space
+    // (so a wide right cluster can't overlap "Export"). If it still can't fit even at
+    // max condensation, fall back to the gap center for the least, symmetric overlap.
+    const windowCenter = h.width / 2;
+    const centerX =
+      minCenter <= maxCenter
+        ? Math.max(minCenter, Math.min(maxCenter, windowCenter))
+        : (leftEdge + rightEdge) / 2;
+    setCarouselLeft(centerX);
+  });
+
+  const displayCondensed = condense >= 1;
+  const importCondensed = condense >= 2;
+  const historyCondensed = condense >= 3;
+  // Final stage: squeeze the padding around the icon buttons when even the
+  // all-icons toolbar still can't clear the carousel.
+  const tight = condense >= 4;
+
   return (
-    <header className="relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
+    <header ref={headerRef} className="relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
       {/* Left section: hamburger menu, Import, then Undo/Redo */}
       <div
-        className={`flex items-center gap-2 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
+        ref={leftRef}
+        className={`flex items-center ${tight ? 'gap-0.5' : 'gap-2'} transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
         data-testid="toolbar-file-controls"
       >
         {/* Disabled during placement mode so the file/project actions that moved
@@ -189,6 +305,7 @@ export default function Toolbar({
           items={menuItems}
           triggerDanger={saveFailed}
           disabled={placementModeActive}
+          compact={tight}
           aria-label={t('singleView.menu.aria')}
         />
         {/* SpeleoDB status button (#204/T2c) - right of the hamburger; hidden for
@@ -224,22 +341,29 @@ export default function Toolbar({
                 onClick={() => onImport()}
                 disabled={placementModeActive || geometryReadOnly}
                 size="sm"
-                className="ml-1"
-                icon={showToolbarIcons ? <span style={{ color: 'var(--sh-comment)' }}><DownloadIcon size={18} /></span> : undefined}
+                // Tighten the padding + drop the left margin at the final stage.
+                className={tight ? '!px-1' : 'ml-1'}
+                // The yellow import icon shows at the toolbar syntactic level, and is
+                // forced on when condensed (icon-only) so the button is never empty.
+                icon={showToolbarIcons || importCondensed ? <span style={{ color: 'var(--sh-comment)' }}><DownloadIcon size={18} /></span> : undefined}
+                aria-label={importCondensed ? t('common.actions.import') : undefined}
+                title={importCondensed ? t('common.actions.import') : undefined}
                 data-testid="toolbar-import-button"
               >
-                {t('common.actions.import')}
+                {importCondensed ? null : t('common.actions.import')}
               </Button>
             )}
-            <div className="w-px h-6 bg-border mx-2" />
+            <div className={`w-px h-6 bg-border ${tight ? 'mx-1' : 'mx-2'}`} />
             <UndoHistoryDropdown
               mode="undo"
               disabled={placementModeActive || !canUndo}
               onSingleAction={onUndo}
               testId="toolbar-undo-button"
+              ariaLabel={t('common.actions.undo')}
+              compact={tight}
             >
               <span className="inline-flex items-center gap-0.5">
-                {t('common.actions.undo')}
+                {historyCondensed ? <UndoIcon size={16} /> : t('common.actions.undo')}
                 {canUndo && !placementModeActive && (
                   <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="undo-chevron">
                     <ChevronDownIcon size={10} />
@@ -252,9 +376,11 @@ export default function Toolbar({
               disabled={placementModeActive || !canRedo}
               onSingleAction={onRedo}
               testId="toolbar-redo-button"
+              ariaLabel={t('common.actions.redo')}
+              compact={tight}
             >
               <span className="inline-flex items-center gap-0.5">
-                {t('common.actions.redo')}
+                {historyCondensed ? <RedoIcon size={16} /> : t('common.actions.redo')}
                 {canRedo && !placementModeActive && (
                   <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="redo-chevron">
                     <ChevronDownIcon size={10} />
@@ -271,28 +397,34 @@ export default function Toolbar({
           the right, so the center is free for the mode switch. Fullscreen table mode
           (a survey sub-state) shows the table's title instead. */}
       {dataTableFullScreen ? (
-        /* Absolutely centered: justify-between would drift the title by the
-           side blocks' width difference, visibly off against the centered
-           sub-header pill below. */
+        /* Absolutely positioned and centered in the free gap between the side
+           clusters (see the measure effect), so it never overlaps them. */
         <div
-          className="absolute left-1/2 -translate-x-1/2 font-medium"
+          ref={centerRef}
+          className="absolute -translate-x-1/2 font-medium"
+          style={{ left: carouselLeft ?? '50%' }}
           data-testid="toolbar-data-table-title"
         >
           {t('dataTable.title')}
         </div>
       ) : (
-        /* Absolutely centered so the carousel stays put as modes cycle — otherwise
-           justify-between would drift it when the right cluster's width changes
-           (the mutating tools are filtered to the read-only set in Plan/Export;
-           DisplayMenu itself stays in every mode). */
-        <div className="absolute left-1/2 -translate-x-1/2">
+        /* Absolutely positioned and centered in the free gap between the side
+           clusters (see the measure effect): it sits in the empty space instead of
+           window-centered, so a wide right cluster can't overlap "Export". The gap
+           center is independent of the carousel's own width, so cycling modes never
+           drifts it. */
+        <div
+          ref={centerRef}
+          className="absolute -translate-x-1/2"
+          style={{ left: carouselLeft ?? '50%' }}
+        >
           <ModeCarousel disabled={placementModeActive} />
         </div>
       )}
 
       {/* Right section - tools and display menu; while the table is fullscreen,
           just the table picker (the "Back to Map" button lives on the left). */}
-      <div className="flex items-center gap-2">
+      <div ref={rightRef} className="flex items-center gap-2">
         {dataTableFullScreen ? (
           /* The "Back to Map" shrink button now lives on the left (in place of
              the project-close button); only the table picker stays on the right. */
@@ -337,7 +469,7 @@ export default function Toolbar({
                 is a confusing no-op). The component keeps the survey-only concerns out of Plan
                 internally: the geometry measured/adjusted toggle (Plan forces the closure map)
                 and the color overlays (the gas reachability gradient owns the coloring there). */}
-            {appMode !== 'export' && <DisplayMenu />}
+            {appMode !== 'export' && <DisplayMenu condensed={displayCondensed} tight={tight} />}
           </>
         )}
       </div>

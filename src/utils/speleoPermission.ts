@@ -15,6 +15,20 @@ const PERMISSION_ORDER: Record<Permission, number> = {
 };
 
 /**
+ * Levels a USER collaborator can be granted, in ascending order. Teams may never
+ * hold ADMIN (the server rejects it), so the team picker omits it. Shared by the
+ * Project Settings admin roster and the Publish dialog's collaborator picker so
+ * both offer exactly the same tiers.
+ */
+export const USER_LEVELS: readonly Permission[] = [
+  'WEB_VIEWER',
+  'READ_ONLY',
+  'READ_AND_WRITE',
+  'ADMIN',
+];
+export const TEAM_LEVELS: readonly Permission[] = ['WEB_VIEWER', 'READ_ONLY', 'READ_AND_WRITE'];
+
+/**
  * True when `permission` meets or exceeds `min`. A `null`/`undefined` permission
  * (no access, or not yet known) never meets a threshold.
  */

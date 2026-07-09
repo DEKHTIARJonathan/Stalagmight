@@ -57,6 +57,9 @@ interface AppMenuProps {
    *  old toolbar, so the menu must be unavailable too — otherwise Close Project /
    *  New / Open / Save As stay clickable mid-placement. */
   disabled?: boolean;
+  /** Shrink the trigger button (tighter padding) when the toolbar is running out
+   *  of horizontal room — the final condensation stage. */
+  compact?: boolean;
   'aria-label'?: string;
   'data-testid'?: string;
   /** Test id for the menu container. Each row's own testid is its `item.id`
@@ -101,6 +104,7 @@ export function AppMenu({
   items,
   triggerDanger = false,
   disabled = false,
+  compact = false,
   'aria-label': ariaLabel = 'Menu',
   'data-testid': triggerTestId = 'app-menu-trigger',
   menuTestId = 'app-menu',
@@ -518,6 +522,9 @@ export function AppMenu({
         ref={triggerRef}
         icon={<MenuIcon className={triggerDanger ? 'text-red-500' : undefined} />}
         size="sm"
+        // Override the fixed sm square (w-7 h-7) with a tighter one at the final
+        // condensation stage; `!` wins over the size class regardless of CSS order.
+        className={compact ? '!w-6 !h-6' : undefined}
         disabled={disabled}
         onClick={() => {
           if (disabled) return;

@@ -4510,6 +4510,39 @@ fn test_remove_recent_projects_fails_when_lock_poisoned() {
 }
 
 #[test]
+fn test_remove_recent_project_removes_present_entry() {
+    let state = AppState::new().unwrap();
+    {
+        let mut recent = state.recent_projects.lock().unwrap();
+        *recent = vec![PathBuf::from("/a.stalx"), PathBuf::from("/b.stalx")];
+    }
+
+    let result = state.remove_from_recent_projects(PathBuf::from("/a.stalx"));
+    assert!(result.success);
+    let recent = state.recent_projects.lock().unwrap();
+    assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
+}
+
+#[test]
+fn test_remove_recent_project_absent_is_idempotent_success() {
+    // A path that is not in the list is a NO-OP SUCCESS, not a failure: "remove from
+    // recent" means "ensure it's absent". Returning a failure used to strand a zombie
+    // "missing" row that the frontend (whose config copy lagged the trimmed backend
+    // list) could never clear, because it only refreshes on success.
+    let state = AppState::new().unwrap();
+    {
+        let mut recent = state.recent_projects.lock().unwrap();
+        *recent = vec![PathBuf::from("/b.stalx")];
+    }
+
+    let result = state.remove_from_recent_projects(PathBuf::from("/gone.stalx"));
+    assert!(result.success, "removing an absent recent must succeed");
+    // The list is left untouched (nothing to remove).
+    let recent = state.recent_projects.lock().unwrap();
+    assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
+}
+
+#[test]
 fn test_import_tracking_fails_when_project_lock_poisoned() {
     let state = AppState::new().unwrap();
     poison_mutex(&state.project);

@@ -41,6 +41,11 @@ export default function DeleteProjectDialog() {
       : path
     : name;
 
+  // A remote (SpeleoDB) recent is only a local cache copy: deleting it leaves the
+  // project on the server (re-openable via Open from SpeleoDB), so we frame it as a
+  // local-copy delete rather than a permanent, unrecoverable one.
+  const isRemote = Boolean(dialogData.isRemote);
+
   const handleConfirm = async () => {
     if (!path) {
       // No-op completion (the Delete button is disabled without a path, but be
@@ -66,15 +71,24 @@ export default function DeleteProjectDialog() {
   };
 
   return (
-    <DialogWrapper title="Delete Project?" onClose={closeDialog} size="md" data-testid="delete-project-dialog">
+    <DialogWrapper
+      title={isRemote ? 'Delete local copy?' : 'Delete Project?'}
+      onClose={closeDialog}
+      size="md"
+      data-testid="delete-project-dialog"
+    >
       <div className="space-y-4">
         <p className="text-text-secondary">
-          Permanently delete <span className="font-medium text-text-primary">{name}</span>?
+          {isRemote ? 'Delete the local copy of ' : 'Permanently delete '}
+          <span className="font-medium text-text-primary">{name}</span>?
         </p>
 
         <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
-          This removes the project files{' '}
-          <span className="font-medium break-all">{fileNames}</span> from disk. It cannot be undone.
+          This removes the local files{' '}
+          <span className="font-medium break-all">{fileNames}</span> from disk.{' '}
+          {isRemote
+            ? 'The project stays on SpeleoDB and can be downloaded again, but any local changes not yet pushed to SpeleoDB will be lost.'
+            : 'It cannot be undone.'}
         </div>
 
         {error && (
@@ -93,7 +107,7 @@ export default function DeleteProjectDialog() {
             disabled={isDeleting || !path}
             data-testid="delete-project-confirm"
           >
-            {isDeleting ? 'Deleting...' : 'Delete Project'}
+            {isDeleting ? 'Deleting...' : isRemote ? 'Delete local copy' : 'Delete Project'}
           </Button>
         </div>
       </div>

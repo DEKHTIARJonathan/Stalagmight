@@ -1782,7 +1782,8 @@
       "mergeProjects": "Merge {{countFormatted}} projects",
       "remove": "Remove from recent",
       "removeMultiple": "Remove {{countFormatted}} from recent",
-      "delete": "Delete project…"
+      "delete": "Delete project…",
+      "deleteLocalCopy": "Delete local copy…"
     },
     "empty": {
       "title": "No projects yet",
@@ -1875,7 +1876,9 @@
         "removeFromRecent": "Remove from recent",
         "removeFromRecentAria": "Remove {{name}} from recent",
         "deleteProject": "Delete project…",
-        "deleteProjectAria": "Permanently delete {{name}}"
+        "deleteProjectAria": "Permanently delete {{name}}",
+        "deleteLocalCopy": "Delete local copy…",
+        "deleteLocalCopyAria": "Delete the local copy of {{name}}"
       }
     },
     "systemCard": {
@@ -2911,7 +2914,12 @@
       "submitting": "Publishing…",
       "success": "Project published to SpeleoDB.",
       "failed": "Could not publish to SpeleoDB",
-      "reloadFailed": "Published to SpeleoDB, but the project could not be reopened. Reopen it from SpeleoDB."
+      "reloadFailed": "Published to SpeleoDB, but the project could not be reopened. Reopen it from SpeleoDB.",
+      "reloadFailedWithCollaborators": "Published to SpeleoDB, but the project could not be reopened, so the collaborators were not added. Reopen it from SpeleoDB and add them from Project Settings.",
+      "descriptionRequired": "A description is required to publish.",
+      "collaborators": "Collaborators",
+      "collaboratorsHint": "Optionally grant others access. They are added once the project is published.",
+      "collaboratorsPartial": "Published, but these collaborators could not be added: {{emails}}. Add them from Project Settings."
     },
     "collaborators": {
       "title": "Collaborators",
