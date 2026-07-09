@@ -198,13 +198,33 @@ pub struct ExportImageOptions {
     /// **Raster-only**: SVG export is always monochrome regardless of this.
     #[serde(default)]
     pub color_mode: ColorMode,
-    /// Whether to draw station-index labels at survey-leg endpoints and
-    /// junctions (degree-1 and degree>=3 points of the drawn passage).
-    /// Interior degree-2 stations are not labeled. Opt-in (default `false`);
-    /// black text + white halo, same placement machinery as the penetration
-    /// labels, so labels stay monochrome regardless of `color_mode`.
+    /// Whether to draw station-index labels at every station touched by at
+    /// least one drawn (non-reference) shot — i.e. all points on the drawn
+    /// passage, deduped by colocation (station merges / aligned closures).
+    /// Opt-in (default `false`); black text + white halo, same placement
+    /// machinery as the penetration labels, so labels stay monochrome
+    /// regardless of `color_mode`.
     #[serde(default)]
     pub show_station_labels: bool,
+    /// Whether to draw section-name labels at the centroid of each section's
+    /// drawn stations. Opt-in (default `false`); black text + white halo.
+    #[serde(default)]
+    pub show_section_names: bool,
+    /// Whether to draw a station's comment text at the station point, for
+    /// every station with a comment that is on drawn geometry. Opt-in
+    /// (default `false`); black text + white halo.
+    #[serde(default)]
+    pub show_station_comments: bool,
+    /// Whether to draw a shot's comment text at the shot midpoint, for every
+    /// non-reference shot with a comment. Opt-in (default `false`); black
+    /// text + white halo.
+    #[serde(default)]
+    pub show_shot_comments: bool,
+    /// Whether to draw azimuth/length/depth data at every non-reference
+    /// shot's midpoint, mirroring the live map's shot label. Opt-in (default
+    /// `false`); black text + white halo.
+    #[serde(default)]
+    pub show_shot_data: bool,
 }
 
 impl Default for ExportImageOptions {
@@ -216,6 +236,10 @@ impl Default for ExportImageOptions {
             show_penetration_labels: true,
             color_mode: ColorMode::None,
             show_station_labels: false,
+            show_section_names: false,
+            show_station_comments: false,
+            show_shot_comments: false,
+            show_shot_data: false,
         }
     }
 }
@@ -1051,7 +1075,13 @@ pub fn generate_svg_string_with_stations(
     // labels (Pass 4) so all three mutually dodge. Only seeded when at least
     // one label pass will read it (skip the filter + allocation otherwise).
     let mut placed: Vec<(f64, f64, f64, f64)> = Vec::new();
-    if options.show_penetration_labels || options.show_station_labels {
+    if options.show_penetration_labels
+        || options.show_station_labels
+        || options.show_section_names
+        || options.show_station_comments
+        || options.show_shot_comments
+        || options.show_shot_data
+    {
         let star_r = px(STAR_OUTER_PX);
         for &i in &zero_datum_indices {
             let s = &stations[i];
@@ -1175,15 +1205,16 @@ pub fn generate_svg_string_with_stations(
         }
     }
 
-    // Pass 4: station-index labels at survey-leg endpoints (degree 1) and
-    // junctions (degree >= 3) of the drawn passage. `point_uf` collapses ONLY
+    // Pass 4: station-index labels (4a) and station comments (4b), both keyed
+    // off the same colocation/degree computation. `point_uf` collapses ONLY
     // colocated stations (merges + aligned closures) into one physical point,
     // NOT shot-connected chains (the segment `uf` above does that and is
     // therefore unusable for per-station degree). Degree counts NON-reference
     // shots incident to the point (reference/jump shots are diver shortcuts,
-    // not passage, and are excluded). Interior degree-2 stations are skipped.
-    // Drop-on-collision is the backstop, sharing `placed` with Passes 2-3.
-    if options.show_station_labels {
+    // not passage, and are excluded), so a point with no non-reference shot
+    // (deg 0) is skipped by both sub-passes. Drop-on-collision is the
+    // backstop, sharing `placed` with Passes 2-3.
+    if options.show_station_labels || options.show_station_comments {
         let mut point_uf = UnionFind::new(n);
         for merge in &project.station_merges {
             if let (Some(a_sr), Some(b_sr)) = (
@@ -1227,81 +1258,283 @@ pub fn generate_svg_string_with_stations(
             }
         }
 
-        // Representative station per point = smallest station index (deterministic).
-        let mut rep: HashMap<usize, usize> = HashMap::new();
-        for i in 0..n {
-            let root = point_uf.find(i);
-            rep.entry(root)
-                .and_modify(|cur| {
-                    if i < *cur {
-                        *cur = i;
-                    }
-                })
-                .or_insert(i);
-        }
+        let label_size = px(PEN_LABEL_PX);
+        let halo = px(PEN_LABEL_HALO_PX);
+        let offset = px(PEN_LABEL_OFFSET_PX);
+        let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
+        let quarter_turn = std::f64::consts::FRAC_PI_4;
 
-        // Junctions first (priority for limited space), then endpoints; each
-        // group sorted by representative station index for deterministic SVG.
-        let mut junctions: Vec<usize> = Vec::new();
-        let mut endpoints: Vec<usize> = Vec::new();
-        for (&root, &deg) in &degree {
-            let si = rep[&root];
-            if deg >= 3 {
-                junctions.push(si);
-            } else if deg == 1 {
-                endpoints.push(si);
+        // Pass 4a: station-index label at every point touched by at least
+        // one drawn shot (deg >= 1) — i.e. all stations on drawn passage,
+        // deduped by colocation. Representative station per point = smallest
+        // station index (deterministic).
+        if options.show_station_labels {
+            let mut rep: HashMap<usize, usize> = HashMap::new();
+            for i in 0..n {
+                let root = point_uf.find(i);
+                rep.entry(root)
+                    .and_modify(|cur| {
+                        if i < *cur {
+                            *cur = i;
+                        }
+                    })
+                    .or_insert(i);
+            }
+            let mut selected: Vec<usize> = degree
+                .iter()
+                .filter(|&(_, &deg)| deg >= 1)
+                .map(|(&root, _)| rep[&root])
+                .collect();
+            selected.sort_unstable();
+
+            if !selected.is_empty() {
+                let _ = writeln!(
+                    svg,
+                    r##"<g class="station-labels" font-family="sans-serif" font-size="{size:.2}" fill="#000000" stroke="#ffffff" stroke-width="{halo:.2}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">"##,
+                    size = label_size,
+                    halo = halo,
+                );
+                for si in selected {
+                    let sx = stations[si].coordinates.x;
+                    let sy = -stations[si].coordinates.y;
+                    let text = stations[si].station_ref.station_index.to_string();
+                    let text_w = char_w * text.chars().count() as f64;
+                    let text_h = label_size;
+                    let primary = label_open_space_angle(si, &stations, project, &station_index);
+                    let offsets = radial_offsets(primary, quarter_turn, offset);
+                    if let Some((lx, ly, bb)) =
+                        place_near(sx, sy, &offsets, text_w, text_h, &placed)
+                    {
+                        let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
+                        placed.push(bb);
+                    }
+                }
+                svg.push_str("</g>\n");
             }
         }
-        junctions.sort_unstable();
-        endpoints.sort_unstable();
-        let selected: Vec<usize> = junctions.into_iter().chain(endpoints).collect();
 
-        if !selected.is_empty() {
-            let label_size = px(PEN_LABEL_PX);
-            let halo = px(PEN_LABEL_HALO_PX);
-            let offset = px(PEN_LABEL_OFFSET_PX);
-            let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
-            let quarter_turn = std::f64::consts::FRAC_PI_4;
-            let _ = writeln!(
-                svg,
-                r##"<g class="station-labels" font-family="sans-serif" font-size="{size:.2}" fill="#000000" stroke="#ffffff" stroke-width="{halo:.2}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">"##,
-                size = label_size,
-                halo = halo,
-            );
-            for si in selected {
-                let sx = stations[si].coordinates.x;
-                let sy = -stations[si].coordinates.y;
-                let text = stations[si].station_ref.station_index.to_string();
+        // Pass 4b: a station's comment at its own point, for every station
+        // with a comment that sits on drawn geometry. Unlike station labels
+        // this is per-STATION, not deduped by point — colocated stations may
+        // each carry their own comment.
+        if options.show_station_comments {
+            let mut opened = false;
+            for i in 0..n {
+                let Some(text) = stations[i].comment.clone() else {
+                    continue;
+                };
+                if degree.get(&point_uf.find(i)).copied().unwrap_or(0) == 0 {
+                    continue;
+                }
+                let sx = stations[i].coordinates.x;
+                let sy = -stations[i].coordinates.y;
                 let text_w = char_w * text.chars().count() as f64;
                 let text_h = label_size;
-                let primary = label_open_space_angle(si, &stations, project, &station_index);
-                let mut chosen: Option<(f64, f64, (f64, f64, f64, f64))> = None;
-                let mut candidate_angles: Vec<f64> = Vec::with_capacity(9);
-                candidate_angles.push(primary);
-                for k in 1..=4 {
-                    candidate_angles.push(primary + (k as f64) * quarter_turn);
-                    candidate_angles.push(primary - (k as f64) * quarter_turn);
-                }
-                for angle in candidate_angles {
-                    let lx = sx + offset * angle.cos();
-                    let ly = sy + offset * angle.sin();
-                    let bb = (lx - text_w * 0.5, ly - text_h * 0.5, text_w, text_h);
-                    let overlap = placed.iter().any(|p| {
-                        bb.0 < p.0 + p.2
-                            && bb.0 + bb.2 > p.0
-                            && bb.1 < p.1 + p.3
-                            && bb.1 + bb.3 > p.1
-                    });
-                    if !overlap {
-                        chosen = Some((lx, ly, bb));
-                        break;
+                let primary = label_open_space_angle(i, &stations, project, &station_index);
+                let offsets = radial_offsets(primary, quarter_turn, offset);
+                if let Some((lx, ly, bb)) = place_near(sx, sy, &offsets, text_w, text_h, &placed) {
+                    if !opened {
+                        let _ = writeln!(
+                            svg,
+                            r##"<g class="station-comments" font-family="sans-serif" font-size="{size:.2}" fill="#000000" stroke="#ffffff" stroke-width="{halo:.2}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">"##,
+                            size = label_size,
+                            halo = halo,
+                        );
+                        opened = true;
                     }
-                }
-                if let Some((lx, ly, bb)) = chosen {
                     let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
                     placed.push(bb);
                 }
             }
+            if opened {
+                svg.push_str("</g>\n");
+            }
+        }
+    }
+
+    // Pass 5: section-name labels at the centroid of each section's drawn
+    // (non-reference) stations. Sections with zero drawn stations (all
+    // reference, or empty) are skipped. Falls back to "Section {id}" when
+    // the section has no user-given name.
+    if options.show_section_names {
+        let label_size = px(PEN_LABEL_PX);
+        let halo = px(PEN_LABEL_HALO_PX);
+        let offset = px(PEN_LABEL_OFFSET_PX);
+        let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
+        let mut opened = false;
+        for section in &project.sections {
+            let mut seen: HashSet<StationRef> = HashSet::new();
+            let mut sum_x = 0.0;
+            let mut sum_y = 0.0;
+            for (i, shot) in section.shots.iter().enumerate() {
+                if shot.is_reference {
+                    continue;
+                }
+                for sr in [
+                    StationRef::new(section.id, i as u32),
+                    StationRef::new(section.id, (i + 1) as u32),
+                ] {
+                    if seen.insert(sr) {
+                        if let Some(s) = station_by_ref.get(&sr) {
+                            sum_x += s.coordinates.x;
+                            sum_y += -s.coordinates.y;
+                        }
+                    }
+                }
+            }
+            if seen.is_empty() {
+                continue;
+            }
+            let count = seen.len() as f64;
+            let cx = sum_x / count;
+            let cy = sum_y / count;
+            let text = section
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Section {}", section.id));
+            let text_w = char_w * text.chars().count() as f64;
+            let text_h = label_size;
+            let offsets = compass_offsets(offset);
+            if let Some((lx, ly, bb)) = place_near(cx, cy, &offsets, text_w, text_h, &placed) {
+                if !opened {
+                    let _ = writeln!(
+                        svg,
+                        r##"<g class="section-names" font-family="sans-serif" font-size="{size:.2}" fill="#000000" stroke="#ffffff" stroke-width="{halo:.2}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">"##,
+                        size = label_size,
+                        halo = halo,
+                    );
+                    opened = true;
+                }
+                let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
+                placed.push(bb);
+            }
+        }
+        if opened {
+            svg.push_str("</g>\n");
+        }
+    }
+
+    // Shot midpoint + perpendicular-offset candidates, shared by Passes 6-7
+    // below (kept as a free fn rather than a closure so both self-contained
+    // passes can call it without fighting the borrow checker over `placed`).
+    fn shot_label_anchor(
+        from: &crate::models::Station,
+        to: &crate::models::Station,
+    ) -> (f64, f64, f64) {
+        let x0 = from.coordinates.x;
+        let y0 = -from.coordinates.y;
+        let x1 = to.coordinates.x;
+        let y1 = -to.coordinates.y;
+        ((x0 + x1) * 0.5, (y0 + y1) * 0.5, (y1 - y0).atan2(x1 - x0))
+    }
+    fn perpendicular_offsets(dir: f64, offset: f64) -> [(f64, f64); 2] {
+        let a = dir + std::f64::consts::FRAC_PI_2;
+        let b = dir - std::f64::consts::FRAC_PI_2;
+        [
+            (offset * a.cos(), offset * a.sin()),
+            (offset * b.cos(), offset * b.sin()),
+        ]
+    }
+
+    // Pass 6: shot-data labels (azimuth/length/depth) at each non-reference
+    // shot's screen midpoint, mirroring the live map's shot label exactly
+    // (see `features.ts`): `{azimuth_in:.1}° {length:.1}m {depth:.1}m`, where
+    // depth is the mean of the two endpoint stations' z (no sign flip).
+    if options.show_shot_data {
+        let label_size = px(PEN_LABEL_PX);
+        let halo = px(PEN_LABEL_HALO_PX);
+        let offset = px(PEN_LABEL_OFFSET_PX);
+        let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
+        let mut opened = false;
+        for section in &project.sections {
+            for (i, shot) in section.shots.iter().enumerate() {
+                if shot.is_reference {
+                    continue;
+                }
+                let from_ref = StationRef::new(section.id, i as u32);
+                let to_ref = StationRef::new(section.id, (i + 1) as u32);
+                let (Some(from), Some(to)) =
+                    (station_by_ref.get(&from_ref), station_by_ref.get(&to_ref))
+                else {
+                    continue;
+                };
+                let (mid_x, mid_y, dir) = shot_label_anchor(from, to);
+                let depth = (from.coordinates.z + to.coordinates.z) / 2.0;
+                let text = format!(
+                    "{:.1}\u{00b0} {:.1}m {:.1}m",
+                    shot.azimuth_in, shot.length, depth
+                );
+                let text_w = char_w * text.chars().count() as f64;
+                let text_h = label_size;
+                let offsets = perpendicular_offsets(dir, offset);
+                if let Some((lx, ly, bb)) =
+                    place_near(mid_x, mid_y, &offsets, text_w, text_h, &placed)
+                {
+                    if !opened {
+                        let _ = writeln!(
+                            svg,
+                            r##"<g class="shot-data" font-family="sans-serif" font-size="{size:.2}" fill="#000000" stroke="#ffffff" stroke-width="{halo:.2}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">"##,
+                            size = label_size,
+                            halo = halo,
+                        );
+                        opened = true;
+                    }
+                    let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
+                    placed.push(bb);
+                }
+            }
+        }
+        if opened {
+            svg.push_str("</g>\n");
+        }
+    }
+
+    // Pass 7: shot-comment labels at each non-reference shot's screen
+    // midpoint, for shots that carry a comment. Same anchor/offset recipe as
+    // Pass 6.
+    if options.show_shot_comments {
+        let label_size = px(PEN_LABEL_PX);
+        let halo = px(PEN_LABEL_HALO_PX);
+        let offset = px(PEN_LABEL_OFFSET_PX);
+        let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
+        let mut opened = false;
+        for section in &project.sections {
+            for (i, shot) in section.shots.iter().enumerate() {
+                if shot.is_reference {
+                    continue;
+                }
+                let Some(text) = shot.comment.clone() else {
+                    continue;
+                };
+                let from_ref = StationRef::new(section.id, i as u32);
+                let to_ref = StationRef::new(section.id, (i + 1) as u32);
+                let (Some(from), Some(to)) =
+                    (station_by_ref.get(&from_ref), station_by_ref.get(&to_ref))
+                else {
+                    continue;
+                };
+                let (mid_x, mid_y, dir) = shot_label_anchor(from, to);
+                let text_w = char_w * text.chars().count() as f64;
+                let text_h = label_size;
+                let offsets = perpendicular_offsets(dir, offset);
+                if let Some((lx, ly, bb)) =
+                    place_near(mid_x, mid_y, &offsets, text_w, text_h, &placed)
+                {
+                    if !opened {
+                        let _ = writeln!(
+                            svg,
+                            r##"<g class="shot-comments" font-family="sans-serif" font-size="{size:.2}" fill="#000000" stroke="#ffffff" stroke-width="{halo:.2}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">"##,
+                            size = label_size,
+                            halo = halo,
+                        );
+                        opened = true;
+                    }
+                    let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
+                    placed.push(bb);
+                }
+            }
+        }
+        if opened {
             svg.push_str("</g>\n");
         }
     }
@@ -1445,6 +1678,62 @@ fn label_open_space_angle(
         }
     }
     best_mid
+}
+
+/// Returns the first candidate `(x, y)` in `offsets` (each a `(dx, dy)`
+/// relative to `(hub_x, hub_y)`) whose text bounding box doesn't collide
+/// with `placed`, along with that box. `None` if every candidate collided —
+/// callers drop the label rather than stack it on top of another. Shared by
+/// every label pass that dodges collisions from a single anchor point
+/// (station labels/comments, section names, shot data/comments); Pass 3
+/// (penetration labels) predates this helper and keeps its own inline copy.
+fn place_near(
+    hub_x: f64,
+    hub_y: f64,
+    offsets: &[(f64, f64)],
+    text_w: f64,
+    text_h: f64,
+    placed: &[(f64, f64, f64, f64)],
+) -> Option<(f64, f64, (f64, f64, f64, f64))> {
+    for &(dx, dy) in offsets {
+        let lx = hub_x + dx;
+        let ly = hub_y + dy;
+        let bb = (lx - text_w * 0.5, ly - text_h * 0.5, text_w, text_h);
+        let overlap = placed.iter().any(|p| {
+            bb.0 < p.0 + p.2 && bb.0 + bb.2 > p.0 && bb.1 < p.1 + p.3 && bb.1 + bb.3 > p.1
+        });
+        if !overlap {
+            return Some((lx, ly, bb));
+        }
+    }
+    None
+}
+
+/// Nine candidate `(dx, dy)` offsets at distance `offset` from a station:
+/// `primary` first, then four ± `step` fallback pairs rotating outward.
+/// Mirrors the placement order Pass 3/4 used before [`place_near`] existed.
+fn radial_offsets(primary: f64, step: f64, offset: f64) -> Vec<(f64, f64)> {
+    let mut out = Vec::with_capacity(9);
+    out.push((offset * primary.cos(), offset * primary.sin()));
+    for k in 1..=4 {
+        let a = primary + (k as f64) * step;
+        out.push((offset * a.cos(), offset * a.sin()));
+        let b = primary - (k as f64) * step;
+        out.push((offset * b.cos(), offset * b.sin()));
+    }
+    out
+}
+
+/// Nine candidate `(dx, dy)` offsets for a section-name label: the centroid
+/// itself (no offset), then eight compass directions at distance `offset`.
+fn compass_offsets(offset: f64) -> Vec<(f64, f64)> {
+    let mut out = Vec::with_capacity(9);
+    out.push((0.0, 0.0));
+    for k in 0..8 {
+        let a = (k as f64) * std::f64::consts::FRAC_PI_4;
+        out.push((offset * a.cos(), offset * a.sin()));
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1621,6 +1910,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
             project.compute_station_coordinates(),
         )
@@ -1700,6 +1990,7 @@ mod tests {
             show_penetration_labels: true,
             color_mode: ColorMode::None,
             show_station_labels: false,
+            ..Default::default()
         };
         export_png(
             &project,
@@ -1736,6 +2027,7 @@ mod tests {
                     show_penetration_labels: true,
                     color_mode: ColorMode::None,
                     show_station_labels: false,
+                    ..Default::default()
                 },
                 project.compute_station_coordinates(),
             )
@@ -1797,6 +2089,7 @@ mod tests {
             show_penetration_labels: true,
             color_mode: ColorMode::None,
             show_station_labels: false,
+            ..Default::default()
         };
         let err = export_png(
             &project,
@@ -1821,6 +2114,7 @@ mod tests {
             show_penetration_labels: true,
             color_mode: ColorMode::None,
             show_station_labels: false,
+            ..Default::default()
         };
         let err = export_png(
             &project,
@@ -1917,6 +2211,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2029,6 +2324,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2139,6 +2435,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2237,6 +2534,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2257,6 +2555,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2371,6 +2670,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2451,6 +2751,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2472,6 +2773,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2550,6 +2852,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2630,6 +2933,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2693,6 +2997,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2717,6 +3022,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2752,6 +3058,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2837,6 +3144,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2921,6 +3229,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -3307,7 +3616,10 @@ mod tests {
     }
 
     #[test]
-    fn station_labels_mark_endpoints_not_interior() {
+    fn station_labels_mark_all_stations() {
+        // CHANGED semantics (#240 follow-up): station labels now cover every
+        // point touched by a drawn shot (deg >= 1), including interior
+        // degree-2 stations 1 and 2 -- not just endpoints/junctions.
         let project = three_shot_line_project();
         let svg = generate_svg_string(
             &project,
@@ -3322,15 +3634,15 @@ mod tests {
             "station-labels group should be present: {svg}"
         );
         assert!(svg.contains(">0</text>"), "start endpoint labeled: {svg}");
+        assert!(
+            svg.contains(">1</text>"),
+            "interior station 1 labeled: {svg}"
+        );
+        assert!(
+            svg.contains(">2</text>"),
+            "interior station 2 labeled: {svg}"
+        );
         assert!(svg.contains(">3</text>"), "end endpoint labeled: {svg}");
-        assert!(
-            !svg.contains(">1</text>"),
-            "interior station 1 should not be labeled: {svg}"
-        );
-        assert!(
-            !svg.contains(">2</text>"),
-            "interior station 2 should not be labeled: {svg}"
-        );
     }
 
     #[test]
@@ -3353,18 +3665,21 @@ mod tests {
     #[test]
     fn station_labels_mark_junctions() {
         // Main is the same 3-shot line as above; a two-shot Branch is merged
-        // onto Main's interior station 1, raising that point's degree from 2 to
-        // 3 (a junction). Main is added first, so its stations occupy the lower
+        // onto Main's interior station 1, colocating that point with Branch's
+        // station 0. Main is added first, so its stations occupy the lower
         // global indices; the merged point's representative (smallest global
-        // index) is therefore Main's station 1, so the junction renders as
-        // ">1</text>".
-        //
-        // The Branch is deliberately TWO shots (free endpoint index 2), not one
-        // (index 1): a one-shot Branch's endpoint would also render ">1</text>",
-        // making this assertion pass even if junction detection were broken. In
-        // `station_labels_mark_endpoints_not_interior`, Main's station 1 is an
-        // interior degree-2 point and is NOT labeled; here the ONLY source of
-        // ">1</text>" is the junction, so the pair isolates junction detection.
+        // index) is therefore Main's station 1 -- rendered at Main:1's world
+        // position (10, 0), NOT Branch:0's own (unmerged-coordinate) position
+        // (0, 0), even though station coordinates aren't geometrically
+        // snapped in this (measured, non-adjusted) render. Since #240's
+        // follow-up labels EVERY station (deg >= 1), asserting on the raw
+        // ">1</text>" substring is no longer a clean junction proxy: Branch's
+        // OWN unmerged interior station also happens to carry local index 1
+        // (every section restarts numbering at 0) and renders its own,
+        // separate ">1</text>" near (0, 10). So the dedup regression this
+        // test guards is checked by POSITION: the merged point must render
+        // exactly once, at Main:1's coordinates, and must NOT also render
+        // a second time at Branch:0's own (0, 0).
         let mut project = three_shot_line_project();
         let main_id = project.sections[0].id;
         let branch_id = project
@@ -3394,9 +3709,19 @@ mod tests {
             svg.contains(r#"class="station-labels""#),
             "station-labels group should be present: {svg}"
         );
+        let labels = parse_text_labels(&svg);
         assert!(
-            svg.contains(">1</text>"),
-            "merged junction station (Main:1) should be labeled: {svg}"
+            labels
+                .iter()
+                .any(|(x, _, text)| text == "1" && (*x - 10.0).abs() < 1.0),
+            "merged point should render once, at Main:1's position (x≈10): {svg}"
+        );
+        assert!(
+            !labels
+                .iter()
+                .any(|(x, y, text)| text == "1" && x.abs() < 1.0 && y.abs() < 1.0),
+            "merged point must not ALSO render at Branch:0's own (unmerged) position \
+             near the origin -- that would mean the point_uf dedup regressed: {svg}"
         );
         // The Branch's own free endpoint (index 2) is labeled separately,
         // confirming the fixture built a real second leg rather than a stub.
@@ -3480,6 +3805,7 @@ mod tests {
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
                 show_station_labels: true,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -3490,6 +3816,572 @@ mod tests {
         assert!(
             svg.contains(r#"class="station-labels""#),
             "station labels should render alongside penetration labels: {svg}"
+        );
+    }
+
+    // ---- Section names, station/shot comments, shot data (#240 follow-up) --
+
+    fn make_shot_with_depth(
+        length: f64,
+        azimuth: f64,
+        depth_in: f64,
+        depth_out: f64,
+        is_reference: bool,
+    ) -> ShotData {
+        ShotData {
+            azimuth_in: azimuth,
+            azimuth_out: azimuth,
+            length,
+            depth_in,
+            depth_out,
+            is_reference,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn section_names_present_with_custom_name_and_id_fallback() {
+        let mut project = Project::new("Test".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Trunk".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![make_shot(10.0, 90.0, false)],
+            ..Default::default()
+        });
+        let unnamed_id = project
+            .add_section(SectionData {
+                name: None,
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false)],
+                ..Default::default()
+            })
+            .id;
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_section_names: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains(r#"class="section-names""#),
+            "section-names group should be present: {svg}"
+        );
+        assert!(svg.contains(">Trunk</text>"), "named section: {svg}");
+        assert!(
+            svg.contains(&format!(">Section {unnamed_id}</text>")),
+            "unnamed section falls back to \"Section {{id}}\": {svg}"
+        );
+    }
+
+    #[test]
+    fn section_names_absent_when_disabled() {
+        let project = three_shot_line_project();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_section_names: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains(r#"class="section-names""#),
+            "section-names group should be absent when opted out: {svg}"
+        );
+    }
+
+    #[test]
+    fn section_names_skip_section_with_no_drawn_stations() {
+        // A section whose only shot is a reference (jump) has zero drawn
+        // stations and must be skipped entirely, not even via the
+        // "Section {id}" fallback.
+        let mut project = Project::new("Test".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Jump".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![make_shot(10.0, 90.0, true)],
+            ..Default::default()
+        });
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_section_names: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains(r#"class="section-names""#),
+            "reference-only section should produce no section-name label: {svg}"
+        );
+    }
+
+    #[test]
+    fn section_names_stay_black_regardless_of_color_mode() {
+        let project = three_shot_line_project();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_section_names: true,
+                color_mode: ColorMode::Depth,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let group_start = svg
+            .find(r#"class="section-names""#)
+            .expect("section-names group should be present");
+        let group_tag_end = group_start + svg[group_start..].find('>').expect("unterminated tag");
+        let group_tag = &svg[..group_tag_end];
+        assert!(
+            group_tag.contains(r##"fill="#000000""##),
+            "section names should stay black regardless of color_mode: {svg}"
+        );
+    }
+
+    #[test]
+    fn section_names_share_collision_space_with_station_labels() {
+        let project = three_shot_line_project();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_station_labels: true,
+                show_section_names: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains(r#"class="station-labels""#),
+            "station labels should render: {svg}"
+        );
+        assert!(
+            svg.contains(r#"class="section-names""#),
+            "section names should render alongside station labels: {svg}"
+        );
+    }
+
+    #[test]
+    fn station_comments_present_when_seeded() {
+        let mut project = three_shot_line_project();
+        let section_id = project.sections[0].id;
+        project.station_comments.insert(
+            StationRef::new(section_id, 1).into(),
+            "wet crawl".to_string(),
+        );
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_station_comments: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains(r#"class="station-comments""#),
+            "station-comments group should be present: {svg}"
+        );
+        assert!(svg.contains(">wet crawl</text>"), "comment text: {svg}");
+    }
+
+    #[test]
+    fn station_comments_absent_when_disabled() {
+        let mut project = three_shot_line_project();
+        let section_id = project.sections[0].id;
+        project.station_comments.insert(
+            StationRef::new(section_id, 1).into(),
+            "wet crawl".to_string(),
+        );
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_station_comments: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains(r#"class="station-comments""#),
+            "station-comments group should be absent when opted out: {svg}"
+        );
+    }
+
+    #[test]
+    fn station_comments_absent_without_a_comment() {
+        // No comment seeded anywhere -- the group must not appear even
+        // though the toggle is on (the comment-present gate is not vacuous).
+        let project = three_shot_line_project();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_station_comments: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains(r#"class="station-comments""#),
+            "no station has a comment, group should be absent: {svg}"
+        );
+    }
+
+    #[test]
+    fn station_comments_exclude_reference_only_shots() {
+        // A comment on a station whose only connection is a reference (jump)
+        // shot must not render: the station never reaches deg >= 1 (the same
+        // "on drawn geometry" guard as station labels).
+        let mut project = Project::new("Jump".to_string(), None);
+        let section_id = project
+            .add_section(SectionData {
+                name: Some("Jump".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 90.0, true)],
+                ..Default::default()
+            })
+            .id;
+        project.station_comments.insert(
+            StationRef::new(section_id, 0).into(),
+            "orphaned".to_string(),
+        );
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_station_comments: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains(r#"class="station-comments""#),
+            "reference-only station comment should not render: {svg}"
+        );
+    }
+
+    #[test]
+    fn station_comments_stay_black_regardless_of_color_mode() {
+        let mut project = three_shot_line_project();
+        let section_id = project.sections[0].id;
+        project.station_comments.insert(
+            StationRef::new(section_id, 1).into(),
+            "wet crawl".to_string(),
+        );
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_station_comments: true,
+                color_mode: ColorMode::Depth,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let group_start = svg
+            .find(r#"class="station-comments""#)
+            .expect("station-comments group should be present");
+        let group_tag_end = group_start + svg[group_start..].find('>').expect("unterminated tag");
+        let group_tag = &svg[..group_tag_end];
+        assert!(
+            group_tag.contains(r##"fill="#000000""##),
+            "station comments should stay black regardless of color_mode: {svg}"
+        );
+    }
+
+    #[test]
+    fn station_comments_share_collision_space_with_station_labels() {
+        let mut project = three_shot_line_project();
+        let section_id = project.sections[0].id;
+        project.station_comments.insert(
+            StationRef::new(section_id, 1).into(),
+            "wet crawl".to_string(),
+        );
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_station_labels: true,
+                show_station_comments: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains(r#"class="station-labels""#),
+            "station labels should render: {svg}"
+        );
+        assert!(
+            svg.contains(r#"class="station-comments""#),
+            "station comments should render alongside station labels: {svg}"
+        );
+    }
+
+    #[test]
+    fn shot_data_exact_text_matches_live_map_format() {
+        let mut project = Project::new("Test".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Trunk".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![make_shot_with_depth(12.3, 42.5, 3.0, 5.0, false)],
+            ..Default::default()
+        });
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_shot_data: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains(r#"class="shot-data""#),
+            "shot-data group should be present: {svg}"
+        );
+        assert!(
+            svg.contains(">42.5\u{00b0} 12.3m 4.0m</text>"),
+            "shot-data text should be azimuth/length/mean-depth to 1 decimal: {svg}"
+        );
+    }
+
+    #[test]
+    fn shot_data_absent_when_disabled() {
+        let project = three_shot_line_project();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_shot_data: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains(r#"class="shot-data""#),
+            "shot-data group should be absent when opted out: {svg}"
+        );
+    }
+
+    #[test]
+    fn shot_data_excludes_reference_shots() {
+        let mut project = Project::new("Jump".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Jump".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![make_shot(10.0, 90.0, true)],
+            ..Default::default()
+        });
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_shot_data: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains(r#"class="shot-data""#),
+            "reference-only shot should produce no shot-data label: {svg}"
+        );
+    }
+
+    #[test]
+    fn shot_data_stays_black_regardless_of_color_mode() {
+        let project = three_shot_line_project();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_shot_data: true,
+                color_mode: ColorMode::Depth,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let group_start = svg
+            .find(r#"class="shot-data""#)
+            .expect("shot-data group should be present");
+        let group_tag_end = group_start + svg[group_start..].find('>').expect("unterminated tag");
+        let group_tag = &svg[..group_tag_end];
+        assert!(
+            group_tag.contains(r##"fill="#000000""##),
+            "shot data should stay black regardless of color_mode: {svg}"
+        );
+    }
+
+    #[test]
+    fn shot_data_shares_collision_space_with_station_labels() {
+        let project = three_shot_line_project();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_station_labels: true,
+                show_shot_data: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains(r#"class="station-labels""#),
+            "station labels should render: {svg}"
+        );
+        assert!(
+            svg.contains(r#"class="shot-data""#),
+            "shot data should render alongside station labels: {svg}"
+        );
+    }
+
+    #[test]
+    fn shot_comments_present_when_seeded() {
+        let mut project = Project::new("Test".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Trunk".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![ShotData {
+                comment: Some("silty".to_string()),
+                ..make_shot(10.0, 90.0, false)
+            }],
+            ..Default::default()
+        });
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_shot_comments: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains(r#"class="shot-comments""#),
+            "shot-comments group should be present: {svg}"
+        );
+        assert!(svg.contains(">silty</text>"), "comment text: {svg}");
+    }
+
+    #[test]
+    fn shot_comments_absent_when_disabled() {
+        let mut project = Project::new("Test".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Trunk".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![ShotData {
+                comment: Some("silty".to_string()),
+                ..make_shot(10.0, 90.0, false)
+            }],
+            ..Default::default()
+        });
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_shot_comments: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains(r#"class="shot-comments""#),
+            "shot-comments group should be absent when opted out: {svg}"
+        );
+    }
+
+    #[test]
+    fn shot_comments_absent_without_a_comment() {
+        let project = three_shot_line_project();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_shot_comments: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains(r#"class="shot-comments""#),
+            "no shot has a comment, group should be absent: {svg}"
+        );
+    }
+
+    #[test]
+    fn shot_comments_exclude_reference_shots() {
+        let mut project = Project::new("Jump".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Jump".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![ShotData {
+                comment: Some("orphaned".to_string()),
+                ..make_shot(10.0, 90.0, true)
+            }],
+            ..Default::default()
+        });
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_shot_comments: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains(r#"class="shot-comments""#),
+            "reference shot comment should not render: {svg}"
+        );
+    }
+
+    #[test]
+    fn shot_comments_stay_black_regardless_of_color_mode() {
+        let mut project = Project::new("Test".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Trunk".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![ShotData {
+                comment: Some("silty".to_string()),
+                ..make_shot(10.0, 90.0, false)
+            }],
+            ..Default::default()
+        });
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_shot_comments: true,
+                color_mode: ColorMode::Depth,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let group_start = svg
+            .find(r#"class="shot-comments""#)
+            .expect("shot-comments group should be present");
+        let group_tag_end = group_start + svg[group_start..].find('>').expect("unterminated tag");
+        let group_tag = &svg[..group_tag_end];
+        assert!(
+            group_tag.contains(r##"fill="#000000""##),
+            "shot comments should stay black regardless of color_mode: {svg}"
+        );
+    }
+
+    #[test]
+    fn shot_comments_share_collision_space_with_shot_data() {
+        let mut project = Project::new("Test".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Trunk".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![ShotData {
+                comment: Some("silty".to_string()),
+                ..make_shot(10.0, 90.0, false)
+            }],
+            ..Default::default()
+        });
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_shot_data: true,
+                show_shot_comments: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains(r#"class="shot-data""#),
+            "shot data should render: {svg}"
+        );
+        assert!(
+            svg.contains(r#"class="shot-comments""#),
+            "shot comments should render alongside shot data: {svg}"
         );
     }
 }
