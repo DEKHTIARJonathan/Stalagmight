@@ -18,6 +18,26 @@ nothing signals pressure. `WebKitMemoryPressureSettings` lets us give the web
 process an explicit soft budget so the handler fires on our terms (GC-style
 pauses of tens of ms), with no kernel cgroup throttling.
 
+## Measured effect (webkitgtk-6.0 2.52.4, 75k-shot project, software GL)
+
+Driving the real app (open 92.stalx, then a repeated-reload churn loop) and
+sampling the web process RSS, with the settings applied vs disabled:
+
+- The settings ARE reached by the web process: a low `kill_threshold` reliably
+  terminated `WebKitWebProcess` once it crossed the budget, proving the
+  construct-only property took effect.
+- Under reload churn the handler keeps RSS bounded and stall-free: peak fell from
+  ~3.8 GB (off) to ~2.9 GB (on), and the working floor from ~2.7 GB to ~2.2 GB,
+  reached in one cycle instead of ratcheting. Post-load reclaim is ~9x faster
+  (~10 s vs ~90 s of natural bmalloc scavenging).
+- It does NOT drive RSS down to the ~700 MB "live" figure. That level was only
+  reached under a cgroup `memory.high` limit, i.e. kernel paging of the live
+  working set, which is exactly the 60s-stall behavior we must avoid. The
+  residual (JS survey geometry + software-GL buffers + `MADV_FREE` pages that the
+  kernel only reclaims under real pressure) is not returnable from user space
+  without that pressure. So this is a meaningful, safe reduction and a cap on
+  churn-driven growth, not a full RSS-tracks-live-memory fix.
+
 ## Change from upstream v0.53.5
 
 Only `src/webkitgtk/web_context.rs` is modified. Two additions, both clearly
