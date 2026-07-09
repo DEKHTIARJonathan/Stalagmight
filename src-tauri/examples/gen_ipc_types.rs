@@ -38,6 +38,7 @@ use stalagmight_lib::core::reconcile::{
 use stalagmight_lib::export::{
     ColorMode, ColorStop, DepthPreset, DepthPresetColors, ExportImageOptions, ImageFormat,
 };
+use stalagmight_lib::logging::{LogsSince, RingLogEntry};
 use stalagmight_lib::models::placement_suggest::{
     CrossSectionSuggestion, ImportSectionForSuggestion, MatchDirection, OrphanPlacementSuggestion,
     PlacementSuggestion, SuggestionConfidence, TargetType,
@@ -243,6 +244,10 @@ fn main() {
     // Memory probe (debug)
     export::<ProcessMemory>(&out_dir);
     export::<MemoryStats>(&out_dir);
+
+    // Recent-logs ring buffer (debug dialog + agent-harness checkpoint reads)
+    export::<RingLogEntry>(&out_dir);
+    export::<LogsSince>(&out_dir);
 
     // Recovery (SPEC 14.4)
     export::<BackupInfo>(&out_dir);
@@ -455,6 +460,8 @@ fn main() {
         "SurveyGeometryError",
         "ProcessMemory",
         "MemoryStats",
+        "RingLogEntry",
+        "LogsSince",
         "BackupInfo",
         "RepairResult",
         "SalvagedData",

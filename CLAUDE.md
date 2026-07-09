@@ -158,3 +158,4 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Performance](docs/performance.md) | Algorithm choices, profiling guide, optimization history |
 | [Debug Gates](docs/debug-gates.md) | Where dev-only logs / asserts / profile harnesses live, and how to turn them on |
 | [macOS Build](docs/macos-build.md) | macOS build scripts and known issues |
+| [Agent Harness](docs/agent-harness.md) | LLM-agent harness (MCP + WebdriverIO) to drive the real app: tools, oracles, stress scenarios, replay + repro reports. Runs under Node 22. |

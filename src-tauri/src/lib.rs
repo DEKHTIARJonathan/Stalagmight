@@ -1050,6 +1050,9 @@ const EXIT_LOCK_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn run() {
     let _guard = logging::init();
+    // Route panics through tracing + a crash-marker file so a crash oracle can
+    // detect a backend panic even when a thread panic leaves the app alive.
+    logging::panic_hook::install();
 
     #[cfg(not(feature = "e2e"))]
     let builder = tauri::Builder::default();
@@ -1416,7 +1419,9 @@ pub fn run() {
             commands::recovery::export_salvageable_data,
             // Logging
             commands::logging::get_recent_logs,
+            commands::logging::get_recent_logs_since,
             commands::logging::push_frontend_log,
+            commands::debug::debug_trigger_panic,
             // Memory probe (debug)
             commands::memory::get_memory_stats,
             // Telemetry

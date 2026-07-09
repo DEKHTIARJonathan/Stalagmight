@@ -4,7 +4,10 @@ name: CI
 # Playwright suites and the quarantined WDIO specs are no-ops here.
 # NOTE: do NOT ignore all of `e2e/**` — cargo tests load `../e2e/fixtures/*.dmp`
 # (dmp.rs, core/state/tests.rs), so a fixture edit MUST still run `check`. Only
-# `e2e/legacy/**` (WDIO specs) is safe to drop.
+# `e2e/legacy/**` (WDIO specs) is safe to drop. `e2e/agent/**` (the LLM-agent
+# harness) MUST run `check` too: its only automated gate is the
+# `pnpm typecheck:agent` step below (the harness itself is on-demand), so
+# ignoring it here would let a type-broken harness land silently.
 # (Blocklist, not allowlist: a new/unlisted path defaults to running CI.)
 # Filters are safe because `master` is unprotected — no required-check deadlock (#122).
 on:
@@ -120,6 +123,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm tsc --noEmit
+      # Agent-harness typecheck (tsconfig.agent.json covers e2e/agent + e2e/lib).
+      # The harness runs via tsx, which transpiles WITHOUT type-checking, and it
+      # is exercised on-demand only — this seconds-cheap step is its one
+      # automated gate against silent rot.
+      - run: pnpm typecheck:agent
       # File-size ratchet (#157): keep non-test src-tauri/src/*.rs files from
       # re-bloating past their committed baseline. Pure-Node, no deps; sub-second.
       # The fixture test pins the prod-LOC strip heuristic (the under-count class).

@@ -8,14 +8,21 @@ import App from './App';
 import './i18n';
 import './index.css';
 import { installConsoleCapture } from './utils/consoleCapture';
+import { installGlobalErrorCapture } from './utils/globalErrorCapture';
 import { initInputModalityTracking } from './utils/inputModality';
 import { useUIStore } from './store/uiStore';
 import { useProjectStore, type LoadingState } from './store/projectStore';
 import { useGlobalViewStore } from './store/globalViewStore';
 import { useGasPlanStore } from './store/gasPlanStore';
+import { useSpeleoStore } from './store/speleoStore';
+import { useExportStore } from './store/exportStore';
+import { useNetworkStore } from './store/networkStore';
 
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
 installConsoleCapture();
+
+// Route unhandled window errors / promise rejections into the same ring buffer
+installGlobalErrorCapture();
 
 // Keyboard-only focus rings: tag <html data-input-modality> from the first
 // interaction (set before render so there's no initial ring flash).
@@ -34,6 +41,9 @@ declare global {
       projectStore?: typeof useProjectStore;
       globalViewStore?: typeof useGlobalViewStore;
       gasPlanStore?: typeof useGasPlanStore;
+      speleoStore?: typeof useSpeleoStore;
+      exportStore?: typeof useExportStore;
+      networkStore?: typeof useNetworkStore;
       // Loading progress E2E hooks
       getLoadingId?: () => number;
       getBackendLoadingId?: () => bigint;
@@ -53,6 +63,9 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
   testAPI.projectStore = useProjectStore;
   testAPI.globalViewStore = useGlobalViewStore;
   testAPI.gasPlanStore = useGasPlanStore;
+  testAPI.speleoStore = useSpeleoStore;
+  testAPI.exportStore = useExportStore;
+  testAPI.networkStore = useNetworkStore;
   window.__E2E_TEST__ = testAPI;
 }
 

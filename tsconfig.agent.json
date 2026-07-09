@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "noImplicitAny": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["e2e/agent/**/*", "e2e/lib/**/*"],
+  "comment:exclude": "Generated replay specs use wdio ambient globals (browser/$); they are typechecked by tsconfig.e2e.json, not here.",
+  "exclude": ["e2e/agent/replays/**"]
+}

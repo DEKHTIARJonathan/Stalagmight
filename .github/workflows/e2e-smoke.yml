@@ -11,10 +11,10 @@ name: E2E Smoke
 on:
   push:
     branches: [master]
-    paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**', 'src-tauri/**']
+    paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**', 'e2e/agent/**', 'src-tauri/**']
   pull_request:
     branches: [master]
-    paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**', 'src-tauri/**']
+    paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**', 'e2e/agent/**', 'src-tauri/**']
 
 concurrency:
   group: smoke-${{ github.ref }}
