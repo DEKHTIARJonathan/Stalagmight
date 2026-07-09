@@ -198,6 +198,13 @@ pub struct ExportImageOptions {
     /// **Raster-only**: SVG export is always monochrome regardless of this.
     #[serde(default)]
     pub color_mode: ColorMode,
+    /// Whether to draw station-index labels at survey-leg endpoints and
+    /// junctions (degree-1 and degree>=3 points of the drawn passage).
+    /// Interior degree-2 stations are not labeled. Opt-in (default `false`);
+    /// black text + white halo, same placement machinery as the penetration
+    /// labels, so labels stay monochrome regardless of `color_mode`.
+    #[serde(default)]
+    pub show_station_labels: bool,
 }
 
 impl Default for ExportImageOptions {
@@ -208,6 +215,7 @@ impl Default for ExportImageOptions {
             branching_threshold: 2,
             show_penetration_labels: true,
             color_mode: ColorMode::None,
+            show_station_labels: false,
         }
     }
 }
@@ -1032,17 +1040,32 @@ pub fn generate_svg_string_with_stations(
         svg.push_str("</g>\n");
     }
 
-    // Pass 3: penetration-distance labels at each thick segment's deepest
-    // station. Only attempted when the project has at least one zero datum
-    // (otherwise penetration distance is undefined). Labels carry a white
-    // halo for readability and dodge collisions by trying eight placement
-    // offsets before giving up.
     let zero_datum_indices: Vec<usize> = stations
         .iter()
         .enumerate()
         .filter(|(_, s)| s.is_zero_datum)
         .map(|(i, _)| i)
         .collect();
+    let star_r = px(STAR_OUTER_PX);
+    // Shared label-occupancy boxes (viewBox units): seeded with zero-datum
+    // stars, then appended to by pen-distance labels (Pass 3) and station
+    // labels (Pass 4) so all three mutually dodge.
+    let mut placed: Vec<(f64, f64, f64, f64)> = Vec::new();
+    for &i in &zero_datum_indices {
+        let s = &stations[i];
+        placed.push((
+            s.coordinates.x - star_r,
+            -s.coordinates.y - star_r,
+            star_r * 2.0,
+            star_r * 2.0,
+        ));
+    }
+
+    // Pass 3: penetration-distance labels at each thick segment's deepest
+    // station. Only attempted when the project has at least one zero datum
+    // (otherwise penetration distance is undefined). Labels carry a white
+    // halo for readability and dodge collisions by trying eight placement
+    // offsets before giving up.
     if options.show_penetration_labels && !zero_datum_indices.is_empty() {
         // Use the project's shared along-cave penetration computation —
         // same metric as `Project::calculate_penetration` (and therefore
@@ -1092,21 +1115,6 @@ pub fn generate_svg_string_with_stations(
             let halo = px(PEN_LABEL_HALO_PX);
             let offset = px(PEN_LABEL_OFFSET_PX);
             let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
-            let star_r = px(STAR_OUTER_PX);
-
-            // Already-occupied boxes that pen labels must not overlap with.
-            // Pre-seed with zero-datum star bounding boxes; appended as we
-            // place each label.
-            let mut placed: Vec<(f64, f64, f64, f64)> = Vec::new(); // (x, y, w, h) in viewBox units
-            for &i in &zero_datum_indices {
-                let s = &stations[i];
-                placed.push((
-                    s.coordinates.x - star_r,
-                    -s.coordinates.y - star_r,
-                    star_r * 2.0,
-                    star_r * 2.0,
-                ));
-            }
 
             let _ = writeln!(
                 svg,
@@ -1159,6 +1167,137 @@ pub fn generate_svg_string_with_stations(
                 // If every candidate collided, drop the label rather
                 // than stack it on top of another — better to lose one
                 // number than to render an unreadable smudge.
+            }
+            svg.push_str("</g>\n");
+        }
+    }
+
+    // Pass 4: station-index labels at survey-leg endpoints (degree 1) and
+    // junctions (degree >= 3) of the drawn passage. `point_uf` collapses ONLY
+    // colocated stations (merges + aligned closures) into one physical point —
+    // NOT shot-connected chains (the segment `uf` above does that and is
+    // therefore unusable for per-station degree). Degree counts NON-reference
+    // shots incident to the point (reference/jump shots are diver shortcuts,
+    // not passage, and are excluded). Interior degree-2 stations are skipped.
+    // Drop-on-collision is the backstop, sharing `placed` with Passes 2-3.
+    if options.show_station_labels {
+        let mut point_uf = UnionFind::new(n);
+        for merge in &project.station_merges {
+            if let (Some(a_sr), Some(b_sr)) = (
+                project.resolve_key(&merge.station_a),
+                project.resolve_key(&merge.station_b),
+            ) {
+                if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
+                    point_uf.union(a, b);
+                }
+            }
+        }
+        for closure in &project.loop_closures {
+            if !closure.is_aligned {
+                continue;
+            }
+            if let (Some(a_sr), Some(b_sr)) = (
+                project.resolve_key(&closure.station_a),
+                project.resolve_key(&closure.station_b),
+            ) {
+                if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
+                    point_uf.union(a, b);
+                }
+            }
+        }
+
+        // Degree per physical point (non-reference shot endpoints).
+        let mut degree: HashMap<usize, u32> = HashMap::new();
+        for section in &project.sections {
+            for (i, shot) in section.shots.iter().enumerate() {
+                if shot.is_reference {
+                    continue;
+                }
+                let from = StationRef::new(section.id, i as u32);
+                let to = StationRef::new(section.id, (i + 1) as u32);
+                let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to))
+                else {
+                    continue;
+                };
+                *degree.entry(point_uf.find(fi)).or_default() += 1;
+                *degree.entry(point_uf.find(ti)).or_default() += 1;
+            }
+        }
+
+        // Representative station per point = smallest station index (deterministic).
+        let mut rep: HashMap<usize, usize> = HashMap::new();
+        for i in 0..n {
+            let root = point_uf.find(i);
+            rep.entry(root)
+                .and_modify(|cur| {
+                    if i < *cur {
+                        *cur = i;
+                    }
+                })
+                .or_insert(i);
+        }
+
+        // Junctions first (priority for limited space), then endpoints; each
+        // group sorted by representative station index for deterministic SVG.
+        let mut junctions: Vec<usize> = Vec::new();
+        let mut endpoints: Vec<usize> = Vec::new();
+        for (&root, &deg) in &degree {
+            let si = rep[&root];
+            if deg >= 3 {
+                junctions.push(si);
+            } else if deg == 1 {
+                endpoints.push(si);
+            }
+        }
+        junctions.sort_unstable();
+        endpoints.sort_unstable();
+        let selected: Vec<usize> = junctions.into_iter().chain(endpoints).collect();
+
+        if !selected.is_empty() {
+            let label_size = px(PEN_LABEL_PX);
+            let halo = px(PEN_LABEL_HALO_PX);
+            let offset = px(PEN_LABEL_OFFSET_PX);
+            let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
+            let quarter_turn = std::f64::consts::FRAC_PI_4;
+            let _ = writeln!(
+                svg,
+                r##"<g class="station-labels" font-family="sans-serif" font-size="{size:.2}" fill="#000000" stroke="#ffffff" stroke-width="{halo:.2}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">"##,
+                size = label_size,
+                halo = halo,
+            );
+            for si in selected {
+                let sx = stations[si].coordinates.x;
+                let sy = -stations[si].coordinates.y;
+                let text = stations[si].station_ref.station_index.to_string();
+                let text_w = char_w * text.chars().count() as f64;
+                let text_h = label_size;
+                let primary = label_open_space_angle(si, &stations, project, &station_index);
+                let mut chosen: Option<(f64, f64, (f64, f64, f64, f64))> = None;
+                let mut candidate_angles: Vec<f64> = Vec::with_capacity(9);
+                candidate_angles.push(primary);
+                for k in 1..=4 {
+                    candidate_angles.push(primary + (k as f64) * quarter_turn);
+                    candidate_angles.push(primary - (k as f64) * quarter_turn);
+                }
+                for angle in candidate_angles {
+                    let lx = sx + offset * angle.cos();
+                    let ly = sy + offset * angle.sin();
+                    let bb = (lx - text_w * 0.5, ly - text_h * 0.5, text_w, text_h);
+                    let overlap = placed.iter().any(|p| {
+                        bb.0 < p.0 + p.2
+                            && bb.0 + bb.2 > p.0
+                            && bb.1 < p.1 + p.3
+                            && bb.1 + bb.3 > p.1
+                    });
+                    if !overlap {
+                        chosen = Some((lx, ly, bb));
+                        break;
+                    }
+                }
+                if let Some((lx, ly, bb)) = chosen {
+                    let _ = writeln!(svg, r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,);
+                    placed.push(bb);
+                }
             }
             svg.push_str("</g>\n");
         }
@@ -1478,6 +1617,7 @@ mod tests {
                 branching_threshold: 2,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
             project.compute_station_coordinates(),
         )
@@ -1556,6 +1696,7 @@ mod tests {
             branching_threshold: 2,
             show_penetration_labels: true,
             color_mode: ColorMode::None,
+            show_station_labels: false,
         };
         export_png(
             &project,
@@ -1591,6 +1732,7 @@ mod tests {
                     branching_threshold: 2,
                     show_penetration_labels: true,
                     color_mode: ColorMode::None,
+                    show_station_labels: false,
                 },
                 project.compute_station_coordinates(),
             )
@@ -1651,6 +1793,7 @@ mod tests {
             branching_threshold: 2,
             show_penetration_labels: true,
             color_mode: ColorMode::None,
+            show_station_labels: false,
         };
         let err = export_png(
             &project,
@@ -1674,6 +1817,7 @@ mod tests {
             branching_threshold: 2,
             show_penetration_labels: true,
             color_mode: ColorMode::None,
+            show_station_labels: false,
         };
         let err = export_png(
             &project,
@@ -1769,6 +1913,7 @@ mod tests {
                 branching_threshold: 1,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -1880,6 +2025,7 @@ mod tests {
                 branching_threshold: 3, // trunk thick, children thin
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -1989,6 +2135,7 @@ mod tests {
                 branching_threshold: 3,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -2086,6 +2233,7 @@ mod tests {
                 branching_threshold: 1,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -2105,6 +2253,7 @@ mod tests {
                 branching_threshold: 2,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -2218,6 +2367,7 @@ mod tests {
                 branching_threshold: 3,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -2297,6 +2447,7 @@ mod tests {
                 branching_threshold: 1,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -2317,6 +2468,7 @@ mod tests {
                 branching_threshold: 2,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -2394,6 +2546,7 @@ mod tests {
                 branching_threshold: 2,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -2473,6 +2626,7 @@ mod tests {
                 branching_threshold: 2,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -2535,6 +2689,7 @@ mod tests {
                 branching_threshold: 1,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -2558,6 +2713,7 @@ mod tests {
                 branching_threshold: 1,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -2592,6 +2748,7 @@ mod tests {
                 branching_threshold: 0,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -2676,6 +2833,7 @@ mod tests {
                 branching_threshold: 0,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -2759,6 +2917,7 @@ mod tests {
                 branching_threshold: 1,
                 show_penetration_labels: true,
                 color_mode: ColorMode::None,
+                show_station_labels: false,
             },
         )
         .unwrap();
@@ -3124,5 +3283,146 @@ mod tests {
         assert!(!svg.contains("class=\"grid\""));
         assert!(!svg.contains("depth-legend"));
         assert!(!svg.contains("linearGradient"));
+    }
+
+    // ---- Station labels (#240) ---------------------------------------------
+
+    /// A straight 3-shot line: stations 0 (start), 1, 2 (interior), 3 (end).
+    fn three_shot_line_project() -> Project {
+        let mut project = Project::new("Line".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![
+                make_shot(10.0, 90.0, false),
+                make_shot(10.0, 90.0, false),
+                make_shot(10.0, 90.0, false),
+            ],
+            ..Default::default()
+        });
+        project
+    }
+
+    #[test]
+    fn station_labels_mark_endpoints_not_interior() {
+        let project = three_shot_line_project();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_station_labels: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains(r#"class="station-labels""#),
+            "station-labels group should be present: {svg}"
+        );
+        assert!(svg.contains(">0</text>"), "start endpoint labeled: {svg}");
+        assert!(svg.contains(">3</text>"), "end endpoint labeled: {svg}");
+        assert!(
+            !svg.contains(">1</text>"),
+            "interior station 1 should not be labeled: {svg}"
+        );
+        assert!(
+            !svg.contains(">2</text>"),
+            "interior station 2 should not be labeled: {svg}"
+        );
+    }
+
+    #[test]
+    fn station_labels_absent_when_disabled() {
+        let project = three_shot_line_project();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_station_labels: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains(r#"class="station-labels""#),
+            "station-labels group should be absent when opted out: {svg}"
+        );
+    }
+
+    #[test]
+    fn station_labels_mark_junctions() {
+        // Main is the same 3-shot line as above; a two-shot Branch is merged
+        // onto Main's interior station 1, raising that point's degree from 2 to
+        // 3 (a junction). Main is added first, so its stations occupy the lower
+        // global indices; the merged point's representative (smallest global
+        // index) is therefore Main's station 1, so the junction renders as
+        // ">1</text>".
+        //
+        // The Branch is deliberately TWO shots (free endpoint index 2), not one
+        // (index 1): a one-shot Branch's endpoint would also render ">1</text>",
+        // making this assertion pass even if junction detection were broken. In
+        // `station_labels_mark_endpoints_not_interior`, Main's station 1 is an
+        // interior degree-2 point and is NOT labeled; here the ONLY source of
+        // ">1</text>" is the junction, so the pair isolates junction detection.
+        let mut project = three_shot_line_project();
+        let main_id = project.sections[0].id;
+        let branch_id = project
+            .add_section(SectionData {
+                name: Some("Branch".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
+                ..Default::default()
+            })
+            .id;
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(branch_id, 0).into(),
+            station_b: StationRef::new(main_id, 1).into(),
+            merged_at: chrono::Utc::now(),
+        });
+        project.rebuild_merge_adjacency();
+
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_station_labels: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            svg.contains(r#"class="station-labels""#),
+            "station-labels group should be present: {svg}"
+        );
+        assert!(
+            svg.contains(">1</text>"),
+            "merged junction station (Main:1) should be labeled: {svg}"
+        );
+        // The Branch's own free endpoint (index 2) is labeled separately,
+        // confirming the fixture built a real second leg rather than a stub.
+        assert!(
+            svg.contains(">2</text>"),
+            "branch free endpoint should be labeled: {svg}"
+        );
+    }
+
+    #[test]
+    fn station_labels_stay_black_regardless_of_color_mode() {
+        let project = three_shot_line_project();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                show_station_labels: true,
+                color_mode: ColorMode::Depth,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let group_start = svg
+            .find(r#"class="station-labels""#)
+            .expect("station-labels group should be present");
+        let group_tag_end = group_start + svg[group_start..].find('>').expect("unterminated tag");
+        let group_tag = &svg[..group_tag_end];
+        assert!(
+            group_tag.contains(r##"fill="#000000""##),
+            "station labels should stay black regardless of color_mode: {svg}"
+        );
     }
 }

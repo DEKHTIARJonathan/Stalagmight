@@ -2,4 +2,4 @@
 import type { ColorMode } from "./ColorMode";
 import type { ImageFormat } from "./ImageFormat";
 
-export interface ExportImageOptions { format: ImageFormat, dpi: number, branching_threshold: number, show_penetration_labels: boolean, color_mode: ColorMode, }
+export interface ExportImageOptions { format: ImageFormat, dpi: number, branching_threshold: number, show_penetration_labels: boolean, color_mode: ColorMode, show_station_labels: boolean, }
