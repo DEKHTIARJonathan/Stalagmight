@@ -1,7 +1,7 @@
 use super::types::{
     default_sigma_azimuth_deg, default_sigma_depth_m, default_sigma_length_m,
-    default_webkit_mem_conservative, default_webkit_mem_limit_mb, default_webkit_mem_poll,
-    default_webkit_mem_strict,
+    default_webkit_jsc_force_ram_size_mb, default_webkit_mem_conservative,
+    default_webkit_mem_limit_mb, default_webkit_mem_poll, default_webkit_mem_strict,
 };
 use super::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
@@ -52,6 +52,7 @@ impl Default for WebkitMemoryConfig {
             strict_threshold: default_webkit_mem_strict(),
             kill_threshold: 0.0,
             poll_interval_seconds: default_webkit_mem_poll(),
+            jsc_force_ram_size_mb: default_webkit_jsc_force_ram_size_mb(),
         }
     }
 }

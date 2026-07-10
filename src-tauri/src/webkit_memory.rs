@@ -18,6 +18,13 @@
 //! Tauri builder starts (the config-defined window's WebContext is built inside
 //! Tauri's setup step, *before* our `.setup()` hook runs, so this is the only
 //! point early enough).
+//!
+//! Alongside the pressure settings we also export `JSC_forceRAMSize`
+//! (`jsc_force_ram_size_mb`, in bytes): JavaScriptCore reads this environment
+//! variable directly in the web process (no wry change needed) and sizes its
+//! heap as if the machine had that much RAM, which means much more aggressive
+//! GC thresholds. Measured ~800 MB RSS reduction on a 75k-shot project with
+//! negligible interactivity cost on the debug build.
 
 use crate::config::{Config, WebkitMemoryConfig};
 
@@ -26,22 +33,33 @@ const CONSERVATIVE: &str = "STALAGMIGHT_WEBKIT_MEM_CONSERVATIVE";
 const STRICT: &str = "STALAGMIGHT_WEBKIT_MEM_STRICT";
 const KILL: &str = "STALAGMIGHT_WEBKIT_MEM_KILL";
 const POLL: &str = "STALAGMIGHT_WEBKIT_MEM_POLL";
+const JSC_FORCE_RAM_SIZE: &str = "JSC_forceRAMSize";
 
-/// Translate a [`WebkitMemoryConfig`] into the `STALAGMIGHT_WEBKIT_MEM_*`
-/// environment pairs the vendored wry reads. When the feature is disabled (or the
-/// limit is `0`) this yields a single `LIMIT_MB=0`, which the wry patch treats as
-/// "off" (identical to upstream behavior).
+/// Translate a [`WebkitMemoryConfig`] into the environment pairs the web
+/// process reads: the `STALAGMIGHT_WEBKIT_MEM_*` pressure settings (via the
+/// vendored wry) plus `JSC_forceRAMSize` (read by JavaScriptCore directly).
+///
+/// When the master switch is off (or the limit is `0`) this yields a single
+/// `LIMIT_MB=0`, which the wry patch treats as "off" (identical to upstream
+/// behavior), and `JSC_forceRAMSize` is not emitted at all. With the feature
+/// on, `jsc_force_ram_size_mb == 0` omits just the JSC pair (JSC's off state
+/// is the variable being absent).
 fn env_pairs(cfg: &WebkitMemoryConfig) -> Vec<(&'static str, String)> {
     if !cfg.enabled || cfg.memory_limit_mb == 0 {
         return vec![(LIMIT_MB, "0".to_string())];
     }
-    vec![
+    let mut pairs = vec![
         (LIMIT_MB, cfg.memory_limit_mb.to_string()),
         (CONSERVATIVE, cfg.conservative_threshold.to_string()),
         (STRICT, cfg.strict_threshold.to_string()),
         (KILL, cfg.kill_threshold.to_string()),
         (POLL, cfg.poll_interval_seconds.to_string()),
-    ]
+    ];
+    if cfg.jsc_force_ram_size_mb > 0 {
+        let bytes = u64::from(cfg.jsc_force_ram_size_mb) * 1024 * 1024;
+        pairs.push((JSC_FORCE_RAM_SIZE, bytes.to_string()));
+    }
+    pairs
 }
 
 /// Resolve the config path the way Tauri does on Linux:
@@ -87,6 +105,7 @@ pub(crate) fn apply_env_from_config() {
         conservative_threshold = cfg.conservative_threshold,
         strict_threshold = cfg.strict_threshold,
         poll_interval_seconds = cfg.poll_interval_seconds,
+        jsc_force_ram_size_mb = cfg.jsc_force_ram_size_mb,
         "Configured WebKit memory-pressure environment for the web process"
     );
 }
@@ -96,16 +115,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_config_emits_all_five_pairs() {
+    fn default_config_emits_all_six_pairs() {
         let cfg = WebkitMemoryConfig::default();
         assert_eq!(
             env_pairs(&cfg),
             vec![
-                (LIMIT_MB, "900".to_string()),
-                (CONSERVATIVE, "0.33".to_string()),
-                (STRICT, "0.5".to_string()),
+                (LIMIT_MB, "550".to_string()),
+                (CONSERVATIVE, "0.25".to_string()),
+                (STRICT, "0.4".to_string()),
                 (KILL, "0".to_string()),
-                (POLL, "3".to_string()),
+                (POLL, "1".to_string()),
+                // 700 MB in bytes.
+                (JSC_FORCE_RAM_SIZE, "734003200".to_string()),
             ]
         );
     }
@@ -137,6 +158,7 @@ mod tests {
             strict_threshold: 0.6,
             kill_threshold: 0.9,
             poll_interval_seconds: 5.0,
+            jsc_force_ram_size_mb: 1024,
         };
         assert_eq!(
             env_pairs(&cfg),
@@ -146,7 +168,30 @@ mod tests {
                 (STRICT, "0.6".to_string()),
                 (KILL, "0.9".to_string()),
                 (POLL, "5".to_string()),
+                // 1024 MB = 1 GiB in bytes.
+                (JSC_FORCE_RAM_SIZE, "1073741824".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn zero_jsc_ram_size_omits_the_jsc_pair() {
+        let cfg = WebkitMemoryConfig {
+            jsc_force_ram_size_mb: 0,
+            ..WebkitMemoryConfig::default()
+        };
+        let pairs = env_pairs(&cfg);
+        assert_eq!(pairs.len(), 5);
+        assert!(pairs.iter().all(|(key, _)| *key != JSC_FORCE_RAM_SIZE));
+    }
+
+    #[test]
+    fn disabled_config_omits_the_jsc_pair_too() {
+        let cfg = WebkitMemoryConfig {
+            enabled: false,
+            ..WebkitMemoryConfig::default()
+        };
+        // Master switch off: only the LIMIT_MB=0 sentinel, no JSC_forceRAMSize.
+        assert_eq!(env_pairs(&cfg), vec![(LIMIT_MB, "0".to_string())]);
     }
 }

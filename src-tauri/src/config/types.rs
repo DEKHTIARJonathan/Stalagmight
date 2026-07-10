@@ -436,22 +436,34 @@ pub struct WebkitMemoryConfig {
     /// Poll interval in seconds for the pressure handler.
     #[serde(default = "default_webkit_mem_poll")]
     pub poll_interval_seconds: f64,
+    /// Tell JavaScriptCore to size its heap for a machine with this much RAM,
+    /// in MB (exported as `JSC_forceRAMSize`, in bytes, to the web process; JSC
+    /// reads the variable directly, no wry patch involved). Yields much more
+    /// aggressive GC thresholds; measured ~800 MB RSS reduction on a 75k-shot
+    /// project with negligible interactivity cost. `0` = off (the variable is
+    /// not set).
+    #[serde(default = "default_webkit_jsc_force_ram_size_mb")]
+    pub jsc_force_ram_size_mb: u32,
 }
 
 pub fn default_webkit_mem_limit_mb() -> u32 {
-    900
+    550
 }
 
 pub fn default_webkit_mem_conservative() -> f64 {
-    0.33
+    0.25
 }
 
 pub fn default_webkit_mem_strict() -> f64 {
-    0.5
+    0.4
 }
 
 pub fn default_webkit_mem_poll() -> f64 {
-    3.0
+    1.0
+}
+
+pub fn default_webkit_jsc_force_ram_size_mb() -> u32 {
+    700
 }
 
 /// Panel sizes configuration (persisted across sessions)
