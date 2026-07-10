@@ -3105,9 +3105,17 @@ function MapCanvas() {
           maxzoom: tileConfig.maxZoom,
         });
 
-        // Add satellite layer below survey layers but above background
-        // 'survey-shots-hitbox' is the first/bottom survey layer (hitbox layers are added first)
-        const firstSurveyLayer = currentMap.getLayer('survey-shots-hitbox') ? 'survey-shots-hitbox' : undefined;
+        // Add satellite layer below survey layers but above background.
+        // The main shots/stations hitbox layers were removed (#mem budget), so
+        // the bottom-most survey layer is now the ghost shot hitbox (added first
+        // in initializeLayers). Fall back through the first visible survey layers
+        // in case ordering changes, so satellite always lands beneath them.
+        const bottomCandidates = [
+          'survey-ghost-shots-hitbox',
+          'survey-ghost-shots',
+          'survey-shots',
+        ];
+        const firstSurveyLayer = bottomCandidates.find((id) => currentMap.getLayer(id));
         currentMap.addLayer({
           id: 'satellite-tiles',
           type: 'raster',
