@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 use super::gas::GasConfig;
+use super::speleodb::SpeleoDbConfig;
+use super::webkit::WebkitMemoryConfig;
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -51,114 +53,6 @@ pub struct Config {
     #[serde(default, skip_serializing, alias = "snap")]
     #[ts(skip)]
     pub(super) legacy_snap: Option<LegacySnapConfig>,
-}
-
-/// Opt-in fallback tier for the SpeleoDB token when no OS keychain is available.
-///
-/// [Track C] (#188, D-188): the user-facing surface is **two-valued**
-/// (`SessionOnly` default, `Plaintext`); `Unknown` is the serde `#[serde(other)]`
-/// sentinel (same idiom as [`ThemeMode::Unknown`]), normalized back to
-/// `SessionOnly` so an unrecognized TOML value never blocks loading. `Plaintext`
-/// is the headless-Linux escape hatch; the warned confirmation that *sets* it is
-/// #205 Settings — Track C only honors the persisted preference.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum TokenFallback {
-    /// Token lives in memory only (lost on restart) when the keychain is absent.
-    #[default]
-    SessionOnly,
-    /// Opt-in: write the token to a `0o600` plaintext file when the keychain
-    /// fails this session (the two-gate plaintext write).
-    Plaintext,
-    /// Catch-all for unrecognized values; normalized to `SessionOnly`.
-    #[serde(other, rename = "unknown")]
-    Unknown,
-}
-
-/// SpeleoDB connection settings (#183 read-only spike).
-///
-/// The auth token is **never** stored here — it lives in the OS keychain (or a
-/// plaintext escape hatch / in-memory session fallback); see
-/// `crate::speleodb::auth`. At runtime the `DEV_SPELEODB_URL` env var overrides
-/// `endpoint`. The full Settings-tab UI binding is #205.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct SpeleoDbConfig {
-    /// Persisted endpoint base URL (e.g. `https://www.speleodb.org`). Overridden
-    /// at runtime by `DEV_SPELEODB_URL` when set.
-    #[serde(default)]
-    pub endpoint: Option<String>,
-    /// Last-used account email, for prefilling the login dialog.
-    #[serde(default)]
-    pub email: Option<String>,
-    /// [Track C] (#188, D-188): opt-in plaintext token fallback preference.
-    /// Default `SessionOnly`; only `Plaintext` enables the two-gate plaintext
-    /// write. #205 Settings owns the warned confirmation that flips it.
-    #[serde(default)]
-    pub token_fallback: TokenFallback,
-    /// [Track C] (#187/D-B10/D-B19): allow an `http://` endpoint to a PUBLIC host.
-    /// Off by default. Relaxes ONLY the public-http scheme block in
-    /// `speleodb::tls::enforce` (Track A #187) — NEVER TLS cert verification
-    /// (self-signed / internal CAs stay rejected). Pre-wired for #205 Settings;
-    /// D-B19's scheme reject lives in `tls.rs`, not here.
-    #[serde(default)]
-    pub insecure_http: bool,
-    /// [#213] Opt-in: allow "force-edit" - editing a remote project WITHOUT holding
-    /// the server write lock (surveying offline / when someone else holds it), behind
-    /// a big-red unmergeable-`.stalx` warning. Off by default; #205 Settings owns the
-    /// warned toggle. When off, a remote project stays strictly read-only until the
-    /// lock is acquired (the only escape being "Save a local copy" / detach).
-    #[serde(default)]
-    pub allow_force_edit: bool,
-    /// How often (seconds) the action shell re-checks the linked project's remote
-    /// state (lock holder / remote-ahead / conflict) for its status icon. Default
-    /// 60; **clamped up to `MIN_POLL_INTERVAL_SECONDS` on load** so a hand-edited
-    /// config below the floor can't spam the server.
-    #[serde(default = "default_poll_interval_seconds")]
-    pub poll_interval_seconds: u32,
-}
-
-/// Floor for [`SpeleoDbConfig::poll_interval_seconds`]. Enforced both in the
-/// Settings UI and here on load (a hand-edited sub-floor value is corrected up).
-pub const MIN_POLL_INTERVAL_SECONDS: u32 = 30;
-
-fn default_poll_interval_seconds() -> u32 {
-    60
-}
-
-impl Default for SpeleoDbConfig {
-    fn default() -> Self {
-        Self {
-            endpoint: None,
-            email: None,
-            token_fallback: TokenFallback::default(),
-            insecure_http: false,
-            allow_force_edit: false,
-            poll_interval_seconds: default_poll_interval_seconds(),
-        }
-    }
-}
-
-impl SpeleoDbConfig {
-    /// [Track C] (#188): coerce the `#[serde(other)]` sentinel back to the safe
-    /// default, and clamp the poll interval up to the floor. Mirrors
-    /// [`AppearanceConfig::normalize`]; wired into [`Config::normalize`].
-    pub fn normalize(&mut self) {
-        if self.token_fallback == TokenFallback::Unknown {
-            tracing::warn!(
-                "Unknown token_fallback value in config, normalizing to \"session_only\""
-            );
-            self.token_fallback = TokenFallback::SessionOnly;
-        }
-        if self.poll_interval_seconds < MIN_POLL_INTERVAL_SECONDS {
-            tracing::warn!(
-                requested = self.poll_interval_seconds,
-                floor = MIN_POLL_INTERVAL_SECONDS,
-                "SpeleoDB poll_interval_seconds below floor; clamping up"
-            );
-            self.poll_interval_seconds = MIN_POLL_INTERVAL_SECONDS;
-        }
-    }
 }
 
 /// Legacy snap config for migration from old [snap] section
@@ -398,72 +292,6 @@ pub struct MapDebugConfig {
     /// Log hit detection events to console
     #[serde(default)]
     pub log_hit_detection: bool,
-}
-
-/// Linux-only WebKit memory-pressure tuning.
-///
-/// On Linux (webkitgtk) the WebKit web process never returns freed memory to the
-/// OS without a pressure signal, so its RSS drifts far above live memory. These
-/// settings give the web process a soft memory budget so WebKit's own
-/// `MemoryPressureHandler` reclaims memory (GC-style pauses), with no kernel
-/// cgroup throttling. Applied via the vendored, patched `wry`
-/// (`src-tauri/vendor/wry/MODIFICATIONS.md`), which reads the
-/// `STALAGMIGHT_WEBKIT_MEM_*` environment variables that `lib.rs` `run()` sets
-/// from this config at startup.
-///
-/// Backend-only: the `Config` field is `#[ts(skip)]`, so this never reaches the
-/// frontend. Tune it in `config.toml` or via the environment variables directly.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WebkitMemoryConfig {
-    /// Master switch. When `false`, no pressure settings are applied and wry
-    /// behaves exactly like upstream.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    /// Soft memory budget for the web process, in MB. The thresholds below are
-    /// fractions of this. `0` disables the feature (same as `enabled = false`).
-    #[serde(default = "default_webkit_mem_limit_mb")]
-    pub memory_limit_mb: u32,
-    /// Fraction of the limit at which WebKit starts a gentle cache release.
-    #[serde(default = "default_webkit_mem_conservative")]
-    pub conservative_threshold: f64,
-    /// Fraction of the limit at which WebKit runs an aggressive, synchronous
-    /// release.
-    #[serde(default = "default_webkit_mem_strict")]
-    pub strict_threshold: f64,
-    /// Fraction of the limit at which the web process is killed. `0.0` = never.
-    #[serde(default)]
-    pub kill_threshold: f64,
-    /// Poll interval in seconds for the pressure handler.
-    #[serde(default = "default_webkit_mem_poll")]
-    pub poll_interval_seconds: f64,
-    /// Tell JavaScriptCore to size its heap for a machine with this much RAM,
-    /// in MB (exported as `JSC_forceRAMSize`, in bytes, to the web process; JSC
-    /// reads the variable directly, no wry patch involved). Yields much more
-    /// aggressive GC thresholds; measured ~800 MB RSS reduction on a 75k-shot
-    /// project with negligible interactivity cost. `0` = off (the variable is
-    /// not set).
-    #[serde(default = "default_webkit_jsc_force_ram_size_mb")]
-    pub jsc_force_ram_size_mb: u32,
-}
-
-pub fn default_webkit_mem_limit_mb() -> u32 {
-    550
-}
-
-pub fn default_webkit_mem_conservative() -> f64 {
-    0.25
-}
-
-pub fn default_webkit_mem_strict() -> f64 {
-    0.4
-}
-
-pub fn default_webkit_mem_poll() -> f64 {
-    1.0
-}
-
-pub fn default_webkit_jsc_force_ram_size_mb() -> u32 {
-    700
 }
 
 /// Panel sizes configuration (persisted across sessions)
