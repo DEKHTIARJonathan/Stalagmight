@@ -12,12 +12,14 @@ import {
   buildSurveyFeatures,
   type BuildSurveyFeaturesOptions,
   type DepthRange,
+  type DisplayColorContext,
   type SurveyFeatureGroupKey,
 } from './features';
 import type { LoopClosure } from '../../../types/project';
 import type { SurveyData } from '../../../types/survey-data';
 import type { GpsOrigin, DecimalPrecision } from '../../../types/config';
 import type { MapThemeColors } from '../../../utils/themeColors';
+import { buildShotStationVt, makeVtPalette } from './vtSurveyBuild';
 import {
   vtLinesFromFeatures,
   vtPointsFromFeatures,
@@ -40,6 +42,30 @@ interface BuildMessage {
   kind: 'build';
   requestId: number;
   args: BuildArgs;
+}
+
+/** Narrow granularity-swap args (#mem). Rebuilds ONLY shots + stations directly
+ *  from the SoA (labels / gradients / section-labels / loop-closures are
+ *  invariant to the merge granularity, so they stay resident). `seedPalette`
+ *  seeds the interner with the caller's resident palette so shot/station
+ *  colorIndex values match the last full build exactly. Keep in sync with
+ *  featuresWorkerClient.GranularitySwapArgs. */
+interface GranularitySwapArgs {
+  surveyData: SurveyData;
+  gpsOrigin: GpsOrigin | null;
+  showDepthGradient: boolean;
+  depthRange: DepthRange;
+  themeColors: MapThemeColors;
+  showIssueSeverity: boolean;
+  issueSeverity: { shotSeverity: Uint8Array; stationSeverity: Uint8Array } | undefined;
+  mergeFeatures: boolean;
+  seedPalette: readonly string[];
+}
+
+interface BuildGranularityMessage {
+  kind: 'buildGranularity';
+  requestId: number;
+  args: GranularitySwapArgs;
 }
 
 /** Streaming reply protocol (#mem). One `begin` (reset), then one `chunk` per
@@ -77,7 +103,7 @@ interface ErrorMessage {
   message: string;
 }
 
-type IncomingMessage = BuildMessage;
+type IncomingMessage = BuildMessage | BuildGranularityMessage;
 type OutgoingMessage = BeginMessage | ChunkMessage | EndMessage | ErrorMessage;
 
 /** Bulk groups converted to the compact vector-tile payload (#mem). Loop
@@ -92,8 +118,56 @@ const VT_GROUP_KIND: Partial<Record<SurveyFeatureGroupKey, 'line' | 'point'>> = 
   stationLabelFeatures: 'point',
 };
 
+/** Narrow granularity swap (#mem): rebuild ONLY shots + stations via the direct
+ *  SoA builder and stream them through the same begin/chunk/end protocol. The
+ *  seeded palette makes the emitted colorIndex values a superset of (identical
+ *  on a pure toggle) the resident palette, so the main thread adopts it without
+ *  shrinking or a color flash. */
+function handleGranularitySwap(requestId: number, args: GranularitySwapArgs): void {
+  const begin: OutgoingMessage = { kind: 'begin', requestId };
+  self.postMessage(begin);
+  const gatedSeverity = args.showIssueSeverity && !!args.issueSeverity;
+  const colorCtx: DisplayColorContext = {
+    showDepthGradient: args.showDepthGradient,
+    depthRange: args.depthRange,
+    themeColors: args.themeColors,
+    showIssueSeverity: gatedSeverity,
+    issueSeverity: args.issueSeverity,
+  };
+  const built = buildShotStationVt(
+    args.surveyData,
+    args.gpsOrigin,
+    colorCtx,
+    args.mergeFeatures,
+    makeVtPalette(args.seedPalette),
+  );
+  const postVt = (group: SurveyFeatureGroupKey, vt: VtLayerData): void => {
+    const chunk: OutgoingMessage = { kind: 'chunk', requestId, group, vt, colorPalette: built.palette };
+    self.postMessage(chunk, { transfer: vtTransferables(vt) });
+  };
+  postVt('shotFeatures', built.shots);
+  postVt('stationFeatures', built.stations);
+  const end: OutgoingMessage = { kind: 'end', requestId };
+  self.postMessage(end);
+}
+
 self.onmessage = (e: MessageEvent<IncomingMessage>) => {
   const msg = e.data;
+
+  if (msg.kind === 'buildGranularity') {
+    try {
+      handleGranularitySwap(msg.requestId, msg.args);
+    } catch (e) {
+      const out: OutgoingMessage = {
+        kind: 'error',
+        requestId: msg.requestId,
+        message: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
+      };
+      self.postMessage(out);
+    }
+    return;
+  }
+
   if (msg.kind !== 'build') return;
 
   try {

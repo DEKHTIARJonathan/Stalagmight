@@ -18,6 +18,7 @@ import { useSpeleoStore } from './store/speleoStore';
 import { useExportStore } from './store/exportStore';
 import { useNetworkStore } from './store/networkStore';
 import { shotMaterialization } from './types/survey-data';
+import { getPerfTimings } from './utils/memoryProbe';
 
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
 installConsoleCapture();
@@ -81,6 +82,12 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
     () => {
       shotMaterialization.count = 0;
     };
+
+  // Perf-timings snapshot for the harness (#mem verification): lets a test read
+  // the most recent recordPerfTiming() entries (e.g. feature-build and
+  // per-shot-mode granularity-swap costs) without opening the memory probe.
+  (window as unknown as { __getPerfTimings?: () => Record<string, { ms: number; ts: number }> }).__getPerfTimings =
+    () => getPerfTimings();
 }
 
 // Expose loading hooks for E2E tests (dev/test mode or explicit E2E build flag)

@@ -18,8 +18,10 @@ import {
   SURVEY_FEATURE_GROUP_ORDER,
   type BuildSurveyFeaturesOptions,
   type DepthRange,
+  type DisplayColorContext,
   type SurveyFeatureGroupKey,
 } from './features';
+import { buildShotStationVt, makeVtPalette } from './vtSurveyBuild';
 import type { LoopClosure } from '../../../types/project';
 import type { SurveyData } from '../../../types/survey-data';
 import type { GpsOrigin, DecimalPrecision } from '../../../types/config';
@@ -40,6 +42,29 @@ interface BuildArgs {
   precision: DecimalPrecision | undefined;
   options: BuildSurveyFeaturesOptions;
 }
+
+/** Narrow granularity-swap args (#mem): rebuild ONLY shots + stations (the merge
+ *  granularity does not affect labels / gradients / section-labels / loop-
+ *  closures, so those stay resident). `seedPalette` seeds the interner with the
+ *  caller's resident palette so shot/station colorIndex values match the last
+ *  full build exactly. Keep in sync with featuresWorker.GranularitySwapArgs. */
+export interface GranularitySwapArgs {
+  surveyData: SurveyData;
+  gpsOrigin: GpsOrigin | null;
+  showDepthGradient: boolean;
+  depthRange: DepthRange;
+  themeColors: MapThemeColors;
+  showIssueSeverity: boolean;
+  issueSeverity: { shotSeverity: Uint8Array; stationSeverity: Uint8Array } | undefined;
+  mergeFeatures: boolean;
+  seedPalette: readonly string[];
+}
+
+/** A worker request: the full build or the narrow granularity swap. Both flow
+ *  through the same single-flight scheduler and reply protocol. */
+type WorkerRequest =
+  | { kind: 'build'; args: BuildArgs }
+  | { kind: 'buildGranularity'; args: GranularitySwapArgs };
 
 /**
  * Streaming reply consumer. `begin` fires once (reset), then `chunk` once per
@@ -80,17 +105,35 @@ let nextRequestId = 0;
  * previously queued one (its promise resolves silently; its sink is never
  * begun, which callers already treat as "superseded, nothing applied").
  */
-let queuedNext: { args: BuildArgs; sink: FeatureStreamSink } | null = null;
+let queuedNext: { request: WorkerRequest; sink: FeatureStreamSink } | null = null;
 
-/** Post a build to the worker and register its sink. */
-function postBuild(w: Worker, args: BuildArgs, sink: FeatureStreamSink): void {
+/** Post a request to the worker and register its sink. */
+function postRequest(w: Worker, request: WorkerRequest, sink: FeatureStreamSink): void {
   const requestId = nextRequestId++;
   pending.set(requestId, sink);
   const tPost = performance.now();
-  w.postMessage({ kind: 'build', requestId, args });
+  w.postMessage({ kind: request.kind, requestId, args: request.args });
   // Note: we don't await postMessage — its return is synchronous after the
   // browser schedules the structured-clone, which dominates the cost here.
   recordPerfTiming('buildFeatures postMessage', performance.now() - tPost);
+}
+
+/** Single-flight, last-wins scheduling shared by the full build and the narrow
+ *  swap: post now if idle, else queue (displacing any previously queued one). */
+function scheduleOrQueue(w: Worker, request: WorkerRequest, sink: FeatureStreamSink): void {
+  if (pending.size > 0) {
+    // A build is in flight: queue this one (last-wins). A previously queued
+    // request is displaced — resolve it silently: its sink was never begun,
+    // which the SurveyLayer caller already treats as "superseded".
+    if (queuedNext) {
+      const displaced = queuedNext;
+      queuedNext = null;
+      displacedSettle(displaced.sink);
+    }
+    queuedNext = { request, sink };
+    return;
+  }
+  postRequest(w, request, sink);
 }
 
 /** After an in-flight build settles, launch the queued one (if any). */
@@ -105,7 +148,30 @@ function launchQueued(): void {
     next.sink.error(new Error('featuresWorker: worker unavailable for queued build'));
     return;
   }
-  postBuild(w, next.args, next.sink);
+  postRequest(w, next.request, next.sink);
+}
+
+/** Wrap a caller sink so `end`/`error` settle the awaited promise exactly once. */
+function makeWrappedSink(sink: FeatureStreamSink, resolve: () => void): FeatureStreamSink {
+  let settled = false;
+  const settle = (): void => {
+    if (!settled) {
+      settled = true;
+      resolve();
+    }
+  };
+  return {
+    begin: () => sink.begin(),
+    chunk: (group, payload, palette) => sink.chunk(group, payload, palette),
+    end: () => {
+      sink.end();
+      settle();
+    },
+    error: (e) => {
+      sink.error(e);
+      settle();
+    },
+  };
 }
 
 /**
@@ -246,39 +312,57 @@ export function buildSurveyFeaturesStreamed(args: BuildArgs, sink: FeatureStream
   }
 
   return new Promise<void>((resolve) => {
-    // Wrap the caller's sink so end/error also settle this promise exactly once.
-    let settled = false;
-    const settle = () => {
-      if (!settled) {
-        settled = true;
-        resolve();
-      }
-    };
-    const wrapped: FeatureStreamSink = {
-      begin: () => sink.begin(),
-      chunk: (group, payload, palette) => sink.chunk(group, payload, palette),
-      end: () => {
-        sink.end();
-        settle();
-      },
-      error: (e) => {
-        sink.error(e);
-        settle();
-      },
-    };
-    if (pending.size > 0) {
-      // A build is in flight: queue this one (last-wins). A previously queued
-      // request is displaced — resolve it silently: its sink was never begun,
-      // which the SurveyLayer caller already treats as "superseded".
-      if (queuedNext) {
-        const displaced = queuedNext;
-        queuedNext = null;
-        displacedSettle(displaced.sink);
-      }
-      queuedNext = { args, sink: wrapped };
-      return;
+    const wrapped = makeWrappedSink(sink, resolve);
+    scheduleOrQueue(w, { kind: 'build', args }, wrapped);
+  });
+}
+
+/**
+ * Narrow granularity swap (#mem): rebuild ONLY the shots + stations sources via
+ * the direct SoA builder and stream them through the same begin/chunk/end sink
+ * contract as {@link buildSurveyFeaturesStreamed}. The ~178k labels / gradients /
+ * section-labels / loop-closures are NOT touched (they are invariant to the
+ * merged-vs-per-feature granularity), so mode entry/exit is near-instant.
+ *
+ * Same single-flight last-wins scheduling as the full build (they share the
+ * worker + queue), so a later full `update()` or swap supersedes an in-flight
+ * one. Falls back to an inline main-thread build when the Worker can't be
+ * constructed (test envs) — identical behaviour, no memory win.
+ */
+export function buildGranularitySwapStreamed(args: GranularitySwapArgs, sink: FeatureStreamSink): Promise<void> {
+  const w = ensureWorker();
+  if (!w) {
+    // Inline fallback: build shots + stations on the main thread and replay the
+    // two vt chunks through the sink in group order.
+    try {
+      const gatedSeverity = args.showIssueSeverity && !!args.issueSeverity;
+      const colorCtx: DisplayColorContext = {
+        showDepthGradient: args.showDepthGradient,
+        depthRange: args.depthRange,
+        themeColors: args.themeColors,
+        showIssueSeverity: gatedSeverity,
+        issueSeverity: args.issueSeverity,
+      };
+      const built = buildShotStationVt(
+        args.surveyData,
+        args.gpsOrigin,
+        colorCtx,
+        args.mergeFeatures,
+        makeVtPalette(args.seedPalette),
+      );
+      sink.begin();
+      sink.chunk('shotFeatures', { vt: built.shots }, built.palette);
+      sink.chunk('stationFeatures', { vt: built.stations }, built.palette);
+      sink.end();
+    } catch (e) {
+      sink.error(e instanceof Error ? e : new Error(String(e)));
     }
-    postBuild(w, args, wrapped);
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve) => {
+    const wrapped = makeWrappedSink(sink, resolve);
+    scheduleOrQueue(w, { kind: 'buildGranularity', args }, wrapped);
   });
 }
 
