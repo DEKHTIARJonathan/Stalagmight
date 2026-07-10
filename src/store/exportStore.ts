@@ -7,7 +7,7 @@ export type DataFormat = 'csv' | 'json' | 'tml';
 /**
  * Default image-export options. Mirrors the backend `ExportImageOptions::default`
  * (PNG / 300 DPI / threshold 2 / labels on) with colors off — coloring is
- * opt-in and raster-only (SVG stays monochrome).
+ * opt-in and raster-only (SVG stays monochrome). Station labels are opt-in too.
  */
 export const DEFAULT_IMAGE_OPTIONS: ExportImageOptions = {
   format: 'png',
@@ -15,6 +15,11 @@ export const DEFAULT_IMAGE_OPTIONS: ExportImageOptions = {
   branching_threshold: 2,
   show_penetration_labels: true,
   color_mode: 'none',
+  show_station_labels: false,
+  show_section_names: false,
+  show_station_comments: false,
+  show_shot_comments: false,
+  show_shot_data: false,
 };
 
 /**

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useId } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { saveDialog } from '../../utils/fileDialogs';
 import { useProjectStore } from '../../store/projectStore';
@@ -12,6 +12,7 @@ import type { LoadingProgressPayload } from '../../types/loading';
 import type { ExportType, DataFormat } from '../../store/exportStore';
 import { ensureExtension, exportSaveFilters } from '../../utils/fileDialogs';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { ChevronRightIcon } from '../common/icons';
 
 /** Phase label mapping for export phases (matches backend LoadingPhase) */
 const EXPORT_PHASE_LABELS: Record<string, string> = {
@@ -64,6 +65,10 @@ export default function ExportControls({
     useProjectStore();
 
   const [isExporting, setIsExporting] = useState(false);
+  const [labelsOptionsExpanded, setLabelsOptionsExpanded] = useState(false);
+  // Unique per-instance id: ExportControls renders in both the panel and the
+  // dialog, so a fixed id would duplicate in the DOM and break the ARIA link.
+  const labelsRegionId = useId();
   const [exportProgress, setExportProgress] = useState<LoadingProgressPayload | null>(null);
   const [showTmlUnanchoredWarning, setShowTmlUnanchoredWarning] = useState(false);
   const [tmlDiscardedSections, setTmlDiscardedSections] = useState<
@@ -359,50 +364,143 @@ export default function ExportControls({
                 </p>
               </div>
 
-              {/* Customize: what the renderer draws. */}
-              <div className="space-y-2">
-                <label className="block text-sm text-text-secondary">Customize</label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={imageOptions.show_penetration_labels}
-                    onChange={(e) =>
-                      onImageOptionsChange({
-                        ...imageOptions,
-                        show_penetration_labels: e.target.checked,
-                      })
-                    }
-                    data-testid="export-show-labels"
+              {/* Comments & Labels Options: what the renderer draws. Collapsible,
+                  default collapsed (mirrors the app's local-collapse pattern, e.g.
+                  DetailPanel's closures section). */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setLabelsOptionsExpanded(!labelsOptionsExpanded)}
+                  className="flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary w-full text-left"
+                  data-testid="export-labels-options-toggle"
+                  aria-expanded={labelsOptionsExpanded}
+                  aria-controls={labelsRegionId}
+                >
+                  <ChevronRightIcon
+                    size={12}
+                    className={labelsOptionsExpanded ? 'rotate-90 transition-transform' : 'transition-transform'}
                   />
-                  <span>Penetration-distance labels</span>
-                </label>
-                <div className={svgSelected ? 'opacity-50' : ''}>
-                  <label
-                    htmlFor="export-color-mode"
-                    className="block text-sm text-text-secondary mb-1"
+                  <span>Comments &amp; Labels Options</span>
+                </button>
+                {labelsOptionsExpanded && (
+                  <div
+                    className="mt-2 space-y-2"
+                    id={labelsRegionId}
+                    data-testid="export-labels-options-content"
                   >
-                    Color
-                  </label>
-                  <Select
-                    value={imageOptions.color_mode}
-                    onChange={(v) =>
-                      onImageOptionsChange({ ...imageOptions, color_mode: v as ColorMode })
-                    }
-                    disabled={svgSelected}
-                    options={[
-                      { value: 'none', label: 'None (monochrome)' },
-                      { value: 'section', label: 'By section' },
-                      { value: 'depth', label: 'By depth' },
-                      { value: 'distance', label: 'By distance' },
-                    ]}
-                    data-testid="export-color-mode"
-                  />
-                </div>
-                <p className="text-xs text-text-secondary">
-                  {svgSelected
-                    ? 'SVG export is always monochrome. Choose PNG or PDF to color the map.'
-                    : 'Depth / distance gradients match the survey map. Color applies to PNG / PDF.'}
-                </p>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={imageOptions.show_section_names}
+                        onChange={(e) =>
+                          onImageOptionsChange({
+                            ...imageOptions,
+                            show_section_names: e.target.checked,
+                          })
+                        }
+                        data-testid="export-show-section-names"
+                      />
+                      <span>Section names</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={imageOptions.show_station_labels}
+                        onChange={(e) =>
+                          onImageOptionsChange({
+                            ...imageOptions,
+                            show_station_labels: e.target.checked,
+                          })
+                        }
+                        data-testid="export-show-station-labels"
+                      />
+                      <span>Station labels</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={imageOptions.show_station_comments}
+                        onChange={(e) =>
+                          onImageOptionsChange({
+                            ...imageOptions,
+                            show_station_comments: e.target.checked,
+                          })
+                        }
+                        data-testid="export-show-station-comments"
+                      />
+                      <span>Station comments</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={imageOptions.show_shot_comments}
+                        onChange={(e) =>
+                          onImageOptionsChange({
+                            ...imageOptions,
+                            show_shot_comments: e.target.checked,
+                          })
+                        }
+                        data-testid="export-show-shot-comments"
+                      />
+                      <span>Shot comments</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={imageOptions.show_shot_data}
+                        onChange={(e) =>
+                          onImageOptionsChange({
+                            ...imageOptions,
+                            show_shot_data: e.target.checked,
+                          })
+                        }
+                        data-testid="export-show-shot-data"
+                      />
+                      <span>Shot data</span>
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={imageOptions.show_penetration_labels}
+                        onChange={(e) =>
+                          onImageOptionsChange({
+                            ...imageOptions,
+                            show_penetration_labels: e.target.checked,
+                          })
+                        }
+                        data-testid="export-show-labels"
+                      />
+                      <span>Penetration-distance labels</span>
+                    </label>
+                    <div className={svgSelected ? 'opacity-50' : ''}>
+                      <label
+                        htmlFor="export-color-mode"
+                        className="block text-sm text-text-secondary mb-1"
+                      >
+                        Color
+                      </label>
+                      <Select
+                        value={imageOptions.color_mode}
+                        onChange={(v) =>
+                          onImageOptionsChange({ ...imageOptions, color_mode: v as ColorMode })
+                        }
+                        disabled={svgSelected}
+                        options={[
+                          { value: 'none', label: 'None (monochrome)' },
+                          { value: 'section', label: 'By section' },
+                          { value: 'depth', label: 'By depth' },
+                          { value: 'distance', label: 'By distance' },
+                        ]}
+                        data-testid="export-color-mode"
+                      />
+                    </div>
+                    <p className="text-xs text-text-secondary">
+                      {svgSelected
+                        ? 'SVG export is always monochrome. Choose PNG or PDF to color the map.'
+                        : 'Depth / distance gradients match the survey map. Color applies to PNG / PDF.'}
+                    </p>
+                  </div>
+                )}
               </div>
             </>
           )}
