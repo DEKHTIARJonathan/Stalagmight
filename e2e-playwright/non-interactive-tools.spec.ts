@@ -177,10 +177,11 @@ test.describe('Non-interactive tools', () => {
 
       if (!map) return { success: false, error: 'No map' };
 
-      // Get first station feature from hitbox layer to get a valid station ref
-      const features = map.queryRenderedFeatures({ layers: ['survey-stations-hitbox'] });
+      // Get first station feature from the visible stations layer to get a
+      // valid station ref (the dedicated hitbox layers were removed, #mem).
+      const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
       if (features.length === 0) {
-        return { success: false, error: 'No station features in hitbox layer' };
+        return { success: false, error: 'No station features in stations layer' };
       }
 
       const feature = features[0];
