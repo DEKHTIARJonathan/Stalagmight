@@ -12,9 +12,18 @@ import { seedProjectWithSections, type SectionSeed } from './helpers/app';
  * layers were removed (they were full duplicate vertex buckets). Hit-testing now
  * queries the VISIBLE survey-shots / survey-stations layers with a padded probe
  * box that reproduces the same tolerance (shot reach = hit_area/2, station reach
- * = hit_area). The boundary/nearest tests below still pass because that behavior
- * is unchanged; the tests that inspected the removed layers' paint/order/opacity
- * are `test.skip`-ped and should be ported or deleted as a follow-up.
+ * = hit_area), reading config.map.*.hit_area LIVE per query (no paint property, no
+ * async settle). The boundary/nearest tests below cover that behavior directly.
+ *
+ * The old layer-inspection tests have been ported to the CURRENT model:
+ *   - layer order / queryability assert against the visible survey-stations /
+ *     survey-shots layers,
+ *   - the debug show_hitboxes toggle and hit_area sizes now drive ONLY the
+ *     debug-only ghost layers survey-ghost-stations-hitbox (circle) and
+ *     survey-ghost-shots-hitbox (line); those tests assert against the ghost
+ *     layers (an accepted "debug hitboxes are ghost-only now" design decision),
+ *   - the hit_area-behavior test stays behavioral: the same screen point flips
+ *     from hit to miss purely from a live config change.
  */
 
 /**
@@ -92,47 +101,120 @@ const sectionSeeds: SectionSeed[] = [
 ];
 
 /**
- * Helper to get a station's screen position using map.queryRenderedFeatures + map.project().
- * This avoids re-implementing coordinate conversion logic and uses the actual rendered feature coords.
+ * Flatten the merged station features into individual station SCREEN points.
+ *
+ * The visible survey-stations layer now returns MERGED MultiPoint features (one
+ * group per section/color/etc, coordinates = an ARRAY of station points, and NO
+ * per-point stationIndex). So we can't read a `(sectionId, stationIndex)` off a
+ * feature; we extract every individual point and identify a target station
+ * BEHAVIORALLY — by which station a click on that point actually selects. Points
+ * carry no identity here (the click resolves it via the geometry-index resolver).
  */
-async function getStationScreenPosition(
-  page: Page,
-  sectionId: number,
-  stationIndex: number
-): Promise<{ x: number; y: number }> {
-  return page.evaluate(
-    ({ sectionId, stationIndex }) => {
-      const map = (window as unknown as {
-        __stalagmight_map__?: {
-          project: (coords: [number, number]) => { x: number; y: number };
-          queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
-            geometry: { type: string; coordinates: [number, number] };
-            properties: { sectionId: number; stationIndex: number };
-          }>;
-        };
-      }).__stalagmight_map__;
+async function getStationScreenPoints(page: Page): Promise<Array<{ x: number; y: number }>> {
+  return page.evaluate(() => {
+    const map = (window as unknown as {
+      __stalagmight_map__?: {
+        project: (coords: [number, number]) => { x: number; y: number };
+        queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
+          geometry: { type: string; coordinates: number[] | number[][] };
+        }>;
+      };
+    }).__stalagmight_map__;
+    if (!map) throw new Error('Map not available');
 
-      if (!map) throw new Error('Map not available');
-
-      // Query actual rendered features to get their coordinates
-      const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-      const feature = features.find(
-        (f) =>
-          f.properties.sectionId === sectionId &&
-          f.properties.stationIndex === stationIndex
-      );
-
-      if (!feature) {
-        throw new Error(`Station feature not found: ${sectionId}:${stationIndex}`);
+    const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
+    const points: Array<{ x: number; y: number }> = [];
+    for (const f of features) {
+      const raw =
+        f.geometry.type === 'MultiPoint'
+          ? (f.geometry.coordinates as number[][])
+          : [f.geometry.coordinates as number[]];
+      for (const c of raw) {
+        const s = map.project([c[0]!, c[1]!]);
+        points.push({ x: s.x, y: s.y });
       }
+    }
+    return points;
+  });
+}
 
-      // Project the actual feature coordinates to screen space
-      const coords = feature.geometry.coordinates as [number, number];
-      const screenPos = map.project(coords);
-      return { x: screenPos.x, y: screenPos.y };
-    },
-    { sectionId, stationIndex }
-  );
+/**
+ * Flatten the merged shot features into individual shot SEGMENTS (screen space),
+ * plus every station's screen point.
+ *
+ * The visible survey-shots layer now returns MERGED MultiLineString features
+ * (one group per colorIndex/isReference per section; each inner line is one
+ * shot's 2-point segment) with NO per-shot `shotId`. We flatten every inner
+ * segment so a test can pick an isolated shot and identify it behaviorally (by
+ * which shot a click selects). The station points let a caller pick a segment
+ * midpoint that is clear of all station hitboxes.
+ */
+async function getShotSegmentsAndStations(page: Page): Promise<{
+  segments: Array<{ x1: number; y1: number; x2: number; y2: number }>;
+  stations: Array<{ x: number; y: number }>;
+}> {
+  return page.evaluate(() => {
+    const map = (window as unknown as {
+      __stalagmight_map__?: {
+        project: (coords: [number, number]) => { x: number; y: number };
+        queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
+          geometry: { type: string; coordinates: number[] | number[][] | number[][][] };
+        }>;
+      };
+    }).__stalagmight_map__;
+    if (!map) throw new Error('Map not available');
+
+    const shotFeatures = map.queryRenderedFeatures({ layers: ['survey-shots'] });
+    const segments: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+    for (const f of shotFeatures) {
+      const lines: number[][][] =
+        f.geometry.type === 'MultiLineString'
+          ? (f.geometry.coordinates as number[][][])
+          : f.geometry.type === 'LineString'
+            ? [f.geometry.coordinates as number[][]]
+            : [];
+      for (const line of lines) {
+        for (let i = 0; i + 1 < line.length; i++) {
+          const a = map.project([line[i]![0]!, line[i]![1]!]);
+          const b = map.project([line[i + 1]![0]!, line[i + 1]![1]!]);
+          segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+        }
+      }
+    }
+
+    const stationFeatures = map.queryRenderedFeatures({ layers: ['survey-stations'] });
+    const stations: Array<{ x: number; y: number }> = [];
+    for (const f of stationFeatures) {
+      const raw =
+        f.geometry.type === 'MultiPoint'
+          ? (f.geometry.coordinates as number[][])
+          : [f.geometry.coordinates as number[]];
+      for (const c of raw) {
+        const s = map.project([c[0]!, c[1]!]);
+        stations.push({ x: s.x, y: s.y });
+      }
+    }
+    return { segments, stations };
+  });
+}
+
+/** The most isolated point (farthest from every OTHER point). A click on it
+ *  unambiguously resolves to the one station rendered there. */
+function mostIsolatedPoint(points: Array<{ x: number; y: number }>): { x: number; y: number } {
+  let bestIdx = 0;
+  let bestMinOther = -Infinity;
+  for (let i = 0; i < points.length; i++) {
+    let minOther = Infinity;
+    for (let j = 0; j < points.length; j++) {
+      if (i === j) continue;
+      minOther = Math.min(minOther, Math.hypot(points[i]!.x - points[j]!.x, points[i]!.y - points[j]!.y));
+    }
+    if (minOther > bestMinOther) {
+      bestMinOther = minOther;
+      bestIdx = i;
+    }
+  }
+  return points[bestIdx]!;
 }
 
 /**
@@ -260,6 +342,101 @@ async function getLayerOrder(page: Page): Promise<Record<string, number>> {
   });
 }
 
+/**
+ * Read a numeric paint property off a layer (returns 0 if unavailable).
+ * Used to inspect the debug-only ghost hitbox layers' circle-radius / line-width.
+ */
+async function getPaintNumber(page: Page, layerId: string, prop: string): Promise<number> {
+  return page.evaluate(
+    ({ layerId, prop }) => {
+      const map = (window as unknown as {
+        __stalagmight_map__?: { getPaintProperty: (l: string, p: string) => unknown };
+      }).__stalagmight_map__;
+      if (!map) return 0;
+      const value = map.getPaintProperty(layerId, prop);
+      if (typeof value === 'number') return value;
+      if (typeof value === 'string') return Number(value);
+      return 0;
+    },
+    { layerId, prop }
+  );
+}
+
+/**
+ * Toggle debug.map.show_hitboxes via the project store, mirroring how the real
+ * config-reload path updates SurveyLayer (setConfig -> updateDebugVisualization,
+ * which drives the ghost hitbox layer opacity).
+ */
+async function setShowHitboxes(page: Page, value: boolean): Promise<void> {
+  await page.evaluate((show) => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore: {
+          getState: () => { config: { debug: { map: { show_hitboxes: boolean } } } | null };
+          setState: (update: { config: unknown }) => void;
+        };
+      };
+    }).__E2E_TEST__;
+
+    if (!stores) return;
+    const state = stores.projectStore.getState();
+    if (!state.config) return;
+    stores.projectStore.setState({
+      config: {
+        ...state.config,
+        debug: {
+          ...state.config.debug,
+          map: { ...state.config.debug.map, show_hitboxes: show },
+        },
+      },
+    });
+  }, value);
+}
+
+/**
+ * Set the station and/or shot hit_area via the project store. SurveyLayer reads
+ * hit_area LIVE per query for actual hit-testing, and setConfig -> updateHitboxLayers
+ * resizes the debug ghost layers to match, so the ghost radius/width is a reliable
+ * signal that the config change has propagated to the layer.
+ */
+async function setHitAreas(
+  page: Page,
+  values: { station?: number; shot?: number }
+): Promise<void> {
+  await page.evaluate((v) => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore: {
+          getState: () => {
+            config: { map: { station: { hit_area: number }; shot: { hit_area: number } } } | null;
+          };
+          setState: (update: { config: unknown }) => void;
+        };
+      };
+    }).__E2E_TEST__;
+
+    if (!stores) return;
+    const state = stores.projectStore.getState();
+    if (!state.config) return;
+    stores.projectStore.setState({
+      config: {
+        ...state.config,
+        map: {
+          ...state.config.map,
+          station: {
+            ...state.config.map.station,
+            ...(v.station !== undefined ? { hit_area: v.station } : {}),
+          },
+          shot: {
+            ...state.config.map.shot,
+            ...(v.shot !== undefined ? { hit_area: v.shot } : {}),
+          },
+        },
+      },
+    });
+  }, values);
+}
+
 test.describe('Hitbox Detection', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
@@ -270,57 +447,29 @@ test.describe('Hitbox Detection', () => {
   test('station click at hitArea-1 hits, hitArea+1 misses with detail panel visible', async ({ page }) => {
     await createProject(page, 'Hitbox Test Project');
 
-    // Get any station and test hitbox boundaries
-    const testData = await page.evaluate(() => {
-      const map = (window as unknown as {
-        __stalagmight_map__?: {
-          project: (coords: [number, number]) => { x: number; y: number };
-          queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
-            geometry: { type: string; coordinates: [number, number] };
-            properties: { sectionId: number; stationIndex: number };
-          }>;
-        };
-      }).__stalagmight_map__;
+    // Merged station features are MultiPoint with no per-point stationIndex, so
+    // flatten to individual screen points and click the most isolated one — its
+    // center resolves unambiguously to the station rendered there.
+    const points = await getStationScreenPoints(page);
+    expect(points.length).toBeGreaterThan(0);
+    const target = mostIsolatedPoint(points);
 
-      const stores = (window as unknown as {
-        __E2E_TEST__?: {
-          projectStore: { getState: () => { config: { map: { station: { hit_area: number } } } | null } };
-        };
-      }).__E2E_TEST__;
-
-      if (!map || !stores) throw new Error('Map or stores not available');
-
-      const hitArea = stores.projectStore.getState().config?.map?.station?.hit_area ?? 10;
-      const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-      if (features.length === 0) throw new Error('No stations found');
-
-      // Get first station
-      const f = features[0]!;
-      const screenPos = map.project(f.geometry.coordinates as [number, number]);
-
-      return {
-        sectionId: f.properties.sectionId,
-        stationIndex: f.properties.stationIndex,
-        screenPos,
-        hitArea,
-      };
-    });
-
-    const { sectionId, stationIndex, screenPos, hitArea } = testData;
     const canvasBox = await getCanvasBoundingBox(page);
 
     // Ensure select tool is active
     await page.keyboard.press('s');
 
-    // Click directly on station center (should definitely hit)
-    await page.mouse.click(canvasBox.x + screenPos.x, canvasBox.y + screenPos.y);
+    // Click directly on the station center (should definitely hit)
+    await page.mouse.click(canvasBox.x + target.x, canvasBox.y + target.y);
 
-    // Poll for selection to appear
-    const selectionAfterHit = await pollSelectionState(page, (sel) => sel !== null);
+    // Poll for a station selection. Identity is discovered behaviorally (the
+    // resolver picks the station at the clicked point) rather than read up front.
+    const selectionAfterHit = await pollSelectionState(page, (sel) => sel?.type === 'station');
     expect(selectionAfterHit).not.toBeNull();
     expect(selectionAfterHit?.type).toBe('station');
-    expect(selectionAfterHit?.stationRef?.section_id).toBe(sectionId);
-    expect(selectionAfterHit?.stationRef?.station_index).toBe(stationIndex);
+    expect(selectionAfterHit?.stationRef).toBeTruthy();
+    expect(typeof selectionAfterHit?.stationRef?.section_id).toBe('number');
+    expect(typeof selectionAfterHit?.stationRef?.station_index).toBe('number');
 
     // Verify the Detail Panel shows station details
     const detailPanel = page.locator('[data-testid="detail-panel"]');
@@ -339,347 +488,256 @@ test.describe('Hitbox Detection', () => {
   test('overlapping hitboxes select nearest to click', async ({ page }) => {
     await createProject(page, 'Overlap Test Project');
 
-    // Find two stations whose hitboxes actually overlap in screen space
-    const overlapData = await page.evaluate(() => {
-      const map = (window as unknown as {
-        __stalagmight_map__?: {
-          project: (coords: [number, number]) => { x: number; y: number };
-          queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
-            geometry: { type: string; coordinates: [number, number] };
-            properties: { sectionId: number; stationIndex: number };
-          }>;
-        };
-      }).__stalagmight_map__;
+    // Flatten the merged MultiPoint stations to individual screen points, then
+    // look for a pair whose hit circles overlap in screen space (< 2*hitArea).
+    const points = await getStationScreenPoints(page);
+    expect(points.length).toBeGreaterThanOrEqual(2);
+    const hitArea = await getStationHitArea(page);
 
-      const stores = (window as unknown as {
-        __E2E_TEST__?: {
-          projectStore: { getState: () => { config: { map: { station: { hit_area: number } } } | null } };
-        };
-      }).__E2E_TEST__;
-
-      if (!map || !stores) throw new Error('Map or stores not available');
-
-      const hitArea = stores.projectStore.getState().config?.map?.station?.hit_area ?? 10;
-      const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-      if (features.length < 2) throw new Error('Need at least 2 stations');
-
-      // Get all station positions
-      const stationsWithPos = features.map((f) => ({
-        sectionId: f.properties.sectionId,
-        stationIndex: f.properties.stationIndex,
-        screenPos: map.project(f.geometry.coordinates as [number, number]),
-      }));
-
-      // Find two stations that actually overlap (distance < 2 * hitArea)
-      for (let i = 0; i < stationsWithPos.length; i++) {
-        for (let j = i + 1; j < stationsWithPos.length; j++) {
-          const a = stationsWithPos[i]!;
-          const b = stationsWithPos[j]!;
-          const dx = b.screenPos.x - a.screenPos.x;
-          const dy = b.screenPos.y - a.screenPos.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-
-          if (distance < 2 * hitArea && distance > 0) {
-            return {
-              stationA: a,
-              stationB: b,
-              distance,
-              hitArea,
-              safeOffset: 0.5,
-            };
-          }
+    let pair: { a: { x: number; y: number }; b: { x: number; y: number } } | null = null;
+    for (let i = 0; i < points.length && !pair; i++) {
+      for (let j = i + 1; j < points.length; j++) {
+        const d = Math.hypot(points[i]!.x - points[j]!.x, points[i]!.y - points[j]!.y);
+        if (d > 0 && d < 2 * hitArea) {
+          pair = { a: points[i]!, b: points[j]! };
+          break;
         }
       }
+    }
 
-      // No overlapping stations found - return first two and let test handle it
-      const a = stationsWithPos[0]!;
-      const b = stationsWithPos[1]!;
-      const dx = b.screenPos.x - a.screenPos.x;
-      const dy = b.screenPos.y - a.screenPos.y;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-
-      return {
-        stationA: a,
-        stationB: b,
-        distance,
-        hitArea,
-        safeOffset: 0.5,
-        noOverlap: true, // Flag that no overlap was found
-      };
-    });
-
-    const { stationA, stationB, distance, hitArea, safeOffset } = overlapData;
     const canvasBox = await getCanvasBoundingBox(page);
-    const hasOverlap = distance < 2 * hitArea;
+    await page.keyboard.press('s');
 
-    // If no overlap found, the test is not applicable - still verify basic selection works
-    if (!hasOverlap) {
-      // Click on stationA directly
-      await page.keyboard.press('s');
-      await page.mouse.click(canvasBox.x + stationA.screenPos.x, canvasBox.y + stationA.screenPos.y);
-      const selection = await pollSelectionState(page, (sel) => sel !== null);
+    // No overlapping pair on this seed's fitted zoom — not applicable, but still
+    // verify a station-center click selects a station (matches the old fallback).
+    if (!pair) {
+      const solo = mostIsolatedPoint(points);
+      await page.mouse.click(canvasBox.x + solo.x, canvasBox.y + solo.y);
+      const selection = await pollSelectionState(page, (sel) => sel?.type === 'station');
       expect(selection).not.toBeNull();
       expect(selection?.type).toBe('station');
-      // Test passes - we verified station selection works, even if no overlap scenario available
       return;
     }
 
-    // Ensure select tool is active
-    await page.keyboard.press('s');
+    // Identify each overlapping station BEHAVIORALLY: a click on a point's exact
+    // center is distance 0 to its own station and > 0 to the other, so the
+    // nearest-wins resolver selects that station.
+    await page.mouse.click(canvasBox.x + pair.a.x, canvasBox.y + pair.a.y);
+    const selA = await pollSelectionState(page, (sel) => sel?.type === 'station');
+    const targetA = selA?.stationRef;
+    expect(targetA).toBeTruthy();
+    await page.keyboard.press('Escape');
+    await pollSelectionState(page, (sel) => sel === null);
 
-    // Click at midpoint + tiny epsilon toward stationA
-    const midX = (stationA.screenPos.x + stationB.screenPos.x) / 2;
-    const midY = (stationA.screenPos.y + stationB.screenPos.y) / 2;
-    const dx = stationA.screenPos.x - midX;
-    const dy = stationA.screenPos.y - midY;
-    const dirLen = Math.sqrt(dx * dx + dy * dy);
-    const offsetX = dirLen > 0 ? (dx / dirLen) * safeOffset : 0;
-    const offsetY = dirLen > 0 ? (dy / dirLen) * safeOffset : 0;
-    const clickX = midX + offsetX;
-    const clickY = midY + offsetY;
+    await page.mouse.click(canvasBox.x + pair.b.x, canvasBox.y + pair.b.y);
+    const selB = await pollSelectionState(page, (sel) => sel?.type === 'station');
+    const targetB = selB?.stationRef;
+    expect(targetB).toBeTruthy();
+    // The two overlapping points are distinct stations.
+    expect(
+      targetA!.section_id !== targetB!.section_id || targetA!.station_index !== targetB!.station_index
+    ).toBe(true);
+    await page.keyboard.press('Escape');
+    await pollSelectionState(page, (sel) => sel === null);
+
+    // Click at the midpoint nudged toward A. The nearest-to-click resolver must
+    // select one of the two overlapping stations (A or B) — never something else.
+    const midX = (pair.a.x + pair.b.x) / 2;
+    const midY = (pair.a.y + pair.b.y) / 2;
+    const dx = pair.a.x - midX;
+    const dy = pair.a.y - midY;
+    const dirLen = Math.hypot(dx, dy) || 1;
+    const clickX = midX + (dx / dirLen) * 0.5;
+    const clickY = midY + (dy / dirLen) * 0.5;
 
     await page.mouse.click(canvasBox.x + clickX, canvasBox.y + clickY);
-
-    // Poll for selection - should select one of the two overlapping stations
-    const selection = await pollSelectionState(page, (sel) => sel !== null);
+    const selection = await pollSelectionState(page, (sel) => sel?.type === 'station');
     expect(selection).not.toBeNull();
     expect(selection?.type).toBe('station');
 
-    // Verify it selected ONE of the overlapping stations (either A or B is valid,
-    // as long as the selection logic works - the exact "nearest" depends on implementation)
     const selectedA =
-      selection?.stationRef?.section_id === stationA.sectionId &&
-      selection?.stationRef?.station_index === stationA.stationIndex;
+      selection?.stationRef?.section_id === targetA!.section_id &&
+      selection?.stationRef?.station_index === targetA!.station_index;
     const selectedB =
-      selection?.stationRef?.section_id === stationB.sectionId &&
-      selection?.stationRef?.station_index === stationB.stationIndex;
+      selection?.stationRef?.section_id === targetB!.section_id &&
+      selection?.stationRef?.station_index === targetB!.station_index;
     expect(selectedA || selectedB).toBe(true);
   });
 
-  // SKIP (#mem budget): the dedicated survey-*-hitbox layers were removed;
-  // this test inspected their paint/order/existence. Hit-testing now uses a
-  // padded query on the visible layers (behavior covered by the shot/station
-  // boundary tests here + the hitProbe unit tests). Port or delete as follow-up.
-  test.skip('layer order has station-hitbox above shot-hitbox', async ({ page }) => {
+  // Ported (#mem budget): the dedicated survey-*-hitbox layers were removed, so
+  // this now asserts the visible hit-test layers' relative order. Stations render
+  // above shots so an overlapping click resolves the station first.
+  test('station layer renders above shot layer', async ({ page }) => {
     await createProject(page, 'Layer Order Test');
 
-    // Poll for layer radius to be ready (ensures layer is present)
+    // Poll for the visible survey layers to be present in the style.
+    await expect.poll(async () => {
+      const order = await getLayerOrder(page);
+      return order['survey-stations'] !== undefined && order['survey-shots'] !== undefined;
+    }, { timeout: 10000 }).toBe(true);
+
+    const layerOrder = await getLayerOrder(page);
+
+    // Both visible hit-test layers exist.
+    expect(layerOrder['survey-stations']).toBeDefined();
+    expect(layerOrder['survey-shots']).toBeDefined();
+
+    // Stations render ABOVE shots (higher index = rendered later = on top), which
+    // is what gives stations click priority over overlapping shots.
+    expect(layerOrder['survey-stations']).toBeGreaterThan(layerOrder['survey-shots']!);
+  });
+
+  // Ported (#mem budget): the invisible-but-queryable opacity trick is gone. The
+  // padded-probe hit model queries the VISIBLE survey-stations / survey-shots
+  // layers, so what matters now is that both layers return rendered features.
+  test('visible hit layers are queryable for hit detection', async ({ page }) => {
+    await createProject(page, 'Opacity Test');
+
+    // Both visible hit-test layers must be queryable (return rendered features)
+    // for the padded-probe candidate gate to find anything. Poll until both are.
     await expect.poll(async () => {
       return page.evaluate(() => {
         const map = (window as unknown as {
-          __stalagmight_map__?: {
-            getPaintProperty: (layer: string, prop: string) => unknown;
-          };
+          __stalagmight_map__?: { queryRenderedFeatures: (opts: { layers: string[] }) => unknown[] };
         }).__stalagmight_map__;
         if (!map) return 0;
-        const radius = map.getPaintProperty('survey-stations-hitbox', 'circle-radius');
-        if (typeof radius === 'number') return radius;
-        if (typeof radius === 'string') return Number(radius);
-        return 0;
+        try {
+          const stations = map.queryRenderedFeatures({ layers: ['survey-stations'] }).length;
+          const shots = map.queryRenderedFeatures({ layers: ['survey-shots'] }).length;
+          return Math.min(stations, shots);
+        } catch {
+          return 0;
+        }
       });
     }, { timeout: 10000 }).toBeGreaterThan(0);
 
-    // Get layer order from the map style
-    const layerOrder = await getLayerOrder(page);
+    const counts = await page.evaluate(() => {
+      const map = (window as unknown as {
+        __stalagmight_map__?: { queryRenderedFeatures: (opts: { layers: string[] }) => unknown[] };
+      }).__stalagmight_map__;
+      if (!map) return { stations: 0, shots: 0 };
+      return {
+        stations: map.queryRenderedFeatures({ layers: ['survey-stations'] }).length,
+        shots: map.queryRenderedFeatures({ layers: ['survey-shots'] }).length,
+      };
+    });
 
-    // Verify station hitbox layer exists
-    expect(layerOrder['survey-stations-hitbox']).toBeDefined();
-
-    // Verify shot hitbox layer exists
-    expect(layerOrder['survey-shots-hitbox']).toBeDefined();
-
-    // Station hitbox should be ABOVE shot hitbox (higher index = rendered later = on top)
-    expect(layerOrder['survey-stations-hitbox']).toBeGreaterThan(layerOrder['survey-shots-hitbox']);
-  });
-
-  // SKIP (#mem budget): the dedicated survey-*-hitbox layers were removed;
-  // this test inspected their paint/order/existence. Hit-testing now uses a
-  // padded query on the visible layers (behavior covered by the shot/station
-  // boundary tests here + the hitProbe unit tests). Port or delete as follow-up.
-  test.skip('hitbox layers have correct opacity for click detection', async ({ page }) => {
-    await createProject(page, 'Opacity Test');
-
-    // Poll for layers to be ready
-    await expect.poll(async () => {
-      const order = await getLayerOrder(page);
-      return order['survey-stations-hitbox'];
-    }).toBeDefined();
-
-    // Verify hitbox layers have tiny non-zero opacity (required for queryRenderedFeatures)
-    const stationOpacity = await getHitboxLayerOpacity(page, 'survey-stations-hitbox');
-    const shotOpacity = await getHitboxLayerOpacity(page, 'survey-shots-hitbox');
-
-    // Should be very small but > 0 (0.001 per implementation)
-    expect(stationOpacity).toBeGreaterThan(0);
-    expect(stationOpacity).toBeLessThan(0.01);
-    expect(shotOpacity).toBeGreaterThan(0);
-    expect(shotOpacity).toBeLessThan(0.01);
+    expect(counts.stations).toBeGreaterThan(0);
+    expect(counts.shots).toBeGreaterThan(0);
   });
 
   test('shot click detection at hitArea boundaries', async ({ page }) => {
     await createProject(page, 'Shot Hitbox Test');
 
-    // Get shot info and find a click point on the shot that's far from all stations
-    const shotInfo = await page.evaluate(() => {
-      const map = (window as unknown as {
-        __stalagmight_map__?: {
-          project: (coords: [number, number]) => { x: number; y: number };
-          queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
-            geometry: { type: string; coordinates: [number, number] | [number, number][] };
-            properties: Record<string, unknown>;
-          }>;
-        };
-      }).__stalagmight_map__;
+    // Merged shots are MultiLineString (one inner line per shot, no per-shot
+    // shotId). Flatten to individual segments + station points, then pick a
+    // segment whose midpoint is clear of every station hitbox.
+    const { segments, stations } = await getShotSegmentsAndStations(page);
+    expect(segments.length).toBeGreaterThan(0);
 
+    const config = await page.evaluate(() => {
       const stores = (window as unknown as {
         __E2E_TEST__?: {
           projectStore: {
             getState: () => {
-              config: {
-                map: {
-                  shot: { hit_area: number };
-                  station: { hit_area: number };
-                };
-              } | null;
+              config: { map: { shot: { hit_area: number }; station: { hit_area: number } } } | null;
             };
           };
         };
       }).__E2E_TEST__;
+      const c = stores?.projectStore.getState().config;
+      return { shotHitArea: c?.map?.shot?.hit_area ?? 8, stationHitArea: c?.map?.station?.hit_area ?? 10 };
+    });
+    const { shotHitArea, stationHitArea } = config;
 
-      if (!map || !stores) throw new Error('Map or stores not available');
-
-      const config = stores.projectStore.getState().config;
-      const shotHitArea = config?.map?.shot?.hit_area ?? 8;
-      const stationHitArea = config?.map?.station?.hit_area ?? 10;
-
-      const shots = map.queryRenderedFeatures({ layers: ['survey-shots'] });
-      const stations = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-
-      if (shots.length === 0) throw new Error('No shots found');
-
-      // Get all station positions
-      const stationPositions = stations.map((f) => {
-        const coords = f.geometry.coordinates as [number, number];
-        return map.project(coords);
-      });
-
-      // Find a point on any shot that's far from all stations
-      for (const shot of shots) {
-        if (shot.geometry.type !== 'LineString') continue;
-        const coords = shot.geometry.coordinates as [number, number][];
-        if (coords.length < 2) continue;
-
-        const start = map.project(coords[0]!);
-        const end = map.project(coords[1]!);
-        const dx = end.x - start.x;
-        const dy = end.y - start.y;
-        const len = Math.sqrt(dx * dx + dy * dy);
-
-        if (len < 20) continue; // Need reasonable length
-
-        // Try points along the shot (at 30%, 50%, 70% of length)
-        for (const t of [0.3, 0.5, 0.7]) {
-          const pointX = start.x + dx * t;
-          const pointY = start.y + dy * t;
-
-          // Check distance to all stations
-          let minStationDist = Infinity;
-          for (const sp of stationPositions) {
-            const sdx = pointX - sp.x;
-            const sdy = pointY - sp.y;
-            const dist = Math.sqrt(sdx * sdx + sdy * sdy);
-            if (dist < minStationDist) minStationDist = dist;
-          }
-
-          // Need to be far enough from stations (station hitArea + shot hitArea + margin)
-          if (minStationDist > stationHitArea + shotHitArea / 2 + 5) {
-            // Perpendicular vector (normalized)
-            const perpX = len > 0 ? -dy / len : 0;
-            const perpY = len > 0 ? dx / len : -1;
-
-            return {
-              sectionId: shot.properties.sectionId as number,
-              shotId: shot.properties.shotId as number,
-              clickPoint: { x: pointX, y: pointY },
-              perpendicular: { x: perpX, y: perpY },
-              shotHitArea,
-              minStationDist,
-            };
-          }
+    // Find a long-enough segment with a click point (30/50/70%) far from all stations.
+    let pick: {
+      clickX: number;
+      clickY: number;
+      perpX: number;
+      perpY: number;
+      minStationDist: number;
+    } | null = null;
+    for (const seg of segments) {
+      const dx = seg.x2 - seg.x1;
+      const dy = seg.y2 - seg.y1;
+      const len = Math.hypot(dx, dy);
+      if (len < 20) continue;
+      for (const t of [0.5, 0.3, 0.7]) {
+        const px = seg.x1 + dx * t;
+        const py = seg.y1 + dy * t;
+        let minStationDist = Infinity;
+        for (const s of stations) minStationDist = Math.min(minStationDist, Math.hypot(px - s.x, py - s.y));
+        if (minStationDist > stationHitArea + shotHitArea / 2 + 5) {
+          pick = { clickX: px, clickY: py, perpX: -dy / len, perpY: dx / len, minStationDist };
+          break;
         }
       }
+      if (pick) break;
+    }
 
-      // If we can't find a safe point, return first shot midpoint and let test handle it
-      const f = shots[0]!;
-      if (f.geometry.type !== 'LineString') throw new Error('Invalid geometry');
-      const coords = f.geometry.coordinates as [number, number][];
-      const start = map.project(coords[0]!);
-      const end = map.project(coords[1]!);
-      const dx = end.x - start.x;
-      const dy = end.y - start.y;
-      const len = Math.sqrt(dx * dx + dy * dy);
-      const perpX = len > 0 ? -dy / len : 0;
-      const perpY = len > 0 ? dx / len : -1;
-
-      return {
-        sectionId: f.properties.sectionId as number,
-        shotId: f.properties.shotId as number,
-        clickPoint: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
-        perpendicular: { x: perpX, y: perpY },
-        shotHitArea,
-        minStationDist: 0, // Indicates we couldn't find a safe point
+    // Fallback: first long-enough segment's midpoint (may be near a station).
+    if (!pick) {
+      const seg = segments.find((s) => Math.hypot(s.x2 - s.x1, s.y2 - s.y1) >= 20) ?? segments[0]!;
+      const dx = seg.x2 - seg.x1;
+      const dy = seg.y2 - seg.y1;
+      const len = Math.hypot(dx, dy) || 1;
+      pick = {
+        clickX: (seg.x1 + seg.x2) / 2,
+        clickY: (seg.y1 + seg.y2) / 2,
+        perpX: -dy / len,
+        perpY: dx / len,
+        minStationDist: 0,
       };
-    });
+    }
 
-    const { sectionId, shotId, clickPoint, perpendicular, shotHitArea, minStationDist } = shotInfo;
     const canvasBox = await getCanvasBoundingBox(page);
-
-    // If we couldn't find a point far from stations, note this and adjust expectations
-    const safeFromStations = minStationDist > 15;
+    const safeFromStations = pick.minStationDist > 15;
 
     // Ensure select tool is active
     await page.keyboard.press('s');
 
-    // Click at shotHitArea/2 - 1 perpendicular from shot line (should hit)
+    // Click just INSIDE the shot reach (hit_area/2 - 1 perpendicular) → hits.
     const hitOffset = shotHitArea / 2 - 1;
-    const hitX = canvasBox.x + clickPoint.x + perpendicular.x * hitOffset;
-    const hitY = canvasBox.y + clickPoint.y + perpendicular.y * hitOffset;
+    await page.mouse.click(
+      canvasBox.x + pick.clickX + pick.perpX * hitOffset,
+      canvasBox.y + pick.clickY + pick.perpY * hitOffset
+    );
 
-    await page.mouse.click(hitX, hitY);
-
-    // Poll for selection
     const selectionAfterHit = await pollSelectionState(page, (sel) => sel !== null);
     expect(selectionAfterHit).not.toBeNull();
 
+    // Identify the target shot behaviorally (merged features carry no per-shot id).
+    let targetShot: { sectionId?: number; shotId?: number } | null = null;
     if (safeFromStations) {
-      // Should have selected the shot
+      // Far from every station → the hit must resolve to the shot.
       expect(selectionAfterHit?.type).toBe('shot');
-      expect(selectionAfterHit?.sectionId).toBe(sectionId);
-      expect(selectionAfterHit?.shotId).toBe(shotId);
+      targetShot = { sectionId: selectionAfterHit?.sectionId, shotId: selectionAfterHit?.shotId };
     } else {
-      // May have selected a station (they have priority) - that's OK
+      // May have selected a station (they have priority) - that's OK.
       expect(['station', 'shot']).toContain(selectionAfterHit?.type);
+      if (selectionAfterHit?.type === 'shot') {
+        targetShot = { sectionId: selectionAfterHit.sectionId, shotId: selectionAfterHit.shotId };
+      }
     }
 
     // Clear selection
     await page.keyboard.press('Escape');
     await pollSelectionState(page, (sel) => sel === null);
 
-    // Click at shotHitArea/2 + 1 perpendicular from shot line (should miss shot)
+    // Click just OUTSIDE the shot reach (hit_area/2 + 1 perpendicular) → must NOT
+    // select the target shot (may select a station / nothing / a different shot).
     const missOffset = shotHitArea / 2 + 1;
-    const missX = canvasBox.x + clickPoint.x + perpendicular.x * missOffset;
-    const missY = canvasBox.y + clickPoint.y + perpendicular.y * missOffset;
+    await page.mouse.click(
+      canvasBox.x + pick.clickX + pick.perpX * missOffset,
+      canvasBox.y + pick.clickY + pick.perpY * missOffset
+    );
 
-    await page.mouse.click(missX, missY);
-
-    // Verify miss from shot - clicking at shotHitArea/2 + 1 should NOT select THIS shot
-    // (it may select a station or nothing, but not this specific shot)
     const selectionAfterMiss = await getSelectionState(page);
-    if (selectionAfterMiss?.type === 'shot') {
-      // If a shot was selected, it should NOT be our target shot
+    if (selectionAfterMiss?.type === 'shot' && targetShot) {
       expect(
-        selectionAfterMiss.sectionId !== sectionId ||
-        selectionAfterMiss.shotId !== shotId
+        selectionAfterMiss.sectionId !== targetShot.sectionId ||
+        selectionAfterMiss.shotId !== targetShot.shotId
       ).toBe(true);
     }
     // If null or station, that's also valid - we missed the shot
@@ -693,133 +751,73 @@ test.describe('Debug Hitbox Visualization', () => {
     await page.waitForSelector('[data-testid="global-view"]');
   });
 
-  // SKIP (#mem budget): the dedicated survey-*-hitbox layers were removed;
-  // this test inspected their paint/order/existence. Hit-testing now uses a
-  // padded query on the visible layers (behavior covered by the shot/station
-  // boundary tests here + the hitProbe unit tests). Port or delete as follow-up.
-  test.skip('hitbox layers exist with correct initial opacity', async ({ page }) => {
-    // This test verifies the initial state where hitboxes are nearly invisible
+  // Ported (#mem budget): the debug show_hitboxes toggle now drives ONLY the
+  // debug-only ghost hitbox layers (an accepted "ghost-only debug hitboxes"
+  // decision). This asserts they exist and are fully hidden by default.
+  test('ghost hitbox layers exist and are hidden by default', async ({ page }) => {
     await createProject(page, 'Debug Hitbox Test');
 
-    // Poll for layers to be ready
+    // The debug-only ghost hitbox layers exist regardless of ghost source data.
     await expect.poll(async () => {
       const order = await getLayerOrder(page);
-      return order['survey-stations-hitbox'];
-    }).toBeDefined();
+      return (
+        order['survey-ghost-stations-hitbox'] !== undefined &&
+        order['survey-ghost-shots-hitbox'] !== undefined
+      );
+    }, { timeout: 10000 }).toBe(true);
 
-    // Verify initial state: hitbox layers have tiny opacity (not fully visible)
-    const stationOpacity = await getHitboxLayerOpacity(page, 'survey-stations-hitbox');
-    expect(stationOpacity).toBeGreaterThan(0);
-    expect(stationOpacity).toBeLessThan(0.01);
-
-    // Verify the layers exist and are queryable (essential for click detection)
     const layerOrder = await getLayerOrder(page);
-    expect(layerOrder['survey-stations-hitbox']).toBeDefined();
-    expect(layerOrder['survey-shots-hitbox']).toBeDefined();
+    expect(layerOrder['survey-ghost-stations-hitbox']).toBeDefined();
+    expect(layerOrder['survey-ghost-shots-hitbox']).toBeDefined();
+
+    // With debug.map.show_hitboxes at its default (false) the ghost layers are
+    // fully hidden (opacity 0), so they never render in normal operation.
+    const stationOpacity = await getHitboxLayerOpacity(page, 'survey-ghost-stations-hitbox');
+    const shotOpacity = await getHitboxLayerOpacity(page, 'survey-ghost-shots-hitbox');
+    expect(stationOpacity).toBe(0);
+    expect(shotOpacity).toBe(0);
   });
 
-  // SKIP (#mem budget): the dedicated survey-*-hitbox layers were removed;
-  // this test inspected their paint/order/existence. Hit-testing now uses a
-  // padded query on the visible layers (behavior covered by the shot/station
-  // boundary tests here + the hitProbe unit tests). Port or delete as follow-up.
-  test.skip('hitbox opacity changes when debug.map.show_hitboxes config changes', async ({ page }) => {
+  // Ported (#mem budget): retargeted to the debug-only ghost hitbox layers, which
+  // are what the show_hitboxes toggle now drives (updateDebugVisualization sets
+  // their opacity to 1 when enabled, 0 when disabled).
+  test('hitbox opacity changes when debug.map.show_hitboxes config changes', async ({ page }) => {
     await createProject(page, 'Hitbox Visibility Toggle');
 
-    // Poll for layers to be ready
+    // Poll for the ghost hitbox layers to be ready.
     await expect.poll(async () => {
       const order = await getLayerOrder(page);
-      return order['survey-stations-hitbox'];
-    }).toBeDefined();
+      return order['survey-ghost-stations-hitbox'] !== undefined;
+    }, { timeout: 10000 }).toBe(true);
 
-    // Verify initial opacity is near-invisible
-    const initialOpacity = await getHitboxLayerOpacity(page, 'survey-stations-hitbox');
-    expect(initialOpacity).toBeLessThan(0.01);
+    // Default (show_hitboxes false): ghost hitbox layers are hidden.
+    expect(await getHitboxLayerOpacity(page, 'survey-ghost-stations-hitbox')).toBe(0);
+    expect(await getHitboxLayerOpacity(page, 'survey-ghost-shots-hitbox')).toBe(0);
 
-    // Simulate config reload with show_hitboxes: true via store update
-    // This tests the SurveyLayer's response to config changes
-    await page.evaluate(() => {
-      const stores = (window as unknown as {
-        __E2E_TEST__?: {
-          projectStore: {
-            getState: () => {
-              config: { debug: { map: { show_hitboxes: boolean } } } | null;
-            };
-            setState: (update: Partial<{
-              config: { debug: { map: { show_hitboxes: boolean } } } | null;
-            }>) => void;
-          };
-        };
-      }).__E2E_TEST__;
+    // Enable the debug toggle via the store; SurveyLayer.setConfig re-runs
+    // updateDebugVisualization, which raises the ghost layer opacity to 1.
+    await setShowHitboxes(page, true);
 
-      if (stores) {
-        const state = stores.projectStore.getState();
-        if (state.config) {
-          // Update config with show_hitboxes: true
-          stores.projectStore.setState({
-            config: {
-              ...state.config,
-              debug: {
-                ...state.config.debug,
-                map: {
-                  ...state.config.debug.map,
-                  show_hitboxes: true,
-                },
-              },
-            } as typeof state.config,
-          });
-        }
-      }
-    });
-
-    // Wait for layers to update (SurveyLayer watches config changes)
     await expect.poll(
-      async () => getHitboxLayerOpacity(page, 'survey-stations-hitbox'),
+      async () => getHitboxLayerOpacity(page, 'survey-ghost-stations-hitbox'),
+      { timeout: 5000 }
+    ).toBe(1);
+    await expect.poll(
+      async () => getHitboxLayerOpacity(page, 'survey-ghost-shots-hitbox'),
       { timeout: 5000 }
     ).toBe(1);
 
-    // Verify opacity is now 1 (fully visible)
-    const enabledOpacity = await getHitboxLayerOpacity(page, 'survey-stations-hitbox');
-    expect(enabledOpacity).toBe(1);
+    // Disable it again; opacity returns to 0.
+    await setShowHitboxes(page, false);
 
-    // Reset config to show_hitboxes: false
-    await page.evaluate(() => {
-      const stores = (window as unknown as {
-        __E2E_TEST__?: {
-          projectStore: {
-            getState: () => {
-              config: { debug: { map: { show_hitboxes: boolean } } } | null;
-            };
-            setState: (update: Partial<{
-              config: { debug: { map: { show_hitboxes: boolean } } } | null;
-            }>) => void;
-          };
-        };
-      }).__E2E_TEST__;
-
-      if (stores) {
-        const state = stores.projectStore.getState();
-        if (state.config) {
-          stores.projectStore.setState({
-            config: {
-              ...state.config,
-              debug: {
-                ...state.config.debug,
-                map: {
-                  ...state.config.debug.map,
-                  show_hitboxes: false,
-                },
-              },
-            } as typeof state.config,
-          });
-        }
-      }
-    });
-
-    // Wait for opacity to return to near-invisible
     await expect.poll(
-      async () => getHitboxLayerOpacity(page, 'survey-stations-hitbox'),
+      async () => getHitboxLayerOpacity(page, 'survey-ghost-stations-hitbox'),
       { timeout: 5000 }
-    ).toBeLessThan(0.01);
+    ).toBe(0);
+    await expect.poll(
+      async () => getHitboxLayerOpacity(page, 'survey-ghost-shots-hitbox'),
+      { timeout: 5000 }
+    ).toBe(0);
   });
 });
 
@@ -830,157 +828,93 @@ test.describe('Config Reload Effects', () => {
     await page.waitForSelector('[data-testid="global-view"]');
   });
 
-  // SKIP (#mem budget): the dedicated survey-*-hitbox layers were removed;
-  // this test inspected their paint/order/existence. Hit-testing now uses a
-  // padded query on the visible layers (behavior covered by the shot/station
-  // boundary tests here + the hitProbe unit tests). Port or delete as follow-up.
-  test.skip('hitbox layer radius reflects config hit_area value', async ({ page }) => {
+  // Ported (#mem budget): retargeted to the ghost station hitbox layer, whose
+  // circle-radius updateHitboxLayers() sizes to config.map.station.hit_area
+  // (independent of the show_hitboxes toggle).
+  test('hitbox layer radius reflects config hit_area value', async ({ page }) => {
     await createProject(page, 'Config Hitbox Test');
 
-    // Poll for layers to be ready
+    // Poll for the ghost station hitbox layer to be ready.
     await expect.poll(async () => {
       const order = await getLayerOrder(page);
-      return order['survey-stations-hitbox'];
-    }).toBeDefined();
+      return order['survey-ghost-stations-hitbox'] !== undefined;
+    }, { timeout: 10000 }).toBe(true);
 
     // Get the current hitArea from config
     const hitArea = await getStationHitArea(page);
     expect(hitArea).toBe(10); // Mock config default
 
-    // Verify the hitbox layer circle-radius matches the config
-    const layerRadius = await page.evaluate(() => {
-      const map = (window as unknown as {
-        __stalagmight_map__?: {
-          getPaintProperty: (layer: string, prop: string) => unknown;
-        };
-      }).__stalagmight_map__;
-
-      if (!map) return 0;
-      const radius = map.getPaintProperty('survey-stations-hitbox', 'circle-radius');
-      if (typeof radius === 'number') return radius;
-      if (typeof radius === 'string') return Number(radius);
-      return 0;
-    });
-
-    // The hitbox layer radius should equal the config hit_area
+    // The ghost station hitbox circle-radius should equal the config hit_area.
+    const layerRadius = await getPaintNumber(page, 'survey-ghost-stations-hitbox', 'circle-radius');
     expect(layerRadius).toBeCloseTo(hitArea, 2);
   });
 
-  // SKIP (#mem budget): the dedicated survey-*-hitbox layers were removed;
-  // this test inspected their paint/order/existence. Hit-testing now uses a
-  // padded query on the visible layers (behavior covered by the shot/station
-  // boundary tests here + the hitProbe unit tests). Port or delete as follow-up.
-  test.skip('hitbox layer sizes update when config hit_area changes', async ({ page }) => {
+  // Ported (#mem budget): retargeted to the ghost hitbox layers. A hit_area config
+  // change flows through setConfig -> updateHitboxLayers, resizing the ghost
+  // station circle-radius and ghost shot line-width.
+  test('hitbox layer sizes update when config hit_area changes', async ({ page }) => {
     await createProject(page, 'Config Reload Hitbox Test');
 
-    // Poll for layers to be ready
+    // Poll for the ghost hitbox layers to be ready.
     await expect.poll(async () => {
       const order = await getLayerOrder(page);
-      return order['survey-stations-hitbox'];
-    }).toBeDefined();
+      return order['survey-ghost-stations-hitbox'] !== undefined;
+    }, { timeout: 10000 }).toBe(true);
 
-    // Verify initial hitbox radius is 10 (default)
-    const initialRadius = await page.evaluate(() => {
-      const map = (window as unknown as {
-        __stalagmight_map__?: {
-          getPaintProperty: (layer: string, prop: string) => number;
-        };
-      }).__stalagmight_map__;
-      return map?.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
-    });
-    expect(initialRadius).toBe(10);
+    // Defaults from the mock config: station hit_area 10, shot hit_area 8.
+    expect(await getPaintNumber(page, 'survey-ghost-stations-hitbox', 'circle-radius')).toBe(10);
+    expect(await getPaintNumber(page, 'survey-ghost-shots-hitbox', 'line-width')).toBe(8);
 
-    // Update config via store to simulate config reload
-    await page.evaluate(() => {
-      const stores = (window as unknown as {
-        __E2E_TEST__?: {
-          projectStore: {
-            getState: () => {
-              config: { map: { station: { hit_area: number }; shot: { hit_area: number } } } | null;
-            };
-            setState: (update: Partial<{
-              config: { map: { station: { hit_area: number }; shot: { hit_area: number } } } | null;
-            }>) => void;
-          };
-        };
-      }).__E2E_TEST__;
+    // Update both hit areas via the store (simulates a config reload).
+    await setHitAreas(page, { station: 15, shot: 12 });
 
-      if (stores) {
-        const state = stores.projectStore.getState();
-        if (state.config) {
-          stores.projectStore.setState({
-            config: {
-              ...state.config,
-              map: {
-                ...state.config.map,
-                station: {
-                  ...state.config.map.station,
-                  hit_area: 15,
-                },
-                shot: {
-                  ...state.config.map.shot,
-                  hit_area: 12,
-                },
-              },
-            } as typeof state.config,
-          });
-        }
-      }
-    });
-
-    // Wait for layers to update (SurveyLayer watches config changes)
+    // Ghost station radius follows the new station hit_area.
     await expect.poll(
-      async () => {
-        return page.evaluate(() => {
-          const map = (window as unknown as {
-            __stalagmight_map__?: {
-              getPaintProperty: (layer: string, prop: string) => number;
-            };
-          }).__stalagmight_map__;
-          return map?.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
-        });
-      },
+      async () => getPaintNumber(page, 'survey-ghost-stations-hitbox', 'circle-radius'),
       { timeout: 5000 }
     ).toBe(15);
 
-    // Verify station hitbox radius updated
-    const updatedStationRadius = await page.evaluate(() => {
-      const map = (window as unknown as {
-        __stalagmight_map__?: {
-          getPaintProperty: (layer: string, prop: string) => number;
-        };
-      }).__stalagmight_map__;
-      return map?.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
-    });
-    expect(updatedStationRadius).toBe(15);
-
-    // Verify shot hitbox width updated
-    const updatedShotWidth = await page.evaluate(() => {
-      const map = (window as unknown as {
-        __stalagmight_map__?: {
-          getPaintProperty: (layer: string, prop: string) => number;
-        };
-      }).__stalagmight_map__;
-      return map?.getPaintProperty('survey-shots-hitbox', 'line-width') ?? 0;
-    });
-    expect(updatedShotWidth).toBe(12);
+    // Ghost shot width follows the new shot hit_area.
+    await expect.poll(
+      async () => getPaintNumber(page, 'survey-ghost-shots-hitbox', 'line-width'),
+      { timeout: 5000 }
+    ).toBe(12);
   });
 
-  // SKIP (#mem budget): the dedicated survey-*-hitbox layers were removed;
-  // this test inspected their paint/order/existence. Hit-testing now uses a
-  // padded query on the visible layers (behavior covered by the shot/station
-  // boundary tests here + the hitProbe unit tests). Port or delete as follow-up.
-  test.skip('config hit_area change affects actual hit detection behavior', async ({ page }) => {
+  // Ported (#mem budget): kept BEHAVIORAL and made strictly discriminating. hit_area
+  // is read LIVE per query (getStationHitReach; station reach == hit_area, inclusive
+  // <=), so the SAME screen point must flip from HIT to MISS purely from a live
+  // config change: we click a point offset just inside the original reach but
+  // outside a reduced reach and prove the outcome flips. The removed
+  // survey-stations-hitbox paint poll is replaced with a ghost-layer settle that
+  // confirms setConfig propagated (config is read live, but setConfig runs from a
+  // React effect, so we wait for the ghost radius to reflect the new hit_area).
+  //
+  // NOTE (#mem budget): the visible survey-stations layer now returns MERGED
+  // MultiPoint features (one per section, coordinates = array of station points,
+  // no per-point stationIndex). So we extract the individual points ourselves and
+  // identify the target by which station the click actually selects, rather than
+  // reading a stationIndex property off the feature.
+  test('config hit_area change affects actual hit detection behavior', async ({ page }) => {
     await createProject(page, 'Config Hit Detection Behavior Test');
 
-    // Get first station and find a safe direction to click (away from all other stations)
-    const testData = await page.evaluate(() => {
+    // Reach model: station maxDistance == hit_area (inclusive). Pick an offset that
+    // is inside the original reach (10) but outside the reduced reach (4), with a
+    // comfortable margin on both sides.
+    const ORIGINAL_HIT_AREA = 10; // mock config default
+    const HIT_OFFSET = 7; // 7 <= 10 -> hits originally; 7 > 4 -> misses when reduced
+    const REDUCED_HIT_AREA = 4;
+
+    // Extract every individual station point (from merged MultiPoint features) and
+    // choose the (point, direction) whose offset click is farthest from EVERY other
+    // station point, so the chosen point is unambiguously the nearest station.
+    const testData = await page.evaluate((hitOffset) => {
       const map = (window as unknown as {
         __stalagmight_map__?: {
           project: (coords: [number, number]) => { x: number; y: number };
           queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
-            geometry: { type: string; coordinates: [number, number] };
-            properties: { sectionId: number; stationIndex: number };
+            geometry: { type: string; coordinates: number[] | number[][] };
+            properties: { sectionId: number };
           }>;
         };
       }).__stalagmight_map__;
@@ -997,145 +931,110 @@ test.describe('Config Reload Effects', () => {
       const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
       if (features.length === 0) throw new Error('No stations found');
 
-      // Get all station positions
-      const positions = features.map((f) => ({
-        sectionId: f.properties.sectionId,
-        stationIndex: f.properties.stationIndex,
-        coords: f.geometry.coordinates as [number, number],
-        screenPos: map.project(f.geometry.coordinates as [number, number]),
-      }));
+      // Flatten merged MultiPoint features into individual station screen points.
+      const points: Array<{ x: number; y: number }> = [];
+      for (const f of features) {
+        const raw =
+          f.geometry.type === 'MultiPoint'
+            ? (f.geometry.coordinates as number[][])
+            : [f.geometry.coordinates as number[]];
+        for (const c of raw) {
+          const s = map.project([c[0]!, c[1]!]);
+          points.push({ x: s.x, y: s.y });
+        }
+      }
+      if (points.length < 2) throw new Error('Need at least 2 station points');
 
-      // Use first station as target
-      const target = positions[0]!;
-      const others = positions.slice(1);
-
-      // Find safest direction to click (farthest from all other stations)
       const directions = [
         { x: 0, y: -1 }, { x: 1, y: -1 }, { x: 1, y: 0 }, { x: 1, y: 1 },
         { x: 0, y: 1 }, { x: -1, y: 1 }, { x: -1, y: 0 }, { x: -1, y: -1 },
       ];
 
-      let bestDir = { x: 0, y: -1 };
-      let bestMinDist = 0;
-
-      for (const dir of directions) {
-        const testX = target.screenPos.x + dir.x * (hitArea + 5);
-        const testY = target.screenPos.y + dir.y * (hitArea + 5);
-
-        let minDist = Infinity;
-        for (const other of others) {
-          const dx = testX - other.screenPos.x;
-          const dy = testY - other.screenPos.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < minDist) minDist = dist;
-        }
-
-        if (minDist > bestMinDist) {
-          bestMinDist = minDist;
-          bestDir = dir;
+      // Search all (point, direction) pairs for the offset click that is farthest
+      // from every OTHER point (normalize so diagonals match axis distance).
+      let best = {
+        screenPos: points[0]!,
+        direction: { x: 0, y: -1 },
+        otherMinDist: -Infinity,
+      };
+      for (let i = 0; i < points.length; i++) {
+        const p = points[i]!;
+        const others = points.filter((_, j) => j !== i);
+        for (const dir of directions) {
+          const norm = Math.hypot(dir.x, dir.y) || 1;
+          const ux = dir.x / norm;
+          const uy = dir.y / norm;
+          const testX = p.x + ux * hitOffset;
+          const testY = p.y + uy * hitOffset;
+          let minDist = Infinity;
+          for (const o of others) {
+            minDist = Math.min(minDist, Math.hypot(testX - o.x, testY - o.y));
+          }
+          if (minDist > best.otherMinDist) {
+            best = { screenPos: p, direction: { x: ux, y: uy }, otherMinDist: minDist };
+          }
         }
       }
 
-      return { target, hitArea, safeDirection: bestDir };
-    });
+      return { hitArea, screenPos: best.screenPos, safeDirection: best.direction, otherMinDist: best.otherMinDist };
+    }, HIT_OFFSET);
 
-    const { target, hitArea, safeDirection } = testData;
+    const { hitArea, screenPos, safeDirection, otherMinDist } = testData;
     const canvasBox = await getCanvasBoundingBox(page);
 
-    // Ensure select tool is active
+    // Preconditions that keep the discriminating click valid on this seed data.
+    expect(hitArea).toBe(ORIGINAL_HIT_AREA);
+    // The nearest OTHER station at the offset click must be farther than the chosen
+    // point (HIT_OFFSET away) so the chosen point is unambiguously the nearest.
+    expect(otherMinDist).toBeGreaterThan(HIT_OFFSET);
+
+    const clickX = canvasBox.x + screenPos.x + safeDirection.x * HIT_OFFSET;
+    const clickY = canvasBox.y + screenPos.y + safeDirection.y * HIT_OFFSET;
+
+    // Ensure select tool is active.
     await page.keyboard.press('s');
 
-    // Click directly on the target station (guaranteed hit)
-    await page.mouse.click(
-      canvasBox.x + target.screenPos.x,
-      canvasBox.y + target.screenPos.y
-    );
+    // 1) With the original hit_area (10), the offset-7 click hits: the nearest
+    // station is the chosen point (7px away). Record whichever station that is as
+    // the target (merged features carry no per-point stationIndex to read up front).
+    await page.mouse.click(clickX, clickY);
+    const hitSel = await pollSelectionState(page, (sel) => sel?.type === 'station');
+    const target = hitSel?.stationRef;
+    expect(target).toBeTruthy();
 
-    // Verify hit
-    const selectionAfterHit = await pollSelectionState(page, (sel) => sel !== null);
-    expect(selectionAfterHit).not.toBeNull();
-    expect(selectionAfterHit?.type).toBe('station');
-
-    // Clear selection
+    // Clear selection.
     await page.keyboard.press('Escape');
     await pollSelectionState(page, (sel) => sel === null);
 
-    // Now reduce hit_area to 5 (so clicking at offset 9 should miss)
-    await page.evaluate(() => {
-      const stores = (window as unknown as {
-        __E2E_TEST__?: {
-          projectStore: {
-            getState: () => {
-              config: { map: { station: { hit_area: number; radius: number } } } | null;
-            };
-            setState: (update: Partial<{
-              config: { map: { station: { hit_area: number } } } | null;
-            }>) => void;
-          };
-        };
-      }).__E2E_TEST__;
-
-      if (stores) {
-        const state = stores.projectStore.getState();
-        if (state.config) {
-          stores.projectStore.setState({
-            config: {
-              ...state.config,
-              map: {
-                ...state.config.map,
-                station: {
-                  ...state.config.map.station,
-                  hit_area: 5,
-                },
-              },
-            } as typeof state.config,
-          });
-        }
-      }
-    });
-
-    // Wait for hitbox layer to update
+    // 2) Reduce the station hit_area. hit_area is read live per query, but
+    // SurveyLayer.setConfig runs from a React effect; wait for the ghost station
+    // hitbox radius to reflect the new value as a propagation signal.
+    await setHitAreas(page, { station: REDUCED_HIT_AREA });
     await expect.poll(
-      async () => {
-        return page.evaluate(() => {
-          const map = (window as unknown as {
-            __stalagmight_map__?: {
-              getPaintProperty: (layer: string, prop: string) => number;
-            };
-          }).__stalagmight_map__;
-          return map?.getPaintProperty('survey-stations-hitbox', 'circle-radius') ?? 0;
-        });
-      },
+      async () => getPaintNumber(page, 'survey-ghost-stations-hitbox', 'circle-radius'),
       { timeout: 5000 }
-    ).toBe(5);
+    ).toBe(REDUCED_HIT_AREA);
 
-    // Query hitbox features farther out (initial hitArea + 5) - should now MISS our target since hitArea is 5
-    const missOffset = hitArea + 5;
-    const updatedTargetScreenPos = await page.evaluate(({ coords }) => {
-      const map = (window as unknown as {
-        __stalagmight_map__?: { project: (c: [number, number]) => { x: number; y: number } };
-      }).__stalagmight_map__;
-      if (!map) return null;
-      return map.project(coords);
-    }, { coords: target.coords });
-    if (!updatedTargetScreenPos) {
-      throw new Error('Map not available for updated target position');
-    }
+    // Sanity: the click pipeline still selects after the config change (a click on
+    // the chosen point's center hits at any hit_area), confirming propagation end to
+    // end and re-selecting the same target station.
+    await page.mouse.click(canvasBox.x + screenPos.x, canvasBox.y + screenPos.y);
+    const stillHits = await pollSelectionState(page, (sel) => sel?.type === 'station');
+    expect(stillHits?.stationRef?.section_id).toBe(target?.section_id);
+    expect(stillHits?.stationRef?.station_index).toBe(target?.station_index);
+    await page.keyboard.press('Escape');
+    await pollSelectionState(page, (sel) => sel === null);
 
-    const missPoint = {
-      x: updatedTargetScreenPos.x + safeDirection.x * missOffset,
-      y: updatedTargetScreenPos.y + safeDirection.y * missOffset,
-    };
-
-    // Click at miss point and verify we do NOT select the original target station
-    await page.mouse.click(canvasBox.x + missPoint.x, canvasBox.y + missPoint.y);
-    const selectionAfterMiss = await getSelectionState(page);
-    if (selectionAfterMiss !== null) {
-      expect(
-        selectionAfterMiss.stationRef?.section_id !== target.sectionId ||
-        selectionAfterMiss.stationRef?.station_index !== target.stationIndex
-      ).toBe(true);
-    }
+    // 3) The SAME offset-7 click now MISSES the target station (7 > reduced 4).
+    // The click handler resolves selection synchronously, so read it directly
+    // (a shot / different station / nothing may be selected, but NOT the target).
+    await page.mouse.click(clickX, clickY);
+    const afterMiss = await getSelectionState(page);
+    const selectedTarget =
+      afterMiss?.type === 'station' &&
+      afterMiss?.stationRef?.section_id === target?.section_id &&
+      afterMiss?.stationRef?.station_index === target?.station_index;
+    expect(selectedTarget).toBe(false);
   });
 });
 

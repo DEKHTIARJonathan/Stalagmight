@@ -285,20 +285,25 @@ test.describe('Toolbar Tool Groups', () => {
 
     // Wait for anchored section IDs to be fetched and feature-state applied.
     // Poll until a station feature in section 1 has anchored=true in feature-state.
+    // The station source is a MapLibre VECTOR-TILE source now (#mem): both the
+    // query and the feature-state read must name the tile source-layer ('g').
+    // setAnchoredSections() applies the `anchored` feature-state to the MERGED
+    // station group features whose `sectionId` is anchored, so a section-1 group
+    // carrying anchored=true is the signal the fade took effect.
     await page.waitForFunction(() => {
       const map = (window as unknown as { __stalagmight_map__?: {
-        querySourceFeatures: (source: string) => Array<{ id?: number | string; properties?: { sectionId?: number } }>;
-        getFeatureState: (opts: { source: string; id: number }) => { anchored?: boolean };
+        querySourceFeatures: (source: string, opts?: { sourceLayer?: string }) => Array<{ id?: number | string; properties?: { sectionId?: number } }>;
+        getFeatureState: (opts: { source: string; sourceLayer?: string; id: number }) => { anchored?: boolean };
       } }).__stalagmight_map__;
       if (!map) return false;
 
       try {
-        const features = map.querySourceFeatures('survey-data-stations');
+        const features = map.querySourceFeatures('survey-data-stations', { sourceLayer: 'g' });
         for (const f of features) {
           if (f.properties?.sectionId === 1 && f.id != null) {
             const featureId = typeof f.id === 'number' ? f.id : parseInt(String(f.id), 10);
             if (!isNaN(featureId)) {
-              const state = map.getFeatureState({ source: 'survey-data-stations', id: featureId });
+              const state = map.getFeatureState({ source: 'survey-data-stations', sourceLayer: 'g', id: featureId });
               if (state?.anchored === true) return true;
             }
           }

@@ -234,18 +234,24 @@ async function getSectionFeatureStates(
 ): Promise<{ shots: { total: number; withState: number }; stations: { total: number; withState: number } }> {
   return page.evaluate(({ secId, key }) => {
     const map = (window as unknown as { __stalagmight_map__?: {
-      querySourceFeatures: (source: string) => Array<{ properties?: { sectionId?: number; featureId?: number } }>;
-      getFeatureState: (opts: { source: string; id: number }) => Record<string, unknown> | null;
+      querySourceFeatures: (source: string, opts?: { sourceLayer?: string }) => Array<{ properties?: { sectionId?: number; featureId?: number } }>;
+      getFeatureState: (opts: { source: string; sourceLayer?: string; id: number }) => Record<string, unknown> | null;
     } }).__stalagmight_map__;
     if (!map) throw new Error('__stalagmight_map__ not found — map must be loaded before checking feature-state');
 
+    // The bulk shot/station sources are now MapLibre VECTOR-TILE sources (#mem):
+    // every querySourceFeatures / getFeatureState call must name the tile's
+    // source-layer ('g' = VT_SOURCE_LAYER). Section highlighting still applies
+    // feature-state to the MERGED group features (one group carries the whole
+    // section's shots/stations), keyed by their group `featureId`.
+    const SOURCE_LAYER = 'g';
     const checkSource = (sourceName: string) => {
-      const features = map.querySourceFeatures(sourceName);
+      const features = map.querySourceFeatures(sourceName, { sourceLayer: SOURCE_LAYER });
       const sectionFeatures = features.filter((f) => f.properties?.sectionId === secId);
       const uniqueIds = new Set(sectionFeatures.map((f) => f.properties?.featureId).filter((id): id is number => id != null));
       let withState = 0;
       for (const id of uniqueIds) {
-        const state = map.getFeatureState({ source: sourceName, id });
+        const state = map.getFeatureState({ source: sourceName, sourceLayer: SOURCE_LAYER, id });
         if (state?.[key]) withState++;
       }
       return { total: uniqueIds.size, withState };
