@@ -158,8 +158,14 @@ export default function ConfirmDialog() {
       setIsSubmitting(false);
       return;
     }
-    trackDialogComplete('confirm-delete');
-    closeDialog();
+    // The delete IPC is async; if the user dismissed this dialog while it was in
+    // flight, activeDialog has already moved on. closeDialog() is global UI state,
+    // so calling it now would close whatever dialog is open instead -- only
+    // finalize if this confirm dialog is still the active one.
+    if (useUIStore.getState().activeDialog === 'confirm-delete') {
+      trackDialogComplete('confirm-delete');
+      closeDialog();
+    }
   };
 
   const getTitle = () => {

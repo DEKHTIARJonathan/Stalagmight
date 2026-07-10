@@ -45,6 +45,7 @@ beforeEach(() => {
     deleteShotAndSplit,
   });
   useUIStore.setState({
+    activeDialog: 'confirm-delete', // the success path only closes if still active
     closeDialog,
     clearSelection,
     setSelection,
@@ -135,5 +136,21 @@ describe('ConfirmDialog non-split delete refusal (#241)', () => {
 
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(clearSelection).toHaveBeenCalled();
+  });
+
+  it('does not close a now-different dialog if this one was dismissed mid-flight', async () => {
+    // The user dismisses the confirm dialog (activeDialog moves on) while the delete
+    // IPC is still in flight. closeDialog is global UI state, so the late success-path
+    // close must NOT fire -- otherwise it would close whatever dialog is open now.
+    deleteShot.mockImplementation(async () => {
+      useUIStore.setState({ activeDialog: 'edit-section' });
+      return { success: true, error: null } as CommandResult;
+    });
+
+    render(<ConfirmDialog />);
+    fireEvent.click(screen.getByText('Delete'));
+
+    await waitFor(() => expect(clearSelection).toHaveBeenCalled());
+    expect(closeDialog).not.toHaveBeenCalled();
   });
 });
