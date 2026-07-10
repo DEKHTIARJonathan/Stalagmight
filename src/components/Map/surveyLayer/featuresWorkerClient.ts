@@ -1,23 +1,24 @@
 /**
  * Main-thread client for the survey-features Worker.
  *
- * Lazily creates a single Worker (re-used across calls) and routes
- * `build` requests through it, returning a Promise. Falls back to
- * synchronous main-thread build if the Worker can't be constructed
- * (e.g. in test runners that don't support Vite's `?worker` syntax).
+ * Lazily creates a Worker (torn down after each drained build to reclaim its
+ * heap) and streams `build` requests through it group-by-group. Falls back to
+ * a synchronous main-thread build if the Worker can't be constructed (e.g. in
+ * test runners that don't support Vite's `?worker` syntax).
  *
- * Tested rough costs on a 75k-shot / 89k-station project:
- *   structured-clone of inputs (Section[] + Station[]):  ~50 ms
- *   buildSurveyFeatures in worker (off main thread):    ~400 ms (parallel)
- *   structured-clone of features back:                   ~80 ms
- * vs synchronous main-thread build of ~450 ms blocking the UI.
- * Net: ~270 ms of main-thread time given back to React + rendering.
+ * The reply is streamed (#mem): the worker posts `begin` (palette), one `chunk`
+ * per feature group, then `end`. The client forwards each to a `sink` so the
+ * caller applies + drops each group as it lands rather than receiving one giant
+ * `SurveyFeatureSets` clone (which made the main thread hold the full
+ * ~178k-feature set live on top of what MapLibre already retains, inflating the
+ * non-decommitting JSC heap).
  */
 import {
   buildSurveyFeatures,
+  SURVEY_FEATURE_GROUP_ORDER,
   type BuildSurveyFeaturesOptions,
   type DepthRange,
-  type SurveyFeatureSets,
+  type SurveyFeatureGroupKey,
 } from './features';
 import type { LoopClosure } from '../../../types/project';
 import type { SurveyData } from '../../../types/survey-data';
@@ -39,6 +40,20 @@ interface BuildArgs {
   options: BuildSurveyFeaturesOptions;
 }
 
+/**
+ * Streaming reply consumer. `begin` fires once (reset), then `chunk` once per
+ * group as its build phase finishes — carrying a snapshot of the append-only
+ * color palette at that point — then exactly one of `end` (success) or `error`.
+ * The caller MUST drop its reference to each chunk's features after `chunk`
+ * returns so the memory win holds.
+ */
+export interface FeatureStreamSink {
+  begin(): void;
+  chunk(group: SurveyFeatureGroupKey, features: GeoJSON.Feature[], colorPalette: readonly string[]): void;
+  end(): void;
+  error(e: Error): void;
+}
+
 /** Worker singleton; created lazily on first use and torn down after each
  *  drained build (see `maybeReclaimWorker`). */
 let workerInstance: Worker | null = null;
@@ -46,8 +61,9 @@ let workerInstance: Worker | null = null;
  *  Once construction fails we fall back to inline builds and never retry. A
  *  worker torn down for memory reclaim does NOT set this — it recreates lazily. */
 let workerConstructionFailed = false;
-/** Pending build requests keyed by id. Resolves when worker posts back. */
-const pending = new Map<number, { resolve: (s: SurveyFeatureSets) => void; reject: (e: Error) => void }>();
+/** In-flight streamed build requests keyed by id. Each entry is settled by an
+ *  `end`/`error` message (or a worker-level error). */
+const pending = new Map<number, FeatureStreamSink>();
 let nextRequestId = 0;
 
 /**
@@ -78,31 +94,47 @@ function ensureWorker(): Worker | null {
     // is the recommended pattern; the bundler emits the worker as a separate
     // chunk and rewrites the URL.
     const w = new Worker(new URL('./featuresWorker.ts', import.meta.url), { type: 'module' });
-    w.onmessage = (e: MessageEvent<{ kind: 'result' | 'error'; requestId: number; features?: SurveyFeatureSets; message?: string }>) => {
+    w.onmessage = (
+      e: MessageEvent<{
+        kind: 'begin' | 'chunk' | 'end' | 'error';
+        requestId: number;
+        colorPalette?: readonly string[];
+        group?: SurveyFeatureGroupKey;
+        features?: GeoJSON.Feature[];
+        message?: string;
+      }>,
+    ) => {
       const { kind, requestId } = e.data;
-      const slot = pending.get(requestId);
-      if (!slot) {
+      const sink = pending.get(requestId);
+      if (!sink) {
         // Late/duplicate message for a request we already settled — still try
         // to reclaim in case this drained the last in-flight build.
         maybeReclaimWorker();
         return;
       }
-      pending.delete(requestId);
-      if (kind === 'result' && e.data.features) {
-        slot.resolve(e.data.features);
+      if (kind === 'begin') {
+        sink.begin();
+      } else if (kind === 'chunk' && e.data.group) {
+        // The chunk's features were structured-cloned onto the main thread
+        // before this handler ran; the sink applies + drops them.
+        sink.chunk(e.data.group, e.data.features ?? [], e.data.colorPalette ?? []);
+      } else if (kind === 'end') {
+        pending.delete(requestId);
+        sink.end();
+        maybeReclaimWorker();
       } else {
-        slot.reject(new Error(e.data.message ?? 'unknown worker error'));
+        pending.delete(requestId);
+        sink.error(new Error(e.data.message ?? 'unknown worker error'));
+        maybeReclaimWorker();
       }
-      // The result was structured-cloned onto the main thread before this
-      // handler ran, so tearing the worker down now cannot affect `features`.
-      maybeReclaimWorker();
     };
     w.onerror = (e) => {
       // Worker-level error (uncaught exception, etc.) — fail all pending and
       // drop the (now-suspect) worker so the next build gets a fresh one.
       const err = new Error(`featuresWorker: ${e.message}`);
-      for (const slot of pending.values()) slot.reject(err);
+      const sinks = [...pending.values()];
       pending.clear();
+      for (const sink of sinks) sink.error(err);
       if (workerInstance) {
         workerInstance.terminate();
         workerInstance = null;
@@ -119,36 +151,69 @@ function ensureWorker(): Worker | null {
 }
 
 /**
- * Build survey features off the main thread when possible. Falls back to
- * synchronous in-line build if the Worker isn't available (test envs).
- *
- * The promise resolves with the same `SurveyFeatureSets` shape that the
- * synchronous `buildSurveyFeatures` returns; the caller can swap in/out
- * without changing the downstream `setData` calls.
+ * Build survey features off the main thread when possible and stream the result
+ * to `sink` group-by-group. Falls back to a synchronous in-line build (then a
+ * synchronous replay through the same sink) if the Worker isn't available (test
+ * envs). The returned promise settles when the stream ends (or errors) so
+ * callers can `await` completion without buffering the groups.
  */
-export function buildSurveyFeaturesAsync(args: BuildArgs): Promise<SurveyFeatureSets> {
+export function buildSurveyFeaturesStreamed(args: BuildArgs, sink: FeatureStreamSink): Promise<void> {
   const w = ensureWorker();
   if (!w) {
-    // Synchronous fallback. Wrap in a resolved promise to keep the call
-    // site uniform; the (small) microtask shift is harmless.
+    // Synchronous fallback: build the full set inline, then replay it through
+    // the sink in the same group order the worker uses. No memory win here
+    // (single-threaded test path), but behaviour is identical.
     const t0 = performance.now();
-    const features = buildSurveyFeatures(
-      args.surveyData,
-      args.loopClosures,
-      args.gpsOrigin,
-      args.showDepthGradient,
-      args.depthRange,
-      args.themeColors,
-      args.precision,
-      args.options,
-    );
+    let features;
+    try {
+      features = buildSurveyFeatures(
+        args.surveyData,
+        args.loopClosures,
+        args.gpsOrigin,
+        args.showDepthGradient,
+        args.depthRange,
+        args.themeColors,
+        args.precision,
+        args.options,
+      );
+    } catch (e) {
+      sink.error(e instanceof Error ? e : new Error(String(e)));
+      return Promise.resolve();
+    }
     recordPerfTiming('buildFeatures (inline fallback)', performance.now() - t0);
-    return Promise.resolve(features);
+    // No streaming build here (single-threaded test path), so replay the full
+    // set through the sink in group order with the final palette on each chunk.
+    sink.begin();
+    for (const group of SURVEY_FEATURE_GROUP_ORDER) {
+      sink.chunk(group, features[group], features.colorPalette);
+      features[group] = [];
+    }
+    sink.end();
+    return Promise.resolve();
   }
 
-  return new Promise<SurveyFeatureSets>((resolve, reject) => {
+  return new Promise<void>((resolve) => {
     const requestId = nextRequestId++;
-    pending.set(requestId, { resolve, reject });
+    // Wrap the caller's sink so end/error also settle this promise exactly once.
+    let settled = false;
+    const settle = () => {
+      if (!settled) {
+        settled = true;
+        resolve();
+      }
+    };
+    pending.set(requestId, {
+      begin: () => sink.begin(),
+      chunk: (group, features, palette) => sink.chunk(group, features, palette),
+      end: () => {
+        sink.end();
+        settle();
+      },
+      error: (e) => {
+        sink.error(e);
+        settle();
+      },
+    });
     const tPost = performance.now();
     w.postMessage({ kind: 'build', requestId, args });
     // Note: we don't await postMessage — its return is synchronous after the
@@ -164,6 +229,7 @@ export function terminateFeaturesWorker(): void {
     workerInstance = null;
   }
   workerConstructionFailed = false;
-  for (const slot of pending.values()) slot.reject(new Error('worker terminated'));
+  const sinks = [...pending.values()];
   pending.clear();
+  for (const sink of sinks) sink.error(new Error('worker terminated'));
 }
