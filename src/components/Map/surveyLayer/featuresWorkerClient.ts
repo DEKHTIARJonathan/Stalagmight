@@ -39,19 +39,39 @@ interface BuildArgs {
   options: BuildSurveyFeaturesOptions;
 }
 
-/** Worker singleton; created lazily on first use. */
+/** Worker singleton; created lazily on first use and torn down after each
+ *  drained build (see `maybeReclaimWorker`). */
 let workerInstance: Worker | null = null;
-/** Whether we've already tried (and possibly failed) to create the worker.
- *  Once we fall back to inline builds we don't keep retrying. */
-let workerCreationAttempted = false;
+/** Set only when constructing the Worker THREW (Vite-without-worker, jsdom).
+ *  Once construction fails we fall back to inline builds and never retry. A
+ *  worker torn down for memory reclaim does NOT set this — it recreates lazily. */
+let workerConstructionFailed = false;
 /** Pending build requests keyed by id. Resolves when worker posts back. */
 const pending = new Map<number, { resolve: (s: SurveyFeatureSets) => void; reject: (e: Error) => void }>();
 let nextRequestId = 0;
 
+/**
+ * Terminate the worker once no build is in flight so its entire JSC heap — the
+ * ~178k-feature build burst plus the interner Maps/Sets and station-lookup
+ * structures it allocated — is freed back to the allocator in bulk (a whole-VM
+ * release the engine actually returns, vs the interleaved-live-object slabs a
+ * long-lived worker keeps pinned). The next build recreates it lazily; worker
+ * startup is a few ms against a multi-hundred-ms build, and builds are seconds
+ * apart (load, zoom-threshold, theme, edits).
+ *
+ * Guard: if another build is still queued/in-flight (`pending` non-empty) we
+ * keep the worker so that build reuses it — only reclaim when fully drained.
+ */
+function maybeReclaimWorker(): void {
+  if (pending.size > 0) return;
+  if (!workerInstance) return;
+  workerInstance.terminate();
+  workerInstance = null;
+}
+
 function ensureWorker(): Worker | null {
   if (workerInstance) return workerInstance;
-  if (workerCreationAttempted) return null;
-  workerCreationAttempted = true;
+  if (workerConstructionFailed) return null;
 
   try {
     // Vite/Webpack `new Worker(new URL(..., import.meta.url), { type: 'module' })`
@@ -61,25 +81,39 @@ function ensureWorker(): Worker | null {
     w.onmessage = (e: MessageEvent<{ kind: 'result' | 'error'; requestId: number; features?: SurveyFeatureSets; message?: string }>) => {
       const { kind, requestId } = e.data;
       const slot = pending.get(requestId);
-      if (!slot) return;
+      if (!slot) {
+        // Late/duplicate message for a request we already settled — still try
+        // to reclaim in case this drained the last in-flight build.
+        maybeReclaimWorker();
+        return;
+      }
       pending.delete(requestId);
       if (kind === 'result' && e.data.features) {
         slot.resolve(e.data.features);
       } else {
         slot.reject(new Error(e.data.message ?? 'unknown worker error'));
       }
+      // The result was structured-cloned onto the main thread before this
+      // handler ran, so tearing the worker down now cannot affect `features`.
+      maybeReclaimWorker();
     };
     w.onerror = (e) => {
-      // Worker-level error (uncaught exception, etc.) — fail all pending.
+      // Worker-level error (uncaught exception, etc.) — fail all pending and
+      // drop the (now-suspect) worker so the next build gets a fresh one.
       const err = new Error(`featuresWorker: ${e.message}`);
       for (const slot of pending.values()) slot.reject(err);
       pending.clear();
+      if (workerInstance) {
+        workerInstance.terminate();
+        workerInstance = null;
+      }
     };
     workerInstance = w;
     return w;
   } catch (e) {
     // Vite-without-worker, jsdom test env, etc. Fall back to inline.
     console.warn('[featuresWorkerClient] failed to construct Worker, falling back to inline build:', e);
+    workerConstructionFailed = true;
     return null;
   }
 }
@@ -129,7 +163,7 @@ export function terminateFeaturesWorker(): void {
     workerInstance.terminate();
     workerInstance = null;
   }
-  workerCreationAttempted = false;
+  workerConstructionFailed = false;
   for (const slot of pending.values()) slot.reject(new Error('worker terminated'));
   pending.clear();
 }
