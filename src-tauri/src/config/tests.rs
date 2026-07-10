@@ -123,6 +123,29 @@ fn test_gas_config_normalize_clamps_invalid_speeds_and_multipliers() {
 }
 
 #[test]
+fn test_gas_config_normalize_floors_survey_and_stressed_rmv_at_one() {
+    // #241 (P1): survey/stressed RMV multipliers are work-factors relative to the baseline
+    // swim RMV, so a positive-but-below-1.0 value (which the old `<= 0.0` guard let through)
+    // under-states in-leg gas and over-states reach -- the unsafe direction. They must floor
+    // at 1.0 like the jump multiplier. A value >= 1.0 is a legitimate advanced setting and is
+    // preserved (covered by test_gas_config_normalize_preserves_valid_values).
+    let mut config = GasConfig {
+        survey_rmv_multiplier: 0.5,   // positive but < 1.0 -> reset to default 1.0
+        stressed_rmv_multiplier: 0.8, // positive but < 1.0 -> reset to default 1.5
+        ..GasConfig::default()
+    };
+    config.normalize();
+    assert_eq!(
+        config.survey_rmv_multiplier, 1.0,
+        "survey RMV below 1.0 must floor to the 1.0 default"
+    );
+    assert_eq!(
+        config.stressed_rmv_multiplier, 1.5,
+        "stressed RMV below 1.0 must floor to the 1.5 default"
+    );
+}
+
+#[test]
 fn test_gas_config_normalize_preserves_valid_values() {
     let mut config = GasConfig {
         swim_speed_m_per_min: 12.0,
