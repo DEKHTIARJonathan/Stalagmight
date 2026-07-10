@@ -4,6 +4,19 @@ import type { ProjectMetadata } from '../../types/project';
 import type { GeometryShot, SurveyGeometry } from '../../types/survey';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import { recordFeatureCount, clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
+import {
+  ensureVtProtocol,
+  setVtLayerData,
+  vtTileUrl,
+  clearVtLayerData,
+} from '../Map/surveyLayer/vectorTileRegistry';
+import {
+  vtLinesFromFeatures,
+  vtPointsFromFeatures,
+  vtGroupCount,
+  VT_SOURCE_LAYER,
+  type VtLayerData,
+} from '../Map/surveyLayer/vectorTileData';
 import { hasLiveStyle } from '../Map/mapUtils';
 import i18n from '../../i18n';
 import { formatFixed, formatNumber } from '../../i18n/format';
@@ -98,28 +111,97 @@ function extractStations(shots: GeometryShot[]): [number, number, boolean][] {
   ]);
 }
 
+/** Shot LineStrings + station Points, split so each feeds its own vt source. */
+export interface GlobalSurveyFeatures {
+  shots: GeoJSON.Feature[];
+  stations: GeoJSON.Feature[];
+}
+
+/**
+ * Materialize per-system shot LineStrings + station Points, split by kind so
+ * each set feeds its own homogeneous vector-tile source (#mem). Per-feature
+ * props are identical to the old single-source features: the systemId-keyed
+ * color/opacity/visual match expressions and the queryRenderedFeatures
+ * handlers read only these scalar props (never feature.id), so they survive
+ * the MVT round-trip (props become MVT tags) unchanged. `featureType` is kept
+ * for parity even though each source is now homogeneous.
+ */
+export function buildGlobalSurveyFeatures(systems: SystemGeometry[]): GlobalSurveyFeatures {
+  const shots: GeoJSON.Feature[] = [];
+  const stations: GeoJSON.Feature[] = [];
+  for (const system of systems) {
+    for (const shot of system.geometry.shots) {
+      shots.push({
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: [shot.from, shot.to],
+        },
+        properties: {
+          featureType: 'shot',
+          systemId: system.metadata.file_path,
+          name: system.metadata.name,
+          totalLength: system.metadata.total_length,
+          stationCount: system.metadata.station_count,
+          isReference: shot.is_reference,
+        },
+      });
+    }
+
+    const systemStations = extractStations(system.geometry.shots);
+    for (const [lng, lat, allShotsReference] of systemStations) {
+      stations.push({
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: [lng, lat],
+        },
+        properties: {
+          featureType: 'station',
+          systemId: system.metadata.file_path,
+          name: system.metadata.name,
+          totalLength: system.metadata.total_length,
+          stationCount: system.metadata.station_count,
+          allShotsReference,
+        },
+      });
+    }
+  }
+  return { shots, stations };
+}
+
 /**
  * GlobalSurveyLayer renders survey geometry for multiple systems on the global map.
  *
  * This is a read-only visualization layer that shows shots as lines and stations
  * as circles. Each system has a distinct, stable color derived from its file path.
  *
- * Layer architecture:
- * - Single GeoJSON source containing all systems (both shots and stations)
- * - Features distinguished by featureType property ('shot' or 'station')
- * - Multiple layers filter by featureType for rendering shots vs stations
+ * Layer architecture (#mem):
+ * - Two on-demand vector-tile sources served by the shared `stalx://`
+ *   machinery: `global-survey-data-shots` (line geometry) and
+ *   `global-survey-data-stations` (point geometry). This replaces the last
+ *   bulk-GeoJSON map source; MapLibre only ever holds the compact MVT bytes
+ *   for currently-loaded tiles instead of the whole cross-project graph.
+ * - Each source is homogeneous, so layers no longer need a featureType filter
+ *   (the reference-shot exclusion filter is still applied dynamically).
  * - Shot lines layer (rendered first, below stations)
  * - Station circles layer (rendered second, above shots)
  * - Hitbox layers for click detection (invisible)
  *
- * Highlighting uses filter-based approach (not setFeatureState) for simplicity.
+ * Highlighting uses filter/match expressions on the string `systemId` property
+ * (not setFeatureState). MVT preserves feature properties as tags, so those
+ * expressions and the queryRenderedFeatures handlers keep working unchanged.
  */
 export default class GlobalSurveyLayer {
   private map: MaplibreMap;
   private callbacks: GlobalSurveyLayerCallbacks;
 
-  // Single source for all features
-  private sourceId = 'global-survey-data';
+  // Two vector-tile sources: homogeneous line shots + point stations. The
+  // distinct `global-survey-data-` prefix avoids collision with SurveyLayer's
+  // `survey-data-` registry keys (the shared registry is module-level, and the
+  // two layers never live at once anyway).
+  private shotsSourceId = 'global-survey-data-shots';
+  private stationsSourceId = 'global-survey-data-stations';
 
   // Layer IDs
   private shotsLayerId = 'global-survey-shots-layer';
@@ -135,16 +217,11 @@ export default class GlobalSurveyLayer {
   // Store system colors for match expressions
   private systemColors: Map<string, string> = new Map();
 
-  // Current GeoJSON tolerance (for simplification)
-  private currentTolerance = 0.5;
-
-  // Cached system input for tolerance updates. We hold the small input
-  // (references back into globalViewStore.geometryData) rather than the
-  // materialized FeatureCollection because MapLibre already owns a copy
-  // of the latter — caching features here meant 2× main-thread storage
-  // for the same data. Tolerance changes rebuild features from this
-  // cached input on demand, which is one buildFeatures pass per change.
-  private cachedSystems: SystemGeometry[] = [];
+  // We keep no copy of the inputs here: globalViewStore.geometryData remains
+  // the single retained copy of inputs, and the two vt sources hold the only
+  // layer-owned derived copies (the compact typed-array payloads in the shared
+  // registry). The old `cachedSystems` field existed only to rebuild features
+  // on a tolerance swap; that mechanism is gone (#mem), so the field is too.
 
   // Tooltip element
   private tooltip: HTMLDivElement | null = null;
@@ -197,17 +274,23 @@ export default class GlobalSurveyLayer {
   }
 
   private initializeSources(): void {
-    // Single GeoJSON source for all features (shots and stations)
-    // Features are distinguished by featureType property
-    this.map.addSource(this.sourceId, {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-      tolerance: this.currentTolerance,
-      generateId: true,
+    // Bulk geometry is served as on-demand vector tiles via `stalx://` (#mem),
+    // mirroring SurveyLayer: two homogeneous vt sources (line shots + point
+    // stations) replace the single bulk-GeoJSON source. Registry keys are the
+    // two source ids; the update recipe registers a VtLayerData and bumps the
+    // tile version so MapLibre reloads tiles. Feature props survive as MVT
+    // tags, so the systemId-based color/opacity/visual expressions and the
+    // queryRenderedFeatures handlers keep working. Feature ids are unused here
+    // (highlighting is filter/match-based), so no promoteId is needed.
+    ensureVtProtocol();
+    const vtSourceSpec = (key: string): maplibregl.VectorSourceSpecification => ({
+      type: 'vector',
+      tiles: [vtTileUrl(key, 0)],
+      minzoom: 0,
+      maxzoom: 22,
     });
+    this.map.addSource(this.shotsSourceId, vtSourceSpec(this.shotsSourceId));
+    this.map.addSource(this.stationsSourceId, vtSourceSpec(this.stationsSourceId));
   }
 
   private initializeLayers(): void {
@@ -216,11 +299,12 @@ export default class GlobalSurveyLayer {
 
     // Shot hitbox layer - wider hit area for easier selection
     // CRITICAL: Use opaque color with tiny opacity for queryRenderedFeatures
+    // Homogeneous shots source -> no featureType filter needed.
     this.map.addLayer({
       id: this.shotsHitboxLayerId,
       type: 'line',
-      source: this.sourceId,
-      filter: ['==', ['get', 'featureType'], 'shot'],
+      source: this.shotsSourceId,
+      'source-layer': VT_SOURCE_LAYER,
       layout: {
         'line-cap': 'round',
       },
@@ -235,8 +319,8 @@ export default class GlobalSurveyLayer {
     this.map.addLayer({
       id: this.stationsHitboxLayerId,
       type: 'circle',
-      source: this.sourceId,
-      filter: ['==', ['get', 'featureType'], 'station'],
+      source: this.stationsSourceId,
+      'source-layer': VT_SOURCE_LAYER,
       paint: {
         'circle-radius': 10, // Larger hit area
         'circle-color': '#000000',
@@ -252,8 +336,8 @@ export default class GlobalSurveyLayer {
     this.map.addLayer({
       id: this.shotsLayerId,
       type: 'line',
-      source: this.sourceId,
-      filter: ['==', ['get', 'featureType'], 'shot'],
+      source: this.shotsSourceId,
+      'source-layer': VT_SOURCE_LAYER,
       paint: {
         'line-color': this.themeColors.grayLine, // Fallback, replaced by match expression on update()
         'line-width': [
@@ -276,8 +360,8 @@ export default class GlobalSurveyLayer {
     this.map.addLayer({
       id: this.stationsLayerId,
       type: 'circle',
-      source: this.sourceId,
-      filter: ['==', ['get', 'featureType'], 'station'],
+      source: this.stationsSourceId,
+      'source-layer': VT_SOURCE_LAYER,
       paint: {
         'circle-radius': 4,
         'circle-color': this.themeColors.grayLine, // Fallback, replaced by match expression on update()
@@ -554,11 +638,10 @@ export default class GlobalSurveyLayer {
    * Update the layer with new system geometry data.
    */
   update(systems: SystemGeometry[]): void {
-    // Cache the small input; build features fresh for MapLibre. We deliberately
-    // do NOT keep our own copy of `features` — MapLibre's source owns the
-    // canonical copy and the worker holds a structured clone of it. Holding a
-    // third copy here would double the per-shot retention on dense maps.
-    this.cachedSystems = systems;
+    // We keep no copy of `systems` or of the materialized features: the vt
+    // registry owns the compact typed-array payloads and MapLibre holds only
+    // the per-tile MVT bytes, so an extra retained copy here would just double
+    // per-shot retention on dense maps.
 
     // Clear and rebuild system colors
     this.systemColors.clear();
@@ -566,17 +649,15 @@ export default class GlobalSurveyLayer {
       this.systemColors.set(system.metadata.file_path, generateSystemColor(system.metadata.file_path));
     }
 
-    const features = this.buildFeatures(systems);
-
-    // Update the single source with all features
-    const source = this.map.getSource(this.sourceId);
-    if (source && 'setData' in source) {
-      (source as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features,
-      });
-      recordFeatureCount('global-survey', features.length);
-    }
+    // Split into homogeneous shot/station sets, convert to flat vt payloads,
+    // and publish each to its own vector-tile source (#mem).
+    const { shots, stations } = buildGlobalSurveyFeatures(systems);
+    const shotsVt = vtLinesFromFeatures(shots);
+    const stationsVt = vtPointsFromFeatures(stations);
+    this.setVtSource(this.shotsSourceId, shotsVt);
+    this.setVtSource(this.stationsSourceId, stationsVt);
+    // Record the combined group count under the existing 'global-survey' kind.
+    recordFeatureCount('global-survey', vtGroupCount(shotsVt) + vtGroupCount(stationsVt));
 
     // Update color expressions using match on systemId
     this.updateColorExpressions();
@@ -586,52 +667,13 @@ export default class GlobalSurveyLayer {
   }
 
   /**
-   * Materialize MapLibre Features from the cached SystemGeometry list. Same
-   * shape as before — kept as a pure function of `systems` so tolerance
-   * changes (which reset the source) can rebuild without us holding a
-   * second copy of the resulting array.
+   * Register a layer's flat vt payload and point its source at the new tile
+   * version so MapLibre reloads tiles (mirrors SurveyLayer's update recipe).
    */
-  private buildFeatures(systems: SystemGeometry[]): GeoJSON.Feature[] {
-    const features: GeoJSON.Feature[] = [];
-    for (const system of systems) {
-      for (const shot of system.geometry.shots) {
-        features.push({
-          type: 'Feature',
-          geometry: {
-            type: 'LineString',
-            coordinates: [shot.from, shot.to],
-          },
-          properties: {
-            featureType: 'shot',
-            systemId: system.metadata.file_path,
-            name: system.metadata.name,
-            totalLength: system.metadata.total_length,
-            stationCount: system.metadata.station_count,
-            isReference: shot.is_reference,
-          },
-        });
-      }
-
-      const stations = extractStations(system.geometry.shots);
-      for (const [lng, lat, allShotsReference] of stations) {
-        features.push({
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: [lng, lat],
-          },
-          properties: {
-            featureType: 'station',
-            systemId: system.metadata.file_path,
-            name: system.metadata.name,
-            totalLength: system.metadata.total_length,
-            stationCount: system.metadata.station_count,
-            allShotsReference,
-          },
-        });
-      }
-    }
-    return features;
+  private setVtSource(key: string, data: VtLayerData): void {
+    const version = setVtLayerData(key, data);
+    const source = this.map.getSource(key) as { setTiles?: (tiles: string[]) => void } | undefined;
+    source?.setTiles?.([vtTileUrl(key, version)]);
   }
 
   /**
@@ -704,13 +746,11 @@ export default class GlobalSurveyLayer {
    * Also hides stations that only connect to reference shots.
    */
   setShowReferenceShots(visible: boolean): void {
-    // Base filter for shot features
-    const shotTypeFilter: maplibregl.ExpressionSpecification = ['==', ['get', 'featureType'], 'shot'];
-
-    // Combined filter: show shots AND (optionally) exclude reference
-    const shotFilter: maplibregl.FilterSpecification = visible
-      ? shotTypeFilter
-      : ['all', shotTypeFilter, ['!=', ['get', 'isReference'], true]];
+    // Each source is homogeneous now, so no featureType clause is needed:
+    // `null` clears the filter (show all shots), otherwise exclude reference.
+    const shotFilter: maplibregl.FilterSpecification | null = visible
+      ? null
+      : ['!=', ['get', 'isReference'], true];
 
     // Apply filter to visual layer
     if (this.map.getLayer(this.shotsLayerId)) {
@@ -723,10 +763,9 @@ export default class GlobalSurveyLayer {
     }
 
     // Station filter: hide reference-only stations when reference shots are hidden
-    const stationTypeFilter: maplibregl.ExpressionSpecification = ['==', ['get', 'featureType'], 'station'];
-    const stationFilter: maplibregl.FilterSpecification = visible
-      ? stationTypeFilter
-      : ['all', stationTypeFilter, ['!=', ['get', 'allShotsReference'], true]];
+    const stationFilter: maplibregl.FilterSpecification | null = visible
+      ? null
+      : ['!=', ['get', 'allShotsReference'], true];
 
     if (this.map.getLayer(this.stationsLayerId)) {
       this.map.setFilter(this.stationsLayerId, stationFilter);
@@ -774,81 +813,11 @@ export default class GlobalSurveyLayer {
     }
   }
 
-  /**
-   * Set the GeoJSON simplification tolerance.
-   * Higher values = more simplification = better performance but less detail.
-   *
-   * Note: MapLibre requires removing and re-adding the source to change tolerance,
-   * so this recreates the source with the cached feature data.
-   *
-   * @param tolerance - GeoJSON simplification tolerance (e.g., 0.5 for normal, 1.0 for throttled)
-   */
-  setTolerance(tolerance: number): void {
-    if (tolerance === this.currentTolerance) return;
-
-    // Store old tolerance in case we need to revert on failure
-    const oldTolerance = this.currentTolerance;
-
-    // MapLibre doesn't allow changing source options after creation,
-    // so we need to remove and re-add the source with new tolerance.
-    // First, remove layers that depend on the source
-    const layerIds = [
-      this.stationsLayerId,
-      this.shotsLayerId,
-      this.stationsHitboxLayerId,
-      this.shotsHitboxLayerId,
-    ];
-
-    try {
-      // Remove layers in reverse order
-      for (const layerId of layerIds) {
-        if (this.map.getLayer(layerId)) {
-          this.map.removeLayer(layerId);
-        }
-      }
-
-      // Remove and re-add source with new tolerance
-      if (this.map.getSource(this.sourceId)) {
-        this.map.removeSource(this.sourceId);
-      }
-
-      // Rebuild features from cached input — see comment on `cachedSystems`.
-      // For an empty cache this yields an empty array; addSource accepts that.
-      const features = this.buildFeatures(this.cachedSystems);
-      this.map.addSource(this.sourceId, {
-        type: 'geojson',
-        data: {
-          type: 'FeatureCollection',
-          features,
-        },
-        tolerance,
-        generateId: true,
-      });
-      recordFeatureCount('global-survey', features.length);
-
-      // Re-add layers
-      this.initializeLayers();
-
-      // Re-apply color expressions and visual state
-      this.updateColorExpressions();
-      this.updateVisualState();
-      this.updateOpacityExpressions();
-
-      // Only update currentTolerance after successful rebuild
-      this.currentTolerance = tolerance;
-    } catch {
-      // Revert internal state on failure
-      this.currentTolerance = oldTolerance;
-      console.error('[GlobalSurveyLayer] Failed to update tolerance');
-    }
-  }
-
-  /**
-   * Get the current tolerance value.
-   */
-  getTolerance(): number {
-    return this.currentTolerance;
-  }
+  // The GeoJSON `tolerance`-swap mechanism (and its FPS-driven throttle in
+  // GlobalViewMap) was removed here (#mem): the `stalx://` tile cutter does
+  // bbox-clip only, with no whole-source simplification, so `tolerance` has no
+  // vector-tile equivalent. Vector tiles already bound the rendered geometry to
+  // the currently-visible tiles, which supersedes whole-source simplification.
 
   /**
    * Update opacity expressions on visual layers based on search filter.
@@ -1119,6 +1088,11 @@ export default class GlobalSurveyLayer {
     // Zero memory-probe count for our source so the panel reflects teardown.
     clearFeatureCountsForPrefix('global-survey');
 
+    // Drop the vt registry entries so the flat geometry arrays don't outlive
+    // the layer in the shared registry when leaving Global View (#mem).
+    clearVtLayerData(this.shotsSourceId);
+    clearVtLayerData(this.stationsSourceId);
+
     // Clean up touch long-press timer
     if (this.touchLongPressTimer) {
       clearTimeout(this.touchLongPressTimer);
@@ -1175,9 +1149,12 @@ export default class GlobalSurveyLayer {
         this.map.removeLayer(this.shotsHitboxLayerId);
       }
 
-      // Remove source
-      if (this.map.getSource(this.sourceId)) {
-        this.map.removeSource(this.sourceId);
+      // Remove both vector-tile sources
+      if (this.map.getSource(this.shotsSourceId)) {
+        this.map.removeSource(this.shotsSourceId);
+      }
+      if (this.map.getSource(this.stationsSourceId)) {
+        this.map.removeSource(this.stationsSourceId);
       }
     } catch {
       // Map may already be destroyed
