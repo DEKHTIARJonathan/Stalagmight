@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::path::Path;
 
-use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
+use super::{Database, SCHEMA_VERSION};
 
 impl Database {
     /// Open or create a database at the given path
@@ -11,9 +11,16 @@ impl Database {
         // project create / save-as / import / recent-list refresh.
         tracing::debug!("Opening database at: {:?}", path);
 
+        // Whether the file already existed decides fresh-vs-migrate below, so
+        // capture it BEFORE Connection::open creates it for a new path. This is a
+        // more robust discriminator than user_version/row-count: an existing file
+        // that predates the user_version pragma (stamped 0) or that has no project
+        // row yet must still be MIGRATED, not treated as fresh.
+        let file_existed = path.exists();
+
         let conn = Connection::open(path).context("Failed to open database")?;
 
-        let db = Self { conn };
+        let mut db = Self { conn };
         db.enable_foreign_keys()?;
 
         let prior_version = db.get_user_version().unwrap_or(0);
@@ -25,16 +32,26 @@ impl Database {
             );
         }
         db.init_schema()?;
-        // `open` stamps the file with the current SCHEMA_VERSION below without
-        // running the full migration chain (init_schema is CREATE IF NOT
-        // EXISTS). Pre-v7 persisted undo/redo payloads are unsafe to replay
-        // (see UNDO_FORMAT_SAFE_VERSION), so drop them here BEFORE the stamp
-        // erases the evidence that this file predates the format change.
-        // No-op for freshly created files (empty tables).
-        if prior_version < UNDO_FORMAT_SAFE_VERSION {
-            db.drop_legacy_undo_history()?;
+
+        // A brand-new file (did not exist until Connection::open created it) was
+        // just built at the CURRENT schema by init_schema (CREATE-IF-NOT-EXISTS),
+        // so stamp it directly -- cheap, and the hot path for every save/import
+        // temp file. An EXISTING file may predate a column-adding migration:
+        // init_schema cannot ALTER an existing table, so it must run the real
+        // migration chain so e.g. the v9->v10 speleo_link.last_edit_at ALTER
+        // actually happens BEFORE the version is stamped -- otherwise
+        // ensure_schema_version()'s fast path (user_version == SCHEMA_VERSION)
+        // skips the migration forever and a later `SELECT last_edit_at` fails.
+        // ensure_schema_version() also drops the unsafe pre-v7 undo/redo payloads
+        // it used to be open()'s job to strip. (#241)
+        if !file_existed {
+            db.set_user_version(SCHEMA_VERSION)?;
+        } else if prior_version < SCHEMA_VERSION {
+            db.ensure_schema_version()?;
         }
-        db.set_user_version(SCHEMA_VERSION)?;
+        // An existing file already at (or newer than) SCHEMA_VERSION is left
+        // untouched; a newer version was warned about above.
+
         tracing::debug!("Schema initialized");
 
         Ok(db)

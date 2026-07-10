@@ -1937,6 +1937,128 @@ fn test_legacy_v6_undo_history_dropped_on_open() {
 }
 
 #[test]
+fn open_migrates_pre_v10_file_instead_of_only_stamping() {
+    // #241 (P0): Database::open() used to init_schema() (CREATE-IF-NOT-EXISTS,
+    // which cannot add a column to a table that already exists) then stamp
+    // user_version = SCHEMA_VERSION WITHOUT running the migration chain. A pre-v10
+    // file reopened this way (e.g. the rename-failure reopen at project_io.rs) was
+    // marked current while its speleo_link still lacked the v10 `last_edit_at`
+    // column; ensure_schema_version()'s fast path (user_version == SCHEMA_VERSION)
+    // then skipped the ALTER forever and a later `SELECT last_edit_at` failed.
+    // open() must run the real migration for an existing older file.
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("pre_v10.stalx");
+
+    // Build a fresh current-schema file, then rewrite it to look like a v9 file:
+    // a speleo_link WITHOUT last_edit_at, stamped user_version 9.
+    {
+        let db = Database::open(&path).unwrap();
+        db.conn
+            .execute_batch(
+                "DROP TABLE IF EXISTS speleo_link;
+                 CREATE TABLE speleo_link (
+                     id INTEGER PRIMARY KEY CHECK (id = 1),
+                     endpoint TEXT NOT NULL,
+                     project_id TEXT NOT NULL,
+                     project_name TEXT NOT NULL,
+                     base_commit_sha TEXT,
+                     has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
+                     last_verify_at TEXT
+                 );
+                 INSERT INTO speleo_link
+                     (id, endpoint, project_id, project_name, has_unpushed_edits)
+                 VALUES (1, 'https://example.test', 'proj', 'name', 1);",
+            )
+            .unwrap();
+        db.set_user_version(9).unwrap();
+
+        // Precondition: the simulated v9 file genuinely lacks the column.
+        let has_before: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('speleo_link') WHERE name='last_edit_at'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_before, 0, "v9 fixture must lack last_edit_at");
+    }
+
+    // Reopen through open(): it must MIGRATE the pre-v10 file, not merely stamp it.
+    let db = Database::open(&path).unwrap();
+    assert_eq!(
+        db.get_user_version().unwrap(),
+        SCHEMA_VERSION,
+        "open() stamps the current version"
+    );
+    let has_after: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('speleo_link') WHERE name='last_edit_at'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        has_after, 1,
+        "open() must run the v9->v10 migration that adds last_edit_at"
+    );
+    // The column is now selectable (this SELECT errored before the fix).
+    db.conn
+        .query_row("SELECT COUNT(last_edit_at) FROM speleo_link", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .expect("SELECT last_edit_at must succeed after migration");
+}
+
+#[test]
+fn open_migrates_existing_file_stamped_v0() {
+    // #241 (pre-pr hardening): open() must not misclassify an EXISTING pre-v10
+    // file that carries user_version 0 (a .stalx predating the version pragma, or
+    // with no project row yet) as freshly-created and stamp it without migrating.
+    // open() keys fresh-vs-migrate on whether the FILE existed before it opened,
+    // not on user_version or project-row count, so an existing v0 file still
+    // migrates. (An earlier `prior_version == 0 && !project_has_rows` heuristic
+    // would have wrongly stamped this file current and skipped the ALTER.)
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("v0_existing.stalx");
+    {
+        let db = Database::open(&path).unwrap();
+        db.conn
+            .execute_batch(
+                "DROP TABLE IF EXISTS speleo_link;
+                 CREATE TABLE speleo_link (
+                     id INTEGER PRIMARY KEY CHECK (id = 1),
+                     endpoint TEXT NOT NULL,
+                     project_id TEXT NOT NULL,
+                     project_name TEXT NOT NULL,
+                     base_commit_sha TEXT,
+                     has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
+                     last_verify_at TEXT
+                 );",
+            )
+            .unwrap();
+        db.set_user_version(0).unwrap();
+    }
+
+    // The file now EXISTS, is stamped user_version 0, and has a pre-v10
+    // speleo_link. Reopen: it must be migrated, not stamp-skipped as "fresh".
+    let db = Database::open(&path).unwrap();
+    let has_after: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('speleo_link') WHERE name='last_edit_at'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        has_after, 1,
+        "an existing v0 file must be migrated, not classified fresh and stamp-skipped"
+    );
+}
+
+#[test]
 fn test_new_format_undo_history_survives_reload() {
     use crate::core::undo::{UndoData, UndoEntry};
     use crate::core::{Command, UndoStack};
