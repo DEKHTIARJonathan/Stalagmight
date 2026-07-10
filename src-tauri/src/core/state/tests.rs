@@ -3319,6 +3319,121 @@ fn test_delete_shot_rejects_frozen_shot() {
 }
 
 #[test]
+fn test_delete_shot_and_split_rejects_frozen_shot() {
+    // #241 (P0): the single-shot delete+split path (execute_delete_shot_and_split)
+    // must enforce the same frozen-geometry guard as delete_shot and the range
+    // split/shift paths. Without it, a frozen MID-section shot can be deleted
+    // through the split, silently breaking an LSQ-adjusted network. Build a
+    // two-section loop with a datum at each end so every shot is frozen, then
+    // split at a genuine INTERIOR shot (so it clears the edge-shot pre-check and
+    // reaches the frozen guard) and assert it is refused with nothing changed.
+    let mut project = Project::new("FrozenSplit".to_string(), None);
+    let sec_a = project
+        .add_section(SectionData {
+            color: "#ff0000".to_string(),
+            shots: vec![
+                test_shot_data(5.0),
+                test_shot_data(7.0),
+                test_shot_data(4.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let sec_b = project
+        .add_section(SectionData {
+            color: "#00ff00".to_string(),
+            shots: vec![
+                test_shot_data(5.0),
+                test_shot_data(7.0),
+                test_shot_data(4.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    // Close the loop: both ends of A merged onto both ends of B (3 shots => the
+    // section tail is station index 3).
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(sec_a, 0).into(),
+        station_b: StationRef::new(sec_b, 0).into(),
+        merged_at: chrono::Utc::now(),
+    });
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(sec_a, 3).into(),
+        station_b: StationRef::new(sec_b, 3).into(),
+        merged_at: chrono::Utc::now(),
+    });
+    // Two datums, one per section head, freeze every shot in the loop.
+    project.zero_datums.push(crate::models::ZeroDatum {
+        station_ref: StationRef::new(sec_a, 0).into(),
+        gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+    });
+    project.zero_datums.push(crate::models::ZeroDatum {
+        station_ref: StationRef::new(sec_b, 0).into(),
+        gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+    });
+    project.rebuild_merge_adjacency();
+
+    // SELF-VERIFY the interior split shot (index 1) is genuinely frozen.
+    let frozen = project.compute_frozen_shots();
+    assert!(
+        frozen
+            .iter()
+            .any(|f| f.section_id == sec_a && f.shot_index == 1),
+        "precondition: sec_a interior shot[1] must be frozen by the loop+two-datum setup"
+    );
+
+    let sec_a_shots = project
+        .sections
+        .iter()
+        .find(|s| s.id == sec_a)
+        .unwrap()
+        .shots
+        .clone();
+    let mid_shot_id = sec_a_shots[1].id;
+    let shots_before = sec_a_shots.len();
+    let sections_before = project.sections.len();
+
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    let result = state.execute_delete_shot_and_split(
+        sec_a,
+        mid_shot_id,
+        "A-1".to_string(),
+        "A-2".to_string(),
+    );
+    assert!(
+        !result.success,
+        "splitting by deleting a frozen shot must be refused"
+    );
+    assert!(
+        result.error.as_deref().unwrap_or("").contains("frozen"),
+        "error must mention the shot is frozen, got: {:?}",
+        result.error
+    );
+
+    // Nothing changed: no new section, the frozen shot still exists.
+    let after = state.get_project_state().unwrap();
+    assert_eq!(
+        after.sections.len(),
+        sections_before,
+        "a refused split must not create a new section"
+    );
+    let shots_after = after
+        .sections
+        .iter()
+        .find(|s| s.id == sec_a)
+        .unwrap()
+        .shots
+        .len();
+    assert_eq!(
+        shots_after, shots_before,
+        "the frozen shot must still exist"
+    );
+}
+
+#[test]
 fn test_legacy_project_seeds_validation_from_global_config() {
     // Issue #57 (Item 5): a legacy project saved before per-project validation
     // (no `validation` row in project_settings) must open with the user's GLOBAL

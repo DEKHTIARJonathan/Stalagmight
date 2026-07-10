@@ -67,6 +67,18 @@ impl AppState {
                 _ => {}
             }
 
+            // Frozen-geometry guard (mirrors delete_shot and the range-split
+            // path): this path deletes `shot_id`, so refuse if it is part of an
+            // adjusted survey network -- otherwise a frozen mid-section shot can
+            // be deleted through the split path, silently breaking the LSQ
+            // solution's frozen geometry. (#241)
+            if project.is_shot_frozen_by_id(section_id, shot_id) {
+                return CommandResult::failure(
+                    "Cannot delete a frozen shot. This shot is part of an adjusted survey network."
+                        .to_string(),
+                );
+            }
+
             // Get split data (safe after pre-checks above)
             let Some((pos, shots_before, shots_after)) = section.split_shots_at(shot_id) else {
                 return CommandResult::failure(format!("Failed to split at shot {shot_id}"));
