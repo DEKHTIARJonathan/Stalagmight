@@ -1,5 +1,5 @@
 /**
- * Unit test (#241) — Plan/Export read-only toolbar layout has exactly one divider.
+ * Unit test (#241) - Plan/Export read-only toolbar layout has exactly one divider.
  *
  * `READ_ONLY_TOOLBAR_ITEMS` filters `TOOLBAR_ITEMS` down to the non-mutating tools
  * (Select / Pan / Zoom / Measure), which leaves two adjacent separators where the
@@ -9,7 +9,7 @@
  * consecutive separators to one and drops any leading/trailing separator.
  *
  * `READ_ONLY_TOOLBAR_ITEMS` and `TOOLBAR_ITEMS` are exported from `Toolbar.tsx`
- * for this test (they were module-private) — a pure array test is far cheaper
+ * for this test (they were module-private) - a pure array test is far cheaper
  * than a full component render, which would need uiStore/projectStore/speleoStore
  * wiring unrelated to this layout logic.
  */

@@ -1,10 +1,10 @@
 /**
- * Component test (#241) — swim-speed disk-persist debounce.
+ * Component test (#241) - swim-speed disk-persist debounce.
  *
  * `PositiveNumberField` fires `onCommit` on every valid keystroke (not just
  * blur), and the swim-speed field's `onCommit` used to call
  * `useProjectStore.getState().updateConfig(...)` unsequenced on every one of
- * those commits — a fast typist fired one disk write per keystroke, and
+ * those commits - a fast typist fired one disk write per keystroke, and
  * out-of-order completion could persist an earlier intermediate value. The
  * fix debounces the disk write (keeping the in-memory `setGasConfig` update
  * immediate) so only the LATEST value is ever persisted.
@@ -54,7 +54,7 @@ describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
     fireEvent.change(input, { target: { value: '12' } });
     fireEvent.change(input, { target: { value: '13' } });
 
-    // No disk write yet — only the debounce timer has been (re)armed.
+    // No disk write yet - only the debounce timer has been (re)armed.
     expect(useProjectStore.getState().updateConfig).not.toHaveBeenCalled();
 
     vi.runAllTimers();
@@ -73,7 +73,7 @@ describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
     fireEvent.change(input, { target: { value: '14' } });
 
     expect(useGasPlanStore.getState().gasConfig.swim_speed_m_per_min).toBe(14);
-    // Still debounced — the disk write hasn't fired.
+    // Still debounced - the disk write hasn't fired.
     expect(useProjectStore.getState().updateConfig).not.toHaveBeenCalled();
   });
 

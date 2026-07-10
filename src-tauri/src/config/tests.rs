@@ -146,6 +146,32 @@ fn test_gas_config_normalize_floors_survey_and_stressed_rmv_at_one() {
 }
 
 #[test]
+fn test_gas_config_normalize_preserves_rmv_multipliers_at_exactly_one() {
+    // The floor is a STRICT `< 1.0`, so exactly 1.0 is a legitimate value and must be
+    // preserved, not reset to a default. This matters most for stressed (default 1.5):
+    // a regression to `<= 1.0` would silently bump a user-set 1.0 up to 1.5.
+    let mut config = GasConfig {
+        survey_rmv_multiplier: 1.0,
+        stressed_rmv_multiplier: 1.0,
+        jump_rmv_multiplier: 1.0,
+        ..GasConfig::default()
+    };
+    config.normalize();
+    assert_eq!(
+        config.survey_rmv_multiplier, 1.0,
+        "survey RMV of exactly 1.0 must be preserved"
+    );
+    assert_eq!(
+        config.stressed_rmv_multiplier, 1.0,
+        "stressed RMV of exactly 1.0 must be preserved"
+    );
+    assert_eq!(
+        config.jump_rmv_multiplier, 1.0,
+        "jump RMV of exactly 1.0 must be preserved"
+    );
+}
+
+#[test]
 fn test_gas_config_normalize_preserves_valid_values() {
     let mut config = GasConfig {
         swim_speed_m_per_min: 12.0,
