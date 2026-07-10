@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useGasPlanStore } from '../../store/gasPlanStore';
@@ -37,6 +37,20 @@ const REQUIRED_STAGES: Record<ReservePreset, number> = {
   two_stage: 2,
   free: 0,
 };
+
+// Persist the swim speed into the saved config (the same gas.swim_speed_m_per_min
+// Settings edits). Reads the LATEST saved config at call time, so a debounced/flushed
+// write always merges against current state rather than a stale snapshot. Module-scope
+// so the debounced callbacks below stay dependency-free.
+function writeSwimSpeedToDisk(v: number): void {
+  const saved = useProjectStore.getState().config;
+  if (saved) {
+    void useProjectStore.getState().updateConfig({
+      ...saved,
+      gas: { ...saved.gas, swim_speed_m_per_min: v },
+    });
+  }
+}
 
 /**
  * Gas & route-planning setup sidebar (#38). The right Dock slot while in Plan mode:
@@ -100,6 +114,35 @@ export function GasPlanPanel() {
     });
     useGasPlanStore.getState().markHydrated();
   }, [setGasConfig]);
+
+  // Swim-speed disk-persist debounce (#241): the in-memory working config updates
+  // immediately on every keystroke, but the disk write is trailing-debounced so a fast
+  // typist doesn't fire one config save per keystroke (each save reloads config + drops
+  // the LSQ solve). Cancel any pending write when a newer value arrives, so only the
+  // LATEST value is ever persisted regardless of write-completion order.
+  const swimSpeedPersistRef = useRef<{
+    timer: ReturnType<typeof setTimeout>;
+    value: number;
+  } | null>(null);
+  // Flush any pending write immediately (used on unmount so a value typed within the
+  // debounce window right before leaving Plan mode still reaches disk -- the pre-debounce
+  // code persisted every keystroke, so dropping the last one would be a regression).
+  const flushSwimSpeed = useCallback(() => {
+    const pending = swimSpeedPersistRef.current;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    swimSpeedPersistRef.current = null;
+    writeSwimSpeedToDisk(pending.value);
+  }, []);
+  useEffect(() => flushSwimSpeed, [flushSwimSpeed]);
+  const persistSwimSpeed = useCallback((v: number) => {
+    if (swimSpeedPersistRef.current) clearTimeout(swimSpeedPersistRef.current.timer);
+    const timer = setTimeout(() => {
+      swimSpeedPersistRef.current = null;
+      writeSwimSpeedToDisk(v);
+    }, 450);
+    swimSpeedPersistRef.current = { timer, value: v };
+  }, []);
 
   const units = gasConfig.units;
   const originLabel = origin
@@ -242,7 +285,9 @@ export function GasPlanPanel() {
             copy (so the overlay/route refetch immediately) AND writes the value back to the saved
             config — the same gas.swim_speed_m_per_min that Settings ▸ Gas edits — so a speed set
             while planning sticks across Plan exit / restart and stays in sync with Settings (#236).
-            Only this field is written back; reserve / units / diver stay per-session. */}
+            The disk write is debounced (see persistSwimSpeed) so rapid typing doesn't fire one
+            config save per keystroke; only this field is written back, reserve / units / diver
+            stay per-session (#241). */}
         <section className="space-y-1">
           <SectionLabel>{t('gasPanel.swimSpeed.label')}</SectionLabel>
           <div className="flex items-center gap-2">
@@ -251,13 +296,7 @@ export function GasPlanPanel() {
               onCommit={(n) => {
                 const v = speedFromDisplay(n, units);
                 setGasConfig({ ...gasConfig, swim_speed_m_per_min: v });
-                const saved = useProjectStore.getState().config;
-                if (saved) {
-                  void useProjectStore.getState().updateConfig({
-                    ...saved,
-                    gas: { ...saved.gas, swim_speed_m_per_min: v },
-                  });
-                }
+                persistSwimSpeed(v);
               }}
               step={units === 'imperial' ? 1 : 0.5}
               displayPrecision={1}
