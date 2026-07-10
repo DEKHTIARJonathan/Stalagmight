@@ -18,6 +18,12 @@ import type { LoopClosure } from '../../../types/project';
 import type { SurveyData } from '../../../types/survey-data';
 import type { GpsOrigin, DecimalPrecision } from '../../../types/config';
 import type { MapThemeColors } from '../../../utils/themeColors';
+import {
+  vtLinesFromFeatures,
+  vtPointsFromFeatures,
+  vtTransferables,
+  type VtLayerData,
+} from './vectorTileData';
 
 interface BuildArgs {
   surveyData: SurveyData;
@@ -51,7 +57,12 @@ interface ChunkMessage {
   kind: 'chunk';
   requestId: number;
   group: SurveyFeatureGroupKey;
-  features: GeoJSON.Feature[];
+  /** GeoJSON payload for non-bulk groups (loop closures). */
+  features?: GeoJSON.Feature[];
+  /** Compact typed-array payload for the bulk groups (#mem): converted here
+   *  in the worker so the ~14k-170k-feature GeoJSON graph never structured-
+   *  clones to the main thread; the arrays move via the transfer list. */
+  vt?: VtLayerData;
   colorPalette: readonly string[];
 }
 
@@ -68,6 +79,18 @@ interface ErrorMessage {
 
 type IncomingMessage = BuildMessage;
 type OutgoingMessage = BeginMessage | ChunkMessage | EndMessage | ErrorMessage;
+
+/** Bulk groups converted to the compact vector-tile payload (#mem). Loop
+ *  closures (small) keep the GeoJSON path. Keep in sync with
+ *  SurveyLayer.VT_GROUP_KIND. */
+const VT_GROUP_KIND: Partial<Record<SurveyFeatureGroupKey, 'line' | 'point'>> = {
+  shotFeatures: 'line',
+  shotGradientFeatures: 'line',
+  stationFeatures: 'point',
+  sectionLabelFeatures: 'point',
+  shotLabelFeatures: 'point',
+  stationLabelFeatures: 'point',
+};
 
 self.onmessage = (e: MessageEvent<IncomingMessage>) => {
   const msg = e.data;
@@ -90,6 +113,19 @@ self.onmessage = (e: MessageEvent<IncomingMessage>) => {
       msg.args.precision,
       msg.args.options,
       (group, features, colorPalette) => {
+        const vtKind = VT_GROUP_KIND[group];
+        if (vtKind) {
+          const vt = vtKind === 'line' ? vtLinesFromFeatures(features) : vtPointsFromFeatures(features);
+          const chunk: OutgoingMessage = {
+            kind: 'chunk',
+            requestId: msg.requestId,
+            group,
+            vt,
+            colorPalette,
+          };
+          self.postMessage(chunk, { transfer: vtTransferables(vt) });
+          return;
+        }
         const chunk: OutgoingMessage = {
           kind: 'chunk',
           requestId: msg.requestId,

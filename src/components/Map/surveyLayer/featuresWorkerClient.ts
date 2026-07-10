@@ -25,6 +25,7 @@ import type { SurveyData } from '../../../types/survey-data';
 import type { GpsOrigin, DecimalPrecision } from '../../../types/config';
 import type { MapThemeColors } from '../../../utils/themeColors';
 import { recordPerfTiming } from '../../../utils/memoryProbe';
+import type { VtFeatureChunk, VtLayerData } from './vectorTileData';
 
 interface BuildArgs {
   /** Struct-of-Arrays survey data. Posted to the worker via structured
@@ -49,7 +50,7 @@ interface BuildArgs {
  */
 export interface FeatureStreamSink {
   begin(): void;
-  chunk(group: SurveyFeatureGroupKey, features: GeoJSON.Feature[], colorPalette: readonly string[]): void;
+  chunk(group: SurveyFeatureGroupKey, payload: VtFeatureChunk, colorPalette: readonly string[]): void;
   end(): void;
   error(e: Error): void;
 }
@@ -69,15 +70,15 @@ let nextRequestId = 0;
 
 /**
  * Single-flight, last-wins build scheduling (#mem). The worker processes its
- * message queue strictly in order, so posting a second build while one was in
+ * message queue strictly in order, so posting a second build while one is in
  * flight used to mean BOTH ran to completion — two full ~178k-feature graphs
- * built and streamed to the main thread back-to-back, doubling the transient
- * allocation burst that sizes the non-decommitting WebKit heap. Callers only
- * ever want the LATEST build (SurveyLayer discards stale results by token
- * anyway), so while one build is in flight we hold at most one queued request
- * and displace any previously queued one. A displaced request's sink is never
- * begun; its promise resolves silently, which the SurveyLayer caller already
- * treats as "superseded, nothing applied".
+ * built, structured-cloned to the main thread and (partially) ingested by
+ * MapLibre back-to-back, doubling the transient allocation burst that sizes
+ * the non-decommitting JSC/bmalloc heap. Callers always want only the LATEST
+ * build (SurveyLayer discards stale results by token anyway), so while one
+ * build is in flight we hold at most one queued request and displace any
+ * previously queued one (its promise resolves silently; its sink is never
+ * begun, which callers already treat as "superseded, nothing applied").
  */
 let queuedNext: { args: BuildArgs; sink: FeatureStreamSink } | null = null;
 
@@ -142,6 +143,7 @@ function ensureWorker(): Worker | null {
         colorPalette?: readonly string[];
         group?: SurveyFeatureGroupKey;
         features?: GeoJSON.Feature[];
+        vt?: VtLayerData;
         message?: string;
       }>,
     ) => {
@@ -156,9 +158,13 @@ function ensureWorker(): Worker | null {
       if (kind === 'begin') {
         sink.begin();
       } else if (kind === 'chunk' && e.data.group) {
-        // The chunk's features were structured-cloned onto the main thread
-        // before this handler ran; the sink applies + drops them.
-        sink.chunk(e.data.group, e.data.features ?? [], e.data.colorPalette ?? []);
+        // Bulk groups arrive as the compact vt payload (typed arrays moved
+        // via the transfer list); others as structured-cloned GeoJSON. The
+        // sink applies + drops the payload either way.
+        const payload: VtFeatureChunk = e.data.vt
+          ? { vt: e.data.vt }
+          : { features: e.data.features ?? [] };
+        sink.chunk(e.data.group, payload, e.data.colorPalette ?? []);
       } else if (kind === 'end') {
         pending.delete(requestId);
         sink.end();
@@ -232,7 +238,7 @@ export function buildSurveyFeaturesStreamed(args: BuildArgs, sink: FeatureStream
     // set through the sink in group order with the final palette on each chunk.
     sink.begin();
     for (const group of SURVEY_FEATURE_GROUP_ORDER) {
-      sink.chunk(group, features[group], features.colorPalette);
+      sink.chunk(group, { features: features[group] }, features.colorPalette);
       features[group] = [];
     }
     sink.end();
@@ -250,7 +256,7 @@ export function buildSurveyFeaturesStreamed(args: BuildArgs, sink: FeatureStream
     };
     const wrapped: FeatureStreamSink = {
       begin: () => sink.begin(),
-      chunk: (group, features, palette) => sink.chunk(group, features, palette),
+      chunk: (group, payload, palette) => sink.chunk(group, payload, palette),
       end: () => {
         sink.end();
         settle();
@@ -261,20 +267,29 @@ export function buildSurveyFeaturesStreamed(args: BuildArgs, sink: FeatureStream
       },
     };
     if (pending.size > 0) {
-      // A build is in flight: queue this one (last-wins) and displace any
-      // previously queued request. Settling the displaced request through
-      // its wrapped `end` resolves its promise; its caller-side sink guards
-      // on a never-fired `begin`, so nothing is applied.
+      // A build is in flight: queue this one (last-wins). A previously queued
+      // request is displaced — resolve it silently: its sink was never begun,
+      // which the SurveyLayer caller already treats as "superseded".
       if (queuedNext) {
         const displaced = queuedNext;
         queuedNext = null;
-        displaced.sink.end();
+        displacedSettle(displaced.sink);
       }
       queuedNext = { args, sink: wrapped };
       return;
     }
     postBuild(w, args, wrapped);
   });
+}
+
+/**
+ * Settle a displaced (superseded) queued build. Its wrapped sink's `end`
+ * would run the caller's `sink.end()` — which SurveyLayer guards with a
+ * `began` flag (false here, since `begin` never fired), so this is safe and
+ * resolves the awaited promise.
+ */
+function displacedSettle(sink: FeatureStreamSink): void {
+  sink.end();
 }
 
 /** Tear down the worker. Currently only used from tests. */
