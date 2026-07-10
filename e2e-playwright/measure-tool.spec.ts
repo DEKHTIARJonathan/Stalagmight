@@ -11,8 +11,6 @@ import { seedProjectWithSections, waitForMapReady, type SectionSeed } from './he
 interface StationPosition {
   x: number;
   y: number;
-  sectionId: number;
-  stationIndex: number;
 }
 
 async function createProject(page: Page, name: string): Promise<void> {
@@ -36,13 +34,17 @@ const sectionSeeds: SectionSeed[] = [
   },
 ];
 
+// The visible survey-stations layer now returns MERGED MultiPoint features (one
+// group per section/color, coordinates = an ARRAY of station points, and NO
+// per-point stationIndex). Flatten every individual point to its screen position;
+// distinct array indices resolve to distinct stations for the two-station measure
+// flow (identity is discovered behaviorally by which station a click selects).
 async function getStationScreenPositions(page: Page): Promise<StationPosition[]> {
   return page.evaluate(() => {
     const map = (window as unknown as {
       __stalagmight_map__?: {
         queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
-          geometry: { coordinates: [number, number] };
-          properties: { sectionId: number; stationIndex: number };
+          geometry: { type: string; coordinates: number[] | number[][] };
         }>;
         project: (coords: [number, number]) => { x: number; y: number };
       };
@@ -50,10 +52,18 @@ async function getStationScreenPositions(page: Page): Promise<StationPosition[]>
     if (!map) return [];
     try {
       const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-      return features.map((f) => {
-        const screenPos = map.project(f.geometry.coordinates);
-        return { x: screenPos.x, y: screenPos.y, sectionId: f.properties.sectionId, stationIndex: f.properties.stationIndex };
-      });
+      const out: StationPosition[] = [];
+      for (const f of features) {
+        const raw =
+          f.geometry.type === 'MultiPoint'
+            ? (f.geometry.coordinates as number[][])
+            : [f.geometry.coordinates as number[]];
+        for (const c of raw) {
+          const screenPos = map.project([c[0]!, c[1]!]);
+          out.push({ x: screenPos.x, y: screenPos.y });
+        }
+      }
+      return out;
     } catch {
       return [];
     }
@@ -67,43 +77,47 @@ async function activeTool(page: Page): Promise<string | undefined> {
   });
 }
 
-/** Count distinct shots whose `measured` feature-state is set (the path tint). */
+/** Count distinct shots whose `measured` feature-state is set (the path tint).
+ *  survey-data-shots is a VECTOR-TILE source now, so the query and every
+ *  getFeatureState read must name the tile source-layer ('g'). */
 async function countMeasuredShots(page: Page): Promise<number> {
   return page.evaluate(() => {
     const map = (window as unknown as {
       __stalagmight_map__?: {
-        querySourceFeatures: (s: string) => Array<{ id?: number }>;
-        getFeatureState: (f: { source: string; id: number }) => { measured?: boolean };
+        querySourceFeatures: (s: string, opts?: { sourceLayer?: string }) => Array<{ id?: number }>;
+        getFeatureState: (f: { source: string; sourceLayer?: string; id: number }) => { measured?: boolean };
       };
     }).__stalagmight_map__;
     if (!map) return 0;
     const seen = new Set<number>();
     let n = 0;
-    for (const f of map.querySourceFeatures('survey-data-shots')) {
+    for (const f of map.querySourceFeatures('survey-data-shots', { sourceLayer: 'g' })) {
       if (f.id == null || seen.has(f.id)) continue;
       seen.add(f.id);
-      if (map.getFeatureState({ source: 'survey-data-shots', id: f.id })?.measured) n++;
+      if (map.getFeatureState({ source: 'survey-data-shots', sourceLayer: 'g', id: f.id })?.measured) n++;
     }
     return n;
   });
 }
 
-/** Count distinct stations whose `measured` feature-state is set (the path tint). */
+/** Count distinct stations whose `measured` feature-state is set (the path tint).
+ *  survey-data-stations is a VECTOR-TILE source now, so the query and every
+ *  getFeatureState read must name the tile source-layer ('g'). */
 async function countMeasuredStations(page: Page): Promise<number> {
   return page.evaluate(() => {
     const map = (window as unknown as {
       __stalagmight_map__?: {
-        querySourceFeatures: (s: string) => Array<{ id?: number }>;
-        getFeatureState: (f: { source: string; id: number }) => { measured?: boolean };
+        querySourceFeatures: (s: string, opts?: { sourceLayer?: string }) => Array<{ id?: number }>;
+        getFeatureState: (f: { source: string; sourceLayer?: string; id: number }) => { measured?: boolean };
       };
     }).__stalagmight_map__;
     if (!map) return 0;
     const seen = new Set<number>();
     let n = 0;
-    for (const f of map.querySourceFeatures('survey-data-stations')) {
+    for (const f of map.querySourceFeatures('survey-data-stations', { sourceLayer: 'g' })) {
       if (f.id == null || seen.has(f.id)) continue;
       seen.add(f.id);
-      if (map.getFeatureState({ source: 'survey-data-stations', id: f.id })?.measured) n++;
+      if (map.getFeatureState({ source: 'survey-data-stations', sourceLayer: 'g', id: f.id })?.measured) n++;
     }
     return n;
   });

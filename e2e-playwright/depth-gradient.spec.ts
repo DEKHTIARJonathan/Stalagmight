@@ -82,6 +82,53 @@ async function waitForMapLoaded(page: Page): Promise<void> {
   }, { timeout: 10000 }).toBe(true);
 }
 
+/**
+ * Rendered station colors, resolved from each merged group's numeric
+ * `colorIndex` through the layer's `circle-color` paint expression.
+ *
+ * The bulk station source is a MapLibre VECTOR-TILE source of MERGED groups now
+ * (#mem): the group features carry a numeric `colorIndex` (plus `featureId` /
+ * `sectionId`), NOT a baked `color` string; the actual rendered color is the
+ * palette entry the paint maps that index to. Enabling the depth gradient swaps
+ * that palette (section blue → the depth ramp) AND the groups' `colorIndex`, so
+ * resolving the index through the live paint yields the true rendered color and
+ * changes exactly when depth coloring turns on. Returns the first few groups'
+ * colors (order-stable enough for a before/after comparison).
+ */
+async function stationRenderedColors(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const map = (window as unknown as {
+      __stalagmight_map__?: {
+        queryRenderedFeatures: (opts: { layers: string[] }) => Array<{ properties?: { colorIndex?: number } }>;
+        getPaintProperty: (l: string, p: string) => unknown;
+      };
+    }).__stalagmight_map__;
+    if (!map) return [];
+    // Resolve a ["match", ["get","colorIndex"], k0, c0, k1, c1, ..., fallback]
+    // color expression for a given colorIndex (or a constant string paint).
+    const resolve = (expr: unknown, ci: number): string => {
+      if (typeof expr === 'string') return expr;
+      if (!Array.isArray(expr) || expr[0] !== 'match') return 'none';
+      for (let i = 2; i + 1 < expr.length; i += 2) {
+        if (expr[i] === ci) return String(expr[i + 1]);
+      }
+      return String(expr[expr.length - 1]);
+    };
+    try {
+      const paint = map.getPaintProperty('survey-stations', 'circle-color');
+      return map
+        .queryRenderedFeatures({ layers: ['survey-stations'] })
+        .slice(0, 5)
+        .map((f) => {
+          const ci = f.properties?.colorIndex;
+          return typeof ci === 'number' ? resolve(paint, ci) : 'none';
+        });
+    } catch {
+      return [];
+    }
+  });
+}
+
 test.describe('Depth Gradient', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
@@ -123,23 +170,9 @@ test.describe('Depth Gradient', () => {
       return count;
     }, { timeout: 5000 }).toBeGreaterThan(0);
 
-    // Get station colors BEFORE enabling depth gradient
-    const colorsBefore = await page.evaluate(() => {
-      const map = (window as unknown as {
-        __stalagmight_map__?: {
-          queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
-            properties: { color?: string };
-          }>;
-        };
-      }).__stalagmight_map__;
-      if (!map) return [];
-      try {
-        const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-        return features.slice(0, 5).map((f) => f.properties?.color ?? 'none');
-      } catch {
-        return [];
-      }
-    });
+    // Get station colors BEFORE enabling depth gradient (resolved via the merged
+    // groups' colorIndex + the live circle-color paint; see stationRenderedColors).
+    const colorsBefore = await stationRenderedColors(page);
 
     // Ensure we have features to compare
     expect(colorsBefore.length).toBeGreaterThan(0);
@@ -163,22 +196,7 @@ test.describe('Depth Gradient', () => {
     // Poll for station colors to change after enabling depth gradient
     // Features are guaranteed to exist from the check above
     await expect.poll(async () => {
-      const colorsAfter = await page.evaluate(() => {
-        const map = (window as unknown as {
-          __stalagmight_map__?: {
-            queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
-              properties: { color?: string };
-            }>;
-          };
-        }).__stalagmight_map__;
-        if (!map) return [];
-        try {
-          const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-          return features.slice(0, 5).map((f) => f.properties?.color ?? 'none');
-        } catch {
-          return [];
-        }
-      });
+      const colorsAfter = await stationRenderedColors(page);
 
       // Keep polling if features not yet available (map still loading)
       if (colorsAfter.length === 0) return 'waiting';
@@ -208,16 +226,19 @@ test.describe('Depth Gradient', () => {
     }, { timeout: 5000 }).toBeGreaterThan(0);
 
     // Wait for shot source features before reading endpoint color metadata.
+    // The bulk shot source and the gradient-overlay source are MapLibre
+    // VECTOR-TILE sources now (#mem): every querySourceFeatures call must name
+    // the single source-layer ('g') or it returns nothing.
     await expect.poll(async () => {
       const count = await page.evaluate(() => {
         const map = (window as unknown as {
           __stalagmight_map__?: {
-            querySourceFeatures: (sourceId: string) => Array<unknown>;
+            querySourceFeatures: (sourceId: string, opts?: { sourceLayer?: string }) => Array<unknown>;
           };
         }).__stalagmight_map__;
         if (!map) return 0;
         try {
-          return map.querySourceFeatures('survey-data-shots').length;
+          return map.querySourceFeatures('survey-data-shots', { sourceLayer: 'g' }).length;
         } catch {
           return 0;
         }
@@ -229,30 +250,28 @@ test.describe('Depth Gradient', () => {
       const map = (window as unknown as {
         __stalagmight_map__?: {
           getStyle: () => { sources?: Record<string, unknown> };
-          querySourceFeatures: (sourceId: string) => Array<{
+          querySourceFeatures: (sourceId: string, opts?: { sourceLayer?: string }) => Array<{
             properties?: {
               sectionId?: number;
               shotId?: number;
-              color?: string;
+              colorIndex?: number;
             };
           }>;
         };
       }).__stalagmight_map__;
       if (!map) return null;
 
-      const shots = map.querySourceFeatures('survey-data-shots');
-      const gradientSegments = map.querySourceFeatures('survey-data-shot-gradients');
-      // In flat (non-depth) mode every shot carries a single solid
-      // `color` property and the gradient overlay layer is empty.
-      // Per-endpoint colors (fromColor/toColor on individual shots)
-      // were retired when the shot-features payload was slimmed
-      // down — the gradient layer now emits per-segment features
-      // with their own colors, exercised by the
-      // hasPerShotGradientSegments check further down.
-      const flatShotFound = shots.some((feature) => {
-        const color = feature.properties?.color;
-        return typeof color === 'string' && color.length > 0;
-      });
+      const shots = map.querySourceFeatures('survey-data-shots', { sourceLayer: 'g' });
+      const gradientSegments = map.querySourceFeatures('survey-data-shot-gradients', { sourceLayer: 'g' });
+      // In flat (non-depth) mode every merged shot group carries a single solid
+      // color, encoded now as a numeric `colorIndex` (the paint maps it to the
+      // palette color) rather than a baked `color` string, and the gradient
+      // overlay source is empty. Per-endpoint colors (fromColor/toColor on
+      // individual shots) were retired when the shot-features payload was
+      // slimmed down; the gradient source now emits per-segment features with
+      // their own colorIndex, exercised by the hasPerShotGradientSegments check
+      // further down.
+      const flatShotFound = shots.some((feature) => typeof feature.properties?.colorIndex === 'number');
 
       return {
         flatShotFound,
@@ -300,31 +319,35 @@ test.describe('Depth Gradient', () => {
       const hasPerShotGradientSegments = await page.evaluate(() => {
         const map = (window as unknown as {
           __stalagmight_map__?: {
-            querySourceFeatures: (sourceId: string) => Array<{
+            querySourceFeatures: (sourceId: string, opts?: { sourceLayer?: string }) => Array<{
               properties?: {
                 sectionId?: number;
                 shotId?: number;
-                color?: string;
+                colorIndex?: number;
               };
             }>;
           };
         }).__stalagmight_map__;
         if (!map) return false;
         try {
-          const segments = map.querySourceFeatures('survey-data-shot-gradients');
+          // Vector-tile source: name the 'g' source-layer (#mem). Each per-segment
+          // gradient feature keeps its per-shot identity (sectionId, shotId) and a
+          // numeric `colorIndex`; a shot whose segments span >1 distinct colorIndex
+          // is one whose color actually ramps along its length.
+          const segments = map.querySourceFeatures('survey-data-shot-gradients', { sourceLayer: 'g' });
           if (segments.length === 0) return false;
 
-          const colorsByShot = new Map<string, Set<string>>();
+          const colorsByShot = new Map<string, Set<number>>();
           for (const segment of segments) {
             const sectionId = segment.properties?.sectionId;
             const shotId = segment.properties?.shotId;
-            const color = segment.properties?.color;
-            if (typeof sectionId !== 'number' || typeof shotId !== 'number' || typeof color !== 'string') {
+            const colorIndex = segment.properties?.colorIndex;
+            if (typeof sectionId !== 'number' || typeof shotId !== 'number' || typeof colorIndex !== 'number') {
               continue;
             }
             const key = `${sectionId}:${shotId}`;
-            const colors = colorsByShot.get(key) ?? new Set<string>();
-            colors.add(color);
+            const colors = colorsByShot.get(key) ?? new Set<number>();
+            colors.add(colorIndex);
             colorsByShot.set(key, colors);
           }
 

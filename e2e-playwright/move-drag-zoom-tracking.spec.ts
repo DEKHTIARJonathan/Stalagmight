@@ -47,21 +47,120 @@ const SECTION_SEEDS: SectionSeed[] = [
   },
 ];
 
+/**
+ * Read every individual station lng/lat off the VISIBLE survey-stations layer.
+ * The bulk survey-data-* sources are VECTOR-TILE sources now, so the raw GeoJSON
+ * is no longer reachable via getSource().serialize(); the visible layer returns
+ * MERGED MultiPoint features (an ARRAY of station coords, no per-point id) which
+ * we flatten (fall back to a plain Point). Returns [] when the tiles are not
+ * rendered yet — callers poll via pollGeometry.
+ */
+async function readStationLngLats(page: Page): Promise<Array<[number, number]>> {
+  return page.evaluate(() => {
+    const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
+    if (!map) return [];
+    const qmap = map as unknown as {
+      queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
+        geometry: { type: string; coordinates: number[] | number[][] };
+      }>;
+    };
+    let feats: Array<{ geometry: { type: string; coordinates: number[] | number[][] } }>;
+    try {
+      feats = qmap.queryRenderedFeatures({ layers: ['survey-stations'] });
+    } catch {
+      return [];
+    }
+    const pts: Array<[number, number]> = [];
+    for (const f of feats) {
+      if (f.geometry.type === 'MultiPoint') {
+        for (const c of f.geometry.coordinates as number[][]) pts.push([c[0]!, c[1]!]);
+      } else if (f.geometry.type === 'Point') {
+        const c = f.geometry.coordinates as number[];
+        pts.push([c[0]!, c[1]!]);
+      }
+    }
+    return pts;
+  });
+}
+
+/**
+ * Read every shot's 2-point segment ([a, b] lng/lats) off the VISIBLE survey-shots
+ * layer. Merged features are MultiLineString (each inner line = one shot's segment,
+ * no per-shot id; fall back to a plain LineString). Returns [] when tiles are not
+ * rendered yet — callers poll via pollGeometry.
+ */
+async function readShotSegments(page: Page): Promise<Array<[[number, number], [number, number]]>> {
+  return page.evaluate(() => {
+    const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
+    if (!map) return [];
+    const qmap = map as unknown as {
+      queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
+        geometry: { type: string; coordinates: number[][] | number[][][] };
+      }>;
+    };
+    let feats: Array<{ geometry: { type: string; coordinates: number[][] | number[][][] } }>;
+    try {
+      feats = qmap.queryRenderedFeatures({ layers: ['survey-shots'] });
+    } catch {
+      return [];
+    }
+    const segs: Array<[[number, number], [number, number]]> = [];
+    for (const f of feats) {
+      const lines: number[][][] =
+        f.geometry.type === 'MultiLineString'
+          ? (f.geometry.coordinates as number[][][])
+          : f.geometry.type === 'LineString'
+            ? [f.geometry.coordinates as number[][]]
+            : [];
+      for (const line of lines) {
+        if (line.length >= 2) segs.push([[line[0]![0]!, line[0]![1]!], [line[1]![0]!, line[1]![1]!]]);
+      }
+    }
+    return segs;
+  });
+}
+
+/**
+ * Poll a read-only geometry fetch until it yields >= `min` items, and return the
+ * captured items. Reading the MERGED geometry off the visible layer needs the
+ * VECTOR tiles generated + rendered, so a single one-shot read can race a mid-flight
+ * tile re-render (transiently empty). Capturing the items on the successful poll
+ * iteration (rather than re-reading afterward) makes the subsequent center/project
+ * independent of the live render state.
+ */
+async function pollGeometry<T>(read: () => Promise<T[]>, min: number, label: string): Promise<T[]> {
+  let items: T[] = [];
+  await expect
+    .poll(
+      async () => {
+        items = await read();
+        return items.length;
+      },
+      { timeout: 10000 },
+    )
+    .toBeGreaterThanOrEqual(min);
+  if (items.length < min) throw new Error(`${label}: need >=${min}, got ${items.length}`);
+  return items;
+}
+
 /** Center on a station at `zoom`; return its canvas screen position + lng/lat. */
 async function centerOnStation(page: Page, zoom: number) {
-  const ll = await page.evaluate((z) => {
-    const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
-    if (!map) return null;
-    const src = map.getSource('survey-data-stations') as unknown as { serialize?: () => { data?: GeoJSON.FeatureCollection } };
-    const fc = typeof src?.serialize === 'function' ? src.serialize().data : null;
-    const pt = (fc as GeoJSON.FeatureCollection | null)?.features?.find((f) => f.geometry.type === 'Point');
-    if (!pt || pt.geometry.type !== 'Point') return { err: 'no station Point' };
-    const c = pt.geometry.coordinates as [number, number];
-    map.setCenter(c);
-    map.setZoom(z);
-    return { lng: c[0], lat: c[1] };
-  }, zoom);
-  if (!ll || 'err' in ll) throw new Error(`centerOnStation: ${ll ? ll.err : 'no map'}`);
+  // Capture the station coords on a successful poll, then center on the FIRST one —
+  // one concrete station to grab. Centering uses the captured lng/lat, so it never
+  // races the live render state.
+  const pts = await pollGeometry(() => readStationLngLats(page), 1, 'centerOnStation');
+  const coord = pts[0]!;
+  const ll = await page.evaluate(
+    ({ c, z }) => {
+      const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
+      if (!map) return null;
+      map.setCenter(c);
+      map.setZoom(z);
+      return { lng: c[0], lat: c[1] };
+    },
+    { c: coord, z: zoom },
+  );
+  if (!ll) throw new Error('centerOnStation: no map');
   await waitForMapIdle(page);
   const screen = await page.evaluate((m) => {
     const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
@@ -78,22 +177,22 @@ async function centerOnStation(page: Page, zoom: number) {
  * midpoint — i.e. it proves the grab used `queryNearestShotPoint`, not the click.
  */
 async function centerOnShotMidpoint(page: Page, zoom: number) {
-  const data = await page.evaluate((z) => {
-    const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
-    if (!map) return null;
-    const src = map.getSource('survey-data-shots') as unknown as { serialize?: () => { data?: GeoJSON.FeatureCollection } };
-    const fc = typeof src?.serialize === 'function' ? src.serialize().data : null;
-    const line = (fc as GeoJSON.FeatureCollection | null)?.features?.find((f) => f.geometry.type === 'LineString');
-    if (!line || line.geometry.type !== 'LineString') return { err: 'no shot LineString' };
-    const cs = line.geometry.coordinates as [number, number][];
-    const a = cs[0];
-    const b = cs[1];
-    const mid: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-    map.setCenter(mid);
-    map.setZoom(z);
-    return { lng: mid[0], lat: mid[1], a, b };
-  }, zoom);
-  if (!data || 'err' in data) throw new Error(`centerOnShotMidpoint: ${data ? data.err : 'no map'}`);
+  // Capture the first shot's segment on a successful poll, then center on its
+  // midpoint using the captured lng/lats (no live-render race).
+  const segs = await pollGeometry(() => readShotSegments(page), 1, 'centerOnShotMidpoint');
+  const [segA, segB] = segs[0]!;
+  const data = await page.evaluate(
+    ({ a, b, z }) => {
+      const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
+      if (!map) return null;
+      const mid: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      map.setCenter(mid);
+      map.setZoom(z);
+      return { lng: mid[0], lat: mid[1], a, b };
+    },
+    { a: segA, b: segB, z: zoom },
+  );
+  if (!data) throw new Error('centerOnShotMidpoint: no map');
   await waitForMapIdle(page);
   const proj = await page.evaluate((d) => {
     const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
@@ -155,24 +254,36 @@ async function zoomInAndPan(page: Page) {
   await waitForMapIdle(page);
 }
 
-/** First + last station of the section, centered to fit both at `zoom`. */
+/** Two well-separated stations of the section, centered to fit both at `zoom`. */
 async function firstAndLastStation(page: Page, zoom: number) {
-  const data = await page.evaluate((z) => {
-    const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
-    if (!map) return null;
-    const src = map.getSource('survey-data-stations') as unknown as { serialize?: () => { data?: GeoJSON.FeatureCollection } };
-    const fc = typeof src?.serialize === 'function' ? src.serialize().data : null;
-    const pts = ((fc as GeoJSON.FeatureCollection | null)?.features ?? [])
-      .filter((f) => f.geometry.type === 'Point')
-      .map((f) => (f.geometry as GeoJSON.Point).coordinates as [number, number]);
-    if (pts.length < 2) return { err: 'need >=2 stations' };
-    const a = pts[0];
-    const b = pts[pts.length - 1];
-    map.setCenter([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
-    map.setZoom(z);
-    return { a, b };
-  }, zoom);
-  if (!data || 'err' in data) throw new Error(`firstAndLastStation: ${data ? data.err : 'no map'}`);
+  // Capture the station coords on a successful poll, then take the farthest-apart
+  // pair as origin/target — two well-separated stations, independent of coordinate
+  // order (was: first + last Point feature). Centering uses the captured lng/lats.
+  const pts = await pollGeometry(() => readStationLngLats(page), 2, 'firstAndLastStation');
+  let a = pts[0]!;
+  let b = pts[1]!;
+  let best = -Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const d = Math.hypot(pts[i]![0] - pts[j]![0], pts[i]![1] - pts[j]![1]);
+      if (d > best) {
+        best = d;
+        a = pts[i]!;
+        b = pts[j]!;
+      }
+    }
+  }
+  const data = await page.evaluate(
+    ({ pa, pb, z }) => {
+      const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
+      if (!map) return null;
+      map.setCenter([(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2]);
+      map.setZoom(z);
+      return { a: pa, b: pb };
+    },
+    { pa: a, pb: b, z: zoom },
+  );
+  if (!data) throw new Error('firstAndLastStation: no map');
   await waitForMapIdle(page);
   const screens = await page.evaluate((d) => {
     const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;

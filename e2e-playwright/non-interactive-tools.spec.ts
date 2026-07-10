@@ -59,25 +59,69 @@ const sectionSeeds: SectionSeed[] = [
 ];
 
 /**
- * Helper to find station screen coordinates via queryRenderedFeatures.
+ * Flatten the merged station features into individual station SCREEN points.
+ *
+ * The visible survey-stations layer now returns MERGED MultiPoint features (one
+ * group per section/color, coordinates = an ARRAY of station points, and NO
+ * per-point sectionId/stationIndex). So we can't read a `(sectionId,
+ * stationIndex)` off a feature; we extract every individual point and identify a
+ * target station BEHAVIORALLY (by which station a click on it selects).
  */
-async function getStationPosition(page: Page): Promise<{ x: number; y: number } | null> {
+async function getStationScreenPoints(page: Page): Promise<Array<{ x: number; y: number }>> {
   return page.evaluate(() => {
     const map = (window as unknown as {
       __stalagmight_map__?: {
         project: (coords: [number, number]) => { x: number; y: number };
         queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
-          geometry: { type: string; coordinates: [number, number] };
+          geometry: { type: string; coordinates: number[] | number[][] };
         }>;
       };
     }).__stalagmight_map__;
 
-    if (!map) return null;
+    if (!map) return [];
     const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-    if (features.length === 0) return null;
-    const coords = features[0]!.geometry.coordinates as [number, number];
-    return map.project(coords);
+    const points: Array<{ x: number; y: number }> = [];
+    for (const f of features) {
+      const raw =
+        f.geometry.type === 'MultiPoint'
+          ? (f.geometry.coordinates as number[][])
+          : [f.geometry.coordinates as number[]];
+      for (const c of raw) {
+        const s = map.project([c[0]!, c[1]!]);
+        points.push({ x: s.x, y: s.y });
+      }
+    }
+    return points;
   });
+}
+
+/** The most isolated point (farthest from every OTHER point). A click on it
+ *  unambiguously resolves to the one station rendered there. */
+function mostIsolatedPoint(points: Array<{ x: number; y: number }>): { x: number; y: number } {
+  let bestIdx = 0;
+  let bestMinOther = -Infinity;
+  for (let i = 0; i < points.length; i++) {
+    let minOther = Infinity;
+    for (let j = 0; j < points.length; j++) {
+      if (i === j) continue;
+      minOther = Math.min(minOther, Math.hypot(points[i]!.x - points[j]!.x, points[i]!.y - points[j]!.y));
+    }
+    if (minOther > bestMinOther) {
+      bestMinOther = minOther;
+      bestIdx = i;
+    }
+  }
+  return points[bestIdx]!;
+}
+
+/**
+ * Helper to find a station screen coordinate. Returns the most isolated station
+ * point so a click on it resolves unambiguously to a single station.
+ */
+async function getStationPosition(page: Page): Promise<{ x: number; y: number } | null> {
+  const points = await getStationScreenPoints(page);
+  if (points.length === 0) return null;
+  return mostIsolatedPoint(points);
 }
 
 /**
@@ -164,38 +208,50 @@ test.describe('Non-interactive tools', () => {
     await page.keyboard.press('s');
     await waitForActiveTool(page, 'select');
 
-    // Set hover state directly via uiStore (simulating what the SurveyLayer callback would do).
-    // The MapCanvas useEffect syncs this to SurveyLayer.setHoveredStation automatically.
-    const hoverSetup = await page.evaluate(() => {
-      const map = (window as unknown as {
-        __stalagmight_map__?: {
-          queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
-            properties: { sectionId: number; stationIndex: number };
-          }>;
-        };
-      }).__stalagmight_map__;
+    // Merged station features are MultiPoint with no per-point station identity,
+    // so discover a valid station ref BEHAVIORALLY: click the most isolated
+    // station point (unambiguous single-station resolution) and read which
+    // station the selection resolver picked.
+    const points = await getStationScreenPoints(page);
+    expect(points.length).toBeGreaterThan(0);
+    const target = mostIsolatedPoint(points);
 
-      if (!map) return { success: false, error: 'No map' };
+    const canvasBox = await getCanvasBoundingBox(page);
+    await page.mouse.click(canvasBox.x + target.x, canvasBox.y + target.y);
 
-      // Get first station feature from the visible stations layer to get a
-      // valid station ref (the dedicated hitbox layers were removed, #mem).
-      const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-      if (features.length === 0) {
-        return { success: false, error: 'No station features in stations layer' };
-      }
+    let stationRef: { section_id: number; station_index: number } | undefined;
+    await expect.poll(
+      async () => {
+        const sel = await page.evaluate(() => {
+          return (window as unknown as {
+            __E2E_TEST__?: {
+              uiStore: {
+                getState: () => {
+                  selection: { type: string; stationRef?: { section_id: number; station_index: number } } | null;
+                };
+              };
+            };
+          }).__E2E_TEST__?.uiStore?.getState()?.selection ?? null;
+        });
+        if (sel?.type === 'station' && sel.stationRef) {
+          stationRef = sel.stationRef;
+          return true;
+        }
+        return false;
+      },
+      { timeout: 2000, message: 'Clicking a station should resolve a station ref' }
+    ).toBe(true);
+    expect(stationRef).toBeTruthy();
 
-      const feature = features[0];
-      const sectionId = feature?.properties?.sectionId;
-      const stationIndex = feature?.properties?.stationIndex;
-
-      if (sectionId === undefined || stationIndex === undefined) {
-        return { success: false, error: 'Feature missing properties' };
-      }
-
+    // Clear the click selection, then set hover state directly via uiStore
+    // (simulating what the SurveyLayer callback would do). The MapCanvas useEffect
+    // syncs this to SurveyLayer.setHoveredStation automatically.
+    await page.keyboard.press('Escape');
+    const hoverSetup = await page.evaluate((ref) => {
       const stores = (window as unknown as {
         __E2E_TEST__?: {
           uiStore: {
-            getState: () => { setHoveredStation: (ref: { section_id: number; station_index: number } | null) => void };
+            getState: () => { setHoveredStation: (r: { section_id: number; station_index: number } | null) => void };
           };
         };
       }).__E2E_TEST__;
@@ -203,10 +259,10 @@ test.describe('Non-interactive tools', () => {
       if (!stores) return { success: false, error: 'No __E2E_TEST__' };
 
       // Set hovered station in uiStore
-      stores.uiStore.getState().setHoveredStation({ section_id: sectionId, station_index: stationIndex });
+      stores.uiStore.getState().setHoveredStation(ref);
 
-      return { success: true, sectionId, stationIndex };
-    });
+      return { success: true };
+    }, stationRef!);
 
     expect(hoverSetup.success).toBe(true);
 

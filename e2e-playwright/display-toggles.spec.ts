@@ -11,8 +11,6 @@ import { seedProjectWithSections, waitForMapReady, openAppMenu, type SectionSeed
 interface StationPosition {
   x: number;
   y: number;
-  sectionId: number;
-  stationIndex: number;
 }
 
 /**
@@ -95,15 +93,21 @@ async function waitForLayerVisible(page: Page, layerId: string): Promise<void> {
 }
 
 /**
- * Helper to get station screen positions via queryRenderedFeatures
+ * Helper to get station screen positions via queryRenderedFeatures.
+ *
+ * The visible survey-stations layer now returns MERGED MultiPoint features (one
+ * group per section/color, coordinates = an ARRAY of station points, and NO
+ * per-point sectionId/stationIndex). So we can't read a `(sectionId,
+ * stationIndex)` off a feature; we flatten every individual point into its own
+ * screen position. These tests only need a valid station SCREEN point (to click
+ * or hover), so identity is not required here.
  */
 async function getStationScreenPositions(page: Page): Promise<StationPosition[]> {
   return page.evaluate(() => {
     const map = (window as unknown as {
       __stalagmight_map__?: {
         queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
-          geometry: { coordinates: [number, number] };
-          properties: { sectionId: number; stationIndex: number };
+          geometry: { type: string; coordinates: number[] | number[][] };
         }>;
         project: (coords: [number, number]) => { x: number; y: number };
       };
@@ -112,16 +116,18 @@ async function getStationScreenPositions(page: Page): Promise<StationPosition[]>
 
     try {
       const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-      return features.map((f) => {
-        const coords = f.geometry.coordinates;
-        const screenPos = map.project(coords);
-        return {
-          x: screenPos.x,
-          y: screenPos.y,
-          sectionId: f.properties.sectionId,
-          stationIndex: f.properties.stationIndex,
-        };
-      });
+      const positions: Array<{ x: number; y: number }> = [];
+      for (const f of features) {
+        const raw =
+          f.geometry.type === 'MultiPoint'
+            ? (f.geometry.coordinates as number[][])
+            : [f.geometry.coordinates as number[]];
+        for (const c of raw) {
+          const screenPos = map.project([c[0]!, c[1]!]);
+          positions.push({ x: screenPos.x, y: screenPos.y });
+        }
+      }
+      return positions;
     } catch {
       return [];
     }

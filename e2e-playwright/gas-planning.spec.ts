@@ -116,19 +116,26 @@ async function stationColorPaint(page: Page): Promise<string> {
   });
 }
 
-/** Whether ANY rendered station carries a numeric `gasReach` feature-state. */
+/** Whether ANY rendered station carries a numeric `gasReach` feature-state.
+ *
+ * The bulk station source is now a MapLibre VECTOR-TILE source whose single
+ * source-layer is 'g' (#mem): every getFeatureState read must name it or the
+ * state comes back empty. Plan/gas mode forces PER-FEATURE granularity
+ * (SurveyLayer.desiredPerFeature), so the rendered station features are
+ * individual points whose `id` is the per-station `encodeFeatureId` the overlay
+ * keyed its `gasReach` feature-state by. */
 async function anyStationHasGasReach(page: Page): Promise<boolean> {
   return page.evaluate(() => {
     const map = (window as unknown as {
       __stalagmight_map__?: {
         queryRenderedFeatures: (o: { layers: string[] }) => Array<{ id?: number }>;
-        getFeatureState: (f: { source: string; id: number }) => { gasReach?: number };
+        getFeatureState: (f: { source: string; sourceLayer?: string; id: number }) => { gasReach?: number };
       };
     }).__stalagmight_map__;
     if (!map) return false;
     return map.queryRenderedFeatures({ layers: ['survey-stations'] }).some((f) => {
       if (f.id == null) return false;
-      const state = map.getFeatureState({ source: 'survey-data-stations', id: f.id });
+      const state = map.getFeatureState({ source: 'survey-data-stations', sourceLayer: 'g', id: f.id });
       // >= 0 (not just "is a number"): the UNREACHABLE_GAS sentinel is -1, which is
       // also a number, so this proves the reachable gold→purple ramp is populated —
       // not that every station went grey/unreachable.

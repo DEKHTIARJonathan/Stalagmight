@@ -82,39 +82,51 @@ async function stationColorPaint(page: Page): Promise<string> {
 }
 
 /** Whether ANY rendered station carries a numeric `dist` feature-state. Robust to
- * render order and to unreachable stations (which may lack a dist). */
+ * render order and to unreachable stations (which may lack a dist).
+ *
+ * The bulk station source is now a MapLibre VECTOR-TILE source whose single
+ * source-layer is 'g' (#mem): every getFeatureState read must name it or the
+ * state comes back empty. The distance overlay forces PER-FEATURE granularity
+ * (SurveyLayer.desiredPerFeature), so the rendered station features are
+ * individual points whose `id` is the per-station `encodeFeatureId` the overlay
+ * keyed its `dist` feature-state by. */
 async function anyStationHasDist(page: Page): Promise<boolean> {
   return page.evaluate(() => {
     const map = (window as unknown as {
       __stalagmight_map__?: {
         queryRenderedFeatures: (o: { layers: string[] }) => Array<{ id?: number }>;
-        getFeatureState: (f: { source: string; id: number }) => { dist?: number };
+        getFeatureState: (f: { source: string; sourceLayer?: string; id: number }) => { dist?: number };
       };
     }).__stalagmight_map__;
     if (!map) return false;
     return map.queryRenderedFeatures({ layers: ['survey-stations'] }).some((f) => {
       if (f.id == null) return false;
-      const state = map.getFeatureState({ source: 'survey-data-stations', id: f.id });
+      const state = map.getFeatureState({ source: 'survey-data-stations', sourceLayer: 'g', id: f.id });
       return typeof state?.dist === 'number';
     });
   });
 }
 
-/** `dist` feature-state of the first rendered station, if any. */
+/** `dist` feature-state of the first rendered station that carries one, if any.
+ * Same vector-tile 'g' source-layer + per-feature id semantics as
+ * `anyStationHasDist`; scans (not just feats[0]) so a leading unreachable
+ * station without a `dist` doesn't mask the reachable ones. */
 async function firstStationDist(page: Page): Promise<number | null> {
   return page.evaluate(() => {
     const map = (window as unknown as {
       __stalagmight_map__?: {
         queryRenderedFeatures: (o: { layers: string[] }) => Array<{ id?: number }>;
-        getFeatureState: (f: { source: string; id: number }) => { dist?: number };
+        getFeatureState: (f: { source: string; sourceLayer?: string; id: number }) => { dist?: number };
       };
     }).__stalagmight_map__;
     if (!map) return null;
     const feats = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-    const id = feats[0]?.id;
-    if (id == null) return null;
-    const state = map.getFeatureState({ source: 'survey-data-stations', id });
-    return typeof state?.dist === 'number' ? state.dist : null;
+    for (const f of feats) {
+      if (f.id == null) continue;
+      const state = map.getFeatureState({ source: 'survey-data-stations', sourceLayer: 'g', id: f.id });
+      if (typeof state?.dist === 'number') return state.dist;
+    }
+    return null;
   });
 }
 

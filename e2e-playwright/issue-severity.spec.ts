@@ -105,40 +105,170 @@ async function issueSeverityFlag(page: Page): Promise<boolean> {
   });
 }
 
-/** Colors of rendered shot features keyed by shotId. */
+/**
+ * Colors of rendered shot features keyed by shotId.
+ *
+ * The bulk shot source is a VECTOR-TILE source of MERGED groups now (#mem): a
+ * group carries a numeric `colorIndex` (which the `line-color` paint maps to the
+ * real color) and a MERGED MultiLineString (one inner 2-point line per shot),
+ * but NO per-shot `shotId`. Issue-severity coloring does NOT force per-feature
+ * granularity, so we recover per-shot identity by geometry: a shot at
+ * section-local order `i` joins station indices `i` and `i+1` (features.ts), so
+ * its midpoint in survey metres identifies which merged segment (hence which
+ * color) it owns. Metres come from the store's stations (station_ref +
+ * coordinates); merged geometry (lng/lat) is converted back via
+ * __stalagmight_to_meters__.
+ */
 async function shotColorsById(page: Page): Promise<Record<number, string>> {
   return page.evaluate(() => {
+    // Resolve a ["match", ["get","colorIndex"], k0, c0, ..., fallback] paint (or
+    // a constant string) to the color for a colorIndex: merged groups carry the
+    // numeric index, the layer paint maps it to the real color.
+    const resolve = (expr: unknown, ci: number): string | null => {
+      if (typeof expr === 'string') return expr;
+      if (!Array.isArray(expr) || expr[0] !== 'match') return null;
+      for (let i = 2; i + 1 < expr.length; i += 2) {
+        if (expr[i] === ci) return String(expr[i + 1]);
+      }
+      return String(expr[expr.length - 1]);
+    };
     const map = (window as unknown as {
       __stalagmight_map__?: {
-        queryRenderedFeatures: (o: { layers: string[] }) => Array<{ properties: { shotId?: number; color?: string } }>;
+        queryRenderedFeatures: (o: { layers: string[] }) => Array<{ properties?: { colorIndex?: number }; geometry: { type: string; coordinates: number[] | number[][] | number[][][] } }>;
+        getPaintProperty: (l: string, p: string) => unknown;
       };
     }).__stalagmight_map__;
+    const toMeters = (window as unknown as {
+      __stalagmight_to_meters__?: (lng: number, lat: number) => { x: number; y: number };
+    }).__stalagmight_to_meters__;
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore: { getState: () => {
+          stations: Array<{ station_ref: { section_id: number; station_index: number }; coordinates: { x: number; y: number } }>;
+          project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> } | null;
+        } };
+      };
+    }).__E2E_TEST__;
     const out: Record<number, string> = {};
-    if (!map) return out;
+    if (!map || !toMeters || !stores) return out;
+    const state = stores.projectStore.getState();
+    if (!state.project) return out;
     try {
+      const paint = map.getPaintProperty('survey-shots', 'line-color');
+      // Every merged inner segment's midpoint (metres) → its group color.
+      const segs: Array<{ mx: number; my: number; color: string }> = [];
       for (const f of map.queryRenderedFeatures({ layers: ['survey-shots'] })) {
-        const id = f.properties?.shotId;
-        if (id != null && f.properties?.color) out[id] = f.properties.color;
+        const ci = f.properties?.colorIndex;
+        if (typeof ci !== 'number') continue;
+        const color = resolve(paint, ci);
+        if (color == null) continue;
+        const lines: number[][][] =
+          f.geometry.type === 'MultiLineString'
+            ? (f.geometry.coordinates as number[][][])
+            : f.geometry.type === 'LineString'
+              ? [f.geometry.coordinates as number[][]]
+              : [];
+        for (const line of lines) {
+          for (let i = 0; i + 1 < line.length; i++) {
+            const a = toMeters(line[i]![0]!, line[i]![1]!);
+            const b = toMeters(line[i + 1]![0]!, line[i + 1]![1]!);
+            segs.push({ mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, color });
+          }
+        }
+      }
+      // Station coords keyed "sectionId:stationIndex" (survey metres).
+      const stationXY = new Map<string, { x: number; y: number }>();
+      for (const st of state.stations) {
+        stationXY.set(`${st.station_ref.section_id}:${st.station_ref.station_index}`, { x: st.coordinates.x, y: st.coordinates.y });
+      }
+      // Shot order i → shotId; its endpoints are stations i and i+1.
+      for (const section of state.project.sections) {
+        for (let i = 0; i < section.shots.length; i++) {
+          const from = stationXY.get(`${section.id}:${i}`);
+          const to = stationXY.get(`${section.id}:${i + 1}`);
+          if (!from || !to) continue;
+          const mx = (from.x + to.x) / 2;
+          const my = (from.y + to.y) / 2;
+          let best = Infinity;
+          let bestColor: string | null = null;
+          for (const s of segs) {
+            const d = Math.hypot(s.mx - mx, s.my - my);
+            if (d < best) { best = d; bestColor = s.color; }
+          }
+          if (bestColor != null && best < 1) out[section.shots[i]!.id] = bestColor;
+        }
       }
     } catch { /* style not ready */ }
     return out;
   });
 }
 
-/** Colors of rendered station features keyed by stationIndex. */
+/**
+ * Colors of rendered station features keyed by stationIndex.
+ *
+ * Same merged vector-tile model as shotColorsById: the merged station group
+ * carries a numeric `colorIndex` (mapped to a color by `circle-color`) and a
+ * MERGED MultiPoint, but NO per-station `stationIndex`. We recover identity by
+ * geometry: convert each group point back to survey metres and match it to the
+ * store's stations (station_ref + metre coordinates). The seed is single-section
+ * so station_index is unique, matching the original keying.
+ */
 async function stationColorsByIndex(page: Page): Promise<Record<number, string>> {
   return page.evaluate(() => {
+    const resolve = (expr: unknown, ci: number): string | null => {
+      if (typeof expr === 'string') return expr;
+      if (!Array.isArray(expr) || expr[0] !== 'match') return null;
+      for (let i = 2; i + 1 < expr.length; i += 2) {
+        if (expr[i] === ci) return String(expr[i + 1]);
+      }
+      return String(expr[expr.length - 1]);
+    };
     const map = (window as unknown as {
       __stalagmight_map__?: {
-        queryRenderedFeatures: (o: { layers: string[] }) => Array<{ properties: { stationIndex?: number; color?: string } }>;
+        queryRenderedFeatures: (o: { layers: string[] }) => Array<{ properties?: { colorIndex?: number }; geometry: { type: string; coordinates: number[] | number[][] } }>;
+        getPaintProperty: (l: string, p: string) => unknown;
       };
     }).__stalagmight_map__;
+    const toMeters = (window as unknown as {
+      __stalagmight_to_meters__?: (lng: number, lat: number) => { x: number; y: number };
+    }).__stalagmight_to_meters__;
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore: { getState: () => {
+          stations: Array<{ station_ref: { section_id: number; station_index: number }; coordinates: { x: number; y: number } }>;
+        } };
+      };
+    }).__E2E_TEST__;
     const out: Record<number, string> = {};
-    if (!map) return out;
+    if (!map || !toMeters || !stores) return out;
     try {
+      const paint = map.getPaintProperty('survey-stations', 'circle-color');
+      const points: Array<{ x: number; y: number; color: string }> = [];
       for (const f of map.queryRenderedFeatures({ layers: ['survey-stations'] })) {
-        const idx = f.properties?.stationIndex;
-        if (idx != null && f.properties?.color) out[idx] = f.properties.color;
+        const ci = f.properties?.colorIndex;
+        if (typeof ci !== 'number') continue;
+        const color = resolve(paint, ci);
+        if (color == null) continue;
+        const raw =
+          f.geometry.type === 'MultiPoint'
+            ? (f.geometry.coordinates as number[][])
+            : [f.geometry.coordinates as number[]];
+        for (const c of raw) {
+          const m = toMeters(c[0]!, c[1]!);
+          points.push({ x: m.x, y: m.y, color });
+        }
+      }
+      // Nearest merged group point (survey metres) identifies each store station.
+      for (const st of stores.projectStore.getState().stations) {
+        const sx = st.coordinates.x;
+        const sy = st.coordinates.y;
+        let best = Infinity;
+        let bestColor: string | null = null;
+        for (const p of points) {
+          const d = Math.hypot(p.x - sx, p.y - sy);
+          if (d < best) { best = d; bestColor = p.color; }
+        }
+        if (bestColor != null && best < 1) out[st.station_ref.station_index] = bestColor;
       }
     } catch { /* style not ready */ }
     return out;
