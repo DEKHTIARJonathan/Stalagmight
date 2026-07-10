@@ -236,6 +236,22 @@ fn depth_gauge_basic() {
 }
 
 #[test]
+fn rect_vector_preserves_lrud() {
+    // #241 (P0): RECT (E/N/U) vectors must keep their trailing <L R U D> passage
+    // dimensions, exactly like CT vectors. Before the fix the RECT branch returned
+    // left/right/up/down = None, silently dropping wall data on any RECT-format
+    // Walls import.
+    let srv = "#units rect order=ENU\n#units meters\n\
+               A B 10 5 2 <1,2,3,4>\n";
+    let v = &parse_srv(srv).vectors[0];
+    assert!(v.is_rect, "sanity: this must be parsed as a RECT vector");
+    assert_eq!(v.left, Some(1.0));
+    assert_eq!(v.right, Some(2.0));
+    assert_eq!(v.up, Some(3.0));
+    assert_eq!(v.down, Some(4.0));
+}
+
+#[test]
 fn depth_gauge_conversion_keeps_gauge_depths() {
     let srv = "#UNITS meters ORDER=DA Tape=SS\n\
                A B 21.1 339 13 13\n\

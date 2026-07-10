@@ -294,6 +294,14 @@ pub(crate) fn parse_vector_line(
             Some((east.atan2(north).to_degrees() + units.rect).rem_euclid(360.0))
         };
         let inc_up = up_rect.atan2(horiz).to_degrees();
+        // RECT vectors carry the same trailing `<L R U D>` passage dimensions as
+        // CT vectors; the span is already extracted above, so parse it like the
+        // CT path rather than dropping the wall data. (#241)
+        let (left, right, up, down) = extracted
+            .lrud
+            .as_deref()
+            .map(|l| parse_lrud(l, units))
+            .unwrap_or((None, None, None, None));
         return Some(WallsVector {
             from,
             to,
@@ -306,10 +314,10 @@ pub(crate) fn parse_vector_line(
             from_depth: None,
             to_depth: None,
             is_depth_gauge: false,
-            left: None,
-            right: None,
-            up: None,
-            down: None,
+            left,
+            right,
+            up,
+            down,
             comment,
             is_reference: from_anon || to_anon,
             from_anon,
