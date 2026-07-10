@@ -77,18 +77,24 @@ export function buildDistanceFeatureState(
  * over `0 → max` on the `dist` feature-state; anything with no/negative `dist`
  * (unset or unreachable) renders `grey`. Guards a degenerate `max <= 0` so the
  * interpolate stops stay strictly ascending.
+ *
+ * `distInput` overrides where `dist` is read from (default: the `dist`
+ * feature-state). The interact overlay passes `['get', 'dist']` so its
+ * property-carried value runs through the SAME GPU interpolate and renders
+ * pixel-identical colors to the bulk layers.
  */
 export function distanceColorExpression(
   near: string,
   far: string,
   max: number,
   grey: string,
+  distInput: ExpressionSpecification = ['feature-state', 'dist'] as ExpressionSpecification,
 ): ExpressionSpecification {
   const safeMax = max > 0 ? max : 1;
   return [
     'let',
     'd',
-    ['coalesce', ['feature-state', 'dist'], UNREACHABLE_DIST],
+    ['coalesce', distInput, UNREACHABLE_DIST],
     [
       'case',
       ['<', ['var', 'd'], 0],

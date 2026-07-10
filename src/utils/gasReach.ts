@@ -103,12 +103,13 @@ export function gasReachColorExpression(
   far: string,
   max: number,
   grey: string,
+  gasInput: ExpressionSpecification = ['feature-state', 'gasReach'] as ExpressionSpecification,
 ): ExpressionSpecification {
   const safeMax = max > 0 ? max : 1;
   return [
     'let',
     'g',
-    ['coalesce', ['feature-state', 'gasReach'], UNREACHABLE_GAS],
+    ['coalesce', gasInput, UNREACHABLE_GAS],
     [
       'case',
       ['<', ['var', 'g'], 0],

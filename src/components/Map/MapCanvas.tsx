@@ -1052,30 +1052,24 @@ function MapCanvas() {
 
     // Only process if box is large enough (not just a click)
     if (maxX - minX > 5 && maxY - minY > 5) {
-      // Query stations in the box using hitbox layer (larger clickable area)
-      const features = map.current.queryRenderedFeatures(
-        [[minX, minY], [maxX, maxY]],
-        { layers: ['survey-stations-hitbox'] }
-      );
+      // Resolve stations in the box via SurveyLayer (#mem): the rendered
+      // hitbox query gates candidate sections and the SoA resolver applies
+      // the same circle-box hit semantics the direct queryRenderedFeatures
+      // call had — per-station identity no longer lives on bulk features.
+      const refs = surveyLayerRef.current?.queryStationsInBox(minX, minY, maxX, maxY) ?? [];
 
-      if (features.length > 0) {
+      if (refs.length > 0) {
         // Clear existing selection if not holding shift
         clearSelection();
         setSource('map');
 
         // Add all stations in box to selection
-        features.forEach((feature) => {
-          if (feature.properties) {
-            const { sectionId, stationIndex } = feature.properties;
-            const sel: Selection = {
-              type: 'station',
-              stationRef: {
-                section_id: sectionId as number,
-                station_index: stationIndex as number,
-              },
-            };
-            addToSelection(sel);
-          }
+        refs.forEach((stationRef) => {
+          const sel: Selection = {
+            type: 'station',
+            stationRef,
+          };
+          addToSelection(sel);
         });
       }
     }

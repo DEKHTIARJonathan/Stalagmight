@@ -299,6 +299,15 @@ export class SurveyGeometryIndex {
     return null;
   }
 
+  /** Whether every shot touching the station is a reference shot (the
+   *  station is filtered out while reference shots are hidden). Stations
+   *  with no feature-producing shots at all also count as all-reference,
+   *  mirroring the builder's `allShotsReference` property. */
+  isAllReferenceStation(ref: StationRef): boolean {
+    this.ensureBuilt();
+    return !this.nonRefStations(ref.section_id).has(ref.station_index);
+  }
+
   /** Section metadata by id (color lookup for overlay styling). */
   section(sectionId: number): SectionMetadata | undefined {
     this.ensureBuilt();
