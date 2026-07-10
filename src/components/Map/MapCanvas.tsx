@@ -3522,6 +3522,12 @@ function MapCanvas() {
         // Small delay to ensure data is rendered
         setTimeout(() => {
           fitToBounds();
+          // Same clean-slate label re-evaluation as the snap path, but the
+          // camera animates here — wait for the map to settle ('idle' also
+          // fires when the fit was a no-op, unlike 'moveend').
+          map.current?.once('idle', () => {
+            surveyLayerRef.current?.resetLabelZoomHysteresis();
+          });
           clearFitToBoundsRequest();
         }, 100);
       }
