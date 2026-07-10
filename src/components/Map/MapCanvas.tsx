@@ -3511,6 +3511,12 @@ function MapCanvas() {
       const snap = requestFitToBounds === 'snap';
       if (snap) {
         fitToBounds({ snap: true });
+        // The load's FIRST feature build can run against the pre-fit camera;
+        // if that transient zoom sat above the label build threshold while
+        // the fitted camera lands inside the hysteresis band, ~165k label
+        // features would persist that a load at the final camera never
+        // builds. Re-evaluate from a clean slate at the fitted camera (#mem).
+        surveyLayerRef.current?.resetLabelZoomHysteresis();
         clearFitToBoundsRequest();
       } else {
         // Small delay to ensure data is rendered
