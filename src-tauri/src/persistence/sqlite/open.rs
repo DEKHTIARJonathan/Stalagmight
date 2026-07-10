@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::path::Path;
 
-use super::{Database, SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION};
+use super::{Database, SCHEMA_VERSION};
 
 impl Database {
     /// Open or create a database at the given path
@@ -13,7 +13,7 @@ impl Database {
 
         let conn = Connection::open(path).context("Failed to open database")?;
 
-        let db = Self { conn };
+        let mut db = Self { conn };
         db.enable_foreign_keys()?;
 
         let prior_version = db.get_user_version().unwrap_or(0);
@@ -25,16 +25,34 @@ impl Database {
             );
         }
         db.init_schema()?;
-        // `open` stamps the file with the current SCHEMA_VERSION below without
-        // running the full migration chain (init_schema is CREATE IF NOT
-        // EXISTS). Pre-v7 persisted undo/redo payloads are unsafe to replay
-        // (see UNDO_FORMAT_SAFE_VERSION), so drop them here BEFORE the stamp
-        // erases the evidence that this file predates the format change.
-        // No-op for freshly created files (empty tables).
-        if prior_version < UNDO_FORMAT_SAFE_VERSION {
-            db.drop_legacy_undo_history()?;
+
+        // init_schema() is CREATE-IF-NOT-EXISTS: it builds the CURRENT schema for
+        // a brand-new file, but it CANNOT add columns to a table that already
+        // exists in a pre-existing older file. A freshly-created DB has
+        // user_version 0 and no project row, so we can stamp it directly -- cheap
+        // and correct (this path also runs for every save/import temp file).
+        let project_has_rows = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM project", [], |r| r.get::<_, i64>(0))
+            .map(|c: i64| c > 0)
+            .unwrap_or(false);
+        let freshly_created = prior_version == 0 && !project_has_rows;
+
+        if freshly_created {
+            db.set_user_version(SCHEMA_VERSION)?;
+        } else if prior_version < SCHEMA_VERSION {
+            // Existing older file: run the real migration chain so column-adding
+            // ALTERs (e.g. the v9->v10 speleo_link.last_edit_at) actually happen
+            // BEFORE the version is stamped. Blindly stamping here would let
+            // ensure_schema_version()'s fast path (user_version == SCHEMA_VERSION)
+            // skip the migration forever, and a later `SELECT last_edit_at` fails.
+            // ensure_schema_version() also drops the unsafe pre-v7 undo/redo
+            // payloads it used to be open()'s job to strip. (#241)
+            db.ensure_schema_version()?;
         }
-        db.set_user_version(SCHEMA_VERSION)?;
+        // prior_version >= SCHEMA_VERSION: already current (a newer version was
+        // warned about above) -- leave the file untouched.
+
         tracing::debug!("Schema initialized");
 
         Ok(db)
