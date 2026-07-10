@@ -252,6 +252,22 @@ fn rect_vector_preserves_lrud() {
 }
 
 #[test]
+fn rect_vector_preserves_partial_lrud() {
+    // RECT LRUD must handle omitted entries (`--`) the same way the CT path does,
+    // not just the all-present case. The LRUD span sits after the E/N/U measures,
+    // a different column count than CT, so an extraction off-by-one would only
+    // surface with a partial span.
+    let srv = "#units rect order=ENU\n#units meters\n\
+               A B 10 5 2 <1,--,3,-->\n";
+    let v = &parse_srv(srv).vectors[0];
+    assert!(v.is_rect, "sanity: this must be parsed as a RECT vector");
+    assert_eq!(v.left, Some(1.0));
+    assert_eq!(v.right, None, "omitted right must stay None");
+    assert_eq!(v.up, Some(3.0));
+    assert_eq!(v.down, None, "omitted down must stay None");
+}
+
+#[test]
 fn depth_gauge_conversion_keeps_gauge_depths() {
     let srv = "#UNITS meters ORDER=DA Tape=SS\n\
                A B 21.1 339 13 13\n\

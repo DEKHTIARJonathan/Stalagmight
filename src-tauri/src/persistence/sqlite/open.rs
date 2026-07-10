@@ -11,6 +11,13 @@ impl Database {
         // project create / save-as / import / recent-list refresh.
         tracing::debug!("Opening database at: {:?}", path);
 
+        // Whether the file already existed decides fresh-vs-migrate below, so
+        // capture it BEFORE Connection::open creates it for a new path. This is a
+        // more robust discriminator than user_version/row-count: an existing file
+        // that predates the user_version pragma (stamped 0) or that has no project
+        // row yet must still be MIGRATED, not treated as fresh.
+        let file_existed = path.exists();
+
         let conn = Connection::open(path).context("Failed to open database")?;
 
         let mut db = Self { conn };
@@ -26,32 +33,24 @@ impl Database {
         }
         db.init_schema()?;
 
-        // init_schema() is CREATE-IF-NOT-EXISTS: it builds the CURRENT schema for
-        // a brand-new file, but it CANNOT add columns to a table that already
-        // exists in a pre-existing older file. A freshly-created DB has
-        // user_version 0 and no project row, so we can stamp it directly -- cheap
-        // and correct (this path also runs for every save/import temp file).
-        let project_has_rows = db
-            .conn
-            .query_row("SELECT COUNT(*) FROM project", [], |r| r.get::<_, i64>(0))
-            .map(|c: i64| c > 0)
-            .unwrap_or(false);
-        let freshly_created = prior_version == 0 && !project_has_rows;
-
-        if freshly_created {
+        // A brand-new file (did not exist until Connection::open created it) was
+        // just built at the CURRENT schema by init_schema (CREATE-IF-NOT-EXISTS),
+        // so stamp it directly -- cheap, and the hot path for every save/import
+        // temp file. An EXISTING file may predate a column-adding migration:
+        // init_schema cannot ALTER an existing table, so it must run the real
+        // migration chain so e.g. the v9->v10 speleo_link.last_edit_at ALTER
+        // actually happens BEFORE the version is stamped -- otherwise
+        // ensure_schema_version()'s fast path (user_version == SCHEMA_VERSION)
+        // skips the migration forever and a later `SELECT last_edit_at` fails.
+        // ensure_schema_version() also drops the unsafe pre-v7 undo/redo payloads
+        // it used to be open()'s job to strip. (#241)
+        if !file_existed {
             db.set_user_version(SCHEMA_VERSION)?;
         } else if prior_version < SCHEMA_VERSION {
-            // Existing older file: run the real migration chain so column-adding
-            // ALTERs (e.g. the v9->v10 speleo_link.last_edit_at) actually happen
-            // BEFORE the version is stamped. Blindly stamping here would let
-            // ensure_schema_version()'s fast path (user_version == SCHEMA_VERSION)
-            // skip the migration forever, and a later `SELECT last_edit_at` fails.
-            // ensure_schema_version() also drops the unsafe pre-v7 undo/redo
-            // payloads it used to be open()'s job to strip. (#241)
             db.ensure_schema_version()?;
         }
-        // prior_version >= SCHEMA_VERSION: already current (a newer version was
-        // warned about above) -- leave the file untouched.
+        // An existing file already at (or newer than) SCHEMA_VERSION is left
+        // untouched; a newer version was warned about above.
 
         tracing::debug!("Schema initialized");
 

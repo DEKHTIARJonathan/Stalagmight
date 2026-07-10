@@ -2012,6 +2012,53 @@ fn open_migrates_pre_v10_file_instead_of_only_stamping() {
 }
 
 #[test]
+fn open_migrates_existing_file_stamped_v0() {
+    // #241 (pre-pr hardening): open() must not misclassify an EXISTING pre-v10
+    // file that carries user_version 0 (a .stalx predating the version pragma, or
+    // with no project row yet) as freshly-created and stamp it without migrating.
+    // open() keys fresh-vs-migrate on whether the FILE existed before it opened,
+    // not on user_version or project-row count, so an existing v0 file still
+    // migrates. (An earlier `prior_version == 0 && !project_has_rows` heuristic
+    // would have wrongly stamped this file current and skipped the ALTER.)
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("v0_existing.stalx");
+    {
+        let db = Database::open(&path).unwrap();
+        db.conn
+            .execute_batch(
+                "DROP TABLE IF EXISTS speleo_link;
+                 CREATE TABLE speleo_link (
+                     id INTEGER PRIMARY KEY CHECK (id = 1),
+                     endpoint TEXT NOT NULL,
+                     project_id TEXT NOT NULL,
+                     project_name TEXT NOT NULL,
+                     base_commit_sha TEXT,
+                     has_unpushed_edits INTEGER NOT NULL DEFAULT 0,
+                     last_verify_at TEXT
+                 );",
+            )
+            .unwrap();
+        db.set_user_version(0).unwrap();
+    }
+
+    // The file now EXISTS, is stamped user_version 0, and has a pre-v10
+    // speleo_link. Reopen: it must be migrated, not stamp-skipped as "fresh".
+    let db = Database::open(&path).unwrap();
+    let has_after: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('speleo_link') WHERE name='last_edit_at'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        has_after, 1,
+        "an existing v0 file must be migrated, not classified fresh and stamp-skipped"
+    );
+}
+
+#[test]
 fn test_new_format_undo_history_survives_reload() {
     use crate::core::undo::{UndoData, UndoEntry};
     use crate::core::{Command, UndoStack};
