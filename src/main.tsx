@@ -17,6 +17,7 @@ import { useGasPlanStore } from './store/gasPlanStore';
 import { useSpeleoStore } from './store/speleoStore';
 import { useExportStore } from './store/exportStore';
 import { useNetworkStore } from './store/networkStore';
+import { shotMaterialization } from './types/survey-data';
 
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
 installConsoleCapture();
@@ -67,6 +68,19 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
   testAPI.exportStore = useExportStore;
   testAPI.networkStore = useNetworkStore;
   window.__E2E_TEST__ = testAPI;
+
+  // Lazy-materialization guard for the load path: the harness reads this after
+  // a settled load and asserts it stayed 0 (see docs/performance.md, #mem SoA).
+  // A live getter so `window.__shotMaterializations` always reflects the
+  // current count; `window.__resetShotMaterializations()` zeroes it.
+  Object.defineProperty(window, '__shotMaterializations', {
+    configurable: true,
+    get: () => shotMaterialization.count,
+  });
+  (window as unknown as { __resetShotMaterializations?: () => void }).__resetShotMaterializations =
+    () => {
+      shotMaterialization.count = 0;
+    };
 }
 
 // Expose loading hooks for E2E tests (dev/test mode or explicit E2E build flag)

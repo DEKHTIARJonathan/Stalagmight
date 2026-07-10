@@ -37,7 +37,7 @@ import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
 import type { SurveyData } from '../types/survey-data';
-import { emptySurveyData, surveyDataFromLegacy } from '../types/survey-data';
+import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
 
@@ -1646,7 +1646,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         set({ adjustedLoading: false });
         return true;
       }
-      const surveyDataAdjusted = surveyDataFromLegacy(project.sections, adjusted);
+      // Reuse the measured shot columns (identical under closure adjustment) and
+      // rebuild only the station columns, so entering/restoring the adjusted view
+      // never force-materializes the lazy `section.shots` getters (#mem). Fall
+      // back to the full legacy walk only if the measured SoA is somehow absent.
+      const surveyDataAdjusted = surveyData
+        ? surveyDataWithAdjustedStations(surveyData, adjusted)
+        : surveyDataFromLegacy(project.sections, adjusted);
       set({ stationsAdjusted: adjusted, surveyDataAdjusted, adjustedLoading: false });
       return true;
     } catch (e) {

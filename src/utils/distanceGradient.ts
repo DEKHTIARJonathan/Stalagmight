@@ -1,5 +1,6 @@
 import type { ExpressionSpecification } from 'maplibre-gl';
-import type { DistanceField, Section } from '../types/project';
+import type { DistanceField } from '../types/project';
+import type { SurveyData } from '../types/survey-data';
 import { encodeFeatureId } from './ids';
 
 /**
@@ -37,9 +38,15 @@ export interface DistanceFeatureState {
  * gradient flows along passage). Unreachable (`null`) or missing endpoints →
  * `UNREACHABLE_DIST`. Keys use the shared `encodeFeatureId` so they line up with
  * the feature ids produced by `surveyLayer/features.ts`.
+ *
+ * Reads the struct-of-arrays `SurveyData` (section metadata + `shotIds`) rather
+ * than `Section[].shots[]`: the overlay only needs each shot's stable id and its
+ * section's shot count, so touching the lazy `section.shots` getter here would
+ * force-materialize every `Shot` object at load whenever the overlay is enabled
+ * (~75k objects / ~1.3 GB for 92.stalx). The SoA path stays typed-array-only.
  */
 export function buildDistanceFeatureState(
-  sections: Section[],
+  data: Pick<SurveyData, 'sections' | 'shotIds'>,
   field: DistanceField,
 ): DistanceFeatureState {
   // station ref → distance (null = unreachable)
@@ -52,20 +59,20 @@ export function buildDistanceFeatureState(
   const stations = new Map<number, number>();
   const shots = new Map<number, number>();
 
-  for (const section of sections) {
-    const n = section.shots.length;
+  for (const section of data.sections) {
+    const n = section.shotCount;
     // Stations: index 0..=n
     for (let idx = 0; idx <= n; idx++) {
       const d = byRef.get(`${section.id}:${idx}`);
       stations.set(encodeFeatureId(section.id, idx), d == null ? UNREACHABLE_DIST : d);
     }
-    // Shots: connect station i → i+1; key by the shot's stable id.
+    // Shots: connect station i → i+1; key by the shot's stable id (from SoA).
     for (let i = 0; i < n; i++) {
-      const shot = section.shots[i]!;
+      const shotId = data.shotIds[section.shotOffset + i]!;
       const from = byRef.get(`${section.id}:${i}`);
       const to = byRef.get(`${section.id}:${i + 1}`);
       const value = from == null || to == null ? UNREACHABLE_DIST : (from + to) / 2;
-      shots.set(encodeFeatureId(section.id, shot.id), value);
+      shots.set(encodeFeatureId(section.id, shotId), value);
     }
   }
 

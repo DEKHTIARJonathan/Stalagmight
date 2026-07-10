@@ -36,6 +36,7 @@ import {
   type SurveyData,
   type SectionMetadata,
   lazyStationArray,
+  noteShotMaterialization,
   SHOT_FLAG_IS_REFERENCE,
   SHOT_MARKER_NULL,
   STATION_FLAG_IS_ZERO_DATUM,
@@ -69,8 +70,9 @@ const STATION_FLOAT_FIELDS = 3;
 /** u32 fields per station. */
 const STATION_UINT_FIELDS = 2;
 
-/** Shape of the msgpack-decoded envelope. Mirrors `LoadProjectFullBinaryResult`. */
-interface BinaryEnvelope {
+/** Shape of the msgpack-decoded envelope. Mirrors `LoadProjectFullBinaryResult`.
+ *  Exported for the load-path laziness regression test's fixture builder. */
+export interface BinaryEnvelope {
   version: number;
   loading_id: bigint | number;
   project_header: ProjectHeaderBinary;
@@ -182,7 +184,14 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
   return result;
 }
 
-function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullResultWithSoa {
+/**
+ * Decode a (already msgpack-decoded) binary envelope into the SoA + legacy
+ * result shape. Exported for the load-path laziness regression test, which
+ * drives this exact function so it exercises the real lazy-getter installation
+ * rather than a hand-rolled stand-in. Production callers go through
+ * `loadProjectFullBinary`.
+ */
+export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullResultWithSoa {
   // Build typed-array views over the bulk byte buffers. These views don't
   // copy; they just point into the underlying ArrayBuffers.
   const shotsF32 = bytesToFloat32(env.shots_floats);
@@ -248,7 +257,6 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
       }
       return shots;
     };
-    let shotsCache: Shot[] | null = null;
     // `Object.defineProperty` for `shots` so we can install a getter
     // without breaking the `Section` interface (which declares it as
     // a plain `Shot[]`). Consumers read `section.shots` exactly as
@@ -263,10 +271,25 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
       quality: sh.quality,
       next_shot_id: sh.next_shot_id,
     } as Section;
+    // Define-once lazy getter: on first read it materializes the Shot[] and
+    // *replaces itself* with a plain data property holding that array. This
+    // (a) keeps identity stable (later reads return the same array),
+    // (b) drops the getter/closure overhead after materialization, and
+    // (c) makes the state externally observable for the load-path lazy guard:
+    //     an untouched section's descriptor is an accessor (`get` defined),
+    //     a materialized one is a data property (`value` defined). The
+    //     regression test and the E2E harness classify sections that way.
     Object.defineProperty(section, 'shots', {
       get() {
-        if (shotsCache === null) shotsCache = materializeShots();
-        return shotsCache;
+        const shots = materializeShots();
+        noteShotMaterialization();
+        Object.defineProperty(section, 'shots', {
+          value: shots,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+        return shots;
       },
       enumerable: true,
       configurable: true,

@@ -109,6 +109,28 @@ export interface SurveyData {
   stationComments: Map<number, string>;
 }
 
+/**
+ * Global counter of lazy `section.shots` materializations.
+ *
+ * The binary loader installs a per-section lazy `shots` getter that
+ * materializes ~250 B `Shot` objects on first read. The whole point of the
+ * SoA layout is that the *load / first-render* path never triggers those
+ * getters for the whole project (75k+ objects). This counter lets a test or
+ * the E2E harness assert that: after a settled load it must stay 0 (a single
+ * section opened by the user afterwards is fine and expected to be nonzero).
+ *
+ * Held in a mutable object so the value can be read live (a primitive export
+ * would snapshot). `main.tsx` exposes it on `window.__shotMaterializations`
+ * in E2E builds.
+ */
+export const shotMaterialization = { count: 0 };
+
+/** Increment the lazy-materialization counter. Called by the binary loader's
+ *  `section.shots` getter on first access. Cheap enough to run unconditionally. */
+export function noteShotMaterialization(): void {
+  shotMaterialization.count++;
+}
+
 /** Sentinel: `Int32Array`'s representation of "the marker_index is null". */
 export const SHOT_MARKER_NULL = -1;
 /** Bit position of the `is_reference` flag in `shotFlags`. */
@@ -409,6 +431,63 @@ export function surveyDataFromLegacy(
   });
 
   return data;
+}
+
+/**
+ * Build a `SurveyData` for the closure-adjusted geometry view by reusing the
+ * measured `base`'s shot columns + section metadata verbatim and rebuilding
+ * only the station columns from `adjustedStations`.
+ *
+ * Closure adjustment moves station *coordinates* only; shot ids, angles,
+ * lengths, section shape and offsets are identical to the measured set. So the
+ * adjusted view can share the base's (large) shot typed-arrays and just swap the
+ * station arrays — an O(stations) pass that never touches the lazy
+ * `section.shots` getters. The previous `surveyDataFromLegacy(project.sections,
+ * adjusted)` walked every section's shots to rebuild shot columns it already had,
+ * force-materializing ~75k `Shot` objects the moment the closure-adjusted mode
+ * was entered (or restored from persisted UI state) on load.
+ */
+export function surveyDataWithAdjustedStations(
+  base: SurveyData,
+  adjustedStations: import('./ipc/Station').Station[],
+): SurveyData {
+  const SN = adjustedStations.length;
+  const stationSectionIds = new Int32Array(SN);
+  const stationIndices = new Uint32Array(SN);
+  const stationCoords = new Float64Array(SN * 3);
+  const stationFlags = new Uint8Array(SN);
+  const stationGps = new Map<number, GpsCoordinates>();
+  const stationMergedWith = new Map<number, StationRef[]>();
+  const stationClosuresWith = new Map<number, ClosureRef[]>();
+  const stationComments = new Map<number, string>();
+
+  adjustedStations.forEach((s, i) => {
+    stationSectionIds[i] = s.station_ref.section_id;
+    stationIndices[i] = s.station_ref.station_index;
+    stationCoords[i * 3] = s.coordinates.x;
+    stationCoords[i * 3 + 1] = s.coordinates.y;
+    stationCoords[i * 3 + 2] = s.coordinates.z;
+    stationFlags[i] = s.is_zero_datum ? STATION_FLAG_IS_ZERO_DATUM : 0;
+    if (s.gps_coordinates) stationGps.set(i, s.gps_coordinates);
+    const mergedWith = s.merged_with;
+    if (mergedWith && mergedWith.length > 0) stationMergedWith.set(i, mergedWith);
+    const closuresWith = s.closures_with;
+    if (closuresWith && closuresWith.length > 0) stationClosuresWith.set(i, closuresWith);
+    if (s.comment) stationComments.set(i, s.comment);
+  });
+
+  return {
+    ...base,
+    stationCount: SN,
+    stationSectionIds,
+    stationIndices,
+    stationCoords,
+    stationFlags,
+    stationGps,
+    stationMergedWith,
+    stationClosuresWith,
+    stationComments,
+  };
 }
 
 /**

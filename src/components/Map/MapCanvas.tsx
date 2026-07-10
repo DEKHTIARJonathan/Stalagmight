@@ -1941,26 +1941,30 @@ function MapCanvas() {
   // from the rebuild path so re-rooting never triggers a feature rebuild.
   useEffect(() => {
     if (!surveyLayerRef.current || !mapLoaded) return;
-    if (showDistanceGradient && !effectiveIssueSeverity && distanceField && project) {
-      const state = buildDistanceFeatureState(project.sections, distanceField);
+    if (showDistanceGradient && !effectiveIssueSeverity && distanceField && surveyData) {
+      // Measured SoA: distances use surveyed geometry, and the builder only needs
+      // section metadata + shot ids — never the lazy `section.shots` objects.
+      const state = buildDistanceFeatureState(surveyData, distanceField);
       surveyLayerRef.current.setDistanceGradient(true, state);
     } else {
       // Severity coloring (incl. the Warnings-tab auto-highlight) takes precedence.
       surveyLayerRef.current.setDistanceGradient(false, null);
     }
-  }, [showDistanceGradient, effectiveIssueSeverity, distanceField, project, mapLoaded, surveyLayerRef]);
+  }, [showDistanceGradient, effectiveIssueSeverity, distanceField, surveyData, mapLoaded, surveyLayerRef]);
 
   // Apply the gas field to the layer (feature-state + paint swap). Separate from
   // the fetch so re-rooting / re-computing never triggers a feature rebuild.
   useEffect(() => {
     if (!surveyLayerRef.current || !mapLoaded) return;
-    if (showGasPlan && gasReachField && project) {
-      const state = buildGasReachFeatureState(project.sections, gasReachField);
+    if (showGasPlan && gasReachField && surveyData) {
+      // Measured SoA (see distance-gradient effect): builder reads shot ids from
+      // typed arrays, never the lazy `section.shots` objects.
+      const state = buildGasReachFeatureState(surveyData, gasReachField);
       surveyLayerRef.current.setGasReach(true, state);
     } else {
       surveyLayerRef.current.setGasReach(false, null);
     }
-  }, [showGasPlan, gasReachField, project, mapLoaded, surveyLayerRef]);
+  }, [showGasPlan, gasReachField, surveyData, mapLoaded, surveyLayerRef]);
 
   // Highlight the picked route over the survey (#233): full-opacity swum legs + faded jumps (#243).
   useEffect(() => {

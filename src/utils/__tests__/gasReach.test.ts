@@ -6,15 +6,19 @@ import {
   UNREACHABLE_GAS,
 } from '../gasReach';
 import { encodeFeatureId } from '../ids';
-import type { Section } from '../../types/project';
+import type { SurveyData } from '../../types/survey-data';
 import type { GasReachField } from '../../types/ipc.generated';
 
 describe('buildGasReachFeatureState', () => {
   // Section 1: shots id10 (st0→st1), id11 (st1→st2). Section 2: shot id20 (st0→st1).
-  const sections = [
-    { id: 1, shots: [{ id: 10 }, { id: 11 }] },
-    { id: 2, shots: [{ id: 20 }] },
-  ] as unknown as Section[];
+  // SoA shape: section metadata (shotOffset/shotCount) + a flat shotIds array.
+  const data = {
+    sections: [
+      { id: 1, shotOffset: 0, shotCount: 2 },
+      { id: 2, shotOffset: 2, shotCount: 1 },
+    ],
+    shotIds: new Int32Array([10, 11, 20]),
+  } as unknown as Pick<SurveyData, 'sections' | 'shotIds'>;
 
   // (1,2) is finite-but-OVER-budget (gas_to_reach 1500 > budget 1000, reachable false)
   // — the adversarial case. (2,1) is disconnected (null). Budget is 1000.
@@ -45,7 +49,7 @@ describe('buildGasReachFeatureState', () => {
   };
 
   it('maps each reachable station to its litres-to-reach, keyed by encodeFeatureId', () => {
-    const { stations } = buildGasReachFeatureState(sections, field);
+    const { stations } = buildGasReachFeatureState(data, field);
     expect(stations.get(encodeFeatureId(1, 0))).toBe(0);
     expect(stations.get(encodeFeatureId(1, 1))).toBe(300);
     expect(stations.get(encodeFeatureId(2, 0))).toBe(200);
@@ -53,23 +57,23 @@ describe('buildGasReachFeatureState', () => {
 
   it('greys a finite-but-OVER-budget station (the conservative direction — never paint it reachable)', () => {
     // gas_to_reach is Some(1500) but reachable=false; it must NOT leak the 1500 value.
-    const { stations } = buildGasReachFeatureState(sections, field);
+    const { stations } = buildGasReachFeatureState(data, field);
     expect(stations.get(encodeFeatureId(1, 2))).toBe(UNREACHABLE_GAS);
   });
 
   it('greys a disconnected station (null gas_to_reach)', () => {
-    const { stations } = buildGasReachFeatureState(sections, field);
+    const { stations } = buildGasReachFeatureState(data, field);
     expect(stations.get(encodeFeatureId(2, 1))).toBe(UNREACHABLE_GAS);
   });
 
   it('colors a shot by the average of its two reachable endpoints, keyed by shot id', () => {
-    const { shots } = buildGasReachFeatureState(sections, field);
+    const { shots } = buildGasReachFeatureState(data, field);
     // shot id10: endpoints st0=0, st1=300 → avg 150
     expect(shots.get(encodeFeatureId(1, 10))).toBe(150);
   });
 
   it('greys a shot when either endpoint is unreachable (over-budget OR disconnected)', () => {
-    const { shots } = buildGasReachFeatureState(sections, field);
+    const { shots } = buildGasReachFeatureState(data, field);
     // id11: st1=300 reachable, st2 over-budget → grey
     expect(shots.get(encodeFeatureId(1, 11))).toBe(UNREACHABLE_GAS);
     // id20: st0=200 reachable, st1 disconnected → grey
@@ -79,7 +83,7 @@ describe('buildGasReachFeatureState', () => {
   it('uses the turn budget (not max_reachable_gas) as the interpolate scale max', () => {
     // The scale must end at the budget so purple always means "at your turn pressure",
     // even when the whole reachable cave costs less than the budget.
-    expect(buildGasReachFeatureState(sections, field).max).toBe(1000);
+    expect(buildGasReachFeatureState(data, field).max).toBe(1000);
   });
 });
 
