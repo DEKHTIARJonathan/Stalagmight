@@ -37,6 +37,7 @@ export default function ConfirmDialog() {
   const [relationships, setRelationships] = useState<SectionRelationships | null>(null);
   const [shotImpact, setShotImpact] = useState<DeleteShotImpact | null>(null);
   const [shotImpactError, setShotImpactError] = useState<string | null>(null);
+  const [splitError, setSplitError] = useState<string | null>(null);
 
   // Whether this deletion removes an entire section (explicit last-shot type
   // or legacy shot type with totalShots === 1)
@@ -86,7 +87,17 @@ export default function ConfirmDialog() {
     if (type === 'shot' && sectionId !== undefined && shotId !== undefined) {
       if (splitRequired) {
         // Mid-section shot: delete and split section
-        await deleteShotAndSplit(sectionId, shotId, splitNameA.trim() || 'Section A', splitNameB.trim() || 'Section B');
+        const result = await deleteShotAndSplit(
+          sectionId,
+          shotId,
+          splitNameA.trim() || 'Section A',
+          splitNameB.trim() || 'Section B',
+        );
+        if (!result.success) {
+          setSplitError(result.error ?? 'Failed to split section');
+          return;
+        }
+        setSplitError(null);
         // Select section A (keeps original ID) after split
         setSelection({ type: 'section', sectionId });
       } else if (totalShots === 1) {
@@ -161,6 +172,11 @@ export default function ConfirmDialog() {
 
         {type === 'shot' && splitRequired && (
           <div className="space-y-3">
+            {splitError && (
+              <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
+                {splitError}
+              </div>
+            )}
             <div>
               <label className="block text-sm text-text-secondary mb-1">Section A name (first half)</label>
               <input
