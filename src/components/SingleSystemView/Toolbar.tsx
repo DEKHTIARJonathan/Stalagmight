@@ -61,7 +61,7 @@ interface Separator {
   kind: 'separator';
 }
 
-type ToolbarItem = StandaloneTool | GroupRef | Separator;
+export type ToolbarItem = StandaloneTool | GroupRef | Separator;
 
 /**
  * Get the display shortcut string for a tool from the shortcuts config.
@@ -114,7 +114,7 @@ const TOOL_GROUP_LABEL_KEYS: Record<string, string> = {
  * tools, a divider, then the standalone measure tool.
  * [Select Pan/Zoom] | [Merge Comment Move] | [Measure]
  */
-const TOOLBAR_ITEMS: ToolbarItem[] = [
+export const TOOLBAR_ITEMS: ToolbarItem[] = [
   { kind: 'standalone', id: 'select', shortcut: 'S' },
   { kind: 'group', groupId: 'navigate' },
   { kind: 'separator' },
@@ -129,19 +129,23 @@ const TOOLBAR_ITEMS: ToolbarItem[] = [
 // move) make no sense there, so they're HIDDEN — not merely disabled — leaving only
 // the non-mutating Select / Pan / Zoom / Measure. Filtered once from TOOLBAR_ITEMS so
 // it stays in sync, with separators left dangling by the removals cleaned up.
-const READ_ONLY_TOOLBAR_ITEMS: ToolbarItem[] = (() => {
+export const READ_ONLY_TOOLBAR_ITEMS: ToolbarItem[] = (() => {
   const kept = TOOLBAR_ITEMS.filter((item) => {
     if (item.kind === 'separator') return true;
     if (item.kind === 'standalone') return !isMutatingTool(item.id);
     const group = TOOL_GROUPS.find((g) => g.id === item.groupId);
     return group ? group.tools.some((tool) => !isMutatingTool(tool)) : false;
   });
-  return kept.filter((item, i, arr) => {
-    if (item.kind !== 'separator') return true;
-    const prev = arr[i - 1];
-    const next = arr[i + 1];
-    return Boolean(prev && next && prev.kind !== 'separator' && next.kind !== 'separator');
-  });
+  const collapsed: ToolbarItem[] = [];
+  for (const item of kept) {
+    if (item.kind === 'separator') {
+      const last = collapsed[collapsed.length - 1];
+      if (!last || last.kind === 'separator') continue;
+    }
+    collapsed.push(item);
+  }
+  if (collapsed[collapsed.length - 1]?.kind === 'separator') collapsed.pop();
+  return collapsed;
 })();
 
 export default function Toolbar({

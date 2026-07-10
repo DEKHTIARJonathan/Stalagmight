@@ -209,15 +209,17 @@ impl GasConfig {
                 self.survey_speed_m_per_min = None;
             }
         }
-        if !self.survey_rmv_multiplier.is_finite() || self.survey_rmv_multiplier <= 0.0 {
+        // survey / stressed / jump RMV multipliers are all work-factors RELATIVE to the
+        // baseline swim RMV, so none is ever LESS work than baseline: a value below 1.0 would
+        // under-state a leg's gas and over-state reach (the unsafe direction, #241 / §6). Clamp
+        // anything non-finite or < 1.0 back to its default (defaults: survey 1.0, stressed 1.5,
+        // jump 1.5), so a hand-edited config can only ever raise gas, never lower it.
+        if !self.survey_rmv_multiplier.is_finite() || self.survey_rmv_multiplier < 1.0 {
             self.survey_rmv_multiplier = default_survey_rmv_multiplier();
         }
-        if !self.stressed_rmv_multiplier.is_finite() || self.stressed_rmv_multiplier <= 0.0 {
+        if !self.stressed_rmv_multiplier.is_finite() || self.stressed_rmv_multiplier < 1.0 {
             self.stressed_rmv_multiplier = default_stressed_rmv_multiplier();
         }
-        // Jump bump must never *reduce* gas: a multiplier below 1.0 would under-state a jump
-        // leg's gas (the unsafe direction, §6), so clamp anything non-finite or <1.0 up to the
-        // 1.0 default (stricter than the `<= 0.0` siblings above — a jump is never less work).
         if !self.jump_rmv_multiplier.is_finite() || self.jump_rmv_multiplier < 1.0 {
             self.jump_rmv_multiplier = default_jump_rmv_multiplier();
         }

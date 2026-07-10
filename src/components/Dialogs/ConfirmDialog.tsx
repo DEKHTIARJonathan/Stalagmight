@@ -5,7 +5,6 @@ import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import type { StationRef } from '../../types/project';
 import type { DeleteShotImpact, SectionRelationships } from '../../types/commands';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 
@@ -15,7 +14,6 @@ export default function ConfirmDialog() {
 
   const type = dialogData.type as 'station' | 'shot' | 'section' | 'last-shot' | undefined;
   const message = dialogData.message as string | undefined;
-  const stationRef = dialogData.stationRef as StationRef | undefined;
   const sectionId = dialogData.sectionId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
   const totalShots = dialogData.totalShots as number | undefined;
@@ -37,6 +35,8 @@ export default function ConfirmDialog() {
   const [relationships, setRelationships] = useState<SectionRelationships | null>(null);
   const [shotImpact, setShotImpact] = useState<DeleteShotImpact | null>(null);
   const [shotImpactError, setShotImpactError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Whether this deletion removes an entire section (explicit last-shot type
   // or legacy shot type with totalShots === 1)
@@ -74,40 +74,98 @@ export default function ConfirmDialog() {
     }
   }, [type, removesSection, splitRequired, sectionId, shotId]);
 
-  const handleConfirm = async () => {
+  // Run the delete for the current dialog type. Returns true if it completed and
+  // the dialog should close; false if the backend REFUSED (a frozen shot, an edge
+  // shot in an adjusted network, a read-only/SpeleoDB-locked project) -- in which
+  // case the error is surfaced via setDeleteError and the dialog stays open. Every
+  // delete path (not just split) checks result.success, so a backend refusal is
+  // never silently closed as a success (#241). Thrown transport errors are handled
+  // by the caller.
+  const runDelete = async (): Promise<boolean> => {
     if (type === 'last-shot' && sectionId !== undefined && shotId !== undefined) {
       // Last remaining shot: delete shot + entire section
-      await deleteLastShotAndSection(sectionId, shotId);
+      const result = await deleteLastShotAndSection(sectionId, shotId);
+      if (!result.success) {
+        setDeleteError(result.error ?? 'Failed to delete shot');
+        return false;
+      }
       clearSelection();
-      trackDialogComplete('confirm-delete');
-      closeDialog();
-      return;
+      return true;
     }
     if (type === 'shot' && sectionId !== undefined && shotId !== undefined) {
       if (splitRequired) {
         // Mid-section shot: delete and split section
-        await deleteShotAndSplit(sectionId, shotId, splitNameA.trim() || 'Section A', splitNameB.trim() || 'Section B');
+        const result = await deleteShotAndSplit(
+          sectionId,
+          shotId,
+          splitNameA.trim() || 'Section A',
+          splitNameB.trim() || 'Section B',
+        );
+        if (!result.success) {
+          setDeleteError(result.error ?? 'Failed to split section');
+          return false;
+        }
         // Select section A (keeps original ID) after split
         setSelection({ type: 'section', sectionId });
-      } else if (totalShots === 1) {
-        // Last remaining shot: delete shot + section
-        await deleteLastShotAndSection(sectionId, shotId);
-        clearSelection();
-      } else {
-        // Edge shot (or legacy caller without position data): simple delete
-        await deleteShot(sectionId, shotId);
-        clearSelection();
+        return true;
       }
-    } else if (type === 'section' && sectionId !== undefined) {
-      await deleteSection(sectionId);
+      if (totalShots === 1) {
+        // Last remaining shot: delete shot + section
+        const result = await deleteLastShotAndSection(sectionId, shotId);
+        if (!result.success) {
+          setDeleteError(result.error ?? 'Failed to delete shot');
+          return false;
+        }
+        clearSelection();
+        return true;
+      }
+      // Edge shot (or legacy caller without position data): simple delete
+      const result = await deleteShot(sectionId, shotId);
+      if (!result.success) {
+        setDeleteError(result.error ?? 'Failed to delete shot');
+        return false;
+      }
       clearSelection();
-    } else if (type === 'station' && stationRef) {
-      // Deleting a station requires deleting connected shots
-      // For now, show a message that this is not directly supported
-      // The user should delete the shots instead
+      return true;
     }
-    trackDialogComplete('confirm-delete');
-    closeDialog();
+    if (type === 'section' && sectionId !== undefined) {
+      const result = await deleteSection(sectionId);
+      if (!result.success) {
+        setDeleteError(result.error ?? 'Failed to delete section');
+        return false;
+      }
+      clearSelection();
+      return true;
+    }
+    // type === 'station': deleting a station is not directly supported; the user
+    // deletes the connected shots instead (see the note rendered for this type).
+    return true;
+  };
+
+  const handleConfirm = async () => {
+    if (isSubmitting) return; // guard against a double-click firing a second delete
+    setIsSubmitting(true);
+    setDeleteError(null);
+    let shouldClose = false;
+    try {
+      shouldClose = await runDelete();
+    } catch (e) {
+      // A genuine IPC/transport failure rejects (distinct from a returned
+      // {success:false}); surface it too rather than leaving the click dead.
+      setDeleteError(getErrorMessage(e, 'Delete failed'));
+    }
+    if (!shouldClose) {
+      setIsSubmitting(false);
+      return;
+    }
+    // The delete IPC is async; if the user dismissed this dialog while it was in
+    // flight, activeDialog has already moved on. closeDialog() is global UI state,
+    // so calling it now would close whatever dialog is open instead -- only
+    // finalize if this confirm dialog is still the active one.
+    if (useUIStore.getState().activeDialog === 'confirm-delete') {
+      trackDialogComplete('confirm-delete');
+      closeDialog();
+    }
   };
 
   const getTitle = () => {
@@ -221,9 +279,23 @@ export default function ConfirmDialog() {
           </>
         )}
 
+        {deleteError && (
+          <div
+            className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm"
+            data-testid="delete-error"
+          >
+            {deleteError}
+          </div>
+        )}
+
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={closeDialog}>Cancel</Button>
-          <Button variant="danger" onClick={handleConfirm} disabled={type === 'station'} data-primary-action="">
+          <Button
+            variant="danger"
+            onClick={handleConfirm}
+            disabled={type === 'station' || isSubmitting}
+            data-primary-action=""
+          >
             {splitRequired ? 'Delete & Split' : 'Delete'}
           </Button>
         </div>
