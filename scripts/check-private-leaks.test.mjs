@@ -11,7 +11,7 @@
 // Run: node scripts/check-private-leaks.test.mjs  (also a CI leak-scan step).
 
 import assert from 'node:assert/strict';
-import { findLeaks, isExcluded, isAttributionFile, RULES, gateFails } from './check-private-leaks.mjs';
+import { findLeaks, isExcluded, isAttributionFile, RULES, gateFails, looksBinary } from './check-private-leaks.mjs';
 
 let passed = 0;
 const failures = [];
@@ -156,6 +156,7 @@ test('isExcluded covers vendor, lockfiles, generated, binary, and self', () => {
   assert.ok(isExcluded('docs/SCREENSHOT.PNG')); // extension lowercased
   assert.ok(isExcluded('scripts/check-private-leaks.mjs'));
   assert.ok(isExcluded('scripts/check-private-leaks.test.mjs'));
+  assert.ok(isExcluded('e2e/fixtures/test_simple.tml')); // Ariane .tml is a binary zip container (#241)
 });
 
 test('isExcluded does NOT skip text formats that can carry a leak', () => {
@@ -174,6 +175,18 @@ test('gateFails: clean only with zero violations AND zero skips', () => {
   // else a marker could be smuggled inside a file the scanner declines to read.
   assert.equal(gateFails([], [{ rel: 'big.md', reason: '9.0 MB > 5 MB cap' }]), true);
   assert.equal(gateFails([{ ruleId: 'maintainer-name' }], []), true);
+});
+
+test('looksBinary flags a NUL byte so an undecidable file fails closed (#241)', () => {
+  // A file whose extension is NOT in BINARY_EXT (so it reaches this check) but that
+  // contains a NUL is undecidable: the scan must treat it as skipped -> gate failure,
+  // not silently pass it. `looksBinary` is what routes it there.
+  assert.equal(looksBinary(Buffer.from('hello\x00world', 'utf8')), true);
+  assert.equal(looksBinary(Buffer.from('plain utf8 text, no nul', 'utf8')), false);
+  // A NUL past the 8000-byte sniff window is not detected (bounded scan) -- documents
+  // the known limit rather than asserting perfection.
+  const late = Buffer.concat([Buffer.alloc(8000, 0x61), Buffer.from([0x00])]);
+  assert.equal(looksBinary(late), false);
 });
 
 // --- rule hygiene -------------------------------------------------------------

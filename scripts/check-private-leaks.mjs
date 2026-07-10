@@ -136,7 +136,7 @@ const EXCLUDE_PREFIXES = [
 const BINARY_EXT = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'ico', 'icns', 'pdf', 'webp',
   'woff', 'woff2', 'ttf', 'otf', 'eot', 'zip', 'gz', 'tgz', 'bz2', 'xz', '7z',
-  'wasm', 'dmp', 'stalx', 'db', 'sqlite', 'sqlite3', 'bin', 'keystore', 'jks',
+  'wasm', 'dmp', 'stalx', 'tml', 'db', 'sqlite', 'sqlite3', 'bin', 'keystore', 'jks',
   'p12', 'der', 'class', 'jar', 'mp4', 'mov', 'webm',
 ]);
 
@@ -197,7 +197,7 @@ function gitTrackedFiles() {
   return out.toString('utf8').split('\0').filter(Boolean);
 }
 
-function looksBinary(buf) {
+export function looksBinary(buf) {
   const n = Math.min(buf.length, 8000);
   for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
   return false;
@@ -231,7 +231,15 @@ function main() {
       skipped.push({ rel, reason: `${(buf.length / 1048576).toFixed(1)} MB > ${MAX_SCAN_BYTES / 1048576} MB cap` });
       continue;
     }
-    if (looksBinary(buf)) continue; // expected/normal — not surfaced
+    if (looksBinary(buf)) {
+      // A NUL byte in a file whose extension is NOT a known binary type (those are
+      // excluded before we ever read them) is undecidable: it could be a mislabeled
+      // binary, or a text file with an embedded NUL that hides a marker past it. Fail
+      // closed (#232 / #241) instead of skipping silently -- if it is genuinely binary,
+      // add its extension to BINARY_EXT so it is excluded up front.
+      skipped.push({ rel, reason: 'binary-like content (NUL byte) in a non-binary extension' });
+      continue;
+    }
     scanned++;
     for (const v of findLeaks(buf.toString('utf8'), rel)) {
       if (isAllowed(rel, v.ruleId)) continue;
