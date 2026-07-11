@@ -279,6 +279,25 @@ export const SECTION_COLORS = [
 ];
 
 /**
+ * Move-comment tool palette (#52). Vivid, high-saturation colors used to
+ * tint each comment label and the shot/station it belongs to, so the two
+ * are visually paired while repositioning. Deliberately distinct from the
+ * muted `SECTION_COLORS` above (so a tint reads clearly even when coloring
+ * by section) and saturated/bright enough to stay readable on the dark map
+ * background.
+ */
+export const COMMENT_PALETTE = [
+  '#ff3b30', // Red
+  '#ff9500', // Orange
+  '#ffd60a', // Yellow
+  '#34c759', // Green
+  '#0a84ff', // Blue
+  '#5e5ce6', // Indigo
+  '#bf5af2', // Purple
+  '#ff2d92', // Magenta
+];
+
+/**
  * Generate a random color with good saturation and lightness
  * that is visually distinct from existing colors
  */
