@@ -24,6 +24,11 @@ interface AnchoredMenuOptions {
    *  stays compact (and scrolls) on a tall window instead of growing to fill the
    *  whole free side. Omit to bound only by the available side space. */
   maxHeightCap?: number;
+  /** Optional signal to re-run the placement measurement while the menu stays
+   *  open (e.g. a string built from async content, so a loading -> N-row swap
+   *  triggers a remeasure). Placement always recomputes on open; pass a value
+   *  here ONLY when the menu's content can resize after that. */
+  remeasureKey?: string | number;
 }
 
 interface Placement {
@@ -46,9 +51,10 @@ interface Placement {
  * off-screen). Dismissal/scroll/resize handling stays with the caller via
  * {@link useDismissableLayer}.
  *
- * NOTE: placement is computed ONCE per open. Keep the menu's content height stable
- * while `open` — a menu with async/changing content (e.g. a loading-row → N-row
- * swap) is NOT re-placed and may sit at a stale `top`/`maxHeight` until reopened.
+ * Placement is computed on open, and again whenever {@link AnchoredMenuOptions.remeasureKey}
+ * changes. Pass `remeasureKey` when the menu's content height can change while
+ * `open` (e.g. a loading-row → N-row async swap) so it re-places instead of
+ * sitting at a stale `top`/`maxHeight`; omit it when content is stable on open.
  *
  * Returns a `fixed` CSS style for the menu element; render the menu while `open`
  * and spread the returned object onto its `style`.
@@ -57,7 +63,7 @@ export function useAnchoredFixedMenu(
   open: boolean,
   triggerRef: RefObject<HTMLElement | null>,
   menuRef: RefObject<HTMLElement | null>,
-  { align, gap, width, maxHeightCap }: AnchoredMenuOptions
+  { align, gap, width, maxHeightCap, remeasureKey }: AnchoredMenuOptions
 ): CSSProperties {
   const [placement, setPlacement] = useState<Placement | null>(null);
 
@@ -104,7 +110,7 @@ export function useAnchoredFixedMenu(
     const left = Math.max(gap, Math.min(rawLeft, window.innerWidth - width - gap));
 
     setPlacement({ top, left, maxHeight });
-  }, [open, triggerRef, menuRef, align, gap, width, maxHeightCap]);
+  }, [open, triggerRef, menuRef, align, gap, width, maxHeightCap, remeasureKey]);
 
   if (!placement) {
     // Hidden first pass: render at natural size, out of the way, so the layout
