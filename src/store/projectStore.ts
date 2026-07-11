@@ -321,6 +321,7 @@ interface ProjectStore {
   createShot: (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => Promise<CommandResult>;
   updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdatesPatch) => Promise<CommandResult>;
   deleteShot: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
+  splitShotAtDistance: (sectionId: SectionId, shotId: ShotId, distance: number) => Promise<CommandResult>;
   deleteShotAndSplit: (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
   deleteLastShotAndSection: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
   deleteShotRangeSplit: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
@@ -1552,6 +1553,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       'delete_shot',
       { sectionId, shotId },
       { purpose: 'delete shot from section', fields: { sectionId, shotId } }
+    );
+  },
+
+  splitShotAtDistance: async (sectionId: SectionId, shotId: ShotId, distance: number) => {
+    return executeCommand(
+      'split_shot_at_distance',
+      { sectionId, shotId, distance },
+      { purpose: 'insert station mid-shot', fields: { sectionId, shotId } }
     );
   },
 

@@ -25,6 +25,7 @@ export { default as SectionAdjustDialog } from './SectionAdjustDialog';
 export { default as SettingsDialog } from './SettingsDialog';
 export { ProjectSettingsDialog } from './ProjectSettingsDialog';
 export { default as SplitSectionDialog } from './SplitSectionDialog';
+export { default as InsertStationDialog } from './InsertStationDialog';
 export { default as CorruptionRecoveryDialog } from './CorruptionRecoveryDialog';
 export { default as TmlImportDialog } from './TmlImportDialog';
 export { default as CompassImportDialog } from './CompassImportDialog';
