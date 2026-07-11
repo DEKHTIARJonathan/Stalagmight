@@ -1,6 +1,7 @@
 # Slate import: photo of handwritten survey notes -> comments on shots
 
-- **Status:** V1 design draft, iterating with the maintainer (speculative; lives on `design/slate-import`)
+- **Status:** V1 design SETTLED 2026-07-11 (speculative; lives on `design/slate-import`)
+- **Tracking issue:** #274
 - **Date:** 2026-07-11
 - **Note:** `docs/plans/` was removed from master in #229; this doc lives on the branch only.
 - **Roadmap anchor:** `docs/SPEC.md` already lists "OCR for Dive Slates: photo import with text recognition" under Version 3.0+. This is the V1 slice of that.
