@@ -9,7 +9,7 @@ use crate::core::{Command, CommandResult, UndoStack};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, ImportPlacement, ImportSectionConfig,
     LoopClosure, Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates,
-    StationAnchor, StationKey, StationMerge, StationRef, SurveyDirection,
+    StationAnchor, StationKey, StationMerge, StationRef, SurveyDirection, MIN_SPLIT_CHILD_LENGTH_M,
 };
 use crate::persistence::Database;
 use tempfile::TempDir;
@@ -3518,6 +3518,18 @@ fn test_split_shot_at_distance_happy_path() {
     assert_eq!(tail.depth_out, 20.0);
     assert_eq!(tail.comment, Some("mid comment".to_string()));
     assert_eq!(tail.marker_index, Some(3));
+
+    // Both children pin the parent shot's LRUD unchanged (a deliberate
+    // mid-station estimate -- see the split_shot_at_distance docstring).
+    assert_eq!(head.left, tail.left, "head LRUD must equal tail LRUD");
+    assert_eq!(head.right, tail.right, "head LRUD must equal tail LRUD");
+    assert_eq!(head.up, tail.up, "head LRUD must equal tail LRUD");
+    assert_eq!(head.down, tail.down, "head LRUD must equal tail LRUD");
+    assert_eq!(
+        (head.left, head.right, head.up, head.down),
+        (Some(1.0), Some(2.0), Some(0.5), Some(0.25)),
+        "head/tail LRUD must equal the parent shot's LRUD"
+    );
 }
 
 #[test]
@@ -3623,6 +3635,77 @@ fn test_split_shot_at_distance_preserves_anchor_on_endpoint_station() {
 }
 
 #[test]
+fn test_split_shot_at_distance_preserves_loop_closure_anchor_on_endpoint_station() {
+    // Same shape as test_split_shot_at_distance_preserves_anchor_on_endpoint_station,
+    // but for a LoopClosure anchored on the parent shot's endpoint station -- the
+    // one anchor class that test doesn't cover. sec_a's first two (flat,
+    // opposite-azimuth, equal-length) shots cancel out, so station A:2 lands
+    // back at the section's own origin (0,0,0) -- a genuine loop back to A:0.
+    let mut project = Project::new("ClosureAnchor".to_string(), None);
+    let sec_a = project
+        .add_section(SectionData {
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    azimuth_in: 0.0,
+                    azimuth_out: 0.0,
+                    length: 3.0,
+                    depth_in: 0.0,
+                    depth_out: 0.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    azimuth_in: 180.0,
+                    azimuth_out: 180.0,
+                    length: 3.0,
+                    depth_in: 0.0,
+                    depth_out: 0.0,
+                    ..Default::default()
+                },
+                test_shot_data(5.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    let target_shot_id = project.sections[0].shots[1].id;
+    let start_key = project.key_for_ref(StationRef::new(sec_a, 0)).unwrap();
+    let endpoint_key = project.key_for_ref(StationRef::new(sec_a, 2)).unwrap();
+    project.loop_closures.push(LoopClosure {
+        id: 0,
+        station_a: endpoint_key,
+        station_b: start_key,
+        path_length: 6.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::Batch,
+        is_aligned: false,
+    });
+
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    let result = state.execute_split_shot_at_distance(sec_a, target_shot_id, 1.0);
+    assert!(result.success, "{:?}", result.error);
+
+    let after = state.get_project_state().unwrap();
+    assert_eq!(after.loop_closures.len(), 1);
+    let closure = &after.loop_closures[0];
+    assert_eq!(
+        after.resolve_key(&closure.station_a),
+        Some(StationRef::new(sec_a, 3)),
+        "the endpoint closure anchor must resolve to index p+2, not the new mid station"
+    );
+    assert_eq!(
+        after.resolve_key(&closure.station_b),
+        Some(StationRef::new(sec_a, 0)),
+        "the closure's other endpoint (before the split point) is unaffected"
+    );
+}
+
+#[test]
 fn test_split_shot_at_distance_first_shot_keeps_section_start_anchor() {
     let mut project = Project::new("FirstSplit".to_string(), None);
     let sec_a = project
@@ -3697,7 +3780,10 @@ fn test_split_shot_at_distance_rejects_invalid_distances() {
     let state = AppState::new().unwrap();
     state.set_project_for_tests(project);
 
-    for distance in [0.0, 10.0, -1.0, f64::NAN, f64::INFINITY, 11.0] {
+    // 0.005 and length - 0.005 = 9.995 both fall under the MIN_SPLIT_CHILD_LENGTH_M
+    // (0.01m) floor and must be rejected even though they are strictly between
+    // 0 and the shot's length.
+    for distance in [0.0, 10.0, -1.0, f64::NAN, f64::INFINITY, 11.0, 0.005, 9.995] {
         let result = state.execute_split_shot_at_distance(sec, shot_id, distance);
         assert!(!result.success, "distance {distance} must be rejected");
     }
@@ -3708,6 +3794,32 @@ fn test_split_shot_at_distance_rejects_invalid_distances() {
         before_json, after_json,
         "a rejected split must leave the project untouched"
     );
+}
+
+#[test]
+fn test_split_shot_at_distance_accepts_exact_min_child_length_boundary() {
+    // A 1m shot split exactly at the MIN_SPLIT_CHILD_LENGTH_M (0.01m) floor
+    // must be accepted: both children end up exactly at the floor, not below it.
+    let mut project = Project::new("Boundary".to_string(), None);
+    project.add_section(SectionData {
+        color: "#ff0000".to_string(),
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    let sec = project.sections[0].id;
+    let shot_id = project.sections[0].shots[0].id;
+
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    let result = state.execute_split_shot_at_distance(sec, shot_id, MIN_SPLIT_CHILD_LENGTH_M);
+    assert!(result.success, "{:?}", result.error);
+
+    let after = state.get_project_state().unwrap();
+    let section = after.get_section(sec).unwrap();
+    assert_eq!(section.shots.len(), 2);
+    assert!((section.shots[0].length - MIN_SPLIT_CHILD_LENGTH_M).abs() < 1e-12);
+    assert!((section.shots[1].length - (1.0 - MIN_SPLIT_CHILD_LENGTH_M)).abs() < 1e-12);
 }
 
 #[test]
