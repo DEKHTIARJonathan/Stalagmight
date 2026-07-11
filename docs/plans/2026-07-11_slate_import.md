@@ -1,6 +1,6 @@
 # Slate import: photo of handwritten survey notes -> comments on shots
 
-- **Status:** V1 design draft, iterating with Nico (speculative; lives on `design/slate-import`)
+- **Status:** V1 design draft, iterating with the maintainer (speculative; lives on `design/slate-import`)
 - **Date:** 2026-07-11
 - **Note:** `docs/plans/` was removed from master in #229; this doc lives on the branch only.
 - **Roadmap anchor:** `docs/SPEC.md` already lists "OCR for Dive Slates: photo import with text recognition" under Version 3.0+. This is the V1 slice of that.
@@ -160,7 +160,7 @@ with absolutely-positioned overlays, no new library.
 ## 6. OCR engine: feasibility and choice
 
 Two-agent research pass, 2026-07-11 (classic HTR engines + small-VLM route).
-All options below are fully on-device; C++ deps were in scope per Nico. Two
+All options below are fully on-device; C++ deps were in scope per the maintainer. Two
 structural findings frame the field:
 
 1. **The dedicated-HTR ecosystem is Python-only.** kraken, PyLaia, Calamari,
@@ -178,7 +178,7 @@ structural findings frame the field:
 | **TrOCR-small/base-handwritten** | best permissive Latin HTR: 4.22%/3.42% CER IAM lines; the ~30% word-CER caveat above | int8 ~63 MB (small) / fp32 246 MB; runtime `ort` (implement decode loop) or `candle` (has TrOCR example, but base/large only + fragile refs/pr weight branches) | `ort` or `candle` | MIT (weights + conversions) |
 | PaddleOCR-VL-0.9B (VLM) | specialist OCR VLM; handwriting is its weak axis; whole-table transcription in ONE inference with structure intact; GBNF-constrainable via llama.cpp | ~1 GB; 20-60 s/slate CPU (image encode dominates; per-cell framing is CPU-hostile: 100+ encodes = minutes) | `ort` (ONNX) or `llama-cpp-2` (mtmd) | Apache-2.0 |
 | Small generalist VLMs (Qwen3-VL-2B, Florence-2, SmolVLM2, moondream2) | none beats TrOCR on handwriting at <=3B; the VLMs that do are 7B+ (bust the budget) | 0.5-3 GB | llama.cpp / `mistral.rs` / `ort` | Apache-2.0 / MIT |
-| Apple Vision | genuinely strong on handwriting (~99% reports on block print) | zero (OS framework) | `objc2-vision` or Swift CLI bridge | macOS-only: optional accelerator, never the baseline (Daniel has no Mac; Linux has no equivalent) |
+| Apple Vision | genuinely strong on handwriting (~99% reports on block print) | zero (OS framework) | `objc2-vision` or Swift CLI bridge | macOS-only: optional accelerator, never the baseline (not all maintainers have Macs; Linux has no equivalent) |
 | Tesseract 5 | ~45%, "functionally unusable for cursive"; custom handwriting training made it worse | C libs + vcpkg pain on Windows | `leptess` | skip |
 | `ocrs` / OnnxTR / PARSeq | printed/synthetic training, no handwriting pedigree | light | native / `ort` | printed-only fallbacks |
 | DeepSeek-OCR | GPU-oriented, ~3B, CPU-hostile | ~6.8 GB | - | ruled out |
@@ -206,7 +206,7 @@ structural findings frame the field:
   real photos; the trait boundary keeps that door open (a VLM impl would slot
   in at per-row granularity with GBNF digit grammars + logprob confidence).
 
-The decision gate is the real-photo eval (section 7) on Nico's 3-5 slate
+The decision gate is the real-photo eval (section 7) on the maintainer's 3-5 slate
 photos via the debug harness, measured as (a) row-alignment success rate and
 (b) comment-column correction effort in the review UI. If PP-OCRv5 aligns rows
 reliably and comments are fixable without pain, V1 ships on it alone; otherwise
@@ -267,9 +267,9 @@ behind the trait so no milestone blocks on ML behavior.
   noise - also stress-tests align).
 - **M2 - engine + eval harness.** `oar-ocr`/PP-OCRv5 behind `CellRecognizer`
   under the `slate-ocr` feature; model download+checksum on first use;
-  `STAL_SLATE_DEBUG` stage-artifact dump. Exit: CLI-level run over Nico's real
+  `STAL_SLATE_DEBUG` stage-artifact dump. Exit: CLI-level run over the maintainer's real
   photos; measure row-alignment rate + comment quality. **This is the
-  feature-viability gate - review results with Nico before building M3.**
+  feature-viability gate - review results with the maintainer before building M3.**
 - **M3 - dialog UI.** `SlateImportDialog` 3-step flow + the `slate_*` IPC
   commands + session state + e2e with mocked IPC. Exit: full flow works in the
   dev app against a real photo.
@@ -291,7 +291,7 @@ behind the trait so no milestone blocks on ML behavior.
 4. **Scope creep.** The non-goals list in section 3 is the contract; V1 exists
    to learn whether the feature is useful, not to be complete.
 
-## 11. Decision log (all resolved with Nico, 2026-07-11)
+## 11. Decision log (all resolved with the maintainer, 2026-07-11)
 
 - ~~Q1 Engine/runtime~~ DECIDED 2026-07-11 after a two-agent research pass:
   staged - PP-OCRv5 via `oar-ocr` for V1, TrOCR-per-row behind the
@@ -305,8 +305,8 @@ behind the trait so no milestone blocks on ML behavior.
 All eight major decisions are now locked; remaining unknowns (pencil vs marker,
 block vs cursive, actual accuracy) resolve empirically via the real-photo eval.
 - ~~Q2 Model distribution~~ DECIDED: first-use download (section 6).
-- **Q3 Ground truth (PARTLY DECIDED):** slates are ruled/gridded tables; Nico
-  will supply 3-5 real photos as local (non-committed) dev fixtures. Still to
+- **Q3 Ground truth (PARTLY DECIDED):** slates are ruled/gridded tables; the
+  maintainer will supply 3-5 real photos as local (non-committed) dev fixtures. Still to
   learn from the photos: pencil vs marker, block capitals vs cursive.
 - ~~Q4 Numeric semantics~~ DECIDED: anchors + discrepancy flags only;
   corrections deferred to a V2 issue.
