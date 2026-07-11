@@ -866,6 +866,10 @@ mod tests {
         //       command.{list,load,save,delete}_dive_plan = 653.
         //   + 2 agent-harness observability commands:
         //       command.get_recent_logs_since + command.debug_trigger_panic = 655.
+        //   + 6 insert-station split-shot events (#59):
+        //       command.split_shot_at_distance, undo-after.split_shot_at_distance,
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .insert-station = 661.
         assert_eq!(EVENT_NAMES.len(), 661);
     }
 
