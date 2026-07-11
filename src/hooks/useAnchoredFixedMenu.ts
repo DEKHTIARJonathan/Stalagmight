@@ -77,7 +77,11 @@ export function useAnchoredFixedMenu(
     if (!trigger || !menu) return;
 
     const rect = trigger.getBoundingClientRect();
-    const naturalHeight = menu.getBoundingClientRect().height;
+    // scrollHeight reports the element's full content height even when it is
+    // currently max-height-clipped (+ overflow-auto) from the PRIOR placement, so a
+    // remeasure after a loading -> N-row content swap still sees the true natural
+    // height instead of reading back the stale cap via getBoundingClientRect alone.
+    const naturalHeight = Math.max(menu.getBoundingClientRect().height, menu.scrollHeight);
 
     // Keep the menu clear of the app chrome that would otherwise clip/cover it:
     // the opaque top toolbar when flipping up, the bottom status bar when flipping

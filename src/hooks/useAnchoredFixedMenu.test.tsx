@@ -71,6 +71,33 @@ describe('useAnchoredFixedMenu', () => {
     expect(result.current.maxHeight).toBe(300);
   });
 
+  it('remeasures past a stale max-height clip using scrollHeight, not just the clipped rect', () => {
+    const { triggerRef, menuRef, menu } = setup();
+
+    const { result, rerender } = renderHook(
+      ({ remeasureKey, rectHeight, scrollHeight }: { remeasureKey: string; rectHeight: number; scrollHeight: number }) => {
+        menu.getBoundingClientRect = () => rect({ height: rectHeight });
+        Object.defineProperty(menu, 'scrollHeight', { value: scrollHeight, configurable: true });
+        return useAnchoredFixedMenu(true, triggerRef, menuRef, {
+          align: 'center',
+          gap: 4,
+          width: 208,
+          remeasureKey,
+        });
+      },
+      { initialProps: { remeasureKey: 'loading', rectHeight: 20, scrollHeight: 20 } }
+    );
+
+    // First placement clips to MIN_MENU_HEIGHT (64).
+    expect(result.current.maxHeight).toBe(64);
+
+    // Remeasure: the menu is still carrying the PRIOR placement's max-height clip
+    // (+ overflow-auto), so getBoundingClientRect reports back the clipped 64px box
+    // even though the content grew to 300px (scrollHeight). Placement must grow.
+    rerender({ remeasureKey: 'row-a|row-b|row-c', rectHeight: 64, scrollHeight: 300 });
+    expect(result.current.maxHeight).toBe(300);
+  });
+
   it('leaves placement stable across re-renders when remeasureKey is omitted', () => {
     const { triggerRef, menuRef, menu } = setup();
 
