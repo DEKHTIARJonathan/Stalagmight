@@ -3,7 +3,7 @@ import { invokeIpc } from '../utils/ipc';
 import { clampRound } from '../utils/clamp';
 import { PANEL_SIZE_BOUNDS } from '../components/SingleSystemView/layoutConstants';
 import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackPanelMode, trackSelect, trackSelectAdd, clearProjectActionSource, isPersistSuppressed } from '../utils/telemetry';
-import type { Coordinates, DistanceField, PathShot, SectionId, ShotId, StationRef, SectionData } from '../types/project';
+import type { Coordinates, DistanceField, PathShot, SectionId, ShotId, StationRef, SectionData, Marker } from '../types/project';
 
 export interface CommentTarget {
   type: 'station' | 'shot';
@@ -455,6 +455,11 @@ interface UIStore {
   setHoveredStation: (ref: StationRef | null) => void;
   setHoveredShot: (shot: { sectionId: SectionId; shotId: ShotId } | null) => void;
   setHoveredSectionId: (sectionId: SectionId | null) => void;
+
+  // Marker preview — temporary marker shown on the map while the marker form is open.
+  // Cleared when the form closes or the shot changes.
+  previewMarker: Marker | null;
+  setPreviewMarker: (marker: Marker | null) => void;
 
   // Toast state (per-key throttling)
   toast: { message: string; key: string; timestamp: number } | null;
@@ -1621,6 +1626,10 @@ export const useUIStore = create<UIStore>((set) => ({
   setHoveredStation: (hoveredStation) => set({ hoveredStation }),
   setHoveredShot: (hoveredShot) => set({ hoveredShot }),
   setHoveredSectionId: (hoveredSectionId) => set({ hoveredSectionId }),
+
+  // Marker preview
+  previewMarker: null,
+  setPreviewMarker: (previewMarker) => set({ previewMarker }),
 
   // Toast state (per-key throttling)
   toast: null,

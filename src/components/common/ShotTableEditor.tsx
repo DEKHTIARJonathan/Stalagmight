@@ -246,8 +246,9 @@ export function ShotTableEditor({
     setMarkerSaving(true);
     try {
       const existing = getMarkerForShot(shot.id);
+      let result;
       if (existing) {
-        await updateMarker(existing.id, {
+        result = await updateMarker(existing.id, {
           position: markerForm.position,
           marker_type: markerForm.type,
           color: markerForm.color,
@@ -255,7 +256,7 @@ export function ShotTableEditor({
           direction: markerForm.direction,
         });
       } else {
-        await addMarker(
+        result = await addMarker(
           sectionId,
           shot.id,
           markerForm.position,
@@ -265,7 +266,11 @@ export function ShotTableEditor({
           markerForm.direction,
         );
       }
-      setOpenMarkerForShotIdx(null);
+      if (result.success) {
+        setOpenMarkerForShotIdx(null);
+      }
+    } catch (e) {
+      console.error('Failed to save marker:', e);
     } finally {
       setMarkerSaving(false);
     }
@@ -913,13 +918,15 @@ export function ShotTableEditor({
                   {showMarkers && (() => {
                     const existingMarker = getMarkerForShot(shot.id);
                     const isOpen = openMarkerForShotIdx === actualIndex;
+                    const isUnsaved = shot.tempId !== undefined;
                     return (
                       <td className="p-0 text-center">
                         {!readOnly && (
                           <button
                             type="button"
-                            onClick={(e) => { e.stopPropagation(); handleMarkerButtonClick(actualIndex, shot); }}
-                            title={existingMarker ? 'edit marker' : 'add marker'}
+                            onClick={(e) => { e.stopPropagation(); if (!isUnsaved) handleMarkerButtonClick(actualIndex, shot); }}
+                            title={isUnsaved ? 'save shot before adding a marker' : existingMarker ? 'edit marker' : 'add marker'}
+                            disabled={isUnsaved}
                             style={{
                               width: 22,
                               height: 22,
