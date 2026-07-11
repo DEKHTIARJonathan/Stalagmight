@@ -11,7 +11,7 @@ import { applyAzimuthEdit, getAzimuthAverage } from '../../utils/shotTable';
 import { HelpTooltip } from './HelpTooltip';
 import { useLongPress } from '../../hooks';
 
-const MARKER_COLORS: string[] = ['#ff6b6b', '#ff9f43', '#ffcb77', '#4ecdc4', '#54a0ff', '#c56cf0'];
+const MARKER_COLORS: string[] = ['#ff6b6b', '#ff9f43', '#ffcb77', '#4ecdc4', '#54a0ff'];
 const DEFAULT_MARKER_COLOR = '#ff6b6b';
 
 interface MarkerFormState {
@@ -207,12 +207,13 @@ export function ShotTableEditor({
   const { addMarker, updateMarker, deleteMarker } = useProjectStore();
   const [openMarkerForShotIdx, setOpenMarkerForShotIdx] = useState<number | null>(null);
   const [markerForm, setMarkerForm] = useState<MarkerFormState>({
-    type: 'Ndm',
+    type: 'Arrow',
     color: DEFAULT_MARKER_COLOR,
     text: '',
     position: 50,
-    direction: null,
+    direction: 'TowardEnd',
   });
+  const [markerCustomColorInput, setMarkerCustomColorInput] = useState('');
   const [markerSaving, setMarkerSaving] = useState(false);
 
   const showMarkers = sectionId !== undefined;
@@ -236,8 +237,13 @@ export function ShotTableEditor({
             position: Math.round(existing.position),
             direction: existing.direction ?? null,
           }
-        : { type: 'Ndm', color: DEFAULT_MARKER_COLOR, text: '', position: 50, direction: null }
+        : { type: 'Arrow', color: DEFAULT_MARKER_COLOR, text: '', position: 50, direction: 'TowardEnd' }
     );
+    if (existing) {
+      setMarkerCustomColorInput(MARKER_COLORS.includes(existing.color) ? '' : existing.color);
+    } else {
+      setMarkerCustomColorInput('');
+    }
     setOpenMarkerForShotIdx(actualIndex);
   }
 
@@ -956,7 +962,16 @@ export function ShotTableEditor({
                                 }}
                               />
                             ) : (
-                              <span style={{ fontSize: 13, lineHeight: 1, color: isOpen ? 'var(--cc-accent, #4ecdc4)' : 'var(--cc-text-secondary, #a0a0a0)' }}>+</span>
+                              <span
+                                style={{
+                                  width: 10,
+                                  height: 10,
+                                  borderRadius: '50%',
+                                  display: 'block',
+                                  border: `1.5px solid ${isOpen ? 'var(--cc-accent, #4ecdc4)' : 'var(--cc-text-secondary, #a0a0a0)'}`,
+                                  opacity: isOpen ? 1 : 0.5,
+                                }}
+                              />
                             )}
                           </button>
                         )}
@@ -1007,13 +1022,12 @@ export function ShotTableEditor({
                     <tr key={`marker-form-${shot.id}`}>
                       <td colSpan={totalCols} style={{ padding: 0, background: 'var(--cc-panel, #16213e)', borderTop: '1px solid var(--cc-accent, #4ecdc4)', borderBottom: '1px solid var(--cc-border, #0f3460)' }}>
                         <div style={{ padding: '10px 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                          {/* Top row: type + color + label */}
+                          {/* Type */}
                           <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                            {/* Type */}
                             <div>
                               <div style={{ fontSize: 10, color: 'var(--cc-text-secondary)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>type</div>
                               <div style={{ display: 'flex', gap: 5 }}>
-                                {(['Ndm', 'Arrow'] as MarkerType[]).map((t2) => (
+                                {(['Arrow', 'Ndm'] as MarkerType[]).map((t2) => (
                                   <button
                                     key={t2}
                                     type="button"
@@ -1031,34 +1045,8 @@ export function ShotTableEditor({
                                       whiteSpace: 'nowrap',
                                     }}
                                   >
-                                    {t2}
+                                    {t2 === 'Ndm' ? 'NDM' : 'Arrow'}
                                   </button>
-                                ))}
-                              </div>
-                            </div>
-                            {/* Color */}
-                            <div>
-                              <div style={{ fontSize: 10, color: 'var(--cc-text-secondary)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>color</div>
-                              <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
-                                {MARKER_COLORS.map((c) => (
-                                  <button
-                                    key={c}
-                                    type="button"
-                                    onClick={() => setMarkerForm((f) => ({ ...f, color: c }))}
-                                    style={{
-                                      width: 18,
-                                      height: 18,
-                                      borderRadius: '50%',
-                                      background: c,
-                                      border: markerForm.color === c ? '2px solid #fff' : '2px solid transparent',
-                                      outline: markerForm.color === c ? '1.5px solid rgba(255,255,255,.4)' : 'none',
-                                      outlineOffset: 1,
-                                      cursor: 'pointer',
-                                      padding: 0,
-                                      flexShrink: 0,
-                                    }}
-                                    title={c}
-                                  />
                                 ))}
                               </div>
                             </div>
@@ -1085,25 +1073,7 @@ export function ShotTableEditor({
                               />
                             </div>
                           </div>
-                          {/* Position slider */}
-                          <div>
-                            <div style={{ fontSize: 10, color: 'var(--cc-text-secondary)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>position along shot</div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <span style={{ fontSize: 10, color: 'var(--cc-text-secondary)' }}>from</span>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                step={1}
-                                value={markerForm.position}
-                                onChange={(e) => setMarkerForm((f) => ({ ...f, position: Number(e.target.value) }))}
-                                style={{ flex: 1, accentColor: markerForm.color }}
-                              />
-                              <span style={{ fontSize: 10, color: 'var(--cc-text-secondary)' }}>to</span>
-                              <span style={{ fontFamily: 'monospace', fontSize: 11, color: markerForm.color, minWidth: 30, textAlign: 'right' }}>{markerForm.position}%</span>
-                            </div>
-                          </div>
-                          {/* Direction (Arrow only) */}
+                          {/* Direction (Arrow only) -- directly under Type */}
                           {markerForm.type === 'Arrow' && (
                             <div>
                               <div style={{ fontSize: 10, color: 'var(--cc-text-secondary)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>direction</div>
@@ -1131,6 +1101,164 @@ export function ShotTableEditor({
                               </div>
                             </div>
                           )}
+                          {/* Color */}
+                          <div>
+                            <div style={{ fontSize: 10, color: 'var(--cc-text-secondary)', textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 5 }}>color</div>
+                            <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+                              {MARKER_COLORS.map((c) => (
+                                <button
+                                  key={c}
+                                  type="button"
+                                  onClick={() => { setMarkerForm((f) => ({ ...f, color: c })); setMarkerCustomColorInput(''); }}
+                                  style={{
+                                    width: 18,
+                                    height: 18,
+                                    borderRadius: '50%',
+                                    background: c,
+                                    border: markerForm.color === c ? '2px solid #fff' : '2px solid transparent',
+                                    outline: markerForm.color === c ? '1.5px solid rgba(255,255,255,.4)' : 'none',
+                                    outlineOffset: 1,
+                                    cursor: 'pointer',
+                                    padding: 0,
+                                    flexShrink: 0,
+                                  }}
+                                  title={c}
+                                />
+                              ))}
+                              {/* Custom color button */}
+                              {(() => {
+                                const isCustom = !MARKER_COLORS.includes(markerForm.color);
+                                return (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (!isCustom) {
+                                          const init = MARKER_COLORS[0] ?? '#ff6b6b';
+                                          setMarkerCustomColorInput(init);
+                                          setMarkerForm((f) => ({ ...f, color: init }));
+                                        }
+                                      }}
+                                      style={{
+                                        fontSize: 10,
+                                        padding: '2px 6px',
+                                        borderRadius: 4,
+                                        border: isCustom ? '1.5px solid var(--cc-accent, #4ecdc4)' : '1px solid var(--cc-border, #0f3460)',
+                                        background: isCustom ? 'rgba(78,205,196,.15)' : 'transparent',
+                                        color: isCustom ? 'var(--cc-accent, #4ecdc4)' : 'var(--cc-text-secondary)',
+                                        cursor: 'pointer',
+                                        flexShrink: 0,
+                                      }}
+                                    >
+                                      Custom
+                                    </button>
+                                    {isCustom && (
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                        <input
+                                          type="color"
+                                          value={/^#[0-9a-fA-F]{6}$/.test(markerForm.color) ? markerForm.color : '#000000'}
+                                          onChange={(e) => {
+                                            setMarkerCustomColorInput(e.target.value);
+                                            setMarkerForm((f) => ({ ...f, color: e.target.value }));
+                                          }}
+                                          style={{
+                                            width: 28,
+                                            height: 28,
+                                            cursor: 'pointer',
+                                            border: '1px solid var(--cc-border, #0f3460)',
+                                            borderRadius: 4,
+                                            padding: 2,
+                                            background: 'none',
+                                            flexShrink: 0,
+                                          }}
+                                        />
+                                        <input
+                                          type="text"
+                                          value={markerCustomColorInput}
+                                          onChange={(e) => {
+                                            const val = e.target.value;
+                                            setMarkerCustomColorInput(val);
+                                            if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+                                              setMarkerForm((f) => ({ ...f, color: val }));
+                                            }
+                                          }}
+                                          placeholder="#rrggbb"
+                                          maxLength={7}
+                                          style={{
+                                            fontFamily: 'monospace',
+                                            fontSize: 11,
+                                            width: 68,
+                                            padding: '2px 6px',
+                                            background: 'var(--cc-background, #1a1a2e)',
+                                            border: /^#[0-9a-fA-F]{6}$/.test(markerCustomColorInput)
+                                              ? `1px solid ${markerCustomColorInput}`
+                                              : '1px solid var(--cc-border, #0f3460)',
+                                            borderRadius: 4,
+                                            color: 'var(--cc-text, #e0e0e0)',
+                                          }}
+                                        />
+                                      </div>
+                                    )}
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          </div>
+                          {/* Position slider */}
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
+                              <div style={{ fontSize: 10, color: 'var(--cc-text-secondary)', textTransform: 'uppercase', letterSpacing: '.06em' }}>position along shot</div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  value={markerForm.position}
+                                  onChange={(e) => {
+                                    const v = Math.max(0, Math.min(100, Math.round(Number(e.target.value))));
+                                    if (!isNaN(v)) setMarkerForm((f) => ({ ...f, position: v }));
+                                  }}
+                                  style={{
+                                    fontFamily: 'monospace',
+                                    fontSize: 11,
+                                    width: 38,
+                                    padding: '1px 4px',
+                                    background: 'var(--cc-background, #1a1a2e)',
+                                    border: '1px solid var(--cc-border, #0f3460)',
+                                    borderRadius: 3,
+                                    color: markerForm.color,
+                                    textAlign: 'right',
+                                  }}
+                                />
+                                <span style={{ fontSize: 11, color: markerForm.color }}>%</span>
+                              </div>
+                            </div>
+                            {/* Custom visual slider */}
+                            <div style={{ position: 'relative', height: 20, display: 'flex', alignItems: 'center' }}>
+                              <div style={{ position: 'absolute', left: 0, right: 0, height: 4, background: 'var(--cc-border, #0f3460)', borderRadius: 2 }} />
+                              <div style={{ position: 'absolute', left: 0, width: `${markerForm.position}%`, height: 4, background: markerForm.color, borderRadius: 2 }} />
+                              <div style={{
+                                position: 'absolute',
+                                left: `${markerForm.position}%`,
+                                transform: `translateX(calc(-50% + ${(0.5 - markerForm.position / 100) * 12}px))`,
+                                width: 12,
+                                height: 12,
+                                borderRadius: '50%',
+                                background: markerForm.color,
+                                boxShadow: '0 1px 3px rgba(0,0,0,.4)',
+                                pointerEvents: 'none',
+                              }} />
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                step={1}
+                                value={markerForm.position}
+                                onChange={(e) => setMarkerForm((f) => ({ ...f, position: Number(e.target.value) }))}
+                                style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0, cursor: 'pointer', margin: 0 }}
+                              />
+                            </div>
+                          </div>
                           {/* Actions */}
                           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, paddingTop: 4, borderTop: '1px solid var(--cc-border, #0f3460)', marginTop: 2 }}>
                             {existingMarker && (

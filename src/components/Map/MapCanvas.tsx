@@ -1014,6 +1014,11 @@ function MapCanvas() {
     onHiddenShotClick: () => {
       showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden');
     },
+    onMarkerClick: (sectionId: number, shotId: number) => {
+      const store = useUIStore.getState();
+      store.setSelection({ type: 'shot', sectionId, shotId });
+      store.setPendingMarkerOpen({ sectionId, shotId });
+    },
   }), [baseToolCallbacks, showToast]);
 
   // Box select handlers

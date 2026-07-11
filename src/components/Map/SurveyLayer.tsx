@@ -67,6 +67,7 @@ const COMMENT_HALO_WIDTH_TINTED = 2.5;
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
   onShotClick?: (sectionId: SectionId, shotId: ShotId, event: MapMouseEvent) => void;
+  onMarkerClick?: (sectionId: SectionId, shotId: ShotId) => void;
   onEmptyClick?: (event: MapMouseEvent) => void;
   onStationHover?: (ref: StationRef | null) => void;
   onShotHover?: (shot: { sectionId: SectionId; shotId: ShotId } | null) => void;
@@ -1434,12 +1435,13 @@ export default class SurveyLayer {
     const suppressStationClick = this.activeTool === 'move_shot';
     const suppressShotClick = this.activeTool === 'move_station';
 
-    // Query both hitbox layers in a single call for better performance
+    // Query stations, shots, and marker layers together
     const allFeatures = this.map.queryRenderedFeatures(e.point, {
-      layers: [this.stationsHitboxLayerId, this.shotsHitboxLayerId],
+      layers: [this.stationsHitboxLayerId, this.shotsHitboxLayerId, this.markersLayerId],
     });
     const stationFeatures = allFeatures.filter((f) => f.layer.id === this.stationsHitboxLayerId);
     const shotFeatures = allFeatures.filter((f) => f.layer.id === this.shotsHitboxLayerId);
+    const markerFeatures = allFeatures.filter((f) => f.layer.id === this.markersLayerId);
 
     const stationHitArea = this.getStationHitArea();
     const shotHitArea = this.getShotHitArea();
@@ -1465,6 +1467,22 @@ export default class SurveyLayer {
           });
         }
         this.callbacks.onStationClick?.(ref, e);
+        return;
+      }
+    }
+
+    // Markers take priority over shot lines -- clicking a marker selects its shot
+    // and signals the detail panel to open the marker form.
+    if (!suppressShotClick && markerFeatures.length > 0) {
+      const markerProps = markerFeatures[0]?.properties;
+      const mSectionId = markerProps?.['sectionId'];
+      const mShotId = markerProps?.['shotId'];
+      if (mSectionId !== undefined && mShotId !== undefined) {
+        if (this.callbacks.onMarkerClick) {
+          this.callbacks.onMarkerClick(mSectionId as number, mShotId as number);
+        } else {
+          this.callbacks.onShotClick?.(mSectionId as number, mShotId as number, e);
+        }
         return;
       }
     }

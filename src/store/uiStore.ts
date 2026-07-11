@@ -461,6 +461,11 @@ interface UIStore {
   previewMarker: Marker | null;
   setPreviewMarker: (marker: Marker | null) => void;
 
+  // When set, ShotMarkerPanel for this shot should auto-open its form.
+  // Cleared by ShotMarkerPanel after it consumes the signal.
+  pendingMarkerOpen: { sectionId: number; shotId: number } | null;
+  setPendingMarkerOpen: (v: { sectionId: number; shotId: number } | null) => void;
+
   // Toast state (per-key throttling)
   toast: { message: string; key: string; timestamp: number } | null;
   lastToastByKey: Record<string, number>;
@@ -1630,6 +1635,9 @@ export const useUIStore = create<UIStore>((set) => ({
   // Marker preview
   previewMarker: null,
   setPreviewMarker: (previewMarker) => set({ previewMarker }),
+
+  pendingMarkerOpen: null,
+  setPendingMarkerOpen: (pendingMarkerOpen) => set({ pendingMarkerOpen }),
 
   // Toast state (per-key throttling)
   toast: null,

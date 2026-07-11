@@ -941,7 +941,7 @@ function computeInclination(depthIn: number, depthOut: number, length: number): 
   return (Math.asin(clamped) * 180) / Math.PI;
 }
 
-const MARKER_COLORS_DETAIL = ['#ff6b6b', '#ff9f43', '#ffcb77', '#4ecdc4', '#54a0ff', '#c56cf0'];
+const MARKER_COLORS_DETAIL = ['#ff6b6b', '#ff9f43', '#ffcb77', '#4ecdc4', '#54a0ff'];
 
 interface MarkerFormState {
   type: MarkerType;
@@ -971,7 +971,13 @@ function makePreviewMarker(
 function ShotMarkerPanel({ section, shot }: { section: Section; shot: Shot }) {
   const { addMarker, updateMarker, deleteMarker } = useProjectStore();
   const markers = useProjectStore((s) => s.project?.markers);
-  const { setPreviewMarker } = useUIStore(useShallow((s) => ({ setPreviewMarker: s.setPreviewMarker })));
+  const { setPreviewMarker, pendingMarkerOpen, setPendingMarkerOpen } = useUIStore(
+    useShallow((s) => ({
+      setPreviewMarker: s.setPreviewMarker,
+      pendingMarkerOpen: s.pendingMarkerOpen,
+      setPendingMarkerOpen: s.setPendingMarkerOpen,
+    }))
+  );
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
 
   const existing = useMemo(
@@ -981,14 +987,15 @@ function ShotMarkerPanel({ section, shot }: { section: Section; shot: Shot }) {
 
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<MarkerFormState>({
-    type: 'Ndm',
+    type: 'Arrow',
     color: MARKER_COLORS_DETAIL[0] ?? '#ff6b6b',
     text: '',
     position: 50,
-    direction: null,
+    direction: 'TowardEnd',
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [customColorInput, setCustomColorInput] = useState('');
 
   // Clear preview when the panel closes, shot changes, or component unmounts.
   useEffect(() => {
@@ -1006,10 +1013,16 @@ function ShotMarkerPanel({ section, shot }: { section: Section; shot: Shot }) {
     setPreviewMarker(makePreviewMarker(section.id, shot.id, form));
   }, [open, form, section.id, shot.id, setPreviewMarker]);
 
-  // When the panel opens, seed the form from the existing marker (if any).
-  function handleToggleOpen() {
-    if (!open) {
+  // Consume the pendingMarkerOpen signal (set when user clicks the marker column
+  // in the data table or a marker on the map). Auto-open the form for this shot.
+  useEffect(() => {
+    if (!pendingMarkerOpen) return;
+    if (pendingMarkerOpen.sectionId !== section.id || pendingMarkerOpen.shotId !== shot.id) return;
+    setPendingMarkerOpen(null);
+    if (!open && !geometryReadOnly) {
       if (existing) {
+        const isCustom = !MARKER_COLORS_DETAIL.includes(existing.color);
+        setCustomColorInput(isCustom ? existing.color : '');
         setForm({
           type: existing.marker_type,
           color: existing.color,
@@ -1018,7 +1031,29 @@ function ShotMarkerPanel({ section, shot }: { section: Section; shot: Shot }) {
           direction: existing.direction ?? null,
         });
       } else {
-        setForm({ type: 'Ndm', color: MARKER_COLORS_DETAIL[0] ?? '#ff6b6b', text: '', position: 50, direction: null });
+        setCustomColorInput('');
+        setForm({ type: 'Arrow', color: MARKER_COLORS_DETAIL[0] ?? '#ff6b6b', text: '', position: 50, direction: 'TowardEnd' });
+      }
+      setOpen(true);
+    }
+  }, [pendingMarkerOpen, section.id, shot.id, open, geometryReadOnly, existing, setPendingMarkerOpen]);
+
+  // When the panel opens, seed the form from the existing marker (if any).
+  function handleToggleOpen() {
+    if (!open) {
+      if (existing) {
+        const isCustom = !MARKER_COLORS_DETAIL.includes(existing.color);
+        setCustomColorInput(isCustom ? existing.color : '');
+        setForm({
+          type: existing.marker_type,
+          color: existing.color,
+          text: existing.text,
+          position: Math.round(existing.position),
+          direction: existing.direction ?? null,
+        });
+      } else {
+        setCustomColorInput('');
+        setForm({ type: 'Arrow', color: MARKER_COLORS_DETAIL[0] ?? '#ff6b6b', text: '', position: 50, direction: 'TowardEnd' });
       }
     }
     setOpen((v) => !v);
@@ -1065,6 +1100,15 @@ function ShotMarkerPanel({ section, shot }: { section: Section; shot: Shot }) {
       console.error('Failed to delete marker:', e);
     } finally {
       setSaving(false);
+    }
+  }
+
+  const isCustomColor = !MARKER_COLORS_DETAIL.includes(form.color);
+
+  function handleCustomColorChange(val: string) {
+    setCustomColorInput(val);
+    if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+      setForm((f) => ({ ...f, color: val }));
     }
   }
 
@@ -1146,20 +1190,31 @@ function ShotMarkerPanel({ section, shot }: { section: Section; shot: Shot }) {
           <div>
             <span style={{ fontSize: 11, color: 'var(--cc-text-secondary)', display: 'block', marginBottom: 4 }}>Type</span>
             <div style={{ display: 'flex', gap: 6 }}>
-              {pill('NDM', form.type === 'Ndm', () => setForm((f) => ({ ...f, type: 'Ndm', direction: null })))}
               {pill('Arrow', form.type === 'Arrow', () => setForm((f) => ({ ...f, type: 'Arrow', direction: f.direction ?? 'TowardEnd' })))}
+              {pill('NDM', form.type === 'Ndm', () => setForm((f) => ({ ...f, type: 'Ndm', direction: null })))}
             </div>
           </div>
+
+          {/* Direction (Arrow only) -- directly under Type */}
+          {form.type === 'Arrow' && (
+            <div>
+              <span style={{ fontSize: 11, color: 'var(--cc-text-secondary)', display: 'block', marginBottom: 4 }}>Direction</span>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {pill('toward start', form.direction === 'TowardStart', () => setForm((f) => ({ ...f, direction: 'TowardStart' })))}
+                {pill('toward end', form.direction === 'TowardEnd', () => setForm((f) => ({ ...f, direction: 'TowardEnd' })))}
+              </div>
+            </div>
+          )}
 
           {/* Color */}
           <div>
             <span style={{ fontSize: 11, color: 'var(--cc-text-secondary)', display: 'block', marginBottom: 4 }}>Color</span>
-            <div style={{ display: 'flex', gap: 5 }}>
+            <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
               {MARKER_COLORS_DETAIL.map((c) => (
                 <button
                   key={c}
                   type="button"
-                  onClick={() => setForm((f) => ({ ...f, color: c }))}
+                  onClick={() => { setForm((f) => ({ ...f, color: c })); setCustomColorInput(''); }}
                   style={{
                     width: 20,
                     height: 20,
@@ -1170,9 +1225,74 @@ function ShotMarkerPanel({ section, shot }: { section: Section; shot: Shot }) {
                     cursor: 'pointer',
                     padding: 0,
                     boxSizing: 'border-box',
+                    flexShrink: 0,
                   }}
                 />
               ))}
+              {/* Custom color */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isCustomColor) {
+                    const init = MARKER_COLORS_DETAIL[0] ?? '#ff6b6b';
+                    setCustomColorInput(init);
+                    setForm((f) => ({ ...f, color: init }));
+                  }
+                }}
+                style={{
+                  fontSize: 10,
+                  padding: '2px 6px',
+                  borderRadius: 4,
+                  border: isCustomColor ? '1.5px solid var(--cc-accent, #4ecdc4)' : '1px solid var(--cc-border, #0f3460)',
+                  background: isCustomColor ? 'rgba(78,205,196,.12)' : 'transparent',
+                  color: isCustomColor ? 'var(--cc-accent, #4ecdc4)' : 'var(--cc-text-secondary)',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                Custom
+              </button>
+              {isCustomColor && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <input
+                    type="color"
+                    value={/^#[0-9a-fA-F]{6}$/.test(form.color) ? form.color : '#000000'}
+                    onChange={(e) => {
+                      setCustomColorInput(e.target.value);
+                      setForm((f) => ({ ...f, color: e.target.value }));
+                    }}
+                    style={{
+                      width: 28,
+                      height: 28,
+                      cursor: 'pointer',
+                      border: '1px solid var(--cc-border, #0f3460)',
+                      borderRadius: 4,
+                      padding: 2,
+                      background: 'none',
+                      flexShrink: 0,
+                    }}
+                  />
+                  <input
+                    type="text"
+                    value={customColorInput}
+                    onChange={(e) => handleCustomColorChange(e.target.value)}
+                    placeholder="#rrggbb"
+                    maxLength={7}
+                    style={{
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      width: 68,
+                      padding: '2px 6px',
+                      background: 'var(--cc-background, #0a0a1a)',
+                      border: /^#[0-9a-fA-F]{6}$/.test(customColorInput)
+                        ? `1px solid ${customColorInput}`
+                        : '1px solid var(--cc-border, #0f3460)',
+                      borderRadius: 4,
+                      color: 'var(--cc-text, #e0e0e0)',
+                    }}
+                  />
+                </div>
+              )}
             </div>
           </div>
 
@@ -1200,30 +1320,58 @@ function ShotMarkerPanel({ section, shot }: { section: Section; shot: Shot }) {
 
           {/* Position slider */}
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
               <span style={{ fontSize: 11, color: 'var(--cc-text-secondary)' }}>Position</span>
-              <span style={{ fontSize: 11, color: 'var(--cc-accent, #4ecdc4)' }}>{form.position}%</span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={form.position}
-              onChange={(e) => setForm((f) => ({ ...f, position: Number(e.target.value) }))}
-              style={{ width: '100%', accentColor: 'var(--cc-accent, #4ecdc4)' }}
-            />
-          </div>
-
-          {/* Direction (Arrow only) */}
-          {form.type === 'Arrow' && (
-            <div>
-              <span style={{ fontSize: 11, color: 'var(--cc-text-secondary)', display: 'block', marginBottom: 4 }}>Direction</span>
-              <div style={{ display: 'flex', gap: 6 }}>
-                {pill('toward start', form.direction === 'TowardStart', () => setForm((f) => ({ ...f, direction: 'TowardStart' })))}
-                {pill('toward end', form.direction === 'TowardEnd', () => setForm((f) => ({ ...f, direction: 'TowardEnd' })))}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={form.position}
+                  onChange={(e) => {
+                    const v = Math.max(0, Math.min(100, Math.round(Number(e.target.value))));
+                    if (!isNaN(v)) setForm((f) => ({ ...f, position: v }));
+                  }}
+                  style={{
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    width: 38,
+                    padding: '1px 4px',
+                    background: 'var(--cc-background, #0a0a1a)',
+                    border: '1px solid var(--cc-border, #0f3460)',
+                    borderRadius: 3,
+                    color: 'var(--cc-accent, #4ecdc4)',
+                    textAlign: 'right',
+                  }}
+                />
+                <span style={{ fontSize: 11, color: 'var(--cc-accent, #4ecdc4)' }}>%</span>
               </div>
             </div>
-          )}
+            {/* Custom slider: visual track + invisible native input layered on top */}
+            <div style={{ position: 'relative', height: 20, display: 'flex', alignItems: 'center' }}>
+              <div style={{ position: 'absolute', left: 0, right: 0, height: 4, background: 'var(--cc-border, #0f3460)', borderRadius: 2 }} />
+              <div style={{ position: 'absolute', left: 0, width: `${form.position}%`, height: 4, background: 'var(--cc-accent, #4ecdc4)', borderRadius: 2 }} />
+              <div style={{
+                position: 'absolute',
+                left: `${form.position}%`,
+                transform: `translateX(calc(-50% + ${(0.5 - form.position / 100) * 12}px))`,
+                width: 12,
+                height: 12,
+                borderRadius: '50%',
+                background: 'var(--cc-accent, #4ecdc4)',
+                boxShadow: '0 1px 3px rgba(0,0,0,.4)',
+                pointerEvents: 'none',
+              }} />
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={form.position}
+                onChange={(e) => setForm((f) => ({ ...f, position: Number(e.target.value) }))}
+                style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0, cursor: 'pointer', margin: 0 }}
+              />
+            </div>
+          </div>
 
           {/* Error */}
           {saveError && (
