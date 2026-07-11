@@ -159,23 +159,58 @@ with absolutely-positioned overlays, no new library.
 
 ## 6. OCR engine: feasibility and choice
 
-Verified 2026-07-11. All options are local; no cloud dependency.
+Two-agent research pass, 2026-07-11 (classic HTR engines + small-VLM route).
+All options below are fully on-device; C++ deps were in scope per Nico. Two
+structural findings frame the field:
 
-| Option | Handwriting quality | Dep weight | Notes |
-|--------|--------------------|-----------|-------|
-| **TrOCR-small-handwritten** (IAM-trained transformer) | best available locally | model ~60-80 MB int8 / ~250 MB fp32; runtime = `candle` (pure Rust) or `ort` (ONNX Runtime native lib) | line-level recognizer: perfect fit for per-cell recognition; Latin-only by training, which matches scope; ONNX exports exist (Xenova) and candle ships a TrOCR example |
-| `ocrs` (robertknight) | weak (trained on printed/synthetic) | light, pure Rust (RTen) | good printed-text fallback; not the handwriting primary |
-| `oar-ocr` / PaddleOCR via ort | printed-oriented | medium | detection model could inspire layout, recognition wrong-domain for handwriting |
-| Tesseract | poor on handwriting | C system dep, packaging pain on 3 OSes | not recommended |
-| Apple Vision | excellent | zero (OS framework) | macOS-only; violates cross-platform (Daniel has no Mac); optional later accelerator at most |
+1. **The dedicated-HTR ecosystem is Python-only.** kraken, PyLaia, Calamari,
+   Loghi, HTRflow, eScriptorium: no ONNX or C/C++ inference path exists for any
+   of them. They are out regardless of quality. (Also: several of their model
+   weights are CC-BY-NC; never ship those.)
+2. **Line-trained recognizers need per-ROW crops.** TrOCR scores ~4% CER on IAM
+   *lines* but ~30% CER on isolated *words* (microsoft/unilm#1653). Cell-sized
+   crops are word-like, so any TrOCR-class engine must be fed row crops (or the
+   comment cell, which is naturally a line), not tiny numeric cells.
 
-**Recommendation:** TrOCR-small-handwritten, runtime preference `candle` (pure
-Rust, aligns with the repo's portability preference, no native-library
-packaging) with `ort` as fallback if candle CPU perf or operator coverage
-disappoints. Per-cell inference on M1/typical CPU is ~50-150 ms; a 25-row x
-5-column slate is ~125 cells => roughly 6-20 s single-threaded, less with rayon
-across cells. Fine for V1 behind a progress bar, and the numeric columns can
-move to a lighter digit-specialized path later if needed.
+| Option | Handwriting evidence | Model / dep weight | Rust path | License |
+|--------|---------------------|--------------------|-----------|---------|
+| **PP-OCRv5 mobile rec via `oar-ocr`** | v5 is the first PP-OCR trained on handwriting; ~50-73% raw accuracy on handwritten text | **7.5 MB** ONNX; `ort` under the hood; single-pass CTC (no decode loop, fast per-cell, no line-context dependency) | `oar-ocr` crate **v0.8.0 (2026-07-08, active)**, Apache-2.0 | Apache-2.0 (code + weights) |
+| **TrOCR-small/base-handwritten** | best permissive Latin HTR: 4.22%/3.42% CER IAM lines; the ~30% word-CER caveat above | int8 ~63 MB (small) / fp32 246 MB; runtime `ort` (implement decode loop) or `candle` (has TrOCR example, but base/large only + fragile refs/pr weight branches) | `ort` or `candle` | MIT (weights + conversions) |
+| PaddleOCR-VL-0.9B (VLM) | specialist OCR VLM; handwriting is its weak axis; whole-table transcription in ONE inference with structure intact; GBNF-constrainable via llama.cpp | ~1 GB; 20-60 s/slate CPU (image encode dominates; per-cell framing is CPU-hostile: 100+ encodes = minutes) | `ort` (ONNX) or `llama-cpp-2` (mtmd) | Apache-2.0 |
+| Small generalist VLMs (Qwen3-VL-2B, Florence-2, SmolVLM2, moondream2) | none beats TrOCR on handwriting at <=3B; the VLMs that do are 7B+ (bust the budget) | 0.5-3 GB | llama.cpp / `mistral.rs` / `ort` | Apache-2.0 / MIT |
+| Apple Vision | genuinely strong on handwriting (~99% reports on block print) | zero (OS framework) | `objc2-vision` or Swift CLI bridge | macOS-only: optional accelerator, never the baseline (Daniel has no Mac; Linux has no equivalent) |
+| Tesseract 5 | ~45%, "functionally unusable for cursive"; custom handwriting training made it worse | C libs + vcpkg pain on Windows | `leptess` | skip |
+| `ocrs` / OnnxTR / PARSeq | printed/synthetic training, no handwriting pedigree | light | native / `ort` | printed-only fallbacks |
+| DeepSeek-OCR | GPU-oriented, ~3B, CPU-hostile | ~6.8 GB | - | ruled out |
+
+**Recommendation (staged, matching the get-testable-fast goal):**
+
+- **V1 primary: PP-OCRv5 mobile rec via `oar-ocr`.** Ready today, 7.5 MB
+  Apache-2.0 model, single-pass CTC that handles isolated numeric cells (no
+  line-context dependency), CTC probabilities give a per-cell confidence signal
+  for the review-UI tinting, whole slate recognizes in ~1-3 s. Raw ~50-73%
+  handwriting accuracy is comfortably enough for the numeric fuzzy-match
+  anchors; comment errors land in the review UI by design. At 7.5 MB the model
+  could even ship bundled, deferring the download infra.
+- **Escalation path (V1.1, behind the same `CellRecognizer` trait): TrOCR
+  handwritten via `ort`** fed per-ROW/comment-cell crops, if the real-photo
+  eval shows PP-OCRv5's comment-column accuracy is not good enough. int8 small
+  is ~63 MB (this is where first-use download starts mattering); a domain
+  fine-tune on slate rows is the known lever if stock accuracy disappoints.
+- **Later, optional: Apple Vision as a macOS accelerator** behind the trait.
+- **Not chosen: the VLM route.** At our size/CPU budget no VLM beats TrOCR on
+  handwriting, and PaddleOCR-VL's real advantage (whole-table structure in one
+  shot) is redundant here: we must build the deterministic layout pipeline
+  anyway for the review overlay, and slates are ruled grids where line
+  detection is cheap and reliable. Revisit only if the classic path fails on
+  real photos; the trait boundary keeps that door open (a VLM impl would slot
+  in at per-row granularity with GBNF digit grammars + logprob confidence).
+
+The decision gate is the real-photo eval (section 7) on Nico's 3-5 slate
+photos via the debug harness, measured as (a) row-alignment success rate and
+(b) comment-column correction effort in the review UI. If PP-OCRv5 aligns rows
+reliably and comments are fixable without pain, V1 ships on it alone; otherwise
+TrOCR-per-row comes in behind the trait.
 
 Cargo (DECIDED 2026-07-11): gate the engine behind a `slate-ocr` feature while
 experimental (same pattern as `telemetry`) so normal builds/CI stay light; the
@@ -234,11 +269,14 @@ use (no connectivity at the cave) demands it.
 
 ## 10. Open questions (deciding with Nico)
 
-- **Q1 Engine/runtime (OPEN, decision escalated 2026-07-11):** on-device is a
-  hard requirement; C++ dependencies are acceptable. Expanded engine search in
-  progress (classic HTR engines + small-VLM route); section 6 to be rewritten
-  with the findings. Everything else in this doc is engine-agnostic behind the
-  `CellRecognizer` trait.
+- **Q1 Engine/runtime (research complete 2026-07-11, awaiting Nico's call):**
+  on-device hard requirement; C++ acceptable. Two-agent research pass done;
+  section 6 rewritten with the full field. Recommendation: staged - PP-OCRv5
+  via `oar-ocr` for V1, TrOCR-per-row behind the trait as the accuracy
+  escalation, VLM route explicitly not chosen. Everything else in this doc is
+  engine-agnostic behind the `CellRecognizer` trait.
+  Side note on the decided Q2: the V1 model is only 7.5 MB, so V1 may simply
+  bundle it and defer the download infra to the TrOCR escalation (~63 MB).
 - ~~Q2 Model distribution~~ DECIDED: first-use download (section 6).
 - **Q3 Ground truth (PARTLY DECIDED):** slates are ruled/gridded tables; Nico
   will supply 3-5 real photos as local (non-committed) dev fixtures. Still to
