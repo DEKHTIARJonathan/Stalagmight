@@ -285,6 +285,14 @@ export const SECTION_COLORS = [
  * muted `SECTION_COLORS` above (so a tint reads clearly even when coloring
  * by section) and saturated/bright enough to stay readable on the dark map
  * background.
+ *
+ * Assignment (see `commentColorForKey` in `surveyLayer/features.ts`) is a
+ * deterministic hash of each comment's owner identity (section + shot/station),
+ * not a build-order ordinal, so a color stays stable across adds/removes/moves
+ * of other comments. Two accepted tradeoffs of hashing into only 8 slots:
+ * nearby comments can collide on the same color, and a survey with more than
+ * 8 comments is guaranteed to have at least one collision somewhere. Both are
+ * cosmetic (color is a visual pairing aid, not a unique ID).
  */
 export const COMMENT_PALETTE = [
   '#ff3b30', // Red

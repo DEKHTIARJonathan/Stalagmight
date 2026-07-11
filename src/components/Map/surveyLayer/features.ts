@@ -14,6 +14,29 @@ import { encodeFeatureId } from '../../../utils/ids';
 
 export type DepthRange = { min: number; max: number };
 
+/** FNV-1a 32-bit string hash. Deterministic and fast; used to pick a stable
+ *  `COMMENT_PALETTE` slot from a comment's owner identity (#52) - see
+ *  `commentColorForKey`. */
+function fnv1a32(str: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+/** Deterministic `COMMENT_PALETTE` color for a comment, keyed by its OWNER
+ *  identity rather than build order (#52), so the color stays stable when
+ *  other comments are added/removed/moved elsewhere in the survey. Exported
+ *  for test assertions; callers should use the section-qualified key shapes
+ *  below (`${sectionId}:s${shotId}` for shot comments, `${sectionId}:st${
+ *  stationIndex}` for station comments) so two sections can't collide on a
+ *  shared local index. */
+export function commentColorForKey(key: string): string {
+  return COMMENT_PALETTE[fnv1a32(key) % COMMENT_PALETTE.length]!;
+}
+
 /**
  * Ghost section data for merge preview visualization.
  */
@@ -216,13 +239,12 @@ export function buildSurveyFeatures(
   const stationsWithNonReferenceShot = new Set<string>();
 
   let globalShotOrdinal = 0; // for shot-label `index` property (matches legacy semantics)
-  // Move-comment palette (#52): each comment gets an ordinal in build order
-  // (shots first, then stations), so `commentColor` is deterministic for a
-  // given survey. `stationCommentColors` carries a station's assigned color
-  // from the (always-built) station-circle loop into the (zoom-gated)
-  // station-label loop below, so it's assigned once, not re-rolled.
-  let commentOrdinal = 0;
-  const stationCommentColors = new Map<number, string>();
+  // Move-comment palette (#52): `stationCommentCarry` carries a station's
+  // comment text + assigned color from the (always-built) station-circle loop
+  // into the (zoom-gated) station-label loop below, so `data.stationComments`
+  // is read once per station rather than twice. Only populated when
+  // `buildLabels` is true - the label loop is its only reader.
+  const stationCommentCarry = new Map<number, { comment: string; color: string }>();
 
   for (const section of data.sections) {
     const innerStationMap = stationLookup.get(section.id);
@@ -261,8 +283,17 @@ export function buildSurveyFeatures(
 
       const shotComment = data.shotComments.get(shotGlobalIdx);
       const shotCommentColor = shotComment
-        ? COMMENT_PALETTE[commentOrdinal++ % COMMENT_PALETTE.length]
+        ? commentColorForKey(`${section.id}:s${shotId}`)
         : undefined;
+
+      const shotProps: Record<string, unknown> = {
+        featureId: shotFeatureId,
+        sectionId: section.id,
+        shotId,
+        color: shotColor,
+        isReference,
+      };
+      if (shotCommentColor) shotProps.commentColor = shotCommentColor;
 
       shotFeatures.push({
         type: 'Feature',
@@ -273,14 +304,7 @@ export function buildSurveyFeatures(
             metersToMapCoords(toXYZ.x, toXYZ.y, gpsOrigin),
           ],
         },
-        properties: {
-          featureId: shotFeatureId,
-          sectionId: section.id,
-          shotId,
-          color: shotColor,
-          isReference,
-          ...(shotCommentColor ? { commentColor: shotCommentColor } : {}),
-        },
+        properties: shotProps,
       });
 
       if (showDepthGradient) {
@@ -386,9 +410,22 @@ export function buildSurveyFeatures(
 
     const stationComment = data.stationComments.get(g);
     const stationCommentColor = stationComment
-      ? COMMENT_PALETTE[commentOrdinal++ % COMMENT_PALETTE.length]
+      ? commentColorForKey(`${sectionId}:st${stationIndex}`)
       : undefined;
-    if (stationCommentColor) stationCommentColors.set(g, stationCommentColor);
+    if (buildLabels && stationComment) {
+      stationCommentCarry.set(g, { comment: stationComment, color: stationCommentColor! });
+    }
+
+    const stationProps: Record<string, unknown> = {
+      featureId,
+      sectionId,
+      stationIndex,
+      isZeroDatum: isZeroDatumStation,
+      color,
+      strokeColor: featureStrokeColor,
+      allShotsReference: !stationsWithNonReferenceShot.has(`${sectionId}:${stationIndex}`),
+    };
+    if (stationCommentColor) stationProps.commentColor = stationCommentColor;
 
     stationFeatures.push({
       type: 'Feature',
@@ -396,16 +433,7 @@ export function buildSurveyFeatures(
         type: 'Point',
         coordinates: metersToMapCoords(xyz.x, xyz.y, gpsOrigin),
       },
-      properties: {
-        featureId,
-        sectionId,
-        stationIndex,
-        isZeroDatum: isZeroDatumStation,
-        color,
-        strokeColor: featureStrokeColor,
-        allShotsReference: !stationsWithNonReferenceShot.has(`${sectionId}:${stationIndex}`),
-        ...(stationCommentColor ? { commentColor: stationCommentColor } : {}),
-      },
+      properties: stationProps,
     });
   }
 
@@ -482,11 +510,10 @@ export function buildSurveyFeatures(
         color: stationLabelColor,
         allShotsReference: !stationsWithNonReferenceShot.has(`${sectionId}:${stationIndex}`),
       };
-      const comment = data.stationComments.get(g);
-      if (comment) {
-        stationLabelProps.comment = comment;
-        const commentColor = stationCommentColors.get(g);
-        if (commentColor) stationLabelProps.commentColor = commentColor;
+      const carriedComment = stationCommentCarry.get(g);
+      if (carriedComment) {
+        stationLabelProps.comment = carriedComment.comment;
+        stationLabelProps.commentColor = carriedComment.color;
       }
       stationLabelFeatures.push({
         type: 'Feature',
