@@ -30,6 +30,15 @@ impl AppState {
             return CommandResult::failure("No project open".to_string());
         };
 
+        // No-op guard (#241): toggling to the value already in effect must not
+        // touch()/mark_remote_dirty() — that would spuriously flag a remote
+        // project as having unpushed edits and bump last_edit_at for a call that
+        // changes nothing.
+        let already_enabled = project.collab.as_ref().is_some_and(|c| c.enabled);
+        if already_enabled == enabled {
+            return CommandResult::success();
+        }
+
         if enabled {
             let sibling = default_sibling_name(project);
             match project.collab.as_mut() {

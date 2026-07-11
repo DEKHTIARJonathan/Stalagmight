@@ -19569,6 +19569,53 @@ fn dirty_bit_noop_for_local_only_project() {
 }
 
 #[test]
+fn set_collab_enabled_noop_leaves_modified_at_and_dirty_bit_untouched() {
+    // #241: toggling to the value already in effect must not touch() the
+    // project or mark_remote_dirty() a remote link — that would spuriously
+    // flag unpushed edits and bump last_edit_at for a call that changes
+    // nothing. A genuine flip must still work.
+    let (state, _sid, _shid, _temp) = remote_fixture_editable();
+    assert!(!dirty_bit(&state), "fixture starts clean");
+
+    let modified_at = || state.get_project_state().unwrap().modified_at;
+
+    // Starts disabled (no collab state yet): disabling again is a no-op.
+    let before = modified_at();
+    assert!(state.set_collab_enabled(false).success);
+    assert_eq!(
+        modified_at(),
+        before,
+        "disabling an already-disabled project must not touch()"
+    );
+    assert!(
+        !dirty_bit(&state),
+        "a no-op toggle must not mark the project remote-dirty"
+    );
+
+    // Genuine flip to enabled: touches and dirties.
+    let before = modified_at();
+    assert!(state.set_collab_enabled(true).success);
+    assert_ne!(
+        modified_at(),
+        before,
+        "a real enable must touch() the project"
+    );
+    assert!(
+        dirty_bit(&state),
+        "a real enable must mark the project remote-dirty"
+    );
+
+    // Repeat-enable is now a no-op: modified_at must not move again.
+    let before = modified_at();
+    assert!(state.set_collab_enabled(true).success);
+    assert_eq!(
+        modified_at(),
+        before,
+        "re-enabling an already-enabled project must not touch()"
+    );
+}
+
+#[test]
 fn edit_disabled_code_prefix_is_distinct() {
     // The EDIT_DISABLED code is distinct from the FS permission code, so the FE
     // can pattern-match it independently (#204).
