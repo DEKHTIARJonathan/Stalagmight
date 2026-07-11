@@ -131,7 +131,11 @@ impl Project {
         // `adj` is kept alongside (gas_in, pred): its edge SET is identical to the plain
         // topology graph `build_survey_graph` would return (same shots/merges/closures,
         // just different edge weights), so it doubles as the turn-frontier's adjacency
-        // below — no second, purely-topological graph build.
+        // below - no second, purely-topological graph build. In the degenerate branch
+        // `gas_in` is all-INFINITY, so `reachable` is all-false and the turn-frontier's
+        // `reachable[u] && adj[u]...` filter short-circuits on `reachable[u]` without ever
+        // reading `adj` - an empty adjacency list is provably equivalent, so build one
+        // instead of paying for a real (unused) graph build.
         let (gas_in, pred, adj) = if n == 0
             || roots.is_empty()
             || in_speed <= 0.0
@@ -142,7 +146,7 @@ impl Project {
             (
                 vec![f64::INFINITY; n],
                 vec![usize::MAX; n],
-                self.build_survey_graph(n, &station_index, None),
+                vec![Vec::new(); n],
             )
         } else {
             let adj = self.build_survey_graph_weighted(n, &station_index, |shot, fi, ti| {
@@ -254,7 +258,7 @@ impl Project {
             .collect();
 
         // Turn frontier: reachable stations with at least one neighbour that is NOT reachable
-        // (out of budget or in another component). Topology only — `adj`'s edge SET (built
+        // (out of budget or in another component). Topology only - `adj`'s edge SET (built
         // above) is enough; the gas weights on it are irrelevant to "who borders whom".
         let turn_frontier: Vec<StationRef> = (0..n)
             .filter(|&u| reachable[u] && adj[u].iter().any(|&(v, _)| !reachable[v]))
