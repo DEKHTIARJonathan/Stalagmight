@@ -1685,8 +1685,7 @@ describe('multi-connection overlap: target shot updates', () => {
 // connections. This is the fix for "interpolation not applied" bug.
 // Test file: /tmp/kb.dmp (sections 018 and 003)
 
-// eslint-disable-next-line vitest/no-disabled-tests
-describe.skip('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () => {
+describe('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () => {
   /**
    * Actual suggestion parameters from /tmp/kb.dmp (sections 018 and 003):
    *   Import section 018: 29 shots, importStationIndex=0, matchedShots=2
