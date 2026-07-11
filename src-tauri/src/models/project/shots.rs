@@ -285,6 +285,95 @@ impl Project {
         self.get_section(section_id)?.get_shot(shot_id)
     }
 
+    /// Insert a station mid-shot by splitting `shot_id` at `distance` meters
+    /// from its start into two collinear child shots (issue #59). The new
+    /// "head" shot (fresh id/uuid) is inserted before `shot_id`; `shot_id`
+    /// itself becomes the shrunken "tail" shot, MUTATED IN PLACE so it keeps
+    /// its original id, uuid, comment, and marker_index. The new station sits
+    /// at index `pos + 1` (the boundary between the two children).
+    ///
+    /// Every cross-reference (merge, closure, zero datum, comment) is stored
+    /// as a position-independent [`StationKey`] (`SectionStart` or
+    /// `AfterShot(uuid)`); since the original shot's uuid stays on the tail
+    /// child, every existing anchor keeps resolving to the SAME station it
+    /// always did (now one position further along), and NO remap is needed.
+    /// This only holds because the split never re-anchors `SectionStart` the
+    /// way [`Self::insert_shot_before`]'s prepend path does — this method
+    /// therefore goes through the section-level insert directly rather than
+    /// `Self::insert_shot_before`/`insert_shot_after`.
+    ///
+    /// The split is collinear (same azimuth/pitch on both children, depth
+    /// linearly interpolated), so `horizontal_length_from_slope` is exact
+    /// under the split and every downstream station's absolute position is
+    /// preserved exactly -- no section-offset adjustment is needed.
+    pub fn split_shot_at_distance(
+        &mut self,
+        section_id: SectionId,
+        shot_id: ShotId,
+        distance: f64,
+    ) -> Result<ShotId, String> {
+        let section = self
+            .get_section(section_id)
+            .ok_or_else(|| format!("Section {section_id} not found"))?;
+        if section.shots.len() >= Self::max_shots_per_section() {
+            return Err(format!(
+                "Section {section_id} has reached the maximum of {} shots",
+                Self::max_shots_per_section()
+            ));
+        }
+        let shot = section
+            .get_shot(shot_id)
+            .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+        if !distance.is_finite() {
+            return Err("Distance must be finite".to_string());
+        }
+        if distance <= 0.0 || distance >= shot.length {
+            return Err(format!(
+                "Distance must be strictly between 0 and the shot's length ({:.2}m)",
+                shot.length
+            ));
+        }
+
+        let t = distance / shot.length;
+        let mid_depth = shot.depth_in + t * (shot.depth_out - shot.depth_in);
+        let tail_length = shot.length - distance;
+        let head_data = ShotData {
+            azimuth_in: shot.azimuth_in,
+            azimuth_out: shot.azimuth_out,
+            length: distance,
+            depth_in: shot.depth_in,
+            depth_out: mid_depth,
+            pitch_in: shot.pitch_in,
+            pitch_out: shot.pitch_out,
+            left: shot.left,
+            right: shot.right,
+            up: shot.up,
+            down: shot.down,
+            comment: None,
+            is_reference: shot.is_reference,
+            marker_index: None,
+            temperature: shot.temperature,
+        };
+
+        let section = self
+            .get_section_mut(section_id)
+            .ok_or_else(|| format!("Section {section_id} not found"))?;
+        let tail = section
+            .get_shot_mut(shot_id)
+            .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+        tail.length = tail_length;
+        tail.depth_in = mid_depth;
+
+        let new_shot = section
+            .insert_shot_before_with_id(shot_id, head_data, None, None)
+            .ok_or_else(|| format!("Failed to insert split shot before {shot_id}"))?;
+        let new_shot_id = new_shot.id;
+
+        self.debug_assert_merge_alignment("split_shot_at_distance");
+        self.touch();
+        Ok(new_shot_id)
+    }
+
     /// Update a shot
     pub fn update_shot(
         &mut self,
