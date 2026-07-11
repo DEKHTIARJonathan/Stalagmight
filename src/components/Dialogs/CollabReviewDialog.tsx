@@ -1,7 +1,8 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
-import { useUIStore } from '../../store/uiStore';
+import { useUIStore, isMapReadOnly } from '../../store/uiStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -30,9 +31,11 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
   const { applyCollabChanges } = useProjectStore();
   const { closeDialog, openDialog, triggerFitToBounds } = useUIStore();
   const [isApplying, setIsApplying] = useState(false);
-  // The closure-adjusted view is read-only: applying collab changes mutates the
-  // measured project, so block it here (switch to Measured to apply).
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  // The closure-adjusted view, Plan/Export mode (the dialog can be triggered by a
+  // background collab-detect regardless of appMode), and a locked remote SpeleoDB
+  // project are all read-only: applying collab changes mutates the measured
+  // project, so block it here (switch to Survey/Measured to apply).
+  const geometryReadOnly = useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly);
 
   const counts = useMemo(() => {
     let removedDependents = 0;

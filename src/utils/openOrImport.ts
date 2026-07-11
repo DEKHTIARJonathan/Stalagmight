@@ -23,6 +23,7 @@
 import { open } from '@tauri-apps/plugin-dialog';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore, isMapReadOnly } from '../store/uiStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
 import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openOrImportFilters, IMPORTABLE_EXTENSIONS } from './fileDialogs';
@@ -67,20 +68,25 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
 
   try {
     // Importing into an open project adds sections (a mutation). The read-only map
-    // (#70 closure-adjusted view, or #243 Plan/Export) rejects an import while
-    // active. Centralized here so every caller (toolbar, Ctrl+I, drag-drop) shares
-    // it. Scoped to recognized importable files so an unsupported/unknown extension
-    // still falls through to the accurate "Unsupported file type" error below
-    // (opening a native .stalx project is not an import, so it's exempt too).
-    if (isImportable && hasProject && isMapReadOnly(ui)) {
+    // (#70 closure-adjusted view, #243 Plan/Export, or a locked remote SpeleoDB
+    // project) rejects an import while active. Centralized here so every caller
+    // (toolbar, Ctrl+I, drag-drop) shares it. Scoped to recognized importable
+    // files so an unsupported/unknown extension still falls through to the
+    // accurate "Unsupported file type" error below (opening a native .stalx
+    // project is not an import, so it's exempt too).
+    const speleoReadOnly = selectSpeleoReadOnly(useSpeleoStore.getState());
+    if (isImportable && hasProject && (isMapReadOnly(ui) || speleoReadOnly)) {
       // Tailor the fix-it advice to the active read-only cause: a Plan/Export user
-      // must return to Survey; the closure-adjusted survey user switches the view.
+      // must return to Survey; the closure-adjusted survey user switches the view;
+      // a locked remote project needs the write lock.
       ui.openDialog('error', {
         title: 'Import',
         message:
-          ui.appMode !== 'survey'
-            ? 'Switch to Survey mode to import — the Plan and Export workspaces are read-only.'
-            : 'Switch to the Measured view to import — the closure-adjusted view is read-only.',
+          speleoReadOnly && ui.appMode === 'survey' && ui.geometryMode !== 'closureAdjusted'
+            ? 'Acquire the SpeleoDB write lock to import.'
+            : ui.appMode !== 'survey'
+              ? 'Switch to Survey mode to import — the Plan and Export workspaces are read-only.'
+              : 'Switch to the Measured view to import — the closure-adjusted view is read-only.',
       });
       return;
     }

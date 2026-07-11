@@ -1,8 +1,9 @@
 import { useRef, useEffect, useState, memo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { type Section, type SectionId } from '../../types/project';
-import { useUIStore } from '../../store/uiStore';
+import { useUIStore, isMapReadOnly } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { SHOT_FLAG_IS_REFERENCE } from '../../types/survey-data';
 import { useShallow } from 'zustand/react/shallow';
 import { formatFixed, formatNumber } from '../../i18n/format';
@@ -47,8 +48,9 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     }))
   );
 
-  // The closure-adjusted view is read-only — section add/delete are disabled there.
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  // The closure-adjusted view, Plan/Export mode, and a locked remote SpeleoDB
+  // project are all read-only — section add/delete are disabled there.
+  const geometryReadOnly = useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly);
 
   // The row to highlight comes from any of: an explicit section hover (panel row /
   // DetailPanel section link), or — for map hovers — the section that owns the

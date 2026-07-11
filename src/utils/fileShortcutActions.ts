@@ -14,6 +14,7 @@
  */
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore, isMapReadOnly } from '../store/uiStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
 import { pickAndRoute } from './openOrImport';
 import { newProjectGuarded } from './projectActions';
 import { quitApp } from './quit';
@@ -40,10 +41,11 @@ export function runFileShortcutAction(action: FileShortcutAction): void {
       break;
     case 'import_dmp': {
       const hasProject = !!useProjectStore.getState().project;
-      // The read-only map (#70 closure-adjusted view, or #243 Plan/Export) rejects
-      // imports — they add sections. Skip even opening the picker (routeOpenedFile
-      // also guards). Only meaningful with a project open; GlobalView has none.
-      if (hasProject && isMapReadOnly(useUIStore.getState())) return;
+      // The read-only map (#70 closure-adjusted view, #243 Plan/Export, or a
+      // locked remote SpeleoDB project) rejects imports — they add sections. Skip
+      // even opening the picker (routeOpenedFile also guards). Only meaningful
+      // with a project open; GlobalView has none.
+      if (hasProject && (isMapReadOnly(useUIStore.getState()) || selectSpeleoReadOnly(useSpeleoStore.getState()))) return;
       setProjectActionSource('keyboard');
       // With a project open the picker is scoped to DMP only (the sole additive
       // in-project import); with none, every importable format is offered plus a

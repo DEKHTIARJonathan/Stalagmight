@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { type Section, type Shot, type ShotData, type Station, type StationRef } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useActiveStations } from '../../hooks/useActiveStations';
-import { useUIStore, type Selection } from '../../store/uiStore';
+import { useUIStore, isMapReadOnly, type Selection } from '../../store/uiStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useShallow } from 'zustand/react/shallow';
 import { SpreadsheetGrid, type GridLabels } from '../common/SpreadsheetGrid';
 import { EntityBlob } from '../common/EntityBlob';
@@ -263,8 +264,9 @@ export default function DataTable({ sections }: DataTableProps) {
   // Coordinate columns follow the active geometry (adjusted in the read-only
   // closure-adjusted view); row refs/comments stay measured for editing.
   const activeStations = useActiveStations();
-  // Closure-adjusted view is read-only: cell editing and the reference toggle are disabled.
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  // Closure-adjusted view, Plan/Export mode, and a locked remote SpeleoDB project are all
+  // read-only: cell editing and the reference toggle are disabled.
+  const geometryReadOnly = useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly);
   const {
     selection,
     setSelection,

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
-import { useUIStore, type Selection } from '../../store/uiStore';
+import { useUIStore, isMapReadOnly, type Selection } from '../../store/uiStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
@@ -621,8 +622,9 @@ function StationDetail({ station }: { station: Station }) {
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnStation: s.triggerCenterOnStation, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredShot: s.setHoveredShot, setHoveredSectionId: s.setHoveredSectionId }))
   );
   const precision = useDecimalPrecision();
-  // Closure-adjusted view is read-only: disable mutation controls (edits happen in measured view).
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  // Closure-adjusted view, Plan/Export mode, and a locked remote SpeleoDB project are
+  // all read-only: disable mutation controls (edits happen in the measured survey view).
+  const geometryReadOnly = useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly);
   const distanceGradientOrigin = useUIStore((s) => s.distanceGradientOrigin);
   const showDistanceGradient = useUIStore((s) => s.showDistanceGradient);
   // Show the active geometry's coordinates so inspection matches the map; falls
@@ -942,7 +944,7 @@ function computeInclination(depthIn: number, depthOut: number, length: number): 
 function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
   const { t } = useTranslation();
   const { setShotReference } = useProjectStore();
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const geometryReadOnly = useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly);
   const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnShot: s.triggerCenterOnShot, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredSectionId: s.setHoveredSectionId }))
   );
@@ -1159,7 +1161,7 @@ interface SectionDetailProps {
 
 function SectionDetail({ section, stations, totalProjectLength }: SectionDetailProps) {
   const { t } = useTranslation();
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const geometryReadOnly = useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly);
   const { openDialog, setSelection, triggerZoomToSection, announceSelection, setHoveredStation } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerZoomToSection: s.triggerZoomToSection, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation }))
   );
@@ -1543,7 +1545,7 @@ function ClosuresSection({
 }: ClosuresSectionProps) {
   const { t } = useTranslation();
   const removeLoopClosure = useProjectStore((s) => s.removeLoopClosure);
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const geometryReadOnly = useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly);
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
   const [removingClosureId, setRemovingClosureId] = useState<bigint | null>(null);

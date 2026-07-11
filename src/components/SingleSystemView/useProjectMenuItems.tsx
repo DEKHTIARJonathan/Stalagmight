@@ -11,7 +11,7 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore, isMapReadOnly } from '../../store/uiStore';
-import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { SpeleoBadgedIcon, PushGlyph, RefreshGlyph, EditNoLockGlyph } from '../common/SpeleoBadgedIcon';
@@ -57,11 +57,11 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   // published while logged in).
   const speleoSession = useSpeleoStore((s) => s.session);
   const { busy: speleoBusy, startEditing, update, done } = useSpeleoActions();
-  // The read-only map (closure-adjusted view, or Plan/Export #243) rejects imports
-  // - they add sections. Disable the Import item up front (the toolbar Import
-  // button and Ctrl+I already do), so the user isn't sent through a file picker
-  // only to be rejected after choosing.
-  const mapReadOnly = useUIStore(isMapReadOnly);
+  // The read-only map (closure-adjusted view, Plan/Export #243, or a locked
+  // remote SpeleoDB project) rejects imports - they add sections. Disable the
+  // Import item up front (the toolbar Import button and Ctrl+I already do), so
+  // the user isn't sent through a file picker only to be rejected after choosing.
+  const mapReadOnly = useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly);
 
   return useMemo(() => {
     const sz = 18;

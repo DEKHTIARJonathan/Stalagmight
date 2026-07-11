@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
-import { useUIStore } from '../../store/uiStore';
+import { useUIStore, isMapReadOnly } from '../../store/uiStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { Button } from '../common/Button';
 import { ChevronLeftIcon, CenterMapIcon } from '../common/icons';
 import { formatFixed } from '../../i18n/format';
@@ -279,7 +280,7 @@ export function WarningResolution({
       triggerZoomToShot: s.triggerZoomToShot,
     })),
   );
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const geometryReadOnly = useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly);
   // "Ignore" persists to the project database immediately; a never-saved project
   // (deferred initial save) reserves file_path but has no open database yet, so the
   // suppression can't be stored. Gate Ignore on the database actually being open,
