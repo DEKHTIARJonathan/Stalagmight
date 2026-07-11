@@ -794,7 +794,7 @@ mod tests {
     #[test]
     fn event_count() {
         // 401 on the pre-feature master
-        //   + 8 walls-import events (#223)
+        //   + 7 walls-import events + 1 compass-import active-dwell mirror (#223)
         //   + 9 SpeleoDB events (#183)        = 418
         //   + 1 gas event (#38):
         //       command.compute_gas_reach_field = 419
