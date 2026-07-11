@@ -6,7 +6,7 @@ import {
   SHOT_FLAG_IS_REFERENCE,
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../../../types/survey-data';
-import { getDepthColor, getErrorColor } from '../../../utils/colors';
+import { getDepthColor, getErrorColor, COMMENT_PALETTE } from '../../../utils/colors';
 import { metersToMapCoords } from '../../../utils/coordinates';
 import { formatFixed } from '../../../i18n/format';
 import type { MapThemeColors } from '../../../utils/themeColors';
@@ -216,6 +216,13 @@ export function buildSurveyFeatures(
   const stationsWithNonReferenceShot = new Set<string>();
 
   let globalShotOrdinal = 0; // for shot-label `index` property (matches legacy semantics)
+  // Move-comment palette (#52): each comment gets an ordinal in build order
+  // (shots first, then stations), so `commentColor` is deterministic for a
+  // given survey. `stationCommentColors` carries a station's assigned color
+  // from the (always-built) station-circle loop into the (zoom-gated)
+  // station-label loop below, so it's assigned once, not re-rolled.
+  let commentOrdinal = 0;
+  const stationCommentColors = new Map<number, string>();
 
   for (const section of data.sections) {
     const innerStationMap = stationLookup.get(section.id);
@@ -252,6 +259,11 @@ export function buildSurveyFeatures(
       const fromXYZ = stationXYZ(fromGlobal);
       const toXYZ = stationXYZ(toGlobal);
 
+      const shotComment = data.shotComments.get(shotGlobalIdx);
+      const shotCommentColor = shotComment
+        ? COMMENT_PALETTE[commentOrdinal++ % COMMENT_PALETTE.length]
+        : undefined;
+
       shotFeatures.push({
         type: 'Feature',
         geometry: {
@@ -267,6 +279,7 @@ export function buildSurveyFeatures(
           shotId,
           color: shotColor,
           isReference,
+          ...(shotCommentColor ? { commentColor: shotCommentColor } : {}),
         },
       });
 
@@ -319,7 +332,6 @@ export function buildSurveyFeatures(
           ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
           : null;
         const shotLabelColor = shotLabelDepthColor ?? labelColor;
-        const comment = data.shotComments.get(shotGlobalIdx);
 
         const shotLabelProps: Record<string, unknown> = {
           label,
@@ -329,7 +341,10 @@ export function buildSurveyFeatures(
           color: shotLabelColor,
           isReference,
         };
-        if (comment) shotLabelProps.comment = comment;
+        if (shotComment) {
+          shotLabelProps.comment = shotComment;
+          if (shotCommentColor) shotLabelProps.commentColor = shotCommentColor;
+        }
         shotLabelFeatures.push({
           type: 'Feature',
           geometry: {
@@ -369,6 +384,12 @@ export function buildSurveyFeatures(
     const featureStrokeColor = showDepthGradient && isZeroDatumStation ? zeroDatum : strokeColor;
     const featureId = encodeFeatureId(sectionId, stationIndex);
 
+    const stationComment = data.stationComments.get(g);
+    const stationCommentColor = stationComment
+      ? COMMENT_PALETTE[commentOrdinal++ % COMMENT_PALETTE.length]
+      : undefined;
+    if (stationCommentColor) stationCommentColors.set(g, stationCommentColor);
+
     stationFeatures.push({
       type: 'Feature',
       geometry: {
@@ -383,6 +404,7 @@ export function buildSurveyFeatures(
         color,
         strokeColor: featureStrokeColor,
         allShotsReference: !stationsWithNonReferenceShot.has(`${sectionId}:${stationIndex}`),
+        ...(stationCommentColor ? { commentColor: stationCommentColor } : {}),
       },
     });
   }
@@ -461,7 +483,11 @@ export function buildSurveyFeatures(
         allShotsReference: !stationsWithNonReferenceShot.has(`${sectionId}:${stationIndex}`),
       };
       const comment = data.stationComments.get(g);
-      if (comment) stationLabelProps.comment = comment;
+      if (comment) {
+        stationLabelProps.comment = comment;
+        const commentColor = stationCommentColors.get(g);
+        if (commentColor) stationLabelProps.commentColor = commentColor;
+      }
       stationLabelFeatures.push({
         type: 'Feature',
         geometry: {
