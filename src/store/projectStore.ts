@@ -746,6 +746,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // stale shot/station/section selection from a previous project/session
         // must not carry over.
         useUIStore.getState().clearSelection();
+        // Same hazard for tool state (#275 B1): an armed move-comment pickup or
+        // merge station from the previous project would resolve against this
+        // project's ids and mutate the wrong entities on the next click.
+        useUIStore.getState().resetToolTransientsForProjectSwitch();
         const tViewStart = performance.now();
         useUIStore.getState().setView('single');
         const tViewDone = performance.now();
@@ -943,6 +947,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       useUIStore.getState().applyDisplaySettings(result.displaySettings);
       // Reset the Details panel to the project-level view on open (#54).
       useUIStore.getState().clearSelection();
+      // Stale tool state must not carry into the new project either (#275 B1).
+      useUIStore.getState().resetToolTransientsForProjectSwitch();
       useUIStore.getState().setView('single');
       await get().loadRecentProjects();
       get().resetLoading();

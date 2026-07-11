@@ -242,6 +242,7 @@ interface UIStore {
   activeTool: ToolType;
   lastSubtoolByGroup: Record<string, ToolType>;
   setActiveTool: (tool: ToolType) => void;
+  resetToolTransientsForProjectSwitch: () => void;
 
   // Selection state
   selection: Selection | null;
@@ -741,6 +742,20 @@ export const useUIStore = create<UIStore>((set) => ({
         return { activeTool, lastSubtoolByGroup, hoveredStation: null, hoveredShot: null, hoveredSectionId: null, ...clearComment, ...clearMoveComment, ...clearMeasure };
       }
       return { activeTool, lastSubtoolByGroup, ...clearComment, ...clearMoveComment, ...clearMeasure };
+    }),
+  // Project-switch reset for tool state. Deliberately NOT routed through
+  // setActiveTool: a load-forced reset is not a user action, so no telemetry or
+  // dwell fires and nothing persists (plain set(), per the transient-state rule).
+  // Entity refs (moveCommentSource, merge picks, commentTarget) use small
+  // per-project integer ids, so a stale ref from project A usually RESOLVES in
+  // project B and the next click would mutate the wrong entity - null them all.
+  resetToolTransientsForProjectSwitch: () =>
+    set({
+      activeTool: 'select',
+      moveCommentSource: null,
+      mergeStationA: null,
+      mergeStationB: null,
+      commentTarget: null,
     }),
 
   // Selection state
