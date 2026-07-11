@@ -406,7 +406,7 @@ export default class SurveyLayer {
 
     // Move-comment palette tint (#52): exactly `move_comment` (not the plain
     // `comment` tool) tints each comment label and its owning shot/station.
-    // Re-derive the paint expressions only on transition in/out — they're
+    // Re-derive the paint expressions only on transition in/out - they're
     // computed on demand from current state, so this also naturally restores
     // whatever the shots/stations color owned before (section/depth/measured
     // tint, or an analytical overlay, which the tint yields to).
@@ -1937,7 +1937,7 @@ export default class SurveyLayer {
   /** Wrap `base` with a move-comment palette tint (#52): features carrying a
    *  `commentColor` property (the comment's own shot/station) render in that
    *  color; everything else falls through to `base` unchanged. Only called
-   *  from the plain/measured branch of shots/stations color — the distance
+   *  from the plain/measured branch of shots/stations color - the distance
    *  and gas-reach overlays own color outright while active, so the tint
    *  yields to them rather than fighting for the same paint property. */
   private commentToolTintExpression(base: ExpressionSpecification): ExpressionSpecification {

@@ -69,7 +69,7 @@ async function stationsCircleColor(page: Page): Promise<string> {
   });
 }
 
-test.describe('Move-comment tool — palette tint (#52)', () => {
+test.describe('Move-comment tool - palette tint (#52)', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Comment Palette Test');
