@@ -31,8 +31,10 @@ the MNemo import. That means:
 - The only genuinely *new* data is the **comment column**. Errors there are cheap
   because the side-by-side review UI exists precisely to fix them, with the
   image crop right next to the editable cell.
-- Numeric disagreement beyond tolerance is **flagged, not imported** (see open
-  question Q4). V1 writes comments only.
+- Numeric disagreement beyond tolerance is **flagged, not imported**. V1 writes
+  comments only. (DECIDED 2026-07-11: anchors + flags; instrument data stays
+  authoritative. Numeric corrections from the slate are a possible V2, to be
+  filed as a follow-up issue if V1 proves out.)
 
 This drops the OCR accuracy bar from "hard research problem" to "feasible with a
 small local model plus human review".
@@ -69,7 +71,7 @@ one IPC command at a time (user interaction sits between stages).
 |---|-------|-----------------|-------|
 | 0 | Acquisition | file path -> `RawImage` | file dialog / drag-drop; decode via `image` crate (already a dep) |
 | 1 | Rectification | `RawImage` + 4 corners -> `RectifiedImage` | grayscale, contrast normalize, homography warp (`nalgebra`, already a dep), adaptive binarize copy for layout |
-| 2 | Layout extraction | `RectifiedImage` -> `TableLayout` | column separators + row bands via ink-density projection profiles (plus ruled-line detection if slates are gridded); row-count prior = number of selected shots; user adjusts, stage re-runs |
+| 2 | Layout extraction | `RectifiedImage` -> `TableLayout` | primary: ruled-line detection (slates are gridded tables, confirmed 2026-07-11), Hough/projection on the binarized image; fallback: ink-density projection profiles; row-count prior = number of selected shots; user adjusts, stage re-runs |
 | 3 | Cell OCR | `TableLayout` -> `CellGrid` | per-cell recognition (engine behind a trait); each cell: text, confidence |
 | 4 | Parse + normalize | `CellGrid` -> typed cells | per-column-type cleanup: digit confusion table (O->0, l/I->1, S->5, B->8), decimal separators, unit strip |
 | 5 | Alignment | typed cells + expected shots -> `AlignedRows` | order-preserving DP match (Needleman-Wunsch style with gap penalties) of row numeric signatures vs the known shot list; tolerates extra/missing rows; emits per-row shot binding + discrepancy flags |
@@ -173,8 +175,11 @@ Cargo: gate the engine behind a `slate-ocr` feature while experimental (same
 pattern as `telemetry`) so normal builds/CI stay light; the deterministic stages
 (rectify/layout/parse/align) build and test everywhere.
 
-Model distribution is open question Q2 (bundle vs first-use download vs
-user-supplied path).
+**Model distribution (DECIDED 2026-07-11): first-use download.** The installer
+stays small; on first slate import the app downloads the model (progress UI +
+checksum verification) into the app data dir. Offline-with-no-model degrades to
+a clear "model not downloaded yet" message. Bundling can be revisited if field
+use (no connectivity at the cave) demands it.
 
 ## 7. Testing strategy
 
@@ -223,14 +228,17 @@ user-supplied path).
 
 ## 10. Open questions (deciding with Nico)
 
-- **Q1 Engine/runtime:** TrOCR via candle (recommended) vs ort vs ocrs-only?
-- **Q2 Model distribution:** bundle in installer vs first-use download vs
-  user-supplied path?
-- **Q3 Ground truth:** what do the slates physically look like (ruled grid?
-  block capitals? pencil on plastic vs paper wet-notes), and can we get 3-5 real
-  photos as local dev fixtures?
-- **Q4 Numeric semantics:** anchors + discrepancy flags only (recommended), or
-  must V1 also write numeric corrections back to shots?
+- **Q1 Engine/runtime (OPEN, decision escalated 2026-07-11):** on-device is a
+  hard requirement; C++ dependencies are acceptable. Expanded engine search in
+  progress (classic HTR engines + small-VLM route); section 6 to be rewritten
+  with the findings. Everything else in this doc is engine-agnostic behind the
+  `CellRecognizer` trait.
+- ~~Q2 Model distribution~~ DECIDED: first-use download (section 6).
+- **Q3 Ground truth (PARTLY DECIDED):** slates are ruled/gridded tables; Nico
+  will supply 3-5 real photos as local (non-committed) dev fixtures. Still to
+  learn from the photos: pencil vs marker, block capitals vs cursive.
+- ~~Q4 Numeric semantics~~ DECIDED: anchors + discrepancy flags only;
+  corrections deferred to a V2 issue.
 - **Q5 Comment target:** shot comment (recommended; simplest, `UpdateShot`
   exists) vs station comment vs per-import choice?
 - **Q6 Rectification UX:** manual 4-corner drag (recommended) vs auto-detect vs
