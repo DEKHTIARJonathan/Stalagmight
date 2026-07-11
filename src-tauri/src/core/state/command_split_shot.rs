@@ -1,6 +1,6 @@
 use super::AppState;
 use crate::core::{Command, CommandResult};
-use crate::models::{SectionId, ShotData, ShotId, ShotUpdates};
+use crate::models::{Project, SectionId, ShotId};
 
 impl AppState {
     /// Execute an insert-station-mid-shot operation (issue #59) as a single
@@ -59,12 +59,18 @@ impl AppState {
                     "Shot {shot_id} not found in section {section_id}"
                 ));
             };
-            if distance <= 0.0 || distance >= shot.length {
-                return CommandResult::failure(format!(
-                    "Distance must be strictly between 0 and the shot's length ({:.2}m)",
-                    shot.length
-                ));
-            }
+
+            // Descriptive placeholder for the undo entry (see push_snapshot_undo
+            // below) -- the real mutation runs through split_shot_at_distance,
+            // whose ProjectSnapshotPair is authoritative; these two Command
+            // variants mirror its actual effects (insert the head shot, shrink
+            // the tail) for a human-readable undo label. Computed via the same
+            // pure `Project::compute_split` the mutation itself calls, so the
+            // label and its error messages can never drift from the real split.
+            let (head_data, tail_updates) = match Project::compute_split(shot, distance) {
+                Ok(v) => v,
+                Err(e) => return CommandResult::failure(e),
+            };
 
             // Frozen-geometry guard (mirrors update_shot/delete_shot): refuse to
             // split a shot that is part of an adjusted survey network -- a split
@@ -76,36 +82,6 @@ impl AppState {
                         .to_string(),
                 );
             }
-
-            // Descriptive placeholder for the undo entry (see push_snapshot_undo
-            // below) -- the real mutation runs through split_shot_at_distance,
-            // whose ProjectSnapshotPair is authoritative; these two Command
-            // variants mirror its actual effects (insert the head shot, shrink
-            // the tail) for a human-readable undo label.
-            let t = distance / shot.length;
-            let mid_depth = shot.depth_in + t * (shot.depth_out - shot.depth_in);
-            let head_data = ShotData {
-                azimuth_in: shot.azimuth_in,
-                azimuth_out: shot.azimuth_out,
-                length: distance,
-                depth_in: shot.depth_in,
-                depth_out: mid_depth,
-                pitch_in: shot.pitch_in,
-                pitch_out: shot.pitch_out,
-                left: shot.left,
-                right: shot.right,
-                up: shot.up,
-                down: shot.down,
-                comment: None,
-                is_reference: shot.is_reference,
-                marker_index: None,
-                temperature: shot.temperature,
-            };
-            let tail_updates = ShotUpdates {
-                length: Some(shot.length - distance),
-                depth_in: Some(mid_depth),
-                ..Default::default()
-            };
 
             let new_shot_id = match project.split_shot_at_distance(section_id, shot_id, distance) {
                 Ok(id) => id,

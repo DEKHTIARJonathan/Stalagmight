@@ -11,6 +11,13 @@ use super::{
     StationPair,
 };
 
+/// Minimum length (meters) either child of a split may end up with (issue
+/// #59). A split is only accepted when both `distance` and
+/// `shot.length - distance` are at least this floor, so a shot must be at
+/// least `2 * MIN_SPLIT_CHILD_LENGTH_M` long to be splittable at all. Mirrored
+/// on the frontend in `src/utils/shotSplit.ts`.
+pub const MIN_SPLIT_CHILD_LENGTH_M: f64 = 0.01;
+
 impl Project {
     /// Stations adjacent to `station_ref` through shots (skipping `excluded_shot`)
     /// and merges, plus loop closures when `include_closures` is true. Pass
@@ -298,7 +305,7 @@ impl Project {
     /// child, every existing anchor keeps resolving to the SAME station it
     /// always did (now one position further along), and NO remap is needed.
     /// This only holds because the split never re-anchors `SectionStart` the
-    /// way [`Self::insert_shot_before`]'s prepend path does — this method
+    /// way [`Self::insert_shot_before`]'s prepend path does -- this method
     /// therefore goes through the section-level insert directly rather than
     /// `Self::insert_shot_before`/`insert_shot_after`.
     ///
@@ -306,6 +313,11 @@ impl Project {
     /// linearly interpolated), so `horizontal_length_from_slope` is exact
     /// under the split and every downstream station's absolute position is
     /// preserved exactly -- no section-offset adjustment is needed.
+    ///
+    /// Both children inherit the parent shot's LRUD unchanged: an interior
+    /// point of the measured shot is better estimated by the parent's own
+    /// LRUD than by null, and no renderer currently consumes per-shot LRUD.
+    /// This is a deliberate mid-station estimate, not a bug.
     pub fn split_shot_at_distance(
         &mut self,
         section_id: SectionId,
@@ -324,6 +336,38 @@ impl Project {
         let shot = section
             .get_shot(shot_id)
             .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+        let (head_data, tail_updates) = Self::compute_split(shot, distance)?;
+
+        let section = self
+            .get_section_mut(section_id)
+            .ok_or_else(|| format!("Section {section_id} not found"))?;
+        let tail = section
+            .get_shot_mut(shot_id)
+            .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+        tail.apply_updates(&tail_updates);
+
+        let new_shot = section
+            .insert_shot_before_with_id(shot_id, head_data, None, None)
+            .ok_or_else(|| format!("Failed to insert split shot before {shot_id}"))?;
+        let new_shot_id = new_shot.id;
+
+        self.debug_assert_merge_alignment("split_shot_at_distance");
+        self.touch();
+        Ok(new_shot_id)
+    }
+
+    /// Pure split math for [`Self::split_shot_at_distance`]: given the shot
+    /// being split and a distance from its start, validates the distance and
+    /// returns the new "head" shot's data (to insert before the original)
+    /// plus the [`ShotUpdates`] the original ("tail") shot needs applied. No
+    /// mutation happens here -- this is the one place the split math and its
+    /// error messages live, shared by the mutating split itself and by the
+    /// command layer, which needs the identical computation to build a
+    /// human-readable undo label without re-deriving it.
+    pub(crate) fn compute_split(
+        shot: &Shot,
+        distance: f64,
+    ) -> Result<(ShotData, ShotUpdates), String> {
         if !distance.is_finite() {
             return Err("Distance must be finite".to_string());
         }
@@ -333,10 +377,15 @@ impl Project {
                 shot.length
             ));
         }
+        let tail_length = shot.length - distance;
+        if distance < MIN_SPLIT_CHILD_LENGTH_M || tail_length < MIN_SPLIT_CHILD_LENGTH_M {
+            return Err(format!(
+                "Both sides of the split must be at least {MIN_SPLIT_CHILD_LENGTH_M:.2}m long"
+            ));
+        }
 
         let t = distance / shot.length;
         let mid_depth = shot.depth_in + t * (shot.depth_out - shot.depth_in);
-        let tail_length = shot.length - distance;
         let head_data = ShotData {
             azimuth_in: shot.azimuth_in,
             azimuth_out: shot.azimuth_out,
@@ -354,24 +403,12 @@ impl Project {
             marker_index: None,
             temperature: shot.temperature,
         };
-
-        let section = self
-            .get_section_mut(section_id)
-            .ok_or_else(|| format!("Section {section_id} not found"))?;
-        let tail = section
-            .get_shot_mut(shot_id)
-            .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
-        tail.length = tail_length;
-        tail.depth_in = mid_depth;
-
-        let new_shot = section
-            .insert_shot_before_with_id(shot_id, head_data, None, None)
-            .ok_or_else(|| format!("Failed to insert split shot before {shot_id}"))?;
-        let new_shot_id = new_shot.id;
-
-        self.debug_assert_merge_alignment("split_shot_at_distance");
-        self.touch();
-        Ok(new_shot_id)
+        let tail_updates = ShotUpdates {
+            length: Some(tail_length),
+            depth_in: Some(mid_depth),
+            ..Default::default()
+        };
+        Ok((head_data, tail_updates))
     }
 
     /// Update a shot
