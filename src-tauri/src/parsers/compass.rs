@@ -266,6 +266,18 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
         }
         for station in &dat.project_stations {
             if let Some(loc) = station.location {
+                // A fixed station becomes the GPS zero datum / elevation anchor;
+                // a non-finite coordinate there would poison the UTM->WGS84
+                // projection and every anchored elevation. Skip it (with a
+                // warning) rather than anchoring the import to garbage.
+                if !loc.easting.is_finite() || !loc.northing.is_finite() || !loc.up.is_finite() {
+                    warnings.push(format!(
+                        "Fixed station '{}' has a non-finite UTM location and was ignored \
+                         as an anchor candidate.",
+                        station.name
+                    ));
+                    continue;
+                }
                 fixed_stations.push(FixedStation {
                     name: station.name.clone(),
                     easting: loc.easting,
@@ -440,12 +452,19 @@ fn parse_flags(flags: Option<&String>) -> ShotFlags {
     parsed
 }
 
+/// Non-finite readings are treated as missing everywhere in this parser.
+/// nom's `double` (used by the vendored compass_data crate) accepts literal
+/// "nan"/"inf"/"infinity" tokens, and every sentinel guard below is a
+/// comparison that NaN fails - so without an explicit is_finite() check a
+/// corrupt or hostile .DAT would store NaN geometry that silently poisons
+/// station coords, the closure solve, and the IPC payload (NaN serializes as
+/// null where TS expects number). Mirrors the .tml parser's is_finite filter.
 fn angle_missing(raw: f64) -> bool {
-    raw <= MISSING_ANGLE_THRESHOLD || raw >= MISSING_VALUE_THRESHOLD
+    !raw.is_finite() || raw <= MISSING_ANGLE_THRESHOLD || raw >= MISSING_VALUE_THRESHOLD
 }
 
 fn lrud_meters(raw: f64, length_to_m: f64) -> Option<f64> {
-    if raw <= -1.0 || raw >= MISSING_VALUE_THRESHOLD {
+    if !raw.is_finite() || raw <= -1.0 || raw >= MISSING_VALUE_THRESHOLD {
         return None;
     }
     let value = raw * length_to_m;
@@ -471,7 +490,7 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     // — pass the raw through.
     let mut inclination = match ctx.inclination_units {
         InclinationUnits::DepthGauge => {
-            if shot.inclination >= MISSING_VALUE_THRESHOLD {
+            if !shot.inclination.is_finite() || shot.inclination >= MISSING_VALUE_THRESHOLD {
                 0.0
             } else {
                 shot.inclination
@@ -485,7 +504,7 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
             }
         }
     };
-    let mut length = if shot.length >= MISSING_VALUE_THRESHOLD {
+    let mut length = if !shot.length.is_finite() || shot.length >= MISSING_VALUE_THRESHOLD {
         0.0
     } else {
         shot.length
@@ -512,7 +531,27 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     // asin(depth / length) — pass the raw length (same units as the
     // depth reading) so the ratio is dimensionless.
     let inclination_deg = inclination_to_degrees(inclination, &ctx.inclination_units, length);
-    (azimuth_final, length_m, inclination_deg)
+    // Belt and braces: corrections, declination, and convergence are ALSO
+    // file-controlled floats (a NaN correction factor poisons the sums above,
+    // and NaN.rem_euclid(360.0) is still NaN). Whatever slipped through, no
+    // non-finite component may escape into stored geometry - coerce to 0.0
+    // (missing semantics downstream).
+    (
+        finite_or_zero(azimuth_final),
+        finite_or_zero(length_m),
+        finite_or_zero(inclination_deg),
+    )
+}
+
+/// See `angle_missing`: the no-non-finite-output contract for file-controlled
+/// float pipelines. 0.0 carries the same "missing" semantics the sentinel
+/// guards produce.
+fn finite_or_zero(v: f64) -> f64 {
+    if v.is_finite() {
+        v
+    } else {
+        0.0
+    }
 }
 
 /// Process a back-sight pair (`back_azimuth`, `back_inclination`) and return
@@ -557,7 +596,8 @@ fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
     // depth/length ratio.  Survey-level CORRECTIONS apply to the
     // physical slope distance regardless of sighting direction, so the
     // fore-sight `cf.length` is the right offset for the back-sight too.
-    let mut slope_length_raw = if shot.length >= MISSING_VALUE_THRESHOLD {
+    let mut slope_length_raw = if !shot.length.is_finite() || shot.length >= MISSING_VALUE_THRESHOLD
+    {
         0.0
     } else {
         shot.length
@@ -582,7 +622,12 @@ fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
     // we store IS that degree-converted reading.
     let back_inc_deg = inclination_to_degrees(back_inc, &ctx.inclination_units, slope_length_raw);
     let pitch_out_down_positive = back_inc_deg;
-    Some((azimuth_out_fore_direction, pitch_out_down_positive))
+    // Same no-non-finite-output contract as shot_geometry (backsight
+    // correction factors are file-controlled too).
+    Some((
+        finite_or_zero(azimuth_out_fore_direction),
+        finite_or_zero(pitch_out_down_positive),
+    ))
 }
 
 fn elevation_gain(length_m: f64, inclination_deg: f64) -> f64 {
@@ -1547,6 +1592,81 @@ mod tests {
             .iter()
             .any(|s| s.flags.as_deref() == Some("PC")));
         assert!(survey.shots.iter().any(|s| s.comment.is_some()));
+    }
+
+    /// #275 B4: nom's `double` (vendored compass_data) accepts literal
+    /// nan/inf/-inf tokens, and every sentinel guard is a comparison NaN
+    /// fails - so a corrupt or hostile .DAT could store NaN geometry that
+    /// poisons station coords, the closure solve, and the IPC payload.
+    /// nonfinite.dat carries nan/inf in length, bearing, dip, all four LRUD,
+    /// and the backsight pair; every stored value must come out finite, with
+    /// the poisoned fields treated as missing (the same semantics the
+    /// existing -999/+999 sentinels get).
+    #[test]
+    fn nonfinite_dat_values_are_coerced_to_missing_never_stored() {
+        let parsed = parse_compass(&fixture("nonfinite.dat")).unwrap();
+        // All six rows parse: nom's double accepts bare "nan"/"inf"/"infinity"
+        // tokens (unsigned only - a signed "-inf" fails the vendor parser and
+        // terminates the shot list, which is why the fixture uses "infinity").
+        assert_eq!(parsed.surveys[0].survey.shots.len(), 6);
+        let (configs, _closures, _warnings) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+
+        let shots: Vec<&ShotData> = configs.iter().flat_map(|c| c.shots.iter()).collect();
+        assert!(!shots.is_empty(), "fixture should keep at least one shot");
+
+        for (i, s) in shots.iter().enumerate() {
+            assert!(s.length.is_finite(), "shot {i} length: {}", s.length);
+            assert!(
+                s.azimuth_in.is_finite(),
+                "shot {i} azimuth_in: {}",
+                s.azimuth_in
+            );
+            assert!(
+                s.azimuth_out.is_finite(),
+                "shot {i} azimuth_out: {}",
+                s.azimuth_out
+            );
+            assert!(s.depth_in.is_finite(), "shot {i} depth_in: {}", s.depth_in);
+            assert!(
+                s.depth_out.is_finite(),
+                "shot {i} depth_out: {}",
+                s.depth_out
+            );
+            for (name, v) in [
+                ("pitch_in", s.pitch_in),
+                ("pitch_out", s.pitch_out),
+                ("left", s.left),
+                ("right", s.right),
+                ("up", s.up),
+                ("down", s.down),
+            ] {
+                assert!(
+                    v.is_none_or(f64::is_finite),
+                    "shot {i} {name}: {v:?} must be finite or dropped"
+                );
+            }
+        }
+
+        // The nan-LRUD row (N6->N7) must have dropped all four dimensions,
+        // exactly as a -9.9/999 sentinel would.
+        // FORMAT declares decimal feet, so the 9.00 ft row stores 2.7432 m.
+        let n6 = shots
+            .iter()
+            .find(|s| (s.length - 9.0 * 0.3048).abs() < 0.01)
+            .expect("the 9.00 ft (2.7432 m) shot should survive with finite length");
+        assert!(
+            n6.left.is_none() && n6.up.is_none() && n6.down.is_none() && n6.right.is_none(),
+            "nan/inf LRUD must be treated as missing: {:?}",
+            (n6.left, n6.up, n6.down, n6.right)
+        );
+
+        // nan/inf LENGTH rows collapse to 0 length and are dropped as
+        // zero-length connectors, not stored.
+        assert!(
+            shots.iter().all(|s| s.length > 0.0),
+            "no zero/negative-length shot may be stored"
+        );
     }
 
     #[test]
