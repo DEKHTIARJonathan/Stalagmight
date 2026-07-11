@@ -43,7 +43,9 @@ small local model plus human review".
 
 **In:**
 - Import one image (PNG/JPEG) from disk via file picker or drag-drop.
-- Manual-assist rectification (user drags 4 corners; Rust applies homography).
+- Rectification: auto quad detection pre-places 4 corner handles, user adjusts,
+  Rust applies homography (DECIDED 2026-07-11: auto-detect + manual fallback;
+  the manual handles remain the authority, auto is best-effort placement).
 - Semi-automatic table layout (auto-proposed column/row lines, user-adjustable).
 - Per-cell local OCR, Latin characters only.
 - Column-mapping affordance (map detected columns to: shot #, length, azimuth,
@@ -57,7 +59,6 @@ small local model plus human review".
 - CJK or non-Latin scripts (no test data).
 - Phone/live capture (future mobile; V1 keeps the entry format-agnostic: image
   bytes in).
-- Automatic corner/page detection (manual drag is deterministic and cheap).
 - Writing numeric values (length/azimuth/depth) back to shots.
 - Multi-page/PDF, GPU inference, persisted column templates, batch import.
 
@@ -70,7 +71,7 @@ one IPC command at a time (user interaction sits between stages).
 | # | Phase | Input -> Output | Notes |
 |---|-------|-----------------|-------|
 | 0 | Acquisition | file path -> `RawImage` | file dialog / drag-drop; decode via `image` crate (already a dep) |
-| 1 | Rectification | `RawImage` + 4 corners -> `RectifiedImage` | grayscale, contrast normalize, homography warp (`nalgebra`, already a dep), adaptive binarize copy for layout |
+| 1 | Rectification | `RawImage` + 4 corners -> `RectifiedImage` | auto quad detection proposes the corners (largest high-contrast quadrilateral; best-effort), user drags to correct; then grayscale, contrast normalize, homography warp (`nalgebra`, already a dep), adaptive binarize copy for layout |
 | 2 | Layout extraction | `RectifiedImage` -> `TableLayout` | primary: ruled-line detection (slates are gridded tables, confirmed 2026-07-11), Hough/projection on the binarized image; fallback: ink-density projection profiles; row-count prior = number of selected shots; user adjusts, stage re-runs |
 | 3 | Cell OCR | `TableLayout` -> `CellGrid` | per-cell recognition (engine behind a trait); each cell: text, confidence |
 | 4 | Parse + normalize | `CellGrid` -> typed cells | per-column-type cleanup: digit confusion table (O->0, l/I->1, S->5, B->8), decimal separators, unit strip |
@@ -119,6 +120,7 @@ IPC commands (all new, all read-only w.r.t. the project until commit):
 
 ```
 slate_begin(path, section_id, shot_range)      -> session_id + preview
+                                                  + proposed corner quad
 slate_rectify(session_id, corners)             -> rectified preview
 slate_layout(session_id, separators?, bands?)  -> proposed/updated TableLayout
 slate_recognize(session_id, column_mapping)    -> CellGrid (text + confidence)
@@ -133,10 +135,14 @@ Commit reuses the **existing** `execute` with `Command::Batch` of
 
 ### 5.3 Frontend
 
-One new dialog (`SlateImportDialog`), three back-navigable steps, opened from
-Survey mode with a section selected (entry point per open question Q7):
+One new dialog (`SlateImportDialog`), three back-navigable steps. Entry point
+(DECIDED 2026-07-11): an "Import slate photo..." action in Survey mode opening
+the dialog with a section dropdown + shot-range picker, defaulting to the whole
+section; the range doubles as the row-count prior for layout and alignment.
+Selection-driven entry ("import slate for selected shots") can layer on later.
 
-1. **Rectify:** image viewer + draggable corner handles -> "Straighten".
+1. **Rectify:** image viewer + corner handles pre-placed by auto quad
+   detection, draggable to correct -> "Straighten".
 2. **Layout + mapping:** rectified image with draggable column separators and
    row bands; header dropdowns above each column = the "set expected headers"
    affordance (shot #, length, azimuth, depth, comment, ignore); defaults to
@@ -171,9 +177,9 @@ disappoints. Per-cell inference on M1/typical CPU is ~50-150 ms; a 25-row x
 across cells. Fine for V1 behind a progress bar, and the numeric columns can
 move to a lighter digit-specialized path later if needed.
 
-Cargo: gate the engine behind a `slate-ocr` feature while experimental (same
-pattern as `telemetry`) so normal builds/CI stay light; the deterministic stages
-(rectify/layout/parse/align) build and test everywhere.
+Cargo (DECIDED 2026-07-11): gate the engine behind a `slate-ocr` feature while
+experimental (same pattern as `telemetry`) so normal builds/CI stay light; the
+deterministic stages (rectify/layout/parse/align) build and test everywhere.
 
 **Model distribution (DECIDED 2026-07-11): first-use download.** The installer
 stays small; on first slate import the app downloads the model (progress UI +
@@ -239,11 +245,11 @@ use (no connectivity at the cave) demands it.
   learn from the photos: pencil vs marker, block capitals vs cursive.
 - ~~Q4 Numeric semantics~~ DECIDED: anchors + discrepancy flags only;
   corrections deferred to a V2 issue.
-- **Q5 Comment target:** shot comment (recommended; simplest, `UpdateShot`
-  exists) vs station comment vs per-import choice?
-- **Q6 Rectification UX:** manual 4-corner drag (recommended) vs auto-detect vs
-  require straight-on photos?
-- **Q7 Entry point:** pre-select section + shot range then open dialog
-  (recommended) vs section-only with alignment finding the range?
-- **Q8 Build shape:** `slate-ocr` cargo feature while experimental (recommended)
-  vs always-on?
+- ~~Q5 Comment target~~ DECIDED: shot comments, committed as a Batch of
+  existing `UpdateShot` commands (section 5.2).
+- ~~Q6 Rectification UX~~ DECIDED: auto quad detection pre-places the corner
+  handles, manual drag is the authority (sections 3, 5.3).
+- ~~Q7 Entry point~~ DECIDED: section dropdown + shot-range picker in the
+  dialog, whole section by default (section 5.3).
+- ~~Q8 Build shape~~ DECIDED: `slate-ocr` cargo feature while experimental
+  (section 6).
