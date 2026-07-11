@@ -1,16 +1,24 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useUIStore } from '../uiStore';
+
+const invokeIpcMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../../utils/ipc', () => ({
+  invokeIpc: invokeIpcMock,
+}));
 
 /**
  * Entering Plan/Export force-opens the right Dock (detail panel) and, for Plan,
  * pins the bottom Dock (data table) open too, so the setup/Cylinders panels
  * surface without hunting for a closed dock. #241: exiting back to Survey must
- * restore whatever dock state the user had BEFORE entering — mirroring the
- * existing prePlanGeometryMode/prePlanDisplay snapshot/restore pattern — rather
+ * restore whatever dock state the user had BEFORE entering - mirroring the
+ * existing prePlanGeometryMode/prePlanDisplay snapshot/restore pattern - rather
  * than leaving a dock the user had closed stranded open.
  */
 describe('Plan/Export dock snapshot/restore (#241)', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    invokeIpcMock.mockResolvedValue(undefined);
     useUIStore.setState({
       appMode: 'survey',
       geometryMode: 'measured',
@@ -73,9 +81,48 @@ describe('Plan/Export dock snapshot/restore (#241)', () => {
     expect(useUIStore.getState().appMode).toBe('survey');
     expect(useUIStore.getState().detailPanelOpen).toBe(true);
     expect(useUIStore.getState().dataTableOpen).toBe(true);
-    // The leftover funnel is now a no-op (already survey) — B's dock state stays live.
+    // The leftover funnel is now a no-op (already survey) - B's dock state stays live.
     useUIStore.getState().exitGasPlan();
     expect(useUIStore.getState().detailPanelOpen).toBe(true);
     expect(useUIStore.getState().dataTableOpen).toBe(true);
+  });
+
+  // #241 must-fix: the entry-time force-open must never persist. Otherwise a user
+  // who had pinned the detail panel closed would find it reopened on next launch,
+  // because Plan/Export force it open in memory but savePanelLayout would have
+  // written that forced-open state to disk.
+  it('never persists the entry-time forced-open panel, in pin mode', () => {
+    useUIStore.getState().setAppMode('plan');
+    expect(useUIStore.getState().detailPanelOpen).toBe(true);
+    useUIStore.getState().setAppMode('survey');
+    expect(useUIStore.getState().detailPanelOpen).toBe(false);
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('update_panel_layout', expect.anything(), expect.anything());
+  });
+
+  // #241: pins the snapshot-after-exits ordering - entering Plan while section-focused
+  // must restore the PRE-FOCUS dock state on the way back to Survey, not the
+  // focus-forced (collapsed) one exitSectionFocus itself just restored.
+  it('restores the pre-focus dock state, not the focus-forced state, when Plan is entered while focused', () => {
+    useUIStore.setState({ detailPanelOpen: true, detailPanelMode: 'pin', dataTableOpen: false, dataTableMode: 'pin' });
+    useUIStore.getState().enterSectionFocus(1, 300);
+    // Focus mode force-collapses the detail panel.
+    expect(useUIStore.getState().detailPanelOpen).toBe(false);
+    useUIStore.getState().setAppMode('plan');
+    useUIStore.getState().setAppMode('survey');
+    // Restored to the pre-focus (open) state, not the focus-forced (closed) one.
+    expect(useUIStore.getState().detailPanelOpen).toBe(true);
+    expect(useUIStore.getState().focusedSectionId).toBeNull();
+  });
+
+  // #241: pins the appMode==='survey' snapshot guard - a Plan -> Export switch must
+  // not overwrite the real pre-Plan snapshot with Export's (already-forced) state.
+  it('restores the original survey dock state across a survey -> plan -> export -> survey chain', () => {
+    expect(useUIStore.getState().detailPanelOpen).toBe(false);
+    expect(useUIStore.getState().dataTableOpen).toBe(false);
+    useUIStore.getState().setAppMode('plan');
+    useUIStore.getState().setAppMode('export');
+    useUIStore.getState().setAppMode('survey');
+    expect(useUIStore.getState().detailPanelOpen).toBe(false);
+    expect(useUIStore.getState().dataTableOpen).toBe(false);
   });
 });
