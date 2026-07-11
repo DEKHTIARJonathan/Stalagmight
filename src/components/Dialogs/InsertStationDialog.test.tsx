@@ -1,5 +1,5 @@
 /**
- * Component test (#59) — Insert Station dialog validates the split distance
+ * Component test (#59) - Insert Station dialog validates the split distance
  * and only closes/selects on a genuine backend success, mirroring
  * ConfirmDialog's result-check + failure-surfacing convention.
  */
@@ -14,12 +14,17 @@ vi.mock('../../utils/telemetry', async (importOriginal) => ({
 import InsertStationDialog from './InsertStationDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
 import type { Project, SectionId, ShotId } from '../../types/project';
 import type { CommandResult } from '../../types/commands';
 
 const SECTION_ID = 1 as SectionId;
 const SHOT_ID = 2 as ShotId;
 const SHOT_LENGTH = 10;
+
+const baseProject = {
+  sections: [{ id: SECTION_ID, shots: [{ id: SHOT_ID, length: SHOT_LENGTH }] }],
+} as unknown as Project;
 
 let splitShotAtDistance: ReturnType<typeof vi.fn>;
 let closeDialog: ReturnType<typeof vi.fn>;
@@ -30,11 +35,9 @@ beforeEach(() => {
   closeDialog = vi.fn();
   setSelection = vi.fn();
   useProjectStore.setState({
-    // The dialog only reads project.sections and section.shots[].id to find
-    // the split shot's post-split (unchanged) position.
-    project: {
-      sections: [{ id: SECTION_ID, shots: [{ id: SHOT_ID, length: SHOT_LENGTH }] }],
-    } as unknown as Project,
+    // The dialog reads the freshest project.sections via getState() after the
+    // split resolves, to find the split shot's post-split index (#59 fix D).
+    project: baseProject,
     splitShotAtDistance,
   });
   useUIStore.setState({
@@ -70,14 +73,52 @@ describe('InsertStationDialog (#59)', () => {
     expect(screen.getByTestId('insert-station-confirm')).toBeDisabled();
   });
 
+  it('disables confirm just under the min-child-length floor', () => {
+    render(<InsertStationDialog />);
+    fireEvent.change(screen.getByTestId('insert-station-distance'), {
+      target: { value: String(MIN_SPLIT_CHILD_LENGTH_M / 2) },
+    });
+    expect(screen.getByTestId('insert-station-confirm')).toBeDisabled();
+  });
+
+  it('disables confirm when the remainder would fall under the min-child-length floor', () => {
+    render(<InsertStationDialog />);
+    fireEvent.change(screen.getByTestId('insert-station-distance'), {
+      target: { value: String(SHOT_LENGTH - MIN_SPLIT_CHILD_LENGTH_M / 2) },
+    });
+    expect(screen.getByTestId('insert-station-confirm')).toBeDisabled();
+  });
+
+  it('enables confirm exactly at the min-child-length floor', () => {
+    render(<InsertStationDialog />);
+    fireEvent.change(screen.getByTestId('insert-station-distance'), {
+      target: { value: String(MIN_SPLIT_CHILD_LENGTH_M) },
+    });
+    expect(screen.getByTestId('insert-station-confirm')).not.toBeDisabled();
+  });
+
   it('enables confirm strictly between 0 and the shot length', () => {
     render(<InsertStationDialog />);
     fireEvent.change(screen.getByTestId('insert-station-distance'), { target: { value: '4' } });
     expect(screen.getByTestId('insert-station-confirm')).not.toBeDisabled();
   });
 
-  it('splits, selects the new station, and closes on success', async () => {
-    splitShotAtDistance.mockResolvedValue({ success: true, error: null } as CommandResult);
+  it('splits, selects the new station from the REFRESHED state, and closes on success', async () => {
+    splitShotAtDistance.mockImplementation(async () => {
+      // Mirrors the real backend's effect: a fresh head shot is inserted
+      // before the split target, so the tail (SHOT_ID) now sits at index 1.
+      useProjectStore.setState({
+        project: {
+          sections: [
+            {
+              id: SECTION_ID,
+              shots: [{ id: 999 as ShotId }, { id: SHOT_ID }],
+            },
+          ],
+        } as unknown as Project,
+      });
+      return { success: true, error: null } as CommandResult;
+    });
 
     render(<InsertStationDialog />);
     fireEvent.change(screen.getByTestId('insert-station-distance'), { target: { value: '4' } });
@@ -89,6 +130,47 @@ describe('InsertStationDialog (#59)', () => {
       type: 'station',
       stationRef: { section_id: SECTION_ID, station_index: 1 },
     });
+  });
+
+  it('closes without selecting when the shot is gone from the refreshed state', async () => {
+    splitShotAtDistance.mockImplementation(async () => {
+      // Simulates a racing mutation / project switch: by the time the split
+      // resolves, the target section no longer exists in the store.
+      useProjectStore.setState({
+        project: { sections: [] } as unknown as Project,
+      });
+      return { success: true, error: null } as CommandResult;
+    });
+
+    render(<InsertStationDialog />);
+    fireEvent.change(screen.getByTestId('insert-station-distance'), { target: { value: '4' } });
+    fireEvent.click(screen.getByTestId('insert-station-confirm'));
+
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    expect(setSelection).not.toHaveBeenCalled();
+  });
+
+  it('calls splitShotAtDistance exactly once on a rapid double-submit', async () => {
+    let resolveSplit: (value: CommandResult) => void = () => {};
+    splitShotAtDistance.mockImplementation(
+      () =>
+        new Promise<CommandResult>((resolve) => {
+          resolveSplit = resolve;
+        })
+    );
+
+    render(<InsertStationDialog />);
+    fireEvent.change(screen.getByTestId('insert-station-distance'), { target: { value: '4' } });
+    const confirmButton = screen.getByTestId('insert-station-confirm');
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(confirmButton).toBeDisabled());
+    expect(splitShotAtDistance).toHaveBeenCalledTimes(1);
+
+    resolveSplit({ success: true, error: null } as CommandResult);
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    expect(splitShotAtDistance).toHaveBeenCalledTimes(1);
   });
 
   it('surfaces the backend error and does not close/select on refusal', async () => {

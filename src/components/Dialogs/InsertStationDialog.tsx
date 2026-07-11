@@ -3,12 +3,13 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
 export default function InsertStationDialog() {
   const { closeDialog, dialogData, setSelection } = useUIStore();
-  const { project, splitShotAtDistance } = useProjectStore();
+  const { splitShotAtDistance } = useProjectStore();
 
   const sectionId = dialogData.sectionId as number | undefined;
   const shotId = dialogData.shotId as number | undefined;
@@ -29,17 +30,14 @@ export default function InsertStationDialog() {
   const isValid =
     distance.trim().length > 0 &&
     Number.isFinite(parsedDistance) &&
-    parsedDistance > 0 &&
-    parsedDistance < shotLength;
+    parsedDistance >= MIN_SPLIT_CHILD_LENGTH_M &&
+    shotLength - parsedDistance >= MIN_SPLIT_CHILD_LENGTH_M;
   const remaining = isValid ? shotLength - parsedDistance : null;
 
   const isDirty = distance.trim().length > 0;
 
   const handleConfirm = async () => {
-    if (sectionId === undefined || shotId === undefined || !isValid) return;
-
-    const section = project?.sections.find((s) => s.id === sectionId);
-    const shotIndex = section?.shots.findIndex((sh) => sh.id === shotId) ?? -1;
+    if (isLoading || sectionId === undefined || shotId === undefined || !isValid) return;
 
     setIsLoading(true);
     setError(null);
@@ -47,10 +45,19 @@ export default function InsertStationDialog() {
     try {
       const result = await splitShotAtDistance(sectionId, shotId, parsedDistance);
       if (result.success) {
-        if (shotIndex >= 0) {
+        // Re-derive the new station's index from the REFRESHED store state
+        // rather than a pre-await snapshot (#59 fix D): the tail keeps its
+        // shot id, and its post-split index IS the new station's index
+        // (station i sits between shots i-1 and i). If the section/shot is
+        // gone by the time the split resolves (project switched, or a racing
+        // mutation), skip the selection and just close.
+        const refreshedProject = useProjectStore.getState().project;
+        const section = refreshedProject?.sections.find((s) => s.id === sectionId);
+        const newStationIndex = section?.shots.findIndex((sh) => sh.id === shotId) ?? -1;
+        if (newStationIndex >= 0) {
           setSelection({
             type: 'station',
-            stationRef: { section_id: sectionId, station_index: shotIndex + 1 },
+            stationRef: { section_id: sectionId, station_index: newStationIndex },
           });
         }
         trackDialogComplete('insert-station');
@@ -93,8 +100,8 @@ export default function InsertStationDialog() {
           </label>
           <input
             type="number" inputMode="decimal"
-            min="0"
-            max={shotLength}
+            min={MIN_SPLIT_CHILD_LENGTH_M}
+            max={shotLength - MIN_SPLIT_CHILD_LENGTH_M}
             step="0.01"
             value={distance}
             onChange={(e) => setDistance(e.target.value)}
@@ -108,7 +115,7 @@ export default function InsertStationDialog() {
         <p className="text-sm text-text-secondary" data-testid="insert-station-preview">
           {remaining !== null
             ? `Shot A: ${parsedDistance.toFixed(2)} m / Shot B: ${remaining.toFixed(2)} m`
-            : `Total shot length: ${shotLength.toFixed(2)} m`}
+            : `Total shot length: ${shotLength.toFixed(2)} m (both sides must be at least ${MIN_SPLIT_CHILD_LENGTH_M.toFixed(2)} m)`}
         </p>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
