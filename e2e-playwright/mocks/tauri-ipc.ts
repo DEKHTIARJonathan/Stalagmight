@@ -3649,6 +3649,60 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, shot_id: nextId };
           }
 
+          case 'split_shot_at_distance': {
+            console.log('[Mock IPC] split_shot_at_distance called with:', args);
+            // Record calls for assertions (exact args), mirroring create_shot.
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_SPLIT_SHOT_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_SPLIT_SHOT_CALLS__ = calls;
+
+            const sectionId = (args?.sectionId ?? args?.section_id) as number;
+            const shotId = (args?.shotId ?? args?.shot_id) as number;
+            const distance = args?.distance as number;
+            const section = (currentProject?.sections as Array<{
+              id: number;
+              shots: Array<{ id: number } & Record<string, unknown>>;
+            }> | undefined)?.find((s) => s.id === sectionId);
+            if (!section) {
+              return { success: false, error: `Section ${sectionId} not found` };
+            }
+            const idx = section.shots.findIndex((s) => s.id === shotId);
+            if (idx < 0) {
+              return { success: false, error: `Shot ${shotId} not found in section ${sectionId}` };
+            }
+            const target = section.shots[idx] as Record<string, unknown>;
+            const length = (target.length as number) ?? 0;
+            if (!Number.isFinite(distance) || distance <= 0 || distance >= length) {
+              return {
+                success: false,
+                error: `Distance must be strictly between 0 and the shot's length (${length.toFixed(2)}m)`,
+              };
+            }
+            // Mirrors the backend's collinear split: shared azimuth/pitch/LRUD,
+            // depth linearly interpolated at the split point. The tail is
+            // mutated in place (keeps its id); the head is a fresh shot
+            // inserted before it, matching split_shot_at_distance's semantics
+            // closely enough for UI assertions.
+            const depthIn = (target.depth_in as number) ?? 0;
+            const depthOut = (target.depth_out as number) ?? 0;
+            const midDepth = depthIn + (distance / length) * (depthOut - depthIn);
+            const nextId = section.shots.reduce((max, s) => Math.max(max, s.id), 0) + 1;
+            const headShot = {
+              ...target,
+              id: nextId,
+              length: distance,
+              depth_out: midDepth,
+              comment: null,
+              marker_index: null,
+            };
+            target.length = length - distance;
+            target.depth_in = midDepth;
+            section.shots.splice(idx, 0, headShot);
+            return { success: true, shot_id: nextId };
+          }
+
           case 'merge_projects':
             console.log('[Mock IPC] merge_projects called with:', args);
             return { success: true };
