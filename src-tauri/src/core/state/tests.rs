@@ -3433,6 +3433,554 @@ fn test_delete_shot_and_split_rejects_frozen_shot() {
     );
 }
 
+// === split_shot_at_distance tests (#59: insert a station mid-shot) ===
+
+#[test]
+fn test_split_shot_at_distance_happy_path() {
+    let mut project = Project::new("Split".to_string(), None);
+    let sec = project
+        .add_section(SectionData {
+            color: "#ff0000".to_string(),
+            shots: vec![
+                test_shot_data(5.0),
+                ShotData {
+                    azimuth_in: 30.0,
+                    azimuth_out: 32.0,
+                    length: 10.0,
+                    depth_in: 10.0,
+                    depth_out: 20.0,
+                    pitch_in: Some(10.0),
+                    pitch_out: Some(-5.0),
+                    left: Some(1.0),
+                    right: Some(2.0),
+                    up: Some(0.5),
+                    down: Some(0.25),
+                    comment: Some("mid comment".to_string()),
+                    is_reference: false,
+                    marker_index: Some(3),
+                    temperature: Some(15.0),
+                },
+                test_shot_data(5.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    let target = project.sections[0].shots[1].clone();
+    let target_shot_id = target.id;
+    let target_uuid = target.uuid;
+
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    let result = state.execute_split_shot_at_distance(sec, target_shot_id, 4.0);
+    assert!(result.success, "{:?}", result.error);
+    let new_shot_id = result.shot_id.expect("new shot id");
+
+    let after = state.get_project_state().unwrap();
+    let section = after.get_section(sec).unwrap();
+    assert_eq!(section.shots.len(), 4);
+
+    let head = &section.shots[1];
+    let tail = &section.shots[2];
+
+    assert_eq!(head.id, new_shot_id);
+    assert_ne!(
+        head.uuid, target_uuid,
+        "the head shot must get a fresh uuid"
+    );
+    assert_eq!(head.length, 4.0);
+    assert_eq!(head.depth_in, 10.0);
+    assert!(
+        (head.depth_out - 14.0).abs() < 1e-9,
+        "mid depth interpolated"
+    );
+    assert_eq!(head.azimuth_in, 30.0);
+    assert_eq!(head.azimuth_out, 32.0);
+    assert_eq!(head.pitch_in, Some(10.0));
+    assert_eq!(head.pitch_out, Some(-5.0));
+    assert_eq!(head.left, Some(1.0));
+    assert_eq!(head.right, Some(2.0));
+    assert_eq!(head.up, Some(0.5));
+    assert_eq!(head.down, Some(0.25));
+    assert_eq!(head.comment, None);
+    assert_eq!(head.marker_index, None);
+    assert_eq!(head.temperature, Some(15.0));
+    assert!(!head.is_reference);
+
+    assert_eq!(
+        tail.id, target_shot_id,
+        "the tail keeps the original shot id"
+    );
+    assert_eq!(tail.uuid, target_uuid, "the tail keeps the original uuid");
+    assert_eq!(tail.length, 6.0);
+    assert!((tail.depth_in - 14.0).abs() < 1e-9);
+    assert_eq!(tail.depth_out, 20.0);
+    assert_eq!(tail.comment, Some("mid comment".to_string()));
+    assert_eq!(tail.marker_index, Some(3));
+}
+
+#[test]
+fn test_split_shot_at_distance_preserves_anchor_on_endpoint_station() {
+    // A cross-reference anchored on the parent shot's ENDPOINT station (the
+    // boundary right after it) must resolve to the shifted-by-one endpoint
+    // after the split, NOT to the new mid station -- the original shot's uuid
+    // staying on the tail child is what makes this automatic.
+    // sec_a's first two (flat, opposite-azimuth, equal-length) shots cancel
+    // out, so station A:2 lands back at the section's own origin (0,0,0) --
+    // matching sec_b's station B:0 (always at its own origin) without needing
+    // any offset-alignment machinery, so the merge is geometrically valid.
+    let mut project = Project::new("Anchor".to_string(), None);
+    let sec_a = project
+        .add_section(SectionData {
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    azimuth_in: 0.0,
+                    azimuth_out: 0.0,
+                    length: 3.0,
+                    depth_in: 0.0,
+                    depth_out: 0.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    azimuth_in: 180.0,
+                    azimuth_out: 180.0,
+                    length: 3.0,
+                    depth_in: 0.0,
+                    depth_out: 0.0,
+                    ..Default::default()
+                },
+                test_shot_data(5.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let sec_b = project
+        .add_section(SectionData {
+            color: "#00ff00".to_string(),
+            shots: vec![test_shot_data(5.0)],
+            ..Default::default()
+        })
+        .id;
+
+    let target_shot_id = project.sections[0].shots[1].id;
+    let endpoint_key = project.key_for_ref(StationRef::new(sec_a, 2)).unwrap();
+    project.station_merges.push(StationMerge {
+        station_a: endpoint_key.clone(),
+        station_b: project.key_for_ref(StationRef::new(sec_b, 0)).unwrap(),
+        merged_at: chrono::Utc::now(),
+    });
+    project.zero_datums.push(crate::models::ZeroDatum {
+        station_ref: endpoint_key.clone(),
+        gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+    });
+    project
+        .station_comments
+        .insert(endpoint_key, "endpoint note".to_string());
+    project.rebuild_merge_adjacency();
+
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    let result = state.execute_split_shot_at_distance(sec_a, target_shot_id, 1.0);
+    assert!(result.success, "{:?}", result.error);
+
+    let after = state.get_project_state().unwrap();
+
+    let merge = after
+        .station_merges
+        .iter()
+        .find(|m| {
+            after.key_is_ref(&m.station_a, StationRef::new(sec_b, 0))
+                || after.key_is_ref(&m.station_b, StationRef::new(sec_b, 0))
+        })
+        .expect("merge survives the split");
+    let our_key = if after.key_is_ref(&merge.station_a, StationRef::new(sec_b, 0)) {
+        &merge.station_b
+    } else {
+        &merge.station_a
+    };
+    assert_eq!(
+        after.resolve_key(our_key),
+        Some(StationRef::new(sec_a, 3)),
+        "the endpoint merge must resolve to index p+2, not the new mid station"
+    );
+
+    assert_eq!(after.zero_datums.len(), 1);
+    assert_eq!(
+        after.resolve_key(&after.zero_datums[0].station_ref),
+        Some(StationRef::new(sec_a, 3))
+    );
+
+    assert_eq!(after.station_comments.len(), 1);
+    let (comment_key, comment) = after.station_comments.iter().next().unwrap();
+    assert_eq!(comment, "endpoint note");
+    assert_eq!(
+        after.resolve_key(comment_key),
+        Some(StationRef::new(sec_a, 3))
+    );
+}
+
+#[test]
+fn test_split_shot_at_distance_first_shot_keeps_section_start_anchor() {
+    let mut project = Project::new("FirstSplit".to_string(), None);
+    let sec_a = project
+        .add_section(SectionData {
+            color: "#ff0000".to_string(),
+            shots: vec![test_shot_data(10.0), test_shot_data(5.0)],
+            ..Default::default()
+        })
+        .id;
+    let sec_b = project
+        .add_section(SectionData {
+            color: "#00ff00".to_string(),
+            shots: vec![test_shot_data(5.0)],
+            ..Default::default()
+        })
+        .id;
+    let target_shot_id = project.sections[0].shots[0].id;
+
+    let start_key = project.key_for_ref(StationRef::new(sec_a, 0)).unwrap();
+    assert_eq!(start_key.anchor, StationAnchor::SectionStart);
+    project.station_merges.push(StationMerge {
+        station_a: start_key.clone(),
+        station_b: project.key_for_ref(StationRef::new(sec_b, 0)).unwrap(),
+        merged_at: chrono::Utc::now(),
+    });
+    project.zero_datums.push(crate::models::ZeroDatum {
+        station_ref: start_key,
+        gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+    });
+    project.rebuild_merge_adjacency();
+
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    let result = state.execute_split_shot_at_distance(sec_a, target_shot_id, 4.0);
+    assert!(result.success, "{:?}", result.error);
+
+    let after = state.get_project_state().unwrap();
+    assert_eq!(
+        after.resolve_key(&after.zero_datums[0].station_ref),
+        Some(StationRef::new(sec_a, 0)),
+        "SectionStart-anchored datum must still resolve to station 0"
+    );
+    let merge = after
+        .station_merges
+        .iter()
+        .find(|m| {
+            after.key_is_ref(&m.station_a, StationRef::new(sec_b, 0))
+                || after.key_is_ref(&m.station_b, StationRef::new(sec_b, 0))
+        })
+        .expect("merge survives");
+    let our_key = if after.key_is_ref(&merge.station_a, StationRef::new(sec_b, 0)) {
+        &merge.station_b
+    } else {
+        &merge.station_a
+    };
+    assert_eq!(after.resolve_key(our_key), Some(StationRef::new(sec_a, 0)));
+}
+
+#[test]
+fn test_split_shot_at_distance_rejects_invalid_distances() {
+    let mut project = Project::new("Invalid".to_string(), None);
+    project.add_section(SectionData {
+        color: "#ff0000".to_string(),
+        shots: vec![test_shot_data(10.0)],
+        ..Default::default()
+    });
+    let sec = project.sections[0].id;
+    let shot_id = project.sections[0].shots[0].id;
+    let before_json = serde_json::to_string(&project).unwrap();
+
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    for distance in [0.0, 10.0, -1.0, f64::NAN, f64::INFINITY, 11.0] {
+        let result = state.execute_split_shot_at_distance(sec, shot_id, distance);
+        assert!(!result.success, "distance {distance} must be rejected");
+    }
+
+    let after = state.get_project_state().unwrap();
+    let after_json = serde_json::to_string(&after).unwrap();
+    assert_eq!(
+        before_json, after_json,
+        "a rejected split must leave the project untouched"
+    );
+}
+
+#[test]
+fn test_split_shot_at_distance_rejects_frozen_shot() {
+    // Mirrors test_delete_shot_and_split_rejects_frozen_shot: a two-section
+    // loop with a datum at each end freezes every shot in it.
+    let mut project = Project::new("FrozenSplit".to_string(), None);
+    let sec_a = project
+        .add_section(SectionData {
+            color: "#ff0000".to_string(),
+            shots: vec![
+                test_shot_data(5.0),
+                test_shot_data(7.0),
+                test_shot_data(4.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let sec_b = project
+        .add_section(SectionData {
+            color: "#00ff00".to_string(),
+            shots: vec![
+                test_shot_data(5.0),
+                test_shot_data(7.0),
+                test_shot_data(4.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(sec_a, 0).into(),
+        station_b: StationRef::new(sec_b, 0).into(),
+        merged_at: chrono::Utc::now(),
+    });
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(sec_a, 3).into(),
+        station_b: StationRef::new(sec_b, 3).into(),
+        merged_at: chrono::Utc::now(),
+    });
+    project.zero_datums.push(crate::models::ZeroDatum {
+        station_ref: StationRef::new(sec_a, 0).into(),
+        gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+    });
+    project.zero_datums.push(crate::models::ZeroDatum {
+        station_ref: StationRef::new(sec_b, 0).into(),
+        gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+    });
+    project.rebuild_merge_adjacency();
+
+    let frozen = project.compute_frozen_shots();
+    assert!(
+        frozen
+            .iter()
+            .any(|f| f.section_id == sec_a && f.shot_index == 1),
+        "precondition: sec_a interior shot[1] must be frozen"
+    );
+    let target_shot_id = project.sections[0].shots[1].id;
+    let shots_before = project.sections[0].shots.len();
+
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    let result = state.execute_split_shot_at_distance(sec_a, target_shot_id, 3.0);
+    assert!(!result.success, "splitting a frozen shot must be refused");
+    assert!(
+        result.error.as_deref().unwrap_or("").contains("frozen"),
+        "error must mention the shot is frozen, got: {:?}",
+        result.error
+    );
+
+    let after = state.get_project_state().unwrap();
+    assert_eq!(
+        after.get_section(sec_a).unwrap().shots.len(),
+        shots_before,
+        "the frozen shot must not be split"
+    );
+}
+
+#[test]
+fn test_split_shot_at_distance_undo_redo_round_trip() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Split Undo".to_string(),
+        location: None,
+    });
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Main".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(10.0),
+            test_shot_data(5.0),
+        ],
+    });
+    let section_id = create_result.section_id.unwrap();
+
+    let before_json = {
+        let proj = state.get_project_state().unwrap();
+        serde_json::to_string(&proj).unwrap()
+    };
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots[1].id
+    };
+
+    let result = state.execute_split_shot_at_distance(section_id, shot_id, 4.0);
+    assert!(result.success, "{:?}", result.error);
+    let split_json = {
+        let proj = state.get_project_state().unwrap();
+        assert_eq!(proj.get_section(section_id).unwrap().shots.len(), 4);
+        serde_json::to_string(&proj).unwrap()
+    };
+
+    let undo_result = state.undo();
+    assert!(undo_result.success, "{:?}", undo_result.error);
+    let after_undo = state.get_project_state().unwrap();
+    assert_eq!(after_undo.get_section(section_id).unwrap().shots.len(), 3);
+    assert_eq!(
+        after_undo.get_section(section_id).unwrap().shots[1].id,
+        shot_id,
+        "undo restores the original single shot"
+    );
+    assert_eq!(
+        serde_json::to_string(&after_undo).unwrap(),
+        before_json,
+        "undo must restore the exact pre-split project"
+    );
+
+    let redo_result = state.redo();
+    assert!(redo_result.success, "{:?}", redo_result.error);
+    let after_redo = state.get_project_state().unwrap();
+    assert_eq!(
+        serde_json::to_string(&after_redo).unwrap(),
+        split_json,
+        "redo must re-split identically"
+    );
+}
+
+#[test]
+fn test_split_shot_at_distance_preserves_downstream_geometry() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Geo".to_string(),
+        location: None,
+    });
+    let create_result = state.execute(Command::CreateSection {
+        name: Some("Main".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            ShotData {
+                azimuth_in: 10.0,
+                azimuth_out: 10.0,
+                length: 5.0,
+                depth_in: 0.0,
+                depth_out: 1.0,
+                ..Default::default()
+            },
+            ShotData {
+                azimuth_in: 50.0,
+                azimuth_out: 50.0,
+                length: 8.0,
+                depth_in: 1.0,
+                depth_out: 4.0,
+                ..Default::default()
+            },
+            ShotData {
+                azimuth_in: 120.0,
+                azimuth_out: 120.0,
+                length: 6.0,
+                depth_in: 4.0,
+                depth_out: 2.0,
+                ..Default::default()
+            },
+        ],
+    });
+    let section_id = create_result.section_id.unwrap();
+
+    let before_offset = state
+        .get_project_state()
+        .unwrap()
+        .section_offset(section_id);
+    let before_coords = abs_coord_map(&state.get_project_state().unwrap());
+    let start_before = before_coords[&StationRef::new(section_id, 0)];
+    let last_before = before_coords[&StationRef::new(section_id, 3)];
+
+    let shot_id = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots[1].id
+    };
+
+    let result = state.execute_split_shot_at_distance(section_id, shot_id, 3.0);
+    assert!(result.success, "{:?}", result.error);
+
+    let after = state.get_project_state().unwrap();
+    assert_eq!(
+        before_offset,
+        after.section_offset(section_id),
+        "a collinear split must not require a section-offset adjustment"
+    );
+
+    let after_coords = abs_coord_map(&after);
+    assert_coords_close(start_before, after_coords[&StationRef::new(section_id, 0)]);
+    // Station 3 shifts to index 4 (one more shot inserted before it); its
+    // absolute position must be exactly preserved.
+    assert_coords_close(last_before, after_coords[&StationRef::new(section_id, 4)]);
+}
+
+#[test]
+fn test_split_shot_at_distance_reference_shot_both_children_reference() {
+    let mut project = Project::new("Ref".to_string(), None);
+    project.add_section(SectionData {
+        color: "#ff0000".to_string(),
+        shots: vec![ShotData {
+            is_reference: true,
+            ..test_shot_data(10.0)
+        }],
+        ..Default::default()
+    });
+    let sec = project.sections[0].id;
+    let shot_id = project.sections[0].shots[0].id;
+
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    let result = state.execute_split_shot_at_distance(sec, shot_id, 4.0);
+    assert!(result.success, "{:?}", result.error);
+
+    let after = state.get_project_state().unwrap();
+    let section = after.get_section(sec).unwrap();
+    assert!(
+        section.shots[0].is_reference,
+        "head must inherit is_reference"
+    );
+    assert!(
+        section.shots[1].is_reference,
+        "tail keeps its own is_reference"
+    );
+}
+
+#[test]
+fn test_split_shot_at_distance_rejects_at_max_shots_cap() {
+    let mut project = Project::new("Cap".to_string(), None);
+    let max = crate::models::FEATURE_ID_STRIDE as usize - 1;
+    project.add_section(SectionData {
+        color: "#ff0000".to_string(),
+        shots: vec![test_shot_data(1.0); max],
+        ..Default::default()
+    });
+    let sec = project.sections[0].id;
+    let shot_id = project.sections[0].shots[0].id;
+
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    let result = state.execute_split_shot_at_distance(sec, shot_id, 0.5);
+    assert!(
+        !result.success,
+        "split must be refused when the section is at the max-shots cap"
+    );
+    assert!(
+        result.error.as_deref().unwrap_or("").contains("maximum"),
+        "error should mention the max-shots cap, got: {:?}",
+        result.error
+    );
+}
+
 #[test]
 fn test_legacy_project_seeds_validation_from_global_config() {
     // Issue #57 (Item 5): a legacy project saved before per-project validation
@@ -19074,6 +19622,7 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "execute_delete_shot_range_split",
     "execute_delete_shot_range_shift",
     "execute_delete_last_shot_and_section",
+    "execute_split_shot_at_distance",
     "execute_create_and_merge",
     "execute_import_sections",
     // by-path / metadata methods (gated only when path == the OPEN project)
@@ -19092,7 +19641,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call below.
     assert_eq!(
         MUTATION_ENTRYPOINTS.len(),
-        24,
+        25,
         "update both the routing and this list when adding a mutation entry"
     );
 
@@ -19212,6 +19761,10 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
         assert_disabled(
             "execute_delete_last_shot_and_section",
             &state.execute_delete_last_shot_and_section(sid, shid),
+        );
+        assert_disabled(
+            "execute_split_shot_at_distance",
+            &state.execute_split_shot_at_distance(sid, shid, 1.0),
         );
         assert_disabled(
             "execute_create_and_merge",
