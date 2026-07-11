@@ -1629,7 +1629,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   addMarker: async (sectionId, shotId, position, markerType, color, text, direction) => {
     return executeCommand(
       'add_marker',
-      { section_id: sectionId, shot_id: shotId, position, marker_type: markerType, color, text, direction },
+      { sectionId, shotId, position, markerType, color, text, direction },
       { purpose: 'add marker to shot', fields: { sectionId, shotId } }
     );
   },
@@ -1637,7 +1637,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   updateMarker: async (markerId, updates) => {
     return executeCommand(
       'update_marker',
-      { marker_id: Number(markerId), updates },
+      { markerId: Number(markerId), updates },
       { purpose: 'update marker', fields: { markerId: markerId.toString() } }
     );
   },
@@ -1645,7 +1645,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   deleteMarker: async (markerId) => {
     return executeCommand(
       'delete_marker',
-      { marker_id: Number(markerId) },
+      { markerId: Number(markerId) },
       { purpose: 'delete marker', fields: { markerId: markerId.toString() } }
     );
   },
