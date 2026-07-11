@@ -183,7 +183,7 @@ structural findings frame the field:
 | `ocrs` / OnnxTR / PARSeq | printed/synthetic training, no handwriting pedigree | light | native / `ort` | printed-only fallbacks |
 | DeepSeek-OCR | GPU-oriented, ~3B, CPU-hostile | ~6.8 GB | - | ruled out |
 
-**Recommendation (staged, matching the get-testable-fast goal):**
+**DECIDED 2026-07-11 (staged, matching the get-testable-fast goal):**
 
 - **V1 primary: PP-OCRv5 mobile rec via `oar-ocr`.** Ready today, 7.5 MB
   Apache-2.0 model, single-pass CTC that handles isolated numeric cells (no
@@ -253,7 +253,31 @@ use (no connectivity at the cave) demands it.
 4. Dialog registration in `src/App.tsx` + `uiStore` dialog id.
 5. `pnpm lint:rust-file-size` before pushing (new files start unbaselined).
 
-## 9. Risks
+## 9. Build order (V1 milestones, sized for opus-tier implementers)
+
+Each milestone is independently verifiable and lands as its own PR-sized unit.
+The deterministic stages are fully specified above; the engine is isolated
+behind the trait so no milestone blocks on ML behavior.
+
+- **M1 - pipeline core, no engine, no UI.** `slate/` module: rectify (incl.
+  auto quad proposal), layout (ruled-line detection + projection fallback),
+  parse, align. Synthetic fixture generator + golden tests + the adversarial
+  alignment unit tests. Exit: `cargo test` proves image -> aligned rows on
+  synthetic slates with a stub recognizer (returns ground truth with injected
+  noise - also stress-tests align).
+- **M2 - engine + eval harness.** `oar-ocr`/PP-OCRv5 behind `CellRecognizer`
+  under the `slate-ocr` feature; model download+checksum on first use;
+  `STAL_SLATE_DEBUG` stage-artifact dump. Exit: CLI-level run over Nico's real
+  photos; measure row-alignment rate + comment quality. **This is the
+  feature-viability gate - review results with Nico before building M3.**
+- **M3 - dialog UI.** `SlateImportDialog` 3-step flow + the `slate_*` IPC
+  commands + session state + e2e with mocked IPC. Exit: full flow works in the
+  dev app against a real photo.
+- **M4 - commit + registration sweep.** Apply-as-`Batch[UpdateShot]`, telemetry
+  registry + count assertion, mock handlers, `pnpm gen:ipc-types`, file-size
+  lint, `/pre-pr`. Exit: comments land on shots, undo works, all gates green.
+
+## 10. Risks
 
 1. **Real-world accuracy** (glare, pencil on wet plastic, gridlines through
    descenders). Mitigated by the alignment design (numeric cells only need to
@@ -267,16 +291,19 @@ use (no connectivity at the cave) demands it.
 4. **Scope creep.** The non-goals list in section 3 is the contract; V1 exists
    to learn whether the feature is useful, not to be complete.
 
-## 10. Open questions (deciding with Nico)
+## 11. Decision log (all resolved with Nico, 2026-07-11)
 
-- **Q1 Engine/runtime (research complete 2026-07-11, awaiting Nico's call):**
-  on-device hard requirement; C++ acceptable. Two-agent research pass done;
-  section 6 rewritten with the full field. Recommendation: staged - PP-OCRv5
-  via `oar-ocr` for V1, TrOCR-per-row behind the trait as the accuracy
-  escalation, VLM route explicitly not chosen. Everything else in this doc is
-  engine-agnostic behind the `CellRecognizer` trait.
-  Side note on the decided Q2: the V1 model is only 7.5 MB, so V1 may simply
-  bundle it and defer the download infra to the TrOCR escalation (~63 MB).
+- ~~Q1 Engine/runtime~~ DECIDED 2026-07-11 after a two-agent research pass:
+  staged - PP-OCRv5 via `oar-ocr` for V1, TrOCR-per-row behind the
+  `CellRecognizer` trait as the accuracy escalation, VLM route not chosen
+  (section 6). On-device hard requirement met; C++ was acceptable but the
+  chosen path is Rust + `ort`.
+- **Q2 revisited and CONFIRMED:** first-use download stays even though the V1
+  model is only 7.5 MB - build the download+checksum machinery now so the
+  ~63 MB TrOCR escalation later is a config change, not new infra.
+
+All eight major decisions are now locked; remaining unknowns (pencil vs marker,
+block vs cursive, actual accuracy) resolve empirically via the real-photo eval.
 - ~~Q2 Model distribution~~ DECIDED: first-use download (section 6).
 - **Q3 Ground truth (PARTLY DECIDED):** slates are ruled/gridded tables; Nico
   will supply 3-5 real photos as local (non-committed) dev fixtures. Still to
