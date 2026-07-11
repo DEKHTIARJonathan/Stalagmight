@@ -626,6 +626,25 @@ const snapshotDisplay = (s: UIStore): PrePlanDisplay => {
 };
 
 /**
+ * The right Dock (detail panel) and bottom Dock (data table) open/mode captured
+ * when entering Plan/Export, restored on return to Survey (#241). Plan/Export
+ * force both docks open (`revealDetailPanel` + the Plan-only pinned data table)
+ * so the setup/Cylinders panels surface without hunting for a closed dock;
+ * without this snapshot a dock the user had closed stayed force-opened after
+ * exiting back to Survey. Module-level bookkeeping like {@link prePlanGeometryMode}
+ * — restored via a plain `set()` (not `toggleDetailPanel`/`toggleDataTable`), so
+ * the restore itself is never persisted, mirroring the fullscreen-table snapshot.
+ */
+let prePlanDocks:
+  | {
+      detailPanelOpen: boolean;
+      detailPanelMode: PanelMode;
+      dataTableOpen: boolean;
+      dataTableMode: PanelMode;
+    }
+  | null = null;
+
+/**
  * The data table's open/mode captured when entering fullscreen, restored on exit.
  * Module-level bookkeeping (the UI never reads it). Fullscreen forces the table
  * open+pinned; without this, exiting would strand a hover-mode or closed table
@@ -1320,7 +1339,17 @@ export const useUIStore = create<UIStore>((set) => ({
       // (and the forced color-overlay clear) don't bleed into the survey view.
       const displayRestore = prePlanDisplay ?? {};
       prePlanDisplay = null;
-      set({ appMode: 'survey', geometryMode: restore, ...displayRestore, ...MEASURE_CLEARED });
+      // Restore the docks Plan/Export force-opened (#241) — a dock the user had
+      // closed before entering must come back closed, not stay stranded open.
+      const dockRestore = prePlanDocks ?? {};
+      prePlanDocks = null;
+      set({
+        appMode: 'survey',
+        geometryMode: restore,
+        ...displayRestore,
+        ...dockRestore,
+        ...MEASURE_CLEARED,
+      });
       return;
     }
     // Entering Plan or Export. Both show the read-only closure map, so:
@@ -1338,6 +1367,17 @@ export const useUIStore = create<UIStore>((set) => ({
     if (s.appMode === 'survey') {
       prePlanGeometryMode = s.geometryMode;
       prePlanDisplay = snapshotDisplay(s);
+      // Snapshot the docks AFTER the exits above, which may themselves have just
+      // restored the user's real pre-focus/pre-fullscreen dock state — capturing
+      // stale pre-exit values here would restore the wrong (focus-forced) state
+      // on the way back out of Plan/Export.
+      const afterExit = useUIStore.getState();
+      prePlanDocks = {
+        detailPanelOpen: afterExit.detailPanelOpen,
+        detailPanelMode: afterExit.detailPanelMode,
+        dataTableOpen: afterExit.dataTableOpen,
+        dataTableMode: afterExit.dataTableMode,
+      };
     }
     set({
       appMode: mode,
@@ -1497,6 +1537,9 @@ export const useUIStore = create<UIStore>((set) => ({
     // Same module-var-outlives-project hazard for the Plan/Export display snapshot:
     // clear it so a load doesn't later restore the previous project's survey display.
     prePlanDisplay = null;
+    // Same hazard for the Plan/Export dock snapshot (#241): clear it so a load doesn't
+    // later restore the previous project's dock open/mode.
+    prePlanDocks = null;
     // The gas/Plan store is per-dive, runtime-only state (origin, diver, cylinders, the
     // staged-reserve `pushyAck` safety acknowledgment). It is normally cleared on sub-mode
     // exit, but a DIRECT project switch sets appMode='survey' here, so the later
