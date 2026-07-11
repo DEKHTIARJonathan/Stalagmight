@@ -7,6 +7,7 @@ import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import type { StationRef, SectionId, ShotId } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
+import { canSplitShot } from '../../utils/shotSplit';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MenuRow, MenuSeparator } from './MenuRow';
@@ -302,7 +303,7 @@ export default function ContextMenu() {
               sectionName: section?.name ?? `Section ${target.sectionId}`,
             });
           },
-          disabled: !sourceShot || sourceShot.length <= 0,
+          disabled: !sourceShot || !canSplitShot(sourceShot.length),
         },
         {
           label: shot?.is_reference ? 'Mark as Permanent' : 'Mark as Jump/Reference',
@@ -438,19 +439,6 @@ export default function ContextMenu() {
         pitch_in: sourceShot.pitch_in,
         pitch_out: sourceShot.pitch_out,
       } : undefined;
-
-      items.push({
-        label: 'Insert Station...',
-        action: () => {
-          openDialog('insert-station', {
-            sectionId: target.sectionId,
-            shotId: target.shotId,
-            shotLength: sourceShot?.length ?? 0,
-            sectionName: target.sectionName,
-          });
-        },
-        disabled: !sourceShot || sourceShot.length <= 0,
-      });
 
       // "Add Shot Before" - only for first shot (prepend mode)
       if (target.isFirst) {

@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { type Section, type Shot, type ShotData, type Station, type StationRef } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useActiveStations } from '../../hooks/useActiveStations';
-import { useUIStore, type Selection } from '../../store/uiStore';
+import { useUIStore, isMapReadOnly, type Selection } from '../../store/uiStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useShallow } from 'zustand/react/shallow';
 import { SpreadsheetGrid, type GridLabels } from '../common/SpreadsheetGrid';
 import { EntityBlob } from '../common/EntityBlob';
@@ -23,6 +24,7 @@ import { buildStationColumns } from './dataTableStationColumns';
 import RawTableView from './RawTableView';
 import { DetailLink } from '../common/DetailLink';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
+import { canSplitShot } from '../../utils/shotSplit';
 import {
   type RowEntry,
   type ShotDraft,
@@ -265,6 +267,9 @@ export default function DataTable({ sections }: DataTableProps) {
   const activeStations = useActiveStations();
   // Closure-adjusted view is read-only: cell editing and the reference toggle are disabled.
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  // A remote SpeleoDB project without the lock is read-only (T2a) - matches the
+  // ContextMenu's shot-menu gating precedent (isMapReadOnly || speleoReadOnly).
+  const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
   const {
     selection,
     setSelection,
@@ -284,6 +289,8 @@ export default function DataTable({ sections }: DataTableProps) {
     hoveredStation,
     showToast,
     triggerResolveWarning,
+    appMode,
+    geometryMode,
   } = useUIStore(useShallow((s) => ({
     selection: s.selection,
     setSelection: s.setSelection,
@@ -303,7 +310,15 @@ export default function DataTable({ sections }: DataTableProps) {
     setHoveredStation: s.setHoveredStation,
     hoveredStation: s.hoveredStation,
     showToast: s.showToast,
+    appMode: s.appMode,
+    geometryMode: s.geometryMode,
   })));
+  // Insert Station is a survey-only mutation: gate it like MapCanvas gates its
+  // geometry-mutating tools (isMapReadOnly({ geometryMode, appMode }) ||
+  // speleoReadOnly), the strongest existing precedent -- appMode-driven, not
+  // geometryMode-only (geometryMode alone reverts to 'measured' with no
+  // eligible closures, see the app-workspace-modes read-only landmine).
+  const insertStationReadOnly = isMapReadOnly({ geometryMode, appMode }) || speleoReadOnly;
 
   // Create a map of shot warnings for quick lookup
   const shotWarningsMap = useMemo(() => {
@@ -976,19 +991,53 @@ export default function DataTable({ sections }: DataTableProps) {
 
   // "Remove draft row" appears when the selection covers draft rows only —
   // discarding a draft never asks for confirmation (nothing is stored yet).
+  // "Insert Station..." appears for a single selected real shot row long
+  // enough to split (#59) - the data table's live equivalent of the map
+  // ContextMenu's shot-menu item; kept as the same literal (untranslated)
+  // label so the two entry points read identically.
   const shotExtraMenuItems = useCallback(
     ({ fromRow, toRow }: { fromRow: number; toRow: number }) => {
       if (geometryReadOnly) return [];
       const entries = rowEntries.slice(fromRow, toRow + 1);
-      if (entries.length === 0 || entries.some((e) => e.kind !== 'draft')) return [];
-      return [
-        {
-          label: t('dataTable.removeDraft', { count: entries.length }),
-          onClick: () => discardDraftRows(fromRow, toRow),
-        },
-      ];
+      if (entries.length === 0) return [];
+
+      if (entries.every((e) => e.kind === 'draft')) {
+        return [
+          {
+            label: t('dataTable.removeDraft', { count: entries.length }),
+            onClick: () => discardDraftRows(fromRow, toRow),
+          },
+        ];
+      }
+
+      const only = entries.length === 1 ? entries[0] : undefined;
+      if (
+        !insertStationReadOnly &&
+        selectedSection &&
+        only?.kind === 'shot' &&
+        canSplitShot(only.shot.length)
+      ) {
+        const { shot } = only;
+        const sectionId = selectedSection.id;
+        const sectionName = selectedSection.name ?? t('sections.defaultName', { id: sectionId });
+        return [
+          {
+            label: 'Insert Station...',
+            onClick: () => {
+              openDialog('insert-station', {
+                sectionId,
+                shotId: shot.id,
+                shotLength: shot.length,
+                sectionName,
+              });
+            },
+          },
+        ];
+      }
+
+      return [];
     },
-    [rowEntries, geometryReadOnly, t, discardDraftRows]
+    [rowEntries, geometryReadOnly, insertStationReadOnly, selectedSection, t, discardDraftRows, openDialog]
   );
 
   // Surface partially-applied pastes (only the non-zero parts).
