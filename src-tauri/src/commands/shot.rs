@@ -126,6 +126,26 @@ pub(crate) fn delete_shot_and_split_impl(
     state.execute_delete_shot_and_split(section_id, shot_id, name_a, name_b)
 }
 
+/// Insert a station mid-shot by splitting a shot at a given distance
+#[tauri::command]
+pub fn split_shot_at_distance(
+    state: State<AppState>,
+    section_id: SectionId,
+    shot_id: ShotId,
+    distance: f64,
+) -> CommandResult {
+    split_shot_at_distance_impl(state.inner(), section_id, shot_id, distance)
+}
+
+pub(crate) fn split_shot_at_distance_impl(
+    state: &AppState,
+    section_id: SectionId,
+    shot_id: ShotId,
+    distance: f64,
+) -> CommandResult {
+    state.execute_split_shot_at_distance(section_id, shot_id, distance)
+}
+
 /// Delete the last remaining shot in a section and remove the section
 #[tauri::command]
 pub fn delete_last_shot_and_section(
