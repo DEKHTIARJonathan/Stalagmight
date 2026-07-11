@@ -1501,10 +1501,15 @@ export const useUIStore = create<UIStore>((set) => ({
     useGasPlanStore.getState().reset();
     // Apply display settings from backend, merging with existing state.
     // Uses ?? to only apply fields that are defined, preserving current state for undefined fields.
-    // EXACT 11 fields matching uiStore - NO showShots, NO colorBy (those aren't persisted).
+    // EXACT 13 persisted fields matching uiStore - NO colorBy (not persisted).
+    // showShots/showShotComments joined in #275 B2: they were always saved by
+    // toggleDisplay but never restored (the previous project's in-memory value
+    // silently won over the saved one).
     set((state) => ({
       appMode: APP_MODE_DEFAULT,
       showStations: settings.showStations ?? state.showStations,
+      showShots: settings.showShots ?? state.showShots,
+      showShotComments: settings.showShotComments ?? state.showShotComments,
       showSectionNames: settings.showSectionNames ?? state.showSectionNames,
       showStationLabels: settings.showStationLabels ?? state.showStationLabels,
       showShotData: settings.showShotData ?? state.showShotData,

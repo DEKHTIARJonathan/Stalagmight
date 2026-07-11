@@ -181,17 +181,19 @@ impl std::error::Error for LoadError {}
 
 /// Display settings for API payloads (used in load_project_full response).
 ///
-/// This struct contains the 11 display settings that are persisted per-project.
+/// This struct contains the 13 display settings that are persisted per-project.
 /// It is used ONLY for the consolidated load API response, not for storage.
 ///
-/// NOTE: showShots is intentionally excluded per spec - the frontend's showShots
-/// toggle exists but this API struct matches the 11 persisted settings only.
-/// Frontend showShots state is managed separately (session-based, always defaults true).
+/// NOTE: show_shots and show_shot_comments were historically excluded here on
+/// the theory that showShots was "session-based" - but the frontend has always
+/// persisted BOTH via save_display_setting, so excluding them meant the saved
+/// values were written and never read back (#275 B2). They are first-class now.
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct DisplaySettings {
     pub show_stations: bool,
+    pub show_shots: bool,
     pub show_section_names: bool,
     pub show_station_labels: bool,
     pub show_shot_data: bool,
@@ -201,6 +203,7 @@ pub struct DisplaySettings {
     pub show_satellite: bool,
     pub show_depth_gradient: bool,
     pub show_station_comments: bool,
+    pub show_shot_comments: bool,
     pub grid_spacing: f64,
     /// Geometry display mode ("measured" | "closureAdjusted"). Carried here so a
     /// project reopened through the typed load path restores the saved mode
@@ -213,6 +216,7 @@ impl Default for DisplaySettings {
     fn default() -> Self {
         Self {
             show_stations: true,
+            show_shots: true,
             show_section_names: true,
             show_station_labels: false,
             show_shot_data: false,
@@ -222,6 +226,7 @@ impl Default for DisplaySettings {
             show_satellite: false,
             show_depth_gradient: false,
             show_station_comments: false,
+            show_shot_comments: false,
             grid_spacing: 10.0,
             geometry_mode: "measured".to_string(),
         }
@@ -235,6 +240,7 @@ impl DisplaySettings {
     pub fn from_stored(map: &HashMap<String, String>) -> Self {
         Self {
             show_stations: map.get("showStations").is_none_or(|s| s == "true"),
+            show_shots: map.get("showShots").is_none_or(|s| s == "true"),
             show_section_names: map.get("showSectionNames").is_none_or(|s| s == "true"),
             show_station_labels: map.get("showStationLabels").is_some_and(|s| s == "true"),
             show_shot_data: map.get("showShotData").is_some_and(|s| s == "true"),
@@ -247,6 +253,7 @@ impl DisplaySettings {
             show_satellite: map.get("showSatellite").is_some_and(|s| s == "true"),
             show_depth_gradient: map.get("showDepthGradient").is_some_and(|s| s == "true"),
             show_station_comments: map.get("showStationComments").is_some_and(|s| s == "true"),
+            show_shot_comments: map.get("showShotComments").is_some_and(|s| s == "true"),
             grid_spacing: map
                 .get("gridSpacing")
                 .and_then(|s| s.parse().ok())
@@ -765,6 +772,8 @@ mod tests {
 
         // Verify defaults match DISPLAY_DEFAULTS in uiStore
         assert!(defaults.show_stations); // true
+        assert!(defaults.show_shots); // true
+        assert!(!defaults.show_shot_comments); // false
         assert!(defaults.show_section_names); // true
         assert!(!defaults.show_station_labels); // false
         assert!(!defaults.show_shot_data); // false
@@ -783,6 +792,8 @@ mod tests {
 
         // Verify defaults match DISPLAY_DEFAULTS in uiStore
         assert!(settings.show_stations); // true
+        assert!(settings.show_shots); // true
+        assert!(!settings.show_shot_comments); // false
         assert!(settings.show_section_names); // true
         assert!(!settings.show_station_labels); // false
         assert!(!settings.show_shot_data); // false
@@ -813,6 +824,8 @@ mod tests {
         // Verify ALL fields are mapped correctly from stored HashMap
         let mut stored = HashMap::new();
         stored.insert("showStations".to_string(), "false".to_string());
+        stored.insert("showShots".to_string(), "false".to_string());
+        stored.insert("showShotComments".to_string(), "true".to_string());
         stored.insert("showSectionNames".to_string(), "false".to_string());
         stored.insert("showStationLabels".to_string(), "true".to_string());
         stored.insert("showShotData".to_string(), "true".to_string());
@@ -827,6 +840,11 @@ mod tests {
 
         // Verify all fields - each should be the opposite of the default
         assert!(!settings.show_stations, "showStations should be false");
+        assert!(!settings.show_shots, "showShots should be false");
+        assert!(
+            settings.show_shot_comments,
+            "showShotComments should be true"
+        );
         assert!(
             !settings.show_section_names,
             "showSectionNames should be false"
@@ -851,6 +869,27 @@ mod tests {
             (settings.grid_spacing - 25.5).abs() < 0.001,
             "gridSpacing should be 25.5"
         );
+    }
+
+    #[test]
+    fn test_show_shots_and_shot_comments_round_trip_stored_false_true() {
+        // The #275 B2 regression case: the frontend has always persisted
+        // showShots/showShotComments via save_display_setting, but this struct
+        // used to omit them, so a saved "false"/"true" was written and never
+        // read back. Pin the exact stored values a real project would carry.
+        let mut stored = HashMap::new();
+        stored.insert("showShots".to_string(), "false".to_string());
+        stored.insert("showShotComments".to_string(), "true".to_string());
+        let settings = DisplaySettings::from_stored(&stored);
+        assert!(!settings.show_shots, "saved showShots=false must load");
+        assert!(
+            settings.show_shot_comments,
+            "saved showShotComments=true must load"
+        );
+        // And absence still yields the uiStore defaults (true / false).
+        let empty = DisplaySettings::from_stored(&HashMap::new());
+        assert!(empty.show_shots);
+        assert!(!empty.show_shot_comments);
     }
 
     #[test]
