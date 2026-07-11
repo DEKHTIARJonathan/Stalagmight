@@ -119,6 +119,23 @@ interface DropdownPosition {
   width: number;
 }
 
+/**
+ * Nearest scrollable ancestor of `el`, or null. When the trigger sits at the edge of
+ * such a container, focusing it on open makes the browser scroll the container to reveal
+ * it; that scroll would otherwise trip useDismissableLayer's scroll-dismiss and close the
+ * just-opened list. We mark this element scroll-safe so its scroll doesn't dismiss, while
+ * a genuine external/page scroll (target outside it) still does.
+ */
+function nearestScrollableAncestor(el: HTMLElement): HTMLElement | null {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const { overflowX, overflowY } = getComputedStyle(node);
+    if (/(auto|scroll|overlay)/.test(overflowY) || /(auto|scroll|overlay)/.test(overflowX)) {
+      return node;
+    }
+  }
+  return null;
+}
+
 export function Select({
   value,
   onChange,
@@ -140,6 +157,9 @@ export function Select({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<(HTMLDivElement | null)[]>([]);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  // The trigger's scrollable ancestor, captured on open — kept scroll-safe so the
+  // focus-into-view scroll that opening triggers can't dismiss the dropdown.
+  const scrollAncestorRef = useRef<HTMLElement | null>(null);
 
   // Refs to avoid stale closures in unmount cleanup
   const onOptionHoverRef = useRef(onOptionHover);
@@ -179,7 +199,7 @@ export function Select({
       setIsOpen(false);
     },
     contains: [triggerRef, dropdownRef],
-    scrollSafe: [dropdownRef],
+    scrollSafe: [dropdownRef, scrollAncestorRef],
   });
 
   // Position calculation with flicker prevention via useLayoutEffect.
@@ -290,8 +310,14 @@ export function Select({
 
   // Open the dropdown, capturing trigger rect for accurate portal positioning
   const openDropdown = useCallback(() => {
-    if (triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
+    const trigger = triggerRef.current;
+    if (trigger) {
+      // Capture the trigger's scroll container so its focus-into-view scroll is treated
+      // as scroll-safe (see nearestScrollableAncestor), then bring the trigger into view
+      // BEFORE reading its rect so the portal is positioned where the trigger ends up.
+      scrollAncestorRef.current = nearestScrollableAncestor(trigger);
+      trigger.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      const rect = trigger.getBoundingClientRect();
       setTriggerRect({ left: rect.left, width: rect.width, top: rect.top, bottom: rect.bottom });
     }
     setIsOpen(true);
