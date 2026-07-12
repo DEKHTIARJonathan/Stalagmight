@@ -78,6 +78,57 @@ function findMatchingBracket(source: string, openIndex: number, openChar: string
 }
 
 /**
+ * Returns a copy of `source` with `//` and `/* *‍/` comment BODIES blanked to
+ * spaces (string and template-literal contents are preserved verbatim, and a
+ * `//` inside a string is not treated as a comment). Length and indices are
+ * unchanged. Without this pass, a comment mentioning a
+ * `commands::mod::fn` path or a `case 'name':` label would inject a phantom
+ * entry into the extracted command sets.
+ */
+function stripComments(source: string): string {
+  const out = source.split('');
+  const n = source.length;
+  let i = 0;
+  while (i < n) {
+    const ch = source[i];
+    if (ch === '/' && source[i + 1] === '/') {
+      const nl = source.indexOf('\n', i);
+      const end = nl === -1 ? n : nl;
+      for (let j = i; j < end; j += 1) out[j] = ' ';
+      i = end;
+      continue;
+    }
+    if (ch === '/' && source[i + 1] === '*') {
+      const close = source.indexOf('*/', i + 2);
+      const end = close === -1 ? n : close + 2;
+      for (let j = i; j < end; j += 1) {
+        if (out[j] !== '\n') out[j] = ' ';
+      }
+      i = end;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      i += 1;
+      while (i < n) {
+        if (source[i] === '\\') {
+          i += 2;
+          continue;
+        }
+        if (source[i] === quote) {
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    i += 1;
+  }
+  return out.join('');
+}
+
+/**
  * Parses the `tauri::generate_handler![...]` command list out of
  * `src-tauri/src/lib.rs`. Every entry there is fully qualified
  * (`commands::<module>::<fn>`), so this extracts the last path segment as
@@ -93,7 +144,7 @@ function parseRegisteredRustCommands(source: string): string[] {
   }
   const openIndex = source.indexOf('[', macroMatch.index);
   const closeIndex = findMatchingBracket(source, openIndex, '[', ']');
-  const block = source.slice(openIndex + 1, closeIndex);
+  const block = stripComments(source.slice(openIndex + 1, closeIndex));
 
   const commandRegex = /\bcommands::[A-Za-z_][A-Za-z0-9_]*::([A-Za-z_][A-Za-z0-9_]*)\b/g;
   const names = new Set<string>();
@@ -135,7 +186,7 @@ function parseMockedCommands(source: string): string[] {
   }
   const openIndex = source.indexOf('{', switchMatch.index);
   const closeIndex = findMatchingBracket(source, openIndex, '{', '}');
-  let block = source.slice(openIndex + 1, closeIndex);
+  let block = stripComments(source.slice(openIndex + 1, closeIndex));
 
   // Mask out any nested `switch (...) { ... }` blocks so their case labels
   // (e.g. table names inside `get_raw_table`'s `switch (table)`) aren't
@@ -321,6 +372,29 @@ describe('mock contract tripwire (#275)', () => {
     );
 
     expect(stale, 'these allowlist entries no longer need an exemption; remove them').toEqual([]);
+  });
+
+  it('ignores command paths and case labels that appear only in comments', () => {
+    const rustSource = [
+      'fn main() { builder.invoke_handler(tauri::generate_handler![',
+      '    commands::project::real_command,',
+      '    // TODO: also register commands::project::phantom_from_line_comment here',
+      '    /* commands::project::phantom_from_block_comment, */',
+      '    commands::export::other_real_command,',
+      ']); }',
+    ].join('\n');
+    expect(parseRegisteredRustCommands(rustSource)).toEqual(['other_real_command', 'real_command']);
+
+    const tsSource = [
+      'switch (cmd) {',
+      "  case 'real_case':",
+      '    return null;',
+      "  // see also case 'phantom_case': in the legacy helper",
+      '  default:',
+      '    return null;',
+      '}',
+    ].join('\n');
+    expect(parseMockedCommands(tsSource)).toEqual(['real_case']);
   });
 
   it('STALE_MOCK_CASE_REASONS has no stale entries', () => {
