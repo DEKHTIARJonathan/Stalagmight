@@ -223,17 +223,6 @@ export function withTrackingSuppressed(fn: () => void): void {
 }
 
 /**
- * Whether telemetry is currently suppressed (inside a `withTrackingSuppressed`
- * callback). Gates only telemetry emission (`trackAction` reads this) — NOT
- * persistence, which has its own `isPersistSuppressed` flag. Onboarding wraps its
- * transient panel toggles in BOTH so they neither emit events nor persist. The
- * synchronous prefix of any side effect started inside the callback observes it.
- */
-export function isTrackingSuppressed(): boolean {
-  return _silent;
-}
-
-/**
  * Run a callback with persistence suppressed. Mirrors `withTrackingSuppressed`
  * but for the separate persistence-suppression concern: a side effect that
  * writes to the user's config (e.g. `savePanelLayout`) should early-return while
