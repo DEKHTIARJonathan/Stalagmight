@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
+import type { DisplaySettings } from '../../types/loading';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 
@@ -35,8 +36,12 @@ describe('projectStore.createProject', () => {
             imported_section_hashes: [],
             next_closure_id: 1n,
           },
+          // Complete payload (satisfies pins it): applyDisplaySettings merges
+          // with ??, so an omitted field would silently keep prior in-memory
+          // state and under-exercise the real create path.
           displaySettings: {
             showStations: true,
+            showShots: true,
             showSectionNames: true,
             showStationLabels: false,
             showShotData: false,
@@ -45,8 +50,11 @@ describe('projectStore.createProject', () => {
             showGrid: false,
             showSatellite: false,
             showDepthGradient: false,
+            showStationComments: false,
+            showShotComments: false,
             gridSpacing: 10,
-          },
+            geometryMode: 'measured',
+          } satisfies DisplaySettings,
         };
       }
       return undefined;

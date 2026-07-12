@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
+import type { DisplaySettings } from '../../types/loading';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 const loadBinaryMock = vi.hoisted(() => vi.fn());
@@ -58,8 +59,12 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
       stats: null,
       warnings: [],
       frozen_shots: [],
+      // Complete payload (satisfies pins it): applyDisplaySettings merges with
+      // ??, so an omitted field would silently keep prior in-memory state and
+      // under-exercise the real load path.
       displaySettings: {
         showStations: true,
+        showShots: true,
         showSectionNames: true,
         showStationLabels: false,
         showShotData: false,
@@ -68,8 +73,11 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
         showGrid: false,
         showSatellite: false,
         showDepthGradient: false,
+        showStationComments: false,
+        showShotComments: false,
         gridSpacing: 10,
-      },
+        geometryMode: 'measured',
+      } satisfies DisplaySettings,
     });
 
     useProjectStore.setState({
