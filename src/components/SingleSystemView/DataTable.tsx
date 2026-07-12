@@ -125,6 +125,13 @@ function SubHeaderPickerMenu({
     gap: 4,
     width: 208, // px; the hook also sets this as the list width (single source of truth)
     maxHeightCap: 256, // matches the old max-h-64 — stay compact + scroll on a tall window
+    // The raw-table submenu feeds async rawTables through `options`: it opens on
+    // a single disabled "loading" row, then swaps to N rows once the load
+    // resolves. Signal that resize so the hook re-places instead of sticking to
+    // the stale on-open placement. The length prefix disambiguates the loading
+    // placeholder ([{value:''}], length 1) from an empty result ([], length 0) -
+    // both would otherwise join to the same '' key.
+    remeasureKey: `${options.length}:${options.map((o) => o.value).join('|')}`,
   });
   // Close on outside mousedown / external scroll / resize (shared hook). The
   // list is position:fixed at a captured rect, so any scroll/resize would

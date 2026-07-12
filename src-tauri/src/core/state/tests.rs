@@ -20234,6 +20234,139 @@ fn dirty_bit_noop_for_local_only_project() {
 }
 
 #[test]
+fn set_collab_enabled_noop_leaves_modified_at_and_dirty_bit_untouched() {
+    // #241: toggling to the value already in effect must not touch() the
+    // project or mark_remote_dirty() a remote link - that would spuriously
+    // flag unpushed edits and bump last_edit_at for a call that changes
+    // nothing. A genuine flip must still work.
+    let (state, _sid, _shid, _temp) = remote_fixture_editable();
+    assert!(!dirty_bit(&state), "fixture starts clean");
+
+    let modified_at = || state.get_project_state().unwrap().modified_at;
+
+    // Starts disabled (no collab state yet): disabling again is a no-op.
+    let before = modified_at();
+    assert!(state.set_collab_enabled(false).success);
+    assert_eq!(
+        modified_at(),
+        before,
+        "disabling an already-disabled project must not touch()"
+    );
+    assert!(
+        !dirty_bit(&state),
+        "a no-op toggle must not mark the project remote-dirty"
+    );
+
+    // Genuine flip to enabled: touches and dirties.
+    let before = modified_at();
+    assert!(state.set_collab_enabled(true).success);
+    assert_ne!(
+        modified_at(),
+        before,
+        "a real enable must touch() the project"
+    );
+    assert!(
+        dirty_bit(&state),
+        "a real enable must mark the project remote-dirty"
+    );
+
+    // Repeat-enable is now a no-op: modified_at must not move again.
+    let before = modified_at();
+    assert!(state.set_collab_enabled(true).success);
+    assert_eq!(
+        modified_at(),
+        before,
+        "re-enabling an already-enabled project must not touch()"
+    );
+}
+
+#[test]
+fn set_collab_enabled_for_path_noop_leaves_dirty_bit_and_saved_state_untouched() {
+    // #241: the by-path variant must mirror set_collab_enabled's no-op guard -
+    // a call that toggles to the value ALREADY STORED ON DISK for that path must
+    // not rewrite collab_state or mark_remote_dirty() the open project. Unlike
+    // set_collab_enabled, this reads its "already enabled" state from a fresh
+    // db.load_project() of the target path, not from the open in-memory project.
+    let (state, _sid, _shid, _temp) = remote_fixture_editable();
+    let path = state.get_project_state().unwrap().file_path.unwrap();
+    assert!(!dirty_bit(&state), "fixture starts clean");
+
+    let load_collab = || {
+        Database::open_existing(&path)
+            .unwrap()
+            .load_project()
+            .unwrap()
+            .collab
+    };
+
+    // No collab state on disk yet: disabling again is a no-op.
+    assert!(
+        state
+            .set_collab_enabled_for_path(path.clone(), false)
+            .success
+    );
+    assert!(
+        !dirty_bit(&state),
+        "a no-op disable must not mark the open project remote-dirty"
+    );
+    assert!(
+        load_collab().is_none(),
+        "a no-op disable must not create a collab_state row"
+    );
+
+    // Genuine flip to enabled: writes collab_state and dirties the open project
+    // (the fixture's path IS the open project).
+    assert!(
+        state
+            .set_collab_enabled_for_path(path.clone(), true)
+            .success
+    );
+    assert!(
+        dirty_bit(&state),
+        "a real enable must mark the open project remote-dirty"
+    );
+    let stored = load_collab().expect("a real enable must save collab_state");
+    assert!(stored.enabled);
+    assert_eq!(
+        stored.sibling_tml_relative, "remote.tml",
+        "sibling name derives from the file stem on a real enable"
+    );
+
+    // Directly stamp a customized sibling name on disk, simulating state a prior
+    // real enable produced (mirrors the collab.rs doc comment: a redundant
+    // enable(true) no longer refreshes sibling_tml_relative). A no-op re-enable
+    // must leave it exactly as stamped, not recompute it back to "remote.tml".
+    let db = Database::open_existing(&path).unwrap();
+    db.save_collab_state(Some(&crate::models::CollabState::new(
+        "custom.tml".to_string(),
+    )))
+    .unwrap();
+    drop(db);
+
+    assert!(
+        state
+            .set_collab_enabled_for_path(path.clone(), true)
+            .success
+    );
+    assert_eq!(
+        load_collab().unwrap().sibling_tml_relative,
+        "custom.tml",
+        "a no-op re-enable must not refresh sibling_tml_relative"
+    );
+
+    // A genuine disable still works and is observable on disk.
+    assert!(
+        state
+            .set_collab_enabled_for_path(path.clone(), false)
+            .success
+    );
+    assert!(
+        !load_collab().unwrap().enabled,
+        "a real disable must persist"
+    );
+}
+
+#[test]
 fn edit_disabled_code_prefix_is_distinct() {
     // The EDIT_DISABLED code is distinct from the FS permission code, so the FE
     // can pattern-match it independently (#204).

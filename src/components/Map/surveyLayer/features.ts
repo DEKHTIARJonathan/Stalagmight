@@ -6,13 +6,36 @@ import {
   SHOT_FLAG_IS_REFERENCE,
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../../../types/survey-data';
-import { getDepthColor, getErrorColor } from '../../../utils/colors';
+import { getDepthColor, getErrorColor, COMMENT_PALETTE } from '../../../utils/colors';
 import { metersToMapCoords } from '../../../utils/coordinates';
 import { formatFixed } from '../../../i18n/format';
 import type { MapThemeColors } from '../../../utils/themeColors';
 import { encodeFeatureId } from '../../../utils/ids';
 
 export type DepthRange = { min: number; max: number };
+
+/** FNV-1a 32-bit string hash. Deterministic and fast; used to pick a stable
+ *  `COMMENT_PALETTE` slot from a comment's owner identity (#52) - see
+ *  `commentColorForKey`. */
+function fnv1a32(str: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+/** Deterministic `COMMENT_PALETTE` color for a comment, keyed by its OWNER
+ *  identity rather than build order (#52), so the color stays stable when
+ *  other comments are added/removed/moved elsewhere in the survey. Exported
+ *  for test assertions; callers should use the section-qualified key shapes
+ *  below (`${sectionId}:s${shotId}` for shot comments, `${sectionId}:st${
+ *  stationIndex}` for station comments) so two sections can't collide on a
+ *  shared local index. */
+export function commentColorForKey(key: string): string {
+  return COMMENT_PALETTE[fnv1a32(key) % COMMENT_PALETTE.length]!;
+}
 
 /**
  * Ghost section data for merge preview visualization.
@@ -216,6 +239,12 @@ export function buildSurveyFeatures(
   const stationsWithNonReferenceShot = new Set<string>();
 
   let globalShotOrdinal = 0; // for shot-label `index` property (matches legacy semantics)
+  // Move-comment palette (#52): `stationCommentCarry` carries a station's
+  // comment text + assigned color from the (always-built) station-circle loop
+  // into the (zoom-gated) station-label loop below, so `data.stationComments`
+  // is read once per station rather than twice. Only populated when
+  // `buildLabels` is true - the label loop is its only reader.
+  const stationCommentCarry = new Map<number, { comment: string; color: string }>();
 
   for (const section of data.sections) {
     const innerStationMap = stationLookup.get(section.id);
@@ -252,6 +281,20 @@ export function buildSurveyFeatures(
       const fromXYZ = stationXYZ(fromGlobal);
       const toXYZ = stationXYZ(toGlobal);
 
+      const shotComment = data.shotComments.get(shotGlobalIdx);
+      const shotCommentColor = shotComment
+        ? commentColorForKey(`${section.id}:s${shotId}`)
+        : undefined;
+
+      const shotProps: Record<string, unknown> = {
+        featureId: shotFeatureId,
+        sectionId: section.id,
+        shotId,
+        color: shotColor,
+        isReference,
+      };
+      if (shotCommentColor) shotProps.commentColor = shotCommentColor;
+
       shotFeatures.push({
         type: 'Feature',
         geometry: {
@@ -261,13 +304,7 @@ export function buildSurveyFeatures(
             metersToMapCoords(toXYZ.x, toXYZ.y, gpsOrigin),
           ],
         },
-        properties: {
-          featureId: shotFeatureId,
-          sectionId: section.id,
-          shotId,
-          color: shotColor,
-          isReference,
-        },
+        properties: shotProps,
       });
 
       if (showDepthGradient) {
@@ -319,7 +356,6 @@ export function buildSurveyFeatures(
           ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
           : null;
         const shotLabelColor = shotLabelDepthColor ?? labelColor;
-        const comment = data.shotComments.get(shotGlobalIdx);
 
         const shotLabelProps: Record<string, unknown> = {
           label,
@@ -329,7 +365,10 @@ export function buildSurveyFeatures(
           color: shotLabelColor,
           isReference,
         };
-        if (comment) shotLabelProps.comment = comment;
+        if (shotComment) {
+          shotLabelProps.comment = shotComment;
+          if (shotCommentColor) shotLabelProps.commentColor = shotCommentColor;
+        }
         shotLabelFeatures.push({
           type: 'Feature',
           geometry: {
@@ -369,21 +408,32 @@ export function buildSurveyFeatures(
     const featureStrokeColor = showDepthGradient && isZeroDatumStation ? zeroDatum : strokeColor;
     const featureId = encodeFeatureId(sectionId, stationIndex);
 
+    const stationComment = data.stationComments.get(g);
+    const stationCommentColor = stationComment
+      ? commentColorForKey(`${sectionId}:st${stationIndex}`)
+      : undefined;
+    if (buildLabels && stationComment) {
+      stationCommentCarry.set(g, { comment: stationComment, color: stationCommentColor! });
+    }
+
+    const stationProps: Record<string, unknown> = {
+      featureId,
+      sectionId,
+      stationIndex,
+      isZeroDatum: isZeroDatumStation,
+      color,
+      strokeColor: featureStrokeColor,
+      allShotsReference: !stationsWithNonReferenceShot.has(`${sectionId}:${stationIndex}`),
+    };
+    if (stationCommentColor) stationProps.commentColor = stationCommentColor;
+
     stationFeatures.push({
       type: 'Feature',
       geometry: {
         type: 'Point',
         coordinates: metersToMapCoords(xyz.x, xyz.y, gpsOrigin),
       },
-      properties: {
-        featureId,
-        sectionId,
-        stationIndex,
-        isZeroDatum: isZeroDatumStation,
-        color,
-        strokeColor: featureStrokeColor,
-        allShotsReference: !stationsWithNonReferenceShot.has(`${sectionId}:${stationIndex}`),
-      },
+      properties: stationProps,
     });
   }
 
@@ -460,8 +510,11 @@ export function buildSurveyFeatures(
         color: stationLabelColor,
         allShotsReference: !stationsWithNonReferenceShot.has(`${sectionId}:${stationIndex}`),
       };
-      const comment = data.stationComments.get(g);
-      if (comment) stationLabelProps.comment = comment;
+      const carriedComment = stationCommentCarry.get(g);
+      if (carriedComment) {
+        stationLabelProps.comment = carriedComment.comment;
+        stationLabelProps.commentColor = carriedComment.color;
+      }
       stationLabelFeatures.push({
         type: 'Feature',
         geometry: {
