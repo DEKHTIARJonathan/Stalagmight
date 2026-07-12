@@ -2537,9 +2537,14 @@ export default class SurveyLayer {
       this.clearShotHover();
     }
     this.map.setLayoutProperty(this.shotsLayerId, 'visibility', visibility);
-    this.map.setLayoutProperty(this.shotGradientsLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.measurePathLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.shotsHitboxLayerId, 'visibility', visibility);
+    // The depth-gradient sublayer's visibility is owned by applyOverlayPaint: it
+    // matches the shots layer EXCEPT while distance/gas-reach or the move_comment
+    // tint is active, when it must stay hidden. Re-derive it here (rather than
+    // forcing it to `visibility` above) so toggling Shots can't re-show the
+    // gradient over an active overlay/tint (#52).
+    this.applyOverlayPaint();
   }
 
   // Control reference shots visibility via filter (while keeping regular shots visible)
