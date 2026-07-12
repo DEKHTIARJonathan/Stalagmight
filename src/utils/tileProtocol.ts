@@ -49,13 +49,6 @@ export async function getTileFetchStats(): Promise<TileFetchStats> {
   };
 }
 
-/**
- * Reset tile fetch statistics (no-op — Rust counters are cumulative).
- */
-export function resetTileFetchStats(): void {
-  // No-op - Rust atomic counters are cumulative and don't support reset
-}
-
 const isAndroid = navigator.userAgent.includes('Android');
 
 /**
@@ -93,11 +86,4 @@ export function registerTileProtocol(): void {
 export function unregisterTileProtocol(): void {
   if (!isAndroid) return;
   maplibregl.removeProtocol('stalagmight-tiles');
-}
-
-/**
- * Force unregister the protocol regardless of ref count.
- */
-export function forceUnregisterTileProtocol(): void {
-  unregisterTileProtocol();
 }

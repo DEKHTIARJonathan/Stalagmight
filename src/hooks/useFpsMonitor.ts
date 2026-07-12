@@ -175,18 +175,3 @@ export function useFpsMonitor(
 
   return { fps, isThrottled };
 }
-
-/**
- * Get the default FPS threshold value.
- * Useful for config defaults that need to match the hook default.
- */
-export function getDefaultFpsThreshold(): number {
-  return DEFAULT_FPS_THRESHOLD;
-}
-
-/**
- * Get the default recovery threshold value.
- */
-export function getDefaultRecoveryThreshold(): number {
-  return DEFAULT_FPS_RECOVERY_THRESHOLD;
-}
