@@ -389,7 +389,9 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
             date: s.survey.date.to_string(),
             team: non_empty(&s.survey.team),
             shot_count: s.survey.shots.len() as u32,
-            declination: s.survey.parameters.declination,
+            // Preview-only field, but it crosses IPC as a ts-rs `number`;
+            // a NaN would serialize as JSON null (#275).
+            declination: finite_or_zero(s.survey.parameters.declination),
         })
         .collect();
     CompassFile {
@@ -463,6 +465,13 @@ fn angle_missing(raw: f64) -> bool {
     !raw.is_finite() || raw <= MISSING_ANGLE_THRESHOLD || raw >= MISSING_VALUE_THRESHOLD
 }
 
+/// Length variant of the sentinel test: lengths (and DepthGauge depth
+/// readings) use only the "+999" half of the sentinel range, plus the
+/// shared non-finite guard.
+fn length_missing(raw: f64) -> bool {
+    !raw.is_finite() || raw >= MISSING_VALUE_THRESHOLD
+}
+
 fn lrud_meters(raw: f64, length_to_m: f64) -> Option<f64> {
     if !raw.is_finite() || raw <= -1.0 || raw >= MISSING_VALUE_THRESHOLD {
         return None;
@@ -490,7 +499,7 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     // — pass the raw through.
     let mut inclination = match ctx.inclination_units {
         InclinationUnits::DepthGauge => {
-            if !shot.inclination.is_finite() || shot.inclination >= MISSING_VALUE_THRESHOLD {
+            if length_missing(shot.inclination) {
                 0.0
             } else {
                 shot.inclination
@@ -504,7 +513,7 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
             }
         }
     };
-    let mut length = if !shot.length.is_finite() || shot.length >= MISSING_VALUE_THRESHOLD {
+    let mut length = if length_missing(shot.length) {
         0.0
     } else {
         shot.length
@@ -531,11 +540,11 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     // asin(depth / length) — pass the raw length (same units as the
     // depth reading) so the ratio is dimensionless.
     let inclination_deg = inclination_to_degrees(inclination, &ctx.inclination_units, length);
-    // Belt and braces: corrections, declination, and convergence are ALSO
-    // file-controlled floats (a NaN correction factor poisons the sums above,
-    // and NaN.rem_euclid(360.0) is still NaN). Whatever slipped through, no
-    // non-finite component may escape into stored geometry - coerce to 0.0
-    // (missing semantics downstream).
+    // Backstop only: build_ctx sanitizes declination/convergence/corrections
+    // and inclination_to_degrees clamps the DepthGauge asin ratio, so with
+    // finite raw inputs these are already finite. 0.0 carries the same
+    // missing semantics the raw sentinel guards above produce; the per-shot
+    // corruption warning fires at the pass-1 scan, not here.
     (
         finite_or_zero(azimuth_final),
         finite_or_zero(length_m),
@@ -596,8 +605,7 @@ fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
     // depth/length ratio.  Survey-level CORRECTIONS apply to the
     // physical slope distance regardless of sighting direction, so the
     // fore-sight `cf.length` is the right offset for the back-sight too.
-    let mut slope_length_raw = if !shot.length.is_finite() || shot.length >= MISSING_VALUE_THRESHOLD
-    {
+    let mut slope_length_raw = if length_missing(shot.length) {
         0.0
     } else {
         shot.length
@@ -622,12 +630,15 @@ fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
     // we store IS that degree-converted reading.
     let back_inc_deg = inclination_to_degrees(back_inc, &ctx.inclination_units, slope_length_raw);
     let pitch_out_down_positive = back_inc_deg;
-    // Same no-non-finite-output contract as shot_geometry (backsight
-    // correction factors are file-controlled too).
-    Some((
-        finite_or_zero(azimuth_out_fore_direction),
-        finite_or_zero(pitch_out_down_positive),
-    ))
+    // Backstop: a computed non-finite backsight must become "no backsight"
+    // (the caller mirrors the fore-sight, which is a no-op in the fore/back
+    // circular mean), NEVER a fabricated due-north Some(0.0) that would
+    // silently rotate every affected shot via average_azimuth (#275).
+    // build_ctx sanitizes the header factors, so this should be unreachable.
+    if !azimuth_out_fore_direction.is_finite() || !pitch_out_down_positive.is_finite() {
+        return None;
+    }
+    Some((azimuth_out_fore_direction, pitch_out_down_positive))
 }
 
 fn elevation_gain(length_m: f64, inclination_deg: f64) -> f64 {
@@ -697,24 +708,52 @@ fn build_ctx(
             survey.name
         ));
     }
-    let declination = survey_declination(
+    let mut declination = survey_declination(
         file_state.declination_mode,
         survey,
         anchor_lat_lng,
         warnings,
     );
-    let convergence_angle = if file_state.convergence_applied {
+    let mut convergence_angle = if file_state.convergence_applied {
         file_state.convergence
     } else {
         0.0
     };
+    let mut corrections = survey.parameters.correction_factors.clone();
+    let mut backsight_corrections = survey.parameters.backsight_correction_factors.clone();
+    // Header-level values are file-controlled floats too (nom's double
+    // accepts nan/inf tokens). Sanitize them once per survey so every
+    // downstream sum stays finite: a poisoned factor becomes 0.0 with a
+    // warning instead of silently corrupting every shot in the survey.
+    {
+        let mut sanitize = |label: &str, v: &mut f64| {
+            if !v.is_finite() {
+                warnings.push(format!(
+                    "Survey '{}': non-finite {label} treated as 0.",
+                    survey.name
+                ));
+                *v = 0.0;
+            }
+        };
+        sanitize("declination", &mut declination);
+        sanitize("UTM convergence", &mut convergence_angle);
+        if let Some(cf) = corrections.as_mut() {
+            sanitize("azimuth correction", &mut cf.azimuth);
+            sanitize("inclination correction", &mut cf.inclination);
+            sanitize("length correction", &mut cf.length);
+        }
+        if let Some(bcf) = backsight_corrections.as_mut() {
+            sanitize("backsight azimuth correction", &mut bcf.azimuth);
+            sanitize("backsight inclination correction", &mut bcf.inclination);
+        }
+    }
     SurveyCtx {
         declination,
         convergence_angle,
         length_to_m,
         apply_corrections: opts.apply_corrections,
-        corrections: survey.parameters.correction_factors.clone(),
-        backsight_corrections: survey.parameters.backsight_correction_factors.clone(),
+        corrections,
+        backsight_corrections,
         inclination_units,
     }
 }
@@ -1077,9 +1116,49 @@ pub fn convert_compass_to_import_configs(
             if flags.exclude_all && !opts.include_excluded {
                 continue;
             }
+            // One warning per shot naming every corrupt (non-finite) raw
+            // reading. Sentinel-coded missing values (-999/+999) stay
+            // silent: they are the format's intended "no reading" markers,
+            // not corruption. Absent backsights read as finite 0.0 here.
+            let mut corrupt: Vec<&str> = Vec::new();
+            for (name, value) in [
+                ("length", shot.length),
+                ("bearing", shot.azimuth),
+                ("dip", shot.inclination),
+                ("left", shot.left),
+                ("up", shot.up),
+                ("down", shot.down),
+                ("right", shot.right),
+                ("back bearing", shot.back_azimuth.unwrap_or(0.0)),
+                ("back dip", shot.back_inclination.unwrap_or(0.0)),
+            ] {
+                if !value.is_finite() {
+                    corrupt.push(name);
+                }
+            }
+            if !corrupt.is_empty() {
+                warnings.push(format!(
+                    "Shot {} -> {}: non-finite {} treated as missing.",
+                    shot.from,
+                    shot.to,
+                    corrupt.join(", ")
+                ));
+            }
             let (_, length_m, inclination) = shot_geometry(shot, &ctx);
             if length_m <= 0.0 {
                 // Zero-length connectors can't be stored as section shots.
+                // Dropping a shot removes its connectivity, so never do it
+                // silently (#275).
+                warnings.push(format!(
+                    "Shot {} -> {}: dropped ({} length).",
+                    shot.from,
+                    shot.to,
+                    if shot.length.is_finite() {
+                        "missing or zero"
+                    } else {
+                        "non-finite"
+                    }
+                ));
                 continue;
             }
             edges.push((
@@ -1607,10 +1686,37 @@ mod tests {
         let parsed = parse_compass(&fixture("nonfinite.dat")).unwrap();
         // All six rows parse: nom's double accepts bare "nan"/"inf"/"infinity"
         // tokens (unsigned only - a signed "-inf" fails the vendor parser and
-        // terminates the shot list, which is why the fixture uses "infinity").
+        // terminates the shot list; pinned by
+        // signed_nonfinite_token_truncates_shot_list).
         assert_eq!(parsed.surveys[0].survey.shots.len(), 6);
-        let (configs, _closures, _warnings) =
+        let (configs, _closures, warnings) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+
+        // Corruption is never silent: one warning per poisoned shot naming
+        // the fields, and one per dropped shot naming the reason (#275).
+        let has = |needle: &str| warnings.iter().any(|w| w.contains(needle));
+        assert!(has("Shot N2 -> N3: non-finite length"), "{warnings:?}");
+        assert!(
+            has("Shot N3 -> N4: non-finite bearing, back bearing"),
+            "{warnings:?}"
+        );
+        assert!(
+            has("Shot N4 -> N5: non-finite dip, back dip"),
+            "{warnings:?}"
+        );
+        assert!(has("Shot N5 -> N6: non-finite length"), "{warnings:?}");
+        assert!(
+            has("Shot N6 -> N7: non-finite left, up, down, right"),
+            "{warnings:?}"
+        );
+        assert!(
+            has("Shot N2 -> N3: dropped (non-finite length)"),
+            "{warnings:?}"
+        );
+        assert!(
+            has("Shot N5 -> N6: dropped (non-finite length)"),
+            "{warnings:?}"
+        );
 
         let shots: Vec<&ShotData> = configs.iter().flat_map(|c| c.shots.iter()).collect();
         assert!(!shots.is_empty(), "fixture should keep at least one shot");
@@ -1666,6 +1772,78 @@ mod tests {
         assert!(
             shots.iter().all(|s| s.length > 0.0),
             "no zero/negative-length shot may be stored"
+        );
+    }
+
+    /// #275: pins how a .MAK with a non-finite fixed-station UTM coordinate
+    /// behaves today. The vendored PROJECT lexer has its own digit-only
+    /// parse_double (unlike the .DAT survey parser's nom `double`), so a
+    /// literal "nan" in a station fix fails the whole .mak parse with a clear
+    /// error - it cannot silently reach geometry. The is_finite guard in
+    /// parse_mak (fixed-station skip + warning) is therefore defense-in-depth
+    /// for a vendor bump; if this test ever sees the file PARSE, that guard
+    /// becomes load-bearing and this pin must flip to asserting the skip.
+    #[test]
+    fn nonfinite_mak_station_fix_fails_parse_never_silent() {
+        let Err(err) = parse_compass(&fixture("nonfinite.mak")) else {
+            panic!("a nan station fix must not parse under the current vendored grammar");
+        };
+        assert!(
+            err.to_string().contains("Invalid station fix"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// #275: header-level DECLINATION / CORRECTIONS2 values are file-controlled
+    /// floats too. A non-finite factor is sanitized to 0 once per survey (with
+    /// a warning), so the shot geometry comes through unchanged instead of the
+    /// whole survey collapsing to fabricated due-north bearings.
+    #[test]
+    fn nonfinite_header_declination_and_correction_sanitized_with_warning() {
+        let parsed = parse_compass(&fixture("nonfinite_header.dat")).unwrap();
+        let (configs, _closures, warnings) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        let shots: Vec<&ShotData> = configs.iter().flat_map(|c| c.shots.iter()).collect();
+        assert_eq!(shots.len(), 1);
+        let s = shots[0];
+        // nan DECLINATION sanitizes to 0: the 90 deg bearing is unchanged.
+        assert!(
+            (s.azimuth_in - 90.0).abs() < 1e-9,
+            "azimuth_in: {}",
+            s.azimuth_in
+        );
+        // The backsight survives with the nan CORRECTIONS2 azimuth factor
+        // sanitized to 0: (270 + 180) % 360 = 90, never a fabricated 0.0.
+        assert!(
+            (s.azimuth_out - 90.0).abs() < 1e-9,
+            "azimuth_out: {}",
+            s.azimuth_out
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("non-finite declination")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("non-finite backsight azimuth correction")),
+            "{warnings:?}"
+        );
+    }
+
+    /// #275: pins the vendored parser's behavior on SIGNED non-finite tokens.
+    /// nom's `double` exception branch accepts only unsigned nan/inf/infinity;
+    /// a literal "-inf" fails the row parse and truncates the survey's shot
+    /// list at that row (silent data loss at the vendor grammar layer). If a
+    /// vendor bump changes this, this test fails and the non-finite handling
+    /// must be re-audited.
+    #[test]
+    fn signed_nonfinite_token_truncates_shot_list() {
+        let parsed = parse_compass(&fixture("nonfinite_signed.dat")).unwrap();
+        assert_eq!(
+            parsed.surveys[0].survey.shots.len(),
+            1,
+            "the -inf row and everything after it are dropped by the vendored parser"
         );
     }
 
