@@ -749,6 +749,10 @@ export const useUIStore = create<UIStore>((set) => ({
   // Entity refs (moveCommentSource, merge picks, commentTarget) use small
   // per-project integer ids, so a stale ref from project A usually RESOLVES in
   // project B and the next click would mutate the wrong entity - null them all.
+  // Measure endpoints carry the same per-project refs, so the canonical reset
+  // owns MEASURE_CLEARED itself instead of relying on the setView() call that
+  // happens to follow it (MapCanvas's projectSwitchKey effect also clears
+  // measure state - a second, independent belt).
   resetToolTransientsForProjectSwitch: () =>
     set({
       activeTool: 'select',
@@ -756,6 +760,7 @@ export const useUIStore = create<UIStore>((set) => ({
       mergeStationA: null,
       mergeStationB: null,
       commentTarget: null,
+      ...MEASURE_CLEARED,
     }),
 
   // Selection state

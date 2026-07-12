@@ -112,4 +112,27 @@ describe('projectStore.createProject', () => {
 
     expect(useUIStore.getState().selection).toBeNull();
   });
+
+  // #275 B1 wiring: the real createProject action (not just the uiStore method)
+  // must clear armed tool transients - deleting the reset call site would
+  // otherwise pass every unit test while the bug ships.
+  it('clears armed tool transients on create (end-to-end wiring)', async () => {
+    useUIStore.setState({
+      activeTool: 'move_comment',
+      moveCommentSource: {
+        type: 'shot',
+        sectionId: 2,
+        shotId: 7,
+        comment: 'stale comment from the previous project',
+      },
+      mergeStationA: { section_id: 1, station_index: 3 },
+    });
+
+    await useProjectStore.getState().createProject('Fresh Cave');
+
+    const ui = useUIStore.getState();
+    expect(ui.activeTool).toBe('select');
+    expect(ui.moveCommentSource).toBeNull();
+    expect(ui.mergeStationA).toBeNull();
+  });
 });

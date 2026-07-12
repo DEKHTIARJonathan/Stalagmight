@@ -14,22 +14,14 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 import { useUIStore } from '../uiStore';
+import { DISPLAY_DEFAULTS } from '../displaySelectors';
 import type { DisplaySettings } from '../../types/loading';
 
+// Spread the documented single source of truth for toggle defaults instead of
+// hand-listing them: a changed default then fails loudly here rather than the
+// test silently asserting against a stale copy.
 const settingsWith = (overrides: Partial<DisplaySettings>): DisplaySettings => ({
-  showStations: true,
-  showShots: true,
-  showSectionNames: true,
-  showStationLabels: false,
-  showShotData: false,
-  showReferenceShots: true,
-  showZeroDatum: true,
-  showGrid: false,
-  showSatellite: false,
-  showDepthGradient: false,
-  showStationComments: false,
-  showShotComments: false,
-  gridSpacing: 10,
+  ...DISPLAY_DEFAULTS,
   geometryMode: 'measured',
   ...overrides,
 });
@@ -59,5 +51,14 @@ describe('applyDisplaySettings showShots/showShotComments restore', () => {
       .applyDisplaySettings(settingsWith({ showShots: true, showShotComments: true }));
     expect(useUIStore.getState().showShots).toBe(true);
     expect(useUIStore.getState().showShotComments).toBe(true);
+  });
+
+  it('bleed check, true->false direction: a saved false wins over in-memory true', () => {
+    useUIStore.setState({ showShotComments: true, showShots: true });
+    useUIStore
+      .getState()
+      .applyDisplaySettings(settingsWith({ showShots: false, showShotComments: false }));
+    expect(useUIStore.getState().showShotComments).toBe(false);
+    expect(useUIStore.getState().showShots).toBe(false);
   });
 });

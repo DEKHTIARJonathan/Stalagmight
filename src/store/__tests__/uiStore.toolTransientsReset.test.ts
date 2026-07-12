@@ -35,6 +35,20 @@ const armedState = () => ({
     screenPos: { x: 10, y: 20 },
     currentComment: 'stale',
   },
+  // Measure endpoints carry the same per-project refs; the canonical reset
+  // owns MEASURE_CLEARED itself (not via the setView() that follows it).
+  measureStart: {
+    kind: 'station' as const,
+    section_id: 1,
+    station_index: 0,
+    coords: { x: 0, y: 0, z: 0 },
+  },
+  measureEnd: {
+    kind: 'station' as const,
+    section_id: 1,
+    station_index: 5,
+    coords: { x: 1, y: 1, z: 0 },
+  },
 });
 
 describe('resetToolTransientsForProjectSwitch', () => {
@@ -51,6 +65,8 @@ describe('resetToolTransientsForProjectSwitch', () => {
     expect(s.mergeStationA).toBeNull();
     expect(s.mergeStationB).toBeNull();
     expect(s.commentTarget).toBeNull();
+    expect(s.measureStart).toBeNull();
+    expect(s.measureEnd).toBeNull();
   });
 
   it('fires no persistence IPC (transient forced state never persists)', () => {
