@@ -1,9 +1,9 @@
 import { useRef, useEffect, useState, memo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { type Section, type SectionId } from '../../types/project';
-import { useUIStore, isMapReadOnly } from '../../store/uiStore';
+import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
+import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { SHOT_FLAG_IS_REFERENCE } from '../../types/survey-data';
 import { useShallow } from 'zustand/react/shallow';
 import { formatFixed, formatNumber } from '../../i18n/format';
@@ -49,8 +49,8 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   );
 
   // The closure-adjusted view, Plan/Export mode, and a locked remote SpeleoDB
-  // project are all read-only — section add/delete are disabled there.
-  const geometryReadOnly = useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly);
+  // project are all read-only - section add/delete are disabled there.
+  const editingBlocked = useEditingBlocked();
 
   // The row to highlight comes from any of: an explicit section hover (panel row /
   // DetailPanel section link), or — for map hovers — the section that owns the
@@ -358,7 +358,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   }, [setHoveredSectionId]);
 
   const handleAddSection = () => {
-    if (geometryReadOnly) return;
+    if (editingBlocked) return;
     setSource('sections-panel');
     openDialog('import');
   };
@@ -390,7 +390,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
           tooltip={t('sections.actions.add')}
           aria-label={t('sections.actions.add')}
           data-testid="sections-add-button"
-          disabled={geometryReadOnly}
+          disabled={editingBlocked}
         />
       </div>
 
@@ -402,7 +402,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
             <br />
             <button
               onClick={handleAddSection}
-              disabled={geometryReadOnly}
+              disabled={editingBlocked}
               className="text-accent hover:underline mt-2 inline-block disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
               data-testid="sections-empty-add"
             >

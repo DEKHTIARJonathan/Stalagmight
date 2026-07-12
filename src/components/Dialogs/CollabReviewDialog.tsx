@@ -1,8 +1,8 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
-import { useUIStore, isMapReadOnly } from '../../store/uiStore';
-import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
+import { useUIStore } from '../../store/uiStore';
+import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -35,7 +35,7 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
   // background collab-detect regardless of appMode), and a locked remote SpeleoDB
   // project are all read-only: applying collab changes mutates the measured
   // project, so block it here (switch to Survey/Measured to apply).
-  const geometryReadOnly = useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly);
+  const editingBlocked = useEditingBlocked();
 
   const counts = useMemo(() => {
     let removedDependents = 0;
@@ -56,7 +56,7 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
   const matchNoteKey = MATCH_QUALITY_NOTE_KEY[changeSet.match_quality];
 
   const handleApply = useCallback(async () => {
-    if (geometryReadOnly) return;
+    if (editingBlocked) return;
     setIsApplying(true);
     try {
       const result = await applyCollabChanges();
@@ -78,7 +78,7 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
         message: getErrorMessage(e, t('dialogs.collabReview.errorApply')),
       });
     }
-  }, [applyCollabChanges, closeDialog, openDialog, triggerFitToBounds, t, geometryReadOnly]);
+  }, [applyCollabChanges, closeDialog, openDialog, triggerFitToBounds, t, editingBlocked]);
 
   return (
     <DialogWrapper title={t('dialogs.collabReview.title')} onClose={closeDialog} size="lg" data-testid="collab-review-dialog">
@@ -227,8 +227,8 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
             data-primary-action=""
             data-testid="collab-review-apply"
             onClick={handleApply}
-            disabled={isApplying || total === 0 || geometryReadOnly}
-            title={geometryReadOnly ? t('dialogs.collabReview.readOnlyHint') : undefined}
+            disabled={isApplying || total === 0 || editingBlocked}
+            title={editingBlocked ? t('dialogs.collabReview.readOnlyHint') : undefined}
           >
             {isApplying ? t('dialogs.collabReview.applying') : t('dialogs.collabReview.apply')}
           </Button>

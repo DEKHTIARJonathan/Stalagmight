@@ -1,0 +1,35 @@
+/**
+ * Canonical "is editing blocked right now" predicate: the survey map is
+ * read-only whenever `isMapReadOnly` is true (closure-adjusted view, or
+ * Plan/Export mode) OR a remote SpeleoDB project is open without the write
+ * lock (`selectSpeleoReadOnly`).
+ *
+ * A prior generation of call sites wrote this composition inline as
+ * `useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly)`. That
+ * expression is a Rules-of-Hooks violation: `||` short-circuits, so the
+ * second zustand hook is skipped entirely whenever the first term is
+ * already `true` on a given render. If that term later flips back to
+ * `false` on a rerender, React sees fewer hooks called than the previous
+ * render and throws ("Rendered fewer hooks than expected"). Every call
+ * site must call BOTH store hooks unconditionally, on separate lines, and
+ * only OR the resulting plain booleans - so this hook is the single place
+ * that does it correctly (#275).
+ */
+import { useUIStore, isMapReadOnly } from '../store/uiStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
+
+/** React-hook form: subscribes to both stores and recomposes on change. */
+export function useEditingBlocked(): boolean {
+  const mapReadOnly = useUIStore(isMapReadOnly);
+  const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
+  return mapReadOnly || speleoReadOnly;
+}
+
+/**
+ * Imperative twin for call sites outside React (raw keydown handlers, utility
+ * functions) that need a one-shot read via `getState()` rather than a
+ * subscription.
+ */
+export function isEditingBlockedNow(): boolean {
+  return isMapReadOnly(useUIStore.getState()) || selectSpeleoReadOnly(useSpeleoStore.getState());
+}
