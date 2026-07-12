@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    ClosureStrategy, CollabState, Coordinates, GpsBounds, LoopClosure, Marker, Section,
+    ClosureStrategy, CollabState, GpsBounds, LoopClosure, Marker, Section,
     SectionData, SectionId, SectionUpdates, ShotData, ShotId, StationAnchor, StationKey,
     StationMerge, StationMergeWire, StationRef, ZeroDatum,
 };
