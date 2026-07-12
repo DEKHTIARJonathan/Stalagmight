@@ -19,6 +19,16 @@ import {
   type AppearanceConfig,
   type ThemeMode,
 } from '../config';
+import { defaultConfig as generatedDefaultConfig } from '../ipc/defaultConfig';
+
+describe('defaultConfig single-sourcing (#275)', () => {
+  it('re-exports the generated Config::default() unmodified', () => {
+    // Tripwire: config.ts must re-export src/types/ipc/defaultConfig.ts as-is,
+    // not merge/override it. Catches a future partial regen or a reintroduced
+    // hand-written override drifting from Config::default() in the Rust config.
+    expect(defaultConfig).toEqual(generatedDefaultConfig);
+  });
+});
 
 describe('defaultConfig structure', () => {
   describe('top-level structure', () => {
@@ -188,11 +198,10 @@ describe('defaultConfig structure', () => {
   });
 
   describe('gas config', () => {
-    // Pins the hand-maintained TS defaultConfig.gas values (mirrors GasConfig::default() in
-    // src-tauri/src/config/gas.rs). NOTE: this guards TS-internal consistency only — it does
-    // NOT read the Rust default, so on its own it can't catch TS↔Rust drift (a golden-fixtured
-    // Rust default would be the real cross-language guard — follow-up). It does fail loudly if
-    // a TS default value here is changed unintentionally.
+    // Pins defaultConfig.gas, which is now generated from Config::default()
+    // (src-tauri/src/config/gas.rs) via `pnpm gen:ipc-types` — see
+    // src/types/ipc/defaultConfig.ts. Fails loudly if a regen changes these
+    // values unintentionally.
     it('has correct gas defaults', () => {
       expect(defaultConfig.gas.units).toBe('metric');
       expect(defaultConfig.gas.default_reserve).toBe('all_thirds');
