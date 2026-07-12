@@ -212,6 +212,19 @@ impl AppState {
             return CommandResult::success();
         }
 
+        // Reject non-finite geometry in overlap-interpolation updates before
+        // any mutation: this path arrives from the collab .tml reconcile
+        // (attacker-controllable input) and must hold the same invariant as
+        // update_shot (#275).
+        for update in &existing_shot_updates {
+            if !update.updates.all_finite() {
+                return CommandResult::failure(format!(
+                    "Import shot update for section {} shot {} has a non-finite (NaN/inf) value",
+                    update.section_id, update.shot_id
+                ));
+            }
+        }
+
         tracing::info!(
             count = sections.len(),
             purpose = "apply imported sections as single undo",

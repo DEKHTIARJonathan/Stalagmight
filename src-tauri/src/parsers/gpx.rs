@@ -386,7 +386,7 @@ fn parse_waypoint_children(
                         b"ele" => {
                             let t = read_text(reader)?;
                             depth -= 1;
-                            wpt.elevation = t.parse::<f64>().ok();
+                            wpt.elevation = t.parse::<f64>().ok().filter(|v| v.is_finite());
                         }
                         b"time" => {
                             let t = read_text(reader)?;
@@ -547,7 +547,7 @@ fn parse_point_children(
                         b"ele" => {
                             let t = read_text(reader)?;
                             depth -= 1;
-                            pt.elevation = t.parse::<f64>().ok();
+                            pt.elevation = t.parse::<f64>().ok().filter(|v| v.is_finite());
                         }
                         b"time" => {
                             let t = read_text(reader)?;
@@ -686,7 +686,7 @@ fn parse_route_point_children(
                         b"ele" => {
                             let t = read_text(reader)?;
                             depth -= 1;
-                            pt.elevation = t.parse::<f64>().ok();
+                            pt.elevation = t.parse::<f64>().ok().filter(|v| v.is_finite());
                         }
                         b"time" => {
                             let t = read_text(reader)?;

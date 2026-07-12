@@ -224,16 +224,3 @@ pub(crate) fn save_display_setting_impl(
         .save_display_setting(&key, &value)
         .map_err(|e| e.to_string())
 }
-
-/// Get a single display setting from the current project database
-#[tauri::command]
-pub fn get_display_setting(state: State<AppState>, key: String) -> Result<Option<String>, String> {
-    get_display_setting_impl(state.inner(), key)
-}
-
-pub(crate) fn get_display_setting_impl(
-    state: &AppState,
-    key: String,
-) -> Result<Option<String>, String> {
-    state.get_display_setting(&key).map_err(|e| e.to_string())
-}

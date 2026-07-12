@@ -29,6 +29,7 @@ pub fn severity_for_code(code: &str) -> WarningSeverity {
         | "INVALID_AZIMUTH"
         | "INVALID_PITCH"
         | "NEGATIVE_LRUD"
+        | "NON_FINITE_VALUE"
         | "LENGTH_BELOW_DEPTH_CHANGE"
         | MULTIPLE_DATUMS_PER_MERGE_COMPONENT => WarningSeverity::Error,
         // SHORT_SHOT, LONG_SHOT, LARGE_DEPTH_CHANGE, AZIMUTH_DEVIATION and

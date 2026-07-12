@@ -242,6 +242,7 @@ interface UIStore {
   activeTool: ToolType;
   lastSubtoolByGroup: Record<string, ToolType>;
   setActiveTool: (tool: ToolType) => void;
+  resetToolTransientsForProjectSwitch: () => void;
 
   // Selection state
   selection: Selection | null;
@@ -741,6 +742,25 @@ export const useUIStore = create<UIStore>((set) => ({
         return { activeTool, lastSubtoolByGroup, hoveredStation: null, hoveredShot: null, hoveredSectionId: null, ...clearComment, ...clearMoveComment, ...clearMeasure };
       }
       return { activeTool, lastSubtoolByGroup, ...clearComment, ...clearMoveComment, ...clearMeasure };
+    }),
+  // Project-switch reset for tool state. Deliberately NOT routed through
+  // setActiveTool: a load-forced reset is not a user action, so no telemetry or
+  // dwell fires and nothing persists (plain set(), per the transient-state rule).
+  // Entity refs (moveCommentSource, merge picks, commentTarget) use small
+  // per-project integer ids, so a stale ref from project A usually RESOLVES in
+  // project B and the next click would mutate the wrong entity - null them all.
+  // Measure endpoints carry the same per-project refs, so the canonical reset
+  // owns MEASURE_CLEARED itself instead of relying on the setView() call that
+  // happens to follow it (MapCanvas's projectSwitchKey effect also clears
+  // measure state - a second, independent belt).
+  resetToolTransientsForProjectSwitch: () =>
+    set({
+      activeTool: 'select',
+      moveCommentSource: null,
+      mergeStationA: null,
+      mergeStationB: null,
+      commentTarget: null,
+      ...MEASURE_CLEARED,
     }),
 
   // Selection state
@@ -1486,10 +1506,15 @@ export const useUIStore = create<UIStore>((set) => ({
     useGasPlanStore.getState().reset();
     // Apply display settings from backend, merging with existing state.
     // Uses ?? to only apply fields that are defined, preserving current state for undefined fields.
-    // EXACT 11 fields matching uiStore - NO showShots, NO colorBy (those aren't persisted).
+    // EXACT 13 persisted fields matching uiStore - NO colorBy (not persisted).
+    // showShots/showShotComments joined in #275 B2: they were always saved by
+    // toggleDisplay but never restored (the previous project's in-memory value
+    // silently won over the saved one).
     set((state) => ({
       appMode: APP_MODE_DEFAULT,
       showStations: settings.showStations ?? state.showStations,
+      showShots: settings.showShots ?? state.showShots,
+      showShotComments: settings.showShotComments ?? state.showShotComments,
       showSectionNames: settings.showSectionNames ?? state.showSectionNames,
       showStationLabels: settings.showStationLabels ?? state.showStationLabels,
       showShotData: settings.showShotData ?? state.showShotData,

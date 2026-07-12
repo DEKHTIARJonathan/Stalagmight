@@ -229,16 +229,6 @@ export function ChevronRightIcon(props: IconProps) {
   );
 }
 
-export function ArrowLeftIcon(props: IconProps) {
-  return (
-    <BaseIcon {...props}>
-      <Bar x1={4} y1={10} x2={16} y2={10} />
-      <Bar x1={8} y1={6} x2={4} y2={10} />
-      <Bar x1={4} y1={10} x2={8} y2={14} />
-    </BaseIcon>
-  );
-}
-
 export function ArrowUpRightIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
@@ -356,16 +346,6 @@ export function CheckCircleIcon(props: IconProps) {
       <Annulus cx={10} cy={10} r={7} />
       <Bar x1={6} y1={10} x2={9} y2={13} />
       <Bar x1={9} y1={13} x2={14} y2={7} />
-    </BaseIcon>
-  );
-}
-
-export function XCircleIcon(props: IconProps) {
-  return (
-    <BaseIcon {...props}>
-      <Annulus cx={10} cy={10} r={7} />
-      <Bar x1={7} y1={7} x2={13} y2={13} />
-      <Bar x1={13} y1={7} x2={7} y2={13} />
     </BaseIcon>
   );
 }
@@ -565,18 +545,6 @@ export function MoveHorizontalIcon(props: IconProps) {
   );
 }
 
-export function MoveDiagonalIcon(props: IconProps) {
-  return (
-    <BaseIcon {...props}>
-      <Bar x1={5} y1={15} x2={15} y2={5} />
-      <Bar x1={11} y1={5} x2={15} y2={5} />
-      <Bar x1={15} y1={5} x2={15} y2={9} />
-      <Bar x1={9} y1={15} x2={5} y2={15} />
-      <Bar x1={5} y1={15} x2={5} y2={11} />
-    </BaseIcon>
-  );
-}
-
 // Fullscreen enter/exit pair (data-table fullscreen mode): two diagonal arrows
 // pointing out of (Expand) or into (Shrink) the corners.
 export function ExpandIcon(props: IconProps) {
@@ -618,46 +586,6 @@ export function MoveAllIcon(props: IconProps) {
       <Bar x1={3} y1={10} x2={5} y2={12} />
       <Bar x1={15} y1={8} x2={17} y2={10} />
       <Bar x1={17} y1={10} x2={15} y2={12} />
-    </BaseIcon>
-  );
-}
-
-export function CursorIcon(props: IconProps) {
-  return (
-    <BaseIcon {...props}>
-      <path d="M4 3 L12 15 L13 10 L17 9 Z" fill="currentColor" stroke="none" />
-    </BaseIcon>
-  );
-}
-
-export function HandIcon(props: IconProps) {
-  return (
-    <BaseIcon {...props}>
-      {/* Four fingers (∩ shapes) */}
-      <Bar x1={6} y1={9} x2={6} y2={4.5} />
-      <Bar x1={6} y1={4.5} x2={8} y2={4.5} />
-      <Bar x1={8} y1={4.5} x2={8} y2={9} />
-      <Bar x1={8} y1={9} x2={8} y2={3.5} />
-      <Bar x1={8} y1={3.5} x2={10} y2={3.5} />
-      <Bar x1={10} y1={3.5} x2={10} y2={9} />
-      <Bar x1={10} y1={9} x2={10} y2={4.5} />
-      <Bar x1={10} y1={4.5} x2={12} y2={4.5} />
-      <Bar x1={12} y1={4.5} x2={12} y2={9} />
-      <Bar x1={12} y1={9} x2={12} y2={5.5} />
-      <Bar x1={12} y1={5.5} x2={14} y2={5.5} />
-      <Bar x1={14} y1={5.5} x2={14} y2={11} />
-      {/* Palm: side walls + rounded bottom */}
-      <Bar x1={6} y1={9} x2={6} y2={11} />
-      <ArcBand cx={10} cy={11} r={4} a1={180} a2={360} />
-    </BaseIcon>
-  );
-}
-
-export function MagnifierIcon(props: IconProps) {
-  return (
-    <BaseIcon {...props}>
-      <Annulus cx={8} cy={8} r={4} />
-      <Bar x1={11} y1={11} x2={16} y2={16} />
     </BaseIcon>
   );
 }
@@ -727,29 +655,6 @@ export function MessageIcon(props: IconProps) {
         stroke="none"
         d="M4 4 H16 A1 1 0 0 1 17 5 V13 A1 1 0 0 1 16 14 H8 L5 17 V14 H4 A1 1 0 0 1 3 13 V5 A1 1 0 0 1 4 4 Z M5.4 5.9 H14.6 A0.5 0.5 0 0 1 15.1 6.4 V11.6 A0.5 0.5 0 0 1 14.6 12.1 H8.2 L6.4 13.9 V12.1 H5.4 A0.5 0.5 0 0 1 4.9 11.6 V6.4 A0.5 0.5 0 0 1 5.4 5.9 Z"
       />
-    </BaseIcon>
-  );
-}
-
-export function MoveCommentIcon(props: IconProps) {
-  return (
-    <BaseIcon {...props}>
-      {/* Speech bubble outline + tail */}
-      <Bar x1={3} y1={4} x2={12} y2={4} />
-      <Bar x1={12} y1={4} x2={13} y2={5} />
-      <Bar x1={13} y1={5} x2={13} y2={10} />
-      <Bar x1={13} y1={10} x2={12} y2={11} />
-      <Bar x1={12} y1={11} x2={7} y2={11} />
-      <Bar x1={7} y1={11} x2={5} y2={13} />
-      <Bar x1={5} y1={13} x2={5} y2={11} />
-      <Bar x1={5} y1={11} x2={3} y2={11} />
-      <Bar x1={3} y1={11} x2={2} y2={10} />
-      <Bar x1={2} y1={10} x2={2} y2={5} />
-      <Bar x1={2} y1={5} x2={3} y2={4} />
-      {/* Arrow pointing right */}
-      <Bar x1={14} y1={8} x2={18} y2={8} />
-      <Bar x1={16} y1={6} x2={18} y2={8} />
-      <Bar x1={18} y1={8} x2={16} y2={10} />
     </BaseIcon>
   );
 }

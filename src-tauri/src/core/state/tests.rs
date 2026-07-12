@@ -14402,6 +14402,90 @@ fn test_execute_import_sections_origin_placement() {
     );
 }
 
+/// #275: overlap-interpolation updates arrive from the collab .tml reconcile
+/// (attacker-controllable input) and must hold the same all_finite invariant
+/// as update_shot - a NaN smuggled through an ExistingShotUpdate must fail the
+/// whole import before any mutation, not poison an existing shot.
+#[test]
+fn test_execute_import_sections_rejects_non_finite_shot_update() {
+    use crate::models::ExistingShotUpdate;
+    use crate::models::ImportPlacement;
+    use crate::models::ImportSectionConfig;
+    use crate::models::ShotUpdates;
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let seed = ImportSectionConfig {
+        section_index: 0,
+        name: Some("Existing".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(5.0)],
+        station_comments: Vec::new(),
+        placement: ImportPlacement::Origin,
+    };
+    let result =
+        state.execute_import_sections(vec![seed], Vec::new(), None, Vec::new(), Vec::new());
+    assert!(result.success, "seed import failed: {:?}", result.error);
+    let project = state.get_project_state().unwrap();
+    let section_id = project.sections[0].id;
+    let shot_id = project.sections[0].shots[0].id;
+    let clean_length = project.sections[0].shots[0].length;
+
+    let poisoned = ImportSectionConfig {
+        section_index: 0,
+        name: Some("Incoming".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(3.0)],
+        station_comments: Vec::new(),
+        placement: ImportPlacement::Origin,
+    };
+    let result = state.execute_import_sections(
+        vec![poisoned],
+        Vec::new(),
+        None,
+        Vec::new(),
+        vec![ExistingShotUpdate {
+            section_id,
+            shot_id,
+            updates: ShotUpdates {
+                length: Some(f64::NAN),
+                ..Default::default()
+            },
+        }],
+    );
+    assert!(
+        !result.success,
+        "a non-finite shot update must fail the import"
+    );
+    assert!(
+        result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("non-finite"),
+        "error should name the invariant: {:?}",
+        result.error
+    );
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 1, "no new section may be created");
+    assert_eq!(
+        project.sections[0].shots[0].length, clean_length,
+        "the existing shot must be untouched"
+    );
+}
+
 #[test]
 fn test_execute_import_sections_from_importing_placement() {
     use crate::models::ImportPlacement;

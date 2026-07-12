@@ -10,8 +10,9 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
-import { useUIStore, isMapReadOnly } from '../../store/uiStore';
+import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
+import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { SpeleoBadgedIcon, PushGlyph, RefreshGlyph, EditNoLockGlyph } from '../common/SpeleoBadgedIcon';
@@ -57,11 +58,11 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   // published while logged in).
   const speleoSession = useSpeleoStore((s) => s.session);
   const { busy: speleoBusy, startEditing, update, done } = useSpeleoActions();
-  // The read-only map (closure-adjusted view, or Plan/Export #243) rejects imports
-  // - they add sections. Disable the Import item up front (the toolbar Import
-  // button and Ctrl+I already do), so the user isn't sent through a file picker
-  // only to be rejected after choosing.
-  const mapReadOnly = useUIStore(isMapReadOnly);
+  // The read-only map (closure-adjusted view, Plan/Export #243, or a locked
+  // remote SpeleoDB project) rejects imports - they add sections. Disable the
+  // Import item up front (the toolbar Import button and Ctrl+I already do), so
+  // the user isn't sent through a file picker only to be rejected after choosing.
+  const editingBlocked = useEditingBlocked();
 
   return useMemo(() => {
     const sz = 18;
@@ -240,7 +241,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         label: t('globalView.actions.import'),
         icon: <DownloadIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.import,
-        disabled: mapReadOnly,
+        disabled: editingBlocked,
         submenu: [
           // DMP-only filter (dmpImportFilters, no "All Files"): with a project
           // open, an unrelated file — notably a `.stalx` — must NOT be pickable
@@ -296,5 +297,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showDevStats, toggleDisplay, mapReadOnly, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoBusy, startEditing, update, done]);
+  }, [t, openDialog, showDevStats, toggleDisplay, editingBlocked, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoBusy, startEditing, update, done]);
 }

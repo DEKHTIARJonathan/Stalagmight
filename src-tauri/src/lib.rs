@@ -1252,9 +1252,7 @@ pub fn run() {
             commands::dive_plan::save_dive_plan,
             commands::dive_plan::delete_dive_plan,
             // Project commands
-            commands::project::create_project,
             commands::project::update_project_settings,
-            commands::project::open_project,
             commands::project::save_project,
             commands::project::close_project,
             commands::project::get_project_state,
@@ -1316,11 +1314,9 @@ pub fn run() {
             commands::section::create_section,
             commands::section::update_section,
             commands::section::delete_section,
-            commands::section::get_section,
             commands::section::move_section,
             commands::section::move_segment,
             commands::section::execute_batch,
-            commands::section::get_connected_section_ids,
             commands::section::get_rigid_connected_section_ids,
             commands::section::get_anchored_section_ids,
             commands::section::create_section_and_merge,
@@ -1381,7 +1377,6 @@ pub fn run() {
             commands::export::export_tml,
             commands::export::export_image,
             commands::export::preview_svg_export,
-            commands::export::get_depth_preset_colors,
             // Collaboration mode
             commands::collab::set_collab_enabled,
             commands::collab::set_collab_enabled_for_path,
@@ -1399,7 +1394,6 @@ pub fn run() {
             // Display settings (per-project)
             commands::config::load_display_settings,
             commands::config::save_display_setting,
-            commands::config::get_display_setting,
             // Raw table browsing (data table fullscreen)
             commands::raw_data::get_raw_table_names,
             commands::raw_data::get_raw_table,
@@ -1410,7 +1404,6 @@ pub fn run() {
             commands::validation::resolve_warning,
             commands::validation::unresolve_warning,
             // Survey geometry
-            commands::survey_geometry::get_survey_geometry,
             commands::survey_geometry::get_survey_geometry_for_file,
             // Recovery (SPEC 14.4)
             commands::recovery::attempt_repair,

@@ -1,18 +1,14 @@
 //! Survey geometry command for GPS-transformed survey data.
 //!
-//! Provides the `get_survey_geometry` command that returns shot data with
-//! GPS-transformed coordinates for map display.
-//!
-//! Also provides `get_survey_geometry_for_file` for lazy loading geometry
-//! from arbitrary project files (used by GlobalView for on-demand loading).
+//! Provides `get_survey_geometry_for_file`, which returns shot data with
+//! GPS-transformed coordinates for lazy loading geometry from arbitrary
+//! project files (used by GlobalView for on-demand loading).
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
 use ts_rs::TS;
 
-use crate::core::AppState;
 use crate::models::{GpsCoordinates, Project, SectionId, StationRef};
 use crate::persistence::Database;
 
@@ -88,33 +84,6 @@ pub fn local_to_gps(
     Ok((lng, lat)) // MapLibre order
 }
 
-/// Get survey geometry with GPS-transformed coordinates.
-///
-/// Computes shot geometry relative to the zero-datum station and transforms
-/// local coordinates to GPS for map display.
-///
-/// # Returns
-/// - `Ok(SurveyGeometry)` with shots and origin
-/// - `Err(SurveyGeometryError)` if project has no GPS reference
-#[tauri::command]
-pub async fn get_survey_geometry(
-    app_handle: tauri::AppHandle,
-) -> Result<SurveyGeometry, SurveyGeometryError> {
-    // Use spawn_blocking for UI responsiveness
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let state = app_handle.state::<AppState>();
-        get_survey_geometry_impl(state.inner())
-    })
-    .await;
-
-    match result {
-        Ok(inner) => inner,
-        Err(e) => Err(SurveyGeometryError {
-            message: format!("Internal error: {e}"),
-        }),
-    }
-}
-
 /// Get survey geometry for a specific file path without loading into AppState.
 ///
 /// This is used by GlobalView for lazy loading geometry from arbitrary projects.
@@ -159,7 +128,7 @@ fn get_survey_geometry_for_file_impl(path: &Path) -> Result<SurveyGeometry, Surv
 }
 
 /// Compute survey geometry from a project struct.
-/// Shared implementation used by both AppState-based and file-based commands.
+/// Shared implementation for the file-based command and its tests.
 fn get_survey_geometry_for_project(
     project: &Project,
 ) -> Result<SurveyGeometry, SurveyGeometryError> {
@@ -245,25 +214,10 @@ fn get_survey_geometry_for_project(
     Ok(SurveyGeometry { shots, origin })
 }
 
-/// Internal implementation for testing.
-pub(crate) fn get_survey_geometry_impl(
-    state: &AppState,
-) -> Result<SurveyGeometry, SurveyGeometryError> {
-    // Get project state
-    let project = state
-        .get_project_state()
-        .ok_or_else(|| SurveyGeometryError {
-            message: "No project loaded".to_string(),
-        })?;
-
-    get_survey_geometry_for_project(&project)
-}
-
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::core::AppState;
     use crate::models::gps_to_local;
     use crate::models::{Project, SectionData, ShotData, StationRef, ZeroDatum};
     use crate::persistence::Database;
@@ -404,14 +358,6 @@ mod tests {
         let high_lat = GpsCoordinates::new(89.0, 0.0, 0.0).unwrap();
         let result = local_to_gps(1000.0, 0.0, &high_lat);
         assert!(result.is_ok(), "89° latitude should be acceptable");
-    }
-
-    #[test]
-    fn test_get_survey_geometry_impl_requires_project() {
-        let state = AppState::new().unwrap();
-        let result = get_survey_geometry_impl(&state);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().message.contains("No project loaded"));
     }
 
     #[test]

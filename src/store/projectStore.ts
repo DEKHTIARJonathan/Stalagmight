@@ -219,11 +219,6 @@ interface ProjectStore {
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
-   * Open a project using the legacy open_project command (no progress events).
-   * @deprecated Use loadProject() instead for progress UI support.
-   */
-  openProject: (path: string) => Promise<CommandResult>;
-  /**
    * Save the project.  `isAutosave` should be set to `true` from the
    * autosave hook so the Rust side can honour
    * `CollabState.write_tml_on_autosave` and skip the sibling `.tml`
@@ -746,6 +741,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // stale shot/station/section selection from a previous project/session
         // must not carry over.
         useUIStore.getState().clearSelection();
+        // Same hazard for tool state (#275 B1): an armed move-comment pickup or
+        // merge station from the previous project would resolve against this
+        // project's ids and mutate the wrong entities on the next click.
+        // Ordering constraint: this must stay in the SUCCESS path, after the
+        // authoritative set() above committed the new project. On a failed
+        // load the old project is still displayed, so its armed tool refs are
+        // still valid and must not be cleared.
+        useUIStore.getState().resetToolTransientsForProjectSwitch();
         const tViewStart = performance.now();
         useUIStore.getState().setView('single');
         const tViewDone = performance.now();
@@ -943,6 +946,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       useUIStore.getState().applyDisplaySettings(result.displaySettings);
       // Reset the Details panel to the project-level view on open (#54).
       useUIStore.getState().clearSelection();
+      // Stale tool state must not carry into the new project either (#275 B1).
+      useUIStore.getState().resetToolTransientsForProjectSwitch();
       useUIStore.getState().setView('single');
       await get().loadRecentProjects();
       get().resetLoading();
@@ -952,50 +957,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Create failed — drop the entry-point source (no auto-reset) so it can't
       // mis-attribute a later, unrelated project command. Mirrors loadProject.
       clearProjectActionSource();
-      const error = parseLoadError(e);
-      if (get().loading.clientOpId === clientOpId) {
-        get().setLoadingError(error.message, error.details);
-      }
-      return emptyCommandResult(false, error.message);
-    }
-  },
-
-  openProject: async (path: string) => {
-    // ALWAYS cancel first - NO isLoading guard
-    await get().cancelLoading();
-
-    // Use cross-platform path splitting for project name extraction
-    const initialName = extractFilename(path, /\.stalx$/i) || 'Project';
-    const clientOpId = get().startLoading(initialName, path);
-
-    try {
-      const result = await invokeIpc<CommandResult>(
-        'open_project',
-        { path },
-        { purpose: 'open project without progress UI', fields: { path } }
-      );
-
-      // Check clientOpId hasn't changed
-      if (get().loading.clientOpId !== clientOpId) {
-        return emptyCommandResult(false, 'Cancelled');
-      }
-
-      if (result.success) {
-        await get().refreshProjectState();
-        await get().loadRecentProjects();
-        // Load display settings from the opened project
-        await useUIStore.getState().loadDisplaySettings();
-        // Fit map to show all stations
-        useUIStore.getState().triggerFitToBounds();
-        useUIStore.getState().setView('single');
-        // An opened project is backed by its on-disk database.
-        set({ isDirty: false, databaseOpen: true });
-        get().resetLoading();
-      } else {
-        get().setLoadingError(result.error ?? 'Failed to open project');
-      }
-      return result;
-    } catch (e) {
       const error = parseLoadError(e);
       if (get().loading.clientOpId === clientOpId) {
         get().setLoadingError(error.message, error.details);

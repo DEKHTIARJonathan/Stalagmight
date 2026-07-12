@@ -98,12 +98,12 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
         return { success: false, error: 'Disk full: no space left on device' };
       }
 
-      if (errorMode === 'open_corrupted' && (cmd === 'open_project' || cmd === 'load_project' || cmd === 'load_project_full')) {
+      if (errorMode === 'open_corrupted' && cmd === 'load_project_full') {
         console.log('[Mock IPC] Simulating corrupted file error');
         throw new Error('File corrupted: invalid project format');
       }
 
-      if (errorMode === 'open_not_found' && (cmd === 'open_project' || cmd === 'load_project' || cmd === 'load_project_full')) {
+      if (errorMode === 'open_not_found' && cmd === 'load_project_full') {
         console.log('[Mock IPC] Simulating file not found error');
         throw new Error('File not found: the specified file does not exist');
       }
@@ -130,25 +130,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
 
       // Normal mock handler logic
       switch (cmd) {
-        case 'create_project': {
-          const name = (args?.name as string) ?? 'Untitled Project';
-          const now = new Date().toISOString();
-          currentProject = {
-            id: 1,
-            name,
-            location: null,
-            created_at: now,
-            modified_at: now,
-            file_path: null,
-            sections: [],
-            station_merges: [],
-            zero_datums: [],
-            loop_closures: [],
-            section_offsets: {},
-          };
-          return { success: true, project: currentProject };
-        }
-
         case 'create_project_full': {
           const name = (args?.name as string) ?? 'Untitled Project';
           const now = new Date().toISOString();
@@ -230,28 +211,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               gridSpacing: 10,
             },
           };
-        }
-
-        case 'load_project':
-        case 'open_project': {
-          projectPath = (args?.path as string) ?? null;
-          if (!currentProject) {
-            const now = new Date().toISOString();
-            currentProject = {
-              id: 1,
-              name: 'Test Project',
-              location: null,
-              created_at: now,
-              modified_at: now,
-              file_path: projectPath,
-              sections: [],
-              station_merges: [],
-              zero_datums: [],
-              loop_closures: [],
-              section_offsets: {},
-            };
-          }
-          return { success: true, project: currentProject };
         }
 
         case 'save_project': {
@@ -520,7 +479,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
           return {};
 
         case 'save_display_setting':
-        case 'get_display_setting':
           return null;
 
         case 'plugin:window|set_title':
