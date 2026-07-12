@@ -42,6 +42,7 @@ mod stats;
 
 pub use gas::{CylRole, Cylinder, Diver, GasReachField, PlanMode, RouteLeg, TankMaterial, Team};
 pub use integrity::{IntegrityViolation, ViolationSeverity};
+pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).
 /// Used by the frontend to show affected relationships before section deletion.

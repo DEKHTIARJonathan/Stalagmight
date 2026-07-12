@@ -459,3 +459,76 @@ test.describe('Context Menu Coverage', () => {
     }).toEqual({ closureCount: 1, hasRemovedClosure: false });
   });
 });
+
+test.describe('Insert Station (#59)', () => {
+  test('shot menu offers Insert Station, opens the dialog, and confirms a split', async ({ page }) => {
+    const { sectionId, shotIds, sectionName } = await setupProjectWithShots(page, 3);
+    const firstShotId = shotIds[0];
+
+    await openContextMenu(page, { type: 'shot', sectionId, shotId: firstShotId });
+    const insertItem = page.getByRole('button', { name: 'Insert Station...' });
+    await expect(insertItem).toBeVisible();
+    await expect(insertItem).toBeEnabled();
+    await insertItem.click();
+
+    const dialog = page.getByTestId('insert-station-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText(sectionName);
+    // buildShot(0) yields length 6.
+    await expect(page.getByTestId('insert-station-preview')).toContainText('Total shot length: 6.00');
+
+    await page.getByTestId('insert-station-distance').fill('2.5');
+    await page.getByTestId('insert-station-confirm').click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    const call = await page.evaluate(() => {
+      const calls = ((window as any).__MOCK_SPLIT_SHOT_CALLS__ ?? []) as Array<any>;
+      return calls[calls.length - 1] ?? null;
+    });
+    expect(call).toEqual({ sectionId, shotId: firstShotId, distance: 2.5 });
+  });
+
+  test('a zero-length shot disables Insert Station', async ({ page }) => {
+    await setupMockedPage(page);
+    await createProject(page, 'Zero Length Shot');
+    await seedProjectWithSections(page, [
+      { name: 'Zero Section', direction: 'in', shots: [buildShot(0, { length: 0 })] },
+    ]);
+    await waitForMapReady(page);
+    await waitForNoDialogs(page);
+
+    const ids = await page.evaluate(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: { projectStore: { getState: () => { project: any } } };
+      }).__E2E_TEST__;
+      const section = e2e?.projectStore.getState().project?.sections?.[0];
+      return { sectionId: section?.id ?? null, shotId: section?.shots?.[0]?.id ?? null };
+    });
+    if (!ids.sectionId || !ids.shotId) {
+      throw new Error('Failed to resolve the zero-length shot');
+    }
+
+    await openContextMenu(page, { type: 'shot', sectionId: ids.sectionId, shotId: ids.shotId });
+    await expect(page.getByRole('button', { name: 'Insert Station...' })).toBeDisabled();
+  });
+
+  test('Insert Station is absent for a shot target in Plan mode', async ({ page }) => {
+    const { sectionId, shotIds } = await setupProjectWithShots(page, 3);
+
+    await page.locator('[data-testid="mode-plan"]').click();
+    await expect.poll(async () => {
+      return page.evaluate(() => (window as any).__E2E_TEST__.uiStore.getState().appMode);
+    }).toBe('plan');
+
+    await openContextMenu(page, { type: 'shot', sectionId, shotId: shotIds[0] });
+    await expect(page.getByRole('button', { name: 'Insert Station...' })).toHaveCount(0);
+  });
+
+  // Note: the data table's SpreadsheetGrid renders its own internal
+  // right-click menu (grid-context-menu), which is a live DOM row interaction
+  // rather than the synthetic openContextMenu() dialog helper used above. None
+  // of this file's helpers drive the Data dock panel, so covering that path
+  // (open the Data panel, right-click a shot row, assert "Insert Station..."
+  // in the SpreadsheetGrid's context menu) is a separate, heavier setup, not
+  // added here to keep this file's synthetic-target pattern consistent.
+});

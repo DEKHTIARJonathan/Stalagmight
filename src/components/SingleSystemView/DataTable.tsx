@@ -24,6 +24,7 @@ import { buildStationColumns } from './dataTableStationColumns';
 import RawTableView from './RawTableView';
 import { DetailLink } from '../common/DetailLink';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
+import { canSplitShot } from '../../utils/shotSplit';
 import {
   type RowEntry,
   type ShotDraft,
@@ -985,19 +986,53 @@ export default function DataTable({ sections }: DataTableProps) {
 
   // "Remove draft row" appears when the selection covers draft rows only —
   // discarding a draft never asks for confirmation (nothing is stored yet).
+  // "Insert Station..." appears for a single selected real shot row long
+  // enough to split (#59) - the data table's live equivalent of the map
+  // ContextMenu's shot-menu item; kept as the same literal (untranslated)
+  // label so the two entry points read identically.
   const shotExtraMenuItems = useCallback(
     ({ fromRow, toRow }: { fromRow: number; toRow: number }) => {
       if (editingBlocked) return [];
       const entries = rowEntries.slice(fromRow, toRow + 1);
-      if (entries.length === 0 || entries.some((e) => e.kind !== 'draft')) return [];
-      return [
-        {
-          label: t('dataTable.removeDraft', { count: entries.length }),
-          onClick: () => discardDraftRows(fromRow, toRow),
-        },
-      ];
+      if (entries.length === 0) return [];
+
+      if (entries.every((e) => e.kind === 'draft')) {
+        return [
+          {
+            label: t('dataTable.removeDraft', { count: entries.length }),
+            onClick: () => discardDraftRows(fromRow, toRow),
+          },
+        ];
+      }
+
+      const only = entries.length === 1 ? entries[0] : undefined;
+      if (
+        selectedSection &&
+        only?.kind === 'shot' &&
+        canSplitShot(only.shot.length)
+      ) {
+        const { shot } = only;
+        const sectionId = selectedSection.id;
+        const sectionName = selectedSection.name ?? t('sections.defaultName', { id: sectionId });
+        return [
+          {
+            label: 'Insert Station...',
+            onClick: () => {
+              setSource('data-table');
+              openDialog('insert-station', {
+                sectionId,
+                shotId: shot.id,
+                shotLength: shot.length,
+                sectionName,
+              });
+            },
+          },
+        ];
+      }
+
+      return [];
     },
-    [rowEntries, editingBlocked, t, discardDraftRows]
+    [rowEntries, editingBlocked, selectedSection, t, discardDraftRows, openDialog]
   );
 
   // Surface partially-applied pastes (only the non-zero parts).

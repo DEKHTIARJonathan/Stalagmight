@@ -7,6 +7,7 @@ import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import type { StationRef, SectionId, ShotId } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
+import { canSplitShot } from '../../utils/shotSplit';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MenuRow, MenuSeparator } from './MenuRow';
@@ -293,6 +294,18 @@ export default function ContextMenu() {
           },
         },
         {
+          label: 'Insert Station...',
+          action: () => {
+            openDialog('insert-station', {
+              sectionId: target.sectionId,
+              shotId: target.shotId,
+              shotLength: sourceShot?.length ?? 0,
+              sectionName: section?.name ?? `Section ${target.sectionId}`,
+            });
+          },
+          disabled: !sourceShot || !canSplitShot(sourceShot.length),
+        },
+        {
           label: shot?.is_reference ? 'Mark as Permanent' : 'Mark as Jump/Reference',
           action: async () => {
             trackContextMenuAction('toggle-reference', 'context-menu');
@@ -501,6 +514,8 @@ export default function ContextMenu() {
         return <EntityEditSymbol entity="shot" size={18} />;
       case 'Edit Section':
         return <EntityEditSymbol entity="section" size={18} />;
+      case 'Insert Station...':
+        return <EntityAddSymbol entity="station" size={18} />;
       case 'Merge With...':
         return <ToolGlyph tool="merge" size={16} />;
       case 'Unmerge Stations':

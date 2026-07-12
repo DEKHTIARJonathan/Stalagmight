@@ -151,6 +151,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_take_remote",
     "command.speleodb_unlink",
     "command.speleodb_update",
+    "command.split_shot_at_distance",
     "command.suggest_all_import_placements",
     "command.suggest_import_placement",
     "command.suggest_orphan_placements",
@@ -228,6 +229,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.gpx-selection",
     "action.dialog.held-lock-resume",
     "action.dialog.import",
+    "action.dialog.insert-station",
     "action.dialog.keyboard-shortcuts",
     "action.dialog.merge",
     "action.dialog.merge-projects",
@@ -289,6 +291,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.gpx-selection",
     "dialog-cancel.held-lock-resume",
     "dialog-cancel.import",
+    "dialog-cancel.insert-station",
     "dialog-cancel.keyboard-shortcuts",
     "dialog-cancel.merge",
     "dialog-cancel.merge-projects",
@@ -339,6 +342,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "undo-after.set_shot_reference",
     "undo-after.set_station_comment",
     "undo-after.set_zero_datum",
+    "undo-after.split_shot_at_distance",
     "undo-after.unmerge_station_pair",
     "undo-after.unmerge_stations",
     "undo-after.update_section",
@@ -376,6 +380,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.gpx-selection",
     "dwell.dialog.held-lock-resume",
     "dwell.dialog.import",
+    "dwell.dialog.insert-station",
     "dwell.dialog.keyboard-shortcuts",
     "dwell.dialog.merge",
     "dwell.dialog.merge-projects",
@@ -514,6 +519,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.gpx-selection",
     "active-dwell.dialog.held-lock-resume",
     "active-dwell.dialog.import",
+    "active-dwell.dialog.insert-station",
     "active-dwell.dialog.keyboard-shortcuts",
     "active-dwell.dialog.merge",
     "active-dwell.dialog.merge-projects",
@@ -861,7 +867,11 @@ mod tests {
         //   - 1 retired dead command (#275, superseded by load_project_full,
         //       zero frontend invokers left after the #275 batch removed the
         //       last caller): command.open_project removed = 648.
-        assert_eq!(EVENT_NAMES.len(), 648);
+        //   + 6 insert-station split-shot events (#59):
+        //       command.split_shot_at_distance, undo-after.split_shot_at_distance,
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .insert-station = 654.
+        assert_eq!(EVENT_NAMES.len(), 654);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
