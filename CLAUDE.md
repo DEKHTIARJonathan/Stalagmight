@@ -62,7 +62,8 @@ All must pass before pushing:
 ```bash
 pnpm tsc --noEmit
 pnpm test:ui
-pnpm lint:rust-file-size                                  # file-size ratchet (CI check-job gate)
+pnpm lint:rust-file-size                                  # Rust file-size ratchet (CI check-job gate)
+pnpm lint:ts-file-size                                     # TS file-size ratchet (CI check-job gate)
 pnpm lint:private-leaks                                   # no internal/personal refs in the public tree (CI leak-scan gate)
 pnpm lint:readonly-gates:test && pnpm lint:readonly-gates # read-only gating tripwire (CI check-job gate)
 cargo fmt --manifest-path src-tauri/Cargo.toml --check   # exactly what CI's check job runs (run without --check to fix)

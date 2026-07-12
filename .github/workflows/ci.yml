@@ -135,6 +135,13 @@ jobs:
         run: |
           pnpm lint:rust-file-size:test
           pnpm lint:rust-file-size
+      # TS file-size ratchet (#275): same policy, ported to src/**/*.{ts,tsx}.
+      # Pure-Node, no deps; sub-second. The fixture test pins the comment/string/
+      # template strip heuristic.
+      - name: TS file-size ratchet
+        run: |
+          pnpm lint:ts-file-size:test
+          pnpm lint:ts-file-size
       # Canonical read-only gating tripwire (#275): blocks a new raw
       # `geometryMode === 'closureAdjusted'` mutation gate (wrong whenever
       # appMode !== 'survey') or a new isMapReadOnly call site missing the
