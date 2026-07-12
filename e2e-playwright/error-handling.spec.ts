@@ -130,7 +130,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
 
       // Normal mock handler logic
       switch (cmd) {
-
         case 'create_project_full': {
           const name = (args?.name as string) ?? 'Untitled Project';
           const now = new Date().toISOString();

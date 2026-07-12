@@ -509,7 +509,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         }
 
         switch (cmd) {
-
           case 'update_project_settings': {
             // Per-project settings (#57): name + validation thresholds.
             if (currentProject) {

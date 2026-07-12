@@ -219,10 +219,6 @@ interface ProjectStore {
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
-   * Open a project using the legacy open_project command (no progress events).
-   * @deprecated Use loadProject() instead for progress UI support.
-   */
-  /**
    * Save the project.  `isAutosave` should be set to `true` from the
    * autosave hook so the Rust side can honour
    * `CollabState.write_tml_on_autosave` and skip the sibling `.tml`
