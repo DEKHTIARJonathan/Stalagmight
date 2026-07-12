@@ -214,15 +214,21 @@ export function DialogWrapper({
     if (!el) return;
 
     const rafId = requestAnimationFrame(() => {
-      // If focus already landed on a specific control inside the dialog before
-      // this frame (a fast click/tab, or a component test typing right after
-      // render), keep it - only the container-level default focus set by the
-      // mount layout effect above gets upgraded by the heuristic. Without this
-      // guard the rAF yanks focus mid-interaction: under jsdom's ~16ms rAF it
-      // fired in the middle of a userEvent.type() and the keystrokes went to
-      // the stolen-focus target (#289, the SectionAdjustDialog flake).
+      // If focus already landed on a specific element inside the dialog before
+      // this frame (a fast click/tab, a child's own deliberate focus effect,
+      // or a component test typing right after render), keep it - only the
+      // container-level default focus set by the mount layout effect above
+      // gets upgraded by the heuristic. Checked against the OUTER container
+      // (dialogRef, the element that layout effect focuses) so the
+      // dirty-confirm alertdialog - a sibling of the content panel - is
+      // protected too; the identity exclusion is what still lets that default
+      // container focus be upgraded. Without this guard the rAF yanked focus
+      // mid-interaction: under jsdom's ~16ms rAF it fired in the middle of a
+      // userEvent.type() and the keystrokes went to the stolen-focus target
+      // (#289, the SectionAdjustDialog flake).
+      const outer = dialogRef.current;
       const active = document.activeElement;
-      if (active instanceof HTMLElement && active !== el && el.contains(active)) {
+      if (outer && active instanceof HTMLElement && active !== outer && outer.contains(active)) {
         return;
       }
 

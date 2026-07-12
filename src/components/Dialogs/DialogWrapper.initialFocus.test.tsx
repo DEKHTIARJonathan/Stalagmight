@@ -14,7 +14,7 @@
  * button - which is exactly what the pre-fix focus steal looked like.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 import { DialogWrapper } from './DialogWrapper';
 
@@ -56,15 +56,41 @@ describe('DialogWrapper initial-focus rAF (#289)', () => {
 
   it('still places initial focus when only the container default is focused', () => {
     renderDialog();
-    // The mount layout effect focused the outer dialog container; no user
-    // focus happened before the first frame.
-    expect(document.activeElement?.getAttribute('data-testid')).not.toBe('second-input');
+    // The mount layout effect focused the outer dialog container (the parent
+    // of the role="dialog" content panel); no user focus happened before the
+    // first frame.
+    const outer = screen.getByRole('dialog').parentElement as HTMLElement;
+    expect(outer).toHaveFocus();
 
     rafCallbacks.forEach((cb) => cb(0));
 
-    // The heuristic ran: in jsdom every visibility-checked candidate fails
-    // getClientRects(), so it lands on the Priority 5 close button. The exact
-    // target matters less than that focus moved off the container at all.
-    expect(document.activeElement?.getAttribute('aria-label')).toBe('Close dialog');
+    // The invariant: the heuristic ran and upgraded the container-level
+    // default to some element inside the dialog. (Which element is an
+    // environment detail - jsdom's empty getClientRects() fails every
+    // visibility-checked candidate, so it happens to be the Priority 5 close
+    // button here - so assert the movement, not the target.)
+    expect(outer).not.toHaveFocus();
+    expect(outer.contains(document.activeElement)).toBe(true);
+  });
+
+  it('does not steal focus from the dirty-confirm alertdialog (a content-panel sibling)', () => {
+    render(
+      <DialogWrapper title="Focus test" onClose={() => {}} isDirty>
+        <input data-testid="first-input" />
+      </DialogWrapper>,
+    );
+    // A close attempt on a dirty dialog opens the confirm overlay, whose
+    // layout effect focuses the alertdialog wrapper - a SIBLING of the
+    // content panel, not a descendant of it.
+    fireEvent.click(screen.getByLabelText('Close dialog'));
+    const alertWrapper = screen.getByRole('alertdialog').parentElement as HTMLElement;
+    expect(alertWrapper).toHaveFocus();
+
+    rafCallbacks.forEach((cb) => cb(0)); // the main dialog's mount rAF fires late
+
+    // Guarding on the inner content panel alone would miss this: the
+    // heuristic would run against the (inert) main content and pull focus
+    // out of the confirm overlay.
+    expect(alertWrapper).toHaveFocus();
   });
 });
