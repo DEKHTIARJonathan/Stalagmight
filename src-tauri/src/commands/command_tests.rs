@@ -131,6 +131,13 @@ fn get_section(
     project.get_section(section_id).cloned()
 }
 
+/// Test helper; replaces the retired open_project IPC command (#275). Calls
+/// the internal Command::OpenProject path the command wrapped, preserving
+/// exact opening semantics (recent-projects update, undo/redo restore, etc).
+fn open_project(state: State<'_, AppState>, path: PathBuf) -> CommandResult {
+    state.execute(Command::OpenProject { path })
+}
+
 fn set_project_for_tests(app: &tauri::App<MockRuntime>, project: Project) {
     state(app).inner().set_project_for_tests(project);
 }
@@ -721,7 +728,7 @@ fn test_save_project_fails_when_no_project() {
 #[test]
 fn test_open_project_fails_when_missing() {
     let app = app_with_state();
-    let result = project::open_project(state(&app), PathBuf::from("/tmp/missing.stalx"));
+    let result = open_project(state(&app), PathBuf::from("/tmp/missing.stalx"));
     assert_failure_contains(&result, "File not found");
 }
 
@@ -748,7 +755,7 @@ fn test_open_project_loads_saved_project() {
         let saved_path = save_project_to_temp(&app, &dir);
 
         let app2 = app_with_state();
-        let result = project::open_project(state(&app2), saved_path);
+        let result = open_project(state(&app2), saved_path);
         assert_success(&result);
         let project_state = project::get_project_state(state(&app2)).expect("project state");
         assert_eq!(project_state.project.name, "Test Cave");
@@ -793,7 +800,7 @@ fn test_project_lifecycle_persists_undo_and_state() {
         std::thread::sleep(std::time::Duration::from_millis(200));
 
         assert_success(&project::close_project(state(&app), None));
-        let open_result = project::open_project(state(&app), saved_path);
+        let open_result = open_project(state(&app), saved_path);
         assert_success(&open_result);
 
         let project_state = project::get_project_state(state(&app)).expect("project state");
@@ -891,7 +898,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
         db.save_project(&project).unwrap();
         drop(db);
 
-        let result = project::open_project(state(&app), project_path.clone());
+        let result = open_project(state(&app), project_path.clone());
         assert_success(&result);
 
         let cfg = config::get_config(state(&app));
@@ -949,7 +956,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
         db.save_project(&project).unwrap();
         drop(db);
 
-        let result = project::open_project(state(&app), project_path.clone());
+        let result = open_project(state(&app), project_path.clone());
         assert_success(&result);
 
         let cfg = config::get_config(state(&app));
@@ -993,9 +1000,9 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
                 db.save_project(&project).unwrap();
             }
 
-            assert_success(&project::open_project(state(&app), path_a));
-            assert_success(&project::open_project(state(&app), path_b.clone()));
-            assert_success(&project::open_project(state(&app), path_c.clone()));
+            assert_success(&open_project(state(&app), path_a));
+            assert_success(&open_project(state(&app), path_b.clone()));
+            assert_success(&open_project(state(&app), path_c.clone()));
 
             let cfg = config::get_config(state(&app));
             assert_eq!(
@@ -1003,7 +1010,7 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
                 vec![path_c.clone(), path_b.clone()]
             );
 
-            assert_success(&project::open_project(state(&app), path_b.clone()));
+            assert_success(&open_project(state(&app), path_b.clone()));
             let cfg = config::get_config(state(&app));
             assert_eq!(cfg.general.recent_projects, vec![path_b, path_c]);
         });
@@ -1020,7 +1027,7 @@ fn test_save_project_persists_sections() {
         let saved_path = save_project_to_temp(&app, &dir);
 
         let app2 = app_with_state();
-        let _ = project::open_project(state(&app2), saved_path);
+        let _ = open_project(state(&app2), saved_path);
         let project_state = project::get_project_state(state(&app2)).expect("project state");
         assert_eq!(project_state.project.sections.len(), 1);
     });

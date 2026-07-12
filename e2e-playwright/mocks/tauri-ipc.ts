@@ -1027,28 +1027,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return Array.from(bytes);
           }
 
-          case 'load_project':
-          case 'open_project': {
-            projectPath = (args?.path as string) ?? null;
-            if (!currentProject) {
-              const now = new Date().toISOString();
-              currentProject = {
-                id: 1,
-                name: 'Test Project',
-                location: null,
-                created_at: now,
-                modified_at: now,
-                file_path: projectPath,
-                sections: [],
-                station_merges: [],
-                zero_datums: [],
-                loop_closures: [],
-                section_offsets: {},
-              };
-            }
-            return { success: true, project: currentProject };
-          }
-
           case 'save_project': {
             projectPath = (args?.path as string) ?? projectPath;
             if (currentProject && projectPath) {

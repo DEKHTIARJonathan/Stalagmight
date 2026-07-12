@@ -1253,7 +1253,6 @@ pub fn run() {
             commands::dive_plan::delete_dive_plan,
             // Project commands
             commands::project::update_project_settings,
-            commands::project::open_project,
             commands::project::save_project,
             commands::project::close_project,
             commands::project::get_project_state,

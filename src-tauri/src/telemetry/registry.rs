@@ -98,7 +98,6 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.move_section",
     "command.move_segment",
     "command.move_station",
-    "command.open_project",
     "command.parse_gpx",
     "command.parse_tml",
     "command.preview_delete_shot",
@@ -859,7 +858,10 @@ mod tests {
         //   - 5 retired dead commands (#275, no frontend caller): command.
         //       {create_project, get_connected_section_ids, get_display_setting,
         //       get_section, get_survey_geometry} removed = 649.
-        assert_eq!(EVENT_NAMES.len(), 649);
+        //   - 1 retired dead command (#275, superseded by load_project_full,
+        //       zero frontend invokers left after the #275 batch removed the
+        //       last caller): command.open_project removed = 648.
+        assert_eq!(EVENT_NAMES.len(), 648);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

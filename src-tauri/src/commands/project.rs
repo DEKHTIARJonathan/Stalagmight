@@ -20,16 +20,6 @@ pub fn update_project_settings(
     state.update_project_settings(name, validation)
 }
 
-/// Open an existing project
-#[tauri::command]
-pub fn open_project(state: State<AppState>, path: PathBuf) -> CommandResult {
-    open_project_impl(state.inner(), path)
-}
-
-pub(crate) fn open_project_impl(state: &AppState, path: PathBuf) -> CommandResult {
-    state.execute(Command::OpenProject { path })
-}
-
 /// Save the current project.
 ///
 /// `is_autosave` is honoured by the collab-sibling write path: when
