@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useRef } from 'react';
-import { useUIStore, isMapReadOnly } from '../store/uiStore';
+import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
+import { isEditingBlockedNow } from './useEditingBlocked';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
@@ -420,10 +421,10 @@ export function useKeyboardShortcuts() {
           event.preventDefault();
           return;
         }
-        // GUARD: read-only — no deletes in the closure-adjusted view OR in Plan/Export
+        // GUARD: read-only - no deletes in the closure-adjusted view, in Plan/Export
         // (which can fall back to geometryMode 'measured' on a no-closures project, so
-        // the appMode check is load-bearing).
-        if (isMapReadOnly(useUIStore.getState())) return;
+        // the appMode check is load-bearing), or on a locked remote SpeleoDB project.
+        if (isEditingBlockedNow()) return;
         // GUARD: No delete for pan/zoom tools
         const currentToolDel = useUIStore.getState().activeTool;
         if (isNonInteractiveTool(currentToolDel)) return;

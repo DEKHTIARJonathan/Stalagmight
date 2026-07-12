@@ -12,8 +12,9 @@
  * - `.dmp`              -> DMP import (add to current project, or new project)
  * - anything else       -> unsupported-file error (NOT silently treated as DMP)
  *
- * Importing into an open project while the read-only closure-adjusted view is
- * active is rejected here, so every import entry point shares that guard.
+ * Importing into an open project while editing is blocked (the closure-adjusted
+ * view, the Plan/Export workspaces, or a SpeleoDB project held without the
+ * write lock) is rejected here, so every import entry point shares that guard.
  *
  * The routing is intentionally shared between the toolbar "Open / Import"
  * button, the "open it from file" hint link, and the Ctrl+I keyboard shortcut
@@ -22,7 +23,9 @@
  */
 import { open } from '@tauri-apps/plugin-dialog';
 import { useProjectStore } from '../store/projectStore';
-import { useUIStore, isMapReadOnly } from '../store/uiStore';
+import { useUIStore } from '../store/uiStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
+import { isEditingBlockedNow } from '../hooks/useEditingBlocked';
 import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openOrImportFilters, IMPORTABLE_EXTENSIONS } from './fileDialogs';
@@ -67,21 +70,35 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
 
   try {
     // Importing into an open project adds sections (a mutation). The read-only map
-    // (#70 closure-adjusted view, or #243 Plan/Export) rejects an import while
-    // active. Centralized here so every caller (toolbar, Ctrl+I, drag-drop) shares
-    // it. Scoped to recognized importable files so an unsupported/unknown extension
-    // still falls through to the accurate "Unsupported file type" error below
-    // (opening a native .stalx project is not an import, so it's exempt too).
-    if (isImportable && hasProject && isMapReadOnly(ui)) {
-      // Tailor the fix-it advice to the active read-only cause: a Plan/Export user
-      // must return to Survey; the closure-adjusted survey user switches the view.
-      ui.openDialog('error', {
-        title: 'Import',
-        message:
-          ui.appMode !== 'survey'
-            ? 'Switch to Survey mode to import — the Plan and Export workspaces are read-only.'
-            : 'Switch to the Measured view to import — the closure-adjusted view is read-only.',
-      });
+    // (#70 closure-adjusted view, #243 Plan/Export, or a locked remote SpeleoDB
+    // project) rejects an import while active. Centralized here so every caller
+    // (toolbar, Ctrl+I, drag-drop) shares it. Scoped to recognized importable
+    // files so an unsupported/unknown extension still falls through to the
+    // accurate "Unsupported file type" error below (opening a native .stalx
+    // project is not an import, so it's exempt too).
+    if (isImportable && hasProject && isEditingBlockedNow()) {
+      // Tailor the fix-it advice to the active read-only cause(s) - read the
+      // individual flags separately (isEditingBlockedNow() reports only the
+      // combined boolean, and isMapReadOnly folds the closure-adjusted and
+      // Plan/Export causes into one) so a compound state (e.g. a
+      // locked remote project also viewed in Plan mode) mentions BOTH causes
+      // instead of silently dropping the SpeleoDB lock from the message.
+      const speleoReadOnly = selectSpeleoReadOnly(useSpeleoStore.getState());
+      const nonSurveyMode = ui.appMode !== 'survey';
+      const closureAdjusted = ui.geometryMode === 'closureAdjusted';
+      let message: string;
+      if (speleoReadOnly && nonSurveyMode) {
+        message = 'Switch to Survey mode and acquire the SpeleoDB write lock to import.';
+      } else if (speleoReadOnly && closureAdjusted) {
+        message = 'Switch to the Measured view and acquire the SpeleoDB write lock to import.';
+      } else if (speleoReadOnly) {
+        message = 'Acquire the SpeleoDB write lock to import.';
+      } else if (nonSurveyMode) {
+        message = 'Switch to Survey mode to import - the Plan and Export workspaces are read-only.';
+      } else {
+        message = 'Switch to the Measured view to import - the closure-adjusted view is read-only.';
+      }
+      ui.openDialog('error', { title: 'Import', message });
       return;
     }
 

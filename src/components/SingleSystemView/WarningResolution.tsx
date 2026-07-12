@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { Button } from '../common/Button';
 import { ChevronLeftIcon, CenterMapIcon } from '../common/icons';
 import { formatFixed } from '../../i18n/format';
@@ -279,7 +280,7 @@ export function WarningResolution({
       triggerZoomToShot: s.triggerZoomToShot,
     })),
   );
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const editingBlocked = useEditingBlocked();
   // "Ignore" persists to the project database immediately; a never-saved project
   // (deferred initial save) reserves file_path but has no open database yet, so the
   // suppression can't be stored. Gate Ignore on the database actually being open,
@@ -288,7 +289,7 @@ export function WarningResolution({
   const activeStations = useActiveStations();
 
   const frozen = isShotFrozen(warning.sectionId, warning.shotIndex);
-  const geometryDisabled = geometryReadOnly || frozen;
+  const geometryDisabled = editingBlocked || frozen;
 
   const [selected, setSelected] = useState<string>('');
   const [busy, setBusy] = useState(false);
@@ -384,9 +385,9 @@ export function WarningResolution({
         ];
       case 'NEGATIVE_LRUD':
         return [
-          { id: 'lrud-abs', label: t('detailPanel.warnings.resolveOptions.useAbs'), disabled: geometryReadOnly },
-          { id: 'lrud-clear', label: t('detailPanel.warnings.resolveOptions.clear'), disabled: geometryReadOnly },
-          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: 'lrud', disabled: geometryReadOnly },
+          { id: 'lrud-abs', label: t('detailPanel.warnings.resolveOptions.useAbs'), disabled: editingBlocked },
+          { id: 'lrud-clear', label: t('detailPanel.warnings.resolveOptions.clear'), disabled: editingBlocked },
+          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: 'lrud', disabled: editingBlocked },
           ...maybeIgnore,
         ];
       case 'LENGTH_BELOW_DEPTH_CHANGE': {
@@ -442,7 +443,7 @@ export function WarningResolution({
         const keepOptions: ResolutionOption[] = refs.map((r, i) => ({
           id: `keep-datum-${i}`,
           label: t('detailPanel.warnings.resolveOptions.keepDatum', { station: `${r.section_id}:${r.station_index}` }),
-          disabled: geometryReadOnly || refs.length < 2,
+          disabled: editingBlocked || refs.length < 2,
         }));
         return [
           ...keepOptions,
@@ -452,7 +453,7 @@ export function WarningResolution({
       default:
         return maybeIgnore;
     }
-  }, [warning.code, warning.severity, warning.datumStationIndex, warning.datumRefs, shot, geometryDisabled, geometryReadOnly, projectSaved, t, precision]);
+  }, [warning.code, warning.severity, warning.datumStationIndex, warning.datumRefs, shot, geometryDisabled, editingBlocked, projectSaved, t, precision]);
 
   // Default selection: prefer "Average" (the safe azimuth fix) when offered,
   // else the first enabled option (falls back to Ignore when every fix is

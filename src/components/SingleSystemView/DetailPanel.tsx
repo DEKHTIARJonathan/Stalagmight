@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type Selection } from '../../store/uiStore';
+import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
@@ -621,8 +622,9 @@ function StationDetail({ station }: { station: Station }) {
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnStation: s.triggerCenterOnStation, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredShot: s.setHoveredShot, setHoveredSectionId: s.setHoveredSectionId }))
   );
   const precision = useDecimalPrecision();
-  // Closure-adjusted view is read-only: disable mutation controls (edits happen in measured view).
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  // Closure-adjusted view, Plan/Export mode, and a locked remote SpeleoDB project are
+  // all read-only: disable mutation controls (edits happen in the measured survey view).
+  const editingBlocked = useEditingBlocked();
   const distanceGradientOrigin = useUIStore((s) => s.distanceGradientOrigin);
   const showDistanceGradient = useUIStore((s) => s.showDistanceGradient);
   // Show the active geometry's coordinates so inspection matches the map; falls
@@ -838,7 +840,7 @@ function StationDetail({ station }: { station: Station }) {
                       title="Unmerge Stations"
                       aria-label={`Unmerge station ${formatStationId(ref.section_id, ref.station_index)}`}
                       data-testid={`detail-unmerge-${ref.section_id}-${ref.station_index}`}
-                      disabled={geometryReadOnly || unmergeTargetKey === `${ref.section_id}:${ref.station_index}`}
+                      disabled={editingBlocked || unmergeTargetKey === `${ref.section_id}:${ref.station_index}`}
                     >
                       <LinkOffIcon size={14} />
                     </button>
@@ -919,7 +921,7 @@ function StationDetail({ station }: { station: Station }) {
       </Panel>
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" className="w-full" onClick={handleEdit} disabled={geometryReadOnly}>
+        <Button size="sm" className="w-full" onClick={handleEdit} disabled={editingBlocked}>
           {t('common.actions.edit')}
         </Button>
       </div>
@@ -942,7 +944,7 @@ function computeInclination(depthIn: number, depthOut: number, length: number): 
 function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
   const { t } = useTranslation();
   const { setShotReference } = useProjectStore();
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const editingBlocked = useEditingBlocked();
   const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnShot: s.triggerCenterOnShot, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredSectionId: s.setHoveredSectionId }))
   );
@@ -1140,10 +1142,10 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
       </Panel>
 
       <div className="p-3 border-t border-border space-y-2">
-        <Button size="sm" className="w-full" onClick={handleToggleReference} disabled={geometryReadOnly}>
+        <Button size="sm" className="w-full" onClick={handleToggleReference} disabled={editingBlocked}>
           {shot.is_reference ? t('detailPanel.shot.markPermanent') : t('detailPanel.shot.markReference')}
         </Button>
-        <Button size="sm" variant="danger" className="w-full" onClick={handleDelete} disabled={geometryReadOnly}>
+        <Button size="sm" variant="danger" className="w-full" onClick={handleDelete} disabled={editingBlocked}>
           {t('common.actions.delete')}
         </Button>
       </div>
@@ -1159,7 +1161,7 @@ interface SectionDetailProps {
 
 function SectionDetail({ section, stations, totalProjectLength }: SectionDetailProps) {
   const { t } = useTranslation();
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const editingBlocked = useEditingBlocked();
   const { openDialog, setSelection, triggerZoomToSection, announceSelection, setHoveredStation } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerZoomToSection: s.triggerZoomToSection, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation }))
   );
@@ -1367,7 +1369,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
       </Panel>
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" className="w-full" onClick={handleEditSection} disabled={geometryReadOnly}>
+        <Button size="sm" className="w-full" onClick={handleEditSection} disabled={editingBlocked}>
           {t('detailPanel.section.edit')}
         </Button>
       </div>
@@ -1543,7 +1545,7 @@ function ClosuresSection({
 }: ClosuresSectionProps) {
   const { t } = useTranslation();
   const removeLoopClosure = useProjectStore((s) => s.removeLoopClosure);
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const editingBlocked = useEditingBlocked();
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
   const [removingClosureId, setRemovingClosureId] = useState<bigint | null>(null);
@@ -1700,7 +1702,7 @@ function ClosuresSection({
                     title="Remove Closure"
                     aria-label={`Remove closure ${closureIdLabel}`}
                     data-testid={`detail-remove-closure-${closureIdLabel}`}
-                    disabled={geometryReadOnly || !closure || removingClosureId === closureId}
+                    disabled={editingBlocked || !closure || removingClosureId === closureId}
                   >
                     <LinkOffIcon size={14} />
                   </button>

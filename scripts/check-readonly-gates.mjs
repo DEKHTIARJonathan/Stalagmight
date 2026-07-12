@@ -1,0 +1,268 @@
+// Canonical read-only gating tripwire (#275).
+//
+// The correct "is the survey map read-only right now" predicate is
+// `useEditingBlocked()` / `isEditingBlockedNow()` (src/hooks/useEditingBlocked.ts):
+// `isMapReadOnly(state)` (geometryMode === 'closureAdjusted' || appMode !== 'survey')
+// composed with `selectSpeleoReadOnly` for a locked remote SpeleoDB project. Two
+// recurring bug classes keep re-appearing at individual call sites:
+//
+//   (A) a RAW `geometryMode === 'closureAdjusted'` comparison used as a mutation
+//       gate. This is wrong whenever appMode !== 'survey': Plan/Export force
+//       closureAdjusted, but that auto-reverts to 'measured' on a project with no
+//       eligible closures - so a geometryMode-only check silently reports
+//       "editable" in a workspace that must be read-only (#243 / the #225 bug
+//       class). `DataTable.tsx`, `SectionsPanel.tsx`, `WarningResolution.tsx`,
+//       `DetailPanel.tsx`, and `CollabReviewDialog.tsx` all had exactly this bug;
+//       fixed in #275.
+//
+//   (B) a call site that reaches for the raw `isMapReadOnly` / `selectSpeleoReadOnly`
+//       symbols directly instead of going through the shared `useEditingBlocked()` /
+//       `isEditingBlockedNow()` helper. The prior generation of call sites wrote the
+//       composition inline as `useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly)`,
+//       which is a Rules-of-Hooks violation: `||` short-circuits, so the second
+//       zustand hook is skipped whenever the first term is already `true`, and React
+//       throws "Rendered fewer hooks than expected" if that term flips back to
+//       `false` on a later render. Routing every call site through the shared helper
+//       (which calls both hooks unconditionally) makes the bug structurally
+//       impossible to reintroduce.
+//
+// Note: Toolbar/keyboard Undo-Redo history controls are DELIBERATELY gated on
+// `appMode` alone, not the full editing-blocked predicate - the backend toast
+// already handles a locked/read-only project rejecting an undo/redo write (see the
+// #243 comment at useKeyboardShortcuts.ts:571-574). That's out of this lint's scope
+// by design; it is not a raw closureAdjusted comparison and doesn't reference
+// isMapReadOnly/selectSpeleoReadOnly, so it never trips either rule below.
+//
+// This script is a curated allowlist, not a mechanical LOC ratchet (#157's
+// pattern) - the legitimate raw-comparison sites (display/coordinate-selection
+// logic, the isMapReadOnly definition itself, the geometry-mode radio control)
+// are enumerated by hand below, each with why it's fine. Anything beyond that
+// baseline count, in a file already on the list or a brand new file, fails the
+// gate. Rule (B) similarly allowlists direct isMapReadOnly/selectSpeleoReadOnly
+// references that are reviewed and legitimate (definitions, the helper itself,
+// and a couple of pre-existing RoH-safe call sites out of the #275 blocker scope).
+//
+// Usage:  node scripts/check-readonly-gates.mjs   (or: pnpm lint:readonly-gates)
+
+import { execFileSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+
+export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+// Rule (A): file -> EXACT allowed count of a raw `=== 'closureAdjusted'` /
+// `!== 'closureAdjusted'` comparison (either operand order, i.e. including the
+// Yoda form `'closureAdjusted' === x`). Each entry is a reviewed, legitimate
+// non-mutation usage (display/coordinate-selection, or the canonical
+// definition) - not a mutation gate that should instead compose
+// useEditingBlocked() / isEditingBlockedNow().
+// Pinned EXACT (not a ceiling): a count that drops below its baseline is just as
+// suspicious as one that grows past it - it likely means a gate got deleted
+// rather than migrated, so keep the allowlist in sync in both directions.
+export const CLOSURE_ADJUSTED_ALLOWLIST = {
+  // The geometry-mode radio control itself: this IS the setting, not a gate.
+  'src/components/SingleSystemView/DisplayMenu.tsx': 2,
+  // Adjusted-geometry data-fetch trigger, the auto-revert-to-measured logic (the
+  // very mechanism the appMode trap above exists because of), and the read-only
+  // banner display - none are mutation gates.
+  'src/components/Map/MapCanvas.tsx': 4,
+  // Guarded by an outer `appMode !== 'survey'` branch a few lines up, so the raw
+  // geometryMode check is already scoped to appMode === 'survey' - equivalent to
+  // isMapReadOnly there.
+  'src/components/common/ContextMenu.tsx': 1,
+  // Coordinate-set selection (which station/survey-data array to render), not a
+  // mutation gate.
+  'src/store/geometrySelectors.ts': 2,
+  // The canonical definition of isMapReadOnly, plus two settings-value
+  // sanitizers (validating/loading a persisted enum) - not mutation gates.
+  'src/store/uiStore.ts': 3,
+  // The import-blocked error message picks one of several strings depending on
+  // which read-only cause is active (closure-adjusted vs Plan/Export vs a
+  // locked remote project); the actual guard is isEditingBlockedNow(), this
+  // read is purely for message selection, gated behind that guard already
+  // having fired.
+  'src/utils/openOrImport.ts': 1,
+};
+
+// Rule (B): files allowed to reference the raw `isMapReadOnly` / `selectSpeleoReadOnly`
+// symbols directly instead of going through `useEditingBlocked()` / `isEditingBlockedNow()`
+// (src/hooks/useEditingBlocked.ts). Every entry needs a written reason - this is
+// meant to stay tiny. The store modules that DEFINE the two symbols, and the
+// helper module itself, are exempt unconditionally (they have no choice but to
+// reference their own exports) and are not listed here.
+export const DIRECT_READ_ONLY_ACCESS_DEFINITIONS = new Set([
+  'src/store/uiStore.ts',
+  'src/store/speleoStore.ts',
+  'src/hooks/useEditingBlocked.ts',
+]);
+
+export const DIRECT_READ_ONLY_ACCESS_EXEMPT = {
+  // Reads selectSpeleoReadOnly separately to choose which read-only cause to
+  // explain in the import-blocked dialog message; the actual guard is
+  // isEditingBlockedNow() (see CLOSURE_ADJUSTED_ALLOWLIST entry above).
+  'src/utils/openOrImport.ts':
+    'message-selection only - the guard itself is isEditingBlockedNow()',
+  // Already composes isMapReadOnly(...) with a separately-hooked speleoReadOnly
+  // without a Rules-of-Hooks violation (both terms come from unconditional hook
+  // calls, mirroring the pattern useEditingBlocked() now centralizes); out of the
+  // #275 blocker scope (isMapReadOnly is called as a plain function here, not as
+  // a hook selector, so migrating it isn't a mechanical swap).
+  'src/components/Map/MapCanvas.tsx':
+    'pre-existing RoH-safe composition, out of #275 blocker scope',
+  // Already composes a raw geometryMode comparison (see CLOSURE_ADJUSTED_ALLOWLIST
+  // above) with a separately-hooked speleoReadOnly without a Rules-of-Hooks
+  // violation; out of the #275 blocker scope.
+  'src/components/common/ContextMenu.tsx':
+    'pre-existing RoH-safe composition, out of #275 blocker scope',
+};
+
+const SRC_PREFIX = 'src/';
+const TEST_RE = /(^|\/)__tests__\/|\.test\.[cm]?[jt]sx?$/;
+const CLOSURE_ADJUSTED_RE =
+  /(===|!==)\s*['"]closureAdjusted['"]|['"]closureAdjusted['"]\s*(===|!==)/;
+const RAW_IS_MAP_READ_ONLY_RE = /\bisMapReadOnly\b/;
+const RAW_SELECT_SPELEO_READ_ONLY_RE = /\bselectSpeleoReadOnly\b/;
+
+function gitTrackedTsFiles() {
+  const out = execFileSync('git', ['ls-files', '-z', '--', 'src/*.ts', 'src/*.tsx', 'src/**/*.ts', 'src/**/*.tsx'], {
+    cwd: REPO_ROOT,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return out.toString('utf8').split('\0').filter(Boolean);
+}
+
+// Strip a trailing `//` line comment before matching, so a comment that merely
+// MENTIONS the pattern (common in this file's own docs, or explanatory code
+// comments) doesn't count as a real comparison. Tracks single/double/template
+// string state across the line so a `//` inside a string literal (e.g. a URL
+// like "http://example.com") is NOT mistaken for the start of a comment - a
+// naive `indexOf('//')` would truncate the line there and silently lose any
+// real comparison that appears later on the same line.
+export function stripLineComment(line) {
+  let inSingle = false;
+  let inDouble = false;
+  let inTemplate = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    const prev = i > 0 ? line[i - 1] : '';
+    if (inSingle) {
+      if (c === "'" && prev !== '\\') inSingle = false;
+      continue;
+    }
+    if (inDouble) {
+      if (c === '"' && prev !== '\\') inDouble = false;
+      continue;
+    }
+    if (inTemplate) {
+      if (c === '`' && prev !== '\\') inTemplate = false;
+      continue;
+    }
+    if (c === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (c === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (c === '`') {
+      inTemplate = true;
+      continue;
+    }
+    if (c === '/' && line[i + 1] === '/') {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
+// Count of raw `=== 'closureAdjusted'` / `!== 'closureAdjusted'` comparisons
+// (either operand order) in the file's code (not inside line comments).
+export function countClosureAdjustedComparisons(text) {
+  let count = 0;
+  for (const rawLine of text.split('\n')) {
+    if (CLOSURE_ADJUSTED_RE.test(stripLineComment(rawLine))) count++;
+  }
+  return count;
+}
+
+// Rule (B) boolean check: does any CODE line reference the raw symbol? Line
+// comments are stripped first (same treatment as Rule (A)) so a doc comment
+// that merely mentions isMapReadOnly/selectSpeleoReadOnly can't trip the gate.
+function anyCodeLineMatches(text, re) {
+  return text.split('\n').some((line) => re.test(stripLineComment(line)));
+}
+
+export function usesIsMapReadOnly(text) {
+  return anyCodeLineMatches(text, RAW_IS_MAP_READ_ONLY_RE);
+}
+
+export function usesSpeleoReadOnly(text) {
+  return anyCodeLineMatches(text, RAW_SELECT_SPELEO_READ_ONLY_RE);
+}
+
+function main() {
+  let files;
+  try {
+    files = gitTrackedTsFiles();
+  } catch (e) {
+    console.error(`check-readonly-gates: could not list tracked files (run from a git repo): ${e.message}`);
+    return 1;
+  }
+
+  const violationsA = [];
+  const violationsB = [];
+
+  for (const rel of files.sort()) {
+    if (!rel.startsWith(SRC_PREFIX)) continue;
+    if (TEST_RE.test(rel)) continue;
+    const full = path.join(REPO_ROOT, rel);
+    let text;
+    try {
+      text = fs.readFileSync(full, 'utf8');
+    } catch (e) {
+      console.error(`check-readonly-gates: could not read ${rel}: ${e.message}`);
+      return 1;
+    }
+
+    const count = countClosureAdjustedComparisons(text);
+    const allowed = CLOSURE_ADJUSTED_ALLOWLIST[rel] ?? 0;
+    if (count !== allowed) {
+      violationsA.push(
+        `${rel}: ${count} raw \`=== 'closureAdjusted'\` comparison(s) (allowlisted: ${allowed}, exact match required). ` +
+          `If this is a genuine mutation gate, use useEditingBlocked() (in a component) or isEditingBlockedNow() (outside React) ` +
+          `instead - see docs comment at the top of scripts/check-readonly-gates.mjs. If it is a ` +
+          `reviewed display/coordinate-selection usage, update the count in CLOSURE_ADJUSTED_ALLOWLIST there ` +
+          `(a count BELOW baseline likely means a gate was deleted rather than migrated - check before lowering it).`,
+      );
+    }
+
+    const isDirectAccessFile = usesIsMapReadOnly(text) || usesSpeleoReadOnly(text);
+    if (isDirectAccessFile && !DIRECT_READ_ONLY_ACCESS_DEFINITIONS.has(rel) && !(rel in DIRECT_READ_ONLY_ACCESS_EXEMPT)) {
+      violationsB.push(
+        `${rel}: references isMapReadOnly or selectSpeleoReadOnly directly instead of the shared ` +
+          `useEditingBlocked() / isEditingBlockedNow() helper (src/hooks/useEditingBlocked.ts). ` +
+          `Composing the two store hooks inline is a Rules-of-Hooks violation (\`||\` short-circuits the ` +
+          `second hook call). Use \`useEditingBlocked()\` in a component or \`isEditingBlockedNow()\` ` +
+          `outside React, or add the file to DIRECT_READ_ONLY_ACCESS_EXEMPT with a written reason if it ` +
+          `genuinely needs the raw symbol.`,
+      );
+    }
+  }
+
+  const violations = [...violationsA, ...violationsB];
+  if (violations.length === 0) {
+    console.log(`✓ readonly-gates: ${files.length} tracked TS/TSX files checked, no new raw closureAdjusted gates or direct isMapReadOnly/selectSpeleoReadOnly access.`);
+    return 0;
+  }
+
+  console.error(`\n✗ readonly-gates check failed - ${violations.length} issue(s):\n`);
+  for (const v of violations) console.error(`  ${v}`);
+  console.error('');
+  return 1;
+}
+
+const isMainModule =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMainModule) process.exit(main());

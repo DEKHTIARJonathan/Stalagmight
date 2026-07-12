@@ -135,6 +135,14 @@ jobs:
         run: |
           pnpm lint:rust-file-size:test
           pnpm lint:rust-file-size
+      # Canonical read-only gating tripwire (#275): blocks a new raw
+      # `geometryMode === 'closureAdjusted'` mutation gate (wrong whenever
+      # appMode !== 'survey') or a new isMapReadOnly call site missing the
+      # speleoReadOnly (locked remote SpeleoDB project) composition.
+      - name: Read-only gating tripwire
+        run: |
+          pnpm lint:readonly-gates:test
+          pnpm lint:readonly-gates
       # vitest unit + component tests (issue #107). `vitest` auto-detects CI
       # (CI=true) and runs once instead of watching.
       - run: pnpm test
