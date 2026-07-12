@@ -287,11 +287,8 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
 
   // Section-graph / relationship queries and warning-resolution: no
   // frontend caller reaches these from any mocked e2e flow today.
-  get_connected_section_ids: 'no frontend caller (only the rigid variant, get_rigid_connected_section_ids, is used)',
   get_rigid_connected_section_ids:
     'SectionAdjustDialog calls it (section-adjust-dialog.spec.ts) but no spec asserts on the derived connected count; a null response is swallowed by the dialog\'s own .catch()',
-  get_section: 'no frontend caller',
-  get_survey_geometry: 'no frontend caller (only get_survey_geometry_for_file is used)',
   export_tml:
     'export-dialog.spec.ts drives the TML export flow, but only asserts the dialog closes afterward, which happens regardless of the (missing) mock response',
   get_section_relationships:
@@ -315,7 +312,6 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
 // ----------------------------------------------------------------------------
 const STALE_MOCK_CASE_REASONS: Record<string, string> = {
   get_project: 'fallthrough alias for get_project_state (legacy command name kept for compat)',
-  load_project: 'fallthrough alias for open_project (legacy command name kept for compat)',
   get_recent_projects: 'fallthrough alias for list_recent_projects (legacy command name kept for compat)',
   get_warnings: 'fallthrough alias for get_project_warnings (legacy command name kept for compat)',
   parse_dmp: 'fallthrough alias for import_dmp (legacy command name kept for compat)',
