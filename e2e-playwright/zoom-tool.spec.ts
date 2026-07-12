@@ -51,6 +51,20 @@ async function getMapCenter(page: Page): Promise<{ lng: number; lat: number } | 
 }
 
 /**
+ * Helper to assert the zoom stays pinned at `expectedZoom` across a short
+ * settle window (~400ms, 4x100ms samples). waitForMapIdle resolves near-
+ * instantly when the map is already idle, so a single read right after it
+ * can't catch a delayed animation sneaking in; this re-samples across the
+ * window the old fixed 400ms sleep used to cover.
+ */
+async function assertZoomRemainsStable(page: Page, expectedZoom: number): Promise<void> {
+  for (const interval of [100, 100, 100, 100]) {
+    await page.waitForTimeout(interval);
+    expect(await getMapZoom(page)).toBe(expectedZoom);
+  }
+}
+
+/**
  * Helper to wait for zoom to change from a starting value.
  */
 async function waitForZoomChange(page: Page, startZoom: number, direction: 'in' | 'out'): Promise<number> {
@@ -173,6 +187,7 @@ test.describe('Zoom Tool', () => {
       // map never starts moving; waitForMapIdle just settles any pending work.
       await page.mouse.click(box!.x + box!.width / 2 + 50, box!.y + box!.height / 2 + 50);
       await waitForMapIdle(page);
+      await assertZoomRemainsStable(page, 22);
 
       const zoomAfter = await getMapZoom(page);
       const centerAfter = await getMapCenter(page);
@@ -209,6 +224,7 @@ test.describe('Zoom Tool', () => {
       // map never starts moving; waitForMapIdle just settles any pending work.
       await page.mouse.click(box!.x + box!.width / 2 + 50, box!.y + box!.height / 2 + 50, { button: 'right' });
       await waitForMapIdle(page);
+      await assertZoomRemainsStable(page, 1);
 
       const zoomAfter = await getMapZoom(page);
       const centerAfter = await getMapCenter(page);
@@ -629,6 +645,7 @@ test.describe('Zoom Tool', () => {
       // to settle; waitForMapIdle still documents the intent).
       await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2, { button: 'right' });
       await waitForMapIdle(page);
+      await assertZoomRemainsStable(page, 1);
 
       const zoomAfter = await getMapZoom(page);
       expect(zoomAfter).toBe(1);
@@ -657,6 +674,7 @@ test.describe('Zoom Tool', () => {
       // to settle; waitForMapIdle still documents the intent).
       await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
       await waitForMapIdle(page);
+      await assertZoomRemainsStable(page, 22);
 
       const zoomAfter = await getMapZoom(page);
       expect(zoomAfter).toBe(22);

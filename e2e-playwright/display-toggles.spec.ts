@@ -232,6 +232,31 @@ test.describe('Display Toggle Visibility', () => {
   });
 });
 
+test.describe('Label Toggle Click Coverage', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await createProject(page, 'Label Toggle Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
+  });
+
+  for (const toggleKey of ['showSectionNames', 'showStationLabels'] as const) {
+    test(`toggling ${toggleKey} flips aria-pressed and back`, async ({ page }) => {
+      await openDisplayMenu(page);
+
+      const initialState = await isToggleOn(page, toggleKey);
+      await toggleDisplayOption(page, toggleKey);
+      expect(await isToggleOn(page, toggleKey)).toBe(!initialState);
+
+      await toggleDisplayOption(page, toggleKey);
+      expect(await isToggleOn(page, toggleKey)).toBe(initialState);
+    });
+  }
+});
+
 test.describe('Selection Blocking When Hidden', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
