@@ -20,7 +20,21 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 import { routeOpenedFile, pickAndRoute, IMPORT_SURVEY_CLOSE_FIRST } from '../openOrImport';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { setProjectActionSource, peekProjectActionSource } from '../telemetry';
+
+const READ_ONLY_LINK: SpeleoLinkState = {
+  permission: 'READ_AND_WRITE',
+  editState: 'read-only',
+  lockHolder: 'someone-else',
+  lockedByOther: true,
+  hasUnpushedEdits: false,
+  forceEditing: false,
+  forceEditAllowed: false,
+  remoteState: 'up_to_date',
+  noAccess: false,
+  serverError: null,
+};
 
 const loadProject = vi.fn().mockResolvedValue({ success: true });
 const importDmp = vi.fn().mockResolvedValue(null);
@@ -93,6 +107,7 @@ describe('routeOpenedFile — read-only-map import guard (#243)', () => {
   // Reset the mode so a case that sets Plan/adjusted can't leak into later tests.
   afterEach(() => {
     useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
+    useSpeleoStore.setState({ link: null });
   });
 
   it('allows a DMP import in Survey + measured (the editable baseline)', async () => {
@@ -133,6 +148,38 @@ describe('routeOpenedFile — read-only-map import guard (#243)', () => {
     useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
     await routeOpenedFile('/cave/project.stalx');
     expect(loadProject).toHaveBeenCalledWith('/cave/project.stalx');
+    expect(useUIStore.getState().activeDialog).not.toBe('error');
+  });
+
+  it('blocks a DMP import on a locked remote SpeleoDB project (Survey + measured otherwise editable)', async () => {
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
+    useSpeleoStore.setState({ link: READ_ONLY_LINK });
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(importDmp).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBe('error');
+    expect(String(useUIStore.getState().dialogData.message)).toContain('SpeleoDB write lock');
+  });
+
+  // Compound read-only state (#275): a locked remote project ALSO viewed in a
+  // non-survey mode must still mention the write lock, not just "switch to Survey" -
+  // silently dropping the SpeleoDB cause from the message would leave the user
+  // stuck after switching modes with no lock acquired.
+  it('mentions the SpeleoDB write lock even when ALSO in Plan mode (compound state)', async () => {
+    useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
+    useSpeleoStore.setState({ link: READ_ONLY_LINK });
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(importDmp).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBe('error');
+    const message = String(useUIStore.getState().dialogData.message);
+    expect(message).toContain('SpeleoDB write lock');
+    expect(message).toContain('Survey mode');
+  });
+
+  it('allows a DMP import once the SpeleoDB write lock is held', async () => {
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
+    useSpeleoStore.setState({ link: { ...READ_ONLY_LINK, editState: 'editing', lockedByOther: false } });
+    await routeOpenedFile('/cave/survey.dmp');
+    expect(importDmp).toHaveBeenCalledWith('/cave/survey.dmp');
     expect(useUIStore.getState().activeDialog).not.toBe('error');
   });
 });
