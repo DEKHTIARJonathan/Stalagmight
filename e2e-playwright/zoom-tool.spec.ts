@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { waitForActiveTool } from './helpers/app';
+import { waitForActiveTool, waitForMapIdle } from './helpers/app';
 
 /**
  * Helper to wait for the MapLibre map to be ready.
@@ -163,14 +163,16 @@ test.describe('Zoom Tool', () => {
         const map = (window as unknown as { __stalagmight_map__?: { setZoom: (z: number) => void } }).__stalagmight_map__;
         map?.setZoom(22);
       });
-      await page.waitForTimeout(100);
+      await expect.poll(() => getMapZoom(page)).toBe(22);
 
       const centerBefore = await getMapCenter(page);
       expect(centerBefore).not.toBeNull();
 
-      // Left click should be ignored at max zoom (no recenter either)
+      // Left click should be ignored at max zoom (no recenter either). The
+      // handler never calls easeTo when targetZoom === currentZoom, so the
+      // map never starts moving; waitForMapIdle just settles any pending work.
       await page.mouse.click(box!.x + box!.width / 2 + 50, box!.y + box!.height / 2 + 50);
-      await page.waitForTimeout(400);
+      await waitForMapIdle(page);
 
       const zoomAfter = await getMapZoom(page);
       const centerAfter = await getMapCenter(page);
@@ -197,14 +199,16 @@ test.describe('Zoom Tool', () => {
         const map = (window as unknown as { __stalagmight_map__?: { setZoom: (z: number) => void } }).__stalagmight_map__;
         map?.setZoom(1);
       });
-      await page.waitForTimeout(100);
+      await expect.poll(() => getMapZoom(page)).toBe(1);
 
       const centerBefore = await getMapCenter(page);
       expect(centerBefore).not.toBeNull();
 
-      // Right click should be ignored at min zoom (no recenter either)
+      // Right click should be ignored at min zoom (no recenter either). The
+      // handler never calls easeTo when targetZoom === currentZoom, so the
+      // map never starts moving; waitForMapIdle just settles any pending work.
       await page.mouse.click(box!.x + box!.width / 2 + 50, box!.y + box!.height / 2 + 50, { button: 'right' });
-      await page.waitForTimeout(400);
+      await waitForMapIdle(page);
 
       const zoomAfter = await getMapZoom(page);
       const centerAfter = await getMapCenter(page);
@@ -264,14 +268,14 @@ test.describe('Zoom Tool', () => {
 
       // Press Escape to cancel
       await page.keyboard.press('Escape');
-      await page.waitForTimeout(100);
 
-      // Overlay should be gone
+      // Overlay should be gone (toBeVisible/not.toBeVisible already poll)
       await expect(overlay).not.toBeVisible();
 
-      // Release mouse
+      // Release mouse. Escape already cleared zoomBox.start, so releasing
+      // never triggers easeTo/fitBounds; wait for any pending work to settle.
       await page.mouse.up();
-      await page.waitForTimeout(400);
+      await waitForMapIdle(page);
 
       // Zoom should not have changed
       const finalZoom = await getMapZoom(page);
@@ -328,7 +332,7 @@ test.describe('Zoom Tool', () => {
 
       await page.mouse.up();
       await page.keyboard.up('Control');
-      await page.waitForTimeout(200);
+      await waitForMapIdle(page);
 
       // Zoom should not have changed
       const finalZoom = await getMapZoom(page);
@@ -369,15 +373,12 @@ test.describe('Zoom Tool', () => {
 
       // Move mouse over different parts of the canvas
       await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
-      await page.waitForTimeout(100);
 
       // Cursor should still be zoom-in (not pointer like with select tool)
-      const cursor = await page.evaluate(() => {
+      await expect.poll(() => page.evaluate(() => {
         const map = (window as unknown as { __stalagmight_map__?: { getCanvas: () => HTMLCanvasElement } }).__stalagmight_map__;
         return map?.getCanvas()?.style.cursor ?? null;
-      });
-      expect(cursor).not.toBeNull();
-      expect(cursor).toBe('zoom-in');
+      })).toBe('zoom-in');
     });
   });
 
@@ -538,8 +539,8 @@ test.describe('Zoom Tool', () => {
       // Left click to zoom in
       await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
 
-      // Wait for zoom animation to complete
-      await page.waitForTimeout(500);
+      // Wait for the easeTo zoom animation to settle
+      await waitForMapIdle(page);
 
       const newZoom = await getMapZoom(page);
       expect(newZoom).not.toBeNull();
@@ -592,8 +593,8 @@ test.describe('Zoom Tool', () => {
       // Press = to zoom in
       await page.keyboard.press('=');
 
-      // Wait for zoom animation to complete
-      await page.waitForTimeout(500);
+      // Wait for the zoomTo animation to settle
+      await waitForMapIdle(page);
 
       const newZoom = await getMapZoom(page);
       expect(newZoom).not.toBeNull();
@@ -619,14 +620,15 @@ test.describe('Zoom Tool', () => {
         const map = (window as unknown as { __stalagmight_map__?: { setZoom: (z: number) => void } }).__stalagmight_map__;
         map?.setZoom(1);
       });
-      await page.waitForTimeout(100);
+      await expect.poll(() => getMapZoom(page)).toBe(1);
 
       const zoomAtMin = await getMapZoom(page);
       expect(zoomAtMin).toBe(1);
 
-      // Right click should be ignored at min zoom
+      // Right click should be ignored at min zoom (no easeTo call, so nothing
+      // to settle; waitForMapIdle still documents the intent).
       await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2, { button: 'right' });
-      await page.waitForTimeout(400);
+      await waitForMapIdle(page);
 
       const zoomAfter = await getMapZoom(page);
       expect(zoomAfter).toBe(1);
@@ -646,14 +648,15 @@ test.describe('Zoom Tool', () => {
         const map = (window as unknown as { __stalagmight_map__?: { setZoom: (z: number) => void } }).__stalagmight_map__;
         map?.setZoom(22);
       });
-      await page.waitForTimeout(100);
+      await expect.poll(() => getMapZoom(page)).toBe(22);
 
       const zoomAtMax = await getMapZoom(page);
       expect(zoomAtMax).toBe(22);
 
-      // Left click should be ignored at max zoom
+      // Left click should be ignored at max zoom (no easeTo call, so nothing
+      // to settle; waitForMapIdle still documents the intent).
       await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
-      await page.waitForTimeout(400);
+      await waitForMapIdle(page);
 
       const zoomAfter = await getMapZoom(page);
       expect(zoomAfter).toBe(22);
@@ -725,8 +728,8 @@ test.describe('Zoom Tool', () => {
       const clickY = box!.y + box!.height / 4;
       await page.mouse.click(clickX, clickY);
 
-      // Wait for zoom animation to complete
-      await page.waitForTimeout(500);
+      // Wait for the easeTo zoom animation to settle
+      await waitForMapIdle(page);
 
       const newCenter = await getMapCenter(page);
       expect(newCenter).not.toBeNull();
