@@ -73,7 +73,6 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.get_cache_stats",
     "command.get_config",
     "command.get_connected_section_ids",
-    "command.get_depth_preset_colors",
     "command.get_display_setting",
     "command.get_network_status",
     "command.get_project_state",
@@ -860,7 +859,9 @@ mod tests {
         //       command.{list,load,save,delete}_dive_plan = 653.
         //   + 2 agent-harness observability commands:
         //       command.get_recent_logs_since + command.debug_trigger_panic = 655.
-        assert_eq!(EVENT_NAMES.len(), 655);
+        //   - 1 retired DepthPreset command (#275, no caller on either side):
+        //       command.get_depth_preset_colors removed = 654.
+        assert_eq!(EVENT_NAMES.len(), 654);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

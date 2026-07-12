@@ -1381,7 +1381,6 @@ pub fn run() {
             commands::export::export_tml,
             commands::export::export_image,
             commands::export::preview_svg_export,
-            commands::export::get_depth_preset_colors,
             // Collaboration mode
             commands::collab::set_collab_enabled,
             commands::collab::set_collab_enabled_for_path,

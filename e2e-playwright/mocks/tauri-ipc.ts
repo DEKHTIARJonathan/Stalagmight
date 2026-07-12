@@ -3354,21 +3354,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return undefined;
 
           // Export commands
-          // Depth color presets for export
-          case 'get_depth_preset_colors': {
-            const preset = args?.preset as string;
-            console.log('[Mock IPC] get_depth_preset_colors called with preset:', preset);
-            // Returns { stops: ColorStop[] } where ColorStop = { position: number; color: string }
-            const presetStops: Record<string, { stops: Array<{ position: number; color: string }> }> = {
-              thermal: { stops: [{ position: 0.0, color: '#00bfff' }, { position: 1.0, color: '#ff4444' }] },
-              ocean: { stops: [{ position: 0.0, color: '#00ffff' }, { position: 1.0, color: '#0000aa' }] },
-              terrain: { stops: [{ position: 0.0, color: '#00ff00' }, { position: 1.0, color: '#8b4513' }] },
-              grayscale: { stops: [{ position: 0.0, color: '#ffffff' }, { position: 1.0, color: '#000000' }] },
-              accessible: { stops: [{ position: 0.0, color: '#7c3aed' }, { position: 1.0, color: '#fde047' }] },
-            };
-            return presetStops[preset] ?? presetStops.thermal;
-          }
-
           case 'export_csv':
             console.log('[Mock IPC] export_csv called with:', args);
             return { success: true, path: args?.path };

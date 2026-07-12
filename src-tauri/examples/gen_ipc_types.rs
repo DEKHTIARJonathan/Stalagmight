@@ -36,7 +36,7 @@ use stalagmight_lib::core::reconcile::{
     MatchQuality, RemovedShot, SectionMetaChange,
 };
 use stalagmight_lib::export::{
-    ColorMode, ColorStop, DepthPreset, DepthPresetColors, ExportImageOptions, ImageFormat,
+    ColorMode, ExportImageOptions, ImageFormat,
 };
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
 use stalagmight_lib::models::placement_suggest::{
@@ -222,9 +222,6 @@ fn main() {
     export::<ExportImageOptions>(&out_dir);
     export::<ImageFormat>(&out_dir);
     export::<ColorMode>(&out_dir);
-    export::<DepthPreset>(&out_dir);
-    export::<DepthPresetColors>(&out_dir);
-    export::<ColorStop>(&out_dir);
 
     // Cache + tiles
     export::<ProviderStats>(&out_dir);
@@ -446,9 +443,6 @@ fn main() {
         "ExportImageOptions",
         "ImageFormat",
         "ColorMode",
-        "DepthPreset",
-        "DepthPresetColors",
-        "ColorStop",
         "ProviderStats",
         "CacheStats",
         "TileFetchStatsResponse",
