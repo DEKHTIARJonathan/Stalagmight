@@ -3,7 +3,7 @@
 //! A plan captures exactly the input tuple of `compute_gas_reach_field`, so loading
 //! a plan is "set the gas inputs and recompute": the reachability field itself is
 //! never stored (it is always derived from live geometry, so a stale overlay can
-//! never be shown). See `docs/plans/2026-07-06_dive-plan-persistence.md`.
+//! never be shown). See `git show de8eef91:docs/plans/2026-07-06_dive-plan-persistence.md` (doc removed from master in #229).
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

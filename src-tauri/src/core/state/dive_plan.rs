@@ -6,7 +6,7 @@
 //! way merges/closures/datums already persist references. The gas inputs are the
 //! persisted payload; the reachability field is always recomputed by the caller.
 //!
-//! Design: `docs/plans/2026-07-06_dive-plan-persistence.md`.
+//! Design: `git show de8eef91:docs/plans/2026-07-06_dive-plan-persistence.md` (doc removed from master in #229).
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
