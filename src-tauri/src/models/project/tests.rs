@@ -5618,7 +5618,7 @@ fn apply_station_move_last_station_only_modifies_incoming() {
     }
 }
 
-// Group E: enforce_merge_alignment (tested indirectly through adjust_loop_closures)
+// Group E: conflicting merge-station translations, resolved through adjust_loop_closures
 
 #[test]
 fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
@@ -5677,7 +5677,7 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
         )
         .unwrap();
 
-    // Adjust loop closures — this triggers enforce_merge_alignment internally
+    // Adjust loop closures across the conflicting merge translations
     let config = ClosureAdjustmentConfig::default();
     let result = project.adjust_loop_closures(
         StationRef::new(a, 0),
@@ -5686,7 +5686,7 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
     );
 
     // The adjustment may succeed or fail depending on the geometry, but the important thing
-    // is that enforce_merge_alignment was exercised and didn't panic
+    // is that it was exercised and didn't panic
     match result {
         Ok(()) => {
             // Verify stations are still at valid, finite coordinates

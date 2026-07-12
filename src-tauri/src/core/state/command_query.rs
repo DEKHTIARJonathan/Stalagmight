@@ -78,41 +78,6 @@ impl AppState {
         })
     }
 
-    /// Get all section IDs connected to the given section through merges and closures
-    pub fn get_connected_section_ids(
-        &self,
-        section_id: SectionId,
-    ) -> Result<Vec<SectionId>, String> {
-        // Serialize with command execution to avoid observing intermediate batch state
-        let _cmd_guard = self
-            .command_lock
-            .lock()
-            .map_err(|_| "Failed to acquire command lock".to_string())?;
-        let proj_guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
-        let project = proj_guard
-            .as_ref()
-            .ok_or_else(|| "No project open".to_string())?;
-
-        // Validate section exists
-        if !project.sections.iter().any(|s| s.id == section_id) {
-            return Err(format!("Section {section_id} not found"));
-        }
-
-        // Filter to existing sections (stale merges/closures may reference deleted sections)
-        let existing: std::collections::HashSet<SectionId> =
-            project.sections.iter().map(|s| s.id).collect();
-        let connected = project.get_connected_section_ids(section_id);
-        let mut result: Vec<SectionId> = connected
-            .into_iter()
-            .filter(|id| existing.contains(id))
-            .collect();
-        result.sort_unstable();
-        Ok(result)
-    }
-
     /// Get all section IDs connected through merges and aligned closures (rigid groups).
     pub fn get_rigid_connected_section_ids(
         &self,

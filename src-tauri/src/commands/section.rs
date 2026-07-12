@@ -5,8 +5,8 @@ use ts_rs::TS;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, Coordinates, Section, SectionId, SectionRelationships, SectionUpdates,
-    ShotData, StationRef, SurveyDirection,
+    ClosureStrategy, Coordinates, SectionId, SectionRelationships, SectionUpdates, ShotData,
+    StationRef, SurveyDirection,
 };
 
 /// Shot-line geometry for a single section within a segment.
@@ -90,17 +90,6 @@ pub(crate) fn delete_section_impl(state: &AppState, section_id: SectionId) -> Co
     state.execute(Command::DeleteSection { section_id })
 }
 
-/// Get a section by ID
-#[tauri::command]
-pub fn get_section(state: State<AppState>, section_id: SectionId) -> Option<Section> {
-    get_section_impl(state.inner(), section_id)
-}
-
-pub(crate) fn get_section_impl(state: &AppState, section_id: SectionId) -> Option<Section> {
-    let project = state.get_project_state()?;
-    project.get_section(section_id).cloned()
-}
-
 /// Move a section by an offset
 #[tauri::command]
 pub fn move_section(
@@ -133,15 +122,6 @@ pub fn move_segment(
 #[tauri::command]
 pub fn execute_batch(state: State<AppState>, commands: Vec<Command>) -> CommandResult {
     state.execute(Command::Batch { commands })
-}
-
-/// Get all section IDs connected to the given section through merges and closures
-#[tauri::command]
-pub fn get_connected_section_ids(
-    state: State<AppState>,
-    section_id: SectionId,
-) -> Result<Vec<SectionId>, String> {
-    state.get_connected_section_ids(section_id)
 }
 
 /// Get all section IDs connected through merges and aligned closures (rigid groups)

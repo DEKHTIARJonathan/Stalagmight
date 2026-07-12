@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    ClosureStrategy, CollabState, Coordinates, GpsBounds, LoopClosure, Section, SectionData,
-    SectionId, SectionUpdates, ShotData, ShotId, StationAnchor, StationKey, StationMerge,
-    StationMergeWire, StationRef, ZeroDatum,
+    ClosureStrategy, CollabState, GpsBounds, LoopClosure, Section, SectionData, SectionId,
+    SectionUpdates, ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire,
+    StationRef, ZeroDatum,
 };
 use super::{LoopClosureWire, ZeroDatumWire};
 
@@ -27,7 +27,7 @@ mod pathfinding;
 // Used only by the `tests` module via `use super::*`; production code in this
 // residual file no longer references them after the Phase 5.2/5.3 cluster moves.
 #[cfg(test)]
-use super::{GpsCoordinates, Shot, ShotUpdates, Station};
+use super::{Coordinates, GpsCoordinates, Shot, ShotUpdates, Station};
 #[cfg(test)]
 use crate::config::ClosureAdjustmentConfig;
 
@@ -92,16 +92,6 @@ struct PathStep {
 struct StationPath {
     start: StationRef,
     steps: Vec<PathStep>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct SegmentShot {
-    section_id: SectionId,
-    shot_index: usize,
-    forward: bool,
-    length: f64,
-    path_vec: Coordinates,
-    sign: f64,
 }
 
 #[derive(Debug, Clone, Copy)]

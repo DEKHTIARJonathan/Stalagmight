@@ -509,26 +509,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         }
 
         switch (cmd) {
-          case 'create_project': {
-            const name = (args?.name as string) ?? 'Untitled Project';
-            const now = new Date().toISOString();
-            sectionCounter = 0;
-            currentProject = {
-              id: 1,
-              name,
-              location: null,
-              created_at: now,
-              modified_at: now,
-              file_path: null,
-              sections: [],
-              station_merges: [],
-              zero_datums: [],
-              loop_closures: [],
-              section_offsets: {},
-            };
-            return { success: true, project: currentProject };
-          }
-
           case 'update_project_settings': {
             // Per-project settings (#57): name + validation thresholds.
             if (currentProject) {
@@ -1044,28 +1024,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // `Array.isArray` fallback converts to Uint8Array without
             // any extra cross-realm dance.
             return Array.from(bytes);
-          }
-
-          case 'load_project':
-          case 'open_project': {
-            projectPath = (args?.path as string) ?? null;
-            if (!currentProject) {
-              const now = new Date().toISOString();
-              currentProject = {
-                id: 1,
-                name: 'Test Project',
-                location: null,
-                created_at: now,
-                modified_at: now,
-                file_path: projectPath,
-                sections: [],
-                station_merges: [],
-                zero_datums: [],
-                loop_closures: [],
-                section_offsets: {},
-              };
-            }
-            return { success: true, project: currentProject };
           }
 
           case 'save_project': {
@@ -3298,12 +3256,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return undefined;
           }
 
-          case 'get_display_setting': {
-            // Return specific setting from in-memory storage
-            const settingKey = args?.key as string;
-            return settingKey ? mockDisplaySettings[settingKey] ?? null : null;
-          }
-
           // Window plugin commands
           case 'plugin:window|set_title':
           case 'plugin:window|current':
@@ -3354,21 +3306,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return undefined;
 
           // Export commands
-          // Depth color presets for export
-          case 'get_depth_preset_colors': {
-            const preset = args?.preset as string;
-            console.log('[Mock IPC] get_depth_preset_colors called with preset:', preset);
-            // Returns { stops: ColorStop[] } where ColorStop = { position: number; color: string }
-            const presetStops: Record<string, { stops: Array<{ position: number; color: string }> }> = {
-              thermal: { stops: [{ position: 0.0, color: '#00bfff' }, { position: 1.0, color: '#ff4444' }] },
-              ocean: { stops: [{ position: 0.0, color: '#00ffff' }, { position: 1.0, color: '#0000aa' }] },
-              terrain: { stops: [{ position: 0.0, color: '#00ff00' }, { position: 1.0, color: '#8b4513' }] },
-              grayscale: { stops: [{ position: 0.0, color: '#ffffff' }, { position: 1.0, color: '#000000' }] },
-              accessible: { stops: [{ position: 0.0, color: '#7c3aed' }, { position: 1.0, color: '#fde047' }] },
-            };
-            return presetStops[preset] ?? presetStops.thermal;
-          }
-
           case 'export_csv':
             console.log('[Mock IPC] export_csv called with:', args);
             return { success: true, path: args?.path };

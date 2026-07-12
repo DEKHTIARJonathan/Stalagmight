@@ -292,6 +292,61 @@ describe('buildShortcutMap logic', () => {
   });
 });
 
+describe('Ctrl+Shift+Z redo binding', () => {
+  // Confirms the actual key-event-to-action pipeline (parseKeyEvent ->
+  // buildShortcutMap lookup) resolves Control+Shift+z to the redo action.
+  // buildShortcutMap-only tests above assert the map contents; this composes
+  // them with parseKeyEvent to cover the real dispatch path used by the hook.
+  it('resolves a Control+Shift+z key event to the redo action', () => {
+    const shortcuts: ShortcutsConfig = {
+      select: ['S'],
+      pan: ['P'],
+      zoom: ['Z'],
+      merge: ['M'],
+      measure: ['R'],
+      move_station: ['T'],
+      move_segment: ['V'],
+      move_shot: ['G'],
+      comment_tool: ['C'],
+      move_comment_tool: ['Shift+C'],
+      undo: ['Ctrl+Z'],
+      redo: ['Ctrl+Y', 'Ctrl+Shift+Z'],
+      save: ['Ctrl+S'],
+      toggle_depth_gradient: ['Shift+D'],
+      toggle_grid: ['Shift+G'],
+      toggle_satellite: ['B'],
+      toggle_station_labels: ['L'],
+      toggle_shot_labels: ['Shift+L'],
+      toggle_section_labels: ['Ctrl+L'],
+      fit_to_bounds: ['F'],
+      zoom_in: ['Equal'],
+      zoom_out: ['Minus'],
+      toggle_sections_panel: ['1'],
+      toggle_detail_panel: ['2'],
+      toggle_data_table: ['3'],
+      new_file: ['Ctrl+N'],
+      open_file: ['Ctrl+O'],
+      save_as: ['Ctrl+Shift+S'],
+      import_dmp: ['Ctrl+I'],
+      export: ['Ctrl+E'],
+      quit: ['Ctrl+Q'],
+    };
+    const map = buildShortcutMap(shortcuts);
+
+    const keyEvent = {
+      key: 'z',
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: false,
+      metaKey: false,
+    } as KeyboardEvent;
+
+    const normalized = parseKeyEvent(keyEvent);
+    expect(normalized).toBe('Ctrl+Shift+Z');
+    expect(map.get(normalized)).toBe('redo');
+  });
+});
+
 describe('parseKeyEvent for shortcut matching', () => {
   function createKeyEvent(
     key: string,
