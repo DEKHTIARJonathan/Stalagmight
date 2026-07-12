@@ -509,25 +509,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         }
 
         switch (cmd) {
-          case 'create_project': {
-            const name = (args?.name as string) ?? 'Untitled Project';
-            const now = new Date().toISOString();
-            sectionCounter = 0;
-            currentProject = {
-              id: 1,
-              name,
-              location: null,
-              created_at: now,
-              modified_at: now,
-              file_path: null,
-              sections: [],
-              station_merges: [],
-              zero_datums: [],
-              loop_closures: [],
-              section_offsets: {},
-            };
-            return { success: true, project: currentProject };
-          }
 
           case 'update_project_settings': {
             // Per-project settings (#57): name + validation thresholds.
@@ -3296,12 +3277,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               console.log(`[Mock IPC] save_display_setting: ${key}=${value}`);
             }
             return undefined;
-          }
-
-          case 'get_display_setting': {
-            // Return specific setting from in-memory storage
-            const settingKey = args?.key as string;
-            return settingKey ? mockDisplaySettings[settingKey] ?? null : null;
           }
 
           // Window plugin commands

@@ -9,33 +9,6 @@ use crate::models::{
     RulerEndpoint, Station, StationRef,
 };
 
-/// Create a new in-memory project (no database file created).
-///
-/// This is the legacy/quick-create path for creating an unsaved project.
-/// The project exists only in memory until explicitly saved with `save_project`.
-///
-/// # Arguments
-/// * `name` - Project name
-/// * `location` - Optional cave location metadata (e.g., "Blue Spring Cave System")
-///
-/// For creating a persisted project with progress events, use `create_project_full` instead.
-#[tauri::command]
-pub fn create_project(
-    state: State<AppState>,
-    name: String,
-    location: Option<String>,
-) -> CommandResult {
-    create_project_impl(state.inner(), name, location)
-}
-
-pub(crate) fn create_project_impl(
-    state: &AppState,
-    name: String,
-    location: Option<String>,
-) -> CommandResult {
-    state.execute(Command::CreateProject { name, location })
-}
-
 /// Update per-project settings (#57): project name + validation thresholds.
 /// Stored in the .stalx so they travel with the file between collaborators.
 #[tauri::command]

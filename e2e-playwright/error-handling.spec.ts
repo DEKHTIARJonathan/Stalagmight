@@ -130,24 +130,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
 
       // Normal mock handler logic
       switch (cmd) {
-        case 'create_project': {
-          const name = (args?.name as string) ?? 'Untitled Project';
-          const now = new Date().toISOString();
-          currentProject = {
-            id: 1,
-            name,
-            location: null,
-            created_at: now,
-            modified_at: now,
-            file_path: null,
-            sections: [],
-            station_merges: [],
-            zero_datums: [],
-            loop_closures: [],
-            section_offsets: {},
-          };
-          return { success: true, project: currentProject };
-        }
 
         case 'create_project_full': {
           const name = (args?.name as string) ?? 'Untitled Project';
@@ -520,7 +502,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
           return {};
 
         case 'save_display_setting':
-        case 'get_display_setting':
           return null;
 
         case 'plugin:window|set_title':

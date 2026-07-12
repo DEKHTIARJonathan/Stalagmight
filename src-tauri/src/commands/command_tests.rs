@@ -3,7 +3,7 @@
 use super::{
     cache, config, export, history, import, project, raw_data, section, shot, station, validation,
 };
-use crate::core::{AppState, CommandResult};
+use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
     ShotUpdates, StationRef, SurveyDirection,
@@ -115,12 +115,20 @@ fn shot_data_with_depth(length: f64, depth_in: f64, depth_out: f64) -> ShotData 
 }
 
 fn create_project(app: &tauri::App<MockRuntime>) {
-    let result = project::create_project(
-        state(app),
-        "Test Cave".to_string(),
-        Some("Test Location".to_string()),
-    );
+    let result = state(app).execute(Command::CreateProject {
+        name: "Test Cave".to_string(),
+        location: Some("Test Location".to_string()),
+    });
     assert_success(&result);
+}
+
+/// Test read-back helper; replaces the retired get_section IPC command (#275).
+fn get_section(
+    state: State<'_, AppState>,
+    section_id: crate::models::SectionId,
+) -> Option<crate::models::Section> {
+    let project = state.get_project_state()?;
+    project.get_section(section_id).cloned()
 }
 
 fn set_project_for_tests(app: &tauri::App<MockRuntime>, project: Project) {
@@ -452,7 +460,7 @@ fn test_update_panel_layout_rejects_invalid_mode() {
 fn test_save_display_setting_then_get() {
     let app = app_with_state();
     config::save_display_setting(state(&app), "k1".to_string(), "v1".to_string()).unwrap();
-    let value = config::get_display_setting(state(&app), "k1".to_string()).unwrap();
+    let value = state(&app).get_display_setting("k1").unwrap();
     assert_eq!(value, Some("v1".to_string()));
 }
 
@@ -461,14 +469,14 @@ fn test_save_display_setting_overwrites() {
     let app = app_with_state();
     config::save_display_setting(state(&app), "k2".to_string(), "v1".to_string()).unwrap();
     config::save_display_setting(state(&app), "k2".to_string(), "v2".to_string()).unwrap();
-    let value = config::get_display_setting(state(&app), "k2".to_string()).unwrap();
+    let value = state(&app).get_display_setting("k2").unwrap();
     assert_eq!(value, Some("v2".to_string()));
 }
 
 #[test]
 fn test_get_display_setting_missing_returns_none() {
     let app = app_with_state();
-    let value = config::get_display_setting(state(&app), "missing".to_string()).unwrap();
+    let value = state(&app).get_display_setting("missing").unwrap();
     assert_eq!(value, None);
 }
 
@@ -533,7 +541,7 @@ fn test_undo_removes_section() {
     let section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
     let undo_result = history::undo(state(&app));
     assert_success(&undo_result);
-    let section = section::get_section(state(&app), section_id);
+    let section = get_section(state(&app), section_id);
     assert!(section.is_none());
 }
 
@@ -582,7 +590,7 @@ fn test_undo_to_index_0_undoes_one_operation() {
     assert_success(&result);
 
     // Section should be removed
-    let section = section::get_section(state(&app), section_id);
+    let section = get_section(state(&app), section_id);
     assert!(section.is_none());
 }
 
@@ -688,16 +696,6 @@ fn test_redo_to_fails_when_stack_empty() {
 }
 
 // === Project commands ===
-
-#[test]
-fn test_create_project_success() {
-    let app = app_with_state();
-    let result = project::create_project(state(&app), "Demo".to_string(), Some("Loc".to_string()));
-    assert_success(&result);
-    let project_state = project::get_project_state(state(&app)).expect("project state");
-    assert_eq!(project_state.project.name, "Demo");
-    assert_eq!(project_state.project.location, Some("Loc".to_string()));
-}
 
 #[test]
 fn test_get_project_state_none_when_no_project() {
@@ -1553,7 +1551,7 @@ fn test_create_section_defaults_direction() {
         vec![shot_data(1.0)],
     );
     assert_success(&result);
-    let section = section::get_section(state(&app), result.section_id.unwrap()).unwrap();
+    let section = get_section(state(&app), result.section_id.unwrap()).unwrap();
     assert_eq!(section.direction, SurveyDirection::In);
 }
 
@@ -1561,7 +1559,7 @@ fn test_create_section_defaults_direction() {
 fn test_get_section_returns_none_missing() {
     let app = app_with_state();
     create_project(&app);
-    assert!(section::get_section(state(&app), 999).is_none());
+    assert!(get_section(state(&app), 999).is_none());
 }
 
 #[test]
@@ -1569,7 +1567,7 @@ fn test_get_section_returns_section() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let section = section::get_section(state(&app), id).unwrap();
+    let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.id, id);
 }
 
@@ -1592,7 +1590,7 @@ fn test_update_section_updates_name() {
     };
     let result = section::update_section(state(&app), id, updates);
     assert_success(&result);
-    let section = section::get_section(state(&app), id).unwrap();
+    let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.name, Some("Updated".to_string()));
 }
 
@@ -1607,7 +1605,7 @@ fn test_update_section_updates_color() {
     };
     let result = section::update_section(state(&app), id, updates);
     assert_success(&result);
-    let section = section::get_section(state(&app), id).unwrap();
+    let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.color, "#123456".to_string());
 }
 
@@ -1626,7 +1624,7 @@ fn test_delete_section_removes_section() {
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
     let result = section::delete_section(state(&app), id);
     assert_success(&result);
-    assert!(section::get_section(state(&app), id).is_none());
+    assert!(get_section(state(&app), id).is_none());
 }
 
 #[test]
@@ -1737,7 +1735,7 @@ fn test_create_shot_success_adds_shot() {
     let id = create_section_with_shots(&app, vec![]);
     let result = shot::create_shot(state(&app), id, shot_data(1.0), None, None);
     assert_success(&result);
-    let section = section::get_section(state(&app), id).unwrap();
+    let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots.len(), 1);
 }
 
@@ -1748,7 +1746,7 @@ fn test_create_shot_after_shot_id_inserts() {
     let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0)]);
     let result = shot::create_shot(state(&app), id, shot_data(3.0), Some(0), None);
     assert_success(&result);
-    let section = section::get_section(state(&app), id).unwrap();
+    let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots.len(), 3);
     assert_eq!(section.shots[1].length, 3.0);
 }
@@ -1788,7 +1786,7 @@ fn test_create_shot_before_inserts_at_position() {
         result.shot_id.is_some(),
         "shot_id must be returned on success"
     );
-    let section = section::get_section(state(&app), id).unwrap();
+    let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots.len(), 3);
     assert_eq!(
         section.shots[0].length, 5.0,
@@ -1817,7 +1815,7 @@ fn test_update_shot_updates_length() {
     };
     let result = shot::update_shot(state(&app), id, 0, updates);
     assert_success(&result);
-    let section = section::get_section(state(&app), id).unwrap();
+    let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots[0].length, 12.0);
 }
 
@@ -1832,7 +1830,7 @@ fn test_update_shot_updates_comment() {
     };
     let result = shot::update_shot(state(&app), id, 0, updates);
     assert_success(&result);
-    let section = section::get_section(state(&app), id).unwrap();
+    let section = get_section(state(&app), id).unwrap();
     assert_eq!(section.shots[0].comment, Some("note".to_string()));
 }
 
@@ -1851,7 +1849,7 @@ fn test_delete_shot_removes_shot() {
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
     let result = shot::delete_shot(state(&app), id, 0);
     assert_success(&result);
-    let section = section::get_section(state(&app), id).unwrap();
+    let section = get_section(state(&app), id).unwrap();
     assert!(section.shots.is_empty());
 }
 
@@ -1860,7 +1858,7 @@ fn test_delete_shot_and_split_creates_new_section() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0), shot_data(2.0), shot_data(3.0)]);
-    let section_state = section::get_section(state(&app), id).unwrap();
+    let section_state = get_section(state(&app), id).unwrap();
     let shot_id = section_state.shots[1].id;
 
     let result = shot::delete_shot_and_split(
@@ -1873,8 +1871,8 @@ fn test_delete_shot_and_split_creates_new_section() {
     assert_success(&result);
     let new_id = result.section_id.expect("new section id");
 
-    let section_a = section::get_section(state(&app), id).unwrap();
-    let section_b = section::get_section(state(&app), new_id).unwrap();
+    let section_a = get_section(state(&app), id).unwrap();
+    let section_b = get_section(state(&app), new_id).unwrap();
     assert_eq!(section_a.name, Some("Section A".to_string()));
     assert_eq!(section_b.name, Some("Section B".to_string()));
     assert_eq!(section_a.shots.len(), 1);
@@ -1886,12 +1884,12 @@ fn test_delete_last_shot_and_section_removes_section() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let section_state = section::get_section(state(&app), id).unwrap();
+    let section_state = get_section(state(&app), id).unwrap();
     let shot_id = section_state.shots[0].id;
 
     let result = shot::delete_last_shot_and_section(state(&app), id, shot_id);
     assert_success(&result);
-    assert!(section::get_section(state(&app), id).is_none());
+    assert!(get_section(state(&app), id).is_none());
 }
 
 #[test]
@@ -1909,7 +1907,7 @@ fn test_set_shot_reference_sets_true() {
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
     let result = shot::set_shot_reference(state(&app), id, 0, true);
     assert_success(&result);
-    let section = section::get_section(state(&app), id).unwrap();
+    let section = get_section(state(&app), id).unwrap();
     assert!(section.shots[0].is_reference);
 }
 
@@ -1921,7 +1919,7 @@ fn test_set_shot_reference_sets_false() {
     let _ = shot::set_shot_reference(state(&app), id, 0, true);
     let result = shot::set_shot_reference(state(&app), id, 0, false);
     assert_success(&result);
-    let section = section::get_section(state(&app), id).unwrap();
+    let section = get_section(state(&app), id).unwrap();
     assert!(!section.shots[0].is_reference);
 }
 
@@ -3408,7 +3406,7 @@ fn test_create_section_with_date_roundtrip() {
         vec![shot_data(1.0)],
     );
     assert_success(&result);
-    let section = section::get_section(state(&app), result.section_id.unwrap()).unwrap();
+    let section = get_section(state(&app), result.section_id.unwrap()).unwrap();
     assert_eq!(section.date, Some(date));
     assert_eq!(section.direction, SurveyDirection::Out);
 }

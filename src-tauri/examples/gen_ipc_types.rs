@@ -35,9 +35,7 @@ use stalagmight_lib::core::reconcile::{
     AddedSection, AddedShot, CollabChangeSet, CollabFieldChange, CollabWarning, EditedShot,
     MatchQuality, RemovedShot, SectionMetaChange,
 };
-use stalagmight_lib::export::{
-    ColorMode, ExportImageOptions, ImageFormat,
-};
+use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
 use stalagmight_lib::models::placement_suggest::{
     CrossSectionSuggestion, ImportSectionForSuggestion, MatchDirection, OrphanPlacementSuggestion,
