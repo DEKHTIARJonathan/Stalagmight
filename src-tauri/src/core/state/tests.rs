@@ -14431,7 +14431,8 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
     };
-    let result = state.execute_import_sections(vec![seed], Vec::new(), None, Vec::new(), Vec::new());
+    let result =
+        state.execute_import_sections(vec![seed], Vec::new(), None, Vec::new(), Vec::new());
     assert!(result.success, "seed import failed: {:?}", result.error);
     let project = state.get_project_state().unwrap();
     let section_id = project.sections[0].id;

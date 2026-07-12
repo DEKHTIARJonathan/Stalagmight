@@ -1785,12 +1785,13 @@ mod tests {
     /// becomes load-bearing and this pin must flip to asserting the skip.
     #[test]
     fn nonfinite_mak_station_fix_fails_parse_never_silent() {
-        let Err(err) = parse_compass(&fixture("nonfinite.mak")) else {
-            panic!("a nan station fix must not parse under the current vendored grammar");
-        };
+        let err = parse_compass(&fixture("nonfinite.mak"))
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
         assert!(
-            err.to_string().contains("Invalid station fix"),
-            "unexpected error: {err}"
+            err.contains("Invalid station fix"),
+            "a nan station fix must fail the vendored grammar; got: {err:?}"
         );
     }
 
@@ -1820,7 +1821,9 @@ mod tests {
             s.azimuth_out
         );
         assert!(
-            warnings.iter().any(|w| w.contains("non-finite declination")),
+            warnings
+                .iter()
+                .any(|w| w.contains("non-finite declination")),
             "{warnings:?}"
         );
         assert!(

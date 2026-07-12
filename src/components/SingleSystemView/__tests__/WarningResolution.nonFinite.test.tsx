@@ -8,7 +8,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
 import { WarningResolution } from '../WarningResolution';
-import type { ProjectWarning, Section, Shot } from '../../../types/project';
+import type { ProjectWarning } from '../../../types/commands';
+import type { Section, Shot } from '../../../types/project';
 
 const section = {
   id: 3,
@@ -36,8 +37,10 @@ const warning: ProjectWarning = {
   code: 'NON_FINITE_VALUE',
   message: 'Shot 3:1 has non-finite value(s) in: length',
   severity: 'error',
-  section_id: 3,
-  shot_id: 9,
+  sectionId: 3,
+  shotId: 9,
+  shotIndex: 0,
+  isResolved: false,
 } as unknown as ProjectWarning;
 
 describe('WarningResolution NON_FINITE_VALUE (#275)', () => {
