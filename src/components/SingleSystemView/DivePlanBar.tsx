@@ -39,7 +39,12 @@ export function DivePlanBar() {
   );
   const isDirty = useGasPlanStore(selectIsPlanDirty);
   // The .plnx sits next to the .stalx, so plans need a saved project (a file path).
-  const hasPath = useProjectStore((s) => Boolean(s.project?.file_path));
+  // A deferred new project HAS a reserved file_path that was never written,
+  // and the backend refuses .plnx persistence until the first real save
+  // (#275 B3). databaseOpen is the purpose-built signal for that state
+  // (false while the initial save is deferred), so gate on BOTH: path
+  // reserved AND database actually on disk.
+  const hasPath = useProjectStore((s) => Boolean(s.project?.file_path) && s.databaseOpen);
   // created_at is the stable project identity; changing project => refetch.
   const projectCreatedAt = useProjectStore((s) => s.project?.created_at ?? null);
   // The backend targets the .plnx sibling of file_path; a project Save-As moves it in place,

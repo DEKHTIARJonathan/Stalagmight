@@ -342,6 +342,26 @@ export function WarningResolution({
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualPitch'), manual: 'pitch', disabled: geometryDisabled },
           ...maybeIgnore,
         ];
+      case 'NON_FINITE_VALUE': {
+        // Backstop for persisted non-finite geometry (#275): parsers coerce at
+        // ingestion, so this fires mostly on projects saved before the guards
+        // existed. Error severity, never ignorable - without an explicit case
+        // it fell to `default: maybeIgnore` = ZERO options, the only Error
+        // code with no way to act. Offer a manual editor for the first
+        // corrupted field group, plus delete for an unsalvageable shot.
+        const nf = (v: number | null | undefined) => v != null && !Number.isFinite(v);
+        const manualTarget =
+          nf(shot.length) ? ('length' as const)
+          : nf(shot.azimuth_in) || nf(shot.azimuth_out) ? ('azimuthInOut' as const)
+          : nf(shot.pitch_in) || nf(shot.pitch_out) ? ('pitch' as const)
+          : nf(shot.depth_in) || nf(shot.depth_out) ? ('depth' as const)
+          : ('lrud' as const);
+        return [
+          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: manualTarget, disabled: geometryDisabled },
+          { id: 'delete-shot', label: t('detailPanel.warnings.resolveOptions.deleteShot'), disabled: geometryDisabled, danger: true },
+          ...maybeIgnore,
+        ];
+      }
       case 'LONG_SHOT':
         return [
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
