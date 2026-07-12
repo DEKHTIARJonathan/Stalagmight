@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { type Section, type Shot, type ShotData, type Station, type StationRef } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useActiveStations } from '../../hooks/useActiveStations';
-import { useUIStore, isMapReadOnly, type Selection } from '../../store/uiStore';
-import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
+import { useUIStore, type Selection } from '../../store/uiStore';
+import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
 import { SpreadsheetGrid, type GridLabels } from '../common/SpreadsheetGrid';
 import { EntityBlob } from '../common/EntityBlob';
@@ -265,11 +265,9 @@ export default function DataTable({ sections }: DataTableProps) {
   // Coordinate columns follow the active geometry (adjusted in the read-only
   // closure-adjusted view); row refs/comments stay measured for editing.
   const activeStations = useActiveStations();
-  // Closure-adjusted view is read-only: cell editing and the reference toggle are disabled.
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
-  // A remote SpeleoDB project without the lock is read-only (T2a) - matches the
-  // ContextMenu's shot-menu gating precedent (isMapReadOnly || speleoReadOnly).
-  const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
+  // Closure-adjusted view, Plan/Export mode, and a locked remote SpeleoDB project are all
+  // read-only: cell editing and the reference toggle are disabled.
+  const editingBlocked = useEditingBlocked();
   const {
     selection,
     setSelection,
@@ -289,8 +287,6 @@ export default function DataTable({ sections }: DataTableProps) {
     hoveredStation,
     showToast,
     triggerResolveWarning,
-    appMode,
-    geometryMode,
   } = useUIStore(useShallow((s) => ({
     selection: s.selection,
     setSelection: s.setSelection,
@@ -310,15 +306,7 @@ export default function DataTable({ sections }: DataTableProps) {
     setHoveredStation: s.setHoveredStation,
     hoveredStation: s.hoveredStation,
     showToast: s.showToast,
-    appMode: s.appMode,
-    geometryMode: s.geometryMode,
   })));
-  // Insert Station is a survey-only mutation: gate it like MapCanvas gates its
-  // geometry-mutating tools (isMapReadOnly({ geometryMode, appMode }) ||
-  // speleoReadOnly), the strongest existing precedent -- appMode-driven, not
-  // geometryMode-only (geometryMode alone reverts to 'measured' with no
-  // eligible closures, see the app-workspace-modes read-only landmine).
-  const insertStationReadOnly = isMapReadOnly({ geometryMode, appMode }) || speleoReadOnly;
 
   // Create a map of shot warnings for quick lookup
   const shotWarningsMap = useMemo(() => {
@@ -784,8 +772,8 @@ export default function DataTable({ sections }: DataTableProps) {
   // here — never into the shots array directly.
   const rowEntries = useMemo(
     (): RowEntry[] =>
-      selectedSection ? interleaveRows(selectedSection.shots, geometryReadOnly ? [] : drafts) : [],
-    [selectedSection, geometryReadOnly, drafts]
+      selectedSection ? interleaveRows(selectedSection.shots, editingBlocked ? [] : drafts) : [],
+    [selectedSection, editingBlocked, drafts]
   );
   const shotIndexAt = useCallback(
     (gridRowIndex: number): number | null => {
@@ -828,11 +816,11 @@ export default function DataTable({ sections }: DataTableProps) {
   // real shots keep their model value (nothing to do here).
   const onShotClearMissing = useCallback(
     (rowIndex: number, colKey: string) => {
-      if (geometryReadOnly) return;
+      if (editingBlocked) return;
       const entry = rowEntries[rowIndex];
       if (entry?.kind === 'draft') applyDraftEdit(entry.draft.key, colKey, undefined);
     },
-    [geometryReadOnly, rowEntries, applyDraftEdit]
+    [editingBlocked, rowEntries, applyDraftEdit]
   );
 
   // Discard the draft rows in a grid-row range; the end draft resets to empty
@@ -903,7 +891,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
   const onShotEdit = useCallback(
     (rowIndex: number, colKey: string, value: unknown) => {
-      if (!selectedSection || geometryReadOnly) return;
+      if (!selectedSection || editingBlocked) return;
       const entry = rowEntries[rowIndex];
       if (!entry) return;
       if (entry.kind === 'draft') {
@@ -914,13 +902,13 @@ export default function DataTable({ sections }: DataTableProps) {
       const updates = buildShotUpdates(entry.shot, [{ colKey, value }]);
       if (Object.keys(updates).length > 0) void updateShot(selectedSection.id, entry.shot.id, updates);
     },
-    [selectedSection, geometryReadOnly, rowEntries, selectShotRow, updateShot, applyDraftEdit]
+    [selectedSection, editingBlocked, rowEntries, selectShotRow, updateShot, applyDraftEdit]
   );
 
   // Multi-cell paste/fill → one execute_batch (one undo).
   const onShotBatchEdit = useCallback(
     (edits: CellEdit[]) => {
-      if (!selectedSection || geometryReadOnly) return;
+      if (!selectedSection || editingBlocked) return;
       setSource('data-table');
       // Edits landing on draft rows (paste/fill into them) feed the drafts;
       // the rest are remapped to shots-array indices and commit as one batch.
@@ -934,7 +922,7 @@ export default function DataTable({ sections }: DataTableProps) {
       const commands = buildShotUpdateBatch(shotEdits, selectedSection.shots, selectedSection.id);
       if (commands.length > 0) void executeBatch(commands);
     },
-    [selectedSection, geometryReadOnly, rowEntries, executeBatch, applyDraftEdit]
+    [selectedSection, editingBlocked, rowEntries, executeBatch, applyDraftEdit]
   );
 
   const onShotActiveCellChange = useCallback(
@@ -982,11 +970,11 @@ export default function DataTable({ sections }: DataTableProps) {
   // they commit (and turn real) once filled.
   const onShotInsertRows = useCallback(
     (beforeIndex: number, count: number) => {
-      if (!selectedSection || geometryReadOnly) return;
+      if (!selectedSection || editingBlocked) return;
       const next = insertDraftsAt(selectedSection.shots, drafts, beforeIndex, count, () => draftKeyRef.current--);
       if (next) setDrafts(next);
     },
-    [selectedSection, geometryReadOnly, drafts]
+    [selectedSection, editingBlocked, drafts]
   );
 
   // "Remove draft row" appears when the selection covers draft rows only —
@@ -997,7 +985,7 @@ export default function DataTable({ sections }: DataTableProps) {
   // label so the two entry points read identically.
   const shotExtraMenuItems = useCallback(
     ({ fromRow, toRow }: { fromRow: number; toRow: number }) => {
-      if (geometryReadOnly) return [];
+      if (editingBlocked) return [];
       const entries = rowEntries.slice(fromRow, toRow + 1);
       if (entries.length === 0) return [];
 
@@ -1012,7 +1000,6 @@ export default function DataTable({ sections }: DataTableProps) {
 
       const only = entries.length === 1 ? entries[0] : undefined;
       if (
-        !insertStationReadOnly &&
         selectedSection &&
         only?.kind === 'shot' &&
         canSplitShot(only.shot.length)
@@ -1037,7 +1024,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
       return [];
     },
-    [rowEntries, geometryReadOnly, insertStationReadOnly, selectedSection, t, discardDraftRows, openDialog]
+    [rowEntries, editingBlocked, selectedSection, t, discardDraftRows, openDialog]
   );
 
   // Surface partially-applied pastes (only the non-zero parts).
@@ -1061,7 +1048,7 @@ export default function DataTable({ sections }: DataTableProps) {
   // selected).
   const onShotDeleteRows = useCallback(
     (fromRow: number, toRow: number) => {
-      if (!selectedSection || geometryReadOnly) return;
+      if (!selectedSection || editingBlocked) return;
       setSource('data-table');
       const inRange = rowEntries
         .slice(fromRow, toRow + 1)
@@ -1120,12 +1107,12 @@ export default function DataTable({ sections }: DataTableProps) {
         endStationIndex: lastIdx + 1,
       });
     },
-    [selectedSection, geometryReadOnly, rowEntries, discardDraftRows, showToast, t, openDialog]
+    [selectedSection, editingBlocked, rowEntries, discardDraftRows, showToast, t, openDialog]
   );
 
   const handleToggleReference = useCallback(
     (shot: Shot) => {
-      if (!selectedSection || geometryReadOnly) return;
+      if (!selectedSection || editingBlocked) return;
       if (shot.id < 0) {
         // A draft row — its id is the draft key.
         applyDraftEdit(shot.id, 'is_reference', !shot.is_reference);
@@ -1133,7 +1120,7 @@ export default function DataTable({ sections }: DataTableProps) {
       }
       void updateShot(selectedSection.id, shot.id, { is_reference: !shot.is_reference });
     },
-    [selectedSection, geometryReadOnly, updateShot, applyDraftEdit]
+    [selectedSection, editingBlocked, updateShot, applyDraftEdit]
   );
 
   const handlePanToShot = useCallback(
@@ -1152,7 +1139,7 @@ export default function DataTable({ sections }: DataTableProps) {
         t,
         precision,
         sectionId: selectedSectionId,
-        geometryReadOnly,
+        geometryReadOnly: editingBlocked,
         isShotFrozen,
         getShotWarnings,
         shotIndexAt,
@@ -1167,7 +1154,7 @@ export default function DataTable({ sections }: DataTableProps) {
     // getShotWarnings reads shotWarningsMap (derived from `warnings`); rebuild when
     // warnings change so frozen/warning icons stay current.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [t, precision, selectedSectionId, geometryReadOnly, isShotFrozen, warnings, shotIndexAt, handleToggleReference, triggerResolveWarning]
+    [t, precision, selectedSectionId, editingBlocked, isShotFrozen, warnings, shotIndexAt, handleToggleReference, triggerResolveWarning]
   );
 
   // Localized grid chrome; rowNoun makes the context menus speak in shots
@@ -1251,14 +1238,14 @@ export default function DataTable({ sections }: DataTableProps) {
   // grid gets no onBatchEdit).
   const onStationEdit = useCallback(
     (rowIndex: number, colKey: string, value: unknown) => {
-      if (geometryReadOnly || colKey !== 'comment') return;
+      if (editingBlocked || colKey !== 'comment') return;
       const station = sectionStations[rowIndex];
       if (!station) return;
       setSource('data-table');
       const comment = typeof value === 'string' && value.trim() !== '' ? value : null;
       void updateStationComment(station.station_ref, comment);
     },
-    [geometryReadOnly, sectionStations, updateStationComment]
+    [editingBlocked, sectionStations, updateStationComment]
   );
 
   const onStationActiveCellChange = useCallback(
@@ -1402,12 +1389,12 @@ export default function DataTable({ sections }: DataTableProps) {
       buildStationColumns({
         t,
         precision,
-        geometryReadOnly,
+        geometryReadOnly: editingBlocked,
         gpsOrigin: stationGpsOrigin,
         onGpsCellClick: handleGpsCellClick,
         onConnectionsCellClick: handleConnectionsCellClick,
       }),
-    [t, precision, geometryReadOnly, stationGpsOrigin, handleGpsCellClick, handleConnectionsCellClick]
+    [t, precision, editingBlocked, stationGpsOrigin, handleGpsCellClick, handleConnectionsCellClick]
   );
 
   // Gutter shows the station's ID pill (the old index column); double-click
@@ -1843,7 +1830,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 showToolbar={false}
                 onSelectionChange={setGridSel}
                 onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey })}
-                {...(geometryReadOnly ? {} : { onInsertRows: onShotInsertRows })}
+                {...(editingBlocked ? {} : { onInsertRows: onShotInsertRows })}
                 onDeleteRows={onShotDeleteRows}
                 extraContextMenuItems={shotExtraMenuItems}
                 hiddenColumns={shotHiddenColumns}

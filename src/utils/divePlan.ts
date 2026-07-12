@@ -6,7 +6,7 @@ import type { StationRef } from '../types/project';
  * inputs that `compute_gas_reach_field` takes; loading one is "set the inputs and
  * recompute". These helpers build the persisted (snake_case IPC) snapshot from the
  * live store fields and compare two snapshots for dirty-tracking.
- * See `docs/plans/2026-07-06_dive-plan-persistence.md`.
+ * See `git show de8eef91:docs/plans/2026-07-06_dive-plan-persistence.md` (doc removed from master in #229).
  */
 
 /** The six gas inputs a dive plan captures (the store's camelCase view). */

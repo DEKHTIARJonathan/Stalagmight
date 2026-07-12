@@ -5,7 +5,7 @@ import type { DivePlan, DivePlanMeta, DivePlanSnapshot } from '../types/ipc.gene
  * Typed wrappers for the dive-plan (`.plnx`) IPC commands (#244). The backend
  * reads/writes a SQLite sibling next to the open project; these calls return `[]`
  * / a friendly error when there is no saved project. See `divePlan.ts` for the
- * snapshot shape and `docs/plans/2026-07-06_dive-plan-persistence.md`.
+ * snapshot shape and `git show de8eef91:docs/plans/2026-07-06_dive-plan-persistence.md` (doc removed from master in #229).
  */
 
 /** List the saved plans for the open project (newest first; `[]` if none). */

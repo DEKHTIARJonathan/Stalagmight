@@ -32,6 +32,40 @@ impl Validator {
             severity: severity_for_code(code),
         };
 
+        // Non-finite backstop (#275 B4): NaN fails EVERY range comparison in
+        // this function, so without an explicit check a NaN/inf field would
+        // produce zero warnings while silently poisoning station coordinates
+        // and the closure solve. Parsers coerce non-finite input at ingestion;
+        // this guards any path that slips through.
+        let non_finite: Vec<&str> = [
+            ("length", Some(shot.length)),
+            ("azimuth_in", Some(shot.azimuth_in)),
+            ("azimuth_out", Some(shot.azimuth_out)),
+            ("depth_in", Some(shot.depth_in)),
+            ("depth_out", Some(shot.depth_out)),
+            ("pitch_in", shot.pitch_in),
+            ("pitch_out", shot.pitch_out),
+            ("left", shot.left),
+            ("right", shot.right),
+            ("up", shot.up),
+            ("down", shot.down),
+        ]
+        .iter()
+        .filter(|(_, v)| v.is_some_and(|v| !v.is_finite()))
+        .map(|(name, _)| *name)
+        .collect();
+        if !non_finite.is_empty() {
+            warnings.push(warn(
+                "NON_FINITE_VALUE",
+                format!(
+                    "Shot {}:{} has non-finite value(s) in: {}",
+                    section_id,
+                    shot_index + 1,
+                    non_finite.join(", ")
+                ),
+            ));
+        }
+
         // Check for zero length
         if shot.length == 0.0 {
             warnings.push(warn(
@@ -288,6 +322,10 @@ impl Validator {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
+    #![expect(
+        clippy::expect_used,
+        reason = "tests assert on known-present warnings; a failed expect fails the test"
+    )]
     use super::*;
     use crate::models::GpsCoordinates;
 
@@ -331,6 +369,56 @@ mod tests {
 
         let warnings = Validator::validate_shot(&shot, &default_config(), 0, 0);
         assert!(Validator::has_errors(&warnings));
+    }
+
+    /// #275 B4 backstop: NaN fails every range comparison in validate_shot,
+    /// so before the explicit check a NaN-poisoned shot produced ZERO
+    /// warnings. Pin that every non-finite field (required and optional)
+    /// yields the error-severity NON_FINITE_VALUE code naming the field.
+    #[test]
+    fn test_non_finite_values_warn_instead_of_passing_silently() {
+        let shot = ShotData {
+            azimuth_in: f64::NAN,
+            azimuth_out: 50.0,
+            length: f64::INFINITY,
+            depth_in: 10.0,
+            depth_out: f64::NEG_INFINITY,
+            pitch_in: Some(f64::NAN),
+            left: Some(f64::NAN),
+            ..Default::default()
+        };
+
+        let warnings = Validator::validate_shot(&shot, &default_config(), 3, 0);
+        let nf = warnings
+            .iter()
+            .find(|w| w.code == "NON_FINITE_VALUE")
+            .expect("non-finite fields must produce NON_FINITE_VALUE");
+        assert_eq!(nf.severity, WarningSeverity::Error);
+        for field in ["length", "azimuth_in", "depth_out", "pitch_in", "left"] {
+            assert!(
+                nf.message.contains(field),
+                "message should name '{field}': {}",
+                nf.message
+            );
+        }
+        assert!(
+            !nf.message.contains("azimuth_out") && !nf.message.contains("depth_in"),
+            "finite fields must not be named: {}",
+            nf.message
+        );
+
+        // A fully finite shot emits no NON_FINITE_VALUE.
+        let ok = ShotData {
+            azimuth_in: 45.0,
+            azimuth_out: 50.0,
+            length: 5.0,
+            depth_in: 10.0,
+            depth_out: 11.0,
+            ..Default::default()
+        };
+        assert!(Validator::validate_shot(&ok, &default_config(), 3, 0)
+            .iter()
+            .all(|w| w.code != "NON_FINITE_VALUE"));
     }
 
     #[test]

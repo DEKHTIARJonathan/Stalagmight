@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
+import type { DisplaySettings } from '../../types/loading';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 
@@ -35,8 +36,12 @@ describe('projectStore.createProject', () => {
             imported_section_hashes: [],
             next_closure_id: 1n,
           },
+          // Complete payload (satisfies pins it): applyDisplaySettings merges
+          // with ??, so an omitted field would silently keep prior in-memory
+          // state and under-exercise the real create path.
           displaySettings: {
             showStations: true,
+            showShots: true,
             showSectionNames: true,
             showStationLabels: false,
             showShotData: false,
@@ -45,8 +50,11 @@ describe('projectStore.createProject', () => {
             showGrid: false,
             showSatellite: false,
             showDepthGradient: false,
+            showStationComments: false,
+            showShotComments: false,
             gridSpacing: 10,
-          },
+            geometryMode: 'measured',
+          } satisfies DisplaySettings,
         };
       }
       return undefined;
@@ -111,5 +119,28 @@ describe('projectStore.createProject', () => {
     await useProjectStore.getState().createProject('Fresh Cave');
 
     expect(useUIStore.getState().selection).toBeNull();
+  });
+
+  // #275 B1 wiring: the real createProject action (not just the uiStore method)
+  // must clear armed tool transients - deleting the reset call site would
+  // otherwise pass every unit test while the bug ships.
+  it('clears armed tool transients on create (end-to-end wiring)', async () => {
+    useUIStore.setState({
+      activeTool: 'move_comment',
+      moveCommentSource: {
+        type: 'shot',
+        sectionId: 2,
+        shotId: 7,
+        comment: 'stale comment from the previous project',
+      },
+      mergeStationA: { section_id: 1, station_index: 3 },
+    });
+
+    await useProjectStore.getState().createProject('Fresh Cave');
+
+    const ui = useUIStore.getState();
+    expect(ui.activeTool).toBe('select');
+    expect(ui.moveCommentSource).toBeNull();
+    expect(ui.mergeStationA).toBeNull();
   });
 });

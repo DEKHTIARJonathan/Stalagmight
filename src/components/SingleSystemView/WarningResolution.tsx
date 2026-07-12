@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { Button } from '../common/Button';
 import { ChevronLeftIcon, CenterMapIcon } from '../common/icons';
 import { formatFixed } from '../../i18n/format';
@@ -279,7 +280,7 @@ export function WarningResolution({
       triggerZoomToShot: s.triggerZoomToShot,
     })),
   );
-  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const editingBlocked = useEditingBlocked();
   // "Ignore" persists to the project database immediately; a never-saved project
   // (deferred initial save) reserves file_path but has no open database yet, so the
   // suppression can't be stored. Gate Ignore on the database actually being open,
@@ -288,7 +289,7 @@ export function WarningResolution({
   const activeStations = useActiveStations();
 
   const frozen = isShotFrozen(warning.sectionId, warning.shotIndex);
-  const geometryDisabled = geometryReadOnly || frozen;
+  const geometryDisabled = editingBlocked || frozen;
 
   const [selected, setSelected] = useState<string>('');
   const [busy, setBusy] = useState(false);
@@ -342,6 +343,26 @@ export function WarningResolution({
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualPitch'), manual: 'pitch', disabled: geometryDisabled },
           ...maybeIgnore,
         ];
+      case 'NON_FINITE_VALUE': {
+        // Backstop for persisted non-finite geometry (#275): parsers coerce at
+        // ingestion, so this fires mostly on projects saved before the guards
+        // existed. Error severity, never ignorable - without an explicit case
+        // it fell to `default: maybeIgnore` = ZERO options, the only Error
+        // code with no way to act. Offer a manual editor for the first
+        // corrupted field group, plus delete for an unsalvageable shot.
+        const nf = (v: number | null | undefined) => v != null && !Number.isFinite(v);
+        const manualTarget =
+          nf(shot.length) ? ('length' as const)
+          : nf(shot.azimuth_in) || nf(shot.azimuth_out) ? ('azimuthInOut' as const)
+          : nf(shot.pitch_in) || nf(shot.pitch_out) ? ('pitch' as const)
+          : nf(shot.depth_in) || nf(shot.depth_out) ? ('depth' as const)
+          : ('lrud' as const);
+        return [
+          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: manualTarget, disabled: geometryDisabled },
+          { id: 'delete-shot', label: t('detailPanel.warnings.resolveOptions.deleteShot'), disabled: geometryDisabled, danger: true },
+          ...maybeIgnore,
+        ];
+      }
       case 'LONG_SHOT':
         return [
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
@@ -364,9 +385,9 @@ export function WarningResolution({
         ];
       case 'NEGATIVE_LRUD':
         return [
-          { id: 'lrud-abs', label: t('detailPanel.warnings.resolveOptions.useAbs'), disabled: geometryReadOnly },
-          { id: 'lrud-clear', label: t('detailPanel.warnings.resolveOptions.clear'), disabled: geometryReadOnly },
-          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: 'lrud', disabled: geometryReadOnly },
+          { id: 'lrud-abs', label: t('detailPanel.warnings.resolveOptions.useAbs'), disabled: editingBlocked },
+          { id: 'lrud-clear', label: t('detailPanel.warnings.resolveOptions.clear'), disabled: editingBlocked },
+          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: 'lrud', disabled: editingBlocked },
           ...maybeIgnore,
         ];
       case 'LENGTH_BELOW_DEPTH_CHANGE': {
@@ -422,7 +443,7 @@ export function WarningResolution({
         const keepOptions: ResolutionOption[] = refs.map((r, i) => ({
           id: `keep-datum-${i}`,
           label: t('detailPanel.warnings.resolveOptions.keepDatum', { station: `${r.section_id}:${r.station_index}` }),
-          disabled: geometryReadOnly || refs.length < 2,
+          disabled: editingBlocked || refs.length < 2,
         }));
         return [
           ...keepOptions,
@@ -432,7 +453,7 @@ export function WarningResolution({
       default:
         return maybeIgnore;
     }
-  }, [warning.code, warning.severity, warning.datumStationIndex, warning.datumRefs, shot, geometryDisabled, geometryReadOnly, projectSaved, t, precision]);
+  }, [warning.code, warning.severity, warning.datumStationIndex, warning.datumRefs, shot, geometryDisabled, editingBlocked, projectSaved, t, precision]);
 
   // Default selection: prefer "Average" (the safe azimuth fix) when offered,
   // else the first enabled option (falls back to Ignore when every fix is

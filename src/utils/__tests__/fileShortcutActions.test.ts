@@ -20,6 +20,20 @@ vi.mock('../openOrImport', () => ({
 import { runFileShortcutAction } from '../fileShortcutActions';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
+
+const READ_ONLY_LINK: SpeleoLinkState = {
+  permission: 'READ_AND_WRITE',
+  editState: 'read-only',
+  lockHolder: 'someone-else',
+  lockedByOther: true,
+  hasUnpushedEdits: false,
+  forceEditing: false,
+  forceEditAllowed: false,
+  remoteState: 'up_to_date',
+  noAccess: false,
+  serverError: null,
+};
 
 describe('runFileShortcutAction("new_file")', () => {
   beforeEach(() => {
@@ -54,6 +68,7 @@ describe('runFileShortcutAction("import_dmp") — read-only-map guard (#243)', (
   });
   afterEach(() => {
     useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
+    useSpeleoStore.setState({ link: null });
   });
 
   it('opens the picker in Survey + measured (the editable baseline)', () => {
@@ -79,6 +94,18 @@ describe('runFileShortcutAction("import_dmp") — read-only-map guard (#243)', (
   it('opens the picker with NO project (GlobalView) regardless of mode — the guard is project-scoped', () => {
     useProjectStore.setState({ project: null, isDirty: false });
     useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
+    runFileShortcutAction('import_dmp');
+    expect(pickAndRouteMock).toHaveBeenCalled();
+  });
+
+  it('skips the picker on a locked remote SpeleoDB project (Survey + measured otherwise editable)', () => {
+    useSpeleoStore.setState({ link: READ_ONLY_LINK });
+    runFileShortcutAction('import_dmp');
+    expect(pickAndRouteMock).not.toHaveBeenCalled();
+  });
+
+  it('opens the picker once the SpeleoDB write lock is held', () => {
+    useSpeleoStore.setState({ link: { ...READ_ONLY_LINK, editState: 'editing', lockedByOther: false } });
     runFileShortcutAction('import_dmp');
     expect(pickAndRouteMock).toHaveBeenCalled();
   });

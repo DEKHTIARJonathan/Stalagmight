@@ -1,5 +1,3 @@
-import { useSyncExternalStore } from 'react';
-
 /**
  * Module-level stack of open dialog container elements.
  * The last element is the topmost (interactive) dialog.
@@ -112,28 +110,3 @@ export function isTopmost(element: HTMLElement): boolean {
   return stack.length > 0 && stack[stack.length - 1] === element;
 }
 
-/**
- * Get a snapshot of the current stack size.
- */
-function getSnapshot(): number {
-  return stack.length;
-}
-
-/**
- * Subscribe to stack changes.
- */
-function subscribe(callback: () => void): () => void {
-  listeners.add(callback);
-  return () => {
-    listeners.delete(callback);
-  };
-}
-
-/**
- * React hook that returns the current dialog stack size.
- * Re-renders the component when the stack changes.
- */
-export function useDialogStack(): { stackSize: number } {
-  const stackSize = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return { stackSize };
-}
