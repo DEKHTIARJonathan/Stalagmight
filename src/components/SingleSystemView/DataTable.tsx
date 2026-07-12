@@ -1018,6 +1018,7 @@ export default function DataTable({ sections }: DataTableProps) {
           {
             label: 'Insert Station...',
             onClick: () => {
+              setSource('data-table');
               openDialog('insert-station', {
                 sectionId,
                 shotId: shot.id,

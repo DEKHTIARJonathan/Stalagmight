@@ -3621,10 +3621,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
             const target = section.shots[idx] as Record<string, unknown>;
             const length = (target.length as number) ?? 0;
-            if (!Number.isFinite(distance) || distance <= 0 || distance >= length) {
+            // Mirror the backend floor: both children must be at least
+            // MIN_SPLIT_CHILD_LENGTH_M (src/utils/shotSplit.ts + models/project.rs),
+            // so the mock cannot accept a distance the real command would reject.
+            const MIN_SPLIT_CHILD_LENGTH_M = 0.01;
+            if (
+              !Number.isFinite(distance) ||
+              distance < MIN_SPLIT_CHILD_LENGTH_M ||
+              length - distance < MIN_SPLIT_CHILD_LENGTH_M
+            ) {
               return {
                 success: false,
-                error: `Distance must be strictly between 0 and the shot's length (${length.toFixed(2)}m)`,
+                error: `Both sides of the split must be at least ${MIN_SPLIT_CHILD_LENGTH_M.toFixed(
+                  2,
+                )}m (shot length ${length.toFixed(2)}m)`,
               };
             }
             // Mirrors the backend's collinear split: shared azimuth/pitch/LRUD,

@@ -126,7 +126,7 @@
     "src/components/Onboarding/OnboardingOverlay.tsx": 1199,
     "src/components/Settings/ShortcutRecorder.tsx": 272,
     "src/components/SingleSystemView/CylindersTable.tsx": 178,
-    "src/components/SingleSystemView/DataTable.tsx": 1625,
+    "src/components/SingleSystemView/DataTable.tsx": 1626,
     "src/components/SingleSystemView/DetailPanel.tsx": 1527,
     "src/components/SingleSystemView/DisplayMenu.tsx": 372,
     "src/components/SingleSystemView/DivePlanBar.tsx": 326,
