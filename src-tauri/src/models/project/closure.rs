@@ -4,7 +4,7 @@ use tracing::{debug, error, trace, warn};
 use crate::config::ClosureAdjustmentConfig;
 use crate::models::{ClosureStrategy, Coordinates, LoopClosure, SectionId, Shot, StationRef};
 
-use super::{PathEdge, Project, SegmentShot, StationPath};
+use super::{PathEdge, Project, StationPath};
 
 impl Project {
     fn coords_add(a: Coordinates, b: Coordinates) -> Coordinates {
@@ -40,26 +40,6 @@ impl Project {
         }
     }
 
-    fn update_shot_from_forward_vector(shot: &mut Shot, vec: Coordinates) {
-        let dx = vec.x;
-        let dy = vec.y;
-        let dz = vec.z;
-        let horizontal = (dx * dx + dy * dy).sqrt();
-        let new_len = (horizontal * horizontal + dz * dz).sqrt();
-        let new_azi = if horizontal > 1e-9 {
-            dx.atan2(dy).to_degrees().rem_euclid(360.0)
-        } else {
-            shot.average_azimuth()
-        };
-        shot.length = new_len;
-        shot.azimuth_in = new_azi;
-        shot.azimuth_out = new_azi;
-        shot.depth_out = shot.depth_in + dz;
-        let pitch = dz.atan2(horizontal).to_degrees();
-        shot.pitch_in = Some(pitch);
-        shot.pitch_out = Some(pitch);
-    }
-
     /// Update only the horizontal geometry of a shot (azimuth and slope length)
     /// from a solved horizontal displacement, preserving original depths and pitch.
     pub(super) fn update_shot_horizontal_only(shot: &mut Shot, dx: f64, dy: f64) {
@@ -74,63 +54,6 @@ impl Project {
         shot.azimuth_in = new_azi;
         shot.azimuth_out = new_azi;
         // depth_in, depth_out, pitch_in, pitch_out are intentionally left unchanged
-    }
-
-    fn apply_correction_to_shots(
-        &mut self,
-        shots: &[SegmentShot],
-        correction_vec: Coordinates,
-        distribution: ClosureStrategy,
-    ) -> Result<(), String> {
-        if shots.is_empty() {
-            return Err("No distributable shots found for closure path".to_string());
-        }
-
-        let total_len: f64 = shots.iter().map(|s| s.length).sum();
-        let shot_count = shots.len();
-
-        if distribution == ClosureStrategy::ProportionalByLength && total_len <= 0.0 {
-            return Err("No valid shot lengths for proportional distribution".to_string());
-        }
-
-        for shot in shots {
-            let signed = Self::coords_scale(correction_vec, shot.sign);
-            let (corr_x, corr_y, corr_z) = match distribution {
-                ClosureStrategy::ProportionalByLength => {
-                    let weight = shot.length / total_len;
-                    (signed.x * weight, signed.y * weight, signed.z * weight)
-                }
-                ClosureStrategy::EqualDistribution => {
-                    let weight = 1.0 / shot_count as f64;
-                    (signed.x * weight, signed.y * weight, signed.z * weight)
-                }
-                _ => {
-                    return Err("Unsupported distribution strategy for adjustment".to_string());
-                }
-            };
-
-            let new_path_vec = Coordinates::new(
-                shot.path_vec.x + corr_x,
-                shot.path_vec.y + corr_y,
-                shot.path_vec.z + corr_z,
-            );
-            let forward_vec = if shot.forward {
-                new_path_vec
-            } else {
-                Self::coords_scale(new_path_vec, -1.0)
-            };
-
-            let section = self
-                .get_section_mut(shot.section_id)
-                .ok_or_else(|| "Section not found for closure path".to_string())?;
-            let shot_mut = section
-                .shots
-                .get_mut(shot.shot_index)
-                .ok_or_else(|| "Shot not found for closure path".to_string())?;
-            Self::update_shot_from_forward_vector(shot_mut, forward_vec);
-        }
-
-        Ok(())
     }
 
     pub fn adjust_loop_closures(
