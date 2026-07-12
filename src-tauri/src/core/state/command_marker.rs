@@ -84,7 +84,7 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::core::Command;
-    use crate::models::{MarkerType, ShotData};
+    use crate::models::{MarkerDirection, MarkerType, ShotData};
 
     fn make_state_with_section_and_shot() -> (AppState, SectionId, ShotId) {
         let state = AppState::new().unwrap();
@@ -120,7 +120,7 @@ mod tests {
             shot_id,
             position: 50.0,
             marker_type: MarkerType::Ndm,
-            color: "white".to_string(),
+            color: "#ffffff".to_string(),
             text: "Test".to_string(),
             direction: None,
         });
@@ -132,6 +132,71 @@ mod tests {
     }
 
     #[test]
+    fn add_marker_rejects_invalid_color() {
+        let (state, section_id, shot_id) = make_state_with_section_and_shot();
+        let res = state.execute(Command::AddMarker {
+            section_id,
+            shot_id,
+            position: 50.0,
+            marker_type: MarkerType::Ndm,
+            color: "url(https://evil.example/x)".to_string(),
+            text: String::new(),
+            direction: None,
+        });
+        assert!(!res.success, "expected failure for CSS-injection color");
+    }
+
+    #[test]
+    fn add_marker_rejects_out_of_range_position() {
+        let (state, section_id, shot_id) = make_state_with_section_and_shot();
+        let res = state.execute(Command::AddMarker {
+            section_id,
+            shot_id,
+            position: 101.0,
+            marker_type: MarkerType::Ndm,
+            color: "#aabbcc".to_string(),
+            text: String::new(),
+            direction: None,
+        });
+        assert!(!res.success, "expected failure for position > 100");
+    }
+
+    #[test]
+    fn add_marker_rejects_bad_section_id() {
+        let (state, _section_id, shot_id) = make_state_with_section_and_shot();
+        let res = state.execute(Command::AddMarker {
+            section_id: 9999,
+            shot_id,
+            position: 50.0,
+            marker_type: MarkerType::Ndm,
+            color: "#aabbcc".to_string(),
+            text: String::new(),
+            direction: None,
+        });
+        assert!(!res.success, "expected failure for nonexistent section");
+    }
+
+    #[test]
+    fn update_marker_rejects_bad_marker_id() {
+        let (state, _, _) = make_state_with_section_and_shot();
+        let res = state.execute(Command::UpdateMarker {
+            marker_id: 9999,
+            updates: MarkerUpdates {
+                text: Some("x".to_string()),
+                ..Default::default()
+            },
+        });
+        assert!(!res.success, "expected failure for nonexistent marker_id");
+    }
+
+    #[test]
+    fn delete_marker_rejects_bad_marker_id() {
+        let (state, _, _) = make_state_with_section_and_shot();
+        let res = state.execute(Command::DeleteMarker { marker_id: 9999 });
+        assert!(!res.success, "expected failure for nonexistent marker_id");
+    }
+
+    #[test]
     fn add_marker_undo_removes_it() {
         let (state, section_id, shot_id) = make_state_with_section_and_shot();
         let res = state.execute(Command::AddMarker {
@@ -139,7 +204,7 @@ mod tests {
             shot_id,
             position: 50.0,
             marker_type: MarkerType::Ndm,
-            color: "white".to_string(),
+            color: "#ffffff".to_string(),
             text: String::new(),
             direction: None,
         });
@@ -149,6 +214,11 @@ mod tests {
         let undo_res = state.undo();
         assert!(undo_res.success, "{:?}", undo_res.error);
         assert!(state.get_project_state().unwrap().markers.is_empty());
+
+        // redo restores the marker
+        let redo_res = state.redo();
+        assert!(redo_res.success, "{:?}", redo_res.error);
+        assert_eq!(state.get_project_state().unwrap().markers.len(), 1);
     }
 
     #[test]
@@ -159,7 +229,7 @@ mod tests {
             shot_id,
             position: 25.0,
             marker_type: MarkerType::Ndm,
-            color: "white".to_string(),
+            color: "#ffffff".to_string(),
             text: "Original".to_string(),
             direction: None,
         });
@@ -169,20 +239,26 @@ mod tests {
             marker_id,
             updates: MarkerUpdates {
                 text: Some("Updated".to_string()),
-                color: Some("orange".to_string()),
+                color: Some("#ff9f43".to_string()),
                 ..Default::default()
             },
         });
         assert!(upd_res.success, "{:?}", upd_res.error);
         let proj = state.get_project_state().unwrap();
         assert_eq!(proj.markers[0].text, "Updated");
-        assert_eq!(proj.markers[0].color, "orange");
+        assert_eq!(proj.markers[0].color, "#ff9f43");
 
         let undo_res = state.undo();
         assert!(undo_res.success, "{:?}", undo_res.error);
         let proj = state.get_project_state().unwrap();
         assert_eq!(proj.markers[0].text, "Original");
-        assert_eq!(proj.markers[0].color, "white");
+        assert_eq!(proj.markers[0].color, "#ffffff");
+
+        // redo re-applies the update
+        let redo_res = state.redo();
+        assert!(redo_res.success, "{:?}", redo_res.error);
+        let proj = state.get_project_state().unwrap();
+        assert_eq!(proj.markers[0].text, "Updated");
     }
 
     #[test]
@@ -193,9 +269,9 @@ mod tests {
             shot_id,
             position: 75.0,
             marker_type: MarkerType::Arrow,
-            color: "blue".to_string(),
+            color: "#54a0ff".to_string(),
             text: String::new(),
-            direction: None,
+            direction: Some(MarkerDirection::TowardEnd),
         });
         let marker_id = add_res.marker_id.unwrap();
 
@@ -208,5 +284,10 @@ mod tests {
         let proj = state.get_project_state().unwrap();
         assert_eq!(proj.markers.len(), 1);
         assert_eq!(proj.markers[0].id, marker_id);
+
+        // redo removes it again
+        let redo_res = state.redo();
+        assert!(redo_res.success, "{:?}", redo_res.error);
+        assert!(state.get_project_state().unwrap().markers.is_empty());
     }
 }

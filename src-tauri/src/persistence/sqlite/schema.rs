@@ -395,6 +395,7 @@ impl Database {
         }
 
         // Ensure markers table exists (schema v12: survey markers placed along shots)
+        // shot_uuid column is added separately below (schema v13)
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS markers (
                 id INTEGER PRIMARY KEY,
@@ -427,6 +428,23 @@ impl Database {
                 [],
             )?;
             tracing::info!("Added next_marker_id column to project table");
+        }
+
+        // Add shot_uuid column to markers table if it doesn't exist (schema v13)
+        let has_shot_uuid: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('markers') WHERE name='shot_uuid'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_shot_uuid {
+            self.conn
+                .execute("ALTER TABLE markers ADD COLUMN shot_uuid TEXT", [])?;
+            tracing::info!("Added shot_uuid column to markers table (schema v13)");
         }
 
         tracing::debug!("Schema migration complete");
@@ -812,11 +830,12 @@ impl Database {
                 FOREIGN KEY (station_b_section) REFERENCES sections(id) ON DELETE CASCADE
             );
 
-            -- Survey markers placed along shots (schema v12)
+            -- Survey markers placed along shots (schema v12; shot_uuid added v13)
             CREATE TABLE IF NOT EXISTS markers (
                 id INTEGER PRIMARY KEY,
                 section_id INTEGER NOT NULL,
                 shot_id INTEGER NOT NULL,
+                shot_uuid TEXT,
                 position REAL NOT NULL,
                 marker_type TEXT NOT NULL,
                 color TEXT NOT NULL,

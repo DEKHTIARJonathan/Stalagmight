@@ -2,4 +2,4 @@
 import type { MarkerDirection } from "./MarkerDirection";
 import type { MarkerType } from "./MarkerType";
 
-export interface MarkerUpdates { position: number | null, marker_type: MarkerType | null, color: string | null, text: string | null, direction: MarkerDirection | null | null, }
+export interface MarkerUpdates { position: number | null, marker_type: MarkerType | null, color: string | null, text: string | null, direction?: MarkerDirection | null, }

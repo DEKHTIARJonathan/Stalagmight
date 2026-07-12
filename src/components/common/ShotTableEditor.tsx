@@ -215,6 +215,7 @@ export function ShotTableEditor({
   });
   const [markerCustomColorInput, setMarkerCustomColorInput] = useState('');
   const [markerSaving, setMarkerSaving] = useState(false);
+  const [markerSaveError, setMarkerSaveError] = useState<string | null>(null);
 
   const showMarkers = sectionId !== undefined;
 
@@ -250,6 +251,7 @@ export function ShotTableEditor({
   async function handleSaveMarker(shot: EditableShot) {
     if (sectionId === undefined || markerSaving) return;
     setMarkerSaving(true);
+    setMarkerSaveError(null);
     try {
       const existing = getMarkerForShot(shot.id);
       let result;
@@ -274,8 +276,12 @@ export function ShotTableEditor({
       }
       if (result.success) {
         setOpenMarkerForShotIdx(null);
+      } else {
+        setMarkerSaveError(result.error ?? 'save failed');
       }
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setMarkerSaveError(msg);
       console.error('Failed to save marker:', e);
     } finally {
       setMarkerSaving(false);
@@ -285,9 +291,17 @@ export function ShotTableEditor({
   async function handleDeleteMarker(markerId: bigint) {
     if (markerSaving) return;
     setMarkerSaving(true);
+    setMarkerSaveError(null);
     try {
-      await deleteMarker(markerId);
-      setOpenMarkerForShotIdx(null);
+      const result = await deleteMarker(markerId);
+      if (result.success) {
+        setOpenMarkerForShotIdx(null);
+      } else {
+        setMarkerSaveError(result.error ?? 'delete failed');
+      }
+    } catch (e) {
+      setMarkerSaveError(e instanceof Error ? e.message : String(e));
+      console.error('Failed to delete marker:', e);
     } finally {
       setMarkerSaving(false);
     }
@@ -1260,6 +1274,11 @@ export function ShotTableEditor({
                             </div>
                           </div>
                           {/* Actions */}
+                          {markerSaveError && (
+                            <p style={{ margin: '2px 0 4px', fontSize: 11, color: 'var(--cc-error, #ff6b6b)' }}>
+                              {markerSaveError}
+                            </p>
+                          )}
                           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, paddingTop: 4, borderTop: '1px solid var(--cc-border, #0f3460)', marginTop: 2 }}>
                             {existingMarker && (
                               <button
@@ -1273,7 +1292,7 @@ export function ShotTableEditor({
                             )}
                             <button
                               type="button"
-                              onClick={() => setOpenMarkerForShotIdx(null)}
+                              onClick={() => { setOpenMarkerForShotIdx(null); setMarkerSaveError(null); }}
                               style={{ fontFamily: 'inherit', fontSize: 11, padding: '5px 11px', background: 'transparent', border: '1px solid var(--cc-border, #0f3460)', borderRadius: 4, color: 'var(--cc-text-secondary)', cursor: 'pointer' }}
                             >
                               cancel

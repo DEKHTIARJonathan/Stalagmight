@@ -172,7 +172,7 @@ function DetailsContent({ selection, project, stations }: DetailsContentProps) {
     const shot = section?.shots.find((s) => s.id === selection.shotId);
 
     if (section && shot) {
-      return <ShotDetail section={section} shot={shot} stations={stations} />;
+      return <ShotDetail key={`${section.id}-${shot.id}`} section={section} shot={shot} stations={stations} />;
     }
   }
 
@@ -1004,6 +1004,7 @@ function ShotMarkerPanel({ section, shot }: { section: Section; shot: Shot }) {
       return;
     }
     setPreviewMarker(makePreviewMarker(section.id, shot.id, form));
+    return () => { setPreviewMarker(null); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, section.id, shot.id]);
 
@@ -1093,10 +1094,16 @@ function ShotMarkerPanel({ section, shot }: { section: Section; shot: Shot }) {
   async function handleRemove() {
     if (!existing || saving) return;
     setSaving(true);
+    setSaveError(null);
     try {
-      await deleteMarker(existing.id);
-      setOpen(false);
+      const result = await deleteMarker(existing.id);
+      if (result.success) {
+        setOpen(false);
+      } else {
+        setSaveError(result.error ?? 'delete failed');
+      }
     } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
       console.error('Failed to delete marker:', e);
     } finally {
       setSaving(false);

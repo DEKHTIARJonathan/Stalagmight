@@ -550,8 +550,20 @@ impl Database {
         // Load loop closures
         let loop_closures = self.load_loop_closures()?;
 
+        // Build UUID → current shot_id map so load_markers can resolve stable refs.
+        // Shot IDs are positionally reconstructed on every load, so the UUID is the
+        // only identity that survives shot deletions (see write.rs: shot_uuid).
+        let uuid_to_shot_id: HashMap<String, u32> = sections
+            .iter()
+            .flat_map(|s| {
+                s.shots
+                    .iter()
+                    .filter_map(|shot| shot.uuid.as_ref().map(|uuid| (uuid.clone(), shot.id)))
+            })
+            .collect();
+
         // Load markers
-        let markers = self.load_markers()?;
+        let markers = self.load_markers(&uuid_to_shot_id)?;
 
         // Load imported file hashes
         let imported_file_hashes = self.load_imported_file_hashes()?;
@@ -758,7 +770,7 @@ impl Database {
     }
 
     /// Load survey markers from database
-    fn load_markers(&self) -> Result<Vec<Marker>> {
+    fn load_markers(&self, uuid_to_shot_id: &HashMap<String, u32>) -> Result<Vec<Marker>> {
         let mut markers = Vec::new();
 
         let table_exists: bool = self
@@ -776,7 +788,7 @@ impl Database {
         }
 
         let mut stmt = self.conn.prepare(
-            "SELECT id, section_id, shot_id, position, marker_type, color, text, direction \
+            "SELECT id, section_id, shot_id, shot_uuid, position, marker_type, color, text, direction \
              FROM markers",
         )?;
 
@@ -785,11 +797,12 @@ impl Database {
                 row.get::<_, i64>(0)?,
                 row.get::<_, u32>(1)?,
                 row.get::<_, u32>(2)?,
-                row.get::<_, f64>(3)?,
-                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, f64>(4)?,
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
-                row.get::<_, Option<String>>(7)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, Option<String>>(8)?,
             ))
         })?;
 
@@ -797,13 +810,20 @@ impl Database {
             let (
                 id_i64,
                 section_id,
-                shot_id,
+                stored_shot_id,
+                shot_uuid,
                 position,
                 marker_type_str,
                 color,
                 text,
                 direction_str,
             ) = row?;
+            // Prefer UUID-resolved shot_id (stable across shot deletions) over
+            // the stored positional shot_id (legacy markers or files without UUIDs).
+            let shot_id = shot_uuid
+                .as_deref()
+                .and_then(|uuid| uuid_to_shot_id.get(uuid).copied())
+                .unwrap_or(stored_shot_id);
             let marker_type = match marker_type_str.as_str() {
                 "Arrow" => MarkerType::Arrow,
                 _ => MarkerType::Ndm,

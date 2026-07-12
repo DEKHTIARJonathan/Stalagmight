@@ -331,16 +331,21 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
         );
         const handleClick = (e: ReactMouseEvent) => {
           e.stopPropagation();
-          ctx.onMarkerColumnClick?.(row);
+          if (!geometryReadOnly) ctx.onMarkerColumnClick?.(row);
         };
         if (!marker) {
           return (
             <span
-              role="button"
-              tabIndex={-1}
+              role={geometryReadOnly ? undefined : 'button'}
+              tabIndex={geometryReadOnly ? undefined : -1}
               onClick={handleClick}
-              style={{ fontSize: 10, color: 'var(--cc-text-secondary, #a0a0a0)', opacity: 0.4, cursor: 'pointer' }}
-              title="Add marker"
+              style={{
+                fontSize: 10,
+                color: 'var(--cc-text-secondary, #a0a0a0)',
+                opacity: 0.4,
+                cursor: geometryReadOnly ? 'default' : 'pointer',
+              }}
+              title={geometryReadOnly ? undefined : 'Add marker'}
             >
               &#9711;
             </span>
@@ -348,8 +353,8 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
         }
         return (
           <span
-            role="button"
-            tabIndex={-1}
+            role={geometryReadOnly ? undefined : 'button'}
+            tabIndex={geometryReadOnly ? undefined : -1}
             onClick={handleClick}
             style={{
               display: 'inline-block',
@@ -359,7 +364,8 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
               background: marker.color,
               border: '1.5px solid rgba(255,255,255,.2)',
               verticalAlign: 'middle',
-              cursor: 'pointer',
+              cursor: geometryReadOnly ? 'default' : 'pointer',
+              opacity: geometryReadOnly ? 0.6 : 1,
             }}
             title={`${marker.marker_type === 'Arrow' ? 'Arrow' : 'NDM'}${marker.text ? ' — ' + marker.text : ''} @ ${Math.round(marker.position)}%`}
           />

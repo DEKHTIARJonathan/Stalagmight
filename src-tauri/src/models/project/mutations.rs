@@ -918,6 +918,8 @@ impl Project {
         text: String,
         direction: Option<MarkerDirection>,
     ) -> Result<Marker, String> {
+        validate_marker_color(&color)?;
+        validate_marker_position(position)?;
         let section = self
             .get_section(section_id)
             .ok_or_else(|| format!("Section {section_id} not found"))?;
@@ -948,6 +950,12 @@ impl Project {
         marker_id: u64,
         updates: MarkerUpdates,
     ) -> Result<Marker, String> {
+        if let Some(ref color) = updates.color {
+            validate_marker_color(color)?;
+        }
+        if let Some(pos) = updates.position {
+            validate_marker_position(pos)?;
+        }
         let marker = self
             .markers
             .iter_mut()
@@ -1095,4 +1103,29 @@ impl Project {
             }
         }
     }
+}
+
+/// Reject colors that are not a valid `#rrggbb` hex string.
+///
+/// Only hex colors are accepted on the IPC boundary to prevent CSS injection
+/// (a `url(...)` value would be valid CSS and trigger an outbound request when
+/// placed in an inline `style` attribute, since the Tauri CSP is `null`).
+fn validate_marker_color(color: &str) -> Result<(), String> {
+    let bytes = color.as_bytes();
+    if bytes.len() == 7 && bytes[0] == b'#' && bytes[1..].iter().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(());
+    }
+    Err(format!(
+        "Invalid marker color '{color}': must be a 6-digit hex color (#rrggbb)"
+    ))
+}
+
+/// Reject positions outside [0.0, 100.0] or non-finite values.
+fn validate_marker_position(position: f32) -> Result<(), String> {
+    if position.is_finite() && (0.0..=100.0).contains(&position) {
+        return Ok(());
+    }
+    Err(format!(
+        "Invalid marker position {position}: must be a finite number in [0.0, 100.0]"
+    ))
 }

@@ -1,7 +1,18 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;
 
 use super::{SectionId, ShotId};
+
+/// Deserializes `Option<Option<T>>` so that an absent key → `None` (leave
+/// unchanged) and an explicit JSON `null` → `Some(None)` (clear the field).
+/// Without this, serde folds both absent and `null` into `None`.
+fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Deserialize::deserialize(de).map(Some)
+}
 
 /// The visual type of a survey marker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -35,6 +46,12 @@ pub struct MarkerUpdates {
     pub marker_type: Option<MarkerType>,
     pub color: Option<String>,
     pub text: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
     pub direction: Option<Option<MarkerDirection>>,
 }
 

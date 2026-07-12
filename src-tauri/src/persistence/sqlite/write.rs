@@ -312,6 +312,18 @@ impl Database {
             )?;
         }
 
+        // Build a shot-UUID lookup so markers are tied to their host shot by the
+        // stable UUID rather than the positionally-reconstructed in-memory ID.
+        let shot_uuid_map: std::collections::HashMap<(u32, u32), &str> = project
+            .sections
+            .iter()
+            .flat_map(|s| {
+                s.shots.iter().filter_map(move |shot| {
+                    shot.uuid.as_deref().map(|uuid| ((s.id, shot.id), uuid))
+                })
+            })
+            .collect();
+
         // Save markers
         for marker in &project.markers {
             let marker_id_i64 = i64::try_from(marker.id)
@@ -324,13 +336,17 @@ impl Database {
                 MarkerDirection::TowardStart => "TowardStart",
                 MarkerDirection::TowardEnd => "TowardEnd",
             });
+            let shot_uuid = shot_uuid_map
+                .get(&(marker.section_id, marker.shot_id))
+                .copied();
             tx.execute(
-                "INSERT INTO markers (id, section_id, shot_id, position, marker_type, color, text, direction) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO markers (id, section_id, shot_id, shot_uuid, position, marker_type, color, text, direction) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     marker_id_i64,
                     marker.section_id,
                     marker.shot_id,
+                    shot_uuid,
                     f64::from(marker.position),
                     marker_type_str,
                     marker.color,
