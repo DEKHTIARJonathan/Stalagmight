@@ -137,8 +137,15 @@ impl AppState {
         let Some(p) = guard.as_ref() else {
             return Err("No project open.".to_string());
         };
-        let Some(stalx) = p.file_path.as_ref() else {
-            return Err("Save the project before saving dive plans.".to_string());
+        // A deferred new project HAS a reserved file_path, but nothing was ever
+        // written there - and its first implicit save auto-renames on collision
+        // (next_available_project_path), which would strand a .plnx already
+        // sitting beside the reserved name (#275 B3). No .stalx on disk means
+        // there is nowhere to anchor a sidecar yet, so treat it the same as
+        // having no path at all; the flag clears on the first successful save.
+        let stalx = match p.file_path.as_ref() {
+            Some(path) if !self.initial_save_deferred() => path,
+            _ => return Err("Save the project before saving dive plans.".to_string()),
         };
         let stem = stalx.file_stem().map_or_else(
             || "dive_plans".to_string(),
@@ -476,6 +483,60 @@ mod tests {
             bytes_before, bytes_after,
             "a Foreign .plnx must not be mutated by ANY dive-plan command"
         );
+    }
+
+    /// #275 B3: a deferred new project has a RESERVED file_path that was never
+    /// written. Its first implicit save may auto-rename the .stalx on collision,
+    /// which would strand any .plnx created beside the reserved name. So while
+    /// the initial save is deferred, every dive-plan command must refuse (same
+    /// error as the no-path case) and write nothing; once the flag clears (first
+    /// successful save), saving works against the real path.
+    #[test]
+    fn deferred_initial_save_blocks_dive_plan_persistence() {
+        let temp = TempDir::new().unwrap();
+        let stalx = temp.path().join("reserved.stalx");
+        let plnx_path = temp.path().join("reserved.plnx");
+
+        let state = AppState::new().unwrap();
+        let mut project = Project::new("Mine".to_string(), None);
+        project.file_path = Some(stalx);
+        *state.project.lock().unwrap() = Some(project);
+        state.set_initial_save_deferred_for_tests(true);
+
+        let snapshot: DivePlanSnapshot = serde_json::from_str("{}").unwrap();
+        let save_err = state
+            .save_dive_plan(None, "New".to_string(), snapshot.clone())
+            .unwrap_err();
+        assert!(
+            save_err.contains("Save the project"),
+            "deferred project must refuse dive-plan saves, got: {save_err}"
+        );
+        assert!(
+            !plnx_path.exists(),
+            "no .plnx may be written beside a reserved-but-unwritten .stalx"
+        );
+        // list degrades to empty (never an error the UI must shout about).
+        assert!(state.list_dive_plans().unwrap().is_empty());
+        // load and delete route through the same plnx_context chokepoint and
+        // must refuse identically while deferred (no ID-first side path).
+        let load_err = state.load_dive_plan(1).unwrap_err();
+        assert!(
+            load_err.contains("Save the project"),
+            "deferred project must refuse dive-plan loads, got: {load_err}"
+        );
+        let delete_err = state.delete_dive_plan(1).unwrap_err();
+        assert!(
+            delete_err.contains("Save the project"),
+            "deferred project must refuse dive-plan deletes, got: {delete_err}"
+        );
+
+        // After the first real save the flag clears and persistence works.
+        state.set_initial_save_deferred_for_tests(false);
+        let meta = state
+            .save_dive_plan(None, "New".to_string(), snapshot)
+            .unwrap();
+        assert_eq!(meta.name, "New");
+        assert!(plnx_path.exists(), "post-save the sidecar lands normally");
     }
 
     #[test]
