@@ -49,7 +49,6 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.close_project",
     "command.compute_gas_reach_field",
     "command.create_loop_closure",
-    "command.create_project",
     "command.create_project_full",
     "command.create_section",
     "command.create_section_and_merge",
@@ -72,9 +71,6 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.get_anchored_section_ids",
     "command.get_cache_stats",
     "command.get_config",
-    "command.get_connected_section_ids",
-    "command.get_depth_preset_colors",
-    "command.get_display_setting",
     "command.get_network_status",
     "command.get_project_state",
     "command.get_project_warnings",
@@ -82,10 +78,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.get_recent_logs_since",
     "command.get_redo_stack",
     "command.get_rigid_connected_section_ids",
-    "command.get_section",
     "command.get_section_relationships",
     "command.get_segment_geometry",
-    "command.get_survey_geometry",
     "command.get_survey_geometry_for_file",
     "command.get_tile_fetch_stats",
     "command.get_tile_providers",
@@ -104,7 +98,6 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.move_section",
     "command.move_segment",
     "command.move_station",
-    "command.open_project",
     "command.parse_gpx",
     "command.parse_tml",
     "command.preview_delete_shot",
@@ -860,7 +853,15 @@ mod tests {
         //       command.{list,load,save,delete}_dive_plan = 653.
         //   + 2 agent-harness observability commands:
         //       command.get_recent_logs_since + command.debug_trigger_panic = 655.
-        assert_eq!(EVENT_NAMES.len(), 655);
+        //   - 1 retired DepthPreset command (#275, no caller on either side):
+        //       command.get_depth_preset_colors removed = 654.
+        //   - 5 retired dead commands (#275, no frontend caller): command.
+        //       {create_project, get_connected_section_ids, get_display_setting,
+        //       get_section, get_survey_geometry} removed = 649.
+        //   - 1 retired dead command (#275, superseded by load_project_full,
+        //       zero frontend invokers left after the #275 batch removed the
+        //       last caller): command.open_project removed = 648.
+        assert_eq!(EVENT_NAMES.len(), 648);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

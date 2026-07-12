@@ -102,8 +102,8 @@ fn escape_xml_text(s: &str) -> String {
 
 // --- Shot color gradients (mirror the live survey map) ----------------------
 // The map computes these colors in the FRONTEND (src/utils/colors.ts +
-// distanceGradient.ts), NOT via the orphaned Rust DepthPreset. To match on
-// screen, port those exact endpoints + math here.
+// distanceGradient.ts). To match on screen, port those exact endpoints + math
+// here (the HSL lerp lives in depth_colors.rs).
 
 /// Live-map depth-gradient endpoints (dark-theme tokens, pinned theme-independent):
 /// shallow teal → deep coral. From `--cc-depth-shallow` / `--cc-depth-deep`.

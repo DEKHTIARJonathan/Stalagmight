@@ -219,11 +219,6 @@ interface ProjectStore {
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
-   * Open a project using the legacy open_project command (no progress events).
-   * @deprecated Use loadProject() instead for progress UI support.
-   */
-  openProject: (path: string) => Promise<CommandResult>;
-  /**
    * Save the project.  `isAutosave` should be set to `true` from the
    * autosave hook so the Rust side can honour
    * `CollabState.write_tml_on_autosave` and skip the sibling `.tml`
@@ -952,50 +947,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Create failed — drop the entry-point source (no auto-reset) so it can't
       // mis-attribute a later, unrelated project command. Mirrors loadProject.
       clearProjectActionSource();
-      const error = parseLoadError(e);
-      if (get().loading.clientOpId === clientOpId) {
-        get().setLoadingError(error.message, error.details);
-      }
-      return emptyCommandResult(false, error.message);
-    }
-  },
-
-  openProject: async (path: string) => {
-    // ALWAYS cancel first - NO isLoading guard
-    await get().cancelLoading();
-
-    // Use cross-platform path splitting for project name extraction
-    const initialName = extractFilename(path, /\.stalx$/i) || 'Project';
-    const clientOpId = get().startLoading(initialName, path);
-
-    try {
-      const result = await invokeIpc<CommandResult>(
-        'open_project',
-        { path },
-        { purpose: 'open project without progress UI', fields: { path } }
-      );
-
-      // Check clientOpId hasn't changed
-      if (get().loading.clientOpId !== clientOpId) {
-        return emptyCommandResult(false, 'Cancelled');
-      }
-
-      if (result.success) {
-        await get().refreshProjectState();
-        await get().loadRecentProjects();
-        // Load display settings from the opened project
-        await useUIStore.getState().loadDisplaySettings();
-        // Fit map to show all stations
-        useUIStore.getState().triggerFitToBounds();
-        useUIStore.getState().setView('single');
-        // An opened project is backed by its on-disk database.
-        set({ isDirty: false, databaseOpen: true });
-        get().resetLoading();
-      } else {
-        get().setLoadingError(result.error ?? 'Failed to open project');
-      }
-      return result;
-    } catch (e) {
       const error = parseLoadError(e);
       if (get().loading.clientOpId === clientOpId) {
         get().setLoadingError(error.message, error.details);

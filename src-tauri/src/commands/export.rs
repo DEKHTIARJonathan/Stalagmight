@@ -3,7 +3,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::AppState;
-use crate::export::{DepthPreset, DepthPresetColors, ExportImageOptions};
+use crate::export::ExportImageOptions;
 use crate::models::Project;
 
 /// Generic helper that handles the shared export logic for all text-based formats.
@@ -256,10 +256,4 @@ pub async fn preview_svg_export(
     })
     .await
     .map_err(|e| format!("Preview task panicked: {e}"))?
-}
-
-/// Get depth color preset colors
-#[tauri::command]
-pub fn get_depth_preset_colors(preset: DepthPreset) -> DepthPresetColors {
-    crate::export::get_depth_preset_colors(preset)
 }
