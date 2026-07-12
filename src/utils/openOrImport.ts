@@ -12,8 +12,9 @@
  * - `.dmp`              -> DMP import (add to current project, or new project)
  * - anything else       -> unsupported-file error (NOT silently treated as DMP)
  *
- * Importing into an open project while the read-only closure-adjusted view is
- * active is rejected here, so every import entry point shares that guard.
+ * Importing into an open project while editing is blocked (the closure-adjusted
+ * view, the Plan/Export workspaces, or a SpeleoDB project held without the
+ * write lock) is rejected here, so every import entry point shares that guard.
  *
  * The routing is intentionally shared between the toolbar "Open / Import"
  * button, the "open it from file" hint link, and the Ctrl+I keyboard shortcut
@@ -77,8 +78,9 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
     // project is not an import, so it's exempt too).
     if (isImportable && hasProject && isEditingBlockedNow()) {
       // Tailor the fix-it advice to the active read-only cause(s) - read the
-      // individual flags separately (not via isMapReadOnly/isEditingBlockedNow,
-      // which only report the combined boolean) so a compound state (e.g. a
+      // individual flags separately (isEditingBlockedNow() reports only the
+      // combined boolean, and isMapReadOnly folds the closure-adjusted and
+      // Plan/Export causes into one) so a compound state (e.g. a
       // locked remote project also viewed in Plan mode) mentions BOTH causes
       // instead of silently dropping the SpeleoDB lock from the message.
       const speleoReadOnly = selectSpeleoReadOnly(useSpeleoStore.getState());

@@ -96,6 +96,16 @@ test('detects isMapReadOnly as a bare identifier or a call', () => {
   assert.ok(!usesIsMapReadOnly('const editingBlocked = useEditingBlocked();'));
 });
 
+test('a // comment that merely mentions the raw symbols does not trip rule B', () => {
+  assert.ok(!usesIsMapReadOnly('// composed from isMapReadOnly plus the speleo lock'));
+  assert.ok(!usesSpeleoReadOnly('// see selectSpeleoReadOnly in speleoStore'));
+});
+
+test('a real reference on a later line still trips rule B despite a comment-only mention', () => {
+  const text = ['// isMapReadOnly is documented here', 'useUIStore(isMapReadOnly);'].join('\n');
+  assert.ok(usesIsMapReadOnly(text));
+});
+
 test('detects selectSpeleoReadOnly as a bare identifier, a call, or an import', () => {
   assert.ok(usesSpeleoReadOnly('useSpeleoStore(selectSpeleoReadOnly)'));
   assert.ok(usesSpeleoReadOnly('selectSpeleoReadOnly(useSpeleoStore.getState())'));

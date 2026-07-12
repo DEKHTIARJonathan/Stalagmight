@@ -1,7 +1,7 @@
 // Canonical read-only gating tripwire (#275).
 //
 // The correct "is the survey map read-only right now" predicate is
-// `isEditingBlocked()` / `isEditingBlockedNow()` (src/hooks/useEditingBlocked.ts):
+// `useEditingBlocked()` / `isEditingBlockedNow()` (src/hooks/useEditingBlocked.ts):
 // `isMapReadOnly(state)` (geometryMode === 'closureAdjusted' || appMode !== 'survey')
 // composed with `selectSpeleoReadOnly` for a locked remote SpeleoDB project. Two
 // recurring bug classes keep re-appearing at individual call sites:
@@ -55,7 +55,8 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 // `!== 'closureAdjusted'` comparison (either operand order, i.e. including the
 // Yoda form `'closureAdjusted' === x`). Each entry is a reviewed, legitimate
 // non-mutation usage (display/coordinate-selection, or the canonical
-// definition) - not a mutation gate that should instead compose isEditingBlocked.
+// definition) - not a mutation gate that should instead compose
+// useEditingBlocked() / isEditingBlockedNow().
 // Pinned EXACT (not a ceiling): a count that drops below its baseline is just as
 // suspicious as one that grows past it - it likely means a gate got deleted
 // rather than migrated, so keep the allowlist in sync in both directions.
@@ -186,12 +187,19 @@ export function countClosureAdjustedComparisons(text) {
   return count;
 }
 
+// Rule (B) boolean check: does any CODE line reference the raw symbol? Line
+// comments are stripped first (same treatment as Rule (A)) so a doc comment
+// that merely mentions isMapReadOnly/selectSpeleoReadOnly can't trip the gate.
+function anyCodeLineMatches(text, re) {
+  return text.split('\n').some((line) => re.test(stripLineComment(line)));
+}
+
 export function usesIsMapReadOnly(text) {
-  return RAW_IS_MAP_READ_ONLY_RE.test(text);
+  return anyCodeLineMatches(text, RAW_IS_MAP_READ_ONLY_RE);
 }
 
 export function usesSpeleoReadOnly(text) {
-  return RAW_SELECT_SPELEO_READ_ONLY_RE.test(text);
+  return anyCodeLineMatches(text, RAW_SELECT_SPELEO_READ_ONLY_RE);
 }
 
 function main() {
@@ -223,7 +231,7 @@ function main() {
     if (count !== allowed) {
       violationsA.push(
         `${rel}: ${count} raw \`=== 'closureAdjusted'\` comparison(s) (allowlisted: ${allowed}, exact match required). ` +
-          `If this is a genuine mutation gate, compose isEditingBlocked()/isEditingBlockedNow() ` +
+          `If this is a genuine mutation gate, use useEditingBlocked() (in a component) or isEditingBlockedNow() (outside React) ` +
           `instead - see docs comment at the top of scripts/check-readonly-gates.mjs. If it is a ` +
           `reviewed display/coordinate-selection usage, update the count in CLOSURE_ADJUSTED_ALLOWLIST there ` +
           `(a count BELOW baseline likely means a gate was deleted rather than migrated - check before lowering it).`,
