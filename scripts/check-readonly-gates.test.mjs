@@ -6,10 +6,12 @@
 import assert from 'node:assert/strict';
 import {
   countClosureAdjustedComparisons,
+  stripLineComment,
   usesIsMapReadOnly,
   usesSpeleoReadOnly,
   CLOSURE_ADJUSTED_ALLOWLIST,
-  MAP_READ_ONLY_EXEMPT,
+  DIRECT_READ_ONLY_ACCESS_DEFINITIONS,
+  DIRECT_READ_ONLY_ACCESS_EXEMPT,
 } from './check-readonly-gates.mjs';
 
 let passed = 0;
@@ -28,6 +30,18 @@ function test(name, fn) {
 test('counts a raw equality comparison against closureAdjusted', () => {
   assert.equal(countClosureAdjustedComparisons("const x = geometryMode === 'closureAdjusted';"), 1);
   assert.equal(countClosureAdjustedComparisons('const x = geometryMode === "closureAdjusted";'), 1);
+});
+
+test('counts a raw inequality comparison against closureAdjusted', () => {
+  assert.equal(countClosureAdjustedComparisons("const x = geometryMode !== 'closureAdjusted';"), 1);
+});
+
+test('counts a Yoda-form equality comparison (string on the left)', () => {
+  assert.equal(countClosureAdjustedComparisons("if ('closureAdjusted' === geometryMode) a();"), 1);
+});
+
+test('counts a Yoda-form inequality comparison (string on the left)', () => {
+  assert.equal(countClosureAdjustedComparisons("if ('closureAdjusted' !== geometryMode) a();"), 1);
 });
 
 test('counts multiple comparisons across lines', () => {
@@ -50,41 +64,81 @@ test('does not count an unrelated equality comparison', () => {
   assert.equal(countClosureAdjustedComparisons("if (mode === 'measured') a();"), 0);
 });
 
+test('does not lose a real comparison that follows a // inside an earlier string literal (URL)', () => {
+  // A naive `line.indexOf('//')` would truncate at the URL's "//" and silently
+  // miss the real comparison later on the line - this is the exact bug fixed by
+  // making stripLineComment string-literal-aware.
+  const line = `const msg = "see http://example.com"; if (mode === 'closureAdjusted') a();`;
+  assert.equal(countClosureAdjustedComparisons(line), 1);
+});
+
+// --- stripLineComment -------------------------------------------------------------
+
+test('stripLineComment leaves a URL inside a string literal intact', () => {
+  const line = `const url = "http://example.com/closureAdjusted";`;
+  assert.equal(stripLineComment(line), line);
+});
+
+test('stripLineComment strips a real trailing comment after a string containing a URL', () => {
+  const line = `const url = "http://example.com"; // not a real comparison`;
+  assert.equal(stripLineComment(line), `const url = "http://example.com"; `);
+});
+
+test('stripLineComment strips a plain trailing comment with no string literal', () => {
+  assert.equal(stripLineComment("if (a) b(); // trailing note"), 'if (a) b(); ');
+});
+
 // --- usesIsMapReadOnly / usesSpeleoReadOnly -------------------------------------
 
 test('detects isMapReadOnly as a bare identifier or a call', () => {
   assert.ok(usesIsMapReadOnly('useUIStore(isMapReadOnly)'));
   assert.ok(usesIsMapReadOnly('isMapReadOnly(useUIStore.getState())'));
-  assert.ok(!usesIsMapReadOnly('const geometryReadOnly = false;'));
+  assert.ok(!usesIsMapReadOnly('const editingBlocked = useEditingBlocked();'));
 });
 
-test('detects either the local speleoReadOnly variable or the selector import', () => {
-  assert.ok(usesSpeleoReadOnly('const geometryReadOnly = isMapReadOnly(s) || speleoReadOnly;'));
+test('detects selectSpeleoReadOnly as a bare identifier, a call, or an import', () => {
+  assert.ok(usesSpeleoReadOnly('useSpeleoStore(selectSpeleoReadOnly)'));
+  assert.ok(usesSpeleoReadOnly('selectSpeleoReadOnly(useSpeleoStore.getState())'));
   assert.ok(usesSpeleoReadOnly("import { selectSpeleoReadOnly } from '../store/speleoStore';"));
-  assert.ok(!usesSpeleoReadOnly('const geometryReadOnly = isMapReadOnly(s);'));
+  assert.ok(!usesSpeleoReadOnly('const editingBlocked = useEditingBlocked();'));
 });
 
 // --- regression proof: this is the exact bug class #275 fixed ------------------
 
-test('the pre-#275 DataTable.tsx pattern would have been flagged (regression proof)', () => {
+test('the pre-#275 DataTable.tsx pattern would have been flagged (regression proof, rule A)', () => {
   const buggy = "const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');";
   assert.equal(countClosureAdjustedComparisons(buggy), 1);
   assert.ok(!usesIsMapReadOnly(buggy)); // it didn't even reach for the canonical predicate
 });
 
-test('the fixed composed pattern passes both checks', () => {
-  const fixed = 'const geometryReadOnly = useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly);';
+test('the pre-#275 short-circuiting composition would have been flagged (regression proof, rule B)', () => {
+  // useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly) - the Rules-of-
+  // Hooks-unsafe pattern the #275 blocker fixed by introducing useEditingBlocked().
+  const buggy = 'const geometryReadOnly = useUIStore(isMapReadOnly) || useSpeleoStore(selectSpeleoReadOnly);';
+  assert.ok(usesIsMapReadOnly(buggy));
+  assert.ok(usesSpeleoReadOnly(buggy));
+});
+
+test('the fixed shared-hook call site passes both checks', () => {
+  const fixed = 'const editingBlocked = useEditingBlocked();';
   assert.equal(countClosureAdjustedComparisons(fixed), 0);
-  assert.ok(usesIsMapReadOnly(fixed));
-  assert.ok(usesSpeleoReadOnly(fixed));
+  assert.ok(!usesIsMapReadOnly(fixed));
+  assert.ok(!usesSpeleoReadOnly(fixed));
 });
 
 // --- allowlist hygiene -----------------------------------------------------------
 
-test('the exemption set only ever names the uiStore definition module', () => {
-  // A growing exemption set silently defeats rule (B) — keep it deliberately tiny
-  // and reviewed; this pins the accepted baseline so a new entry is a visible diff.
-  assert.deepEqual([...MAP_READ_ONLY_EXEMPT], ['src/store/uiStore.ts']);
+test('the direct-access definitions set only names the two store modules and the helper', () => {
+  assert.deepEqual(
+    [...DIRECT_READ_ONLY_ACCESS_DEFINITIONS].sort(),
+    ['src/hooks/useEditingBlocked.ts', 'src/store/speleoStore.ts', 'src/store/uiStore.ts'].sort(),
+  );
+});
+
+test('every direct-access exemption carries a non-empty written reason', () => {
+  for (const [file, reason] of Object.entries(DIRECT_READ_ONLY_ACCESS_EXEMPT)) {
+    assert.ok(typeof reason === 'string' && reason.trim().length > 0, `${file}: exemption needs a reason`);
+  }
 });
 
 test('every allowlisted count is a positive integer (no stray zero entries)', () => {
