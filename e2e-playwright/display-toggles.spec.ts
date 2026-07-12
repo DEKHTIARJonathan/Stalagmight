@@ -232,6 +232,31 @@ test.describe('Display Toggle Visibility', () => {
   });
 });
 
+test.describe('Label Toggle Click Coverage', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await createProject(page, 'Label Toggle Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
+  });
+
+  for (const toggleKey of ['showSectionNames', 'showStationLabels'] as const) {
+    test(`toggling ${toggleKey} flips aria-pressed and back`, async ({ page }) => {
+      await openDisplayMenu(page);
+
+      const initialState = await isToggleOn(page, toggleKey);
+      await toggleDisplayOption(page, toggleKey);
+      expect(await isToggleOn(page, toggleKey)).toBe(!initialState);
+
+      await toggleDisplayOption(page, toggleKey);
+      expect(await isToggleOn(page, toggleKey)).toBe(initialState);
+    });
+  }
+});
+
 test.describe('Selection Blocking When Hidden', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
@@ -629,10 +654,11 @@ test.describe('Toggle Relationship Tests', () => {
   });
 });
 
-// These exercise the Draw tool, which was removed in #71/#74 (the draw shortcut
-// is unbound and uiStore.setDrawFromStation no longer exists). Skipped as
-// obsolete — they predate the removal and were left behind on master.
-test.describe.skip('Tool Operation Tests', () => {
+// The Draw tool was removed in #71/#74 (the draw shortcut is unbound and
+// uiStore.setDrawFromStation no longer exists), so its coverage above is gone.
+// Merge still requires visible stations to select targets, so that behavior
+// is kept as a live test below (Refs #275).
+test.describe('Merge Tool Interaction', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
@@ -643,58 +669,18 @@ test.describe.skip('Tool Operation Tests', () => {
     await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
   });
 
-  test('draw operation continues when stations hidden - highlight layer shows origin', async ({ page }) => {
-    // This tests that draw operations continue to work even with hidden stations
-    // The highlight layer makes the origin station visible during the operation
-    // (Per MapCanvas.tsx: "Do NOT clear drawFromStation... These operations work with hidden stations")
-
-    // Switch to draw tool
-    await page.keyboard.press('d');
-
-    // Set a draw from station via store (simulating start of draw)
-    await page.evaluate(() => {
-      const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { setDrawFromStation: (ref: unknown) => void } } } }).__E2E_TEST__;
-      stores?.uiStore?.getState()?.setDrawFromStation({
-        section_id: 1,
-        station_index: 0,
-      });
-    });
-
-    // Verify draw is active
-    await expect.poll(async () => {
-      const drawFrom = await page.evaluate(() => {
-        const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { drawFromStation: unknown } } } }).__E2E_TEST__;
-        return stores?.uiStore?.getState()?.drawFromStation ?? null;
-      });
-      return drawFrom;
-    }, { timeout: 1000 }).not.toBeNull();
-
-    // Hide stations
-    await openDisplayMenu(page);
-    await toggleDisplayOption(page, 'showStations');
-
-    // Draw operation should PERSIST - highlight layer shows origin station
-    const drawFromAfter = await page.evaluate(() => {
-      const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { drawFromStation: unknown } } } }).__E2E_TEST__;
-      return stores?.uiStore?.getState()?.drawFromStation ?? null;
-    });
-    expect(drawFromAfter).not.toBeNull();
-  });
-
   test('merge operation canceled when stations hidden mid-merge', async ({ page }) => {
     // Unlike draw, merge requires visible stations to select targets
+    const [station] = await getStationScreenPositions(page);
 
     // Switch to merge tool
     await page.keyboard.press('m');
 
     // Set a merge station A via store (simulating first station selected)
-    await page.evaluate(() => {
+    await page.evaluate((ref) => {
       const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { setMergeStationA: (ref: unknown) => void } } } }).__E2E_TEST__;
-      stores?.uiStore?.getState()?.setMergeStationA({
-        section_id: 1,
-        station_index: 0,
-      });
-    });
+      stores?.uiStore?.getState()?.setMergeStationA(ref);
+    }, { section_id: station.sectionId, station_index: station.stationIndex });
 
     // Verify merge station A is set
     await expect.poll(async () => {
@@ -717,62 +703,6 @@ test.describe.skip('Tool Operation Tests', () => {
       });
       return mergeA;
     }, { timeout: 2000 }).toBeNull();
-  });
-
-  test('snap detection is disabled when stations are hidden during Draw tool', async ({ page }) => {
-    // Wait for stations to be visible and get their positions
-    await waitForLayerVisible(page, 'survey-stations');
-    const stations = await getStationScreenPositions(page);
-
-    // Skip if no stations available
-    if (stations.length === 0) {
-      test.skip();
-      return;
-    }
-
-    const targetStation = stations[0];
-
-    // Hide stations
-    await openDisplayMenu(page);
-    await toggleDisplayOption(page, 'showStations');
-    await page.keyboard.press('Escape');
-
-    // Switch to draw tool
-    await page.keyboard.press('d');
-
-    // Get canvas position
-    const canvas = page.locator('canvas').first();
-    const box = await canvas.boundingBox();
-    expect(box).not.toBeNull();
-
-    // Move mouse near the known station position (with small offsets for stability)
-    const offsets = [
-      [0, 0],
-      [4, 0],
-      [-4, 0],
-      [0, 4],
-      [0, -4],
-      [6, 6],
-      [-6, -6],
-    ] as const;
-
-    let snappedStation: unknown = null;
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      for (const [dx, dy] of offsets) {
-        await page.mouse.move(box!.x + targetStation.x + dx, box!.y + targetStation.y + dy);
-        // Let map pointer handlers process the latest move event
-        await page.waitForTimeout(40);
-        snappedStation = await page.evaluate(() => {
-          const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { snappedStation: unknown } } } }).__E2E_TEST__;
-          return stores?.uiStore?.getState()?.snappedStation ?? null;
-        });
-        if (snappedStation) break;
-      }
-      if (snappedStation) break;
-    }
-
-    // Stations hitbox layer is hidden alongside stations, so snapping must remain unavailable
-    expect(snappedStation).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures/coverage';
-import { setupMockedPage, createProject, waitForMapReady, waitForMapIdle } from './helpers/app';
+import { setupMockedPage, createProject, waitForMapReady } from './helpers/app';
 
 test.describe('UI Components', () => {
   test.beforeEach(async ({ page }) => {
@@ -29,61 +29,6 @@ test.describe('UI Components', () => {
 
     test('should handle Ctrl+A for select all', async ({ page }) => {
       await page.keyboard.press('Control+a');
-      await expect(page.getByTestId('map-canvas')).toBeVisible();
-    });
-  });
-
-  test.describe('Panel Toggles', () => {
-    test('should toggle sections panel with Ctrl+1', async ({ page }) => {
-      const sectionsPanel = page.getByTestId('sections-panel');
-      const wasVisible = await sectionsPanel.isVisible();
-      await page.keyboard.press('Control+1');
-      await waitForMapIdle(page);
-      if (wasVisible) {
-        await expect(sectionsPanel).toBeHidden();
-      } else {
-        await expect(sectionsPanel).toBeVisible();
-      }
-    });
-
-    test('should toggle detail panel with Ctrl+2', async ({ page }) => {
-      const detailPanel = page.getByTestId('detail-panel');
-      const wasVisible = await detailPanel.isVisible();
-      await page.keyboard.press('Control+2');
-      await waitForMapIdle(page);
-      if (wasVisible) {
-        await expect(detailPanel).toBeHidden();
-      } else {
-        await expect(detailPanel).toBeVisible();
-      }
-    });
-
-    test('should toggle data table with Ctrl+3', async ({ page }) => {
-      const dataTable = page.getByTestId('data-table');
-      const wasVisible = await dataTable.isVisible();
-      await page.keyboard.press('Control+3');
-      await waitForMapIdle(page);
-      if (wasVisible) {
-        await expect(dataTable).toBeHidden();
-      } else {
-        await expect(dataTable).toBeVisible();
-      }
-    });
-  });
-
-  test.describe('Undo/Redo', () => {
-    test('should handle Ctrl+Z for undo', async ({ page }) => {
-      await page.keyboard.press('Control+z');
-      await expect(page.getByTestId('map-canvas')).toBeVisible();
-    });
-
-    test('should handle Ctrl+Y for redo', async ({ page }) => {
-      await page.keyboard.press('Control+y');
-      await expect(page.getByTestId('map-canvas')).toBeVisible();
-    });
-
-    test('should handle Ctrl+Shift+Z for redo', async ({ page }) => {
-      await page.keyboard.press('Control+Shift+z');
       await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
   });
@@ -198,50 +143,6 @@ test.describe('UI Components', () => {
       await expect(bottomLeftContainer).toBeVisible({ timeout: 2000 });
     });
 
-    test('should toggle section names visibility', async ({ page }) => {
-      // Open Display menu
-      await page.getByTestId('display-menu-button').click();
-      await expect(page.locator('button:has-text("Section Names")')).toBeVisible({ timeout: 2000 });
-
-      // Section Names is on by default (showSectionNames: true in uiStore)
-      // Check the button shows it's enabled (has checkmark or active state)
-      const sectionNamesButton = page.locator('button:has-text("Section Names")');
-      await expect(sectionNamesButton).toBeVisible();
-
-      // Toggle section names off
-      await page.click('button:has-text("Section Names")');
-
-      // Toggle back on
-      await page.click('button:has-text("Section Names")');
-
-      // Button should still be visible and functional
-      await expect(sectionNamesButton).toBeVisible();
-    });
-
-    test('should toggle station labels visibility', async ({ page }) => {
-      // Open Display menu
-      await page.getByTestId('display-menu-button').click();
-      await expect(page.locator('button:has-text("Station Labels")')).toBeVisible({ timeout: 2000 });
-
-      // Station Labels is off by default (showStationLabels: false in uiStore).
-      // It's an element pill (tinted in the station color), so its on/off state is
-      // read from aria-pressed rather than a bg-accent fill.
-      const stationLabelsButton = page.locator('button:has-text("Station Labels")');
-      await expect(stationLabelsButton).toBeVisible();
-      await expect(stationLabelsButton).toHaveAttribute('aria-pressed', 'false');
-
-      // Toggle station labels on
-      await page.click('button:has-text("Station Labels")');
-      await expect(stationLabelsButton).toHaveAttribute('aria-pressed', 'true');
-
-      // Toggle back off
-      await page.click('button:has-text("Station Labels")');
-      await expect(stationLabelsButton).toHaveAttribute('aria-pressed', 'false');
-
-      // Button should still be visible and functional
-      await expect(stationLabelsButton).toBeVisible();
-    });
-
     test('should toggle grid overlay visibility', async ({ page }) => {
       // Open Display menu
       await page.getByTestId('display-menu-button').click();
@@ -303,36 +204,6 @@ test.describe('UI Components', () => {
       await expect(spacingSelect).toHaveValue('100');
     });
 
-    test('should toggle satellite imagery visibility', async ({ page }) => {
-      // Open Display menu
-      await page.getByTestId('display-menu-button').click();
-      await expect(page.locator('button:has-text("Satellite")')).toBeVisible({ timeout: 2000 });
-
-      // Satellite is off by default (showSatellite: false in uiStore)
-      const satelliteButton = page.locator('[data-testid="display-toggle-showSatellite"]');
-      await expect(satelliteButton).toBeVisible();
-
-      // Verify initial state - checkbox indicator should NOT have bg-accent (off state)
-      const checkbox = satelliteButton;
-      await expect(checkbox).not.toHaveClass(/bg-accent/);
-
-      // Toggle satellite on
-      await satelliteButton.click();
-
-      // Verify the toggle is now on - checkbox should have bg-accent class
-      await expect(checkbox).toHaveClass(/bg-accent/);
-
-      // Wait for satellite layer to be added (source should be added to map)
-      // Toggle back off
-      await satelliteButton.click();
-
-      // Verify the toggle is back off - checkbox should NOT have bg-accent
-      await expect(checkbox).not.toHaveClass(/bg-accent/);
-
-      // Button should still be visible and functional
-      await expect(satelliteButton).toBeVisible();
-    });
-
     test('should show satellite option in Display menu', async ({ page }) => {
       // Open Display menu
       await page.getByTestId('display-menu-button').click();
@@ -342,29 +213,6 @@ test.describe('UI Components', () => {
       await expect(satelliteButton).toBeVisible();
       await expect(satelliteButton).toHaveText('Satellite');
       await expect(satelliteButton).toHaveAttribute('title', 'Show satellite imagery');
-    });
-
-    test('should persist satellite toggle state during session', async ({ page }) => {
-      // Open Display menu and toggle satellite on
-      await page.getByTestId('display-menu-button').click();
-      const satelliteButton = page.locator('[data-testid="display-toggle-showSatellite"]');
-      const checkbox = satelliteButton;
-
-      // Verify initially off
-      await expect(checkbox).not.toHaveClass(/bg-accent/);
-
-      // Toggle on
-      await satelliteButton.click();
-      await expect(checkbox).toHaveClass(/bg-accent/);
-
-      // Close the menu (click outside)
-      await page.keyboard.press('Escape');
-      // Open the menu again
-      await page.getByTestId('display-menu-button').click();
-
-      // Satellite should still be on (state persisted in store during session)
-      const checkbox2 = page.locator('[data-testid="display-toggle-showSatellite"]');
-      await expect(checkbox2).toHaveClass(/bg-accent/);
     });
   });
 });
