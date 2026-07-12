@@ -214,6 +214,18 @@ export function DialogWrapper({
     if (!el) return;
 
     const rafId = requestAnimationFrame(() => {
+      // If focus already landed on a specific control inside the dialog before
+      // this frame (a fast click/tab, or a component test typing right after
+      // render), keep it - only the container-level default focus set by the
+      // mount layout effect above gets upgraded by the heuristic. Without this
+      // guard the rAF yanks focus mid-interaction: under jsdom's ~16ms rAF it
+      // fired in the middle of a userEvent.type() and the keystrokes went to
+      // the stolen-focus target (#289, the SectionAdjustDialog flake).
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== el && el.contains(active)) {
+        return;
+      }
+
       // Priority 1: element with [data-autofocus]
       const autofocus = el.querySelector<HTMLElement>('[data-autofocus]');
       if (autofocus && isVisibleAndAccessible(autofocus, el)) {
