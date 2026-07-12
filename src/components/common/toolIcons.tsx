@@ -180,11 +180,6 @@ export function ToolGlyph({ tool, size = 20 }: ToolGlyphProps) {
   );
 }
 
-/** Whether a duotone glyph exists for a tool. */
-export function hasToolGlyph(tool: ToolType): boolean {
-  return GLYPHS[tool] !== undefined;
-}
-
 /**
  * Standalone object glyphs for each geometry entity (no action modifier), used
  * to mark entity hyperlinks. Same duotone language as the toolbar icons: the
