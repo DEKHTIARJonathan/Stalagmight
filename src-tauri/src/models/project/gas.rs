@@ -127,14 +127,27 @@ impl Project {
         // 0 survey_rmv_multiplier) would zero every edge cost and make the whole cave falsely
         // reachable — the unsafe over-stating direction (§6) — so bail to all-unreachable.
         // `pred` is the shortest-path predecessor tree (for the staged drop route below).
-        let (gas_in, pred) = if n == 0
+        //
+        // `adj` is kept alongside (gas_in, pred): its edge SET is identical to the plain
+        // topology graph `build_survey_graph` would return (same shots/merges/closures,
+        // just different edge weights), so it doubles as the turn-frontier's adjacency
+        // below - no second, purely-topological graph build. In the degenerate branch
+        // `gas_in` is all-INFINITY, so `reachable` is all-false and the turn-frontier's
+        // `reachable[u] && adj[u]...` filter short-circuits on `reachable[u]` without ever
+        // reading `adj` - an empty adjacency list is provably equivalent, so build one
+        // instead of paying for a real (unused) graph build.
+        let (gas_in, pred, adj) = if n == 0
             || roots.is_empty()
             || in_speed <= 0.0
             || !in_speed.is_finite()
             || in_rmv <= 0.0
             || !in_rmv.is_finite()
         {
-            (vec![f64::INFINITY; n], vec![usize::MAX; n])
+            (
+                vec![f64::INFINITY; n],
+                vec![usize::MAX; n],
+                vec![Vec::new(); n],
+            )
         } else {
             let adj = self.build_survey_graph_weighted(n, &station_index, |shot, fi, ti| {
                 // Jump/reference legs burn gas at a higher RMV: tying in a jump is extra
@@ -153,7 +166,8 @@ impl Project {
                     coords_ref[ti].z,
                 )
             });
-            Self::dijkstra_with_preds(&adj, &roots)
+            let (gas_in, pred) = Self::dijkstra_with_preds(&adj, &roots);
+            (gas_in, pred, adj)
         };
 
         // The strategy actually applied (a stage-short staged request falls back to All-thirds; Free
@@ -244,11 +258,10 @@ impl Project {
             .collect();
 
         // Turn frontier: reachable stations with at least one neighbour that is NOT reachable
-        // (out of budget or in another component). Topology only — the unweighted graph's
-        // adjacency is enough; the gas weights are irrelevant to "who borders whom".
-        let adj_topo = self.build_survey_graph(n, &station_index, None);
+        // (out of budget or in another component). Topology only - `adj`'s edge SET (built
+        // above) is enough; the gas weights on it are irrelevant to "who borders whom".
         let turn_frontier: Vec<StationRef> = (0..n)
-            .filter(|&u| reachable[u] && adj_topo[u].iter().any(|&(v, _)| !reachable[v]))
+            .filter(|&u| reachable[u] && adj[u].iter().any(|&(v, _)| !reachable[v]))
             .map(|u| station_refs[u])
             .collect();
 

@@ -1936,6 +1936,82 @@ fn gas_reach_field_reaches_across_a_station_merge() {
 }
 
 #[test]
+fn gas_reach_field_turn_frontier_crosses_a_station_merge() {
+    // Pins the "weighted and topology graphs share one edge set" invariant a perf fix
+    // relies on (#241): `turn_frontier` is filtered against the SAME `adj` the gas
+    // Dijkstra ran on, not a separately-built topology graph, so a merge tie must show
+    // up as an edge on both sides for the frontier to be correct across it.
+    //
+    // Section A: A:0 -> A:1, a 1 m leg (trivially cheap). Section B: B:0 -> B:1, a
+    // 2000 m leg (expensive enough to fall outside the small cylinder's budget).
+    // A:1 is merged onto B:0 (the 0-cost tie). So the only reachable/unreachable
+    // boundary is exactly at the merge: B:0 is reachable (cheap: just the 1 m A leg
+    // plus the 0-cost tie) and borders the unreachable B:1 (too far); A:0 borders only
+    // the reachable A:1/B:0, so it is NOT on the frontier.
+    let mut project = Project::new("Gas".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![make_shot(1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![make_shot(2000.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
+        .unwrap();
+
+    let origin = StationRef::new(a, 0);
+    let diver = Diver::new(20.0, None).unwrap();
+    // Small single steel: 12 L x 200 bar = 2400 L of gas, All-Thirds budget ~800 L in-leg -
+    // comfortably above the ~2 L A leg + tie, comfortably below the ~4000 L B leg.
+    let small = Cylinder::new(
+        12.0,
+        200.0,
+        200.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        &[small],
+        &GasConfig::default(),
+    );
+
+    let a0 = StationRef::new(a, 0);
+    let a1 = StationRef::new(a, 1);
+    let b0 = StationRef::new(b, 0);
+    let b1 = StationRef::new(b, 1);
+    let idx = |sr: StationRef| field.station_refs.iter().position(|r| *r == sr).unwrap();
+
+    assert!(field.reachable[idx(a0)], "A:0 (origin) must be reachable");
+    assert!(field.reachable[idx(a1)], "A:1 must be reachable (1 m leg)");
+    assert!(
+        field.reachable[idx(b0)],
+        "B:0 must be reachable across the 0-cost merge tie"
+    );
+    assert!(
+        !field.reachable[idx(b1)],
+        "B:1 must be out of budget (2000 m leg)"
+    );
+
+    // Hand-computed expected membership: only B:0 sits on the boundary.
+    assert_eq!(
+        field.turn_frontier,
+        vec![b0],
+        "turn_frontier must cross the merge tie and stop exactly at B:0"
+    );
+}
+
+#[test]
 fn gas_reach_field_pins_in_leg_gas_values() {
     // Default config: RMV 20, swim 10 m/min, multiplier 1.0, no survey speed. The three legs
     // (avg depths 5/15/25 m → 1.5/2.5/3.5 ATA) cost 20·1.5·10 / 20·2.5·10 / 20·3.5·10 =

@@ -6,6 +6,7 @@ import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
 import { defaultConfig } from '../../../types/config';
+import { PositiveNumberField } from '../../common/PositiveNumberField';
 
 /**
  * Gas & route-planning settings category (#38). Persisted personal defaults a plan is
@@ -13,8 +14,11 @@ import { defaultConfig } from '../../../types/config';
  *  - swim speed — the exit-leg (and symmetric survey-in) speed, default 10 m/min;
  *  - jump RMV multiplier — gas bump on reference/jump legs (tying in a jump is extra
  *    work), >= 1.0, default 1.0; 1.5 is a useful value.
- * Both are clamped server-side in GasConfig::normalize; validated here so an invalid
- * entry blocks Save with a friendly message rather than silently snapping back.
+ * Both are clamped server-side in GasConfig::normalize. Client-side, PositiveNumberField
+ * rejects a non-positive entry at the field itself (it reverts to the last valid value on
+ * blur, no error message); a sub-minimum positive jump multiplier (0 < jump < 1) still
+ * commits and is caught by the validation effect below, which blocks Save via the error
+ * indicator instead.
  */
 export function GasSettings({
   config,
@@ -57,19 +61,13 @@ export function GasSettings({
           isDefault={config.gas.swim_speed_m_per_min === defaultConfig.gas.swim_speed_m_per_min}
           data-testid="setting-gas-swim-speed"
         >
-          <input
-            type="number"
-            inputMode="decimal"
-            min={1}
-            step={1}
+          <PositiveNumberField
             value={config.gas.swim_speed_m_per_min}
-            onChange={(e) => {
-              const n = parseFloat(e.target.value);
-              if (Number.isFinite(n)) setGas({ swim_speed_m_per_min: n });
-            }}
+            onCommit={(n) => setGas({ swim_speed_m_per_min: n })}
+            step={1}
             className="w-24 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label={t('settings.gas.swimSpeed.aria')}
-            data-testid="input-gas-swim-speed"
+            ariaLabel={t('settings.gas.swimSpeed.aria')}
+            testId="input-gas-swim-speed"
           />
         </SettingRow>
 
@@ -81,19 +79,13 @@ export function GasSettings({
           isDefault={config.gas.jump_rmv_multiplier === defaultConfig.gas.jump_rmv_multiplier}
           data-testid="setting-gas-jump-multiplier"
         >
-          <input
-            type="number"
-            inputMode="decimal"
-            min={1}
-            step={0.1}
+          <PositiveNumberField
             value={config.gas.jump_rmv_multiplier}
-            onChange={(e) => {
-              const n = parseFloat(e.target.value);
-              if (Number.isFinite(n)) setGas({ jump_rmv_multiplier: n });
-            }}
+            onCommit={(n) => setGas({ jump_rmv_multiplier: n })}
+            step={0.1}
             className="w-24 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label={t('settings.gas.jumpMultiplier.aria')}
-            data-testid="input-gas-jump-multiplier"
+            ariaLabel={t('settings.gas.jumpMultiplier.aria')}
+            testId="input-gas-jump-multiplier"
           />
         </SettingRow>
       </SettingsSection>
