@@ -22,8 +22,9 @@
  */
 import { open } from '@tauri-apps/plugin-dialog';
 import { useProjectStore } from '../store/projectStore';
-import { useUIStore, isMapReadOnly } from '../store/uiStore';
+import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
+import { isEditingBlockedNow } from '../hooks/useEditingBlocked';
 import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openOrImportFilters, IMPORTABLE_EXTENSIONS } from './fileDialogs';
@@ -74,20 +75,28 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
     // files so an unsupported/unknown extension still falls through to the
     // accurate "Unsupported file type" error below (opening a native .stalx
     // project is not an import, so it's exempt too).
-    const speleoReadOnly = selectSpeleoReadOnly(useSpeleoStore.getState());
-    if (isImportable && hasProject && (isMapReadOnly(ui) || speleoReadOnly)) {
-      // Tailor the fix-it advice to the active read-only cause: a Plan/Export user
-      // must return to Survey; the closure-adjusted survey user switches the view;
-      // a locked remote project needs the write lock.
-      ui.openDialog('error', {
-        title: 'Import',
-        message:
-          speleoReadOnly && ui.appMode === 'survey' && ui.geometryMode !== 'closureAdjusted'
-            ? 'Acquire the SpeleoDB write lock to import.'
-            : ui.appMode !== 'survey'
-              ? 'Switch to Survey mode to import — the Plan and Export workspaces are read-only.'
-              : 'Switch to the Measured view to import — the closure-adjusted view is read-only.',
-      });
+    if (isImportable && hasProject && isEditingBlockedNow()) {
+      // Tailor the fix-it advice to the active read-only cause(s) - read the
+      // individual flags separately (not via isMapReadOnly/isEditingBlockedNow,
+      // which only report the combined boolean) so a compound state (e.g. a
+      // locked remote project also viewed in Plan mode) mentions BOTH causes
+      // instead of silently dropping the SpeleoDB lock from the message.
+      const speleoReadOnly = selectSpeleoReadOnly(useSpeleoStore.getState());
+      const nonSurveyMode = ui.appMode !== 'survey';
+      const closureAdjusted = ui.geometryMode === 'closureAdjusted';
+      let message: string;
+      if (speleoReadOnly && nonSurveyMode) {
+        message = 'Switch to Survey mode and acquire the SpeleoDB write lock to import.';
+      } else if (speleoReadOnly && closureAdjusted) {
+        message = 'Switch to the Measured view and acquire the SpeleoDB write lock to import.';
+      } else if (speleoReadOnly) {
+        message = 'Acquire the SpeleoDB write lock to import.';
+      } else if (nonSurveyMode) {
+        message = 'Switch to Survey mode to import - the Plan and Export workspaces are read-only.';
+      } else {
+        message = 'Switch to the Measured view to import - the closure-adjusted view is read-only.';
+      }
+      ui.openDialog('error', { title: 'Import', message });
       return;
     }
 

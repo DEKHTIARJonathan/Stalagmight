@@ -1169,7 +1169,7 @@
       "cancel": "Cancel",
       "apply": "Apply Changes",
       "applying": "Applying...",
-      "readOnlyHint": "Switch to the Measured view to apply — the closure-adjusted view is read-only.",
+      "readOnlyHint": "Applying is disabled while this project is read-only (closure-adjusted view, Plan/Export mode, or a locked remote SpeleoDB project).",
       "errorTitle": "Reconcile Failed",
       "errorUnknown": "Unknown error while applying changes",
       "errorApply": "Failed to apply collaborator changes",
