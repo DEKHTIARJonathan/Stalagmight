@@ -56,6 +56,13 @@ import { buildSurveyFeaturesAsync } from './surveyLayer/featuresWorkerClient';
 // Note: buildPriorityExpression, compositeIdEquals, inSection no longer needed
 // after switching to setFeatureState for hover/selection highlighting
 
+/** Comment-label halo width (#52): the plain base width and the wider,
+ *  more-readable width while `move_comment` is tinting the labels. Shared by
+ *  the initial layer defs and the tool-transition restore path so they can't
+ *  drift apart. */
+const COMMENT_HALO_WIDTH_BASE = 1.5;
+const COMMENT_HALO_WIDTH_TINTED = 2.5;
+
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
   onShotClick?: (sectionId: SectionId, shotId: ShotId, event: MapMouseEvent) => void;
@@ -366,6 +373,7 @@ export default class SurveyLayer {
    * Self-healing: also clears stale hover if already in a non-interactive tool.
    */
   public setActiveTool(tool: ToolType): void {
+    const wasMoveComment = this.activeTool === 'move_comment';
     this.activeTool = tool;
 
     const isNonInteractive = isNonInteractiveTool(tool);
@@ -401,6 +409,18 @@ export default class SurveyLayer {
       this._enableCommentToolOverride();
     } else if (!isCommentTool && this.commentToolActive) {
       this._disableCommentToolOverride();
+    }
+
+    // Move-comment palette tint (#52): exactly `move_comment` (not the plain
+    // `comment` tool) tints each comment label and its owning shot/station.
+    // Re-derive the paint expressions only on transition in/out - they're
+    // computed on demand from current state, so this also naturally restores
+    // whatever the shots/stations color owned before (section/depth/measured
+    // tint, or an analytical overlay, which the tint yields to).
+    const isMoveComment = tool === 'move_comment';
+    if (isMoveComment !== wasMoveComment) {
+      this.applyOverlayPaint();
+      this.applyCommentToolTint();
     }
   }
 
@@ -999,9 +1019,9 @@ export default class SurveyLayer {
         'visibility': 'none', // Start hidden, controlled by setShowStationComments
       },
       paint: {
-        'text-color': this.themeColors.labelColor,
+        'text-color': this.commentTextColor(),
         'text-halo-color': this.themeColors.textHaloAlt,
-        'text-halo-width': 1.5,
+        'text-halo-width': COMMENT_HALO_WIDTH_BASE,
         'text-opacity': 0.85,
       },
       filter: ['!=', ['get', 'comment'], null],
@@ -1031,9 +1051,9 @@ export default class SurveyLayer {
         'visibility': 'none', // Start hidden, controlled by setShowShotComments
       },
       paint: {
-        'text-color': this.themeColors.labelColor,
+        'text-color': this.commentTextColor(),
         'text-halo-color': this.themeColors.textHaloAlt,
-        'text-halo-width': 1.5,
+        'text-halo-width': COMMENT_HALO_WIDTH_BASE,
         'text-opacity': 0.85,
       },
       filter: ['!=', ['get', 'comment'], null],
@@ -1921,6 +1941,16 @@ export default class SurveyLayer {
     return ['get', 'color'] as ExpressionSpecification;
   }
 
+  /** Wrap `base` with a move-comment palette tint (#52): features carrying a
+   *  `commentColor` property (the comment's own shot/station) render in that
+   *  color; everything else falls through to `base` unchanged. Only called
+   *  from the plain/measured branch of shots/stations color - the distance
+   *  and gas-reach overlays own color outright while active, so the tint
+   *  yields to them rather than fighting for the same paint property. */
+  private commentToolTintExpression(base: ExpressionSpecification | string): ExpressionSpecification {
+    return ['coalesce', ['get', 'commentColor'], base] as ExpressionSpecification;
+  }
+
   /** The shots layer's `line-color`: distance ramp when active, else the measured
    *  along-line tint (#26), else plain. (The `measurePathLayerId` overlay redraws
    *  the tint on top of the depth gradient; this keeps it correct when the gradient
@@ -1928,7 +1958,8 @@ export default class SurveyLayer {
   private shotsLineColor(): ExpressionSpecification {
     if (this.distanceMode) return this.distanceRampExpression();
     if (this.gasReachMode) return this.gasReachRampExpression();
-    return this.measuredTintExpression(this.measuredPathIds);
+    const base = this.measuredTintExpression(this.measuredPathIds);
+    return this.activeTool === 'move_comment' ? this.commentToolTintExpression(base) : base;
   }
 
   /** The stations layer's `circle-color`: distance ramp when active, else the
@@ -1936,12 +1967,14 @@ export default class SurveyLayer {
   private stationsCircleColor(): ExpressionSpecification {
     if (this.distanceMode) return this.distanceRampExpression();
     if (this.gasReachMode) return this.gasReachRampExpression();
-    return this.measuredTintExpression(this.measuredPathStationIds);
+    const base = this.measuredTintExpression(this.measuredPathStationIds);
+    return this.activeTool === 'move_comment' ? this.commentToolTintExpression(base) : base;
   }
 
   /** Swap shots/stations color to whichever analytical overlay is active (the
    *  distance gradient or the gas reachable-frontier), or restore, and suspend the
-   *  depth sub-segment layer so the overlay wins cleanly. */
+   *  depth sub-segment layer so the overlay - or the move-comment palette tint
+   *  (#52) - wins cleanly. */
   private applyOverlayPaint(): void {
     if (!this.map) return;
     if (this.map.getLayer(this.shotsLayerId)) {
@@ -1951,10 +1984,12 @@ export default class SurveyLayer {
       this.map.setPaintProperty(this.stationsLayerId, 'circle-color', this.stationsCircleColor());
     }
     // Depth's per-segment gradient renders above the main shot line; hide it while
-    // distance is active so it can't cover the distance colors. The measure tint
-    // overlay (#26) is intentionally NOT suspended here — the ruler highlight must
-    // always sit on top of whatever owns the shot color, including the distance
-    // gradient. When restoring the gradient, match the main shots layer's
+    // distance/gas-reach is active so it can't cover their colors, and while
+    // move_comment is active so it can't cover the comment tint (#52 - it draws
+    // on the same shots line but ABOVE it, so the coalesce in commentToolTintExpression
+    // isn't enough on its own). The measure tint overlay (#26) is intentionally NOT
+    // suspended here — the ruler highlight must always sit on top of whatever owns
+    // the shot color. When restoring the gradient, match the main shots layer's
     // visibility rather than forcing 'visible' — the user may have Shots hidden
     // (then depth segments must stay hidden too).
     if (this.map.getLayer(this.shotGradientsLayerId)) {
@@ -1964,7 +1999,9 @@ export default class SurveyLayer {
       this.map.setLayoutProperty(
         this.shotGradientsLayerId,
         'visibility',
-        this.distanceMode || this.gasReachMode ? 'none' : shotsVisibility,
+        this.distanceMode || this.gasReachMode || this.activeTool === 'move_comment'
+          ? 'none'
+          : shotsVisibility,
       );
     }
   }
@@ -2500,9 +2537,14 @@ export default class SurveyLayer {
       this.clearShotHover();
     }
     this.map.setLayoutProperty(this.shotsLayerId, 'visibility', visibility);
-    this.map.setLayoutProperty(this.shotGradientsLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.measurePathLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.shotsHitboxLayerId, 'visibility', visibility);
+    // The depth-gradient sublayer's visibility is owned by applyOverlayPaint: it
+    // matches the shots layer EXCEPT while distance/gas-reach or the move_comment
+    // tint is active, when it must stay hidden. Re-derive it here (rather than
+    // forcing it to `visibility` above) so toggling Shots can't re-show the
+    // gradient over an active overlay/tint (#52).
+    this.applyOverlayPaint();
   }
 
   // Control reference shots visibility via filter (while keeping regular shots visible)
@@ -2626,6 +2668,49 @@ export default class SurveyLayer {
     // Restore default overlap behavior
     this.map.setLayoutProperty(this.stationCommentsLayerId, 'text-allow-overlap', false);
     this.map.setLayoutProperty(this.shotCommentsLayerId, 'text-allow-overlap', false);
+  }
+
+  /** Comment-label `text-color` (#52): palette tint from the feature's
+   *  `commentColor` while `move_comment` is the exact active tool, else the
+   *  plain theme label color. Shared by both comment layers. Reuses
+   *  `commentToolTintExpression` so the shots/stations color tint and the
+   *  label text tint can't drift apart. */
+  private commentTextColor(): string | ExpressionSpecification {
+    return this.activeTool === 'move_comment'
+      ? this.commentToolTintExpression(this.themeColors.labelColor)
+      : this.themeColors.labelColor;
+  }
+
+  /** Set `text-color` from {@link commentTextColor} on both comment layers.
+   *  Shared by `applyCommentToolTint` (tool transitions) and `applyThemeColors`
+   *  (theme changes) so the two callers can't diverge. */
+  private applyCommentTextColor(): void {
+    if (!this.map) return;
+    const color = this.commentTextColor();
+    if (this.map.getLayer(this.stationCommentsLayerId)) {
+      this.map.setPaintProperty(this.stationCommentsLayerId, 'text-color', color);
+    }
+    if (this.map.getLayer(this.shotCommentsLayerId)) {
+      this.map.setPaintProperty(this.shotCommentsLayerId, 'text-color', color);
+    }
+  }
+
+  /** Apply (or restore) the move-comment palette tint on the comment text layers.
+   *  A wider halo keeps the vivid palette colors readable over the map while
+   *  tinted; restores the normal halo width on exit. Called on tool-transition;
+   *  `applyThemeColors` calls `applyCommentTextColor` directly (it does not touch
+   *  halo width, only the theme-driven halo color) so a theme change while the
+   *  tool is active keeps the tint instead of reverting to the plain label color. */
+  private applyCommentToolTint(): void {
+    if (!this.map) return;
+    this.applyCommentTextColor();
+    const haloWidth = this.activeTool === 'move_comment' ? COMMENT_HALO_WIDTH_TINTED : COMMENT_HALO_WIDTH_BASE;
+    if (this.map.getLayer(this.stationCommentsLayerId)) {
+      this.map.setPaintProperty(this.stationCommentsLayerId, 'text-halo-width', haloWidth);
+    }
+    if (this.map.getLayer(this.shotCommentsLayerId)) {
+      this.map.setPaintProperty(this.shotCommentsLayerId, 'text-halo-width', haloWidth);
+    }
   }
 
   // Set highlighted stations by their string IDs (format: "sectionId:stationIndex")
@@ -4241,14 +4326,15 @@ export default class SurveyLayer {
     if (this.map.getLayer(this.stationLabelsLayerId)) {
       this.map.setPaintProperty(this.stationLabelsLayerId, 'text-halo-color', colors.textHaloAlt);
     }
-    // Station comments label + halo
+    // Comments label text-color (via applyCommentTextColor() to keep the
+    // move-comment palette tint (#52) if that tool is currently active)
+    this.applyCommentTextColor();
+    // Station comments halo
     if (this.map.getLayer(this.stationCommentsLayerId)) {
-      this.map.setPaintProperty(this.stationCommentsLayerId, 'text-color', colors.labelColor);
       this.map.setPaintProperty(this.stationCommentsLayerId, 'text-halo-color', colors.textHaloAlt);
     }
-    // Shot comments label + halo
+    // Shot comments halo
     if (this.map.getLayer(this.shotCommentsLayerId)) {
-      this.map.setPaintProperty(this.shotCommentsLayerId, 'text-color', colors.labelColor);
       this.map.setPaintProperty(this.shotCommentsLayerId, 'text-halo-color', colors.textHaloAlt);
     }
     // Ghost station stroke
