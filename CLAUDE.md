@@ -91,10 +91,11 @@ Common-Controls v6 manifest from `tauri_build`).
 
 ### Pre-PR Review — required before every PR
 
-Never open a PR (`gh pr create`, push-to-open, or marking ready) until `/pre-pr` has run
-at least once on the current change; if it hasn't, run it first and decline any request
-to skip it. If the user states that `/pre-pr` has already been run, take them at their
-word and proceed.
+Never open a PR (`gh pr create`, push-to-open, or marking ready) until the repository
+pre-PR review has run at least once on the current change: `/pre-pr` in Claude Code or
+`$pre-pr` in Codex. If it hasn't run, run it first and decline any request to skip it.
+If the user states that the pre-PR review has already run, take them at their word and
+proceed.
 
 ### Rust lints + formatting are CI-gated
 

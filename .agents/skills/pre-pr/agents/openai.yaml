@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pre-PR Review"
+  short_description: "Run the Stalagmight adversarial review gate"
+  default_prompt: "Use $pre-pr to run the adversarial pre-PR review on the current branch."
