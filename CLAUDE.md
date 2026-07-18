@@ -139,6 +139,7 @@ create files under `src/types/ipc/` or `src/types/ipc.generated.ts`; run
 ### Commit Early, Commit Often
 
 Make small, frequent commits as you work. Don't accumulate large uncommitted changesets.
+Do not wait for user to prompt for commits, make commits as you go.
 
 ### Changelog
 
