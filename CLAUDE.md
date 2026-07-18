@@ -71,6 +71,10 @@ TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
 ```
 
+Running full `pnpm test:ui` is not recommended as it is heavy. You must select
+playwright tests relevant to the code and funcitonality changed/affected by the
+changes made and run those selectively.
+
 CI runs the Rust tests with `--features telemetry`, which gates the
 registry-coverage tests (`registry_covers_all_*`). A plain `cargo test` filters
 those out, so it can pass locally while CI fails; `build.rs` also requires
