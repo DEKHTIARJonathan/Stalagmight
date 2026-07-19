@@ -41,6 +41,7 @@ import {
 } from './surveyLayer/dragPreviewSource';
 import { padProbeBox, probePad, type ProbeGeometry } from './surveyLayer/hitProbe';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
+import { SurveyCustomController } from './surveyLayer/customRender/controller';
 import type { SurveyData } from '../../types/survey-data';
 import type { ProjectWarning } from '../../types/commands';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
@@ -411,6 +412,10 @@ export default class SurveyLayer {
   private geoIndex: SurveyGeometryIndex | null = null;
   private cachedIssueSeverity: IssueSeverity | undefined;
 
+  // Flag-gated custom WebGL render prototype (#customRender). No-op unless the
+  // `stalagmight_custom_render` gate is on; see surveyLayer/customRender/.
+  private customRender: SurveyCustomController | null = null;
+
   // Feature granularity of the bulk sources (#mem). Merged groups are the
   // steady state; per-feature modes (distance / gas-reach / measured path /
   // move_station / move_shot) need per-item feature-state or filters, so
@@ -454,6 +459,7 @@ export default class SurveyLayer {
     this.initializeSources();
     this.initializeLayers();
     this.initializeEventHandlers();
+    this.customRender = new SurveyCustomController(map);
   }
 
   setCallbacks(callbacks: SurveyLayerCallbacks) {
@@ -4382,6 +4388,31 @@ export default class SurveyLayer {
   }
 
   /**
+   * Prototype hook (#customRender): mirror the just-built bulk geometry into the
+   * flag-gated custom WebGL layer. No-op unless the gate is on. Reads the caches
+   * the flush already populated (surveyData / severity / modes / theme / origin),
+   * so it adds nothing to the hot path when the flag is off.
+   */
+  private syncCustomRender(surveyData: SurveyData): void {
+    if (!this.customRender) return;
+    const colorCtx: DisplayColorContext = {
+      showDepthGradient: this.showDepthGradient,
+      depthRange: this.depthRange,
+      themeColors: this.themeColors,
+      showIssueSeverity: this.showIssueSeverity,
+      issueSeverity: this.cachedIssueSeverity,
+    };
+    this.customRender.sync({
+      surveyData,
+      gpsOrigin: this.gpsOrigin,
+      colorCtx,
+      shotWidthPx: this.getShotWidth(),
+      stationRadiusPx: this.getStationRadius(),
+      stationStrokePx: 1,
+    });
+  }
+
+  /**
    * Decide whether label features should materialize for this flush, and
    * record the decision in `labelsCurrentlyBuilt`. Shared by the async
    * (worker) and sync (drag-commit) flush paths.
@@ -4499,6 +4530,7 @@ export default class SurveyLayer {
       this.cachedSurveyData = surveyData;
       this.cachedIssueSeverity = issueSeverity;
       this.geoIndex = new SurveyGeometryIndex(surveyData, this.gpsOrigin);
+      this.syncCustomRender(surveyData);
       const buildOptions = {
         buildLabels,
         showIssueSeverity,
@@ -4662,6 +4694,7 @@ export default class SurveyLayer {
     this.cachedSurveyData = surveyData;
     this.cachedIssueSeverity = issueSeverity;
     this.geoIndex = new SurveyGeometryIndex(surveyData, this.gpsOrigin);
+    this.syncCustomRender(surveyData);
 
     const features = buildSurveyFeatures(
       surveyData,
@@ -4985,6 +5018,11 @@ export default class SurveyLayer {
     // destroyed map (would throw in setData).
     this.updateScheduled = false;
     this.pendingUpdateArgs = null;
+
+    // Tear down the custom-render prototype (removes its layer, restores stock
+    // layer visibility, and unregisters the runtime sync hook) (#customRender).
+    this.customRender?.destroy();
+    this.customRender = null;
 
     // Zero memory-probe feature counts for our sources so the debug panel
     // stops showing stale counts from the last setData call.
