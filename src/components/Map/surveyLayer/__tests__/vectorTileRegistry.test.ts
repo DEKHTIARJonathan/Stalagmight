@@ -102,6 +102,105 @@ describe('vector tile registry', () => {
     await expect(replacement).resolves.toBe(true);
   });
 
+  it('swallows the drain reload when the tile is removed before MapLibre re-issues it', async () => {
+    // MapLibre's own queued reload, awaited by TileManager._loadTile. Rejecting
+    // it there fires a source ErrorEvent (the console burst). It must be resolved
+    // cleanly, never rejected, once the tile is gone.
+    const queued = { resolve: vi.fn(), reject: vi.fn() };
+    const tile: {
+      state: string;
+      abortController?: { abort: ReturnType<typeof vi.fn> };
+      reloadPromise?: { resolve: () => void; reject: (error?: unknown) => void } | null;
+    } = { state: 'loaded', abortController: { abort: vi.fn() }, reloadPromise: queued };
+    let removed = false;
+    const reloadTile = vi.fn();
+    const setTiles = vi.fn();
+    const manager = {
+      getIds: vi.fn(() => ['tile-1']),
+      // Resident when we queue behind the active load; gone (zoom churn / cache
+      // reset dropped it, and with it the worker's loaded[uid]) by drain time.
+      getTileByID: vi.fn(() => (removed ? undefined : tile)),
+      _reloadTile: reloadTile,
+    };
+    const source = {
+      map: {
+        style: { tileManagers: { 'drain-removed-test': manager } },
+        triggerRepaint: vi.fn(),
+      },
+      tiles: ['stalx://drain-removed-test/{z}/{x}/{y}?v=1'],
+      _options: { type: 'vector' as const, tiles: ['stalx://drain-removed-test/{z}/{x}/{y}?v=1'] },
+      setTiles,
+    };
+
+    const rejections: unknown[] = [];
+    const onRejection = (e: PromiseRejectionEvent): void => {
+      e.preventDefault();
+      rejections.push(e.reason);
+    };
+    globalThis.addEventListener?.('unhandledrejection', onRejection);
+    try {
+      const replacement = reloadVtSource(source as unknown as VectorTileSource, 'drain-removed-test', 2);
+      await vi.waitFor(() => expect(tile.reloadPromise).not.toBe(queued));
+      expect(reloadTile).not.toHaveBeenCalled();
+
+      // The tile is evicted, then MapLibre's un-guarded drain re-issues the reload
+      // and the worker rejects it because loaded[uid] is gone.
+      removed = true;
+      tile.reloadPromise!.reject(
+        new Error('Should not be trying to reload a tile that was never loaded or has been removed'),
+      );
+
+      await expect(replacement).resolves.toBe(true);
+      // No reload issued for the dead tile, no stale-URL fallback, and the wrapped
+      // MapLibre promise settled cleanly (resolve, never reject -> no ErrorEvent).
+      expect(reloadTile).not.toHaveBeenCalled();
+      expect(setTiles).not.toHaveBeenCalled();
+      expect(queued.reject).not.toHaveBeenCalled();
+      expect(queued.resolve).toHaveBeenCalledOnce();
+      // Give any stray rejection a tick to surface.
+      await Promise.resolve();
+      expect(rejections).toEqual([]);
+    } finally {
+      globalThis.removeEventListener?.('unhandledrejection', onRejection);
+    }
+  });
+
+  it('still falls back to a URL reload when a resident tile genuinely fails to reload', async () => {
+    // The dead-tile swallow must not mask a real failure: a tile still resident
+    // at drain time propagates its rejection to the stale-URL fallback.
+    const queued = { resolve: vi.fn(), reject: vi.fn() };
+    const tile: {
+      state: string;
+      abortController?: { abort: ReturnType<typeof vi.fn> };
+      reloadPromise?: { resolve: () => void; reject: (error?: unknown) => void } | null;
+    } = { state: 'loaded', abortController: { abort: vi.fn() }, reloadPromise: queued };
+    const setTiles = vi.fn();
+    const manager = {
+      getIds: vi.fn(() => ['tile-1']),
+      getTileByID: vi.fn(() => tile), // stays resident
+      _reloadTile: vi.fn(),
+    };
+    const source = {
+      map: {
+        style: { tileManagers: { 'drain-live-fail-test': manager } },
+        triggerRepaint: vi.fn(),
+      },
+      tiles: ['stalx://drain-live-fail-test/{z}/{x}/{y}?v=1'],
+      _options: { type: 'vector' as const, tiles: ['stalx://drain-live-fail-test/{z}/{x}/{y}?v=1'] },
+      setTiles,
+    };
+
+    const replacement = reloadVtSource(source as unknown as VectorTileSource, 'drain-live-fail-test', 2);
+    await vi.waitFor(() => expect(tile.reloadPromise).not.toBe(queued));
+
+    tile.reloadPromise!.reject(new Error('worker parse failed'));
+
+    await expect(replacement).resolves.toBe(true);
+    // Live-tile failure: propagated to MapLibre and to the stale-URL fallback.
+    expect(queued.reject).toHaveBeenCalledOnce();
+    expect(setTiles).toHaveBeenCalledWith(['stalx://drain-live-fail-test/{z}/{x}/{y}?v=2']);
+  });
+
   it('restarts an initial source load before any geometry is resident', () => {
     const setTiles = vi.fn();
     const source = {

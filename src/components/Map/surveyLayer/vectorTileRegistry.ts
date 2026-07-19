@@ -178,9 +178,36 @@ type ReloadTile = {
  * and starts one more load itself, so chaining onto it (rather than aborting or
  * polling a private controller, both of which can strand a renderable tile)
  * lets the newer payload ride behind the load in flight.
+ *
+ * That drain (`_afterTileLoadWorkerResponse` -> `this.loadTile(tile)`) re-issues
+ * the reload with NO residency re-check: if zoom churn / a structural full
+ * reload / an out-of-view-cache reset removed the tile between queuing and the
+ * drain, its worker `loaded[uid]` was already dropped, so the re-issued load
+ * throws "Should not be trying to reload a tile that was never loaded or has
+ * been removed". When we wrap a MapLibre-owned `reloadPromise` (one awaited by
+ * `TileManager._loadTile`), propagating that rejection makes `_loadTile` fire a
+ * source `ErrorEvent` (the console burst) and our own settle rejects into the
+ * stale-URL `setTiles` fallback (a full, wasteful refetch).
+ *
+ * So re-read residency under our generation when the drain settles: a tile that
+ * is gone (or a superseded generation) resolves cleanly — the wrapped promise is
+ * released without an error and no fallback fires. A still-resident tile's
+ * genuine reload failure still propagates so the fallback path is preserved.
  */
-function queueAfterActiveLoad(tile: ReloadTile): Promise<void> {
+function queueAfterActiveLoad(
+  tile: ReloadTile,
+  manager: VtTileManager,
+  source: VectorTileSource,
+  state: ReloadState,
+  generation: number,
+  id: string,
+): Promise<void> {
   const queued = tile.reloadPromise;
+  const tileStillResident = (): boolean => {
+    const latest = reloadStates.get(source);
+    if (latest !== state || latest.generation !== generation) return false;
+    return manager.getTileByID(id) !== undefined;
+  };
   return new Promise<void>((resolve, reject) => {
     tile.reloadPromise = {
       resolve: () => {
@@ -188,8 +215,16 @@ function queueAfterActiveLoad(tile: ReloadTile): Promise<void> {
         resolve();
       },
       reject: (error) => {
-        queued?.reject(error);
-        reject(error);
+        if (tileStillResident()) {
+          queued?.reject(error);
+          reject(error);
+          return;
+        }
+        // Dead or superseded tile: the drain's reload hit a worker entry that no
+        // longer exists. Settle the wrapped promise cleanly (no ErrorEvent) and
+        // treat our publication as a no-op for this tile (no setTiles fallback).
+        queued?.resolve();
+        resolve();
       },
     };
   });
@@ -216,10 +251,10 @@ function reloadTileGuarded(
   if (latest !== state || latest.generation !== generation) return Promise.resolve();
   const tile = manager.getTileByID(id) as ReloadTile | undefined;
   if (!tile) return Promise.resolve();
-  if (tile.abortController) return queueAfterActiveLoad(tile);
+  if (tile.abortController) return queueAfterActiveLoad(tile, manager, source, state, generation, id);
   if (tile.state === 'loading') {
     return tile.reloadPromise
-      ? queueAfterActiveLoad(tile)
+      ? queueAfterActiveLoad(tile, manager, source, state, generation, id)
       : Promise.resolve(manager._reloadTile(id, 'expired'));
   }
   return Promise.resolve(manager._reloadTile(id, 'expired'));
