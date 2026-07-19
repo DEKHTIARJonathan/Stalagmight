@@ -44,6 +44,24 @@ import {
 /** Stock bulk layers hidden while the custom layer is on. */
 const HIDDEN_STOCK_LAYERS = ['survey-shots', 'survey-shot-gradients', 'survey-stations'] as const;
 
+/**
+ * Defer a fail-safe restore off MapLibre's render stack. A self-disable fires
+ * from inside `render()`, so we must NOT mutate the style synchronously there.
+ * rAF (preferred) runs it next frame; microtask / setTimeout are non-DOM
+ * fallbacks (test/node). Injectable via controller options for deterministic tests.
+ */
+function defaultScheduleRestore(fn: () => void): void {
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => fn());
+  else if (typeof queueMicrotask === 'function') queueMicrotask(fn);
+  else setTimeout(fn, 0);
+}
+
+export interface SurveyCustomControllerOptions {
+  /** Override how the fail-safe restore is deferred off the render stack.
+   *  Defaults to {@link defaultScheduleRestore}; tests inject an inline runner. */
+  scheduleRestore?: (fn: () => void) => void;
+}
+
 export interface CustomSyncParams {
   surveyData: SurveyData;
   gpsOrigin: GpsOrigin | null;
@@ -61,10 +79,18 @@ export class SurveyCustomController {
   private active = false;
   private lastParams: CustomSyncParams | null = null;
   private hookInstalled = false;
+  private readonly scheduleRestore: (fn: () => void) => void;
+  /** Guards handleSelfDisable against re-entrancy while a restore is pending. */
+  private selfDisableScheduled = false;
 
-  constructor(map: MaplibreMap, layerId = 'survey-custom-render') {
+  constructor(
+    map: MaplibreMap,
+    layerId = 'survey-custom-render',
+    opts: SurveyCustomControllerOptions = {},
+  ) {
     this.map = map;
     this.layerId = layerId;
+    this.scheduleRestore = opts.scheduleRestore ?? defaultScheduleRestore;
     this.installHook();
   }
 
@@ -83,20 +109,72 @@ export class SurveyCustomController {
 
   private enable(data: CustomRenderData): void {
     if (!this.map.getStyle) return;
-    this.layer = new SurveyCustomLayer(this.layerId, data);
+    // addLayer triggers layer.onAdd synchronously; the layer may disable itself
+    // there (no WebGL2, shader compile/link failure) and would draw NOTHING.
+    const layer = new SurveyCustomLayer(this.layerId, data, (reason) =>
+      this.handleSelfDisable(reason),
+    );
     const beforeId = this.map.getLayer('survey-shots') ? 'survey-shots' : undefined;
-    this.map.addLayer(this.layer, beforeId);
+    this.map.addLayer(layer, beforeId);
+    if (layer.isDisabled()) {
+      // FAIL-SAFE: never hide the stock layers behind a layer that can't draw.
+      // Remove the dead layer, ensure the stock survey stays visible, and warn
+      // ungated so the failure is diagnosable in a production build.
+      const reason = layer.getDisabledReason() ?? 'unknown';
+      console.warn(
+        `[customRender] custom layer failed to initialize (${reason}); ` +
+          'keeping stock survey layers visible',
+      );
+      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      this.setStockVisibility('visible');
+      this.layer = null;
+      this.active = false;
+      return;
+    }
+    this.layer = layer;
     this.setStockVisibility('none');
     this.active = true;
+    // Ungated lifecycle log (one-shot): gate state + buffer counts.
+    console.info('[customRender] enabled; stock survey layers hidden', {
+      shotSegments: data.line.segmentCount,
+      stations: data.circle.stationCount,
+      bytes: data.line.byteLength + data.circle.byteLength,
+    });
     this.map.triggerRepaint();
   }
 
   private disable(): void {
+    this.teardown();
+    // Ungated lifecycle log (one-shot): gate flipped off / controller torn down.
+    console.info('[customRender] disabled; stock survey layers restored');
+  }
+
+  /** Remove the custom layer and un-hide the stock layers. No logging (callers
+   *  log with their own context). Safe when already inactive. */
+  private teardown(): void {
     if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
     this.layer = null;
     this.setStockVisibility('visible');
     this.active = false;
     this.map.triggerRepaint();
+  }
+
+  /**
+   * The custom layer hit a GL error mid-render and disabled itself. This fires
+   * INSIDE MapLibre's frame (from the layer's render()), so mutating the style
+   * now is unsafe. Warn ungated with the error code and DEFER the stock-layer
+   * restore off the render stack. Idempotent + re-entrancy-safe.
+   */
+  private handleSelfDisable(reason: string): void {
+    if (!this.active || this.selfDisableScheduled) return;
+    this.selfDisableScheduled = true;
+    console.warn(
+      `[customRender] custom layer self-disabled (${reason}); restoring stock survey layers`,
+    );
+    this.scheduleRestore(() => {
+      this.selfDisableScheduled = false;
+      if (this.active) this.teardown();
+    });
   }
 
   private setStockVisibility(v: 'none' | 'visible'): void {

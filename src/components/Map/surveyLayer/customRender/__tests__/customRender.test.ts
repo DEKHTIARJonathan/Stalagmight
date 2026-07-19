@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { packCssColor, writeCssColor } from '../colorPack';
+import { SurveyCustomLayer, type CustomRenderData } from '../surveyCustomLayer';
 import { mat4Multiply, composeAnchorMatrix, computeMercatorAnchor } from '../mercator';
 import {
   buildStationLookup,
@@ -246,6 +247,59 @@ describe('circle tessellation', () => {
       expect(Array.from(b.fill.slice(v * 4, v * 4 + 4))).toEqual([2, 0, 0, 255]);
       expect(Array.from(b.stroke.slice(v * 4, v * 4 + 4))).toEqual([9, 9, 9, 255]);
     }
+  });
+});
+
+describe('SurveyCustomLayer first-frames GL-error probe', () => {
+  /** Private-method accessor: the GL draw path stays untested, but the pure
+   *  frame-accounting around gl.getError() is exercised with a fake context. */
+  type Probe = { checkFrameError(gl: WebGL2RenderingContext, data: CustomRenderData): void };
+  const probe = (l: SurveyCustomLayer): Probe => l as unknown as Probe;
+
+  const fakeData = (): CustomRenderData =>
+    ({
+      line: { segmentCount: 2, byteLength: 100 },
+      circle: { stationCount: 4, byteLength: 40 },
+    }) as unknown as CustomRenderData;
+
+  /** Minimal GL stub: only NO_ERROR + a scripted getError() are touched here. */
+  const fakeGl = (getError: () => number): WebGL2RenderingContext =>
+    ({ NO_ERROR: 0, getError }) as unknown as WebGL2RenderingContext;
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('checks getError() only until the first N clean frames, then stops', () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const getError = vi.fn(() => 0);
+    const layer = new SurveyCustomLayer('id', null);
+    const gl = fakeGl(getError);
+    const data = fakeData();
+    for (let i = 0; i < 8; i++) probe(layer).checkFrameError(gl, data);
+    // 5 clean frames validated, then it stops calling getError().
+    expect(getError).toHaveBeenCalledTimes(5);
+    expect(layer.isDisabled()).toBe(false);
+    // The first clean frame logs 'first frame drawn OK' exactly once (ungated).
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls[0]?.[0]).toContain('[customRender] first frame drawn OK');
+  });
+
+  it('self-disables and notifies the callback on a GL error', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onSelfDisable = vi.fn();
+    const layer = new SurveyCustomLayer('id', null, onSelfDisable);
+    // First frame clean, second frame raises INVALID_OPERATION (0x502).
+    let call = 0;
+    const gl = fakeGl(() => (call++ === 0 ? 0 : 0x502));
+    const data = fakeData();
+    probe(layer).checkFrameError(gl, data);
+    probe(layer).checkFrameError(gl, data);
+    expect(layer.isDisabled()).toBe(true);
+    expect(layer.getDisabledReason()).toBe('gl-error-0x502');
+    expect(onSelfDisable).toHaveBeenCalledOnce();
+    expect(onSelfDisable).toHaveBeenCalledWith('gl-error-0x502');
+    const lastWarn = warn.mock.calls[warn.mock.calls.length - 1];
+    expect(lastWarn?.[0]).toContain('[customRender] GL error 0x502');
   });
 });
 

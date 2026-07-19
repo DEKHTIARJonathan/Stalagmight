@@ -27,6 +27,18 @@ import {
   CIRCLE_FRAGMENT_SRC,
 } from './shaders';
 
+/**
+ * Notified when the layer disables itself mid-render (a GL error surfaced by
+ * the first-frames `gl.getError()` probe). The controller uses this to restore
+ * stock-layer visibility so the survey never ends up blank. Fired from inside
+ * MapLibre's render pass, so the controller must defer any style mutation.
+ */
+export type SelfDisableCallback = (reason: string) => void;
+
+/** How many consecutive clean frames to validate with `gl.getError()` before
+ *  trusting the layer and dropping the per-frame sync stall that getError() costs. */
+const MAX_CHECKED_FRAMES = 5;
+
 /** Everything the layer needs to draw one frame; swapped wholesale by update(). */
 export interface CustomRenderData {
   anchorX: number;
@@ -113,26 +125,55 @@ export class SurveyCustomLayer implements CustomLayerInterface {
   private lineGpu: LineGpu | null = null;
   private circleGpu: CircleGpu | null = null;
   private disabled = false;
+  /** Machine-readable reason the layer is disabled ('webgl2-unavailable',
+   *  'program-link-failed', 'gl-error-0x…'); null while healthy. */
+  private disabledReason: string | null = null;
+  private readonly onSelfDisable: SelfDisableCallback | null;
+  /** Count of clean frames validated so far; caps at MAX_CHECKED_FRAMES. */
+  private checkedFrames = 0;
+  private firstFrameLogged = false;
 
   private data: CustomRenderData | null = null;
-  /** Set before addLayer so onAdd uploads immediately. */
-  constructor(id: string, initial: CustomRenderData | null) {
+  /** Set before addLayer so onAdd uploads immediately. `onSelfDisable` lets the
+   *  controller restore stock layers if a GL error kills the layer mid-render. */
+  constructor(
+    id: string,
+    initial: CustomRenderData | null,
+    onSelfDisable: SelfDisableCallback | null = null,
+  ) {
     this.id = id;
     this.data = initial;
+    this.onSelfDisable = onSelfDisable;
+  }
+
+  /** True once onAdd bailed or a GL error self-disabled the layer. */
+  isDisabled(): boolean {
+    return this.disabled;
+  }
+
+  /** Why the layer is disabled, or null while healthy. */
+  getDisabledReason(): string | null {
+    return this.disabledReason;
   }
 
   onAdd(_map: MaplibreMap, gl: WebGLRenderingContext | WebGL2RenderingContext): void {
     if (typeof WebGL2RenderingContext === 'undefined' || !(gl instanceof WebGL2RenderingContext)) {
-      console.warn('[customRender] WebGL2 required; disabling custom layer');
+      // Ungated: the controller reads this state and must keep stock layers up.
+      console.warn('[customRender] WebGL2 unavailable; disabling custom layer');
       this.disabled = true;
+      this.disabledReason = 'webgl2-unavailable';
       return;
     }
     this.gl = gl;
     this.disabled = false;
+    this.disabledReason = null;
+    // compile()/link() already log getShaderInfoLog / getProgramInfoLog ungated.
     this.lineProgram = link(gl, LINE_VERTEX_SRC, LINE_FRAGMENT_SRC);
     this.circleProgram = link(gl, CIRCLE_VERTEX_SRC, CIRCLE_FRAGMENT_SRC);
     if (!this.lineProgram || !this.circleProgram) {
+      console.warn('[customRender] shader program link failed; disabling custom layer');
       this.disabled = true;
+      this.disabledReason = 'program-link-failed';
       return;
     }
     if (this.data) this.uploadBuffers(this.data);
@@ -188,6 +229,40 @@ export class SurveyCustomLayer implements CustomLayerInterface {
 
     this.drawLines(gl, matrix, viewport, data);
     this.drawCircles(gl, matrix, viewport, data);
+    this.checkFrameError(gl, data);
+  }
+
+  /**
+   * On the first few frames, verify our draws produced no GL error (WebKitGTK
+   * can drop a whole layer silently with no console output). Counts SUCCESSFUL
+   * frames; after MAX_CHECKED_FRAMES clean frames it stops calling getError()
+   * (a synchronous GPU pipeline stall) and trusts the layer. The first clean
+   * frame logs ungated; any error self-disables the layer and notifies the
+   * controller so it can restore the stock survey layers.
+   */
+  private checkFrameError(gl: WebGL2RenderingContext, data: CustomRenderData): void {
+    if (this.checkedFrames >= MAX_CHECKED_FRAMES) return;
+    const err = gl.getError();
+    if (err !== gl.NO_ERROR) {
+      const code = `0x${err.toString(16)}`;
+      const reason = `gl-error-${code}`;
+      this.disabled = true;
+      this.disabledReason = reason;
+      // Ungated: this is the exact failure the prototype was blind to before.
+      console.warn(`[customRender] GL error ${code} after draw; self-disabling custom layer`);
+      this.onSelfDisable?.(reason);
+      return;
+    }
+    this.checkedFrames += 1;
+    if (!this.firstFrameLogged) {
+      this.firstFrameLogged = true;
+      // Ungated one-shot: proof the custom layer actually put pixels on screen.
+      console.info('[customRender] first frame drawn OK', {
+        shotSegments: data.line.segmentCount,
+        stations: data.circle.stationCount,
+        bytes: data.line.byteLength + data.circle.byteLength,
+      });
+    }
   }
 
   private drawLines(
