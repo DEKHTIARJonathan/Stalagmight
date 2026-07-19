@@ -983,7 +983,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Update file_path if the backend returned it (first save / save-as)
       if (result.saved_path) {
         const project = get().project;
-        if (project) {
+        // Only mint a new project object when the path ACTUALLY changed (first
+        // save / Save As). A successful save always echoes `saved_path` (Rust
+        // `CommandResult::success().with_path(...)`), so an autosave to the same
+        // path would otherwise re-spread the project on every debounced write.
+        // That changes the project's identity, and MapCanvas's republish
+        // useLayoutEffect keys on it — a no-op save would trigger a full survey
+        // rebuild + republish, briefly blanking all geometry (#mem).
+        if (project && project.file_path !== result.saved_path) {
           set({ project: { ...project, file_path: result.saved_path } });
           // On the first save / Save As the backend derives the sibling
           // name from the final .stalx stem (e.g. `cave.stalx` →
