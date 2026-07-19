@@ -24,6 +24,11 @@
 
 export type VtPropValue = string | number | boolean;
 
+/** A mercator [minX,minY,maxX,maxY] rectangle in [0,1] world space, used to
+ *  scope a live tile reload to the region an edit touched. See the dirty-bounds
+ *  diffing section below. */
+export type VtDirtyBounds = [minX: number, minY: number, maxX: number, maxY: number];
+
 /**
  * One bulk layer's geometry, struct-of-arrays style.
  *
@@ -79,6 +84,145 @@ export function vtTransferables(data: VtLayerData): ArrayBuffer[] {
   if (data.groupLineOffsets) out.push(data.groupLineOffsets.buffer as ArrayBuffer);
   // De-dupe (defensive: views could share a buffer).
   return [...new Set(out)];
+}
+
+// ─── Dirty-bounds diffing ─────────────────────────────────────────────────
+//
+// `VtDirtyBounds` (declared above with the data-model types) is a mercator
+// [minX,minY,maxX,maxY] rectangle in [0,1] world space. It scopes a live tile
+// reload to the region an edit actually touched, so unchanged tiles are never
+// refetched. A diff returns `null` when nothing changed (the caller skips the
+// reload entirely); a full, unbounded reload is signalled by omitting the
+// bounds at the reload call site. Adapted from the budget branch, which read
+// per-group bounds from a precomputed spatial index; this branch has no such
+// index, so bounds are computed straight from the flat `coords` array.
+
+/** Mercator bounds of one group's points, or null for an empty group. Works for
+ *  both kinds: a line group's every point lives in the shared `coords` array
+ *  delimited by `groupPointOffsets`, exactly like a point group. */
+function groupBounds(data: VtLayerData, gi: number): VtDirtyBounds | null {
+  const start = data.groupPointOffsets[gi]!;
+  const end = data.groupPointOffsets[gi + 1]!;
+  if (end <= start) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let p = start; p < end; p++) {
+    const x = data.coords[p * 2]!;
+    const y = data.coords[p * 2 + 1]!;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  return [minX, minY, maxX, maxY];
+}
+
+/** Union `group` into `bounds` (either may be null). */
+function extendDirtyBounds(
+  bounds: VtDirtyBounds | null,
+  group: VtDirtyBounds | null,
+): VtDirtyBounds | null {
+  if (!group) return bounds;
+  if (!bounds) return [group[0], group[1], group[2], group[3]];
+  bounds[0] = Math.min(bounds[0], group[0]);
+  bounds[1] = Math.min(bounds[1], group[1]);
+  bounds[2] = Math.max(bounds[2], group[2]);
+  bounds[3] = Math.max(bounds[3], group[3]);
+  return bounds;
+}
+
+/** Whether two groups carry identical MVT properties. (This branch does not
+ *  stamp geometry/style generation onto props, so every key is significant —
+ *  no revision keys to filter out, unlike the budget branch.) */
+function equalProps(
+  a: Record<string, VtPropValue>,
+  b: Record<string, VtPropValue>,
+): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => a[key] === b[key]);
+}
+
+/** Whether two groups have identical geometry: the same point coordinates and,
+ *  for lines, the same per-line topology. Reads offsets straight off the flat
+ *  arrays. */
+function equalGroupGeometry(a: VtLayerData, ai: number, b: VtLayerData, bi: number): boolean {
+  const aStart = a.groupPointOffsets[ai]!;
+  const aEnd = a.groupPointOffsets[ai + 1]!;
+  const bStart = b.groupPointOffsets[bi]!;
+  const bEnd = b.groupPointOffsets[bi + 1]!;
+  if (aEnd - aStart !== bEnd - bStart) return false;
+  for (let offset = 0; offset < (aEnd - aStart) * 2; offset++) {
+    if (a.coords[aStart * 2 + offset] !== b.coords[bStart * 2 + offset]) return false;
+  }
+  if (a.kind === 'point' && b.kind === 'point') return true;
+  if (a.kind !== 'line' || b.kind !== 'line') return false;
+  const aGroupLines = a.groupLineOffsets!;
+  const bGroupLines = b.groupLineOffsets!;
+  const aLineStart = aGroupLines[ai]!;
+  const aLineEnd = aGroupLines[ai + 1]!;
+  const bLineStart = bGroupLines[bi]!;
+  const bLineEnd = bGroupLines[bi + 1]!;
+  if (aLineEnd - aLineStart !== bLineEnd - bLineStart) return false;
+  for (let offset = 0; offset <= aLineEnd - aLineStart; offset++) {
+    if (
+      a.lineOffsets![aLineStart + offset]! - aStart !==
+      b.lineOffsets![bLineStart + offset]! - bStart
+    ) return false;
+  }
+  return true;
+}
+
+/**
+ * Union the old and new bounds of every changed feature group. Groups are
+ * emitted in deterministic order, so unchanged prefixes and stable-topology
+ * edits stay sharply bounded. An insert/delete shifts later groups and
+ * conservatively expands the union (a broader reload, still correct). Returns
+ * null when nothing changed so the caller can skip the reload entirely.
+ */
+export function diffVtLayerBounds(previous: VtLayerData, next: VtLayerData): VtDirtyBounds | null {
+  const common = Math.min(vtGroupCount(previous), vtGroupCount(next));
+  let dirty: VtDirtyBounds | null = null;
+  for (let gi = 0; gi < common; gi++) {
+    const equal =
+      previous.kind === next.kind &&
+      previous.ids[gi] === next.ids[gi] &&
+      equalProps(previous.props[gi]!, next.props[gi]!) &&
+      equalGroupGeometry(previous, gi, next, gi);
+    if (equal) continue;
+    dirty = extendDirtyBounds(dirty, groupBounds(previous, gi));
+    dirty = extendDirtyBounds(dirty, groupBounds(next, gi));
+  }
+  for (let gi = common; gi < vtGroupCount(previous); gi++) {
+    dirty = extendDirtyBounds(dirty, groupBounds(previous, gi));
+  }
+  for (let gi = common; gi < vtGroupCount(next); gi++) {
+    dirty = extendDirtyBounds(dirty, groupBounds(next, gi));
+  }
+  return dirty;
+}
+
+/** Full mercator extent of a layer, or null when it holds no geometry. Used for
+ *  the first publication, where there is no previous payload to diff against. */
+export function vtLayerBounds(data: VtLayerData): VtDirtyBounds | null {
+  const { coords } = data;
+  if (vtGroupCount(data) === 0 || coords.length === 0) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let p = 0; p < coords.length; p += 2) {
+    const x = coords[p]!;
+    const y = coords[p + 1]!;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  return [minX, minY, maxX, maxY];
 }
 
 /** Standard MVT tile extent. */

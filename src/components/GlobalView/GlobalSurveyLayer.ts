@@ -671,7 +671,7 @@ export default class GlobalSurveyLayer {
    * version so MapLibre reloads tiles (mirrors SurveyLayer's update recipe).
    */
   private setVtSource(key: string, data: VtLayerData): void {
-    const version = setVtLayerData(key, data);
+    const { version } = setVtLayerData(key, data);
     const source = this.map.getSource(key) as { setTiles?: (tiles: string[]) => void } | undefined;
     source?.setTiles?.([vtTileUrl(key, version)]);
   }

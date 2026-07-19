@@ -4780,7 +4780,7 @@ export default class SurveyLayer {
         }
       }
       const sourceId = this.sourceId + suffix;
-      const version = setVtLayerData(sourceId, data);
+      const { version } = setVtLayerData(sourceId, data);
       const source = this.map.getSource(sourceId) as { setTiles?: (tiles: string[]) => void } | undefined;
       source?.setTiles?.([vtTileUrl(sourceId, version)]);
       recordFeatureCount(kind, vtGroupCount(data));
