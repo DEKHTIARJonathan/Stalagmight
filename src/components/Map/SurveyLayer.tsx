@@ -32,6 +32,8 @@ import {
 import { SurveyGeometryIndex } from './surveyLayer/geometryIndex';
 import {
   buildDragPreviewFeatureCollection,
+  offsetOverlayPoint,
+  offsetOverlayShot,
   type DragPreviewFeature,
   type DragPreviewSet,
   type MovingEnd,
@@ -297,6 +299,13 @@ export default class SurveyLayer {
    *  only needs the latest — one setData per frame. */
   private dragUpdateRaf: number | null = null;
   private pendingDragOffset: { dx: number; dy: number } | null = null;
+  /** Interact-overlay follow (#C): a hover/selected highlight on a moving
+   *  station/shot is re-emitted at the drag offset each frame so it tracks the
+   *  cursor. Stationary overlay features (snap ring, highlightedStationIds,
+   *  unrelated selections) keep their true coordinates. */
+  private dragMovingStationKeys = new Set<string>();
+  private dragMovingShots = new Map<string, MovingEnd>();
+  private dragOverlayOffset: { dx: number; dy: number } | null = null;
 
   // Visibility state (for hidden feature detection)
   private stationsVisible: boolean = true;
@@ -2142,7 +2151,9 @@ export default class SurveyLayer {
       this.snappedStationId,
       this.highlightedStationIds.join(','),
     ].join('§');
-    if (key === this.lastInteractKey) return;
+    // During a drag the feature IDs are unchanged but their coordinates move, so
+    // the id-based cache would wrongly short-circuit — bypass it while following.
+    if (this.dragOverlayOffset === null && key === this.lastInteractKey) return;
     this.lastInteractKey = key;
 
     const features: GeoJSON.Feature[] = [];
@@ -2256,9 +2267,15 @@ export default class SurveyLayer {
     if (this.gasReachMode && fid !== null) {
       properties.gasReach = this.gasReachState?.shots.get(fid) ?? -1;
     }
+    // Follow an active drag: stretch this shot's moving endpoint(s) by the offset
+    // so a selected/hovered highlight tracks the preview (#C).
+    const off = this.dragOverlayOffset;
+    const { from, to } = off
+      ? offsetOverlayShot(geo.from, geo.to, this.dragMovingShots.get(idStr), this.dragProjector(), off.dx, off.dy)
+      : { from: geo.from, to: geo.to };
     return {
       type: 'Feature',
-      geometry: { type: 'LineString', coordinates: [geo.from, geo.to] },
+      geometry: { type: 'LineString', coordinates: [from, to] },
       properties,
     };
   }
@@ -2307,9 +2324,14 @@ export default class SurveyLayer {
     if (this.gasReachMode && fid !== null) {
       properties.gasReach = this.gasReachState?.stations.get(fid) ?? -1;
     }
+    // Follow an active drag: offset this station's highlight if it is moving (#C).
+    const off = this.dragOverlayOffset;
+    const point = off
+      ? offsetOverlayPoint(coords, this.dragMovingStationKeys.has(idStr), this.dragProjector(), off.dx, off.dy)
+      : coords;
     return {
       type: 'Feature',
-      geometry: { type: 'Point', coordinates: coords },
+      geometry: { type: 'Point', coordinates: point },
       properties,
     };
   }
@@ -3728,15 +3750,33 @@ export default class SurveyLayer {
    *  the preview correct across a mid-drag zoom. */
   private renderDragPreview(dx: number, dy: number): void {
     if (!this.dragPreviewActive || !this.dragPreviewSet) return;
-    const projector: Projector = {
-      project: (lngLat) => this.map.project(lngLat),
-      unproject: (pt) => this.map.unproject(pt),
-    };
-    const fc = buildDragPreviewFeatureCollection(this.dragPreviewSet, projector, dx, dy);
+    const fc = buildDragPreviewFeatureCollection(this.dragPreviewSet, this.dragProjector(), dx, dy);
     const src = this.map.getSource(SurveyLayer.DRAG_PREVIEW_SOURCE);
     if (src && 'setData' in src) {
       (src as maplibregl.GeoJSONSource).setData(fc);
     }
+    // Re-emit any hover/selected highlight on a moving feature at the same offset
+    // so it tracks the cursor instead of sticking at the committed position (#C).
+    this.dragOverlayOffset = { dx, dy };
+    this.refreshInteractOverlay();
+  }
+
+  /** The map-backed projector used for the preview + overlay offset transforms. */
+  private dragProjector(): Projector {
+    return {
+      project: (lngLat) => this.map.project(lngLat),
+      unproject: (pt) => this.map.unproject(pt),
+    };
+  }
+
+  /** Stop the interact overlay following the drag and snap it back to committed
+   *  coordinates (called on commit / end). */
+  private clearDragOverlayFollow(): void {
+    this.dragOverlayOffset = null;
+    this.dragMovingStationKeys.clear();
+    this.dragMovingShots.clear();
+    this.lastInteractKey = null;
+    this.refreshInteractOverlay();
   }
 
   /** The per-feature analytical-overlay props (dist / gas-reach) a moving feature
@@ -3813,6 +3853,7 @@ export default class SurveyLayer {
         const ref = st.station_ref;
         const coord = metersToMapCoords(st.coordinates.x, st.coordinates.y, this.gpsOrigin) as [number, number];
         const idStr = `${ref.section_id}:${ref.station_index}`;
+        this.dragMovingStationKeys.add(idStr);
         const g = this.geoIndex.stationGlobalIndex(ref);
         const color = g === null
           ? stationDefault
@@ -3845,6 +3886,7 @@ export default class SurveyLayer {
         const color = geo
           ? resolveShotDisplayColor(this.cachedSurveyData, section.color ?? stationDefault, geo.globalIdx, ctx)
           : (section.color ?? stationDefault);
+        this.dragMovingShots.set(`${section.id}:${shot.id}`, 'both');
         features.push({
           emit: 'line',
           coords: [fromCoord, toCoord],
@@ -4003,6 +4045,7 @@ export default class SurveyLayer {
       const ref = st.station_ref;
       const coord = metersToMapCoords(st.coordinates.x, st.coordinates.y, this.gpsOrigin) as [number, number];
       const idStr = `${ref.section_id}:${ref.station_index}`;
+      this.dragMovingStationKeys.add(idStr);
       const section = this.geoIndex.section(ref.section_id);
       const g = this.geoIndex.stationGlobalIndex(ref);
       const color = g === null
@@ -4051,6 +4094,7 @@ export default class SurveyLayer {
         seenShotKeys.add(shotKey);
 
         const movingEnd: MovingEnd = fromIsMoving && toIsMoving ? 'both' : fromIsMoving ? 'from' : 'to';
+        this.dragMovingShots.set(shotKey, movingEnd);
         const fromCoord = metersToMapCoords(fromSt.coordinates.x, fromSt.coordinates.y, this.gpsOrigin) as [number, number];
         const toCoord = metersToMapCoords(toSt.coordinates.x, toSt.coordinates.y, this.gpsOrigin) as [number, number];
         const geo = this.geoIndex.shotGeometry(section.id, shot.id);
@@ -4189,6 +4233,10 @@ export default class SurveyLayer {
     if (!this.dragPreviewActive) return;
     this.cancelDragRender();
     this.removeDragPreviewLayers();
+    // Stop the overlay follow now: its offset maps the OLD committed coords to the
+    // drag position, so it must not survive into the post-commit rebuild (where
+    // the overlay reads the NEW coords and would double-count the offset).
+    this.clearDragOverlayFollow();
     this.dragPreviewSet = null;
   }
 
@@ -4204,6 +4252,7 @@ export default class SurveyLayer {
     for (const [layerId, saved] of this.dragSavedFilters) {
       if (this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
     }
+    this.clearDragOverlayFollow();
 
     this.dragPreviewSet = null;
     this.dragSavedFilters.clear();

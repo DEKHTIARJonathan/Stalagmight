@@ -103,6 +103,42 @@ export function transformFeatureCoords(
 }
 
 /**
+ * Offset an interact-overlay point (a station highlight) by the drag if it
+ * belongs to the moving set; otherwise return it unchanged. Used so a
+ * selected/hovered station highlight tracks the drag while stationary overlay
+ * features (snap ring, highlighted stations) stay put (#C).
+ */
+export function offsetOverlayPoint(
+  coord: [number, number],
+  moving: boolean,
+  projector: Projector,
+  dx: number,
+  dy: number,
+): [number, number] {
+  return moving ? offsetVertex(coord, projector, dx, dy) : coord;
+}
+
+/**
+ * Offset an interact-overlay shot's endpoints per its `movingEnd` (undefined /
+ * `none` → stationary, returned unchanged). A one-endpoint shot stretches
+ * exactly like the preview does.
+ */
+export function offsetOverlayShot(
+  from: [number, number],
+  to: [number, number],
+  movingEnd: MovingEnd | undefined,
+  projector: Projector,
+  dx: number,
+  dy: number,
+): { from: [number, number]; to: [number, number] } {
+  if (!movingEnd || movingEnd === 'none') return { from, to };
+  return {
+    from: movingEnd === 'to' ? from : offsetVertex(from, projector, dx, dy),
+    to: movingEnd === 'from' ? to : offsetVertex(to, projector, dx, dy),
+  };
+}
+
+/**
  * Build the full FeatureCollection for the drag preview source from the captured
  * set and the current offset. One call per frame; the result is handed to a
  * single `setData`, so every moving feature updates in lockstep.

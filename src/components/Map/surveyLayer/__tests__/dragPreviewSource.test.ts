@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   buildDragPreviewFeatureCollection,
   movesVertex,
+  offsetOverlayPoint,
+  offsetOverlayShot,
   offsetVertex,
   transformFeatureCoords,
   type DragPreviewFeature,
@@ -197,5 +199,71 @@ describe('buildDragPreviewFeatureCollection', () => {
     };
     const fc = buildDragPreviewFeatureCollection(set, identityProjector, 100, 100);
     expect((fc.features[0]!.geometry as GeoJSON.Point).coordinates).toEqual([3, 7]);
+  });
+});
+
+// Interact-overlay follow (#C): a highlight on a moving station/shot tracks the
+// drag; a stationary highlighted station keeps its true coordinates.
+describe('offsetOverlayPoint', () => {
+  it('offsets a moving station highlight', () => {
+    expect(offsetOverlayPoint([1, 1], true, identityProjector, 5, -2)).toEqual([6, -1]);
+  });
+  it('leaves a stationary highlighted station unchanged', () => {
+    expect(offsetOverlayPoint([1, 1], false, identityProjector, 5, -2)).toEqual([1, 1]);
+  });
+});
+
+describe('offsetOverlayShot', () => {
+  it('stretches only the moving endpoint (from)', () => {
+    expect(offsetOverlayShot([0, 0], [10, 0], 'from', identityProjector, 3, 0)).toEqual({
+      from: [3, 0],
+      to: [10, 0],
+    });
+  });
+  it('stretches only the moving endpoint (to)', () => {
+    expect(offsetOverlayShot([0, 0], [10, 0], 'to', identityProjector, 3, 0)).toEqual({
+      from: [0, 0],
+      to: [13, 0],
+    });
+  });
+  it('offsets both endpoints when both move', () => {
+    expect(offsetOverlayShot([0, 0], [10, 0], 'both', identityProjector, 2, 2)).toEqual({
+      from: [2, 2],
+      to: [12, 2],
+    });
+  });
+  it('leaves a stationary (undefined / none) shot unchanged', () => {
+    expect(offsetOverlayShot([0, 0], [10, 0], undefined, identityProjector, 9, 9)).toEqual({
+      from: [0, 0],
+      to: [10, 0],
+    });
+    expect(offsetOverlayShot([0, 0], [10, 0], 'none', identityProjector, 9, 9)).toEqual({
+      from: [0, 0],
+      to: [10, 0],
+    });
+  });
+});
+
+// The scenario the task calls out: a selected station + shot in the moving set,
+// plus one stationary highlighted station — moving pair offsets, stationary one
+// stays. Modeled over the same primitives the overlay builders use.
+describe('overlay follow scenario', () => {
+  it('offsets the moving station+shot and leaves the stationary highlight put', () => {
+    const proj = identityProjector;
+    const dx = 4;
+    const dy = 0;
+    const movingStationKeys = new Set(['1:0']);
+    const movingShots = new Map([['1:5', 'from' as const]]);
+
+    // Selected station 1:0 is moving.
+    const selStation = offsetOverlayPoint([0, 0], movingStationKeys.has('1:0'), proj, dx, dy);
+    // Selected shot 1:5 has its from-endpoint moving.
+    const selShot = offsetOverlayShot([0, 0], [10, 0], movingShots.get('1:5'), proj, dx, dy);
+    // A stationary highlighted station 2:3 is NOT in the moving set.
+    const highlight = offsetOverlayPoint([7, 7], movingStationKeys.has('2:3'), proj, dx, dy);
+
+    expect(selStation).toEqual([4, 0]);
+    expect(selShot).toEqual({ from: [4, 0], to: [10, 0] });
+    expect(highlight).toEqual([7, 7]);
   });
 });
