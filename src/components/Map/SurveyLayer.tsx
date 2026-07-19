@@ -1,4 +1,4 @@
-import type { Map as MaplibreMap, MapMouseEvent, ExpressionSpecification } from 'maplibre-gl';
+import type { Map as MaplibreMap, MapMouseEvent, ExpressionSpecification, VectorTileSource } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
 import type {
   LoopClosure,
@@ -65,7 +65,7 @@ import { MEASURE_TINT } from '../../utils/measurePath';
 import { distanceToLineSegment } from './surveyLayer/hitTest';
 import { recordFeatureCount, clearFeatureCountsForPrefix, recordPerfTiming } from '../../utils/memoryProbe';
 import { buildSurveyFeaturesStreamed, buildGranularitySwapStreamed } from './surveyLayer/featuresWorkerClient';
-import { ensureVtProtocol, setVtLayerData, vtTileUrl, clearVtLayerData } from './surveyLayer/vectorTileRegistry';
+import { ensureVtProtocol, setVtLayerData, vtTileUrl, clearVtLayerData, reloadVtSource } from './surveyLayer/vectorTileRegistry';
 import {
   vtLinesFromFeatures,
   vtPointsFromFeatures,
@@ -4780,9 +4780,18 @@ export default class SurveyLayer {
         }
       }
       const sourceId = this.sourceId + suffix;
-      const { version } = setVtLayerData(sourceId, data);
-      const source = this.map.getSource(sourceId) as { setTiles?: (tiles: string[]) => void } | undefined;
-      source?.setTiles?.([vtTileUrl(sourceId, version)]);
+      const { version, dirtyBounds } = setVtLayerData(sourceId, data);
+      // Flash-free publication (#mem): when nothing this layer serves changed
+      // (a rebuild that touched a different source, or a no-op republish), the
+      // diff is null — skip the reload entirely so resident tiles are untouched.
+      // Otherwise reload only the tiles overlapping the edited region in place,
+      // keeping existing geometry renderable until each replacement lands. The
+      // very first publication (source still on the v0 URL) is bootstrapped by
+      // reloadVtSource with a plain setTiles.
+      if (dirtyBounds !== null) {
+        const source = this.map.getSource(sourceId) as VectorTileSource | undefined;
+        void reloadVtSource(source, sourceId, version, dirtyBounds);
+      }
       recordFeatureCount(kind, vtGroupCount(data));
       this.applyColorPaint();
       return;
@@ -4806,9 +4815,10 @@ export default class SurveyLayer {
   private endApplyFeatures(): void {
     // Guard: only re-apply if map style is still live (avoids crash during teardown)
     if (!hasLiveStyle(this.map)) return;
-    // The shots/stations sources are vector tiles now, refreshed via setTiles()
-    // (#mem). Unlike the old GeoJSON setData(), setTiles() does NOT wipe
-    // feature-state: MapLibre keeps it keyed by (source, feature id). A rebuild
+    // The shots/stations sources are vector tiles now, refreshed via an in-place
+    // tile reload (#mem). Unlike the old GeoJSON setData(), reloading tiles does
+    // NOT wipe feature-state: MapLibre keeps it keyed by (source, feature id) at
+    // the style level, independent of tile refetches. A rebuild
     // can reassign a merged-group ordinal (feature id) to a different section;
     // for example, changing depth coloring can drop groups and shift later
     // ordinals down. Remove every previously tracked ID individually so pending
