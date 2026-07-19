@@ -441,6 +441,62 @@ describe('vector tile registry', () => {
     expect(source.setTiles).not.toHaveBeenCalled();
   });
 
+  it('re-issues a superseded publication\'s tiles under the new generation (supersession union)', async () => {
+    // Publication N reloads tile A (in R1) and holds it in flight; publication
+    // N+1 arrives with a disjoint rectangle R2 covering only tile B. Without the
+    // union, N+1 would touch only B and A would be left in whatever half-applied
+    // state N reached -> phantom / duplicate. The union folds N's unsettled R1
+    // into N+1, so A is re-issued under N+1's generation too.
+    const reloadCalls: Array<{ id: string; resolve: () => void }> = [];
+    const reloadTile = vi.fn((id: string) => new Promise<void>((resolve) => {
+      reloadCalls.push({ id, resolve });
+    }));
+    const tileA = { state: 'loaded', tileID: { canonical: { z: 2, x: 0, y: 0 } } };
+    const tileB = { state: 'loaded', tileID: { canonical: { z: 2, x: 3, y: 3 } } };
+    const manager = {
+      getIds: vi.fn(() => ['A', 'B']),
+      getTileByID: vi.fn((id: string) => (id === 'A' ? tileA : tileB)),
+      _reloadTile: reloadTile,
+    };
+    const source = {
+      map: {
+        style: { tileManagers: { 'supersede-union-test': manager } },
+        triggerRepaint: vi.fn(),
+      },
+      tiles: ['stalx://supersede-union-test/{z}/{x}/{y}?v=1'],
+      setTiles: vi.fn(),
+    };
+
+    // R1 covers only tile A (mercator [0,0.25]^2); B is skipped.
+    const r1: [number, number, number, number] = [0.01, 0.01, 0.05, 0.05];
+    const n = reloadVtSource(source as unknown as VectorTileSource, 'supersede-union-test', 2, r1);
+    await vi.waitFor(() => expect(reloadTile).toHaveBeenCalledTimes(1));
+    expect(reloadTile).toHaveBeenNthCalledWith(1, 'A', 'expired');
+
+    // R2 covers only tile B ([0.75,1]^2), disjoint from R1. N is superseded.
+    const r2: [number, number, number, number] = [0.9, 0.9, 0.95, 0.95];
+    const nPlus1 = reloadVtSource(source as unknown as VectorTileSource, 'supersede-union-test', 3, r2);
+    await expect(n).resolves.toBe(false);
+
+    // N+1's union(R1,R2) reloads B now and queues A behind N's in-flight reload.
+    await vi.waitFor(() => expect(reloadCalls.some((c) => c.id === 'B')).toBe(true));
+
+    // Finish N's A reload; the deferred A reload then fires under N+1's generation.
+    reloadCalls.find((c) => c.id === 'A')!.resolve();
+    await vi.waitFor(() =>
+      expect(reloadTile.mock.calls.filter((c) => c[0] === 'A')).toHaveLength(2),
+    );
+
+    // Drain the remaining reloads so N+1 settles.
+    reloadCalls.forEach((c) => c.resolve());
+    await expect(nPlus1).resolves.toBe(true);
+
+    const reloadedIds = reloadTile.mock.calls.map((c) => c[0]);
+    expect(reloadedIds.filter((id) => id === 'A')).toHaveLength(2); // R1 tile re-issued under N+1
+    expect(reloadedIds.filter((id) => id === 'B')).toHaveLength(1); // R2 tile
+    expect(source.setTiles).not.toHaveBeenCalled();
+  });
+
   it('falls back to a URL reload when a controlled tile replacement rejects', async () => {
     const clearTiles = vi.fn();
     const setTiles = vi.fn();

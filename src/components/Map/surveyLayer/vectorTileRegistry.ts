@@ -42,6 +42,13 @@ interface ReloadState {
   generation: number;
   inFlightReloads: Map<string, Promise<void>>;
   settle?: (replaced: boolean) => void;
+  /** Reload region of the publication currently in flight (unsettled), where a
+   *  rectangle is bounded and `undefined` is a full reload. A superseding
+   *  publication unions this into its own region so tiles the superseded pass
+   *  had not yet refreshed are still re-issued under the new generation. Null
+   *  when no publication is in flight (a clean completion deletes the state,
+   *  which naturally clears it). */
+  pending: { bounds: VtDirtyBounds | undefined } | null;
 }
 const reloadStates = new WeakMap<VectorTileSource, ReloadState>();
 
@@ -106,6 +113,17 @@ function canonicalIntersectsDirtyBounds(
     tileMaxY < dirtyBounds[1] ||
     tileMinY > dirtyBounds[3]
   );
+}
+
+/** Union two reload regions. `undefined` (a full reload) swallows everything;
+ *  otherwise return a fresh rectangle covering both (inputs are never mutated —
+ *  either may be an array still referenced by an in-flight publication). */
+function unionDirtyRegions(
+  a: VtDirtyBounds | undefined,
+  b: VtDirtyBounds | undefined,
+): VtDirtyBounds | undefined {
+  if (a === undefined || b === undefined) return undefined;
+  return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
 }
 
 interface TileCacheLike {
@@ -243,12 +261,26 @@ export function reloadVtSource(
     state = {
       generation: 0,
       inFlightReloads: new Map(),
+      pending: null,
     };
     reloadStates.set(source, state);
   }
 
+  // Fold any still-unsettled prior publication's region into this one. If that
+  // publication is superseded before it refreshes every tile it owned, the tiles
+  // it missed still fall inside this union and get re-issued under the new
+  // generation — closing the forward-edit-then-quick-undo window. A clean
+  // completion deletes the state, so `pending` is only ever set while an overlap
+  // is genuinely in flight. `dirtyBounds === null` already returned above, so the
+  // incoming region here is a rectangle or `undefined` (full).
+  const incoming: VtDirtyBounds | undefined = dirtyBounds ?? undefined;
+  const effectiveBounds = state.pending
+    ? unionDirtyRegions(incoming, state.pending.bounds)
+    : incoming;
+
   state.settle?.(false);
   const generation = ++state.generation;
+  state.pending = { bounds: effectiveBounds };
   return new Promise<boolean>((resolve) => {
     let settled = false;
     const settle = (replaced: boolean): void => {
@@ -273,7 +305,7 @@ export function reloadVtSource(
 
       // Invalidate cached other-zoom tiles up front so a later zoom cannot reuse
       // pre-edit geometry. Independent of the resident reload the handoff awaits.
-      evictCachedTiles(manager as { _outOfViewCache?: TileCacheLike }, dirtyBounds ?? undefined);
+      evictCachedTiles(manager as { _outOfViewCache?: TileCacheLike }, effectiveBounds);
 
       // Keep each existing tile renderable while its worker result is replaced.
       let ids = manager.getIds();
@@ -300,7 +332,7 @@ export function reloadVtSource(
         const tile = manager.getTileByID(id) as ReloadTile | undefined;
         if (!tile) continue;
         const canonical = tile.tileID?.canonical;
-        if (dirtyBounds && canonical && !canonicalIntersectsDirtyBounds(canonical, dirtyBounds)) {
+        if (effectiveBounds && canonical && !canonicalIntersectsDirtyBounds(canonical, effectiveBounds)) {
           continue;
         }
         const priorReload = state.inFlightReloads.get(id);
