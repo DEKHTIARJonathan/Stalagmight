@@ -10,6 +10,7 @@ import {
   vtGroupCount,
   vtTransferables,
   cutTile,
+  isStructuralChange,
   lngLatToMercator,
   VT_EXTENT,
   VT_SOURCE_LAYER,
@@ -383,5 +384,55 @@ describe('cutTile on empty data', () => {
   it('returns null for zero groups', () => {
     const data: VtLayerData = vtPointsFromFeatures([]);
     expect(cutTile(data, 0, 0, 0)).toBeNull();
+  });
+});
+
+describe('isStructuralChange', () => {
+  it('is false for a same-structure move (identical ids + sectionId, moved coords)', () => {
+    const a = vtPointsFromFeatures([
+      pointFeature(1, [[0, 0]], { sectionId: 5 }),
+      pointFeature(2, [[10, 10]], { sectionId: 5 }),
+    ]);
+    const b = vtPointsFromFeatures([
+      pointFeature(1, [[0, 0]], { sectionId: 5 }),
+      pointFeature(2, [[10, 20]], { sectionId: 5 }),
+    ]);
+    expect(isStructuralChange(a, b)).toBe(false);
+  });
+
+  it('is false for an unchanged republish', () => {
+    const mk = (): VtLayerData =>
+      vtPointsFromFeatures([pointFeature(1, [[1, 1]], { sectionId: 3 })]);
+    expect(isStructuralChange(mk(), mk())).toBe(false);
+  });
+
+  it('is true when a group is removed (count shrinks)', () => {
+    const a = vtPointsFromFeatures([pointFeature(1, [[1, 1]]), pointFeature(2, [[2, 2]])]);
+    const b = vtPointsFromFeatures([pointFeature(1, [[1, 1]])]);
+    expect(isStructuralChange(a, b)).toBe(true);
+  });
+
+  it('is true when a group is added (count grows)', () => {
+    const a = vtPointsFromFeatures([pointFeature(1, [[1, 1]])]);
+    const b = vtPointsFromFeatures([pointFeature(1, [[1, 1]]), pointFeature(2, [[2, 2]])]);
+    expect(isStructuralChange(a, b)).toBe(true);
+  });
+
+  it('is true when groups are reordered (same count, different id sequence)', () => {
+    const a = vtPointsFromFeatures([pointFeature(1, [[1, 1]]), pointFeature(2, [[2, 2]])]);
+    const b = vtPointsFromFeatures([pointFeature(2, [[2, 2]]), pointFeature(1, [[1, 1]])]);
+    expect(isStructuralChange(a, b)).toBe(true);
+  });
+
+  it('is true when a group keeps its id but changes sectionId', () => {
+    const a = vtPointsFromFeatures([pointFeature(1, [[1, 1]], { sectionId: 5 })]);
+    const b = vtPointsFromFeatures([pointFeature(1, [[1, 1]], { sectionId: 6 })]);
+    expect(isStructuralChange(a, b)).toBe(true);
+  });
+
+  it('is true when the layer kind changes', () => {
+    const a = vtPointsFromFeatures([pointFeature(1, [[1, 1]])]);
+    const b = vtLinesFromFeatures([lineFeature(1, [[[1, 1], [2, 2]]])]);
+    expect(isStructuralChange(a, b)).toBe(true);
   });
 });

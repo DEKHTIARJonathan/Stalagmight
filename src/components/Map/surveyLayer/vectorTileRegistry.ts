@@ -15,6 +15,7 @@ import type { VectorTileSource } from 'maplibre-gl';
 import {
   cutTile,
   diffVtLayerBounds,
+  isStructuralChange,
   vtLayerBounds,
   type VtDirtyBounds,
   type VtLayerData,
@@ -24,10 +25,15 @@ export const VT_PROTOCOL = 'stalx';
 
 export interface VtLayerPublication {
   version: number;
-  /** Region an edit touched (mercator [minX,minY,maxX,maxY]), or null when the
-   *  payload is unchanged. A null value tells the caller to skip the reload
-   *  entirely — no tile refetch, no repaint. */
-  dirtyBounds: VtDirtyBounds | null;
+  /** How the caller should reload after this publication:
+   *  - a rectangle (mercator [minX,minY,maxX,maxY]) — a same-structure geometry
+   *    edit; reload only the tiles it overlaps;
+   *  - `null` — the payload is unchanged; skip the reload entirely (no refetch,
+   *    no repaint — the autosave/no-op skip);
+   *  - `undefined` — a structural edit (delete/merge/split/reorder/undo); reload
+   *    every resident tile in place and reset the whole out-of-view cache, since
+   *    a structural change can empty tiles wholesale. See `isStructuralChange`. */
+  dirtyBounds: VtDirtyBounds | null | undefined;
 }
 
 const registry = new Map<string, { data: VtLayerData; version: number }>();
@@ -51,9 +57,17 @@ export function setVtLayerData(key: string, data: VtLayerData): VtLayerPublicati
   const entry = registry.get(key);
   const version = (entry?.version ?? 0) + 1;
   const previous = entry?.data;
-  const dirtyBounds = previous ? diffVtLayerBounds(previous, data) : vtLayerBounds(data);
   registry.set(key, { data, version });
-  return { version, dirtyBounds };
+  // First publication: no previous payload to diff. The bootstrap reload turns a
+  // rectangle here into a plain setTiles (nothing is resident yet), so a full
+  // reload would be wasted; report the layer's extent (or null when empty).
+  if (!previous) return { version, dirtyBounds: vtLayerBounds(data) };
+  // Structural edit (group added/removed/reordered, or the undo of one): answer
+  // with a full in-place reload (undefined) so no tile that lost its geometry is
+  // left un-recut. Same-structure geometry edits keep the cheap rectangle diff;
+  // an unchanged payload stays null so the autosave/no-op skip never regresses.
+  if (isStructuralChange(previous, data)) return { version, dirtyBounds: undefined };
+  return { version, dirtyBounds: diffVtLayerBounds(previous, data) };
 }
 
 /** Drop a layer's data (project close / layer teardown). Serving falls back

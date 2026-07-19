@@ -481,6 +481,91 @@ describe('vector tile registry', () => {
     expect(cleared.data.byteLength).toBe(0);
   });
 
+  // Emptied-tile correctness (MapLibre 5.16, traced from the installed sources):
+  // `_reloadTile(id,'expired')` sets tile.state='expired', which makes
+  // VectorTileSource.loadTile send an "LT" loadTile — a real re-fetch through the
+  // stalx protocol, not a cached re-parse. A tile the re-cut empties returns a
+  // zero-byte ArrayBuffer; the worker parses it as a valid empty vector tile
+  // (zero layers -> zero buckets), and Tile.loadVectorData() calls
+  // unloadVectorData() first (state 'expired' counts as hasData), destroying the
+  // prior bucket before installing the empty one. So an in-place empty reload
+  // provably clears the old geometry — a plain reload is correct; these tests
+  // lock that no reload path SKIPS a tile that will cut empty.
+  it('reloads a tile the bounded rectangle empties, clearing its now-empty bucket', async () => {
+    const emptied = { state: 'loaded', tileID: { canonical: { z: 2, x: 0, y: 0 } } };
+    const manager = {
+      getIds: vi.fn(() => ['emptied']),
+      getTileByID: vi.fn(() => emptied),
+      _reloadTile: vi.fn(() => Promise.resolve()),
+    };
+    const source = {
+      map: {
+        style: { tileManagers: { 'empty-rect-test': manager } },
+        triggerRepaint: vi.fn(),
+      },
+      tiles: ['stalx://empty-rect-test/{z}/{x}/{y}?v=1'],
+      setTiles: vi.fn(),
+    };
+
+    // A move whose old + new positions both sit inside tile (2,0,0)'s region:
+    // the tile is covered by the rectangle, so it re-cuts (possibly empty) in
+    // place rather than being skipped.
+    await expect(reloadVtSource(
+      source as unknown as VectorTileSource,
+      'empty-rect-test',
+      2,
+      [0.01, 0.01, 0.05, 0.05],
+    )).resolves.toBe(true);
+
+    expect(manager._reloadTile).toHaveBeenCalledWith('emptied', 'expired');
+  });
+
+  it('routes a group removal through a full reload so the emptied tile is re-cut, not skipped', async () => {
+    const key = 'structural-empty-test';
+    setVtLayerData(key, vtPointsFromFeatures([
+      { type: 'Feature', geometry: { type: 'Point', coordinates: [1, 1] }, properties: { featureId: 1 } },
+      { type: 'Feature', geometry: { type: 'Point', coordinates: [40, 40] }, properties: { featureId: 2 } },
+    ]));
+    // Remove the second group: structural -> undefined -> full reload.
+    const publication = setVtLayerData(key, vtPointsFromFeatures([
+      { type: 'Feature', geometry: { type: 'Point', coordinates: [1, 1] }, properties: { featureId: 1 } },
+    ]));
+    expect(publication.dirtyBounds).toBeUndefined();
+
+    // Tile the removed group used to occupy. A bounded rectangle around the lone
+    // survivor need not cover it, but the full reload reloads every resident tile.
+    const emptied = { state: 'loaded', tileID: { canonical: { z: 2, x: 3, y: 3 } } };
+    const outOfViewCache = { reset: vi.fn(), filter: vi.fn() };
+    const manager = {
+      _outOfViewCache: outOfViewCache,
+      getIds: vi.fn(() => ['emptied']),
+      getTileByID: vi.fn(() => emptied),
+      _reloadTile: vi.fn(() => Promise.resolve()),
+    };
+    const source = {
+      map: {
+        style: { tileManagers: { [key]: manager } },
+        triggerRepaint: vi.fn(),
+      },
+      tiles: [`stalx://${key}/{z}/{x}/{y}?v=1`],
+      setTiles: vi.fn(),
+    };
+
+    await expect(reloadVtSource(
+      source as unknown as VectorTileSource,
+      key,
+      publication.version,
+      publication.dirtyBounds,
+    )).resolves.toBe(true);
+
+    expect(manager._reloadTile).toHaveBeenCalledWith('emptied', 'expired');
+    // Full reload resets the whole out-of-view cache (no bounded filter).
+    expect(outOfViewCache.reset).toHaveBeenCalledOnce();
+    expect(outOfViewCache.filter).not.toHaveBeenCalled();
+
+    clearVtLayerData(key);
+  });
+
   describe('setVtLayerData dirty bounds', () => {
     beforeEach(() => {
       clearVtLayerData('diff-test');
@@ -503,12 +588,49 @@ describe('vector tile registry', () => {
       setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[0, 0], [10, 10]])));
       const moved = setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[0, 0], [10, 20]])));
       expect(moved.dirtyBounds).not.toBeNull();
+      expect(moved.dirtyBounds).not.toBeUndefined();
       // Only the second group moved (lng 10, lat 10 -> 20). The unchanged group
       // sits at mercator (0.5, 0.5); the scoped rect must exclude it in both
       // axes, proving the diff is bounded to the group that actually changed.
       const [minX, , , maxY] = moved.dirtyBounds!;
       expect(minX).toBeGreaterThan(0.5);
       expect(maxY).toBeLessThan(0.5);
+    });
+
+    // A structural edit (group added / removed / reordered, or the undo of one)
+    // can empty resident tiles wholesale, so it must route to a full in-place
+    // reload (dirtyBounds === undefined) rather than a bounded rectangle that a
+    // superseding publication or a skipped tile could leave stale.
+    it('reports undefined (full reload) when a group is removed', () => {
+      setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[1, 1], [2, 2]])));
+      const removed = setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[1, 1]])));
+      expect(removed.dirtyBounds).toBeUndefined();
+    });
+
+    it('reports undefined (full reload) when a group is added', () => {
+      setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[1, 1]])));
+      const added = setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[1, 1], [2, 2]])));
+      expect(added.dirtyBounds).toBeUndefined();
+    });
+
+    it('reports undefined (full reload) when groups are reordered', () => {
+      const forward = pointsAt([[1, 1], [2, 2]]); // ids 1,2
+      const reversed: GeoJSON.Feature[] = [
+        { type: 'Feature', geometry: { type: 'Point', coordinates: [2, 2] }, properties: { featureId: 2 } },
+        { type: 'Feature', geometry: { type: 'Point', coordinates: [1, 1] }, properties: { featureId: 1 } },
+      ];
+      setVtLayerData('diff-test', vtPointsFromFeatures(forward));
+      const shuffled = setVtLayerData('diff-test', vtPointsFromFeatures(reversed));
+      expect(shuffled.dirtyBounds).toBeUndefined();
+    });
+
+    it('keeps a rectangle for a same-structure move and null for an unchanged republish', () => {
+      setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[0, 0], [10, 10]])));
+      const moved = setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[0, 0], [10, 20]])));
+      expect(moved.dirtyBounds).not.toBeNull();
+      expect(moved.dirtyBounds).not.toBeUndefined();
+      const unchanged = setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[0, 0], [10, 20]])));
+      expect(unchanged.dirtyBounds).toBeNull();
     });
   });
 });

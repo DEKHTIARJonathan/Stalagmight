@@ -205,6 +205,34 @@ export function diffVtLayerBounds(previous: VtLayerData, next: VtLayerData): VtD
   return dirty;
 }
 
+/**
+ * Whether `next` changes the group *structure* relative to `previous`: a
+ * different group count, or a different group-identity sequence (layer `kind`,
+ * plus each group's MVT id and `sectionId`). Pure geometry edits — moves that
+ * keep every group's identity in place — are NOT structural.
+ *
+ * A structural edit (delete / merge / split / reorder, and the undo of any of
+ * them) can empty resident tiles wholesale as groups vanish or shift between
+ * tiles. The index-aligned rectangle diff stays correct for these, but a
+ * *bounded* reload of that rectangle is only as reliable as the weakest tile it
+ * skips or a superseding publication leaves stale. The caller answers a
+ * structural change with a full in-place reload instead (bounds omitted), which
+ * re-cuts every resident tile and resets the whole out-of-view cache, so no tile
+ * that lost its geometry can be left rendering the pre-edit bucket. In-place
+ * full reloads never blank (resident tiles stay renderable while re-cutting), so
+ * the no-flash property is preserved. Cheap: one pass, no coordinate reads.
+ */
+export function isStructuralChange(previous: VtLayerData, next: VtLayerData): boolean {
+  if (previous.kind !== next.kind) return true;
+  const count = vtGroupCount(previous);
+  if (count !== vtGroupCount(next)) return true;
+  for (let gi = 0; gi < count; gi++) {
+    if (previous.ids[gi] !== next.ids[gi]) return true;
+    if (previous.props[gi]!['sectionId'] !== next.props[gi]!['sectionId']) return true;
+  }
+  return false;
+}
+
 /** Full mercator extent of a layer, or null when it holds no geometry. Used for
  *  the first publication, where there is no previous payload to diff against. */
 export function vtLayerBounds(data: VtLayerData): VtDirtyBounds | null {
