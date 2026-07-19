@@ -41,6 +41,7 @@ import {
 } from './surveyLayer/dragPreviewSource';
 import { padProbeBox, probePad, type ProbeGeometry } from './surveyLayer/hitProbe';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
+import { dimmedZoomOpacity } from './surveyLayer/opacityExpressions';
 import { SurveyCustomController } from './surveyLayer/customRender/controller';
 import type { SurveyData } from '../../types/survey-data';
 import type { ProjectWarning } from '../../types/commands';
@@ -3388,17 +3389,13 @@ export default class SurveyLayer {
 
     if (idsArray.length > 0) {
       // Shot labels: anchored → 0.25, else zoom-interpolated
-      this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', [
-        'case', anchoredCheck, 0.25, zoomOpacity,
-      ] as maplibregl.ExpressionSpecification);
+      this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', dimmedZoomOpacity(anchoredCheck));
       // Section name labels: anchored → 0.25, else 1
       this.map.setPaintProperty(this.labelsLayerId, 'text-opacity', [
         'case', anchoredCheck, 0.25, 1,
       ] as maplibregl.ExpressionSpecification);
       // Station index labels: anchored → 0.25, else zoom-interpolated
-      this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', [
-        'case', anchoredCheck, 0.25, zoomOpacity,
-      ] as maplibregl.ExpressionSpecification);
+      this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', dimmedZoomOpacity(anchoredCheck));
     } else {
       // Restore original opacity (no anchored sections)
       this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', zoomOpacity);
@@ -3566,9 +3563,7 @@ export default class SurveyLayer {
           ['+', ['*', ['get', 'sectionId'], FEATURE_ID_STRIDE], ['get', 'stationIndex']],
           ['literal', stationIdsArray],
         ] as maplibregl.ExpressionSpecification;
-        this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', [
-          'case', stationAnchoredCheck, 0.25, zoomOpacity,
-        ] as maplibregl.ExpressionSpecification);
+        this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', dimmedZoomOpacity(stationAnchoredCheck));
       } else {
         this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', zoomOpacity);
       }
@@ -3581,9 +3576,7 @@ export default class SurveyLayer {
           ['+', ['*', ['get', 'sectionId'], FEATURE_ID_STRIDE], ['get', 'shotId']],
           ['literal', shotIdsArray],
         ] as maplibregl.ExpressionSpecification;
-        this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', [
-          'case', shotAnchoredCheck, 0.25, zoomOpacity,
-        ] as maplibregl.ExpressionSpecification);
+        this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', dimmedZoomOpacity(shotAnchoredCheck));
       } else {
         this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', zoomOpacity);
       }
