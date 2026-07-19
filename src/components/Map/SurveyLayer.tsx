@@ -30,6 +30,13 @@ import {
   type SurveyFeatureGroupKey,
 } from './surveyLayer/features';
 import { SurveyGeometryIndex } from './surveyLayer/geometryIndex';
+import {
+  buildDragPreviewFeatureCollection,
+  type DragPreviewFeature,
+  type DragPreviewSet,
+  type MovingEnd,
+  type Projector,
+} from './surveyLayer/dragPreviewSource';
 import { padProbeBox, probePad, type ProbeGeometry } from './surveyLayer/hitProbe';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
 import type { SurveyData } from '../../types/survey-data';
@@ -139,7 +146,6 @@ export default class SurveyLayer {
   private stationCommentsLayerId = 'survey-station-comments';
   private shotCommentsLayerId = 'survey-shot-comments';
   private loopClosuresLayerId = 'survey-loop-closures';
-  private dragClosuresLayerId = 'survey-drag-loop-closures';
   private ghostShotsLayerId = 'survey-ghost-shots';
   private ghostStationsLayerId = 'survey-ghost-stations';
   private ghostMergeLayerId = 'survey-ghost-merge';
@@ -258,47 +264,39 @@ export default class SurveyLayer {
    *  builds compare against this on resolve to bail if a newer update
    *  invalidated them mid-flight. */
   private lastUpdateToken = 0;
-  // Layers that participate in drag preview (main layer → temp layer config)
-  private static readonly DRAG_LAYER_DEFS: Array<{
-    mainLayerId: string;
-    tempLayerId: string;
-    sourceId: string;
-    type: 'line' | 'circle' | 'symbol';
-    translateProp: string;
-    translateAnchorProp: string;
-  }> = [
-    { mainLayerId: 'survey-shots', tempLayerId: 'survey-drag-shots', sourceId: 'survey-data-shots', type: 'line', translateProp: 'line-translate', translateAnchorProp: 'line-translate-anchor' },
-    { mainLayerId: 'survey-shot-gradients', tempLayerId: 'survey-drag-shot-gradients', sourceId: 'survey-data-shot-gradients', type: 'line', translateProp: 'line-translate', translateAnchorProp: 'line-translate-anchor' },
-    { mainLayerId: 'survey-stations', tempLayerId: 'survey-drag-stations', sourceId: 'survey-data-stations', type: 'circle', translateProp: 'circle-translate', translateAnchorProp: 'circle-translate-anchor' },
-    { mainLayerId: 'survey-shot-labels', tempLayerId: 'survey-drag-shot-labels', sourceId: 'survey-data-shot-labels', type: 'symbol', translateProp: 'text-translate', translateAnchorProp: 'text-translate-anchor' },
-    { mainLayerId: 'survey-labels', tempLayerId: 'survey-drag-labels', sourceId: 'survey-data-section-labels', type: 'symbol', translateProp: 'text-translate', translateAnchorProp: 'text-translate-anchor' },
-    { mainLayerId: 'survey-station-labels', tempLayerId: 'survey-drag-station-labels', sourceId: 'survey-data-station-labels', type: 'symbol', translateProp: 'text-translate', translateAnchorProp: 'text-translate-anchor' },
+  // Segment drag hides these bulk layers' real features (excluded by sectionId)
+  // while the moving copy renders from the unified preview source. Section labels
+  // (survey-labels) are intentionally NOT hidden: they stay at their committed
+  // anchor during the drag and snap to the new position on commit — cheaper than
+  // reconstructing the anchor-station selection, and they don't wedge (atomic).
+  private static readonly SEGMENT_DRAG_MAIN_LAYERS = [
+    'survey-shots',
+    'survey-shot-gradients',
+    'survey-stations',
+    'survey-shot-labels',
+    'survey-station-labels',
   ];
 
-  // Station drag preview — dynamic geometry rebuild for connected shots
-  // (translate is insufficient because only one endpoint of each shot moves)
-  private stationDragShots: Array<{
-    properties: Record<string, unknown>;
-    fromCoord: [number, number]; // original [lng, lat]
-    toCoord: [number, number];
-    movingEnd: 'from' | 'to' | 'both';
-    shotLabelProperties: Record<string, unknown>;
-  }> | null = null;
-  private static readonly STATION_DRAG_SHOT_SOURCE = 'survey-drag-station-shots-src';
-  private static readonly STATION_DRAG_SHOT_LAYER = 'survey-drag-station-shots-layer';
-  private static readonly STATION_DRAG_SHOT_LABEL_SOURCE = 'survey-drag-station-shot-labels-src';
-  private static readonly STATION_DRAG_SHOT_LABEL_LAYER = 'survey-drag-station-shot-labels-layer';
-
-  // Station drag preview — dynamic geometry rebuild for connected closure indicator lines
-  // (translate is insufficient because only one endpoint of each closure line may move)
-  private stationDragClosures: Array<{
-    properties: Record<string, unknown>;
-    fromCoord: [number, number]; // original [lng, lat] — station_a
-    toCoord: [number, number];   // original [lng, lat] — station_b
-    movingEnd: 'from' | 'to' | 'both';
-  }> | null = null;
-  private static readonly STATION_DRAG_CLOSURE_SOURCE = 'survey-drag-station-closures-src';
-  private static readonly STATION_DRAG_CLOSURE_LAYER = 'survey-drag-station-closures-layer';
+  // Unified drag-preview source (#mem drag fixes): ONE GeoJSON source holding
+  // every moving feature for the active drag — stations (points), shots (lines),
+  // shot/station labels, loop-closure indicator lines — rebuilt from captured
+  // originals each frame and pushed via a SINGLE setData. Real moved coordinates
+  // (not `*-translate`) so the tiler clips moved geometry — no background wedges
+  // at large offsets (BUG A); one setData so stations/shots/labels can't skew
+  // apart (BUG B).
+  private static readonly DRAG_PREVIEW_SOURCE = 'survey-drag-preview';
+  private static readonly DRAG_PREVIEW_SHOTS_LAYER = 'survey-drag-preview-shots';
+  private static readonly DRAG_PREVIEW_CLOSURES_LAYER = 'survey-drag-preview-closures';
+  private static readonly DRAG_PREVIEW_STATIONS_LAYER = 'survey-drag-preview-stations';
+  private static readonly DRAG_PREVIEW_SHOT_LABELS_LAYER = 'survey-drag-preview-shot-labels';
+  private static readonly DRAG_PREVIEW_STATION_LABELS_LAYER = 'survey-drag-preview-station-labels';
+  /** Captured moving geometry for the active drag (originals + movingEnd). */
+  private dragPreviewSet: DragPreviewSet | null = null;
+  /** rAF coalescer for the per-frame preview render: MapCanvas may push several
+   *  offsets per frame (pointermove + the map-'move' re-apply), but the preview
+   *  only needs the latest — one setData per frame. */
+  private dragUpdateRaf: number | null = null;
+  private pendingDragOffset: { dx: number; dy: number } | null = null;
 
   // Visibility state (for hidden feature detection)
   private stationsVisible: boolean = true;
@@ -3597,154 +3595,300 @@ export default class SurveyLayer {
     }
   }
 
+  /** The drag preview's shot/station color paint. Plain mode reads the resolved
+   *  per-feature `color` property (baked at capture time, like the interact
+   *  overlay); distance / gas-reach modes read the carried `dist` / `gasReach`
+   *  through the SAME ramp expressions the bulk layers use, so colors match. */
+  private dragPreviewColorExpr(): ExpressionSpecification {
+    if (this.distanceMode) {
+      return distanceColorExpression(
+        DISTANCE_NEAR,
+        DISTANCE_FAR,
+        this.distanceState?.max ?? 0,
+        this.themeColors.grayLine,
+        ['get', 'dist'] as ExpressionSpecification,
+      );
+    }
+    if (this.gasReachMode) {
+      return gasReachColorExpression(
+        GAS_NEAR,
+        GAS_FAR,
+        this.gasReachState?.max ?? 0,
+        this.themeColors.grayLine,
+        ['get', 'gasReach'] as ExpressionSpecification,
+      );
+    }
+    return ['get', 'color'] as ExpressionSpecification;
+  }
+
+  /** Add one drag-preview label layer, copying layout (size/offset/anchor/
+   *  visibility) from its bulk counterpart so labels keep their look. */
+  private addDragPreviewLabelLayer(layerId: string, kind: string, mainLayerId: string): void {
+    const vis = this.map.getLayoutProperty(mainLayerId, 'visibility') ?? 'visible';
+    const textSize = this.map.getLayoutProperty(mainLayerId, 'text-size') ?? 11;
+    const textOffset = this.map.getLayoutProperty(mainLayerId, 'text-offset');
+    const textAnchor = this.map.getLayoutProperty(mainLayerId, 'text-anchor');
+    const layout: Record<string, unknown> = {
+      'text-field': ['get', 'label'],
+      'text-font': ['Open Sans Regular'],
+      'text-size': textSize,
+      'text-allow-overlap': true,
+      'visibility': vis as 'visible' | 'none',
+    };
+    if (textOffset != null) layout['text-offset'] = textOffset;
+    if (textAnchor != null) layout['text-anchor'] = textAnchor;
+    this.map.addLayer({
+      id: layerId,
+      type: 'symbol',
+      source: SurveyLayer.DRAG_PREVIEW_SOURCE,
+      filter: ['==', ['get', 'kind'], kind],
+      layout: layout as NonNullable<maplibregl.SymbolLayerSpecification['layout']>,
+      paint: {
+        'text-color': ['get', 'color'],
+        'text-halo-color': this.themeColors.textHalo,
+        'text-halo-width': 1.5,
+        'text-opacity': 0.85,
+      },
+    });
+  }
+
+  /** Create the unified drag-preview source and its layers (idempotent). The
+   *  layers filter one source by the feature `kind`; z-order is lines (shots,
+   *  closures) below circles (stations) below labels, matching the bulk stack. */
+  private createDragPreviewLayers(): void {
+    if (this.map.getSource(SurveyLayer.DRAG_PREVIEW_SOURCE)) this.removeDragPreviewLayers();
+    this.map.addSource(SurveyLayer.DRAG_PREVIEW_SOURCE, {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] },
+    });
+    const colorExpr = this.dragPreviewColorExpr();
+
+    this.map.addLayer({
+      id: SurveyLayer.DRAG_PREVIEW_SHOTS_LAYER,
+      type: 'line',
+      source: SurveyLayer.DRAG_PREVIEW_SOURCE,
+      filter: ['==', ['get', 'kind'], 'shot'],
+      paint: {
+        'line-color': colorExpr,
+        'line-width': this.getShotSelectionWidth(),
+        'line-opacity': 0.85,
+      },
+    });
+    this.map.addLayer({
+      id: SurveyLayer.DRAG_PREVIEW_CLOSURES_LAYER,
+      type: 'line',
+      source: SurveyLayer.DRAG_PREVIEW_SOURCE,
+      filter: ['==', ['get', 'kind'], 'closure'],
+      paint: {
+        'line-color': ['get', 'color'],
+        'line-width': 3,
+        'line-opacity': 0.85,
+        'line-dasharray': [6, 4],
+      },
+    });
+    this.map.addLayer({
+      id: SurveyLayer.DRAG_PREVIEW_STATIONS_LAYER,
+      type: 'circle',
+      source: SurveyLayer.DRAG_PREVIEW_SOURCE,
+      filter: ['==', ['get', 'kind'], 'station'],
+      paint: {
+        'circle-color': colorExpr,
+        'circle-radius': this.getStationSelectionRadius(),
+        'circle-stroke-color': this.themeColors.selectHighlight,
+        'circle-stroke-width': 2.5,
+        'circle-opacity': 0.85,
+      },
+    });
+    this.addDragPreviewLabelLayer(
+      SurveyLayer.DRAG_PREVIEW_SHOT_LABELS_LAYER, 'shotLabel', this.shotLabelsLayerId,
+    );
+    this.addDragPreviewLabelLayer(
+      SurveyLayer.DRAG_PREVIEW_STATION_LABELS_LAYER, 'stationLabel', this.stationLabelsLayerId,
+    );
+  }
+
+  /** Remove the unified drag-preview source and its layers (idempotent). */
+  private removeDragPreviewLayers(): void {
+    for (const layerId of [
+      SurveyLayer.DRAG_PREVIEW_SHOTS_LAYER,
+      SurveyLayer.DRAG_PREVIEW_CLOSURES_LAYER,
+      SurveyLayer.DRAG_PREVIEW_STATIONS_LAYER,
+      SurveyLayer.DRAG_PREVIEW_SHOT_LABELS_LAYER,
+      SurveyLayer.DRAG_PREVIEW_STATION_LABELS_LAYER,
+    ]) {
+      if (this.map.getLayer(layerId)) this.map.removeLayer(layerId);
+    }
+    if (this.map.getSource(SurveyLayer.DRAG_PREVIEW_SOURCE)) {
+      this.map.removeSource(SurveyLayer.DRAG_PREVIEW_SOURCE);
+    }
+  }
+
+  /** Re-project the captured moving set at the current offset and push it in ONE
+   *  setData. Projecting from originals every frame (never accumulating) keeps
+   *  the preview correct across a mid-drag zoom. */
+  private renderDragPreview(dx: number, dy: number): void {
+    if (!this.dragPreviewActive || !this.dragPreviewSet) return;
+    const projector: Projector = {
+      project: (lngLat) => this.map.project(lngLat),
+      unproject: (pt) => this.map.unproject(pt),
+    };
+    const fc = buildDragPreviewFeatureCollection(this.dragPreviewSet, projector, dx, dy);
+    const src = this.map.getSource(SurveyLayer.DRAG_PREVIEW_SOURCE);
+    if (src && 'setData' in src) {
+      (src as maplibregl.GeoJSONSource).setData(fc);
+    }
+  }
+
+  /** The per-feature analytical-overlay props (dist / gas-reach) a moving feature
+   *  must carry so the preview's ramp paint matches the bulk layers. Keyed the
+   *  same way the interact overlay keys them ("sec:idx" / "sec:shotId"). */
+  private dragOverlayProps(idStr: string, kind: 'station' | 'shot'): Record<string, unknown> {
+    const props: Record<string, unknown> = {};
+    if (!this.distanceMode && !this.gasReachMode) return props;
+    const fid = this.parseFeatureId(idStr);
+    if (fid === null) return props;
+    const map = kind === 'station'
+      ? { dist: this.distanceState?.stations, gas: this.gasReachState?.stations }
+      : { dist: this.distanceState?.shots, gas: this.gasReachState?.shots };
+    if (this.distanceMode) props.dist = map.dist?.get(fid) ?? -1;
+    if (this.gasReachMode) props.gasReach = map.gas?.get(fid) ?? -1;
+    return props;
+  }
+
   /**
-   * Begin drag preview — hides connected section features from main layers via filter,
-   * then creates temporary layers (same sources) that show only those features with a
-   * *-translate paint property. Per-frame cost becomes just setPaintProperty (shader
-   * uniform update) instead of rebuilding 5 GeoJSON sources.
+   * Begin SEGMENT drag preview — hide the connected sections' real features from
+   * the bulk layers (excluded by sectionId), capture every moving station / shot
+   * / label / closure ONCE with its original coordinates, and render the moving
+   * copy from the unified preview source. All geometry moves uniformly, so a
+   * later per-frame offset is applied to every captured vertex.
    */
   beginDragPreview(connectedSectionIds: Set<number>): void {
     if (this.dragPreviewActive) this.endDragPreview();
     if (connectedSectionIds.size === 0) return;
+    if (!this.geoIndex || !this.cachedSurveyData) return;
 
     const idsArray = [...connectedSectionIds];
-    const exclusion: maplibregl.FilterSpecification = ['!', ['in', ['get', 'sectionId'], ['literal', idsArray]]];
-    const inclusion: maplibregl.FilterSpecification = ['in', ['get', 'sectionId'], ['literal', idsArray]];
+    const exclusion: maplibregl.FilterSpecification =
+      ['!', ['in', ['get', 'sectionId'], ['literal', idsArray]]];
 
-    for (const def of SurveyLayer.DRAG_LAYER_DEFS) {
-      // Save and compose exclusion filter on main layer
-      const existing = this.map.getFilter(def.mainLayerId);
-      this.dragSavedFilters.set(def.mainLayerId, existing ?? undefined);
-      // Compose exclusion with existing filter. If existing is trivial (null/boolean), use
-      // exclusion alone. Cast needed because MapLibre's TS types don't fully cover ['all',...].
+    // Hide the connected sections' real features from the bulk layers (compose
+    // with any existing filter so reference/zoom gating is preserved).
+    for (const mainLayerId of SurveyLayer.SEGMENT_DRAG_MAIN_LAYERS) {
+      const existing = this.map.getFilter(mainLayerId);
+      this.dragSavedFilters.set(mainLayerId, existing ?? undefined);
       const composed: maplibregl.FilterSpecification = (existing && typeof existing === 'object')
         ? (['all', existing, exclusion] as unknown as maplibregl.FilterSpecification)
         : exclusion;
-      this.map.setFilter(def.mainLayerId, composed);
+      this.map.setFilter(mainLayerId, composed);
+    }
 
-      // Create temp layer from same source, filtered to connected sections only
-      const paintBase: Record<string, unknown> = {
-        [def.translateProp]: [0, 0] as [number, number],
-        [def.translateAnchorProp]: 'viewport',
-        // Disable the default 300ms paint transition — makes translate instant
-        [`${def.translateProp}-transition`]: { duration: 0, delay: 0 },
-      };
+    // Hide closures with EITHER endpoint in the connected set. Closures with BOTH
+    // endpoints inside move uniformly (captured below); closures bridging a
+    // dragged and a stationary section are hidden during the drag and reappear
+    // with correct geometry on commit.
+    const existingClosureFilter = this.map.getFilter(this.loopClosuresLayerId);
+    this.dragSavedFilters.set(this.loopClosuresLayerId, existingClosureFilter ?? undefined);
+    const eitherEndpointExclusion: maplibregl.FilterSpecification = ['!', ['any',
+      ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
+      ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
+    ]] as unknown as maplibregl.FilterSpecification;
+    this.map.setFilter(this.loopClosuresLayerId, (existingClosureFilter && typeof existingClosureFilter === 'object')
+      ? (['all', existingClosureFilter, eitherEndpointExclusion] as unknown as maplibregl.FilterSpecification)
+      : eitherEndpointExclusion);
 
-      if (def.type === 'line') {
-        this.map.addLayer({
-          id: def.tempLayerId,
-          type: 'line',
-          source: def.sourceId,
-          'source-layer': VT_SOURCE_LAYER,
-          filter: inclusion,
-          paint: {
-            // Drag temp layer reads the main palette-indexed source (#B).
-            'line-color': this.colorExpr(),
-            'line-width': this.getShotSelectionWidth(),
-            'line-opacity': 0.85,
-            ...paintBase,
-          },
+    // Capture the moving geometry once. Everything in the segment moves uniformly.
+    const features: DragPreviewFeature[] = [];
+    const ctx = this.displayColorContext();
+    const buildLabels = this.labelsCurrentlyBuilt;
+    const stationDefault = this.themeColors.stationDefault;
+
+    for (const section of this.cachedSections) {
+      if (!connectedSectionIds.has(section.id)) continue;
+      const sectionStations = this.cachedStations
+        .filter(s => s.station_ref.section_id === section.id)
+        .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index);
+
+      // Stations (points) + station labels.
+      for (const st of sectionStations) {
+        const ref = st.station_ref;
+        const coord = metersToMapCoords(st.coordinates.x, st.coordinates.y, this.gpsOrigin) as [number, number];
+        const idStr = `${ref.section_id}:${ref.station_index}`;
+        const g = this.geoIndex.stationGlobalIndex(ref);
+        const color = g === null
+          ? stationDefault
+          : resolveStationDisplayColor(this.cachedSurveyData, section.color ?? stationDefault, g, ctx);
+        features.push({
+          emit: 'point',
+          coords: [coord],
+          movingEnd: 'uniform',
+          properties: { kind: 'station', color, ...this.dragOverlayProps(idStr, 'station') },
         });
-      } else if (def.type === 'circle') {
-        this.map.addLayer({
-          id: def.tempLayerId,
-          type: 'circle',
-          source: def.sourceId,
-          'source-layer': VT_SOURCE_LAYER,
-          filter: inclusion,
-          paint: {
-            'circle-color': this.colorExpr(),
-            'circle-radius': this.getStationSelectionRadius(),
-            'circle-stroke-color': this.themeColors.selectHighlight,
-            'circle-stroke-width': 2.5,
-            'circle-opacity': 0.85,
-            ...paintBase,
-          },
+        if (buildLabels) {
+          features.push({
+            emit: 'point',
+            coords: [coord],
+            movingEnd: 'uniform',
+            properties: { kind: 'stationLabel', label: String(ref.station_index), color },
+          });
+        }
+      }
+
+      // Shots (lines) + shot labels.
+      for (let i = 0; i < section.shots.length; i++) {
+        const fromSt = sectionStations[i];
+        const toSt = sectionStations[i + 1];
+        const shot = section.shots[i];
+        if (!fromSt || !toSt || !shot) continue;
+        const fromCoord = metersToMapCoords(fromSt.coordinates.x, fromSt.coordinates.y, this.gpsOrigin) as [number, number];
+        const toCoord = metersToMapCoords(toSt.coordinates.x, toSt.coordinates.y, this.gpsOrigin) as [number, number];
+        const geo = this.geoIndex.shotGeometry(section.id, shot.id);
+        const color = geo
+          ? resolveShotDisplayColor(this.cachedSurveyData, section.color ?? stationDefault, geo.globalIdx, ctx)
+          : (section.color ?? stationDefault);
+        features.push({
+          emit: 'line',
+          coords: [fromCoord, toCoord],
+          movingEnd: 'uniform',
+          properties: { kind: 'shot', color, ...this.dragOverlayProps(`${section.id}:${shot.id}`, 'shot') },
         });
-      } else if (def.type === 'symbol') {
-        // Copy layout properties from main layer so labels keep their position/size
-        const vis = this.map.getLayoutProperty(def.mainLayerId, 'visibility') ?? 'visible';
-        const textSize = this.map.getLayoutProperty(def.mainLayerId, 'text-size') ?? 11;
-        const textOffset = this.map.getLayoutProperty(def.mainLayerId, 'text-offset');
-        const textAnchor = this.map.getLayoutProperty(def.mainLayerId, 'text-anchor');
-        const layoutProps: Record<string, unknown> = {
-          'text-field': def.sourceId.includes('section') ? ['get', 'name'] : ['get', 'label'],
-          'text-font': ['Open Sans Regular'],
-          'text-size': textSize,
-          'text-allow-overlap': true,
-          'visibility': vis as 'visible' | 'none',
-        };
-        if (textOffset != null) layoutProps['text-offset'] = textOffset;
-        if (textAnchor != null) layoutProps['text-anchor'] = textAnchor;
-        this.map.addLayer({
-          id: def.tempLayerId,
-          type: 'symbol',
-          source: def.sourceId,
-          'source-layer': VT_SOURCE_LAYER,
-          filter: inclusion,
-          layout: layoutProps as NonNullable<maplibregl.SymbolLayerSpecification['layout']>,
-          paint: {
-            'text-color': ['get', 'color'],
-            'text-halo-color': this.themeColors.textHalo,
-            'text-halo-width': 1.5,
-            'text-opacity': 0.85,
-            ...paintBase,
-          },
-        });
+        if (buildLabels) {
+          const label = `${formatFixed(shot.azimuth_in, undefined, this.cachedPrecision?.azimuth ?? 0)}° ${formatFixed(shot.length, undefined, this.cachedPrecision?.length ?? 1)}m`;
+          features.push({
+            emit: 'midpoint',
+            coords: [fromCoord, toCoord],
+            movingEnd: 'uniform',
+            properties: { kind: 'shotLabel', label, color: section.color ?? stationDefault },
+          });
+        }
       }
     }
 
-    // Loop closures: hide closures that have ANY endpoint in the connected set from
-    // the main layer, then create a temp layer for closures with BOTH endpoints in the
-    // set (those translate uniformly). Closures bridging dragged/stationary sections are
-    // hidden during drag and reappear with correct geometry after commit.
-    {
-      const closureSourceId = this.sourceId + '-loop-closures';
-      const existingFilter = this.map.getFilter(this.loopClosuresLayerId);
-      this.dragSavedFilters.set(this.loopClosuresLayerId, existingFilter ?? undefined);
-
-      // Hide closures where EITHER endpoint is in the connected set
-      const eitherEndpointExclusion: maplibregl.FilterSpecification = ['!', ['any',
-        ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
-        ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
-      ]] as unknown as maplibregl.FilterSpecification;
-      const composedClosure: maplibregl.FilterSpecification = (existingFilter && typeof existingFilter === 'object')
-        ? (['all', existingFilter, eitherEndpointExclusion] as unknown as maplibregl.FilterSpecification)
-        : eitherEndpointExclusion;
-      this.map.setFilter(this.loopClosuresLayerId, composedClosure);
-
-      // Temp layer: closures where BOTH endpoints are in connected set (translate together)
-      const bothEndpointInclusion: maplibregl.FilterSpecification = ['all',
-        ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
-        ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
-      ] as unknown as maplibregl.FilterSpecification;
-
-      this.map.addLayer({
-        id: this.dragClosuresLayerId,
-        type: 'line',
-        source: closureSourceId,
-        filter: bothEndpointInclusion,
-        paint: {
-          'line-color': ['get', 'color'],
-          'line-width': 3,
-          'line-opacity': 0.85,
-          'line-dasharray': [6, 4],
-          'line-translate': [0, 0] as [number, number],
-          'line-translate-anchor': 'viewport',
-          'line-translate-transition': { duration: 0, delay: 0 },
-        },
+    // Loop closures with BOTH endpoints in the moving set (move uniformly).
+    for (const lc of this.cachedLoopClosures ?? []) {
+      if (!connectedSectionIds.has(lc.station_a.section_id) || !connectedSectionIds.has(lc.station_b.section_id)) continue;
+      const a = this.geoIndex.stationCoords(lc.station_a);
+      const b = this.geoIndex.stationCoords(lc.station_b);
+      if (!a || !b) continue;
+      features.push({
+        emit: 'line',
+        coords: [a, b],
+        movingEnd: 'uniform',
+        properties: { kind: 'closure', color: getErrorColor(lc.error_percentage) },
       });
     }
 
+    this.dragPreviewSet = { features };
+    this.createDragPreviewLayers();
     this.dragPreviewActive = true;
+    this.renderDragPreview(0, 0);
   }
 
   /**
-   * Begin station drag preview — finds all co-located stations (merged/closured),
-   * hides them and their connected shots from main layers, then creates:
-   *   1. Translate-based temp layers for station circles + labels (GPU-efficient)
-   *   2. Dynamic GeoJSON sources + layers for connected shots + shot labels
-   *      (geometry is rebuilt per-frame since only one endpoint of each shot moves)
+   * Begin station / shot drag preview — finds all co-located stations
+   * (merged/closured), hides them and their connected shots/labels/closures from
+   * the bulk layers, captures that moving geometry (with per-shot movingEnd so a
+   * shot stretches around its fixed endpoint), and renders the moving copy from
+   * the unified preview source. Everything moves through ONE per-frame setData.
    *
    * Returns the list of co-located StationRefs so MapCanvas can batch-move them.
    */
@@ -3834,15 +3978,58 @@ export default class SurveyLayer {
     const stationExclusion: maplibregl.FilterSpecification =
       ['!', stationInclusion] as unknown as maplibregl.FilterSpecification;
 
-    // 3. Find connected shots for all moving stations
-    type ShotInfo = typeof this.stationDragShots extends (infer T)[] | null ? T : never;
-    const shotInfos: ShotInfo[] = [];
-    const seenShotKeys = new Set<string>();
+    // 3. Capture the moving geometry once (originals + movingEnd). The bulk
+    // features are hidden by filters below; the moving copy renders from the
+    // unified preview source. Only endpoints in the moving set follow the offset,
+    // so a shot stretches around a fixed end instead of translating whole.
+    if (!this.geoIndex || !this.cachedSurveyData) return movingStations.map(s => s.station_ref);
+    const ctx = this.displayColorContext();
+    const buildLabels = this.labelsCurrentlyBuilt;
+    const stationDefault = this.themeColors.stationDefault;
+    const features: DragPreviewFeature[] = [];
 
+    // Hide the moving stations from the bulk station + station-label layers.
+    for (const layerId of [this.stationsLayerId, this.stationLabelsLayerId]) {
+      const existing = this.map.getFilter(layerId);
+      this.dragSavedFilters.set(layerId, existing ?? undefined);
+      const composed: maplibregl.FilterSpecification = (existing && typeof existing === 'object')
+        ? (['all', existing, stationExclusion] as unknown as maplibregl.FilterSpecification)
+        : stationExclusion;
+      this.map.setFilter(layerId, composed);
+    }
+
+    // Moving stations (points) + station labels — all move uniformly.
+    for (const st of movingStations) {
+      const ref = st.station_ref;
+      const coord = metersToMapCoords(st.coordinates.x, st.coordinates.y, this.gpsOrigin) as [number, number];
+      const idStr = `${ref.section_id}:${ref.station_index}`;
+      const section = this.geoIndex.section(ref.section_id);
+      const g = this.geoIndex.stationGlobalIndex(ref);
+      const color = g === null
+        ? stationDefault
+        : resolveStationDisplayColor(this.cachedSurveyData, section?.color ?? stationDefault, g, ctx);
+      features.push({
+        emit: 'point',
+        coords: [coord],
+        movingEnd: 'uniform',
+        properties: { kind: 'station', color, ...this.dragOverlayProps(idStr, 'station') },
+      });
+      if (buildLabels) {
+        features.push({
+          emit: 'point',
+          coords: [coord],
+          movingEnd: 'uniform',
+          properties: { kind: 'stationLabel', label: String(ref.station_index), color },
+        });
+      }
+    }
+
+    // 4. Connected shots (lines) + shot labels; build the shot exclusion filter.
+    const shotExclusions: maplibregl.FilterSpecification[] = [];
+    const seenShotKeys = new Set<string>();
     for (const movingSt of movingStations) {
       const section = this.cachedSections.find(s => s.id === movingSt.station_ref.section_id);
       if (!section) continue;
-
       const sectionStations = this.cachedStations
         .filter(s => s.station_ref.section_id === section.id)
         .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index);
@@ -3850,7 +4037,8 @@ export default class SurveyLayer {
       for (let i = 0; i < section.shots.length; i++) {
         const fromSt = sectionStations[i];
         const toSt = sectionStations[i + 1];
-        if (!fromSt || !toSt) continue;
+        const shot = section.shots[i];
+        if (!fromSt || !toSt || !shot) continue;
 
         const fromKey = `${fromSt.station_ref.section_id}:${fromSt.station_ref.station_index}`;
         const toKey = `${toSt.station_ref.section_id}:${toSt.station_ref.station_index}`;
@@ -3858,126 +4046,44 @@ export default class SurveyLayer {
         const toIsMoving = movingRefKeys.has(toKey);
         if (!fromIsMoving && !toIsMoving) continue;
 
-        const shot = section.shots[i];
-        if (!shot) continue;
         const shotKey = `${section.id}:${shot.id}`;
         if (seenShotKeys.has(shotKey)) continue;
         seenShotKeys.add(shotKey);
 
-        const fromCoord = metersToMapCoords(
-          fromSt.coordinates.x, fromSt.coordinates.y, this.gpsOrigin
-        ) as [number, number];
-        const toCoord = metersToMapCoords(
-          toSt.coordinates.x, toSt.coordinates.y, this.gpsOrigin
-        ) as [number, number];
-
-        shotInfos.push({
-          properties: {
-            sectionId: section.id,
-            shotId: shot.id,
-            color: section.color,
-            isReference: shot.is_reference,
-          },
-          fromCoord,
-          toCoord,
-          movingEnd: fromIsMoving && toIsMoving ? 'both' : fromIsMoving ? 'from' : 'to',
-          shotLabelProperties: {
-            label: `${formatFixed(shot.azimuth_in, undefined, this.cachedPrecision?.azimuth ?? 0)}° ${formatFixed(shot.length, undefined, this.cachedPrecision?.length ?? 1)}m`,
-            sectionId: section.id,
-            shotId: shot.id,
-            color: section.color,
-          },
+        const movingEnd: MovingEnd = fromIsMoving && toIsMoving ? 'both' : fromIsMoving ? 'from' : 'to';
+        const fromCoord = metersToMapCoords(fromSt.coordinates.x, fromSt.coordinates.y, this.gpsOrigin) as [number, number];
+        const toCoord = metersToMapCoords(toSt.coordinates.x, toSt.coordinates.y, this.gpsOrigin) as [number, number];
+        const geo = this.geoIndex.shotGeometry(section.id, shot.id);
+        const color = geo
+          ? resolveShotDisplayColor(this.cachedSurveyData, section.color ?? stationDefault, geo.globalIdx, ctx)
+          : (section.color ?? stationDefault);
+        features.push({
+          emit: 'line',
+          coords: [fromCoord, toCoord],
+          movingEnd,
+          properties: { kind: 'shot', color, ...this.dragOverlayProps(shotKey, 'shot') },
         });
+        if (buildLabels) {
+          const label = `${formatFixed(shot.azimuth_in, undefined, this.cachedPrecision?.azimuth ?? 0)}° ${formatFixed(shot.length, undefined, this.cachedPrecision?.length ?? 1)}m`;
+          features.push({
+            emit: 'midpoint',
+            coords: [fromCoord, toCoord],
+            movingEnd,
+            properties: { kind: 'shotLabel', label, color: section.color ?? stationDefault },
+          });
+        }
+        shotExclusions.push(['all',
+          ['==', ['get', 'sectionId'], section.id],
+          ['==', ['get', 'shotId'], shot.id],
+        ] as unknown as maplibregl.FilterSpecification);
       }
     }
 
-    // 4. Create translate-based temp layers for stations + station labels
-    const stationDefs = SurveyLayer.DRAG_LAYER_DEFS.filter(
-      d => d.mainLayerId === 'survey-stations' || d.mainLayerId === 'survey-station-labels'
-    );
-
-    for (const def of stationDefs) {
-      const existing = this.map.getFilter(def.mainLayerId);
-      this.dragSavedFilters.set(def.mainLayerId, existing ?? undefined);
-      const composed: maplibregl.FilterSpecification = (existing && typeof existing === 'object')
-        ? (['all', existing, stationExclusion] as unknown as maplibregl.FilterSpecification)
-        : stationExclusion;
-      this.map.setFilter(def.mainLayerId, composed);
-
-      const paintBase: Record<string, unknown> = {
-        [def.translateProp]: [0, 0] as [number, number],
-        [def.translateAnchorProp]: 'viewport',
-        [`${def.translateProp}-transition`]: { duration: 0, delay: 0 },
-      };
-
-      if (def.type === 'circle') {
-        this.map.addLayer({
-          id: def.tempLayerId,
-          type: 'circle',
-          source: def.sourceId,
-          'source-layer': VT_SOURCE_LAYER,
-          filter: stationInclusion,
-          paint: {
-            // Drag temp layer reads the main palette-indexed source (#B).
-            'circle-color': this.colorExpr(),
-            'circle-radius': this.getStationSelectionRadius(),
-            'circle-stroke-color': this.themeColors.selectHighlight,
-            'circle-stroke-width': 2.5,
-            'circle-opacity': 0.85,
-            ...paintBase,
-          },
-        });
-      } else if (def.type === 'symbol') {
-        const vis = this.map.getLayoutProperty(def.mainLayerId, 'visibility') ?? 'visible';
-        const textSize = this.map.getLayoutProperty(def.mainLayerId, 'text-size') ?? 11;
-        const textOffset = this.map.getLayoutProperty(def.mainLayerId, 'text-offset');
-        const textAnchor = this.map.getLayoutProperty(def.mainLayerId, 'text-anchor');
-        const layoutProps: Record<string, unknown> = {
-          'text-field': ['get', 'label'],
-          'text-font': ['Open Sans Regular'],
-          'text-size': textSize,
-          'text-allow-overlap': true,
-          'visibility': vis as 'visible' | 'none',
-        };
-        if (textOffset != null) layoutProps['text-offset'] = textOffset;
-        if (textAnchor != null) layoutProps['text-anchor'] = textAnchor;
-        this.map.addLayer({
-          id: def.tempLayerId,
-          type: 'symbol',
-          source: def.sourceId,
-          'source-layer': VT_SOURCE_LAYER,
-          filter: stationInclusion,
-          layout: layoutProps as NonNullable<maplibregl.SymbolLayerSpecification['layout']>,
-          paint: {
-            'text-color': ['get', 'color'],
-            'text-halo-color': this.themeColors.textHalo,
-            'text-halo-width': 1.5,
-            'text-opacity': 0.85,
-            ...paintBase,
-          },
-        });
-      }
-    }
-
-    // 5. Create dynamic sources + layers for connected shots + shot labels
-    if (shotInfos.length > 0) {
-      // Build shot exclusion filter and apply to main shot + shot-label layers
-      const firstShot = shotInfos[0]!;
-      const shotInclusion: maplibregl.FilterSpecification = (shotInfos.length === 1
-        ? ['all',
-            ['==', ['get', 'sectionId'], firstShot.properties.sectionId],
-            ['==', ['get', 'shotId'], firstShot.properties.shotId],
-          ]
-        : ['any',
-            ...shotInfos.map(s => ['all',
-              ['==', ['get', 'sectionId'], s.properties.sectionId],
-              ['==', ['get', 'shotId'], s.properties.shotId],
-            ]),
-          ]
-      ) as unknown as maplibregl.FilterSpecification;
-      const shotExclusion: maplibregl.FilterSpecification =
-        ['!', shotInclusion] as unknown as maplibregl.FilterSpecification;
-
+    // Hide the moving shots from the bulk shot / gradient / shot-label layers.
+    if (shotExclusions.length > 0) {
+      const shotExclusion: maplibregl.FilterSpecification = ['!',
+        shotExclusions.length === 1 ? shotExclusions[0]! : ['any', ...shotExclusions],
+      ] as unknown as maplibregl.FilterSpecification;
       for (const layerId of ['survey-shots', 'survey-shot-gradients', 'survey-shot-labels']) {
         const existing = this.map.getFilter(layerId);
         this.dragSavedFilters.set(layerId, existing ?? undefined);
@@ -3986,359 +4092,122 @@ export default class SurveyLayer {
           : shotExclusion;
         this.map.setFilter(layerId, composed);
       }
-
-      // Build initial GeoJSON for shots
-      const shotFeatures: GeoJSON.Feature[] = shotInfos.map(s => ({
-        type: 'Feature' as const,
-        geometry: { type: 'LineString' as const, coordinates: [s.fromCoord, s.toCoord] },
-        properties: s.properties,
-      }));
-
-      this.map.addSource(SurveyLayer.STATION_DRAG_SHOT_SOURCE, {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: shotFeatures },
-      });
-      this.map.addLayer({
-        id: SurveyLayer.STATION_DRAG_SHOT_LAYER,
-        type: 'line',
-        source: SurveyLayer.STATION_DRAG_SHOT_SOURCE,
-        paint: {
-          'line-color': ['get', 'color'],
-          'line-width': this.getShotSelectionWidth(),
-          'line-opacity': 0.85,
-        },
-      });
-
-      // Build initial GeoJSON for shot labels
-      const shotLabelFeatures: GeoJSON.Feature[] = shotInfos.map(s => ({
-        type: 'Feature' as const,
-        geometry: {
-          type: 'Point' as const,
-          coordinates: [(s.fromCoord[0] + s.toCoord[0]) / 2, (s.fromCoord[1] + s.toCoord[1]) / 2],
-        },
-        properties: s.shotLabelProperties,
-      }));
-
-      this.map.addSource(SurveyLayer.STATION_DRAG_SHOT_LABEL_SOURCE, {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: shotLabelFeatures },
-      });
-      const shotLabelVis = this.map.getLayoutProperty('survey-shot-labels', 'visibility') ?? 'visible';
-      const shotLabelSize = this.map.getLayoutProperty('survey-shot-labels', 'text-size') ?? 11;
-      this.map.addLayer({
-        id: SurveyLayer.STATION_DRAG_SHOT_LABEL_LAYER,
-        type: 'symbol',
-        source: SurveyLayer.STATION_DRAG_SHOT_LABEL_SOURCE,
-        layout: {
-          'text-field': ['get', 'label'],
-          'text-font': ['Open Sans Regular'],
-          'text-size': shotLabelSize as number,
-          'text-allow-overlap': true,
-          'visibility': shotLabelVis as 'visible' | 'none',
-        },
-        paint: {
-          'text-color': ['get', 'color'],
-          'text-halo-color': this.themeColors.textHalo,
-          'text-halo-width': 1.5,
-          'text-opacity': 0.85,
-        },
-      });
     }
 
-    this.stationDragShots = shotInfos.length > 0 ? shotInfos : null;
+    // 5. Closure indicator lines with >= 1 endpoint in the moving set; hide those
+    // from the bulk closures layer (they render in the preview, stretched).
+    const closureExclusions: maplibregl.FilterSpecification[] = [];
+    for (const lc of this.cachedLoopClosures ?? []) {
+      const keyA = `${lc.station_a.section_id}:${lc.station_a.station_index}`;
+      const keyB = `${lc.station_b.section_id}:${lc.station_b.station_index}`;
+      const aMoving = movingRefKeys.has(keyA);
+      const bMoving = movingRefKeys.has(keyB);
+      if (!aMoving && !bMoving) continue;
 
-    // 6. Find closure indicator lines with at least one endpoint in the moving set
-    type ClosureInfo = NonNullable<typeof this.stationDragClosures>[number];
-    const closureInfos: ClosureInfo[] = [];
-    if (this.cachedLoopClosures && this.cachedLoopClosures.length > 0) {
-      for (const lc of this.cachedLoopClosures) {
-        const keyA = `${lc.station_a.section_id}:${lc.station_a.station_index}`;
-        const keyB = `${lc.station_b.section_id}:${lc.station_b.station_index}`;
-        const aMoving = movingRefKeys.has(keyA);
-        const bMoving = movingRefKeys.has(keyB);
-        if (!aMoving && !bMoving) continue;
+      const stA = stationByKey.get(keyA);
+      const stB = stationByKey.get(keyB);
+      if (!stA || !stB) continue;
 
-        const stA = stationByKey.get(keyA);
-        const stB = stationByKey.get(keyB);
-        if (!stA || !stB) continue;
-
-        const fromCoord = metersToMapCoords(
-          stA.coordinates.x, stA.coordinates.y, this.gpsOrigin
-        ) as [number, number];
-        const toCoord = metersToMapCoords(
-          stB.coordinates.x, stB.coordinates.y, this.gpsOrigin
-        ) as [number, number];
-
-        closureInfos.push({
-          properties: {
-            stationA: keyA,
-            stationB: keyB,
-            sectionIdA: lc.station_a.section_id,
-            sectionIdB: lc.station_b.section_id,
-            errorPercentage: lc.error_percentage,
-            misclosureDistance: lc.misclosure_distance,
-            pathLength: lc.path_length,
-            color: getErrorColor(lc.error_percentage),
-          },
-          fromCoord,
-          toCoord,
-          movingEnd: aMoving && bMoving ? 'both' : aMoving ? 'from' : 'to',
-        });
-      }
+      const fromCoord = metersToMapCoords(stA.coordinates.x, stA.coordinates.y, this.gpsOrigin) as [number, number];
+      const toCoord = metersToMapCoords(stB.coordinates.x, stB.coordinates.y, this.gpsOrigin) as [number, number];
+      features.push({
+        emit: 'line',
+        coords: [fromCoord, toCoord],
+        movingEnd: aMoving && bMoving ? 'both' : aMoving ? 'from' : 'to',
+        properties: { kind: 'closure', color: getErrorColor(lc.error_percentage) },
+      });
+      closureExclusions.push(['all',
+        ['==', ['get', 'stationA'], keyA],
+        ['==', ['get', 'stationB'], keyB],
+      ] as unknown as maplibregl.FilterSpecification);
     }
-
-    if (closureInfos.length > 0) {
-      // Build exclusion filter for closures with ANY endpoint in moving set
-      const closureExclusion: maplibregl.FilterSpecification = ['!', ['any',
-        ...closureInfos.map(c => ['all',
-          ['==', ['get', 'stationA'], c.properties.stationA],
-          ['==', ['get', 'stationB'], c.properties.stationB],
-        ]),
-      ]] as unknown as maplibregl.FilterSpecification;
-
+    if (closureExclusions.length > 0) {
+      const closureExclusion: maplibregl.FilterSpecification = ['!',
+        ['any', ...closureExclusions],
+      ] as unknown as maplibregl.FilterSpecification;
       const existingClosureFilter = this.map.getFilter(this.loopClosuresLayerId);
       this.dragSavedFilters.set(this.loopClosuresLayerId, existingClosureFilter ?? undefined);
       const composedClosure: maplibregl.FilterSpecification = (existingClosureFilter && typeof existingClosureFilter === 'object')
         ? (['all', existingClosureFilter, closureExclusion] as unknown as maplibregl.FilterSpecification)
         : closureExclusion;
       this.map.setFilter(this.loopClosuresLayerId, composedClosure);
-
-      // Create dynamic GeoJSON source + layer for closure lines
-      const closureFeatures: GeoJSON.Feature[] = closureInfos.map(c => ({
-        type: 'Feature' as const,
-        geometry: { type: 'LineString' as const, coordinates: [c.fromCoord, c.toCoord] },
-        properties: c.properties,
-      }));
-
-      this.map.addSource(SurveyLayer.STATION_DRAG_CLOSURE_SOURCE, {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: closureFeatures },
-      });
-      this.map.addLayer({
-        id: SurveyLayer.STATION_DRAG_CLOSURE_LAYER,
-        type: 'line',
-        source: SurveyLayer.STATION_DRAG_CLOSURE_SOURCE,
-        paint: {
-          'line-color': ['get', 'color'],
-          'line-width': 3,
-          'line-opacity': 0.85,
-          'line-dasharray': [6, 4],
-        },
-      });
     }
 
-    this.stationDragClosures = closureInfos.length > 0 ? closureInfos : null;
+    this.dragPreviewSet = { features };
+    this.createDragPreviewLayers();
     this.dragPreviewActive = true;
+    this.renderDragPreview(0, 0);
     return movingStations.map(s => s.station_ref);
   }
 
+  /** Schedule a coalesced preview render at `[dx, dy]`; latest offset wins, one
+   *  setData per animation frame. */
+  private scheduleDragRender(dx: number, dy: number): void {
+    this.pendingDragOffset = { dx, dy };
+    if (this.dragUpdateRaf !== null) return;
+    this.dragUpdateRaf = requestAnimationFrame(() => {
+      this.dragUpdateRaf = null;
+      const off = this.pendingDragOffset;
+      this.pendingDragOffset = null;
+      if (off) this.renderDragPreview(off.dx, off.dy);
+    });
+  }
+
+  /** Cancel any pending coalesced render (on commit / end). */
+  private cancelDragRender(): void {
+    if (this.dragUpdateRaf !== null) {
+      cancelAnimationFrame(this.dragUpdateRaf);
+      this.dragUpdateRaf = null;
+    }
+    this.pendingDragOffset = null;
+  }
+
   /**
-   * Update station drag preview — translates station circles/labels AND
-   * rebuilds connected shot geometries so they stretch to follow the cursor.
-   * Shot geometry rebuild is cheap (typically 1-5 features).
+   * Update the station / shot drag preview — one setData over the unified source
+   * (stations, shots, labels, closures all move together, no skew).
    */
   updateStationDragPreview(dx: number, dy: number): void {
-    if (!this.dragPreviewActive) return;
-
-    // Update station circles + labels via translate (GPU shader uniform)
-    const offset: [number, number] = [dx, dy];
-    for (const def of SurveyLayer.DRAG_LAYER_DEFS) {
-      if (this.map.getLayer(def.tempLayerId)) {
-        this.map.setPaintProperty(def.tempLayerId, def.translateProp, offset);
-      }
-    }
-
-    // Rebuild connected shot geometries
-    if (!this.stationDragShots) return;
-
-    const shotFeatures: GeoJSON.Feature[] = [];
-    const shotLabelFeatures: GeoJSON.Feature[] = [];
-
-    for (const s of this.stationDragShots) {
-      let fromLng = s.fromCoord[0], fromLat = s.fromCoord[1];
-      let toLng = s.toCoord[0], toLat = s.toCoord[1];
-
-      if (s.movingEnd === 'from' || s.movingEnd === 'both') {
-        const p = this.map.project([fromLng, fromLat]);
-        const np = this.map.unproject([p.x + dx, p.y + dy]);
-        fromLng = np.lng;
-        fromLat = np.lat;
-      }
-      if (s.movingEnd === 'to' || s.movingEnd === 'both') {
-        const p = this.map.project([toLng, toLat]);
-        const np = this.map.unproject([p.x + dx, p.y + dy]);
-        toLng = np.lng;
-        toLat = np.lat;
-      }
-
-      shotFeatures.push({
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: [[fromLng, fromLat], [toLng, toLat]] },
-        properties: s.properties,
-      });
-
-      shotLabelFeatures.push({
-        type: 'Feature',
-        geometry: {
-          type: 'Point',
-          coordinates: [(fromLng + toLng) / 2, (fromLat + toLat) / 2],
-        },
-        properties: s.shotLabelProperties,
-      });
-    }
-
-    const shotSource = this.map.getSource(SurveyLayer.STATION_DRAG_SHOT_SOURCE);
-    if (shotSource && 'setData' in shotSource) {
-      (shotSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection', features: shotFeatures,
-      });
-    }
-    const shotLabelSource = this.map.getSource(SurveyLayer.STATION_DRAG_SHOT_LABEL_SOURCE);
-    if (shotLabelSource && 'setData' in shotLabelSource) {
-      (shotLabelSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection', features: shotLabelFeatures,
-      });
-    }
-
-    // Rebuild closure indicator line geometries
-    if (this.stationDragClosures) {
-      const closureFeatures: GeoJSON.Feature[] = [];
-      for (const c of this.stationDragClosures) {
-        let fromLng = c.fromCoord[0], fromLat = c.fromCoord[1];
-        let toLng = c.toCoord[0], toLat = c.toCoord[1];
-
-        if (c.movingEnd === 'from' || c.movingEnd === 'both') {
-          const p = this.map.project([fromLng, fromLat]);
-          const np = this.map.unproject([p.x + dx, p.y + dy]);
-          fromLng = np.lng;
-          fromLat = np.lat;
-        }
-        if (c.movingEnd === 'to' || c.movingEnd === 'both') {
-          const p = this.map.project([toLng, toLat]);
-          const np = this.map.unproject([p.x + dx, p.y + dy]);
-          toLng = np.lng;
-          toLat = np.lat;
-        }
-
-        closureFeatures.push({
-          type: 'Feature',
-          geometry: { type: 'LineString', coordinates: [[fromLng, fromLat], [toLng, toLat]] },
-          properties: c.properties,
-        });
-      }
-
-      const closureSource = this.map.getSource(SurveyLayer.STATION_DRAG_CLOSURE_SOURCE);
-      if (closureSource && 'setData' in closureSource) {
-        (closureSource as maplibregl.GeoJSONSource).setData({
-          type: 'FeatureCollection', features: closureFeatures,
-        });
-      }
-    }
+    this.scheduleDragRender(dx, dy);
   }
 
   /**
-   * Update drag preview offset — just updates *-translate paint properties.
-   * This is a shader uniform update (essentially free, no GeoJSON rebuild).
-   * Guards against missing layers so it works for both full segment drag
-   * (5 temp layers) and single station drag (2 temp layers).
+   * Update the segment drag preview — one setData over the unified source. The
+   * whole segment moves uniformly, so every captured vertex takes the offset.
    */
   updateDragPreview(dx: number, dy: number): void {
-    if (!this.dragPreviewActive) return;
-    const offset: [number, number] = [dx, dy];
-    for (const def of SurveyLayer.DRAG_LAYER_DEFS) {
-      if (this.map.getLayer(def.tempLayerId)) {
-        this.map.setPaintProperty(def.tempLayerId, def.translateProp, offset);
-      }
-    }
-    // Update closure drag layer
-    if (this.map.getLayer(this.dragClosuresLayerId)) {
-      this.map.setPaintProperty(this.dragClosuresLayerId, 'line-translate', offset);
-    }
+    this.scheduleDragRender(dx, dy);
   }
 
   /**
-   * Commit drag preview — removes temp layers but keeps exclusion filters on main
-   * layers so connected sections stay hidden. Call this before the backend commit,
-   * then call endDragPreview() after React re-renders with new positions.
-   * This prevents a blink where features briefly appear at newPosition + dragOffset.
+   * Commit drag preview — removes the preview layers but keeps the exclusion
+   * filters on the bulk layers so the moved features stay hidden until React
+   * re-renders with their new positions. Call this before the backend commit,
+   * then endDragPreview() after the re-render. This prevents a blink where
+   * features briefly appear at newPosition + dragOffset.
    */
   commitDragPreview(): void {
     if (!this.dragPreviewActive) return;
-    for (const def of SurveyLayer.DRAG_LAYER_DEFS) {
-      if (this.map.getLayer(def.tempLayerId)) {
-        this.map.removeLayer(def.tempLayerId);
-      }
-    }
-    if (this.map.getLayer(this.dragClosuresLayerId)) {
-      this.map.removeLayer(this.dragClosuresLayerId);
-    }
-    // Station drag dynamic layers + sources
-    this.removeStationDragLayers();
+    this.cancelDragRender();
+    this.removeDragPreviewLayers();
+    this.dragPreviewSet = null;
   }
 
   /**
-   * End drag preview — removes temporary layers (if still present) and restores
-   * original filters so connected sections are visible again.
+   * End drag preview — removes the preview layers (if still present) and restores
+   * every saved bulk-layer filter so the real features are visible again.
    */
   endDragPreview(): void {
     if (!this.dragPreviewActive) return;
 
-    for (const def of SurveyLayer.DRAG_LAYER_DEFS) {
-      // Remove temp layer if commitDragPreview wasn't called first
-      if (this.map.getLayer(def.tempLayerId)) {
-        this.map.removeLayer(def.tempLayerId);
-      }
-
-      // Restore original filter on main layer — only if we saved one
-      // (station drag only modifies 2 of 5 layers)
-      if (this.dragSavedFilters.has(def.mainLayerId)) {
-        const saved = this.dragSavedFilters.get(def.mainLayerId);
-        this.map.setFilter(def.mainLayerId, saved ?? null);
-      }
+    this.cancelDragRender();
+    this.removeDragPreviewLayers();
+    for (const [layerId, saved] of this.dragSavedFilters) {
+      if (this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
     }
 
-    // Remove closure temp layer and restore filter
-    if (this.map.getLayer(this.dragClosuresLayerId)) {
-      this.map.removeLayer(this.dragClosuresLayerId);
-    }
-    if (this.dragSavedFilters.has(this.loopClosuresLayerId)) {
-      const savedClosureFilter = this.dragSavedFilters.get(this.loopClosuresLayerId);
-      this.map.setFilter(this.loopClosuresLayerId, savedClosureFilter ?? null);
-    }
-
-    // Station drag dynamic layers + sources
-    this.removeStationDragLayers();
-
-    // Restore shot/shot-label filters if saved (station drag modifies these)
-    for (const layerId of ['survey-shots', 'survey-shot-labels']) {
-      if (this.dragSavedFilters.has(layerId)) {
-        const saved = this.dragSavedFilters.get(layerId);
-        this.map.setFilter(layerId, saved ?? null);
-      }
-    }
-
-    this.stationDragShots = null;
-    this.stationDragClosures = null;
+    this.dragPreviewSet = null;
     this.dragSavedFilters.clear();
     this.dragPreviewActive = false;
-  }
-
-  /** Remove station drag dynamic layers and sources (idempotent). */
-  private removeStationDragLayers(): void {
-    for (const layerId of [
-      SurveyLayer.STATION_DRAG_SHOT_LAYER,
-      SurveyLayer.STATION_DRAG_SHOT_LABEL_LAYER,
-      SurveyLayer.STATION_DRAG_CLOSURE_LAYER,
-    ]) {
-      if (this.map.getLayer(layerId)) this.map.removeLayer(layerId);
-    }
-    for (const sourceId of [
-      SurveyLayer.STATION_DRAG_SHOT_SOURCE,
-      SurveyLayer.STATION_DRAG_SHOT_LABEL_SOURCE,
-      SurveyLayer.STATION_DRAG_CLOSURE_SOURCE,
-    ]) {
-      if (this.map.getSource(sourceId)) this.map.removeSource(sourceId);
-    }
   }
 
   /**
@@ -5075,6 +4944,7 @@ export default class SurveyLayer {
       this.hoverRafId = null;
     }
     this.pendingHoverEvent = null;
+    this.cancelDragRender();
 
     // Clean up touch long-press timer
     if (this.touchLongPressTimer) {
