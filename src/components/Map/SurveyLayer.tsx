@@ -76,10 +76,9 @@ import { buildSurveyFeaturesStreamed, buildGranularitySwapStreamed } from './sur
 import { ensureVtProtocol, setVtLayerData, vtTileUrl, clearVtLayerData, reloadVtSource } from './surveyLayer/vectorTileRegistry';
 import {
   LABEL_VT_GROUPS,
-  LABEL_RESTORE_FALLBACK_MS,
   partitionDragFilters,
-  shouldDeferTextRestore,
-  type DragFilterMap,
+  diffRemovedSectionIds,
+  LabelRestoreController,
 } from './surveyLayer/labelRestore';
 import {
   vtLinesFromFeatures,
@@ -349,14 +348,11 @@ export default class SurveyLayer {
    *  endDragPreview can defer its text-filter restore behind them. Null for a
    *  direct endDragPreview (Escape / rejected move) -> restore immediately. */
   private pendingDragCommitLabelReloads: Promise<unknown>[] | null = null;
-  /** A still-pending deferred text-filter restore (FINISH label-flash fix). Held
-   *  so a superseding drag or teardown can force-apply it synchronously; guarded
-   *  by dragGeneration so a late tile-reload settle from a superseded drag no-ops. */
-  private pendingLabelRestore: {
-    filters: DragFilterMap;
-    generation: number;
-    timeout: ReturnType<typeof setTimeout>;
-  } | null = null;
+  /** Deferred text-label filter machinery shared by the drag-commit FINISH fix
+   *  (moved labels wait for the tiles to reload) and the delete/undo removal fix
+   *  (removed sections' labels are hidden in the flush that drops their geometry
+   *  and released once the label tiles reload without them). See labelRestore.ts. */
+  private readonly labelRestore: LabelRestoreController;
 
   // Visibility state (for hidden feature detection)
   private stationsVisible: boolean = true;
@@ -529,6 +525,7 @@ export default class SurveyLayer {
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
     this.callbacks = callbacks;
+    this.labelRestore = new LabelRestoreController(map);
     this.initializeSources();
     this.initializeLayers();
     this.initializeEventHandlers();
@@ -3835,7 +3832,7 @@ export default class SurveyLayer {
     // Restore any prior drag's still-deferred text filters NOW so this drag
     // captures the true base filters, not a stale hidden state (its own late
     // settle then no-ops via the generation guard).
-    this.applyPendingLabelRestore();
+    this.labelRestore.flushPending();
     if (connectedSectionIds.size === 0) return;
     if (!this.geoIndex || !this.cachedSurveyData) return;
 
@@ -3967,7 +3964,7 @@ export default class SurveyLayer {
     if (this.dragPreviewActive) this.endDragPreview();
     // Restore any prior drag's still-deferred text filters before capturing this
     // drag's base (see beginDragPreview).
-    this.applyPendingLabelRestore();
+    this.labelRestore.flushPending();
 
     // The per-item exclusion/inclusion filters below need per-feature source
     // content. The tool switch requested it (ensureFeatureGranularity), but a
@@ -4377,7 +4374,10 @@ export default class SurveyLayer {
     for (const [layerId, saved] of geometry) {
       if (this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
     }
-    this.scheduleTextFilterRestore(text);
+    // On a real commit that reloaded label tiles, defer the text restore behind
+    // them (else the moved labels flash at the old position); a direct
+    // endDragPreview (Escape / rejected move / no-op) passes null -> restore now.
+    this.labelRestore.deferRestore(text, this.pendingDragCommitLabelReloads);
     this.clearDragOverlayFollow();
 
     this.dragPreviewSet = null;
@@ -4386,59 +4386,6 @@ export default class SurveyLayer {
     // Drop the custom-render exclusion and rebuild full buffers so the moved
     // features reappear at their committed positions (mirrors the filter restore).
     this.setDragExclusion(null);
-  }
-
-  /**
-   * Restore the moved sections' text-layer filters. On a real drag commit that
-   * reloaded the label tiles, defer the restore until those reloads settle so the
-   * moved labels are never painted at their pre-move position; otherwise (Escape /
-   * cancel, rejected move, or an edit that changed no label) restore synchronously.
-   *
-   * `pendingDragCommitLabelReloads` is non-null only inside the onNextUpdate
-   * callback fired by endApplyFeatures, i.e. exactly the drag-commit flush; every
-   * other endDragPreview caller (Escape, `!res.success`, no-movement bail) sees
-   * null and restores immediately. A generation guard (dragGeneration, bumped per
-   * drag in installDragPreview) ensures a superseding drag owns the filters and a
-   * late settle from the superseded drag no-ops.
-   */
-  private scheduleTextFilterRestore(text: DragFilterMap): void {
-    if (text.size === 0) return;
-    const reloads = this.pendingDragCommitLabelReloads;
-    if (!reloads || !shouldDeferTextRestore(reloads.length)) {
-      this.restoreTextFilters(text);
-      return;
-    }
-    // Force-apply any earlier still-pending restore first so nothing is stranded
-    // (defensive: a superseding drag's begin already flushes it).
-    this.applyPendingLabelRestore();
-    const generation = this.dragGeneration;
-    const timeout = setTimeout(() => this.settleLabelRestore(generation), LABEL_RESTORE_FALLBACK_MS);
-    this.pendingLabelRestore = { filters: text, generation, timeout };
-    void Promise.allSettled(reloads).then(() => this.settleLabelRestore(generation));
-  }
-
-  /** Apply a queued text-filter restore if it still belongs to `generation` (a
-   *  superseding drag has taken over the filters otherwise -> skip). */
-  private settleLabelRestore(generation: number): void {
-    if (!this.pendingLabelRestore || this.pendingLabelRestore.generation !== generation) return;
-    this.applyPendingLabelRestore();
-  }
-
-  /** Force-apply any queued text-filter restore synchronously (superseding drag /
-   *  teardown). No-op when nothing is queued. */
-  private applyPendingLabelRestore(): void {
-    const pending = this.pendingLabelRestore;
-    if (!pending) return;
-    this.pendingLabelRestore = null;
-    clearTimeout(pending.timeout);
-    this.restoreTextFilters(pending.filters);
-  }
-
-  /** Re-apply saved filters to the text (label / comment) layers. */
-  private restoreTextFilters(text: DragFilterMap): void {
-    for (const [layerId, saved] of text) {
-      if (this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
-    }
   }
 
   /**
@@ -4778,6 +4725,11 @@ export default class SurveyLayer {
       this.depthRange = normalizeDepthRange(depthRange);
       this.showIssueSeverity = showIssueSeverity;
       this.cachedWarnings = warnings;
+      // Sections this flush removes (delete / undo-of-add), read BEFORE the cache
+      // overwrite. Under the custom renderer their geometry vanishes synchronously
+      // below (syncCustomRender), so their stale labels + highlights are dropped in
+      // the same frame rather than lingering (#customRender delete straggler).
+      const removedSectionIds = diffRemovedSectionIds(this.cachedSections, sections);
       this.cachedSections = sections;
       this.cachedStations = stations;
       this.cachedLoopClosures = loopClosures;
@@ -4817,6 +4769,30 @@ export default class SurveyLayer {
       this.cachedIssueSeverity = issueSeverity;
       this.geoIndex = new SurveyGeometryIndex(surveyData, this.gpsOrigin);
       this.syncCustomRender(surveyData);
+      // Custom-render delete straggler: the custom layer just dropped the removed
+      // geometry, but the async worker build below only refreshes the label sources
+      // and the interact overlay in endApplyFeatures (~a worker round-trip later).
+      // Close both gaps in THIS frame. Gated on the custom layer actually
+      // suppressing stock (the stock path updates geometry and labels together in
+      // endApplyFeatures, so it has no such gap) and skipped mid-drag (the drag
+      // paths own the overlay follow + label filters).
+      if (this.customBulkSuppressed && !this.dragPreviewActive) {
+        // Hide the removed sections' labels until the label tiles reload without
+        // them (released in endApplyFeatures); no-op when nothing was removed.
+        this.labelRestore.hideRemovedSections(removedSectionIds);
+        // Rebuild the interact overlay against the new geometry so a selected /
+        // hovered / snapped feature this flush removed (a deleted shot / station /
+        // section member) is dropped now instead of lingering until the async
+        // refresh or the store-driven selection clear. Only when something is
+        // actually highlighted - an empty overlay needs no rebuild.
+        if (
+          this.selectedShotId || this.hoveredShotId || this.selectedStationId ||
+          this.hoveredStationId || this.snappedStationId || this.highlightedStationIds.length > 0
+        ) {
+          this.lastInteractKey = null;
+          this.refreshInteractOverlay();
+        }
+      }
       const buildOptions = {
         buildLabels,
         showIssueSeverity,
@@ -5248,6 +5224,12 @@ export default class SurveyLayer {
         this.pendingDragCommitLabelReloads = null;
       }
     }
+
+    // Release any removed-section label hide applied at this flush's prelude, once
+    // this flush's label-source reloads land (so the removed sections' stale labels
+    // are never shown in the gap). No-op unless a removal hid something. Mutually
+    // exclusive with the drag-commit block above (a removal flush has no callback).
+    this.labelRestore.settleRemoval(this.labelReloadsThisFlush);
   }
 
   /**
@@ -5336,10 +5318,7 @@ export default class SurveyLayer {
     // Clear any still-pending deferred text-filter restore timer so it cannot
     // fire on a torn-down map (the setFilter is getLayer-guarded, but drop the
     // timer to avoid a dangling handle).
-    if (this.pendingLabelRestore) {
-      clearTimeout(this.pendingLabelRestore.timeout);
-      this.pendingLabelRestore = null;
-    }
+    this.labelRestore.dispose();
 
     // Tear down the custom-render prototype (removes its layer, restores stock
     // layer visibility, and unregisters the runtime sync hook) (#customRender).
