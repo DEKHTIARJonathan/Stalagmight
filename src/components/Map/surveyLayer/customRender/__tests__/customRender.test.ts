@@ -4,6 +4,7 @@ import { SurveyCustomLayer, type CustomRenderData } from '../surveyCustomLayer';
 import { mat4Multiply, composeAnchorMatrix, computeMercatorAnchor } from '../mercator';
 import {
   buildStationLookup,
+  computeStationAllReference,
   projectStationsRel,
   countValidShots,
   buildLineBuffers,
@@ -12,6 +13,7 @@ import {
 import type { Rgba8 } from '../colorPack';
 import {
   emptySurveyData,
+  SHOT_FLAG_IS_REFERENCE,
   STATION_FLAG_IS_ZERO_DATUM,
   type SurveyData,
 } from '../../../../../types/survey-data';
@@ -400,6 +402,102 @@ describe('tessellation exclusion (move-drag hide semantics)', () => {
     expect(Array.from(emptyCircle.indices)).toEqual(Array.from(baseCircle.indices));
     expect(Array.from(emptyCircle.fill)).toEqual(Array.from(baseCircle.fill));
     expect(Array.from(emptyCircle.center)).toEqual(Array.from(baseCircle.center));
+  });
+});
+
+describe('reference-shot flags (setShowReferenceShots parity)', () => {
+  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+  const fill = (g: number): Rgba8 => [g, 0, 0, 255];
+  const stroke = (_g: number): Rgba8 => [9, 9, 9, 255];
+
+  /** makeFixture with shot global 0 (section 1, shot idx0) flagged reference. */
+  function refFixture(): SurveyData {
+    const d = makeFixture();
+    d.shotFlags = new Uint8Array([SHOT_FLAG_IS_REFERENCE, 0, 0]);
+    return d;
+  }
+
+  it('buildLineBuffers marks all 4 verts of a reference segment, 0 otherwise', () => {
+    const d = refFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildLineBuffers(d, rel, lookup, stubColor);
+    // Segment 0 = shot global 0 (reference) -> all 4 verts flagged 1.
+    expect(Array.from(b.reference.slice(0, 4))).toEqual([1, 1, 1, 1]);
+    // Segment 1 = shot global 1 (not reference) -> 0.
+    expect(Array.from(b.reference.slice(4, 8))).toEqual([0, 0, 0, 0]);
+  });
+
+  it('computeStationAllReference flags stations touched only by reference/invalid shots', () => {
+    const d = refFixture();
+    const lookup = buildStationLookup(d);
+    const allRef = computeStationAllReference(d, lookup);
+    // Station 0: only endpoint of the reference shot -> all-reference (1).
+    // Stations 1,2: endpoints of the non-reference shot global 1 -> 0.
+    // Station 3: section 2's only shot is invalid (missing endpoint) -> 1.
+    expect(Array.from(allRef)).toEqual([1, 0, 0, 1]);
+  });
+
+  it('a fully non-reference survey has no all-reference stations', () => {
+    const d = makeFixture(); // all shotFlags 0
+    const lookup = buildStationLookup(d);
+    const allRef = computeStationAllReference(d, lookup);
+    // Stations 0,1,2 are all endpoints of non-reference shots; station 3 isolated.
+    expect(Array.from(allRef)).toEqual([0, 0, 0, 1]);
+  });
+
+  it('buildCircleBuffers propagates the all-reference flag to every vertex', () => {
+    const d = refFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const allRef = computeStationAllReference(d, lookup);
+    const b = buildCircleBuffers(d, rel, fill, stroke, undefined, allRef);
+    // Station 0 (all-reference) -> its 4 verts are 1.
+    for (let c = 0; c < 4; c++) expect(b.allReference[0 * 4 + c]).toBe(1);
+    // Station 1 (has a non-reference shot) -> 0.
+    for (let c = 0; c < 4; c++) expect(b.allReference[1 * 4 + c]).toBe(0);
+    // Station 3 (isolated) -> 1.
+    for (let c = 0; c < 4; c++) expect(b.allReference[3 * 4 + c]).toBe(1);
+  });
+
+  it('allReference defaults to 0 for every vertex when no flags are passed', () => {
+    const d = makeFixture();
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildCircleBuffers(d, rel, fill, stroke);
+    expect(Array.from(b.allReference)).toEqual(new Array(b.vertexCount).fill(0));
+  });
+});
+
+describe('depth-gradient per-endpoint colors', () => {
+  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+  // Distinct from/to colors per shot so the A/B split is observable.
+  const endpoints = (shotIdx: number, _sectionId: number): readonly [Rgba8, Rgba8] => [
+    [shotIdx, 0, 0, 255],
+    [shotIdx, 255, 0, 255],
+  ];
+
+  it('assigns the from-color to A vertices and to-color to B vertices', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildLineBuffers(d, rel, lookup, stubColor, undefined, endpoints);
+    // Segment 0: v0/v1 are endpoint A (from), v2/v3 endpoint B (to).
+    expect(Array.from(b.color.slice(0, 4))).toEqual([0, 0, 0, 255]); // v0 from
+    expect(Array.from(b.color.slice(4, 8))).toEqual([0, 0, 0, 255]); // v1 from
+    expect(Array.from(b.color.slice(8, 12))).toEqual([0, 255, 0, 255]); // v2 to
+    expect(Array.from(b.color.slice(12, 16))).toEqual([0, 255, 0, 255]); // v3 to
+    // Endpoint attribute still selects A(0)/B(1) consistently.
+    expect(Array.from(b.endpoint.slice(0, 4))).toEqual([0, 0, 1, 1]);
+  });
+
+  it('without the endpoint resolver, all 4 verts keep the flat color', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildLineBuffers(d, rel, lookup, stubColor);
+    for (let v = 0; v < 4; v++) {
+      expect(Array.from(b.color.slice(v * 4, v * 4 + 4))).toEqual([0, 1, 7, 255]);
+    }
   });
 });
 

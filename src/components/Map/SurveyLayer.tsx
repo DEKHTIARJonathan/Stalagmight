@@ -3077,6 +3077,7 @@ export default class SurveyLayer {
       this.clearStationHover();
     }
     this.map.setLayoutProperty(this.stationsLayerId, 'visibility', visibility);
+    this.customRender?.setStationsVisible(visible);
     this.map.setLayoutProperty(this.loopClosuresLayerId, 'visibility', visibility);
     // Interact overlay tracks the stations layer: a hover/selection highlight
     // must not surface a hidden station (#mem).
@@ -3098,6 +3099,7 @@ export default class SurveyLayer {
       this.clearShotHover();
     }
     this.map.setLayoutProperty(this.shotsLayerId, 'visibility', visibility);
+    this.customRender?.setShotsVisible(visible);
     this.map.setLayoutProperty(this.measurePathLayerId, 'visibility', visibility);
     // Interact overlay tracks the shots layers (#mem).
     this.map.setLayoutProperty(this.interactShotsLayerId, 'visibility', visibility);
@@ -3116,6 +3118,7 @@ export default class SurveyLayer {
   setShowReferenceShots(visible: boolean): void {
     if (!this.map) return;
     this.showReferenceShotsCached = visible;
+    this.customRender?.setReferenceShotsVisible(visible);
     const notReference: maplibregl.FilterSpecification = ['!=', ['get', 'isReference'], true];
     const notAllReference: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsReference'], true];
     if (visible) {

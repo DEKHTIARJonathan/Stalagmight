@@ -27,14 +27,25 @@ uniform mat4 u_matrix;
 uniform vec2 u_viewport;
 uniform float u_half_width;
 uniform float u_aa;
+uniform float u_hide_reference;
 in vec2 a_pos_a;
 in vec2 a_pos_b;
 in float a_endpoint;
 in float a_side;
 in vec4 a_color;
+in float a_reference;
 out vec4 v_color;
 out float v_edge;
 void main() {
+  // Reference shots hidden (setShowReferenceShots(false)): collapse the whole
+  // quad to a single clipped point so it produces no fragments. All 4 vertices
+  // of a segment share a_reference, so both triangles degenerate together.
+  if (a_reference > 0.5 && u_hide_reference > 0.5) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    v_color = vec4(0.0);
+    v_edge = 0.0;
+    return;
+  }
   vec4 pa = u_matrix * vec4(a_pos_a, 0.0, 1.0);
   vec4 pb = u_matrix * vec4(a_pos_b, 0.0, 1.0);
   vec2 sa = pa.xy / pa.w;
@@ -46,7 +57,10 @@ void main() {
   vec2 offsetPx = normal * a_side * outset;
   vec2 offsetClip = offsetPx / u_viewport * 2.0 * base.w;
   gl_Position = vec4(base.xy + offsetClip, base.z, base.w);
+  // Reference shots draw at 0.5 opacity (mirrors the stock shots/gradient
+  // layers' isReference line-opacity case).
   v_color = a_color;
+  if (a_reference > 0.5) v_color.a *= 0.5;
   v_edge = a_side;
 }`;
 
@@ -73,14 +87,26 @@ uniform vec2 u_viewport;
 uniform float u_radius;
 uniform float u_stroke_width;
 uniform float u_aa;
+uniform float u_hide_reference;
 in vec2 a_center;
 in vec2 a_corner;
 in vec4 a_fill;
 in vec4 a_stroke;
+in float a_all_reference;
 out vec4 v_fill;
 out vec4 v_stroke;
 out vec2 v_offset;
 void main() {
+  // All-reference stations hidden with reference shots (matches the stock
+  // stations layer's not-allShotsReference filter): collapse the quad to a
+  // single clipped point.
+  if (a_all_reference > 0.5 && u_hide_reference > 0.5) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    v_fill = vec4(0.0);
+    v_stroke = vec4(0.0);
+    v_offset = vec2(0.0);
+    return;
+  }
   vec4 c = u_matrix * vec4(a_center, 0.0, 1.0);
   float ext = u_radius + u_stroke_width + u_aa;
   vec2 offsetPx = a_corner * ext;

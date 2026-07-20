@@ -10,7 +10,13 @@
  * memory change with zero visual difference.
  */
 import { describe, expect, it } from 'vitest';
-import { buildSurveyFeatures, commentColorForKey } from '../features';
+import {
+  buildSurveyFeatures,
+  commentColorForKey,
+  resolveShotDisplayColor,
+  resolveShotEndpointColors,
+  type DisplayColorContext,
+} from '../features';
 import { surveyDataFromLegacy } from '../../../../types/survey-data';
 import { getMapThemeColors } from '../../../../utils/themeColors';
 import { COMMENT_PALETTE, getDepthColor } from '../../../../utils/colors';
@@ -286,6 +292,53 @@ describe('buildSurveyFeatures streaming emit (#mem)', () => {
       }
     });
   }
+});
+
+describe('resolveShotEndpointColors (custom-render depth gradient)', () => {
+  const ctxFor = (showDepthGradient: boolean): DisplayColorContext => ({
+    showDepthGradient,
+    depthRange,
+    themeColors: theme,
+    showIssueSeverity: false,
+  });
+
+  it('depth mode: endpoints are the in/out depth-ramp colors (stock gradient endpoints)', () => {
+    const { sections, stations } = fixture();
+    const data = surveyDataFromLegacy(sections, stations);
+    const ctx = ctxFor(true);
+    // shot 101: depth_in 0, depth_out -4.
+    const gIdx = findShotGlobal(data, 1, 101);
+    const [from, to] = resolveShotEndpointColors(data, sectionColorOf(sections, 1), gIdx, ctx);
+    expect(from).toBe(
+      getDepthColor(0, theme.depthShallow, theme.depthDeep, depthRange.min, depthRange.max),
+    );
+    expect(to).toBe(
+      getDepthColor(-4, theme.depthShallow, theme.depthDeep, depthRange.min, depthRange.max),
+    );
+    // The two endpoints differ (there is a real ramp along this shot).
+    expect(from).not.toBe(to);
+  });
+
+  it('depth mode: a flat shot has equal endpoints', () => {
+    const { sections, stations } = fixture();
+    const data = surveyDataFromLegacy(sections, stations);
+    // shot 201: depth_in -2, depth_out -2 (flat).
+    const gIdx = findShotGlobal(data, 2, 201);
+    const [from, to] = resolveShotEndpointColors(data, sectionColorOf(sections, 2), gIdx, ctxFor(true));
+    expect(from).toBe(to);
+  });
+
+  it('section-color mode: both endpoints equal the flat display color', () => {
+    const { sections, stations } = fixture();
+    const data = surveyDataFromLegacy(sections, stations);
+    const ctx = ctxFor(false);
+    const gIdx = findShotGlobal(data, 1, 101);
+    const base = resolveShotDisplayColor(data, sectionColorOf(sections, 1), gIdx, ctx);
+    const [from, to] = resolveShotEndpointColors(data, sectionColorOf(sections, 1), gIdx, ctx);
+    expect(from).toBe(base);
+    expect(to).toBe(base);
+    expect(base).toBe(sectionColorOf(sections, 1));
+  });
 });
 
 function sectionColorOf(sections: Section[], id: number): string {

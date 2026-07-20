@@ -58,6 +58,7 @@ interface LineGpu {
   endpoint: WebGLBuffer;
   side: WebGLBuffer;
   color: WebGLBuffer;
+  reference: WebGLBuffer;
   index: WebGLBuffer;
   count: number;
 }
@@ -67,6 +68,7 @@ interface CircleGpu {
   corner: WebGLBuffer;
   fill: WebGLBuffer;
   stroke: WebGLBuffer;
+  allReference: WebGLBuffer;
   index: WebGLBuffer;
   count: number;
 }
@@ -134,6 +136,31 @@ export class SurveyCustomLayer implements CustomLayerInterface {
   private firstFrameLogged = false;
 
   private data: CustomRenderData | null = null;
+  /** Draw toggles mirroring the stock shots / stations layers' `visibility`
+   *  (setShowShots / setShowStations). Skipping a draw is the custom-layer
+   *  equivalent of hiding the stock layer. */
+  private drawShots = true;
+  private drawStations = true;
+  /** Hide reference shots + all-reference stations (setShowReferenceShots
+   *  false). Fed to the shaders' `u_hide_reference` uniform. */
+  private hideReference = false;
+
+  /** Show/hide custom-rendered shots (mirrors setShowShots). */
+  setShotsVisible(visible: boolean): void {
+    this.drawShots = visible;
+  }
+
+  /** Show/hide custom-rendered stations (mirrors setShowStations). */
+  setStationsVisible(visible: boolean): void {
+    this.drawStations = visible;
+  }
+
+  /** Hide/show reference shots + all-reference stations (mirrors
+   *  setShowReferenceShots). */
+  setReferenceShotsVisible(visible: boolean): void {
+    this.hideReference = !visible;
+  }
+
   /** Set before addLayer so onAdd uploads immediately. `onSelfDisable` lets the
    *  controller restore stock layers if a GL error kills the layer mid-render. */
   constructor(
@@ -196,6 +223,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
       endpoint: makeBuffer(gl, gl.ARRAY_BUFFER, l.endpoint),
       side: makeBuffer(gl, gl.ARRAY_BUFFER, l.side),
       color: makeBuffer(gl, gl.ARRAY_BUFFER, l.color),
+      reference: makeBuffer(gl, gl.ARRAY_BUFFER, l.reference),
       index: makeBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, l.indices),
       count: l.indices.length,
     };
@@ -205,6 +233,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
       corner: makeBuffer(gl, gl.ARRAY_BUFFER, c.corner),
       fill: makeBuffer(gl, gl.ARRAY_BUFFER, c.fill),
       stroke: makeBuffer(gl, gl.ARRAY_BUFFER, c.stroke),
+      allReference: makeBuffer(gl, gl.ARRAY_BUFFER, c.allReference),
       index: makeBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, c.indices),
       count: c.indices.length,
     };
@@ -234,8 +263,8 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
 
-    this.drawLines(gl, matrix, viewport, data);
-    this.drawCircles(gl, matrix, viewport, data);
+    if (this.drawShots) this.drawLines(gl, matrix, viewport, data);
+    if (this.drawStations) this.drawCircles(gl, matrix, viewport, data);
     this.checkFrameError(gl, data);
   }
 
@@ -285,11 +314,13 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     gl.uniform2f(gl.getUniformLocation(prog, 'u_viewport'), viewport[0], viewport[1]);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_half_width'), data.lineHalfWidthPx);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_aa'), data.aaPx);
+    gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_reference'), this.hideReference ? 1 : 0);
     this.bindVec2(gl, prog, 'a_pos_a', g.posA);
     this.bindVec2(gl, prog, 'a_pos_b', g.posB);
     this.bindFloat(gl, prog, 'a_endpoint', g.endpoint);
     this.bindFloat(gl, prog, 'a_side', g.side);
     this.bindColor(gl, prog, 'a_color', g.color);
+    this.bindFloat(gl, prog, 'a_reference', g.reference);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
   }
@@ -308,10 +339,12 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     gl.uniform1f(gl.getUniformLocation(prog, 'u_radius'), data.circleRadiusPx);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_stroke_width'), data.circleStrokePx);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_aa'), data.aaPx);
+    gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_reference'), this.hideReference ? 1 : 0);
     this.bindVec2(gl, prog, 'a_center', g.center);
     this.bindVec2(gl, prog, 'a_corner', g.corner);
     this.bindColor(gl, prog, 'a_fill', g.fill);
     this.bindColor(gl, prog, 'a_stroke', g.stroke);
+    this.bindFloat(gl, prog, 'a_all_reference', g.allReference);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
   }

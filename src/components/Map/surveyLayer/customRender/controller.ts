@@ -25,6 +25,7 @@ import { STATION_FLAG_IS_ZERO_DATUM } from '../../../../types/survey-data';
 import { debugLog } from '../../../../utils/debugLog';
 import {
   resolveShotDisplayColor,
+  resolveShotEndpointColors,
   resolveStationDisplayColor,
   resolveStationStrokeColor,
   type DisplayColorContext,
@@ -33,6 +34,7 @@ import { packCssColor, type Rgba8 } from './colorPack';
 import { computeMercatorAnchor } from './mercator';
 import {
   buildStationLookup,
+  computeStationAllReference,
   projectStationsRel,
   buildLineBuffers,
   buildCircleBuffers,
@@ -103,6 +105,12 @@ export class SurveyCustomController {
   private readonly resync: (() => void) | undefined;
   /** Guards handleSelfDisable against re-entrancy while a restore is pending. */
   private selfDisableScheduled = false;
+  /** Display toggles mirroring the stock layers' setShowShots /
+   *  setShowStations / setShowReferenceShots. Held on the controller so they
+   *  survive a layer re-create (enable re-applies them to the fresh layer). */
+  private shotsVisible = true;
+  private stationsVisible = true;
+  private referenceShotsVisible = true;
 
   constructor(
     map: MaplibreMap,
@@ -129,6 +137,30 @@ export class SurveyCustomController {
     else this.layer?.update(data);
   }
 
+  /** Mirror setShowShots: show/hide the custom-rendered shots. Cheap - flips a
+   *  draw flag + repaints, no buffer rebuild. */
+  setShotsVisible(visible: boolean): void {
+    this.shotsVisible = visible;
+    this.layer?.setShotsVisible(visible);
+    if (this.active) this.map.triggerRepaint();
+  }
+
+  /** Mirror setShowStations: show/hide the custom-rendered stations. */
+  setStationsVisible(visible: boolean): void {
+    this.stationsVisible = visible;
+    this.layer?.setStationsVisible(visible);
+    if (this.active) this.map.triggerRepaint();
+  }
+
+  /** Mirror setShowReferenceShots: hide/show reference shots + all-reference
+   *  stations via the shader uniform (instant, like the stock setFilter - no
+   *  buffer rebuild). */
+  setReferenceShotsVisible(visible: boolean): void {
+    this.referenceShotsVisible = visible;
+    this.layer?.setReferenceShotsVisible(visible);
+    if (this.active) this.map.triggerRepaint();
+  }
+
   private enable(data: CustomRenderData): void {
     if (!this.map.getStyle) return;
     // addLayer triggers layer.onAdd synchronously; the layer may disable itself
@@ -136,6 +168,11 @@ export class SurveyCustomController {
     const layer = new SurveyCustomLayer(this.layerId, data, (reason) =>
       this.handleSelfDisable(reason),
     );
+    // Re-apply display toggles to the fresh layer (a re-enable starts a new
+    // SurveyCustomLayer whose flags default to "show everything").
+    layer.setShotsVisible(this.shotsVisible);
+    layer.setStationsVisible(this.stationsVisible);
+    layer.setReferenceShotsVisible(this.referenceShotsVisible);
     const beforeId = this.map.getLayer('survey-shots') ? 'survey-shots' : undefined;
     this.map.addLayer(layer, beforeId);
     if (layer.isDisabled()) {
@@ -239,6 +276,18 @@ export class SurveyCustomController {
       const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
       return pack(resolveShotDisplayColor(surveyData, sectionColor, shotGlobalIdx, colorCtx));
     };
+    // Depth mode only: per-endpoint colors so the GPU interpolates the shot's
+    // depth ramp natively (the stock survey-shot-gradients equivalent). In
+    // section-color / severity mode this resolver is not passed, so lines stay
+    // flat and byte-identical to before.
+    const colorForShotEndpoints = (
+      shotGlobalIdx: number,
+      sectionId: number,
+    ): readonly [Rgba8, Rgba8] => {
+      const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
+      const [from, to] = resolveShotEndpointColors(surveyData, sectionColor, shotGlobalIdx, colorCtx);
+      return [pack(from), pack(to)];
+    };
     const fillForStation = (g: number): Rgba8 => {
       const sectionId = surveyData.stationSectionIds[g]!;
       const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
@@ -249,9 +298,14 @@ export class SurveyCustomController {
       return pack(resolveStationStrokeColor(isZeroDatum, colorCtx));
     };
 
-    const line = buildLineBuffers(surveyData, stationRel, lookup, colorForShot, params.exclude);
+    const useDepthEndpoints = colorCtx.showDepthGradient && !colorCtx.showIssueSeverity;
+    const allReference = computeStationAllReference(surveyData, lookup);
+    const line = buildLineBuffers(
+      surveyData, stationRel, lookup, colorForShot, params.exclude,
+      useDepthEndpoints ? colorForShotEndpoints : undefined,
+    );
     const circle = buildCircleBuffers(
-      surveyData, stationRel, fillForStation, strokeForStation, params.exclude,
+      surveyData, stationRel, fillForStation, strokeForStation, params.exclude, allReference,
     );
 
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;

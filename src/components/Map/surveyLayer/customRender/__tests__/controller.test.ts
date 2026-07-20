@@ -57,6 +57,20 @@ const h = vi.hoisted(() => {
     update(data: unknown): void {
       this.data = data;
     }
+
+    // Display toggles the controller re-applies on enable + on setShow* calls.
+    shotsVisible = true;
+    stationsVisible = true;
+    referenceShotsVisible = true;
+    setShotsVisible(v: boolean): void {
+      this.shotsVisible = v;
+    }
+    setStationsVisible(v: boolean): void {
+      this.stationsVisible = v;
+    }
+    setReferenceShotsVisible(v: boolean): void {
+      this.referenceShotsVisible = v;
+    }
   }
 
   return { layerState, gate, FakeLayer };
@@ -243,6 +257,35 @@ describe('SurveyCustomController fail-safe visibility', () => {
     (c as unknown as { runSyncHook(): void }).runSyncHook();
     expect(syncSpy).toHaveBeenCalledOnce();
     expect(syncSpy.mock.calls[0]?.[0]).toBe(params);
+  });
+
+  it('propagates visibility toggles to the layer and persists them across re-enable', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.sync(makeParams());
+    const layer1 = h.layerState.last;
+    expect(layer1).not.toBeNull();
+
+    // Toggles reach the live layer.
+    c.setShotsVisible(false);
+    c.setStationsVisible(false);
+    c.setReferenceShotsVisible(false);
+    expect(layer1?.shotsVisible).toBe(false);
+    expect(layer1?.stationsVisible).toBe(false);
+    expect(layer1?.referenceShotsVisible).toBe(false);
+
+    // Re-enable (gate off then on) builds a FRESH layer; the stored toggles
+    // must be re-applied so a re-create never silently shows hidden geometry.
+    h.gate.enabled = false;
+    c.sync(makeParams());
+    h.gate.enabled = true;
+    c.sync(makeParams());
+    const layer2 = h.layerState.last;
+    expect(layer2).not.toBe(layer1);
+    expect(layer2?.shotsVisible).toBe(false);
+    expect(layer2?.stationsVisible).toBe(false);
+    expect(layer2?.referenceShotsVisible).toBe(false);
   });
 
   it('restores stock layers when the gate flips off', () => {
