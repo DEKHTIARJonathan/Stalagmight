@@ -1485,6 +1485,9 @@ function MapCanvas() {
             surveyLayerRef.current?.onNextUpdate(() => {
               surveyLayerRef.current?.endDragPreview();
             });
+            // Clear the overlay follow-offset synchronously (see the non-snap
+            // segment branch) so the post-merge rebuild never doubles the offset.
+            surveyLayerRef.current?.commitDragPreview();
             dragConnectedSectionIdsRef.current = new Set();
             moveDragLngLatRef.current = null;
             lastCursorClientRef.current = null;
@@ -1612,6 +1615,12 @@ function MapCanvas() {
         surveyLayerRef.current?.onNextUpdate(() => {
           surveyLayerRef.current?.endDragPreview();
         });
+        // Commit preview NOW (mirrors the station/shot branches): removes the
+        // temp layers and clears the overlay follow-offset synchronously so the
+        // post-commit interact-overlay rebuild reads the new coords WITHOUT the
+        // stale drag offset. Without this the highlight briefly renders at
+        // newPosition + dragOffset (a one-frame double-distance flash).
+        surveyLayerRef.current?.commitDragPreview();
         const res = await moveSegment(moveDrag.sectionId, offset);
         // Rejected move (read-only gate): restore now — see the station branch.
         if (!res.success) surveyLayerRef.current?.endDragPreview();

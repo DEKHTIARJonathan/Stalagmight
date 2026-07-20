@@ -109,7 +109,7 @@
     "src/components/Map/DistanceLegend.tsx": 86,
     "src/components/Map/GasLegend.tsx": 143,
     "src/components/Map/GridOverlay.tsx": 152,
-    "src/components/Map/MapCanvas.tsx": 2994,
+    "src/components/Map/MapCanvas.tsx": 2996,
     "src/components/Map/MapDevStats.tsx": 710,
     "src/components/Map/MoveCommentCursorTag.tsx": 45,
     "src/components/Map/PlacementOverlay.tsx": 194,
