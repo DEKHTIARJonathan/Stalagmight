@@ -24,7 +24,11 @@
  * That keeps the custom layer's shot set identical to the stock shots layer.
  */
 import type { GpsOrigin } from '../../../../types/config';
-import { type SurveyData, SHOT_FLAG_IS_REFERENCE } from '../../../../types/survey-data';
+import {
+  type SurveyData,
+  SHOT_FLAG_IS_REFERENCE,
+  STATION_FLAG_IS_ZERO_DATUM,
+} from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { lngLatToMercator } from '../vectorTileData';
 import type { Rgba8 } from './colorPack';
@@ -50,6 +54,12 @@ export interface LineBuffers {
    *  shots layer's `isReference` property: the shader dims reference shots to
    *  0.5 opacity and collapses them when reference shots are hidden. */
   reference: Float32Array;
+  /** Per-vertex dim flag (1 = dimmed to 0.25, else 0). Mirrors the stock shots
+   *  layer's anchored / immovable paint cases (move-segment / move-shot tools):
+   *  the shader multiplies opacity by 0.25 and this WINS over the reference 0.5
+   *  case, matching the stock `case immovable 0.25, anchored 0.25, reference
+   *  0.5, 1` order. Rewritten in place on an anchored/immovable set change. */
+  dim: Float32Array;
   /** Two triangles per segment, `segmentCount*6`, `UNSIGNED_INT`. */
   indices: Uint32Array;
   /** Total attribute + index bytes (for cost logging). */
@@ -67,6 +77,17 @@ export interface CircleBuffers {
   fill: Uint8Array;
   /** Per-vertex stroke RGBA8. */
   stroke: Uint8Array;
+  /** Per-vertex size multiplier applied to BOTH radius and stroke width (1 for
+   *  a normal station, 2 for a zero-datum station). Mirrors the stock stations
+   *  layer's `['get','isZeroDatum']` cases: radius `baseRadius*2` and stroke
+   *  `2` (vs the default `1`), i.e. a uniform 2x on both, since the custom
+   *  layer's base stroke is always 1px. */
+  sizeMul: Float32Array;
+  /** Per-vertex dim flag (1 = dimmed to 0.25, else 0). Mirrors the stock
+   *  stations layer's anchored / immovable circle-opacity + circle-stroke-
+   *  opacity 0.25 cases (move-segment / move-station tools). Rewritten in place
+   *  on an anchored/immovable set change. */
+  dim: Float32Array;
   /** Per-vertex all-reference flag (1 = every shot touching this station is a
    *  reference shot, else 0). Mirrors the stock stations layer's
    *  `allShotsReference` property: the shader collapses these stations when
@@ -217,6 +238,7 @@ export function buildLineBuffers(
   colorForShot: (globalShotIdx: number, sectionId: number) => Rgba8,
   exclude?: CustomRenderExclusion,
   colorForShotEndpoints?: (globalShotIdx: number, sectionId: number) => readonly [Rgba8, Rgba8],
+  dimForShot?: (globalShotIdx: number, sectionId: number) => boolean,
 ): LineBuffers {
   const exSections = exclude?.sectionIds;
   const exShots = exclude?.shotGlobalIndices;
@@ -228,6 +250,7 @@ export function buildLineBuffers(
   const side = new Float32Array(vertexCount);
   const color = new Uint8Array(vertexCount * 4);
   const reference = new Float32Array(vertexCount);
+  const dim = new Float32Array(vertexCount);
   const indices = new Uint32Array(segmentCount * 6);
 
   // Per-segment vertex template: [endpoint, side] for the 4 corners.
@@ -253,6 +276,7 @@ export function buildLineBuffers(
       const colB = ends ? ends[1] : colA;
       const isRef =
         (data.shotFlags[shotGlobalIdx]! & SHOT_FLAG_IS_REFERENCE) !== 0 ? 1 : 0;
+      const isDim = dimForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
       const ax = stationRel[fromGlobal * 2]!;
       const ay = stationRel[fromGlobal * 2 + 1]!;
       const bx = stationRel[toGlobal * 2]!;
@@ -273,6 +297,7 @@ export function buildLineBuffers(
         color[v * 4 + 2] = b;
         color[v * 4 + 3] = a;
         reference[v] = isRef;
+        dim[v] = isDim;
       }
       const io = seg * 6;
       indices[io] = base;
@@ -287,10 +312,46 @@ export function buildLineBuffers(
 
   const byteLength =
     posA.byteLength + posB.byteLength + endpoint.byteLength + side.byteLength +
-    color.byteLength + reference.byteLength + indices.byteLength;
+    color.byteLength + reference.byteLength + dim.byteLength + indices.byteLength;
   return {
-    segmentCount, vertexCount, posA, posB, endpoint, side, color, reference, indices, byteLength,
+    segmentCount, vertexCount, posA, posB, endpoint, side, color, reference, dim, indices, byteLength,
   };
+}
+
+/**
+ * Recompute ONLY the per-vertex line dim flags for the CURRENT anchored /
+ * immovable set, replaying {@link buildLineBuffers}' exact skip + iteration so
+ * the k-th drawn segment lines up vertex-for-vertex. Lets the controller refresh
+ * dimming on a tool-activation change without the full geometry rebuild (no
+ * reprojection, no color packing). The returned length equals the line buffers'
+ * `vertexCount`; a parity test locks it against the build path's `dim` array.
+ */
+export function computeLineDim(
+  data: SurveyData,
+  lookup: Map<number, Map<number, number>>,
+  dimForShot: (globalShotIdx: number, sectionId: number) => boolean,
+  exclude?: CustomRenderExclusion,
+): Float32Array {
+  const exSections = exclude?.sectionIds;
+  const exShots = exclude?.shotGlobalIndices;
+  const segmentCount = countValidShots(data, lookup, exclude);
+  const dim = new Float32Array(segmentCount * 4);
+  let seg = 0;
+  for (const section of data.sections) {
+    if (exSections?.has(section.id)) continue;
+    const inner = lookup.get(section.id);
+    if (!inner) continue;
+    for (let i = 0; i < section.shotCount; i++) {
+      const shotGlobalIdx = section.shotOffset + i;
+      if (exShots?.has(shotGlobalIdx)) continue;
+      if (inner.get(i) === undefined || inner.get(i + 1) === undefined) continue;
+      const isDim = dimForShot(shotGlobalIdx, section.id) === true ? 1 : 0;
+      const base = seg * 4;
+      for (let c = 0; c < 4; c++) dim[base + c] = isDim;
+      seg++;
+    }
+  }
+  return dim;
 }
 
 /**
@@ -305,6 +366,7 @@ export function buildCircleBuffers(
   strokeForStation: (globalIdx: number) => Rgba8,
   exclude?: CustomRenderExclusion,
   allReferenceFlags?: Float32Array,
+  dimForStation?: (globalIdx: number) => boolean,
 ): CircleBuffers {
   const exSections = exclude?.sectionIds;
   const exStations = exclude?.stationGlobalIndices;
@@ -323,6 +385,8 @@ export function buildCircleBuffers(
   const corner = new Float32Array(vertexCount * 2);
   const fill = new Uint8Array(vertexCount * 4);
   const stroke = new Uint8Array(vertexCount * 4);
+  const sizeMul = new Float32Array(vertexCount);
+  const dim = new Float32Array(vertexCount);
   const allReference = new Float32Array(vertexCount);
   const indices = new Uint32Array(stationCount * 6);
 
@@ -338,6 +402,9 @@ export function buildCircleBuffers(
     const [fr, fg, fb, fa] = fillForStation(g);
     const [sr, sg, sb, sa] = strokeForStation(g);
     const allRef = allReferenceFlags ? allReferenceFlags[g]! : 0;
+    // Zero-datum stations render at 2x radius + 2x stroke (stock parity).
+    const sm = (data.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0 ? 2 : 1;
+    const dm = dimForStation?.(g) === true ? 1 : 0;
     const base = out * 4;
     for (let c = 0; c < 4; c++) {
       const v = base + c;
@@ -353,6 +420,8 @@ export function buildCircleBuffers(
       stroke[v * 4 + 1] = sg;
       stroke[v * 4 + 2] = sb;
       stroke[v * 4 + 3] = sa;
+      sizeMul[v] = sm;
+      dim[v] = dm;
       allReference[v] = allRef;
     }
     const io = out * 6;
@@ -367,8 +436,40 @@ export function buildCircleBuffers(
 
   const byteLength =
     center.byteLength + corner.byteLength + fill.byteLength + stroke.byteLength +
-    allReference.byteLength + indices.byteLength;
+    sizeMul.byteLength + dim.byteLength + allReference.byteLength + indices.byteLength;
   return {
-    stationCount, vertexCount, center, corner, fill, stroke, allReference, indices, byteLength,
+    stationCount, vertexCount, center, corner, fill, stroke, sizeMul, dim, allReference, indices, byteLength,
   };
+}
+
+/**
+ * Recompute ONLY the per-vertex circle dim flags for the CURRENT anchored /
+ * immovable set, replaying {@link buildCircleBuffers}' exact skip + compaction
+ * so the k-th drawn station lines up vertex-for-vertex. Companion to
+ * {@link computeLineDim} for the cheap tool-activation dim refresh.
+ */
+export function computeCircleDim(
+  data: SurveyData,
+  dimForStation: (globalIdx: number) => boolean,
+  exclude?: CustomRenderExclusion,
+): Float32Array {
+  const exSections = exclude?.sectionIds;
+  const exStations = exclude?.stationGlobalIndices;
+  const skip = (g: number): boolean =>
+    exStations?.has(g) === true || exSections?.has(data.stationSectionIds[g]!) === true;
+  let stationCount = data.stationCount;
+  if (exStations || exSections) {
+    stationCount = 0;
+    for (let g = 0; g < data.stationCount; g++) if (!skip(g)) stationCount++;
+  }
+  const dim = new Float32Array(stationCount * 4);
+  let out = 0;
+  for (let g = 0; g < data.stationCount; g++) {
+    if (skip(g)) continue;
+    const isDim = dimForStation(g) === true ? 1 : 0;
+    const base = out * 4;
+    for (let c = 0; c < 4; c++) dim[base + c] = isDim;
+    out++;
+  }
+  return dim;
 }

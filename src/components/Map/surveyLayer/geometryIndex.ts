@@ -65,6 +65,21 @@ export interface ResolveOptions {
   includeReference: boolean;
 }
 
+/**
+ * Cheap snapshot of the map camera for {@link SurveyGeometryIndex.sectionsIntersectingBox}'s
+ * projected-AABB cache. `key` is any stable string that changes iff `project`
+ * would map a given lng/lat to a different pixel (zoom / center / bearing /
+ * pitch / viewport). `axisAligned` is true when the projection preserves axis
+ * order (bearing 0 and pitch 0), which lets the reprojection use only the two
+ * diagonal AABB corners instead of all four — exact under a top-down mercator
+ * view, so the conservative-superset contract is unchanged. Omit the snapshot
+ * to force a full 4-corner reprojection every call (the legacy behavior).
+ */
+export interface CameraSnapshot {
+  key: string;
+  axisAligned: boolean;
+}
+
 export class SurveyGeometryIndex {
   private readonly data: SurveyData;
   private readonly gpsOrigin: GpsOrigin | null;
@@ -79,13 +94,25 @@ export class SurveyGeometryIndex {
   /** Per-section cache: stationIndex values that touch >=1 non-reference shot
    *  (both endpoints present — mirrors the builder's feature-emission guard). */
   private nonRefStationCache = new Map<number, Set<number>>();
-  /** sectionId -> world-coord (map coords) AABB over its stations. Lazily built
-   *  by {@link ensureBounds} the first time the candidate-section gate runs. */
-  private sectionBounds = new Map<
-    number,
-    { minLng: number; minLat: number; maxLng: number; maxLat: number }
-  >();
+  /** Per-section world-coord (map coords) AABB over its stations, stored as flat
+   *  parallel arrays (index 0..boundsCount-1) for cache-friendly projection.
+   *  Lazily built by {@link ensureBounds} the first time the gate runs. */
+  private boundsSid: Int32Array = new Int32Array(0);
+  private boundsMinLng: Float64Array = new Float64Array(0);
+  private boundsMinLat: Float64Array = new Float64Array(0);
+  private boundsMaxLng: Float64Array = new Float64Array(0);
+  private boundsMaxLat: Float64Array = new Float64Array(0);
+  private boundsCount = 0;
   private boundsBuilt = false;
+  /** Projected screen-space AABB per section (parallel to the bounds arrays),
+   *  reused across probes of the SAME camera. {@link sectionsIntersectingBox}
+   *  reprojects only when the caller's camera key changes — during hover the
+   *  camera is static, so every probe after the first is pure AABB overlap. */
+  private projMinX: Float32Array = new Float32Array(0);
+  private projMinY: Float32Array = new Float32Array(0);
+  private projMaxX: Float32Array = new Float32Array(0);
+  private projMaxY: Float32Array = new Float32Array(0);
+  private cachedCameraKey: string | null = null;
 
   constructor(data: SurveyData, gpsOrigin: GpsOrigin | null) {
     this.data = data;
@@ -123,18 +150,77 @@ export class SurveyGeometryIndex {
   private ensureBounds(): void {
     if (this.boundsBuilt) return;
     this.boundsBuilt = true;
+    // Accumulate per-section AABBs in a Map, then flatten to parallel arrays.
+    const acc = new Map<
+      number,
+      { minLng: number; minLat: number; maxLng: number; maxLat: number }
+    >();
     for (let g = 0; g < this.data.stationCount; g++) {
       const sid = this.data.stationSectionIds[g]!;
       const [lng, lat] = this.stationLngLat(g);
-      const b = this.sectionBounds.get(sid);
+      const b = acc.get(sid);
       if (!b) {
-        this.sectionBounds.set(sid, { minLng: lng, minLat: lat, maxLng: lng, maxLat: lat });
+        acc.set(sid, { minLng: lng, minLat: lat, maxLng: lng, maxLat: lat });
         continue;
       }
       if (lng < b.minLng) b.minLng = lng;
       if (lng > b.maxLng) b.maxLng = lng;
       if (lat < b.minLat) b.minLat = lat;
       if (lat > b.maxLat) b.maxLat = lat;
+    }
+    const n = acc.size;
+    this.boundsCount = n;
+    this.boundsSid = new Int32Array(n);
+    this.boundsMinLng = new Float64Array(n);
+    this.boundsMinLat = new Float64Array(n);
+    this.boundsMaxLng = new Float64Array(n);
+    this.boundsMaxLat = new Float64Array(n);
+    this.projMinX = new Float32Array(n);
+    this.projMinY = new Float32Array(n);
+    this.projMaxX = new Float32Array(n);
+    this.projMaxY = new Float32Array(n);
+    let i = 0;
+    for (const [sid, b] of acc) {
+      this.boundsSid[i] = sid;
+      this.boundsMinLng[i] = b.minLng;
+      this.boundsMinLat[i] = b.minLat;
+      this.boundsMaxLng[i] = b.maxLng;
+      this.boundsMaxLat[i] = b.maxLat;
+      i++;
+    }
+    // Force a reprojection on the first query (no camera key matches null yet).
+    this.cachedCameraKey = null;
+  }
+
+  /**
+   * Reproject every section's world-coord AABB into the screen-space cache.
+   * With `axisAligned` (bearing 0, pitch 0) the projection preserves axis order,
+   * so the two diagonal corners bound the footprint exactly; otherwise all four
+   * corners are projected to keep the superset conservative under an affine map.
+   */
+  private projectBounds(project: ProjectFn, axisAligned: boolean): void {
+    for (let i = 0; i < this.boundsCount; i++) {
+      const minLng = this.boundsMinLng[i]!;
+      const minLat = this.boundsMinLat[i]!;
+      const maxLng = this.boundsMaxLng[i]!;
+      const maxLat = this.boundsMaxLat[i]!;
+      if (axisAligned) {
+        const p1 = project([minLng, minLat]);
+        const p2 = project([maxLng, maxLat]);
+        this.projMinX[i] = Math.min(p1.x, p2.x);
+        this.projMaxX[i] = Math.max(p1.x, p2.x);
+        this.projMinY[i] = Math.min(p1.y, p2.y);
+        this.projMaxY[i] = Math.max(p1.y, p2.y);
+      } else {
+        const p1 = project([minLng, minLat]);
+        const p2 = project([minLng, maxLat]);
+        const p3 = project([maxLng, minLat]);
+        const p4 = project([maxLng, maxLat]);
+        this.projMinX[i] = Math.min(p1.x, p2.x, p3.x, p4.x);
+        this.projMaxX[i] = Math.max(p1.x, p2.x, p3.x, p4.x);
+        this.projMinY[i] = Math.min(p1.y, p2.y, p3.y, p4.y);
+        this.projMaxY[i] = Math.max(p1.y, p2.y, p3.y, p4.y);
+      }
     }
   }
 
@@ -312,20 +398,25 @@ export class SurveyGeometryIndex {
     minY: number,
     maxX: number,
     maxY: number,
+    camera?: CameraSnapshot | null,
   ): Set<number> {
     this.ensureBounds();
+    // Reproject the section AABBs only when the camera changed. Without a
+    // snapshot (unit tests / legacy callers) reproject every call — same result,
+    // just uncached. With a matching key, skip straight to the overlap test.
+    if (!camera || camera.key !== this.cachedCameraKey) {
+      this.projectBounds(project, camera?.axisAligned ?? false);
+      this.cachedCameraKey = camera ? camera.key : null;
+    }
     const out = new Set<number>();
-    for (const [sid, b] of this.sectionBounds) {
-      const p1 = project([b.minLng, b.minLat]);
-      const p2 = project([b.minLng, b.maxLat]);
-      const p3 = project([b.maxLng, b.minLat]);
-      const p4 = project([b.maxLng, b.maxLat]);
-      const sMinX = Math.min(p1.x, p2.x, p3.x, p4.x);
-      const sMaxX = Math.max(p1.x, p2.x, p3.x, p4.x);
-      const sMinY = Math.min(p1.y, p2.y, p3.y, p4.y);
-      const sMaxY = Math.max(p1.y, p2.y, p3.y, p4.y);
-      if (sMaxX >= minX && sMinX <= maxX && sMaxY >= minY && sMinY <= maxY) {
-        out.add(sid);
+    for (let i = 0; i < this.boundsCount; i++) {
+      if (
+        this.projMaxX[i]! >= minX &&
+        this.projMinX[i]! <= maxX &&
+        this.projMaxY[i]! >= minY &&
+        this.projMinY[i]! <= maxY
+      ) {
+        out.add(this.boundsSid[i]!);
       }
     }
     return out;

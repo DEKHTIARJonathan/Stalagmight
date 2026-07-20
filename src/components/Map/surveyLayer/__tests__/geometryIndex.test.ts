@@ -8,7 +8,7 @@
  * `resolveNearestShot` over per-feature build output) for a grid of probe
  * points, with the same tolerances.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap, MapMouseEvent, MapGeoJSONFeature } from 'maplibre-gl';
 import { buildSurveyFeatures } from '../features';
 import { resolveNearestShot, resolveNearestStation } from '../hitTest';
@@ -300,5 +300,63 @@ describe('SurveyGeometryIndex.sectionsIntersectingBox candidate gate', () => {
     // The resolver, fed that candidate set, confirms the real in-reach hit.
     const hit = index.nearestStation(proj, p.x, p.y, cand, stationReach, { includeReference: true });
     expect(hit?.ref).toEqual({ section_id: 1, station_index: 3 });
+  });
+});
+
+/**
+ * Camera-keyed projected-AABB cache (#customRender). The gate now reuses each
+ * section's projected screen AABB across probes of the SAME camera. The cached
+ * path (and its axis-aligned 2-corner fast path) must return EXACTLY the sets
+ * the legacy per-call 4-corner reprojection did, and must reproject only when
+ * the caller's camera key changes.
+ */
+describe('SurveyGeometryIndex.sectionsIntersectingBox camera cache', () => {
+  const { data } = buildPerFeature();
+  const proj = (c: [number, number]) => project(c);
+  const stationReach = 10;
+  const boxes = probeGrid().map((p) => padProbeBox([p.x, p.y], stationReach));
+  const runAt = (
+    idx: SurveyGeometryIndex,
+    box: ReturnType<typeof padProbeBox>,
+    cam?: { key: string; axisAligned: boolean },
+  ) => idx.sectionsIntersectingBox(proj, box[0][0], box[0][1], box[1][0], box[1][1], cam);
+
+  it('cached (2-corner + 4-corner) matches the uncached path across the probe grid', () => {
+    const naive = new SurveyGeometryIndex(data, null);
+    const cached2 = new SurveyGeometryIndex(data, null);
+    const cached4 = new SurveyGeometryIndex(data, null);
+    for (const box of boxes) {
+      const want = [...runAt(naive, box)].sort();
+      expect([...runAt(cached2, box, { key: 'cam', axisAligned: true })].sort()).toEqual(want);
+      expect([...runAt(cached4, box, { key: 'cam', axisAligned: false })].sort()).toEqual(want);
+    }
+  });
+
+  it('reprojects only when the camera key changes', () => {
+    const index = new SurveyGeometryIndex(data, null);
+    const spy = vi.fn(proj);
+    const box = boxes[0]!;
+    // First probe with key A -> projects (2 sections * 2 corners under axisAligned).
+    index.sectionsIntersectingBox(spy, box[0][0], box[0][1], box[1][0], box[1][1], { key: 'A', axisAligned: true });
+    const afterFirst = spy.mock.calls.length;
+    expect(afterFirst).toBe(4);
+    // Same key -> cache hit, no further project() calls even for a different box.
+    const box2 = boxes[boxes.length - 1]!;
+    index.sectionsIntersectingBox(spy, box2[0][0], box2[0][1], box2[1][0], box2[1][1], { key: 'A', axisAligned: true });
+    expect(spy.mock.calls.length).toBe(afterFirst);
+    // New key -> reproject once more.
+    index.sectionsIntersectingBox(spy, box[0][0], box[0][1], box[1][0], box[1][1], { key: 'B', axisAligned: true });
+    expect(spy.mock.calls.length).toBe(afterFirst * 2);
+  });
+
+  it('an omitted snapshot reprojects every call (legacy behavior preserved)', () => {
+    const index = new SurveyGeometryIndex(data, null);
+    const spy = vi.fn(proj);
+    const box = boxes[0]!;
+    // No camera -> 4-corner reprojection each call (2 sections * 4 corners = 8).
+    index.sectionsIntersectingBox(spy, box[0][0], box[0][1], box[1][0], box[1][1]);
+    expect(spy.mock.calls.length).toBe(8);
+    index.sectionsIntersectingBox(spy, box[0][0], box[0][1], box[1][0], box[1][1]);
+    expect(spy.mock.calls.length).toBe(16);
   });
 });

@@ -1840,21 +1840,37 @@ export default class SurveyLayer {
     let shotSections = new Set<number>();
     if (!this.geoIndex || !hasLiveStyle(this.map)) return { stationSections, shotSections };
     const project = this.projector();
+    // One camera snapshot for both probes: the geometry index reuses its
+    // projected per-section AABBs across probes of the same camera, so a static
+    // hover reprojects the 14k+ sections once, not once per probe (#customRender).
+    const camera = this.cameraSnapshot();
     if (this.shotsVisible) {
       const [[minX, minY], [maxX, maxY]] = padProbeBox(
         geometry as ProbeGeometry,
         this.getShotHitReach(),
       );
-      shotSections = this.geoIndex.sectionsIntersectingBox(project, minX, minY, maxX, maxY);
+      shotSections = this.geoIndex.sectionsIntersectingBox(project, minX, minY, maxX, maxY, camera);
     }
     if (this.stationsVisible) {
       const [[minX, minY], [maxX, maxY]] = padProbeBox(
         geometry as ProbeGeometry,
         this.getStationHitReach(),
       );
-      stationSections = this.geoIndex.sectionsIntersectingBox(project, minX, minY, maxX, maxY);
+      stationSections = this.geoIndex.sectionsIntersectingBox(project, minX, minY, maxX, maxY, camera);
     }
     return { stationSections, shotSections };
+  }
+
+  /** Cheap camera snapshot keying the geometry index's projected-AABB cache.
+   *  The key changes iff `map.project` would move a lng/lat to a new pixel;
+   *  axisAligned (no bearing/pitch) enables the 2-corner reprojection fast path. */
+  private cameraSnapshot(): { key: string; axisAligned: boolean } {
+    const c = this.map.getCenter();
+    const cv = this.map.getCanvas();
+    const bearing = this.map.getBearing();
+    const pitch = this.map.getPitch();
+    const key = `${this.map.getZoom()}|${c.lng}|${c.lat}|${bearing}|${pitch}|${cv.width}|${cv.height}`;
+    return { key, axisAligned: bearing === 0 && pitch === 0 };
   }
 
   /** Screen projection closure for the geometry resolver. */
@@ -3393,6 +3409,17 @@ export default class SurveyLayer {
 
     // Refresh main layer opacity so anchored sections dim consistently with current set.
     this.updateImmovableLayerOpacity(this.immovableStationFeatureIds, this.immovableShotFeatureIds);
+    this.syncCustomDimming();
+  }
+
+  /** Push the current anchored + immovable dim set to the custom-render layer so
+   *  it dims the same features the stock paint expressions do (#customRender). */
+  private syncCustomDimming(): void {
+    this.customRender?.setDimming({
+      anchoredSectionIds: this.anchoredSectionIds,
+      immovableStationFeatureIds: this.immovableStationFeatureIds,
+      immovableShotFeatureIds: this.immovableShotFeatureIds,
+    });
   }
 
   // Set text-opacity on label layers: 0.25 for features in anchored sections, normal otherwise
@@ -3458,6 +3485,7 @@ export default class SurveyLayer {
     // Update label and closure opacity
     this.updateImmovableLabelOpacity(stationIds, shotIds);
     this.updateImmovableClosureOpacity(stationIds);
+    this.syncCustomDimming();
   }
 
   // Set circle-opacity/line-opacity on main layers using data-driven expressions.

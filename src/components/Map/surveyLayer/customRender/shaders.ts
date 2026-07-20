@@ -34,6 +34,7 @@ in float a_endpoint;
 in float a_side;
 in vec4 a_color;
 in float a_reference;
+in float a_dim;
 out vec4 v_color;
 out float v_edge;
 void main() {
@@ -57,10 +58,12 @@ void main() {
   vec2 offsetPx = normal * a_side * outset;
   vec2 offsetClip = offsetPx / u_viewport * 2.0 * base.w;
   gl_Position = vec4(base.xy + offsetClip, base.z, base.w);
-  // Reference shots draw at 0.5 opacity (mirrors the stock shots/gradient
-  // layers' isReference line-opacity case).
+  // Dimmed shots (anchored / immovable during move tools) draw at 0.25 and this
+  // WINS over the reference 0.5 case, matching the stock line-opacity case order
+  // (immovable 0.25, anchored 0.25, isReference 0.5, else 1).
   v_color = a_color;
-  if (a_reference > 0.5) v_color.a *= 0.5;
+  if (a_dim > 0.5) v_color.a *= 0.25;
+  else if (a_reference > 0.5) v_color.a *= 0.5;
   v_edge = a_side;
 }`;
 
@@ -93,9 +96,13 @@ in vec2 a_corner;
 in vec4 a_fill;
 in vec4 a_stroke;
 in float a_all_reference;
+in float a_size_mul;
+in float a_dim;
 out vec4 v_fill;
 out vec4 v_stroke;
 out vec2 v_offset;
+out float v_size_mul;
+out float v_dim;
 void main() {
   // All-reference stations hidden with reference shots (matches the stock
   // stations layer's not-allShotsReference filter): collapse the quad to a
@@ -105,16 +112,22 @@ void main() {
     v_fill = vec4(0.0);
     v_stroke = vec4(0.0);
     v_offset = vec2(0.0);
+    v_size_mul = 1.0;
+    v_dim = 0.0;
     return;
   }
   vec4 c = u_matrix * vec4(a_center, 0.0, 1.0);
-  float ext = u_radius + u_stroke_width + u_aa;
+  // Zero-datum stations render 2x (a_size_mul), so the quad extent must grow to
+  // fit; the fragment recomputes disc/stroke radii with the same multiplier.
+  float ext = (u_radius + u_stroke_width) * a_size_mul + u_aa;
   vec2 offsetPx = a_corner * ext;
   vec2 offsetClip = offsetPx / u_viewport * 2.0 * c.w;
   gl_Position = vec4(c.xy + offsetClip, c.z, c.w);
   v_fill = a_fill;
   v_stroke = a_stroke;
   v_offset = offsetPx;
+  v_size_mul = a_size_mul;
+  v_dim = a_dim;
 }`;
 
 export const CIRCLE_FRAGMENT_SRC = `#version 300 es
@@ -125,13 +138,20 @@ uniform float u_aa;
 in vec4 v_fill;
 in vec4 v_stroke;
 in vec2 v_offset;
+in float v_size_mul;
+in float v_dim;
 out vec4 fragColor;
 void main() {
+  float rad = u_radius * v_size_mul;
+  float sw = u_stroke_width * v_size_mul;
   float d = length(v_offset);
-  float outer = u_radius + u_stroke_width;
+  float outer = rad + sw;
   float outerAlpha = clamp((outer - d) / u_aa + 0.5, 0.0, 1.0);
-  float fillT = clamp((u_radius - d) / u_aa + 0.5, 0.0, 1.0);
+  float fillT = clamp((rad - d) / u_aa + 0.5, 0.0, 1.0);
   vec4 col = mix(v_stroke, v_fill, fillT);
-  float a = col.a * outerAlpha;
+  // Dimmed stations (anchored / immovable) draw at 0.25 (stock circle-opacity +
+  // circle-stroke-opacity anchored case); applies uniformly to fill + stroke.
+  float dimF = (v_dim > 0.5) ? 0.25 : 1.0;
+  float a = col.a * outerAlpha * dimF;
   fragColor = vec4(col.rgb * a, a);
 }`;

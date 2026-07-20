@@ -23,6 +23,7 @@ import type { GpsOrigin } from '../../../../types/config';
 import type { SurveyData, SectionMetadata } from '../../../../types/survey-data';
 import { STATION_FLAG_IS_ZERO_DATUM } from '../../../../types/survey-data';
 import { debugLog } from '../../../../utils/debugLog';
+import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
 import {
   resolveShotDisplayColor,
   resolveShotEndpointColors,
@@ -38,6 +39,8 @@ import {
   projectStationsRel,
   buildLineBuffers,
   buildCircleBuffers,
+  computeLineDim,
+  computeCircleDim,
   type CustomRenderExclusion,
 } from './tessellate';
 import { SurveyCustomLayer, type CustomRenderData } from './surveyCustomLayer';
@@ -93,6 +96,27 @@ export interface CustomSyncParams {
 
 export type { CustomRenderExclusion } from './tessellate';
 
+/**
+ * Current dimming set mirroring the stock move-tool paint state (#customRender).
+ * `anchoredSectionIds` dims every station + shot of those sections (move-segment,
+ * SurveyLayer.setAnchoredSections); the immovable `featureId` sets dim specific
+ * stations / shots (move-station / move-shot, SurveyLayer.setImmovableFeatures).
+ * `featureId = sectionId * FEATURE_ID_STRIDE + stationIndex | shotId`, matching
+ * the stock layers' `['get','featureId']` matching. Held on the controller so a
+ * layer re-create (re-enable / re-sync) re-applies it during the next build.
+ */
+export interface CustomDimState {
+  anchoredSectionIds: ReadonlySet<number>;
+  immovableStationFeatureIds: ReadonlySet<number>;
+  immovableShotFeatureIds: ReadonlySet<number>;
+}
+
+const EMPTY_DIM: CustomDimState = {
+  anchoredSectionIds: new Set<number>(),
+  immovableStationFeatureIds: new Set<number>(),
+  immovableShotFeatureIds: new Set<number>(),
+};
+
 export class SurveyCustomController {
   private readonly map: MaplibreMap;
   private readonly layerId: string;
@@ -111,6 +135,14 @@ export class SurveyCustomController {
   private shotsVisible = true;
   private stationsVisible = true;
   private referenceShotsVisible = true;
+  /** Anchored / immovable dim set applied to every build; survives re-enable. */
+  private dimState: CustomDimState = EMPTY_DIM;
+  /** Cached build products backing the cheap dim-only refresh (setDimming):
+   *  the last CustomRenderData (its dim arrays are rewritten in place) plus the
+   *  station lookup + survey the line-dim recompute needs. */
+  private lastData: CustomRenderData | null = null;
+  private lastLookup: Map<number, Map<number, number>> | null = null;
+  private lastSurveyData: SurveyData | null = null;
 
   constructor(
     map: MaplibreMap,
@@ -300,12 +332,17 @@ export class SurveyCustomController {
 
     const useDepthEndpoints = colorCtx.showDepthGradient && !colorCtx.showIssueSeverity;
     const allReference = computeStationAllReference(surveyData, lookup);
+    // Apply the current anchored/immovable dim set (undefined on the no-dim hot
+    // path so the dim attribute stays all-zero without per-item predicate calls).
+    const dims = this.hasDimming() ? this.dimPredicates(surveyData) : null;
     const line = buildLineBuffers(
       surveyData, stationRel, lookup, colorForShot, params.exclude,
       useDepthEndpoints ? colorForShotEndpoints : undefined,
+      dims?.dimForShot,
     );
     const circle = buildCircleBuffers(
       surveyData, stationRel, fillForStation, strokeForStation, params.exclude, allReference,
+      dims?.dimForStation,
     );
 
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
@@ -330,7 +367,69 @@ export class SurveyCustomController {
       totalMB: +(totalBytes / 1048576).toFixed(2),
       distinctColors: packCache.size,
     });
+    // Cache products so setDimming can recompute just the dim arrays in place.
+    this.lastData = data;
+    this.lastLookup = lookup;
+    this.lastSurveyData = surveyData;
     return data;
+  }
+
+  /** True when some anchored section or immovable feature is currently set. */
+  private hasDimming(): boolean {
+    return (
+      this.dimState.anchoredSectionIds.size > 0 ||
+      this.dimState.immovableStationFeatureIds.size > 0 ||
+      this.dimState.immovableShotFeatureIds.size > 0
+    );
+  }
+
+  /** Per-station / per-shot dim predicates for the current {@link dimState}:
+   *  a feature dims when its section is anchored OR its featureId is immovable. */
+  private dimPredicates(surveyData: SurveyData): {
+    dimForStation: (g: number) => boolean;
+    dimForShot: (globalShotIdx: number, sectionId: number) => boolean;
+  } {
+    const { anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds } = this.dimState;
+    return {
+      dimForStation: (g: number): boolean => {
+        const sid = surveyData.stationSectionIds[g]!;
+        return (
+          anchoredSectionIds.has(sid) ||
+          (immovableStationFeatureIds.size > 0 &&
+            immovableStationFeatureIds.has(sid * FEATURE_ID_STRIDE + surveyData.stationIndices[g]!))
+        );
+      },
+      dimForShot: (globalShotIdx: number, sectionId: number): boolean =>
+        anchoredSectionIds.has(sectionId) ||
+        (immovableShotFeatureIds.size > 0 &&
+          immovableShotFeatureIds.has(sectionId * FEATURE_ID_STRIDE + surveyData.shotIds[globalShotIdx]!)),
+    };
+  }
+
+  /**
+   * Update the anchored / immovable dim set (SurveyLayer.setAnchoredSections /
+   * setImmovableFeatures). Rare (fires on move-tool activation, not per frame),
+   * so it takes the cheap path: recompute ONLY the two per-vertex dim arrays
+   * from the cached SoA + exclusion and re-upload just those GPU buffers, no
+   * reprojection or color packing. State is stored regardless so the next full
+   * build (geometry flush / drag / re-enable) reproduces it.
+   */
+  setDimming(state: CustomDimState): void {
+    this.dimState = state;
+    if (!this.active || !this.layer || !this.lastData || !this.lastLookup || !this.lastSurveyData) {
+      return;
+    }
+    const survey = this.lastSurveyData;
+    const exclude = this.lastParams?.exclude;
+    const { dimForStation, dimForShot } = this.dimPredicates(survey);
+    const lineDim = computeLineDim(survey, this.lastLookup, dimForShot, exclude);
+    const circleDim = computeCircleDim(survey, dimForStation, exclude);
+    // Keep the cached buffers coherent so a later context restore / re-upload
+    // (update()) carries the dim state without a fresh setDimming.
+    this.lastData.line.dim = lineDim;
+    this.lastData.circle.dim = circleDim;
+    this.layer.updateDim(lineDim, circleDim);
+    this.map.triggerRepaint();
   }
 
   private installHook(): void {

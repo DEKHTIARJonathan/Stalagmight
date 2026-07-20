@@ -59,6 +59,7 @@ interface LineGpu {
   side: WebGLBuffer;
   color: WebGLBuffer;
   reference: WebGLBuffer;
+  dim: WebGLBuffer;
   index: WebGLBuffer;
   count: number;
 }
@@ -68,6 +69,8 @@ interface CircleGpu {
   corner: WebGLBuffer;
   fill: WebGLBuffer;
   stroke: WebGLBuffer;
+  sizeMul: WebGLBuffer;
+  dim: WebGLBuffer;
   allReference: WebGLBuffer;
   index: WebGLBuffer;
   count: number;
@@ -224,6 +227,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
       side: makeBuffer(gl, gl.ARRAY_BUFFER, l.side),
       color: makeBuffer(gl, gl.ARRAY_BUFFER, l.color),
       reference: makeBuffer(gl, gl.ARRAY_BUFFER, l.reference),
+      dim: makeBuffer(gl, gl.ARRAY_BUFFER, l.dim),
       index: makeBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, l.indices),
       count: l.indices.length,
     };
@@ -233,10 +237,32 @@ export class SurveyCustomLayer implements CustomLayerInterface {
       corner: makeBuffer(gl, gl.ARRAY_BUFFER, c.corner),
       fill: makeBuffer(gl, gl.ARRAY_BUFFER, c.fill),
       stroke: makeBuffer(gl, gl.ARRAY_BUFFER, c.stroke),
+      sizeMul: makeBuffer(gl, gl.ARRAY_BUFFER, c.sizeMul),
+      dim: makeBuffer(gl, gl.ARRAY_BUFFER, c.dim),
       allReference: makeBuffer(gl, gl.ARRAY_BUFFER, c.allReference),
       index: makeBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, c.indices),
       count: c.indices.length,
     };
+  }
+
+  /**
+   * Re-upload ONLY the per-vertex dim buffers (line + circle) after an
+   * anchored / immovable set change, without rebuilding positions, colors, or
+   * indices. The arrays must match the currently-uploaded geometry's vertex
+   * counts (the controller recomputes them from the same SoA + exclusion), so
+   * this is the cheap path for move-tool activation vs a full geometry rebuild.
+   */
+  updateDim(lineDim: Float32Array, circleDim: Float32Array): void {
+    const gl = this.gl;
+    if (!gl || this.disabled) return;
+    if (this.lineGpu) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.lineGpu.dim);
+      gl.bufferData(gl.ARRAY_BUFFER, lineDim, gl.STATIC_DRAW);
+    }
+    if (this.circleGpu) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.circleGpu.dim);
+      gl.bufferData(gl.ARRAY_BUFFER, circleDim, gl.STATIC_DRAW);
+    }
   }
 
   render(gl: WebGLRenderingContext | WebGL2RenderingContext, options: CustomRenderMethodInput): void {
@@ -321,6 +347,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     this.bindFloat(gl, prog, 'a_side', g.side);
     this.bindColor(gl, prog, 'a_color', g.color);
     this.bindFloat(gl, prog, 'a_reference', g.reference);
+    this.bindFloat(gl, prog, 'a_dim', g.dim);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
   }
@@ -344,7 +371,9 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     this.bindVec2(gl, prog, 'a_corner', g.corner);
     this.bindColor(gl, prog, 'a_fill', g.fill);
     this.bindColor(gl, prog, 'a_stroke', g.stroke);
+    this.bindFloat(gl, prog, 'a_size_mul', g.sizeMul);
     this.bindFloat(gl, prog, 'a_all_reference', g.allReference);
+    this.bindFloat(gl, prog, 'a_dim', g.dim);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
   }
