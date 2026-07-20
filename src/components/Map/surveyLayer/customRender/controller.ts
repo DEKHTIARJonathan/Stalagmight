@@ -60,6 +60,17 @@ export interface SurveyCustomControllerOptions {
   /** Override how the fail-safe restore is deferred off the render stack.
    *  Defaults to {@link defaultScheduleRestore}; tests inject an inline runner. */
   scheduleRestore?: (fn: () => void) => void;
+  /**
+   * Re-sync the layer from CURRENT geometry, backing the runtime
+   * `__stalagmightSyncCustomRender` hook. When provided, the hook calls this
+   * instead of replaying the controller's cached `lastParams` snapshot: after a
+   * project switch the snapshot is a previous project's geometry, so replaying
+   * it strands the custom layer on stale data (fewer shots than the store).
+   * SurveyLayer supplies a resync that reads the store, so a manual re-sync
+   * always converges to the loaded project. Absent (unit tests): fall back to
+   * the cached snapshot.
+   */
+  resync?: () => void;
 }
 
 export interface CustomSyncParams {
@@ -80,6 +91,8 @@ export class SurveyCustomController {
   private lastParams: CustomSyncParams | null = null;
   private hookInstalled = false;
   private readonly scheduleRestore: (fn: () => void) => void;
+  /** Fresh-geometry re-sync backing the runtime hook; see options.resync. */
+  private readonly resync: (() => void) | undefined;
   /** Guards handleSelfDisable against re-entrancy while a restore is pending. */
   private selfDisableScheduled = false;
 
@@ -91,6 +104,7 @@ export class SurveyCustomController {
     this.map = map;
     this.layerId = layerId;
     this.scheduleRestore = opts.scheduleRestore ?? defaultScheduleRestore;
+    this.resync = opts.resync;
     this.installHook();
   }
 
@@ -257,10 +271,20 @@ export class SurveyCustomController {
 
   private installHook(): void {
     if (this.hookInstalled || typeof window === 'undefined') return;
-    (window as unknown as Record<string, unknown>)[CUSTOM_RENDER_SYNC_HOOK] = () => {
-      if (this.lastParams) this.sync(this.lastParams);
-    };
+    (window as unknown as Record<string, unknown>)[CUSTOM_RENDER_SYNC_HOOK] = () =>
+      this.runSyncHook();
     this.hookInstalled = true;
+  }
+
+  /**
+   * Body of the runtime `__stalagmightSyncCustomRender` hook. Prefer a
+   * fresh-geometry resync (SurveyLayer reads the store) so a manual re-sync
+   * after a project switch never rebuilds from a stale `lastParams` snapshot;
+   * fall back to the snapshot only when no resync was wired (unit tests).
+   */
+  private runSyncHook(): void {
+    if (this.resync) this.resync();
+    else if (this.lastParams) this.sync(this.lastParams);
   }
 
   destroy(): void {

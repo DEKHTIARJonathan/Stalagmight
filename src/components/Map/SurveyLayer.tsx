@@ -460,7 +460,9 @@ export default class SurveyLayer {
     this.initializeSources();
     this.initializeLayers();
     this.initializeEventHandlers();
-    this.customRender = new SurveyCustomController(map);
+    this.customRender = new SurveyCustomController(map, undefined, {
+      resync: () => this.resyncCustomRenderFromStore(),
+    });
   }
 
   setCallbacks(callbacks: SurveyLayerCallbacks) {
@@ -4403,6 +4405,22 @@ export default class SurveyLayer {
       stationRadiusPx: this.getStationRadius(),
       stationStrokePx: 1,
     });
+  }
+
+  /**
+   * Re-sync the custom-render prototype from CURRENT store geometry
+   * (#customRender). Backs the runtime `__stalagmightSyncCustomRender` hook: the
+   * controller's own snapshot is a previous project's geometry after a switch,
+   * so read fresh geometry here (measured fallback, like every flush) rather
+   * than replaying the stale snapshot. Falls back to the last flush's cached
+   * geometry only when the store has no active geometry (e.g. mid-close).
+   */
+  private resyncCustomRenderFromStore(): void {
+    if (!this.customRender || !hasLiveStyle(this.map)) return;
+    const surveyData =
+      selectActiveSurveyData(useProjectStore.getState(), useUIStore.getState().geometryMode) ??
+      this.cachedSurveyData;
+    if (surveyData) this.syncCustomRender(surveyData);
   }
 
   /**

@@ -219,6 +219,32 @@ describe('SurveyCustomController fail-safe visibility', () => {
     expect(removed).toEqual([CUSTOM_ID]); // torn down exactly once
   });
 
+  it('sync hook prefers a fresh-geometry resync over the stale snapshot', () => {
+    // Regression (#customRender): replaying the cached `lastParams` after a
+    // project switch stranded the custom layer on the previous project's
+    // geometry (store 502 shots, custom stuck at 420). The hook must call the
+    // injected resync (which reads current store geometry) and NOT replay.
+    const { map } = makeFakeMap();
+    const resync = vi.fn();
+    const c = new SurveyCustomController(map, undefined, { resync });
+    c.sync(makeParams()); // populates lastParams with this snapshot
+    const syncSpy = vi.spyOn(c, 'sync');
+    (c as unknown as { runSyncHook(): void }).runSyncHook();
+    expect(resync).toHaveBeenCalledOnce();
+    expect(syncSpy).not.toHaveBeenCalled();
+  });
+
+  it('sync hook falls back to the cached snapshot when no resync is wired', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    const params = makeParams();
+    c.sync(params);
+    const syncSpy = vi.spyOn(c, 'sync');
+    (c as unknown as { runSyncHook(): void }).runSyncHook();
+    expect(syncSpy).toHaveBeenCalledOnce();
+    expect(syncSpy.mock.calls[0]?.[0]).toBe(params);
+  });
+
   it('restores stock layers when the gate flips off', () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     const { map, visibility } = makeFakeMap();
