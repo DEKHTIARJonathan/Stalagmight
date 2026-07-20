@@ -48,6 +48,7 @@ import {
 import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
 import { dimmedZoomOpacity } from './surveyLayer/opacityExpressions';
+import { decideLabelBuild, skippedBuildForCamera } from './surveyLayer/labelBuildDecision';
 import { SurveyCustomController, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
 import type { SurveyData } from '../../types/survey-data';
 import type { ProjectWarning } from '../../types/commands';
@@ -4627,12 +4628,23 @@ export default class SurveyLayer {
     const zoom = hasLiveStyle(this.map) ? this.map.getZoom() : 0;
     const fitPending = useUIStore.getState().requestFitToBounds !== false;
     const cameraSettled = !hasLiveStyle(this.map) || (!this.map.isMoving() && !fitPending);
-    const buildLabels =
-      cameraSettled &&
-      (this.labelsCurrentlyBuilt
-        ? zoom >= SurveyLayer.LABEL_DROP_ZOOM
-        : zoom >= SurveyLayer.LABEL_BUILD_ZOOM);
-    if (!cameraSettled && !fitPending) this.armLabelIdleRecheck();
+    const input = {
+      currentlyBuilt: this.labelsCurrentlyBuilt,
+      zoom,
+      cameraSettled,
+      buildZoom: SurveyLayer.LABEL_BUILD_ZOOM,
+      dropZoom: SurveyLayer.LABEL_DROP_ZOOM,
+    };
+    // Already-built labels are KEPT through transient camera motion: the
+    // camera-settle guard only blocks a fresh build against a transient zoom.
+    // Tearing built labels down here would blank the whole population, because a
+    // move-commit re-flushes through the synchronous drag-commit path, which
+    // publishes empty label groups when this returns false (the "all labels
+    // flash" bug). See labelBuildDecision.ts.
+    const buildLabels = decideLabelBuild(input);
+    // Arm a settled-camera recheck only when a fresh build was skipped for camera
+    // motion (never for a pending fit — MapCanvas owns that recheck).
+    if (!fitPending && skippedBuildForCamera(input)) this.armLabelIdleRecheck();
     this.labelsCurrentlyBuilt = buildLabels && hasData;
     return buildLabels;
   }
