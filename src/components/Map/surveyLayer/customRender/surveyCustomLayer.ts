@@ -60,6 +60,7 @@ interface LineGpu {
   color: WebGLBuffer;
   reference: WebGLBuffer;
   dim: WebGLBuffer;
+  hide: WebGLBuffer;
   index: WebGLBuffer;
   count: number;
 }
@@ -71,6 +72,7 @@ interface CircleGpu {
   stroke: WebGLBuffer;
   sizeMul: WebGLBuffer;
   dim: WebGLBuffer;
+  hide: WebGLBuffer;
   allReference: WebGLBuffer;
   index: WebGLBuffer;
   count: number;
@@ -228,6 +230,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
       color: makeBuffer(gl, gl.ARRAY_BUFFER, l.color),
       reference: makeBuffer(gl, gl.ARRAY_BUFFER, l.reference),
       dim: makeBuffer(gl, gl.ARRAY_BUFFER, l.dim),
+      hide: makeBuffer(gl, gl.ARRAY_BUFFER, l.hide),
       index: makeBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, l.indices),
       count: l.indices.length,
     };
@@ -239,6 +242,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
       stroke: makeBuffer(gl, gl.ARRAY_BUFFER, c.stroke),
       sizeMul: makeBuffer(gl, gl.ARRAY_BUFFER, c.sizeMul),
       dim: makeBuffer(gl, gl.ARRAY_BUFFER, c.dim),
+      hide: makeBuffer(gl, gl.ARRAY_BUFFER, c.hide),
       allReference: makeBuffer(gl, gl.ARRAY_BUFFER, c.allReference),
       index: makeBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, c.indices),
       count: c.indices.length,
@@ -263,6 +267,75 @@ export class SurveyCustomLayer implements CustomLayerInterface {
       gl.bindBuffer(gl.ARRAY_BUFFER, this.circleGpu.dim);
       gl.bufferData(gl.ARRAY_BUFFER, circleDim, gl.STATIC_DRAW);
     }
+  }
+
+  /**
+   * Re-upload ONLY the per-vertex hide buffers (line + circle) after a drag
+   * begin / end. The cheap counterpart to a full rebuild-with-exclusion: the
+   * moving features stay in the buffers and the shader collapses the marked
+   * verts. Array lengths must match the uploaded geometry's vertex counts.
+   */
+  updateHide(lineHide: Float32Array, circleHide: Float32Array): void {
+    const gl = this.gl;
+    if (!gl || this.disabled) return;
+    if (this.lineGpu) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.lineGpu.hide);
+      gl.bufferData(gl.ARRAY_BUFFER, lineHide, gl.STATIC_DRAW);
+    }
+    if (this.circleGpu) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.circleGpu.hide);
+      gl.bufferData(gl.ARRAY_BUFFER, circleHide, gl.STATIC_DRAW);
+    }
+  }
+
+  /** `gl.bufferSubData` a `[vStart, vStart+vCount)` vertex slice of one attribute
+   *  from `src` (interleave `elemPerVertex`), reusing the WebGL2 srcOffset/length
+   *  overload so no temporary slice is allocated. */
+  private subUpload(
+    buf: WebGLBuffer,
+    src: Float32Array | Uint8Array,
+    elemPerVertex: number,
+    vStart: number,
+    vCount: number,
+  ): void {
+    const gl = this.gl!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferSubData(
+      gl.ARRAY_BUFFER,
+      vStart * elemPerVertex * src.BYTES_PER_ELEMENT,
+      src,
+      vStart * elemPerVertex,
+      vCount * elemPerVertex,
+    );
+  }
+
+  /**
+   * Re-upload the edit-mutable line attributes (positions + colors + reference)
+   * for a `[vStart, vStart+vCount)` vertex range, after the incremental edit path
+   * rewrote that range in `this.data.line`. Constant attributes (endpoint/side),
+   * the index buffer, and the separately-managed dim/hide buffers are untouched.
+   */
+  uploadLineVertexRange(vStart: number, vCount: number): void {
+    const gl = this.gl;
+    if (!gl || this.disabled || !this.lineGpu || !this.data || vCount <= 0) return;
+    const l = this.data.line;
+    this.subUpload(this.lineGpu.posA, l.posA, 2, vStart, vCount);
+    this.subUpload(this.lineGpu.posB, l.posB, 2, vStart, vCount);
+    this.subUpload(this.lineGpu.color, l.color, 4, vStart, vCount);
+    this.subUpload(this.lineGpu.reference, l.reference, 1, vStart, vCount);
+  }
+
+  /** Circle counterpart of {@link uploadLineVertexRange}: re-upload center, fill,
+   *  stroke, size multiplier, and all-reference for a vertex range. */
+  uploadCircleVertexRange(vStart: number, vCount: number): void {
+    const gl = this.gl;
+    if (!gl || this.disabled || !this.circleGpu || !this.data || vCount <= 0) return;
+    const c = this.data.circle;
+    this.subUpload(this.circleGpu.center, c.center, 2, vStart, vCount);
+    this.subUpload(this.circleGpu.fill, c.fill, 4, vStart, vCount);
+    this.subUpload(this.circleGpu.stroke, c.stroke, 4, vStart, vCount);
+    this.subUpload(this.circleGpu.sizeMul, c.sizeMul, 1, vStart, vCount);
+    this.subUpload(this.circleGpu.allReference, c.allReference, 1, vStart, vCount);
   }
 
   render(gl: WebGLRenderingContext | WebGL2RenderingContext, options: CustomRenderMethodInput): void {
@@ -348,6 +421,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     this.bindColor(gl, prog, 'a_color', g.color);
     this.bindFloat(gl, prog, 'a_reference', g.reference);
     this.bindFloat(gl, prog, 'a_dim', g.dim);
+    this.bindFloat(gl, prog, 'a_hide', g.hide);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
   }
@@ -374,6 +448,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     this.bindFloat(gl, prog, 'a_size_mul', g.sizeMul);
     this.bindFloat(gl, prog, 'a_all_reference', g.allReference);
     this.bindFloat(gl, prog, 'a_dim', g.dim);
+    this.bindFloat(gl, prog, 'a_hide', g.hide);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
   }

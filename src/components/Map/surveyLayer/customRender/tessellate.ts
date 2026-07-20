@@ -26,6 +26,7 @@
 import type { GpsOrigin } from '../../../../types/config';
 import {
   type SurveyData,
+  type SectionMetadata,
   SHOT_FLAG_IS_REFERENCE,
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../../../../types/survey-data';
@@ -60,8 +61,21 @@ export interface LineBuffers {
    *  case, matching the stock `case immovable 0.25, anchored 0.25, reference
    *  0.5, 1` order. Rewritten in place on an anchored/immovable set change. */
   dim: Float32Array;
+  /** Per-vertex hide flag (1 = collapse the vertex to a clipped point, drawing
+   *  nothing). Mirrors the drag-exclusion the stock bulk layers apply via
+   *  setFilter during a move: instead of omitting the moving features from the
+   *  buffers (a full rebuild), the drag-begin path recomputes just this array
+   *  and re-uploads it, and drag-end zeroes it. All 4 verts of a segment share
+   *  the flag so both triangles degenerate together. */
+  hide: Float32Array;
   /** Two triangles per segment, `segmentCount*6`, `UNSIGNED_INT`. */
   indices: Uint32Array;
+  /** Per-section `[segStart, segCount]` pairs (`sections.length * 2`), in
+   *  section declaration order. `segStart` is the first drawn segment index for
+   *  the section; `segCount` the number of valid (drawn) segments. Lets the
+   *  incremental edit path re-emit only a changed section's contiguous vertex
+   *  range instead of the whole buffer. CPU-only metadata, not uploaded. */
+  sectionRanges: Uint32Array;
   /** Total attribute + index bytes (for cost logging). */
   byteLength: number;
 }
@@ -88,6 +102,10 @@ export interface CircleBuffers {
    *  opacity 0.25 cases (move-segment / move-station tools). Rewritten in place
    *  on an anchored/immovable set change. */
   dim: Float32Array;
+  /** Per-vertex hide flag (1 = collapse the station quad to a clipped point).
+   *  Circle counterpart of {@link LineBuffers.hide}: the drag-begin path marks a
+   *  moving station hidden without omitting it from the buffers. */
+  hide: Float32Array;
   /** Per-vertex all-reference flag (1 = every shot touching this station is a
    *  reference shot, else 0). Mirrors the stock stations layer's
    *  `allShotsReference` property: the shader collapses these stations when
@@ -231,6 +249,96 @@ export function countValidShots(
  * natively, with no gradient sub-segments. Absent -> the flat, whole-segment
  * `colorForShot` path (byte-identical to the previous behavior).
  */
+// Per-segment vertex template: [endpoint, side] for the 4 corners.
+// v0 A-left, v1 A-right, v2 B-left, v3 B-right.
+const LINE_EP = [0, 0, 1, 1];
+const LINE_SIDE = [-1, 1, -1, 1];
+
+/**
+ * Optional per-shot resolvers/predicates a section emit reads. Bundled so the
+ * full build and the incremental section recompute pass the identical set (a
+ * prerequisite for the byte-identical incremental guarantee).
+ */
+export interface LineSectionInputs {
+  colorForShot: (globalShotIdx: number, sectionId: number) => Rgba8;
+  colorForShotEndpoints?: ((globalShotIdx: number, sectionId: number) => readonly [Rgba8, Rgba8]) | undefined;
+  dimForShot?: ((globalShotIdx: number, sectionId: number) => boolean) | undefined;
+  hideForShot?: ((globalShotIdx: number, sectionId: number) => boolean) | undefined;
+}
+
+/**
+ * Emit one section's valid shots into `b`, starting at drawn-segment `startSeg`,
+ * returning the next free segment index. The single writer used by BOTH the full
+ * build (looping every section) and the incremental recompute (re-emitting one
+ * changed section into its stored range), so a section rebuilt incrementally is
+ * byte-for-byte identical to the same section in a full rebuild. `exShots` skips
+ * individually-excluded shots (build-time exclusion path only; the live drag
+ * path leaves it undefined and hides via {@link LineBuffers.hide}).
+ */
+function emitLineSection(
+  b: LineBuffers,
+  section: SectionMetadata,
+  startSeg: number,
+  data: SurveyData,
+  stationRel: StationRel,
+  lookup: Map<number, Map<number, number>>,
+  inputs: LineSectionInputs,
+  exShots: ReadonlySet<number> | undefined,
+): number {
+  const inner = lookup.get(section.id);
+  if (!inner) return startSeg;
+  const { posA, posB, endpoint, side, color, reference, dim, hide, indices } = b;
+  const { colorForShot, colorForShotEndpoints, dimForShot, hideForShot } = inputs;
+  let seg = startSeg;
+  for (let i = 0; i < section.shotCount; i++) {
+    const shotGlobalIdx = section.shotOffset + i;
+    if (exShots?.has(shotGlobalIdx)) continue;
+    const fromGlobal = inner.get(i);
+    const toGlobal = inner.get(i + 1);
+    if (fromGlobal === undefined || toGlobal === undefined) continue;
+    // Per-endpoint colors (depth gradient) win; else the flat segment color at
+    // both ends. `LINE_EP[c]` selects the A (0) or B (1) color per vertex.
+    const ends = colorForShotEndpoints?.(shotGlobalIdx, section.id);
+    const colA = ends ? ends[0] : colorForShot(shotGlobalIdx, section.id);
+    const colB = ends ? ends[1] : colA;
+    const isRef = (data.shotFlags[shotGlobalIdx]! & SHOT_FLAG_IS_REFERENCE) !== 0 ? 1 : 0;
+    const isDim = dimForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
+    const isHide = hideForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
+    const ax = stationRel[fromGlobal * 2]!;
+    const ay = stationRel[fromGlobal * 2 + 1]!;
+    const bx = stationRel[toGlobal * 2]!;
+    const by = stationRel[toGlobal * 2 + 1]!;
+
+    const base = seg * 4;
+    for (let c = 0; c < 4; c++) {
+      const v = base + c;
+      posA[v * 2] = ax;
+      posA[v * 2 + 1] = ay;
+      posB[v * 2] = bx;
+      posB[v * 2 + 1] = by;
+      endpoint[v] = LINE_EP[c]!;
+      side[v] = LINE_SIDE[c]!;
+      const [r, g, b, a] = LINE_EP[c] === 0 ? colA : colB;
+      color[v * 4] = r;
+      color[v * 4 + 1] = g;
+      color[v * 4 + 2] = b;
+      color[v * 4 + 3] = a;
+      reference[v] = isRef;
+      dim[v] = isDim;
+      hide[v] = isHide;
+    }
+    const io = seg * 6;
+    indices[io] = base;
+    indices[io + 1] = base + 1;
+    indices[io + 2] = base + 2;
+    indices[io + 3] = base + 2;
+    indices[io + 4] = base + 1;
+    indices[io + 5] = base + 3;
+    seg++;
+  }
+  return seg;
+}
+
 export function buildLineBuffers(
   data: SurveyData,
   stationRel: StationRel,
@@ -239,6 +347,7 @@ export function buildLineBuffers(
   exclude?: CustomRenderExclusion,
   colorForShotEndpoints?: (globalShotIdx: number, sectionId: number) => readonly [Rgba8, Rgba8],
   dimForShot?: (globalShotIdx: number, sectionId: number) => boolean,
+  hideForShot?: (globalShotIdx: number, sectionId: number) => boolean,
 ): LineBuffers {
   const exSections = exclude?.sectionIds;
   const exShots = exclude?.shotGlobalIndices;
@@ -251,71 +360,54 @@ export function buildLineBuffers(
   const color = new Uint8Array(vertexCount * 4);
   const reference = new Float32Array(vertexCount);
   const dim = new Float32Array(vertexCount);
+  const hide = new Float32Array(vertexCount);
   const indices = new Uint32Array(segmentCount * 6);
-
-  // Per-segment vertex template: [endpoint, side] for the 4 corners.
-  // v0 A-left, v1 A-right, v2 B-left, v3 B-right.
-  const EP = [0, 0, 1, 1];
-  const SIDE = [-1, 1, -1, 1];
-
-  let seg = 0;
-  for (const section of data.sections) {
-    if (exSections?.has(section.id)) continue;
-    const inner = lookup.get(section.id);
-    if (!inner) continue;
-    for (let i = 0; i < section.shotCount; i++) {
-      const shotGlobalIdx = section.shotOffset + i;
-      if (exShots?.has(shotGlobalIdx)) continue;
-      const fromGlobal = inner.get(i);
-      const toGlobal = inner.get(i + 1);
-      if (fromGlobal === undefined || toGlobal === undefined) continue;
-      // Per-endpoint colors (depth gradient) win; else the flat segment color
-      // at both ends. `EP[c]` selects the A (0) or B (1) color per vertex.
-      const ends = colorForShotEndpoints?.(shotGlobalIdx, section.id);
-      const colA = ends ? ends[0] : colorForShot(shotGlobalIdx, section.id);
-      const colB = ends ? ends[1] : colA;
-      const isRef =
-        (data.shotFlags[shotGlobalIdx]! & SHOT_FLAG_IS_REFERENCE) !== 0 ? 1 : 0;
-      const isDim = dimForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
-      const ax = stationRel[fromGlobal * 2]!;
-      const ay = stationRel[fromGlobal * 2 + 1]!;
-      const bx = stationRel[toGlobal * 2]!;
-      const by = stationRel[toGlobal * 2 + 1]!;
-
-      const base = seg * 4;
-      for (let c = 0; c < 4; c++) {
-        const v = base + c;
-        posA[v * 2] = ax;
-        posA[v * 2 + 1] = ay;
-        posB[v * 2] = bx;
-        posB[v * 2 + 1] = by;
-        endpoint[v] = EP[c]!;
-        side[v] = SIDE[c]!;
-        const [r, g, b, a] = EP[c] === 0 ? colA : colB;
-        color[v * 4] = r;
-        color[v * 4 + 1] = g;
-        color[v * 4 + 2] = b;
-        color[v * 4 + 3] = a;
-        reference[v] = isRef;
-        dim[v] = isDim;
-      }
-      const io = seg * 6;
-      indices[io] = base;
-      indices[io + 1] = base + 1;
-      indices[io + 2] = base + 2;
-      indices[io + 3] = base + 2;
-      indices[io + 4] = base + 1;
-      indices[io + 5] = base + 3;
-      seg++;
-    }
-  }
-
+  const sectionRanges = new Uint32Array(data.sections.length * 2);
   const byteLength =
     posA.byteLength + posB.byteLength + endpoint.byteLength + side.byteLength +
-    color.byteLength + reference.byteLength + dim.byteLength + indices.byteLength;
-  return {
-    segmentCount, vertexCount, posA, posB, endpoint, side, color, reference, dim, indices, byteLength,
+    color.byteLength + reference.byteLength + dim.byteLength + hide.byteLength + indices.byteLength;
+  const b: LineBuffers = {
+    segmentCount, vertexCount, posA, posB, endpoint, side, color, reference, dim, hide,
+    indices, sectionRanges, byteLength,
   };
+
+  const inputs: LineSectionInputs = { colorForShot, colorForShotEndpoints, dimForShot, hideForShot };
+  let seg = 0;
+  for (let si = 0; si < data.sections.length; si++) {
+    const section = data.sections[si]!;
+    const segStart = seg;
+    // A section-level exclusion drops the whole section (segCount 0); otherwise
+    // emit its valid shots. The range map is recorded either way so the
+    // incremental path can address every section by index.
+    if (!exSections?.has(section.id)) {
+      seg = emitLineSection(b, section, seg, data, stationRel, lookup, inputs, exShots);
+    }
+    sectionRanges[si * 2] = segStart;
+    sectionRanges[si * 2 + 1] = seg - segStart;
+  }
+  return b;
+}
+
+/**
+ * Re-emit ONE section's line vertices in place (incremental edit path). The
+ * section's drawn-segment range is stable (unchanged SoA layout is the caller's
+ * precondition), so this rewrites exactly the slots {@link buildLineBuffers}
+ * wrote for that section — positions, colors, reference/dim/hide flags — leaving
+ * every other section's bytes untouched. Never called with a build-time
+ * exclusion (the live path hides via the per-vertex flag), so `exShots` is
+ * omitted and the re-emit stays in lock-step with the stored range.
+ */
+export function recomputeLineSection(
+  b: LineBuffers,
+  sectionIndex: number,
+  data: SurveyData,
+  stationRel: StationRel,
+  lookup: Map<number, Map<number, number>>,
+  inputs: LineSectionInputs,
+): void {
+  const section = data.sections[sectionIndex]!;
+  const startSeg = b.sectionRanges[sectionIndex * 2]!;
+  emitLineSection(b, section, startSeg, data, stationRel, lookup, inputs, undefined);
 }
 
 /**
@@ -354,6 +446,74 @@ export function computeLineDim(
   return dim;
 }
 
+// Unit corners: v0 bottom-left, v1 bottom-right, v2 top-right, v3 top-left.
+const CIRCLE_CX = [-1, 1, 1, -1];
+const CIRCLE_CY = [-1, -1, 1, 1];
+
+/** Optional per-station resolvers/predicates one station emit reads. */
+export interface CircleStationInputs {
+  fillForStation: (globalIdx: number) => Rgba8;
+  strokeForStation: (globalIdx: number) => Rgba8;
+  dimForStation?: ((globalIdx: number) => boolean) | undefined;
+  hideForStation?: ((globalIdx: number) => boolean) | undefined;
+}
+
+/**
+ * Emit one station's quad (4 verts + 6 indices) into `b` at output slot `out`,
+ * reading its center/color/size/flags for global station index `g`. The single
+ * writer shared by the full build and the incremental station recompute. In the
+ * live (unexcluded) path `out === g`, so a station's vertices are always at
+ * `[4g, 4g+4)` — the property the incremental path relies on to address a
+ * changed station without a compaction map.
+ */
+function emitStation(
+  b: CircleBuffers,
+  out: number,
+  g: number,
+  data: SurveyData,
+  stationRel: StationRel,
+  inputs: CircleStationInputs,
+  allRef: number,
+): void {
+  const { center, corner, fill, stroke, sizeMul, dim, hide, allReference, indices } = b;
+  const { fillForStation, strokeForStation, dimForStation, hideForStation } = inputs;
+  const cx = stationRel[g * 2]!;
+  const cy = stationRel[g * 2 + 1]!;
+  const [fr, fg, fb, fa] = fillForStation(g);
+  const [sr, sg, sb, sa] = strokeForStation(g);
+  // Zero-datum stations render at 2x radius + 2x stroke (stock parity).
+  const sm = (data.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0 ? 2 : 1;
+  const dm = dimForStation?.(g) === true ? 1 : 0;
+  const hd = hideForStation?.(g) === true ? 1 : 0;
+  const base = out * 4;
+  for (let c = 0; c < 4; c++) {
+    const v = base + c;
+    center[v * 2] = cx;
+    center[v * 2 + 1] = cy;
+    corner[v * 2] = CIRCLE_CX[c]!;
+    corner[v * 2 + 1] = CIRCLE_CY[c]!;
+    fill[v * 4] = fr;
+    fill[v * 4 + 1] = fg;
+    fill[v * 4 + 2] = fb;
+    fill[v * 4 + 3] = fa;
+    stroke[v * 4] = sr;
+    stroke[v * 4 + 1] = sg;
+    stroke[v * 4 + 2] = sb;
+    stroke[v * 4 + 3] = sa;
+    sizeMul[v] = sm;
+    dim[v] = dm;
+    hide[v] = hd;
+    allReference[v] = allRef;
+  }
+  const io = out * 6;
+  indices[io] = base;
+  indices[io + 1] = base + 1;
+  indices[io + 2] = base + 2;
+  indices[io + 3] = base;
+  indices[io + 4] = base + 2;
+  indices[io + 5] = base + 3;
+}
+
 /**
  * Build the per-station quad buffers for station discs. Each station becomes 4
  * corner vertices and 6 indices. `fillForStation` / `strokeForStation` resolve
@@ -367,6 +527,7 @@ export function buildCircleBuffers(
   exclude?: CustomRenderExclusion,
   allReferenceFlags?: Float32Array,
   dimForStation?: (globalIdx: number) => boolean,
+  hideForStation?: (globalIdx: number) => boolean,
 ): CircleBuffers {
   const exSections = exclude?.sectionIds;
   const exStations = exclude?.stationGlobalIndices;
@@ -387,59 +548,69 @@ export function buildCircleBuffers(
   const stroke = new Uint8Array(vertexCount * 4);
   const sizeMul = new Float32Array(vertexCount);
   const dim = new Float32Array(vertexCount);
+  const hide = new Float32Array(vertexCount);
   const allReference = new Float32Array(vertexCount);
   const indices = new Uint32Array(stationCount * 6);
+  const byteLength =
+    center.byteLength + corner.byteLength + fill.byteLength + stroke.byteLength +
+    sizeMul.byteLength + dim.byteLength + hide.byteLength + allReference.byteLength + indices.byteLength;
+  const b: CircleBuffers = {
+    stationCount, vertexCount, center, corner, fill, stroke, sizeMul, dim, hide, allReference,
+    indices, byteLength,
+  };
 
-  // Unit corners: v0 bottom-left, v1 bottom-right, v2 top-right, v3 top-left.
-  const CX = [-1, 1, 1, -1];
-  const CY = [-1, -1, 1, 1];
-
+  const inputs: CircleStationInputs = { fillForStation, strokeForStation, dimForStation, hideForStation };
   let out = 0;
   for (let g = 0; g < data.stationCount; g++) {
     if (skip(g)) continue;
-    const cx = stationRel[g * 2]!;
-    const cy = stationRel[g * 2 + 1]!;
-    const [fr, fg, fb, fa] = fillForStation(g);
-    const [sr, sg, sb, sa] = strokeForStation(g);
-    const allRef = allReferenceFlags ? allReferenceFlags[g]! : 0;
-    // Zero-datum stations render at 2x radius + 2x stroke (stock parity).
-    const sm = (data.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0 ? 2 : 1;
-    const dm = dimForStation?.(g) === true ? 1 : 0;
-    const base = out * 4;
-    for (let c = 0; c < 4; c++) {
-      const v = base + c;
-      center[v * 2] = cx;
-      center[v * 2 + 1] = cy;
-      corner[v * 2] = CX[c]!;
-      corner[v * 2 + 1] = CY[c]!;
-      fill[v * 4] = fr;
-      fill[v * 4 + 1] = fg;
-      fill[v * 4 + 2] = fb;
-      fill[v * 4 + 3] = fa;
-      stroke[v * 4] = sr;
-      stroke[v * 4 + 1] = sg;
-      stroke[v * 4 + 2] = sb;
-      stroke[v * 4 + 3] = sa;
-      sizeMul[v] = sm;
-      dim[v] = dm;
-      allReference[v] = allRef;
-    }
-    const io = out * 6;
-    indices[io] = base;
-    indices[io + 1] = base + 1;
-    indices[io + 2] = base + 2;
-    indices[io + 3] = base;
-    indices[io + 4] = base + 2;
-    indices[io + 5] = base + 3;
+    emitStation(b, out, g, data, stationRel, inputs, allReferenceFlags ? allReferenceFlags[g]! : 0);
     out++;
   }
+  return b;
+}
 
-  const byteLength =
-    center.byteLength + corner.byteLength + fill.byteLength + stroke.byteLength +
-    sizeMul.byteLength + dim.byteLength + allReference.byteLength + indices.byteLength;
-  return {
-    stationCount, vertexCount, center, corner, fill, stroke, sizeMul, dim, allReference, indices, byteLength,
-  };
+/**
+ * Re-emit ONE station's circle vertices in place (incremental edit path). Valid
+ * only for the unexcluded (live) build where output slot equals global index, so
+ * the station occupies `[4g, 4g+4)`. `allRef` is the station's current
+ * all-reference flag (the caller recomputes it per changed section).
+ */
+export function recomputeStation(
+  b: CircleBuffers,
+  g: number,
+  data: SurveyData,
+  stationRel: StationRel,
+  inputs: CircleStationInputs,
+  allRef: number,
+): void {
+  emitStation(b, g, g, data, stationRel, inputs, allRef);
+}
+
+/**
+ * Reset one section's stations' all-reference flags in `allRef` (in place),
+ * replaying {@link computeStationAllReference}'s per-section clear so the result
+ * for those stations is identical to a global recompute. Used by the incremental
+ * path when a section's shot reference flags change; `allRef[g]` depends only on
+ * `g`'s own section's shots, so a scoped reset is exact.
+ */
+export function recomputeSectionAllReference(
+  data: SurveyData,
+  lookup: Map<number, Map<number, number>>,
+  section: SectionMetadata,
+  allRef: Float32Array,
+): void {
+  const inner = lookup.get(section.id);
+  if (!inner) return;
+  for (const g of inner.values()) allRef[g] = 1;
+  for (let i = 0; i < section.shotCount; i++) {
+    const fromGlobal = inner.get(i);
+    const toGlobal = inner.get(i + 1);
+    if (fromGlobal === undefined || toGlobal === undefined) continue;
+    const isReference = (data.shotFlags[section.shotOffset + i]! & SHOT_FLAG_IS_REFERENCE) !== 0;
+    if (isReference) continue;
+    allRef[fromGlobal] = 0;
+    allRef[toGlobal] = 0;
+  }
 }
 
 /**

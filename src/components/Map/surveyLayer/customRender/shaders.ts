@@ -35,9 +35,20 @@ in float a_side;
 in vec4 a_color;
 in float a_reference;
 in float a_dim;
+in float a_hide;
 out vec4 v_color;
 out float v_edge;
 void main() {
+  // Drag-hidden shots (a moving feature excluded during a move drag): collapse
+  // the whole quad to a single clipped point. All 4 verts of a segment share
+  // a_hide, so both triangles degenerate together. Mirrors the stock bulk
+  // layers' setFilter exclusion without omitting the shot from the buffers.
+  if (a_hide > 0.5) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    v_color = vec4(0.0);
+    v_edge = 0.0;
+    return;
+  }
   // Reference shots hidden (setShowReferenceShots(false)): collapse the whole
   // quad to a single clipped point so it produces no fragments. All 4 vertices
   // of a segment share a_reference, so both triangles degenerate together.
@@ -98,12 +109,24 @@ in vec4 a_stroke;
 in float a_all_reference;
 in float a_size_mul;
 in float a_dim;
+in float a_hide;
 out vec4 v_fill;
 out vec4 v_stroke;
 out vec2 v_offset;
 out float v_size_mul;
 out float v_dim;
 void main() {
+  // Drag-hidden stations (moving during a move drag): collapse the quad to a
+  // single clipped point, without omitting the station from the buffers.
+  if (a_hide > 0.5) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    v_fill = vec4(0.0);
+    v_stroke = vec4(0.0);
+    v_offset = vec2(0.0);
+    v_size_mul = 1.0;
+    v_dim = 0.0;
+    return;
+  }
   // All-reference stations hidden with reference shots (matches the stock
   // stations layer's not-allShotsReference filter): collapse the quad to a
   // single clipped point.

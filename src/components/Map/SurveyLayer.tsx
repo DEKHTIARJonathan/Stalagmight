@@ -308,12 +308,6 @@ export default class SurveyLayer {
   private dragMovingStationKeys = new Set<string>();
   private dragMovingShots = new Map<string, MovingEnd>();
   private dragOverlayOffset: { dx: number; dy: number } | null = null;
-  /** Which features the custom-render layer must skip for the active drag, so
-   *  its GPU buffers hide the originals exactly as the stock bulk layers' filters
-   *  do (the custom layer ignores MapLibre filters). Set by the drag-begin paths,
-   *  cleared by endDragPreview; folded into every syncCustomRender so mid-drag
-   *  flushes keep the originals hidden. Null off the hot path. */
-  private dragExclusion: CustomRenderExclusion | null = null;
 
   // Visibility state (for hidden feature detection)
   private stationsVisible: boolean = true;
@@ -4244,13 +4238,12 @@ export default class SurveyLayer {
   }
 
   /** Point the custom-render layer at (or off, with null) the active drag's
-   *  hidden feature set and rebuild its GPU buffers now, so the originals vanish
-   *  at drag begin and reappear at drag end — matching the stock bulk layers'
-   *  setFilter exclusions the custom layer cannot see. No-op unless the custom
-   *  render gate is on (resync -> sync early-returns without building). */
+   *  hidden feature set, so the originals vanish at drag begin and reappear at
+   *  drag end — matching the stock bulk layers' setFilter exclusions the custom
+   *  layer cannot see. Cheap: recomputes + re-uploads only the per-vertex hide
+   *  flag (no buffer rebuild). No-op unless the custom render gate is on. */
   private setDragExclusion(exclusion: CustomRenderExclusion | null): void {
-    this.dragExclusion = exclusion;
-    this.resyncCustomRenderFromStore();
+    this.customRender?.setDragHide(exclusion);
   }
 
   /** Schedule a coalesced preview render at `[dx, dy]`; latest offset wins, one
@@ -4475,7 +4468,6 @@ export default class SurveyLayer {
       shotWidthPx: this.getShotWidth(),
       stationRadiusPx: this.getStationRadius(),
       stationStrokePx: 1,
-      exclude: this.dragExclusion ?? undefined,
     });
   }
 

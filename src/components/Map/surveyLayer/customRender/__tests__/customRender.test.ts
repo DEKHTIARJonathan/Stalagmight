@@ -671,6 +671,111 @@ describe('SurveyCustomLayer first-frames GL-error probe', () => {
   });
 });
 
+describe('per-section line range map', () => {
+  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+
+  it('records [segStart, segCount] per section in declaration order', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildLineBuffers(d, rel, lookup, stubColor);
+    // Section 1 owns the 2 valid shots (segments 0,1); section 2's only shot is
+    // invalid, so it contributes 0 segments starting after section 1.
+    expect(Array.from(b.sectionRanges)).toEqual([0, 2, 2, 0]);
+  });
+
+  it('tracks ranges under a single-shot exclusion (compacted)', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildLineBuffers(d, rel, lookup, stubColor, { shotGlobalIndices: new Set([0]) });
+    // Shot 0 excluded -> section 1 keeps 1 segment (shot 1); section 2 still 0.
+    expect(Array.from(b.sectionRanges)).toEqual([0, 1, 1, 0]);
+  });
+
+  it('a fully excluded section has a zero-count range', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildLineBuffers(d, rel, lookup, stubColor, { sectionIds: new Set([1]) });
+    expect(Array.from(b.sectionRanges)).toEqual([0, 0, 0, 0]);
+  });
+});
+
+describe('drag hide flag (per-vertex, no rebuild)', () => {
+  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+  const fill = (g: number): Rgba8 => [g, 0, 0, 255];
+  const stroke = (_g: number): Rgba8 => [9, 9, 9, 255];
+
+  it('buildLineBuffers marks all 4 verts of a hidden shot, 0 otherwise', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildLineBuffers(d, rel, lookup, stubColor, undefined, undefined, undefined, (sgi) => sgi === 0);
+    expect(Array.from(b.hide.slice(0, 4))).toEqual([1, 1, 1, 1]);
+    expect(Array.from(b.hide.slice(4, 8))).toEqual([0, 0, 0, 0]);
+  });
+
+  it('buildCircleBuffers marks all 4 verts of a hidden station, 0 otherwise', () => {
+    const d = makeFixture();
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildCircleBuffers(d, rel, fill, stroke, undefined, undefined, undefined, (g) => g === 2);
+    for (let c = 0; c < 4; c++) expect(b.hide[2 * 4 + c]).toBe(1);
+    for (const g of [0, 1, 3]) for (let c = 0; c < 4; c++) expect(b.hide[g * 4 + c]).toBe(0);
+  });
+
+  it('hide defaults to 0 for every vertex when no predicate is passed', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const line = buildLineBuffers(d, rel, lookup, stubColor);
+    const circle = buildCircleBuffers(d, rel, fill, stroke);
+    expect(Array.from(line.hide)).toEqual(new Array(line.vertexCount).fill(0));
+    expect(Array.from(circle.hide)).toEqual(new Array(circle.vertexCount).fill(0));
+  });
+
+  it('computeLineDim / computeCircleDim double as the hide-flag builders', () => {
+    // The controller reuses these to recompute ONLY the hide arrays on drag
+    // begin/end; the flag they produce must match the build path's inline hide.
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const hideForShot = (sgi: number): boolean => sgi === 1;
+    const hideForStation = (g: number): boolean => g === 0 || g === 3;
+    const line = buildLineBuffers(d, rel, lookup, stubColor, undefined, undefined, undefined, hideForShot);
+    const circle = buildCircleBuffers(d, rel, fill, stroke, undefined, undefined, undefined, hideForStation);
+    expect(Array.from(computeLineDim(d, lookup, hideForShot))).toEqual(Array.from(line.hide));
+    expect(Array.from(computeCircleDim(d, hideForStation))).toEqual(Array.from(circle.hide));
+  });
+
+  it('the shaders collapse a hidden vertex to a clipped point', () => {
+    expect(LINE_VERTEX_SRC).toContain('if (a_hide > 0.5) {');
+    expect(LINE_VERTEX_SRC).toContain('in float a_hide;');
+    expect(CIRCLE_VERTEX_SRC).toContain('if (a_hide > 0.5) {');
+    expect(CIRCLE_VERTEX_SRC).toContain('in float a_hide;');
+  });
+
+  it('a full build + hide flag draws the same geometry as an exclusion rebuild', () => {
+    // Drag-begin marks moving features hidden WITHOUT omitting them; the drawn
+    // (non-hidden) verts must match what the old exclusion-rebuild produced.
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const hidden = new Set([0]); // hide shot global 0
+    const full = buildLineBuffers(d, rel, lookup, stubColor, undefined, undefined, undefined, (sgi) =>
+      hidden.has(sgi),
+    );
+    const excluded = buildLineBuffers(d, rel, lookup, stubColor, { shotGlobalIndices: hidden });
+    // The hidden segment (0) collapses; the surviving segment (1, verts 4..7) in
+    // the full+hide build equals the excluded build's only segment (verts 0..3).
+    expect(Array.from(full.hide.slice(0, 4))).toEqual([1, 1, 1, 1]);
+    expect(Array.from(full.hide.slice(4, 8))).toEqual([0, 0, 0, 0]);
+    expect(excluded.segmentCount).toBe(1);
+    expect(Array.from(full.posA.slice(8, 16))).toEqual(Array.from(excluded.posA.slice(0, 8)));
+    expect(Array.from(full.color.slice(16, 32))).toEqual(Array.from(excluded.color.slice(0, 16)));
+  });
+});
+
 // colorCtxNoop referenced to keep the fixture's intent explicit for future
 // color-mode tests; the resolvers are exercised via the controller elsewhere.
 void colorCtxNoop;

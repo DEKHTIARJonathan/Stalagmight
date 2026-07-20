@@ -20,18 +20,12 @@
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import type { GpsOrigin } from '../../../../types/config';
-import type { SurveyData, SectionMetadata } from '../../../../types/survey-data';
-import { STATION_FLAG_IS_ZERO_DATUM } from '../../../../types/survey-data';
+import type { SurveyData } from '../../../../types/survey-data';
+import { metersToMapCoords } from '../../../../utils/coordinates';
 import { debugLog } from '../../../../utils/debugLog';
 import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
-import {
-  resolveShotDisplayColor,
-  resolveShotEndpointColors,
-  resolveStationDisplayColor,
-  resolveStationStrokeColor,
-  type DisplayColorContext,
-} from '../features';
-import { packCssColor, type Rgba8 } from './colorPack';
+import type { DisplayColorContext } from '../features';
+import { lngLatToMercator } from '../vectorTileData';
 import { computeMercatorAnchor } from './mercator';
 import {
   buildStationLookup,
@@ -41,8 +35,16 @@ import {
   buildCircleBuffers,
   computeLineDim,
   computeCircleDim,
+  recomputeLineSection,
+  recomputeStation,
+  recomputeSectionAllReference,
+  type StationRel,
   type CustomRenderExclusion,
+  type LineSectionInputs,
+  type CircleStationInputs,
 } from './tessellate';
+import { makeColorResolvers } from './colorResolvers';
+import { planIncrementalUpdate, coalesceVertexRuns } from './incremental';
 import { SurveyCustomLayer, type CustomRenderData } from './surveyCustomLayer';
 import {
   readCustomRenderGate,
@@ -117,6 +119,9 @@ const EMPTY_DIM: CustomDimState = {
   immovableShotFeatureIds: new Set<number>(),
 };
 
+/** No features hidden (drag inactive): the zero-cost default for the hide flag. */
+const EMPTY_EXCLUSION: CustomRenderExclusion = {};
+
 export class SurveyCustomController {
   private readonly map: MaplibreMap;
   private readonly layerId: string;
@@ -137,12 +142,20 @@ export class SurveyCustomController {
   private referenceShotsVisible = true;
   /** Anchored / immovable dim set applied to every build; survives re-enable. */
   private dimState: CustomDimState = EMPTY_DIM;
-  /** Cached build products backing the cheap dim-only refresh (setDimming):
-   *  the last CustomRenderData (its dim arrays are rewritten in place) plus the
-   *  station lookup + survey the line-dim recompute needs. */
+  /** Features hidden for the active move drag (drag begin/end). Applied as the
+   *  per-vertex hide flag over the FULL buffers instead of omitting features (a
+   *  rebuild), and re-applied on every build so a mid-drag flush stays hidden. */
+  private hideState: CustomRenderExclusion = EMPTY_EXCLUSION;
+  /** Cached build products backing the cheap dim-only refresh (setDimming),
+   *  the drag hide refresh (setDragHide), and the incremental edit path: the
+   *  last CustomRenderData (its per-vertex arrays are rewritten in place) plus
+   *  the station lookup / anchor-relative positions / all-reference flags /
+   *  survey the recomputes need. */
   private lastData: CustomRenderData | null = null;
   private lastLookup: Map<number, Map<number, number>> | null = null;
   private lastSurveyData: SurveyData | null = null;
+  private lastStationRel: StationRel | null = null;
+  private lastAllReference: Float32Array | null = null;
 
   constructor(
     map: MaplibreMap,
@@ -158,12 +171,16 @@ export class SurveyCustomController {
 
   /** Re-evaluate the gate and apply/refresh or tear down the custom layer. */
   sync(params: CustomSyncParams): void {
+    const prevParams = this.lastParams;
     this.lastParams = params;
     const enabled = readCustomRenderGate();
     if (!enabled) {
       if (this.active) this.disable();
       return;
     }
+    // Fast path: an edit that left the SoA layout unchanged only moved / recolored
+    // a few sections. Re-emit + sub-upload just those instead of a full rebuild.
+    if (this.active && this.layer && prevParams && this.tryIncremental(prevParams, params)) return;
     const data = this.build(params);
     if (!this.active) this.enable(data);
     else this.layer?.update(data);
@@ -280,6 +297,22 @@ export class SurveyCustomController {
     }
   }
 
+  /** DEVICE-pixel style sizes for a params set (mirror the stock visual weights).
+   *  Shared by build() and the incremental path so a size-only change (no vertex
+   *  edit) still reaches the shader uniforms. */
+  private sizeFields(params: CustomSyncParams): Pick<
+    CustomRenderData,
+    'lineHalfWidthPx' | 'circleRadiusPx' | 'circleStrokePx' | 'aaPx'
+  > {
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    return {
+      lineHalfWidthPx: (params.shotWidthPx / 2) * dpr,
+      circleRadiusPx: params.stationRadiusPx * dpr,
+      circleStrokePx: params.stationStrokePx * dpr,
+      aaPx: dpr,
+    };
+  }
+
   /** Build the GPU-ready buffers from SoA, resolving colors + anchor. */
   private build(params: CustomSyncParams): CustomRenderData {
     const t0 = performance.now();
@@ -287,75 +320,23 @@ export class SurveyCustomController {
     const [anchorX, anchorY] = computeMercatorAnchor(surveyData, gpsOrigin);
     const stationRel = projectStationsRel(surveyData, gpsOrigin, anchorX, anchorY);
     const lookup = buildStationLookup(surveyData);
-
-    const sectionById = new Map<number, SectionMetadata>();
-    for (const s of surveyData.sections) sectionById.set(s.id, s);
-    const stationDefault = colorCtx.themeColors.stationDefault;
-
-    // Small append cache: the palette of distinct colors is tiny vs the vertex
-    // count, so parse each CSS color once.
-    const packCache = new Map<string, Rgba8>();
-    const pack = (css: string): Rgba8 => {
-      let v = packCache.get(css);
-      if (!v) {
-        v = packCssColor(css);
-        packCache.set(css, v);
-      }
-      return v;
-    };
-
-    const colorForShot = (shotGlobalIdx: number, sectionId: number): Rgba8 => {
-      const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
-      return pack(resolveShotDisplayColor(surveyData, sectionColor, shotGlobalIdx, colorCtx));
-    };
-    // Depth mode only: per-endpoint colors so the GPU interpolates the shot's
-    // depth ramp natively (the stock survey-shot-gradients equivalent). In
-    // section-color / severity mode this resolver is not passed, so lines stay
-    // flat and byte-identical to before.
-    const colorForShotEndpoints = (
-      shotGlobalIdx: number,
-      sectionId: number,
-    ): readonly [Rgba8, Rgba8] => {
-      const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
-      const [from, to] = resolveShotEndpointColors(surveyData, sectionColor, shotGlobalIdx, colorCtx);
-      return [pack(from), pack(to)];
-    };
-    const fillForStation = (g: number): Rgba8 => {
-      const sectionId = surveyData.stationSectionIds[g]!;
-      const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
-      return pack(resolveStationDisplayColor(surveyData, sectionColor, g, colorCtx));
-    };
-    const strokeForStation = (g: number): Rgba8 => {
-      const isZeroDatum = (surveyData.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0;
-      return pack(resolveStationStrokeColor(isZeroDatum, colorCtx));
-    };
-
-    const useDepthEndpoints = colorCtx.showDepthGradient && !colorCtx.showIssueSeverity;
+    const res = makeColorResolvers(surveyData, colorCtx);
     const allReference = computeStationAllReference(surveyData, lookup);
-    // Apply the current anchored/immovable dim set (undefined on the no-dim hot
-    // path so the dim attribute stays all-zero without per-item predicate calls).
+    // Apply the current dim + drag-hide sets (null on the hot path so the dim /
+    // hide attributes stay all-zero without per-item predicate calls).
     const dims = this.hasDimming() ? this.dimPredicates(surveyData) : null;
+    const hides = this.hasHide() ? this.hidePredicates(surveyData) : null;
     const line = buildLineBuffers(
-      surveyData, stationRel, lookup, colorForShot, params.exclude,
-      useDepthEndpoints ? colorForShotEndpoints : undefined,
-      dims?.dimForShot,
+      surveyData, stationRel, lookup, res.colorForShot, params.exclude,
+      res.useDepthEndpoints ? res.colorForShotEndpoints : undefined,
+      dims?.dimForShot, hides?.hideForShot,
     );
     const circle = buildCircleBuffers(
-      surveyData, stationRel, fillForStation, strokeForStation, params.exclude, allReference,
-      dims?.dimForStation,
+      surveyData, stationRel, res.fillForStation, res.strokeForStation, params.exclude, allReference,
+      dims?.dimForStation, hides?.hideForStation,
     );
 
-    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
-    const data: CustomRenderData = {
-      anchorX,
-      anchorY,
-      line,
-      circle,
-      lineHalfWidthPx: (params.shotWidthPx / 2) * dpr,
-      circleRadiusPx: params.stationRadiusPx * dpr,
-      circleStrokePx: params.stationStrokePx * dpr,
-      aaPx: dpr,
-    };
+    const data: CustomRenderData = { anchorX, anchorY, line, circle, ...this.sizeFields(params) };
 
     const totalBytes = line.byteLength + circle.byteLength;
     debugLog('[customRender] build', {
@@ -365,12 +346,14 @@ export class SurveyCustomController {
       lineMB: +(line.byteLength / 1048576).toFixed(2),
       circleMB: +(circle.byteLength / 1048576).toFixed(2),
       totalMB: +(totalBytes / 1048576).toFixed(2),
-      distinctColors: packCache.size,
     });
-    // Cache products so setDimming can recompute just the dim arrays in place.
+    // Cache products so setDimming / setDragHide / the incremental edit path can
+    // recompute just the affected arrays in place.
     this.lastData = data;
     this.lastLookup = lookup;
     this.lastSurveyData = surveyData;
+    this.lastStationRel = stationRel;
+    this.lastAllReference = allReference;
     return data;
   }
 
@@ -406,6 +389,33 @@ export class SurveyCustomController {
     };
   }
 
+  /** True when a drag is hiding some feature (drag active). */
+  private hasHide(): boolean {
+    return (
+      (this.hideState.sectionIds?.size ?? 0) > 0 ||
+      (this.hideState.stationGlobalIndices?.size ?? 0) > 0 ||
+      (this.hideState.shotGlobalIndices?.size ?? 0) > 0
+    );
+  }
+
+  /** Per-station / per-shot hide predicates for the current {@link hideState}:
+   *  a feature hides when its section, its global station index, or its global
+   *  shot index is in the drag-exclusion set. Mirrors the build-time exclusion
+   *  skip so a marked vertex collapses exactly where an omitted one would vanish. */
+  private hidePredicates(surveyData: SurveyData): {
+    hideForStation: (g: number) => boolean;
+    hideForShot: (globalShotIdx: number, sectionId: number) => boolean;
+  } {
+    const { sectionIds, stationGlobalIndices, shotGlobalIndices } = this.hideState;
+    return {
+      hideForStation: (g: number): boolean =>
+        stationGlobalIndices?.has(g) === true ||
+        sectionIds?.has(surveyData.stationSectionIds[g]!) === true,
+      hideForShot: (globalShotIdx: number, sectionId: number): boolean =>
+        shotGlobalIndices?.has(globalShotIdx) === true || sectionIds?.has(sectionId) === true,
+    };
+  }
+
   /**
    * Update the anchored / immovable dim set (SurveyLayer.setAnchoredSections /
    * setImmovableFeatures). Rare (fires on move-tool activation, not per frame),
@@ -430,6 +440,120 @@ export class SurveyCustomController {
     this.lastData.circle.dim = circleDim;
     this.layer.updateDim(lineDim, circleDim);
     this.map.triggerRepaint();
+  }
+
+  /**
+   * Point the custom layer at (or off, with null) the active drag's hidden
+   * feature set (SurveyLayer.setDragExclusion). The cheap drag-begin/end path:
+   * the buffers keep every feature, so this recomputes ONLY the two per-vertex
+   * hide arrays from the cached SoA and re-uploads just those GPU buffers -
+   * no reprojection, color packing, or full rebuild. State is stored regardless
+   * so the next full build (mid-drag flush / re-enable) reproduces it.
+   */
+  setDragHide(exclusion: CustomRenderExclusion | null): void {
+    this.hideState = exclusion ?? EMPTY_EXCLUSION;
+    if (!this.active || !this.layer || !this.lastData || !this.lastLookup || !this.lastSurveyData) {
+      return;
+    }
+    const survey = this.lastSurveyData;
+    // The live drag path never uses a build-time exclusion, so the hide arrays
+    // span the full (uncompacted) buffers; computeLine/CircleDim double as the
+    // per-vertex flag builders for any predicate.
+    const lineHide = this.hasHide()
+      ? computeLineDim(survey, this.lastLookup, this.hidePredicates(survey).hideForShot)
+      : new Float32Array(this.lastData.line.vertexCount);
+    const circleHide = this.hasHide()
+      ? computeCircleDim(survey, this.hidePredicates(survey).hideForStation)
+      : new Float32Array(this.lastData.circle.vertexCount);
+    this.lastData.line.hide = lineHide;
+    this.lastData.circle.hide = circleHide;
+    this.layer.updateHide(lineHide, circleHide);
+    this.map.triggerRepaint();
+  }
+
+  /**
+   * Try to apply an edit incrementally (only the changed sections' vertex
+   * ranges) instead of a full rebuild. Returns false to fall back to build().
+   * Requires an active layer with cached products; `planIncrementalUpdate` gates
+   * on layout / color-global / anchor / gps stability (see incremental.ts).
+   */
+  private tryIncremental(prevParams: CustomSyncParams, params: CustomSyncParams): boolean {
+    const prev = this.lastSurveyData;
+    const layer = this.layer;
+    const line = this.lastData?.line;
+    const circle = this.lastData?.circle;
+    const rel = this.lastStationRel;
+    const allRef = this.lastAllReference;
+    const lookup = this.lastLookup;
+    if (!prev || !layer || !this.lastData || !line || !circle || !rel || !allRef || !lookup) return false;
+    // A build-time exclusion (tests) compacts the buffers, breaking the g↦[4g]
+    // station map the incremental path relies on; only the live (full) path is
+    // eligible.
+    if (prevParams.exclude || params.exclude) return false;
+    const next = params.surveyData;
+    const plan = planIncrementalUpdate(
+      prev, next, prevParams.colorCtx, params.colorCtx,
+      prevParams.gpsOrigin, params.gpsOrigin, this.lastData.anchorX, this.lastData.anchorY,
+    );
+    if (!plan) return false;
+
+    // Reproject moved stations in place (same anchor by the plan's gate).
+    const { anchorX, anchorY } = this.lastData;
+    for (const g of plan.reprojectStationGlobals) {
+      const ll = metersToMapCoords(next.stationCoords[g * 3]!, next.stationCoords[g * 3 + 1]!, params.gpsOrigin);
+      const [mx, my] = lngLatToMercator(ll[0], ll[1]);
+      rel[g * 2] = mx - anchorX;
+      rel[g * 2 + 1] = my - anchorY;
+    }
+
+    const res = makeColorResolvers(next, params.colorCtx);
+    const dims = this.hasDimming() ? this.dimPredicates(next) : null;
+    const hides = this.hasHide() ? this.hidePredicates(next) : null;
+    const lineInputs: LineSectionInputs = {
+      colorForShot: res.colorForShot,
+      colorForShotEndpoints: res.useDepthEndpoints ? res.colorForShotEndpoints : undefined,
+      dimForShot: dims?.dimForShot,
+      hideForShot: hides?.hideForShot,
+    };
+    const circleInputs: CircleStationInputs = {
+      fillForStation: res.fillForStation,
+      strokeForStation: res.strokeForStation,
+      dimForStation: dims?.dimForStation,
+      hideForStation: hides?.hideForStation,
+    };
+
+    // Re-emit each dirty section's line range + its stations (all-reference
+    // first, since a station read depends on it), collecting station slots.
+    const circleSlots: number[] = [];
+    for (const si of plan.dirtySectionIdxs) {
+      const section = next.sections[si]!;
+      recomputeSectionAllReference(next, lookup, section, allRef);
+      const inner = lookup.get(section.id);
+      if (inner) {
+        for (const g of inner.values()) {
+          recomputeStation(circle, g, next, rel, circleInputs, allRef[g]!);
+          circleSlots.push(g);
+        }
+      }
+      recomputeLineSection(line, si, next, rel, lookup, lineInputs);
+    }
+
+    // Sub-upload: one contiguous line range per section; coalesced station runs.
+    for (const si of plan.dirtySectionIdxs) {
+      const segStart = line.sectionRanges[si * 2]!;
+      const segCount = line.sectionRanges[si * 2 + 1]!;
+      layer.uploadLineVertexRange(segStart * 4, segCount * 4);
+    }
+    circleSlots.sort((a, b) => a - b);
+    for (const [vStart, vCount] of coalesceVertexRuns(circleSlots, 4)) {
+      layer.uploadCircleVertexRange(vStart, vCount);
+    }
+
+    // Refresh caches + size uniforms (a size-only change needs no upload).
+    Object.assign(this.lastData, this.sizeFields(params));
+    this.lastSurveyData = next;
+    this.map.triggerRepaint();
+    return true;
   }
 
   private installHook(): void {
