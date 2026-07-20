@@ -75,6 +75,13 @@ import { recordFeatureCount, clearFeatureCountsForPrefix, recordPerfTiming } fro
 import { buildSurveyFeaturesStreamed, buildGranularitySwapStreamed } from './surveyLayer/featuresWorkerClient';
 import { ensureVtProtocol, setVtLayerData, vtTileUrl, clearVtLayerData, reloadVtSource } from './surveyLayer/vectorTileRegistry';
 import {
+  LABEL_VT_GROUPS,
+  LABEL_RESTORE_FALLBACK_MS,
+  partitionDragFilters,
+  shouldDeferTextRestore,
+  type DragFilterMap,
+} from './surveyLayer/labelRestore';
+import {
   vtLinesFromFeatures,
   vtPointsFromFeatures,
   vtGroupCount,
@@ -330,6 +337,25 @@ export default class SurveyLayer {
   private pendingDragHide: {
     exclusion: CustomRenderExclusion;
     listener: (e: maplibregl.MapSourceDataEvent) => void;
+  } | null = null;
+  /** Label-source VT reload promises produced by the current apply/flush (reset
+   *  in beginApplyFeatures, pushed in applyFeatureChunk for label groups). Fed to
+   *  endDragPreview so a drag-commit restore of the moved sections' TEXT filters
+   *  waits for the label tiles to carry post-move coordinates (FINISH label-flash
+   *  fix). */
+  private labelReloadsThisFlush: Promise<unknown>[] = [];
+  /** Non-null only for the synchronous span of the onNextUpdate callback fired by
+   *  endApplyFeatures: the just-committed flush's label reloads, so a drag-commit
+   *  endDragPreview can defer its text-filter restore behind them. Null for a
+   *  direct endDragPreview (Escape / rejected move) -> restore immediately. */
+  private pendingDragCommitLabelReloads: Promise<unknown>[] | null = null;
+  /** A still-pending deferred text-filter restore (FINISH label-flash fix). Held
+   *  so a superseding drag or teardown can force-apply it synchronously; guarded
+   *  by dragGeneration so a late tile-reload settle from a superseded drag no-ops. */
+  private pendingLabelRestore: {
+    filters: DragFilterMap;
+    generation: number;
+    timeout: ReturnType<typeof setTimeout>;
   } | null = null;
 
   // Visibility state (for hidden feature detection)
@@ -3802,6 +3828,10 @@ export default class SurveyLayer {
    */
   beginDragPreview(connectedSectionIds: Set<number>): void {
     if (this.dragPreviewActive) this.endDragPreview();
+    // Restore any prior drag's still-deferred text filters NOW so this drag
+    // captures the true base filters, not a stale hidden state (its own late
+    // settle then no-ops via the generation guard).
+    this.applyPendingLabelRestore();
     if (connectedSectionIds.size === 0) return;
     if (!this.geoIndex || !this.cachedSurveyData) return;
 
@@ -3931,6 +3961,9 @@ export default class SurveyLayer {
    */
   beginStationDragPreview(sectionId: number, stationIndex: number, additionalSeeds?: StationRef[]): StationRef[] {
     if (this.dragPreviewActive) this.endDragPreview();
+    // Restore any prior drag's still-deferred text filters before capturing this
+    // drag's base (see beginDragPreview).
+    this.applyPendingLabelRestore();
 
     // The per-item exclusion/inclusion filters below need per-feature source
     // content. The tool switch requested it (ensureFeatureGranularity), but a
@@ -4328,9 +4361,19 @@ export default class SurveyLayer {
     // preview now that commitDragPreview keeps it alive across the IPC window.
     this.clearPendingDragHide();
     removeDragPreviewLayers(this.map);
-    for (const [layerId, saved] of this.dragSavedFilters) {
+    // Restore geometry filters immediately, but hold the moved sections' TEXT
+    // (label + comment) filters until the label tiles reload with post-move
+    // coordinates. The geometry is custom-rendered (its exclusion is dropped
+    // synchronously below), so it lands at the new position at once; the text
+    // layers read the async-reloading `stalx://` label sources whose resident
+    // tiles still hold PRE-move coords, so restoring them in this synchronous
+    // flush block would paint the moved labels at their OLD position for the
+    // ~200ms until the tiles reload (FINISH label-flash fix).
+    const { geometry, text } = partitionDragFilters(this.dragSavedFilters);
+    for (const [layerId, saved] of geometry) {
       if (this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
     }
+    this.scheduleTextFilterRestore(text);
     this.clearDragOverlayFollow();
 
     this.dragPreviewSet = null;
@@ -4339,6 +4382,59 @@ export default class SurveyLayer {
     // Drop the custom-render exclusion and rebuild full buffers so the moved
     // features reappear at their committed positions (mirrors the filter restore).
     this.setDragExclusion(null);
+  }
+
+  /**
+   * Restore the moved sections' text-layer filters. On a real drag commit that
+   * reloaded the label tiles, defer the restore until those reloads settle so the
+   * moved labels are never painted at their pre-move position; otherwise (Escape /
+   * cancel, rejected move, or an edit that changed no label) restore synchronously.
+   *
+   * `pendingDragCommitLabelReloads` is non-null only inside the onNextUpdate
+   * callback fired by endApplyFeatures, i.e. exactly the drag-commit flush; every
+   * other endDragPreview caller (Escape, `!res.success`, no-movement bail) sees
+   * null and restores immediately. A generation guard (dragGeneration, bumped per
+   * drag in installDragPreview) ensures a superseding drag owns the filters and a
+   * late settle from the superseded drag no-ops.
+   */
+  private scheduleTextFilterRestore(text: DragFilterMap): void {
+    if (text.size === 0) return;
+    const reloads = this.pendingDragCommitLabelReloads;
+    if (!reloads || !shouldDeferTextRestore(reloads.length)) {
+      this.restoreTextFilters(text);
+      return;
+    }
+    // Force-apply any earlier still-pending restore first so nothing is stranded
+    // (defensive: a superseding drag's begin already flushes it).
+    this.applyPendingLabelRestore();
+    const generation = this.dragGeneration;
+    const timeout = setTimeout(() => this.settleLabelRestore(generation), LABEL_RESTORE_FALLBACK_MS);
+    this.pendingLabelRestore = { filters: text, generation, timeout };
+    void Promise.allSettled(reloads).then(() => this.settleLabelRestore(generation));
+  }
+
+  /** Apply a queued text-filter restore if it still belongs to `generation` (a
+   *  superseding drag has taken over the filters otherwise -> skip). */
+  private settleLabelRestore(generation: number): void {
+    if (!this.pendingLabelRestore || this.pendingLabelRestore.generation !== generation) return;
+    this.applyPendingLabelRestore();
+  }
+
+  /** Force-apply any queued text-filter restore synchronously (superseding drag /
+   *  teardown). No-op when nothing is queued. */
+  private applyPendingLabelRestore(): void {
+    const pending = this.pendingLabelRestore;
+    if (!pending) return;
+    this.pendingLabelRestore = null;
+    clearTimeout(pending.timeout);
+    this.restoreTextFilters(pending.filters);
+  }
+
+  /** Re-apply saved filters to the text (label / comment) layers. */
+  private restoreTextFilters(text: DragFilterMap): void {
+    for (const [layerId, saved] of text) {
+      if (this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
+    }
   }
 
   /**
@@ -4961,6 +5057,9 @@ export default class SurveyLayer {
   private beginApplyFeatures(): void {
     this.sectionShotFeatureIds = new Map();
     this.sectionStationFeatureIds = new Map();
+    // Fresh flush: collect this flush's label-source reloads so a drag commit can
+    // defer its text-filter restore behind them (FINISH label-flash fix).
+    this.labelReloadsThisFlush = [];
   }
 
   /**
@@ -5023,7 +5122,12 @@ export default class SurveyLayer {
       // reloadVtSource with a plain setTiles.
       if (dirtyBounds !== null) {
         const source = this.map.getSource(sourceId) as VectorTileSource | undefined;
-        void reloadVtSource(source, sourceId, version, dirtyBounds);
+        const reload = reloadVtSource(source, sourceId, version, dirtyBounds);
+        // Track label-source reloads so a drag-commit endDragPreview can hold the
+        // moved sections' text filters hidden until the tiles carry post-move
+        // coordinates (else the labels flash at the old position).
+        if (LABEL_VT_GROUPS.has(group)) this.labelReloadsThisFlush.push(reload);
+        else void reload;
       }
       recordFeatureCount(kind, vtGroupCount(data));
       this.applyColorPaint();
@@ -5126,11 +5230,19 @@ export default class SurveyLayer {
     }
 
     // Fire one-shot callback (used by drag commit to restore filters in the same
-    // synchronous block as setData, ensuring no paint gap between them).
+    // synchronous block as setData, ensuring no paint gap between them). Expose
+    // this flush's label reloads for the callback's span so a drag-commit
+    // endDragPreview defers its text-filter restore behind the label tiles
+    // (FINISH label-flash fix); a direct endDragPreview sees null -> restores now.
     if (this.onNextUpdateCallback) {
       const cb = this.onNextUpdateCallback;
       this.onNextUpdateCallback = null;
-      cb();
+      this.pendingDragCommitLabelReloads = this.labelReloadsThisFlush;
+      try {
+        cb();
+      } finally {
+        this.pendingDragCommitLabelReloads = null;
+      }
     }
   }
 
@@ -5216,6 +5328,14 @@ export default class SurveyLayer {
     // destroyed map (would throw in setData).
     this.updateScheduled = false;
     this.pendingUpdateArgs = null;
+
+    // Clear any still-pending deferred text-filter restore timer so it cannot
+    // fire on a torn-down map (the setFilter is getLayer-guarded, but drop the
+    // timer to avoid a dangling handle).
+    if (this.pendingLabelRestore) {
+      clearTimeout(this.pendingLabelRestore.timeout);
+      this.pendingLabelRestore = null;
+    }
 
     // Tear down the custom-render prototype (removes its layer, restores stock
     // layer visibility, and unregisters the runtime sync hook) (#customRender).
