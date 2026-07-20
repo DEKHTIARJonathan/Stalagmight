@@ -12,9 +12,11 @@
  *            stations layers. Labels, interact overlay, drag-preview stay stock.
  * Flag OFF : remove the custom layer, restore the stock layers' visibility.
  *
- * Hit-testing, labels, overlays, and the vector-tile publish path are untouched;
- * hit-testing still runs against the (now hidden) stock layers' logic-level data,
- * which is fine for a prototype (positions are identical).
+ * Hit-testing does NOT depend on the stock layers: candidate-section discovery
+ * runs against the SoA geometry index (SurveyLayer.hitCandidateSections ->
+ * geometryIndex.sectionsIntersectingBox), so hiding the stock layers leaves
+ * hover / select / station+segment move fully working. Labels, overlays, and
+ * the vector-tile publish path are likewise untouched.
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import type { GpsOrigin } from '../../../../types/config';

@@ -79,6 +79,13 @@ export class SurveyGeometryIndex {
   /** Per-section cache: stationIndex values that touch >=1 non-reference shot
    *  (both endpoints present — mirrors the builder's feature-emission guard). */
   private nonRefStationCache = new Map<number, Set<number>>();
+  /** sectionId -> world-coord (map coords) AABB over its stations. Lazily built
+   *  by {@link ensureBounds} the first time the candidate-section gate runs. */
+  private sectionBounds = new Map<
+    number,
+    { minLng: number; minLat: number; maxLng: number; maxLat: number }
+  >();
+  private boundsBuilt = false;
 
   constructor(data: SurveyData, gpsOrigin: GpsOrigin | null) {
     this.data = data;
@@ -103,6 +110,31 @@ export class SurveyGeometryIndex {
         this.stationLookup.set(sid, inner);
       }
       inner.set(this.data.stationIndices[g]!, g);
+    }
+  }
+
+  /**
+   * Build the per-section world-coord bounding boxes used by
+   * {@link sectionsIntersectingBox}. Kept separate from + lazier than
+   * {@link ensureBuilt}: only the candidate-section gate needs projected bounds,
+   * so the per-item resolvers must not pay this pass. One metersToMapCoords per
+   * station, on the first gate query only.
+   */
+  private ensureBounds(): void {
+    if (this.boundsBuilt) return;
+    this.boundsBuilt = true;
+    for (let g = 0; g < this.data.stationCount; g++) {
+      const sid = this.data.stationSectionIds[g]!;
+      const [lng, lat] = this.stationLngLat(g);
+      const b = this.sectionBounds.get(sid);
+      if (!b) {
+        this.sectionBounds.set(sid, { minLng: lng, minLat: lat, maxLng: lng, maxLat: lat });
+        continue;
+      }
+      if (lng < b.minLng) b.minLng = lng;
+      if (lng > b.maxLng) b.maxLng = lng;
+      if (lat < b.minLat) b.minLat = lat;
+      if (lat > b.maxLat) b.maxLat = lat;
     }
   }
 
@@ -251,6 +283,49 @@ export class SurveyGeometryIndex {
         if (Math.hypot(p.x - cx, p.y - cy) <= radius) {
           out.push({ section_id: sid, station_index: this.data.stationIndices[g]! });
         }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Sections whose geometry may intersect the screen-space box
+   * `[minX, minY, maxX, maxY]` (already padded by the caller to the type's hit
+   * reach). Replaces the old `queryRenderedFeatures` candidate-section prefilter
+   * (#customRender): once the custom WebGL layer renders the survey, the stock
+   * shots/stations layers are hidden (visibility:none) and return nothing from
+   * `queryRenderedFeatures`, so candidate discovery must come from the SoA index
+   * rather than rendered features.
+   *
+   * Each section's world-coord AABB is projected corner by corner; the screen
+   * AABB of those four corners is a conservative SUPERSET of the section's
+   * projected footprint (exact under the app's unrotated top-down projection,
+   * a safe over-approximation under any affine map transform). A section is a
+   * candidate iff that screen AABB overlaps the probe box. The result is a
+   * superset — the per-item resolvers ({@link nearestStation} /
+   * {@link nearestShot} / {@link stationsInBox}) then trim to exact tolerance,
+   * so no in-tolerance hit is dropped and none leaks past it.
+   */
+  sectionsIntersectingBox(
+    project: ProjectFn,
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+  ): Set<number> {
+    this.ensureBounds();
+    const out = new Set<number>();
+    for (const [sid, b] of this.sectionBounds) {
+      const p1 = project([b.minLng, b.minLat]);
+      const p2 = project([b.minLng, b.maxLat]);
+      const p3 = project([b.maxLng, b.minLat]);
+      const p4 = project([b.maxLng, b.maxLat]);
+      const sMinX = Math.min(p1.x, p2.x, p3.x, p4.x);
+      const sMaxX = Math.max(p1.x, p2.x, p3.x, p4.x);
+      const sMinY = Math.min(p1.y, p2.y, p3.y, p4.y);
+      const sMaxY = Math.max(p1.y, p2.y, p3.y, p4.y);
+      if (sMaxX >= minX && sMinX <= maxX && sMaxY >= minY && sMinY <= maxY) {
+        out.add(sid);
       }
     }
     return out;

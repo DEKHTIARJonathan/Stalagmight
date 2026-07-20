@@ -39,7 +39,7 @@ import {
   type MovingEnd,
   type Projector,
 } from './surveyLayer/dragPreviewSource';
-import { padProbeBox, probePad, type ProbeGeometry } from './surveyLayer/hitProbe';
+import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
 import { dimmedZoomOpacity } from './surveyLayer/opacityExpressions';
 import { SurveyCustomController } from './surveyLayer/customRender/controller';
@@ -1803,42 +1803,50 @@ export default class SurveyLayer {
   };
 
   /**
-   * Candidate sections under a point/box. The dedicated hitbox layers are gone
-   * (#mem budget); we query the VISIBLE shots/stations layers instead, which
-   * already carry the same `sectionId` property and honor the same visibility +
-   * reference filters. Because the visible mark is far thinner than the old
-   * hitbox, we pad the probe box so the thin rendered mark still intersects it
-   * out to the exact old reach. The tolerance arithmetic (and why the padded
-   * box + SoA resolver reproduce the old candidate set exactly) lives in
-   * `hitProbe.ts` (`probePad` / `padProbeBox`), which is unit tested. Per-type
-   * padding uses two queries because shot and station reaches differ.
+   * Candidate sections under a point/box, from the SoA geometry index
+   * (#customRender / #mem). Candidate discovery no longer depends on stock-layer
+   * residency: the endgame renders the survey via the custom WebGL layer, which
+   * hides the stock shots/stations layers (visibility:none), and MapLibre returns
+   * nothing from hidden layers. So instead of `queryRenderedFeatures` we ask the
+   * geometry index for sections whose world-space bounds, projected to screen,
+   * intersect the probe box padded by the type's hit reach. That padded-box query
+   * is a SUPERSET of the sections whose geometry can be within tolerance; the SoA
+   * resolver (`resolveStationAt` / `resolveShotAt` / `geoIndex.stationsInBox`)
+   * then trims it to the exact pick. Per-type padding preserves the two old
+   * queries' semantics (shot vs station reach differ); the pad is the FULL reach
+   * because we test the true geometry, not a thin rendered mark. See
+   * `hitProbe.ts` (`padProbeBox`) and `geometryIndex.ts`
+   * (`sectionsIntersectingBox`), both unit tested.
+   *
+   * A type is gated by the USER visibility flags (`stationsVisible` /
+   * `shotsVisible`, set by setStationsVisibility / setShotsVisibility): a
+   * user-hidden type yields no candidates, exactly as the old query returned
+   * nothing for a hidden layer, so clicks fall through to the hidden-feature
+   * toast in `handleEmptyClick`. These flags are NOT raw layer visibility: the
+   * custom renderer hiding the stock layers (visibility:none) leaves the survey
+   * fully interactive, while a user "hide stations/shots" toggle still suppresses
+   * hits.
    */
   private hitCandidateSections(
     geometry: maplibregl.PointLike | [maplibregl.PointLike, maplibregl.PointLike],
   ): { stationSections: Set<number>; shotSections: Set<number> } {
-    const stationSections = new Set<number>();
-    const shotSections = new Set<number>();
-    if (!hasLiveStyle(this.map)) return { stationSections, shotSections };
-
-    const shotPad = probePad(this.getShotHitReach(), this.getShotWidth() / 2);
-    const stationPad = probePad(this.getStationHitReach(), this.getStationRadius());
-
-    const shotFeatures = this.map.queryRenderedFeatures(
-      padProbeBox(geometry as ProbeGeometry, shotPad),
-      { layers: [this.shotsLayerId] },
-    );
-    for (const f of shotFeatures) {
-      const sid = f.properties?.sectionId as number | undefined;
-      if (sid !== undefined) shotSections.add(sid);
+    let stationSections = new Set<number>();
+    let shotSections = new Set<number>();
+    if (!this.geoIndex || !hasLiveStyle(this.map)) return { stationSections, shotSections };
+    const project = this.projector();
+    if (this.shotsVisible) {
+      const [[minX, minY], [maxX, maxY]] = padProbeBox(
+        geometry as ProbeGeometry,
+        this.getShotHitReach(),
+      );
+      shotSections = this.geoIndex.sectionsIntersectingBox(project, minX, minY, maxX, maxY);
     }
-
-    const stationFeatures = this.map.queryRenderedFeatures(
-      padProbeBox(geometry as ProbeGeometry, stationPad),
-      { layers: [this.stationsLayerId] },
-    );
-    for (const f of stationFeatures) {
-      const sid = f.properties?.sectionId as number | undefined;
-      if (sid !== undefined) stationSections.add(sid);
+    if (this.stationsVisible) {
+      const [[minX, minY], [maxX, maxY]] = padProbeBox(
+        geometry as ProbeGeometry,
+        this.getStationHitReach(),
+      );
+      stationSections = this.geoIndex.sectionsIntersectingBox(project, minX, minY, maxX, maxY);
     }
     return { stationSections, shotSections };
   }

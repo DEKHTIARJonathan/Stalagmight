@@ -13,6 +13,7 @@ import type { Map as MaplibreMap, MapMouseEvent, MapGeoJSONFeature } from 'mapli
 import { buildSurveyFeatures } from '../features';
 import { resolveNearestShot, resolveNearestStation } from '../hitTest';
 import { SurveyGeometryIndex } from '../geometryIndex';
+import { padProbeBox } from '../hitProbe';
 import { surveyDataFromLegacy } from '../../../../types/survey-data';
 import { getMapThemeColors } from '../../../../utils/themeColors';
 import type { Section } from '../../../../types/ipc/Section';
@@ -237,5 +238,67 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
     expect(ref[0]).toBeCloseTo(55 / 111320, 9);
     expect(index.stationCoords({ section_id: 9, station_index: 0 })).toBeNull();
     expect(index.isZeroDatum({ section_id: 1, station_index: 0 })).toBe(false);
+  });
+});
+
+/**
+ * Candidate-section gate (#customRender): `sectionsIntersectingBox` replaces the
+ * old `queryRenderedFeatures` prefilter, so candidate discovery no longer needs
+ * the stock layers to be rendered. The gate must return a SUPERSET of the
+ * sections the per-item SoA resolvers then pick — never dropping an in-tolerance
+ * hit — and honor the padded-box reach semantics (`padProbeBox`).
+ */
+describe('SurveyGeometryIndex.sectionsIntersectingBox candidate gate', () => {
+  const { data } = buildPerFeature();
+  const index = new SurveyGeometryIndex(data, null);
+  const proj = (c: [number, number]) => project(c);
+  const stationReach = 10;
+  const shotReach = 4;
+  /** Fixture meters -> the deterministic test screen space. */
+  const screen = (mx: number, my: number) => ({
+    x: (mx / 111320) * SCALE,
+    y: -(my / 111320) * SCALE,
+  });
+  const sectionsAt = (box: ReturnType<typeof padProbeBox>) =>
+    index.sectionsIntersectingBox(proj, box[0][0], box[0][1], box[1][0], box[1][1]);
+
+  it('returns empty for a probe far from every section', () => {
+    const p = screen(500, 500);
+    expect(sectionsAt(padProbeBox([p.x, p.y], stationReach)).size).toBe(0);
+  });
+
+  it('includes a section whose geometry sits under the probe box', () => {
+    // Station (1,3) at (60,25) m: section 1 owns the geometry near there.
+    const p = screen(60, 25);
+    expect(sectionsAt(padProbeBox([p.x, p.y], stationReach)).has(1)).toBe(true);
+  });
+
+  it('is a SUPERSET of the sections the SoA resolver picks (station + shot)', () => {
+    for (const p of probeGrid()) {
+      const st = index.nearestStation(proj, p.x, p.y, [1, 2], stationReach, {
+        includeReference: true,
+      });
+      if (st) {
+        expect(sectionsAt(padProbeBox([p.x, p.y], stationReach)).has(st.ref.section_id)).toBe(true);
+      }
+      const sh = index.nearestShot(proj, p.x, p.y, [1, 2], shotReach, { includeReference: true });
+      if (sh) {
+        expect(sectionsAt(padProbeBox([p.x, p.y], shotReach)).has(sh.sectionId)).toBe(true);
+      }
+    }
+  });
+
+  it('reach padding captures a section just beyond its bounds (missed unpadded)', () => {
+    // Probe 8 px to the RIGHT of station (1,3) at (60,25) m — section 1's max x.
+    // The station is within the 10 px reach, but an UNPADDED point box lands past
+    // the section's AABB and misses it; padding by the reach restores it.
+    const at = screen(60, 25);
+    const p = { x: at.x + 8, y: at.y };
+    expect(sectionsAt(padProbeBox([p.x, p.y], 0)).has(1)).toBe(false);
+    const cand = sectionsAt(padProbeBox([p.x, p.y], stationReach));
+    expect(cand.has(1)).toBe(true);
+    // The resolver, fed that candidate set, confirms the real in-reach hit.
+    const hit = index.nearestStation(proj, p.x, p.y, cand, stationReach, { includeReference: true });
+    expect(hit?.ref).toEqual({ section_id: 1, station_index: 3 });
   });
 });
