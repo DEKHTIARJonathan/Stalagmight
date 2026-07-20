@@ -308,6 +308,13 @@ export default class SurveyLayer {
   private dragMovingStationKeys = new Set<string>();
   private dragMovingShots = new Map<string, MovingEnd>();
   private dragOverlayOffset: { dx: number; dy: number } | null = null;
+  /** Set by commitDragPreview at placement: the follow-offset (dragOverlayOffset +
+   *  moving sets) is deliberately KEPT applied across the IPC + flush window so the
+   *  grabbed highlight stays on the cursor instead of snapping back to the OLD
+   *  coords. endApplyFeatures drops it atomically, right before the post-commit
+   *  overlay refresh reads the freshly installed geometry (no snap-back, and no
+   *  old+offset overshoot). */
+  private dragCommitPending = false;
 
   // Visibility state (for hidden feature detection)
   private stationsVisible: boolean = true;
@@ -2854,6 +2861,14 @@ export default class SurveyLayer {
     if (this.snappedStationId === newId) return;
     this.snappedStationId = newId;
 
+    // During a live move drag EVERY interact refresh is funneled through the
+    // per-frame renderDragPreview pass, so the snap ring, the grabbed highlight and
+    // the moving preview all update in the SAME rAF tick (lockstep, no out-of-band
+    // frame where the overlay leads or trails the preview). A snap-target change is
+    // driven by the same pointer move that schedules that frame, so the ring lands
+    // one frame later at most; outside a drag, refresh immediately as before.
+    if (this.dragPreviewActive && !this.dragCommitPending) return;
+
     // Snap ring renders from the interact overlay (#mem): pushing one small
     // feature is as instant as the old per-feature feature-state was.
     this.refreshInteractOverlay();
@@ -3796,9 +3811,7 @@ export default class SurveyLayer {
     if (!this.dragPreviewActive || !this.dragPreviewSet) return;
     const fc = buildDragPreviewFeatureCollection(this.dragPreviewSet, this.dragProjector(), dx, dy);
     const src = this.map.getSource(SurveyLayer.DRAG_PREVIEW_SOURCE);
-    if (src && 'setData' in src) {
-      (src as maplibregl.GeoJSONSource).setData(fc);
-    }
+    if (src && 'setData' in src) (src as maplibregl.GeoJSONSource).setData(fc);
     // Re-emit any hover/selected highlight on a moving feature at the same offset
     // so it tracks the cursor instead of sticking at the committed position (#C).
     this.dragOverlayOffset = { dx, dy };
@@ -3817,6 +3830,7 @@ export default class SurveyLayer {
    *  coordinates (called on commit / end). */
   private clearDragOverlayFollow(): void {
     this.dragOverlayOffset = null;
+    this.dragCommitPending = false;
     this.dragMovingStationKeys.clear();
     this.dragMovingShots.clear();
     this.lastInteractKey = null;
@@ -4299,11 +4313,16 @@ export default class SurveyLayer {
     if (!this.dragPreviewActive) return;
     this.cancelDragRender();
     this.removeDragPreviewLayers();
-    // Stop the overlay follow now: its offset maps the OLD committed coords to the
-    // drag position, so it must not survive into the post-commit rebuild (where
-    // the overlay reads the NEW coords and would double-count the offset).
-    this.clearDragOverlayFollow();
-    this.dragPreviewSet = null;
+    // Keep the interact overlay following (dragOverlayOffset + moving sets) across
+    // the IPC + flush window so the grabbed highlight stays glued to the cursor
+    // instead of snapping back to the OLD coords for the ~100ms until the committed
+    // geometry lands. endApplyFeatures drops the offset atomically, right before the
+    // post-commit overlay refresh reads the installed geometry — so the overlay
+    // never renders old+offset after the install (no 2x flash) nor plain old coords
+    // during the window (no snap-back). It must survive until the geometry swaps,
+    // hence the dragCommitPending handoff. (dragPreviewSet is nulled by the
+    // endDragPreview that MapCanvas sequences right after this via onNextUpdate.)
+    this.dragCommitPending = true;
   }
 
   /**
@@ -5071,6 +5090,14 @@ export default class SurveyLayer {
     // so the shots/gradient/stations color + stroke expressions must be refreshed
     // to line up with the freshly-set `colorIndex` / `strokeColorIndex`.
     this.applyColorPaint();
+    // Drag-commit atomic settle: the placement kept the follow-offset applied
+    // through the IPC + flush window so the grabbed highlight tracked the cursor.
+    // The committed geometry is installed NOW, so drop the offset (and its moving
+    // sets) BEFORE the refresh below reads it — the overlay then renders the NEW
+    // coords once (final == cursor), with no old+offset overshoot and no snap-back
+    // to old coords. clearDragOverlayFollow re-emits at the new coords immediately;
+    // updateVisualState's own refresh is then a no-op via the lastInteractKey cache.
+    if (this.dragCommitPending) this.clearDragOverlayFollow();
     this.updateVisualState();
     // The clear above wiped feature-state, so re-apply the distance-gradient
     // `dist` HERE (the rebuild path), NOT in updateVisualState(), which runs on
