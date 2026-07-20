@@ -215,11 +215,18 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     const data = this.data;
     if (!data || !this.lineProgram || !this.circleProgram || !this.lineGpu || !this.circleGpu) return;
 
-    const matrix = composeAnchorMatrix(
-      options.modelViewProjectionMatrix as unknown as ArrayLike<number>,
-      data.anchorX,
-      data.anchorY,
-    );
+    // MapLibre 5.16's options.modelViewProjectionMatrix maps WORLD-PIXEL space
+    // (0..worldSize) to clip space; the mercator [0,1] -> clip matrix that a
+    // custom layer needs is options.defaultProjectionData.mainMatrix. Feeding
+    // the world-pixel matrix here projects the survey millions of pixels
+    // off-screen (the observed blank layer, with clean GL state and no errors).
+    const mainMatrix = options.defaultProjectionData.mainMatrix as
+      | ArrayLike<number>
+      | undefined;
+    // Guard exotic projections that might omit mainMatrix: skip the frame
+    // rather than compose against garbage.
+    if (!mainMatrix) return;
+    const matrix = composeAnchorMatrix(mainMatrix, data.anchorX, data.anchorY);
     const viewport: [number, number] = [gl.drawingBufferWidth, gl.drawingBufferHeight];
 
     gl.enable(gl.BLEND);

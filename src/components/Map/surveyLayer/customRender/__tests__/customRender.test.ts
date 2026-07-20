@@ -109,6 +109,56 @@ describe('mat4 + anchor matrix', () => {
     expect(cx).toBeCloseTo(merc[0]! + 10, 6);
     expect(cy).toBeCloseTo(merc[1]! + 20, 6);
   });
+
+  // Locks the input-matrix contract that MEM-92 regressed: composeAnchorMatrix
+  // must be fed MapLibre's mercator [0,1] -> clip matrix
+  // (defaultProjectionData.mainMatrix), NOT the world-pixel
+  // modelViewProjectionMatrix. Pure math, no GL.
+  it('projects the anchor point into clip with mainMatrix but off-screen with a world-pixel matrix', () => {
+    // A mercator [0,1] -> clip matrix (what defaultProjectionData.mainMatrix
+    // supplies): orthographic, centered on the survey's mercator center so that
+    // center maps to the clip origin at a fixed scale.
+    const cx = 0.512;
+    const cy = 0.498;
+    const s = 2000; // clip units per mercator unit for a zoomed-in view
+    const mercatorMatrix = new Float64Array([
+      s, 0, 0, 0,
+      0, s, 0, 0,
+      0, 0, 1, 0,
+      -s * cx, -s * cy, 0, 1,
+    ]);
+
+    // Column-major homogeneous projection of an anchor-relative local point.
+    const project = (m: Float32Array, px: number, py: number) => ({
+      x: m[0]! * px + m[4]! * py + m[12]!,
+      y: m[1]! * px + m[5]! * py + m[13]!,
+      w: m[3]! * px + m[7]! * py + m[15]!,
+    });
+
+    // Anchor at the mercator center; the survey point sits AT the anchor, so its
+    // anchor-relative local position is (0, 0). With the correct mainMatrix it
+    // must land at the clip origin.
+    const composed = composeAnchorMatrix(mercatorMatrix, cx, cy);
+    const clip = project(composed, 0, 0);
+    expect(clip.w).toBeGreaterThan(0);
+    expect(Math.abs(clip.x)).toBeLessThan(1);
+    expect(Math.abs(clip.y)).toBeLessThan(1);
+    expect(clip.x).toBeCloseTo(0, 6);
+    expect(clip.y).toBeCloseTo(0, 6);
+
+    // The regression: MapLibre 5.16's modelViewProjectionMatrix maps world-pixel
+    // space (0..worldSize, worldSize = 512 * 2^zoom) to clip, not mercator [0,1].
+    // Model it by removing the 1/worldSize scaling from the projection's linear
+    // block (scale it by 512 * 2^zoom) while leaving the translation. Feeding the
+    // same anchor point through it lands millions of clip units off-screen.
+    const worldSize = 512 * 2 ** 14; // ~8.4M px
+    const worldMatrix = Float64Array.from(mercatorMatrix);
+    for (const i of [0, 1, 2, 4, 5, 6, 8, 9, 10]) worldMatrix[i]! *= worldSize;
+    const composedWorld = composeAnchorMatrix(worldMatrix, cx, cy);
+    const clipWorld = project(composedWorld, 0, 0);
+    expect(clipWorld.w).toBeGreaterThan(0);
+    expect(Math.abs(clipWorld.x)).toBeGreaterThan(1e6);
+  });
 });
 
 describe('anchor-relative station projection', () => {

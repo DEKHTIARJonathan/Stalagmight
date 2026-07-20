@@ -18,7 +18,9 @@
  */
 
 /** All px sizes are DEVICE pixels; `u_viewport` is `[drawingBufferWidth,
- *  drawingBufferHeight]`. `u_matrix` maps anchor-relative mercator -> clip. */
+ *  drawingBufferHeight]`. `u_matrix` maps anchor-relative mercator -> clip; it
+ *  is composed from MapLibre's `defaultProjectionData.mainMatrix` (the mercator
+ *  [0,1] -> clip matrix), NOT `modelViewProjectionMatrix` (world-pixel space). */
 export const LINE_VERTEX_SRC = `#version 300 es
 precision highp float;
 uniform mat4 u_matrix;

@@ -14,7 +14,9 @@
  * `composeAnchorMatrix(mvp, anchor)` = `mvp * translate(anchor)`, so in the
  * vertex shader `gl_Position = u_matrix * vec4(localPos, 0, 1)` reconstructs
  * `mvp * (anchor + localPos) = mvp * mercator`. `mvp` is MapLibre's
- * `modelViewProjectionMatrix` render arg (mercator [0,1] -> clip space).
+ * `defaultProjectionData.mainMatrix` render arg (mercator [0,1] -> clip space).
+ * NOT `modelViewProjectionMatrix`, which in MapLibre 5.16 maps world-pixel
+ * space (0..worldSize) to clip and would fling the geometry off-screen.
  */
 import type { GpsOrigin } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
@@ -45,9 +47,11 @@ export function mat4Multiply(a: Mat4, b: Mat4): Float64Array {
 
 /**
  * Compose MapLibre's mercator matrix with an anchor translation, in float64,
- * returning a float32 matrix ready for `uniformMatrix4fv`. Result maps
- * anchor-relative mercator positions (`mercator - anchor`) straight to clip
- * space. z-translation is 0 (2d prototype).
+ * returning a float32 matrix ready for `uniformMatrix4fv`. `mvp` must be the
+ * mercator [0,1] -> clip matrix (`defaultProjectionData.mainMatrix`), not the
+ * world-pixel `modelViewProjectionMatrix`. Result maps anchor-relative mercator
+ * positions (`mercator - anchor`) straight to clip space. z-translation is 0
+ * (2d prototype).
  */
 export function composeAnchorMatrix(mvp: Mat4, anchorX: number, anchorY: number): Float32Array {
   // Column-major translation matrix with translation in the last column.
