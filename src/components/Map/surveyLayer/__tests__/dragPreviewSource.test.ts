@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildDragPreviewFeatureCollection,
+  dragLabelTranslate,
   movesVertex,
   offsetOverlayPoint,
   offsetOverlayShot,
   offsetVertex,
+  textPreviewFeature,
   transformFeatureCoords,
   type DragPreviewFeature,
   type DragPreviewSet,
@@ -199,6 +201,59 @@ describe('buildDragPreviewFeatureCollection', () => {
     };
     const fc = buildDragPreviewFeatureCollection(set, identityProjector, 100, 100);
     expect((fc.features[0]!.geometry as GeoJSON.Point).coordinates).toEqual([3, 7]);
+  });
+
+  // Text features (label === true) render at their STATIC anchor and follow the
+  // drag with a text-translate paint uniform, so buildDragPreviewFeatureCollection
+  // must emit them un-offset even at a large offset (else they'd double-move).
+  it('emits a point label at its static anchor regardless of offset', () => {
+    const set: DragPreviewSet = {
+      features: [
+        textPreviewFeature('stationLabel', 'point', [[2, 3]], 'uniform', '7', '#fff'),
+      ],
+    };
+    const fc = buildDragPreviewFeatureCollection(set, identityProjector, 100, -40);
+    expect((fc.features[0]!.geometry as GeoJSON.Point).coordinates).toEqual([2, 3]);
+    expect(fc.features[0]!.properties).toEqual({ kind: 'stationLabel', label: '7', color: '#fff', half: false });
+  });
+
+  it('emits a midpoint label at the static shot midpoint regardless of offset', () => {
+    const set: DragPreviewSet = {
+      features: [
+        textPreviewFeature('shotLabel', 'midpoint', [[0, 0], [10, 4]], 'from', '1m', '#abc'),
+      ],
+    };
+    const fc = buildDragPreviewFeatureCollection(set, identityProjector, 100, 100);
+    // Midpoint of the ORIGINAL endpoints ([0,0], [10,4]) => [5,2], no offset.
+    expect((fc.features[0]!.geometry as GeoJSON.Point).coordinates).toEqual([5, 2]);
+    // A single-endpoint shot's midpoint moves half the offset -> half layer.
+    expect(fc.features[0]!.properties).toMatchObject({ kind: 'shotLabel', half: true });
+  });
+});
+
+describe('dragLabelTranslate', () => {
+  it('returns the full offset for a fully-translating label', () => {
+    expect(dragLabelTranslate(12, -8, false)).toEqual([12, -8]);
+  });
+  it('halves the offset for a stretching shot midpoint', () => {
+    expect(dragLabelTranslate(12, -8, true)).toEqual([6, -4]);
+  });
+});
+
+describe('textPreviewFeature', () => {
+  it('flags text features as static labels and derives half from movingEnd', () => {
+    const uniform = textPreviewFeature('stationLabel', 'point', [[1, 1]], 'uniform', '0', '#111');
+    expect(uniform.label).toBe(true);
+    expect(uniform.properties).toEqual({ kind: 'stationLabel', label: '0', color: '#111', half: false });
+
+    // A shot midpoint with one moving endpoint (from / to) moves half the offset.
+    for (const end of ['from', 'to'] as const) {
+      const half = textPreviewFeature('shotComment', 'midpoint', [[0, 0], [2, 0]], end, 'note', '#222');
+      expect(half.properties.half).toBe(true);
+    }
+    // Both endpoints (a shot move) -> full offset.
+    const both = textPreviewFeature('shotLabel', 'midpoint', [[0, 0], [2, 0]], 'both', '2m', '#333');
+    expect(both.properties.half).toBe(false);
   });
 });
 
