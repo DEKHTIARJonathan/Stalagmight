@@ -23,6 +23,17 @@ import { getPerfTimings } from './utils/memoryProbe';
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
 installConsoleCapture();
 
+// Dev-only agent bridge: mirror the console and accept eval requests over the
+// Vite dev server so an outside process can drive the webview. Dynamically
+// imported behind the DEV constant so it tree-shakes out of production builds,
+// and installed AFTER installConsoleCapture() so its console patch wraps that
+// one (both fire). See docs/debug-gates.md and scripts/lib/vite-agent-bridge.mjs.
+if (import.meta.env.DEV) {
+  void import('./dev/agentBridge')
+    .then((m) => m.installAgentBridge())
+    .catch(() => {});
+}
+
 // Route unhandled window errors / promise rejections into the same ring buffer
 installGlobalErrorCapture();
 

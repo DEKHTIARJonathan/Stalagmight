@@ -158,6 +158,56 @@ log at the click handler in `SurveyLayer.tsx` is the clearest example —
 controlled by `debug.map.log_hit_detection`. Off by default; toggle in the
 config file when you need to see which feature was picked on each click.
 
+### Agent console bridge (dev-only)
+
+A dev-only bridge lets an outside process on the same machine (for example
+Claude Code, via `curl` / `tail`) read the live frontend console of the running
+`pnpm tauri dev` webview and execute JavaScript inside it. It exists **only
+under `vite serve`**: the Vite plugin (`scripts/lib/vite-agent-bridge.mjs`) is
+registered with `apply: 'serve'`, and the webview client
+(`src/dev/agentBridge.ts`) is dynamically imported behind `import.meta.env.DEV`
+in `src/main.tsx`, so both tree-shake out of production builds. There are no Rust
+changes, so it can be wired up without restarting the Tauri app.
+
+On each dev-server start the plugin writes to `.agent-bridge/` at the repo root
+(git-ignored):
+
+- `token`: a fresh random token, mode 0600, regenerated every server start.
+- `console.jsonl`: one JSON line (`{ts, level, text}`) per mirrored console
+  entry. The webview wraps `console.log/info/warn/error/debug` and flushes a
+  batch every 300 ms.
+- `results.jsonl`: one JSON line per eval result.
+
+Usage from a shell in the repo root:
+
+```bash
+# Follow the live frontend console
+tail -f .agent-bridge/console.jsonl
+
+# Evaluate an expression (holds up to `wait` seconds for the result)
+curl -s -X POST "http://localhost:1420/__agent/eval?wait=10" \
+  -H "x-agent-token: $(cat .agent-bridge/token)" \
+  --data-binary '1+1'
+# -> {"id":1,"ok":true,"value":2}
+
+# Statement form: use an explicit `return` (the expression form is tried first,
+# then this is the fallback on a construction-time SyntaxError)
+curl -s -X POST "http://localhost:1420/__agent/eval?wait=10" \
+  -H "x-agent-token: $(cat .agent-bridge/token)" \
+  --data-binary 'const el = document.querySelector("#root"); return el?.childElementCount ?? 0;'
+```
+
+If the `wait` window elapses before the webview posts a result (page mid-reload,
+say), the response is `{"id":N,"status":"pending"}` and the result still lands in
+`results.jsonl` once it arrives.
+
+Access is gated three ways: the `x-agent-token` header (or `?token=` for GETs)
+must match the current token; the `Host` header must be `localhost:1420` or
+`127.0.0.1:1420`; and any present `Origin` must be a known dev/tauri origin
+(`http://localhost:1420`, `tauri://localhost`, `http://tauri.localhost`). No CORS
+headers are set, so a cross-origin browser cannot read the token or drive the
+bridge. None of this exists in a production build.
+
 ## Conventions for new debug code
 
 1. **Per-operation backend log?** Use `tracing::debug!`, not `tracing::info!`.
