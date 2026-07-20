@@ -36,6 +36,7 @@ import {
   projectStationsRel,
   buildLineBuffers,
   buildCircleBuffers,
+  type CustomRenderExclusion,
 } from './tessellate';
 import { SurveyCustomLayer, type CustomRenderData } from './surveyCustomLayer';
 import {
@@ -83,7 +84,12 @@ export interface CustomSyncParams {
   shotWidthPx: number;
   stationRadiusPx: number;
   stationStrokePx: number;
+  /** Features to omit from the buffers, mirroring the stock bulk layers'
+   *  move-drag setFilter exclusions. Absent / undefined = draw everything. */
+  exclude?: CustomRenderExclusion | undefined;
 }
+
+export type { CustomRenderExclusion } from './tessellate';
 
 export class SurveyCustomController {
   private readonly map: MaplibreMap;
@@ -243,8 +249,10 @@ export class SurveyCustomController {
       return pack(resolveStationStrokeColor(isZeroDatum, colorCtx));
     };
 
-    const line = buildLineBuffers(surveyData, stationRel, lookup, colorForShot);
-    const circle = buildCircleBuffers(surveyData, stationRel, fillForStation, strokeForStation);
+    const line = buildLineBuffers(surveyData, stationRel, lookup, colorForShot, params.exclude);
+    const circle = buildCircleBuffers(
+      surveyData, stationRel, fillForStation, strokeForStation, params.exclude,
+    );
 
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     const data: CustomRenderData = {

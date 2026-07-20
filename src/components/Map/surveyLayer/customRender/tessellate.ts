@@ -68,6 +68,30 @@ export interface CircleBuffers {
   byteLength: number;
 }
 
+/**
+ * Which features the custom buffers must SKIP, mirroring the MapLibre
+ * setFilter exclusions the stock bulk layers apply during a move drag
+ * (SurveyLayer.beginDragPreview / beginStationDragPreview). Without this the
+ * custom layer keeps drawing the originals under the drag preview.
+ *
+ * Key types are chosen so the SoA iteration can test membership O(1):
+ *  - `sectionIds`         : segment drag hides whole connected sections (both
+ *                           shots and stations) — tested against `section.id`
+ *                           (lines) and `data.stationSectionIds[g]` (circles).
+ *  - `stationGlobalIndices`: station / shot move hides specific stations —
+ *                           tested against the circle loop's global index `g`.
+ *  - `shotGlobalIndices`  : station / shot move hides specific shots — tested
+ *                           against the line loop's `section.shotOffset + i`.
+ *
+ * All fields optional; an absent (or `undefined`) exclusion is the zero-cost
+ * hot path (`undefined?.has(...)` short-circuits, no allocation).
+ */
+export interface CustomRenderExclusion {
+  sectionIds?: ReadonlySet<number>;
+  stationGlobalIndices?: ReadonlySet<number>;
+  shotGlobalIndices?: ReadonlySet<number>;
+}
+
 /** (sectionId, stationIndex) -> global station index. Mirrors vtSurveyBuild. */
 export function buildStationLookup(data: SurveyData): Map<number, Map<number, number>> {
   const lookup = new Map<number, Map<number, number>>();
@@ -105,13 +129,23 @@ export function projectStationsRel(
   return rel;
 }
 
-/** Count valid shots (both endpoints present), matching vtSurveyBuild. */
-export function countValidShots(data: SurveyData, lookup: Map<number, Map<number, number>>): number {
+/** Count valid shots (both endpoints present), matching vtSurveyBuild. When
+ *  `exclude` is given, excluded sections / shots are skipped so the count stays
+ *  in lock-step with {@link buildLineBuffers}. */
+export function countValidShots(
+  data: SurveyData,
+  lookup: Map<number, Map<number, number>>,
+  exclude?: CustomRenderExclusion,
+): number {
+  const exSections = exclude?.sectionIds;
+  const exShots = exclude?.shotGlobalIndices;
   let count = 0;
   for (const section of data.sections) {
+    if (exSections?.has(section.id)) continue;
     const inner = lookup.get(section.id);
     if (!inner) continue;
     for (let i = 0; i < section.shotCount; i++) {
+      if (exShots?.has(section.shotOffset + i)) continue;
       if (inner.get(i) !== undefined && inner.get(i + 1) !== undefined) count++;
     }
   }
@@ -129,8 +163,11 @@ export function buildLineBuffers(
   stationRel: StationRel,
   lookup: Map<number, Map<number, number>>,
   colorForShot: (globalShotIdx: number, sectionId: number) => Rgba8,
+  exclude?: CustomRenderExclusion,
 ): LineBuffers {
-  const segmentCount = countValidShots(data, lookup);
+  const exSections = exclude?.sectionIds;
+  const exShots = exclude?.shotGlobalIndices;
+  const segmentCount = countValidShots(data, lookup, exclude);
   const vertexCount = segmentCount * 4;
   const posA = new Float32Array(vertexCount * 2);
   const posB = new Float32Array(vertexCount * 2);
@@ -146,13 +183,15 @@ export function buildLineBuffers(
 
   let seg = 0;
   for (const section of data.sections) {
+    if (exSections?.has(section.id)) continue;
     const inner = lookup.get(section.id);
     if (!inner) continue;
     for (let i = 0; i < section.shotCount; i++) {
+      const shotGlobalIdx = section.shotOffset + i;
+      if (exShots?.has(shotGlobalIdx)) continue;
       const fromGlobal = inner.get(i);
       const toGlobal = inner.get(i + 1);
       if (fromGlobal === undefined || toGlobal === undefined) continue;
-      const shotGlobalIdx = section.shotOffset + i;
       const [r, g, b, a] = colorForShot(shotGlobalIdx, section.id);
       const ax = stationRel[fromGlobal * 2]!;
       const ay = stationRel[fromGlobal * 2 + 1]!;
@@ -200,8 +239,20 @@ export function buildCircleBuffers(
   stationRel: StationRel,
   fillForStation: (globalIdx: number) => Rgba8,
   strokeForStation: (globalIdx: number) => Rgba8,
+  exclude?: CustomRenderExclusion,
 ): CircleBuffers {
-  const stationCount = data.stationCount;
+  const exSections = exclude?.sectionIds;
+  const exStations = exclude?.stationGlobalIndices;
+  const skip = (g: number): boolean =>
+    exStations?.has(g) === true || exSections?.has(data.stationSectionIds[g]!) === true;
+
+  // Count first only when an exclusion is present; the no-exclusion hot path
+  // keeps every station and skips the extra pass entirely.
+  let stationCount = data.stationCount;
+  if (exStations || exSections) {
+    stationCount = 0;
+    for (let g = 0; g < data.stationCount; g++) if (!skip(g)) stationCount++;
+  }
   const vertexCount = stationCount * 4;
   const center = new Float32Array(vertexCount * 2);
   const corner = new Float32Array(vertexCount * 2);
@@ -213,12 +264,14 @@ export function buildCircleBuffers(
   const CX = [-1, 1, 1, -1];
   const CY = [-1, -1, 1, 1];
 
-  for (let g = 0; g < stationCount; g++) {
+  let out = 0;
+  for (let g = 0; g < data.stationCount; g++) {
+    if (skip(g)) continue;
     const cx = stationRel[g * 2]!;
     const cy = stationRel[g * 2 + 1]!;
     const [fr, fg, fb, fa] = fillForStation(g);
     const [sr, sg, sb, sa] = strokeForStation(g);
-    const base = g * 4;
+    const base = out * 4;
     for (let c = 0; c < 4; c++) {
       const v = base + c;
       center[v * 2] = cx;
@@ -234,13 +287,14 @@ export function buildCircleBuffers(
       stroke[v * 4 + 2] = sb;
       stroke[v * 4 + 3] = sa;
     }
-    const io = g * 6;
+    const io = out * 6;
     indices[io] = base;
     indices[io + 1] = base + 1;
     indices[io + 2] = base + 2;
     indices[io + 3] = base;
     indices[io + 4] = base + 2;
     indices[io + 5] = base + 3;
+    out++;
   }
 
   const byteLength =

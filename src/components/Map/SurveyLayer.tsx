@@ -42,7 +42,7 @@ import {
 import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
 import { dimmedZoomOpacity } from './surveyLayer/opacityExpressions';
-import { SurveyCustomController } from './surveyLayer/customRender/controller';
+import { SurveyCustomController, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
 import type { SurveyData } from '../../types/survey-data';
 import type { ProjectWarning } from '../../types/commands';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
@@ -308,6 +308,12 @@ export default class SurveyLayer {
   private dragMovingStationKeys = new Set<string>();
   private dragMovingShots = new Map<string, MovingEnd>();
   private dragOverlayOffset: { dx: number; dy: number } | null = null;
+  /** Which features the custom-render layer must skip for the active drag, so
+   *  its GPU buffers hide the originals exactly as the stock bulk layers' filters
+   *  do (the custom layer ignores MapLibre filters). Set by the drag-begin paths,
+   *  cleared by endDragPreview; folded into every syncCustomRender so mid-drag
+   *  flushes keep the originals hidden. Null off the hot path. */
+  private dragExclusion: CustomRenderExclusion | null = null;
 
   // Visibility state (for hidden feature detection)
   private stationsVisible: boolean = true;
@@ -3932,6 +3938,9 @@ export default class SurveyLayer {
     this.createDragPreviewLayers();
     this.dragPreviewActive = true;
     this.renderDragPreview(0, 0);
+    // Segment drag hides whole connected sections (shots + stations) in the
+    // custom layer, mirroring the sectionId exclusion applied to the stock layers.
+    this.setDragExclusion({ sectionIds: new Set(idsArray) });
   }
 
   /**
@@ -4038,6 +4047,10 @@ export default class SurveyLayer {
     const buildLabels = this.labelsCurrentlyBuilt;
     const stationDefault = this.themeColors.stationDefault;
     const features: DragPreviewFeature[] = [];
+    // Custom-render exclusion mirrors the stock filters below: the SAME moving
+    // stations + shots, keyed by global SoA index for O(1) skip in tessellate.
+    const excludedStationGlobals = new Set<number>();
+    const excludedShotGlobals = new Set<number>();
 
     // Hide the moving stations from the bulk station + station-label layers.
     for (const layerId of [this.stationsLayerId, this.stationLabelsLayerId]) {
@@ -4057,6 +4070,7 @@ export default class SurveyLayer {
       this.dragMovingStationKeys.add(idStr);
       const section = this.geoIndex.section(ref.section_id);
       const g = this.geoIndex.stationGlobalIndex(ref);
+      if (g !== null) excludedStationGlobals.add(g);
       const color = g === null
         ? stationDefault
         : resolveStationDisplayColor(this.cachedSurveyData, section?.color ?? stationDefault, g, ctx);
@@ -4107,6 +4121,7 @@ export default class SurveyLayer {
         const fromCoord = metersToMapCoords(fromSt.coordinates.x, fromSt.coordinates.y, this.gpsOrigin) as [number, number];
         const toCoord = metersToMapCoords(toSt.coordinates.x, toSt.coordinates.y, this.gpsOrigin) as [number, number];
         const geo = this.geoIndex.shotGeometry(section.id, shot.id);
+        if (geo) excludedShotGlobals.add(geo.globalIdx);
         const color = geo
           ? resolveShotDisplayColor(this.cachedSurveyData, section.color ?? stationDefault, geo.globalIdx, ctx)
           : (section.color ?? stationDefault);
@@ -4190,7 +4205,21 @@ export default class SurveyLayer {
     this.createDragPreviewLayers();
     this.dragPreviewActive = true;
     this.renderDragPreview(0, 0);
+    this.setDragExclusion({
+      stationGlobalIndices: excludedStationGlobals,
+      shotGlobalIndices: excludedShotGlobals,
+    });
     return movingStations.map(s => s.station_ref);
+  }
+
+  /** Point the custom-render layer at (or off, with null) the active drag's
+   *  hidden feature set and rebuild its GPU buffers now, so the originals vanish
+   *  at drag begin and reappear at drag end — matching the stock bulk layers'
+   *  setFilter exclusions the custom layer cannot see. No-op unless the custom
+   *  render gate is on (resync -> sync early-returns without building). */
+  private setDragExclusion(exclusion: CustomRenderExclusion | null): void {
+    this.dragExclusion = exclusion;
+    this.resyncCustomRenderFromStore();
   }
 
   /** Schedule a coalesced preview render at `[dx, dy]`; latest offset wins, one
@@ -4266,6 +4295,9 @@ export default class SurveyLayer {
     this.dragPreviewSet = null;
     this.dragSavedFilters.clear();
     this.dragPreviewActive = false;
+    // Drop the custom-render exclusion and rebuild full buffers so the moved
+    // features reappear at their committed positions (mirrors the filter restore).
+    this.setDragExclusion(null);
   }
 
   /**
@@ -4412,6 +4444,7 @@ export default class SurveyLayer {
       shotWidthPx: this.getShotWidth(),
       stationRadiusPx: this.getStationRadius(),
       stationStrokePx: 1,
+      exclude: this.dragExclusion ?? undefined,
     });
   }
 

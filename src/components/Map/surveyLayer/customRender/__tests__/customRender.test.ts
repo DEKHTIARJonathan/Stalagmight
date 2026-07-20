@@ -300,6 +300,109 @@ describe('circle tessellation', () => {
   });
 });
 
+describe('tessellation exclusion (move-drag hide semantics)', () => {
+  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+  const fill = (g: number): Rgba8 => [g, 0, 0, 255];
+  const stroke = (_g: number): Rgba8 => [9, 9, 9, 255];
+
+  // Shared fixture handles: section 1 owns stations 0,1,2 + shots (global 0,1);
+  // section 2 owns station 3 + an invalid shot (global 2, dropped).
+
+  it('countValidShots drops excluded sections and shots, in lock-step', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    // Baseline.
+    expect(countValidShots(d, lookup)).toBe(2);
+    // Empty exclusion object == no exclusion.
+    expect(countValidShots(d, lookup, {})).toBe(2);
+    // Whole section 1 excluded -> both its shots gone.
+    expect(countValidShots(d, lookup, { sectionIds: new Set([1]) })).toBe(0);
+    // Single shot (global 0) excluded -> one valid shot remains.
+    expect(countValidShots(d, lookup, { shotGlobalIndices: new Set([0]) })).toBe(1);
+  });
+
+  it('buildLineBuffers omits an excluded shot and keeps the rest intact', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildLineBuffers(d, rel, lookup, stubColor, { shotGlobalIndices: new Set([0]) });
+    expect(b.segmentCount).toBe(1);
+    expect(b.vertexCount).toBe(4);
+    expect(b.indices.length).toBe(6);
+    expect(Array.from(b.indices)).toEqual([0, 1, 2, 2, 1, 3]);
+    // The surviving segment is shot global 1 (station idx1 -> idx2), color stub(1, 1).
+    expect(Array.from(b.color.slice(0, 4))).toEqual([1, 1, 7, 255]);
+    expect(b.posA[0]).toBeCloseTo(rel[2]!, 6); // station global 1
+    expect(b.posB[0]).toBeCloseTo(rel[4]!, 6); // station global 2
+  });
+
+  it('buildLineBuffers with an excluded section yields zero segments', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildLineBuffers(d, rel, lookup, stubColor, { sectionIds: new Set([1]) });
+    expect(b.segmentCount).toBe(0);
+    expect(b.vertexCount).toBe(0);
+    expect(b.indices.length).toBe(0);
+  });
+
+  it('buildCircleBuffers omits an excluded station and compacts output', () => {
+    const d = makeFixture();
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildCircleBuffers(d, rel, fill, stroke, { stationGlobalIndices: new Set([1]) });
+    expect(b.stationCount).toBe(3); // globals 0, 2, 3 survive
+    expect(b.vertexCount).toBe(12);
+    expect(b.indices.length).toBe(18);
+    // Output slot 0 = global 0, slot 1 = global 2, slot 2 = global 3 (compacted).
+    expect(Array.from(b.fill.slice(0, 4))).toEqual([0, 0, 0, 255]);
+    expect(Array.from(b.fill.slice(4 * 4, 4 * 4 + 4))).toEqual([2, 0, 0, 255]);
+    expect(Array.from(b.fill.slice(8 * 4, 8 * 4 + 4))).toEqual([3, 0, 0, 255]);
+    // Slot 1 (out index 1) center is global 2's anchor-relative position.
+    expect(b.center[4 * 2]).toBeCloseTo(rel[4]!, 6);
+    expect(b.center[4 * 2 + 1]).toBeCloseTo(rel[5]!, 6);
+    // Compacted indices reference the compacted vertex slots.
+    expect(Array.from(b.indices.slice(6, 12))).toEqual([4, 5, 6, 4, 6, 7]);
+  });
+
+  it('buildCircleBuffers with an excluded section drops all its stations', () => {
+    const d = makeFixture();
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildCircleBuffers(d, rel, fill, stroke, { sectionIds: new Set([1]) });
+    expect(b.stationCount).toBe(1); // only section 2's station 3
+    expect(Array.from(b.fill.slice(0, 4))).toEqual([3, 0, 0, 255]);
+  });
+
+  it('a station/shot move excludes both endpoint stations and the shot together', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const exclude = { stationGlobalIndices: new Set([1, 2]), shotGlobalIndices: new Set([1]) };
+    const line = buildLineBuffers(d, rel, lookup, stubColor, exclude);
+    const circle = buildCircleBuffers(d, rel, fill, stroke, exclude);
+    expect(line.segmentCount).toBe(1); // shot global 1 hidden; shot global 0 remains
+    expect(circle.stationCount).toBe(2); // globals 0, 3 remain
+  });
+
+  it('no exclusion (undefined / {} ) is byte-identical to the plain build', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const baseLine = buildLineBuffers(d, rel, lookup, stubColor);
+    const emptyLine = buildLineBuffers(d, rel, lookup, stubColor, {});
+    expect(emptyLine.segmentCount).toBe(baseLine.segmentCount);
+    expect(Array.from(emptyLine.indices)).toEqual(Array.from(baseLine.indices));
+    expect(Array.from(emptyLine.color)).toEqual(Array.from(baseLine.color));
+    expect(Array.from(emptyLine.posA)).toEqual(Array.from(baseLine.posA));
+
+    const baseCircle = buildCircleBuffers(d, rel, fill, stroke);
+    const emptyCircle = buildCircleBuffers(d, rel, fill, stroke, {});
+    expect(emptyCircle.stationCount).toBe(baseCircle.stationCount);
+    expect(Array.from(emptyCircle.indices)).toEqual(Array.from(baseCircle.indices));
+    expect(Array.from(emptyCircle.fill)).toEqual(Array.from(baseCircle.fill));
+    expect(Array.from(emptyCircle.center)).toEqual(Array.from(baseCircle.center));
+  });
+});
+
 describe('SurveyCustomLayer first-frames GL-error probe', () => {
   /** Private-method accessor: the GL draw path stays untested, but the pure
    *  frame-accounting around gl.getError() is exercised with a fake context. */
