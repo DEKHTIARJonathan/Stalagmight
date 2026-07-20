@@ -47,64 +47,9 @@ export interface DragPreviewFeature {
   /** ORIGINAL [lng, lat] vertices captured at drag start. */
   coords: Array<[number, number]>;
   movingEnd: MovingEnd;
-  /**
-   * Text features (labels / comments / section names) are emitted at their
-   * STATIC original anchor and followed each frame with a `text-translate` paint
-   * uniform, NOT by re-offsetting the source geometry. MapLibre re-runs symbol
-   * placement asynchronously and throttled, so a per-frame `setData` that moved
-   * the label coordinates leaves the glyphs frozen at their last-placed position
-   * for the whole drag (only snapping to the final spot once motion stops). A GPU
-   * `text-translate` shifts the drawn glyphs instantly, so the text tracks the
-   * moving geometry smoothly. When `label` is true, `buildDragPreviewFeature
-   * Collection` emits at the ORIGINAL coordinate and the layer's `text-translate`
-   * supplies the follow (`full` = whole offset, `half` = a stretching shot's
-   * midpoint, which moves half as far as its one moving endpoint).
-   */
-  label?: boolean;
   /** Passed through to the emitted GeoJSON feature unchanged (colors, widths,
-   *  label text, gradient props, the `kind` discriminator the layers filter on). */
+   *  gradient props, the `kind` discriminator the layers filter on). */
   properties: Record<string, unknown>;
-}
-
-/**
- * The per-frame `text-translate` for a preview label layer: the full screen
- * offset for text that moves with a fully-translating feature (station labels,
- * section names, both-endpoints shots), half of it for text at the midpoint of a
- * shot with a single moving endpoint (the midpoint shifts by half the offset).
- */
-export function dragLabelTranslate(dx: number, dy: number, half: boolean): [number, number] {
-  return half ? [dx / 2, dy / 2] : [dx, dy];
-}
-
-/**
- * Build a preview TEXT feature (station / shot label, section name, station /
- * shot comment). `emit` is `point` for text anchored at a single coordinate,
- * `midpoint` for text at the middle of a shot. The feature is flagged `label`
- * so it renders at its static anchor and follows via `text-translate`; the
- * `half` property (set for a shot whose midpoint moves half the offset) routes
- * it to the half-translate layer. `text` and `color` feed the layer's
- * `['get','label']` / `['get','color']`.
- */
-export function textPreviewFeature(
-  kind: string,
-  emit: 'point' | 'midpoint',
-  coords: Array<[number, number]>,
-  movingEnd: MovingEnd,
-  text: string,
-  color: string,
-): DragPreviewFeature {
-  return {
-    emit,
-    coords,
-    movingEnd,
-    label: true,
-    properties: {
-      kind,
-      label: text,
-      color,
-      half: movingEnd === 'from' || movingEnd === 'to',
-    },
-  };
 }
 
 export interface DragPreviewSet {
@@ -206,10 +151,7 @@ export function buildDragPreviewFeatureCollection(
 ): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = [];
   for (const f of set.features) {
-    // Text features stay at their static anchor; the layer's `text-translate`
-    // does the following (see DragPreviewFeature.label). Non-text geometry is
-    // re-projected at the current offset so the tiler clips the MOVED shape.
-    const moved = f.label ? f.coords : transformFeatureCoords(f, projector, dx, dy);
+    const moved = transformFeatureCoords(f, projector, dx, dy);
     if (f.emit === 'point') {
       features.push({
         type: 'Feature',

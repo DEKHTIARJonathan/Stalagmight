@@ -34,7 +34,6 @@ import {
   buildDragPreviewFeatureCollection,
   offsetOverlayPoint,
   offsetOverlayShot,
-  textPreviewFeature,
   type DragPreviewFeature,
   type DragPreviewSet,
   type MovingEnd,
@@ -42,10 +41,8 @@ import {
 } from './surveyLayer/dragPreviewSource';
 import {
   DRAG_PREVIEW_SOURCE,
-  applyDragLabelTranslate,
   createDragPreviewLayers,
   removeDragPreviewLayers,
-  setDragPreviewLabels,
   type DragPreviewLayerCtx,
 } from './surveyLayer/dragPreviewLayers';
 import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
@@ -68,7 +65,6 @@ import {
   type GasReachFeatureState,
 } from '../../utils/gasReach';
 import { metersToMapCoords } from '../../utils/coordinates';
-import { formatFixed } from '../../i18n/format';
 import { getErrorColor } from '../../utils/colors';
 import { trackNav } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
@@ -278,9 +274,10 @@ export default class SurveyLayer {
    *  invalidated them mid-flight. */
   private lastUpdateToken = 0;
   // Segment drag hides these bulk layers' real features (excluded by sectionId)
-  // while the moving copy renders from the unified preview source. Section names
-  // (survey-labels) are hidden too and re-rendered as a following preview copy
-  // (the anchor station moves with the segment, so a static name would trail).
+  // while the moving copy renders from the preview source. Shots + stations are
+  // re-rendered as moving geometry; the text layers (shot / station labels and
+  // section names) are hidden with no preview copy - attached text is dropped for
+  // the drag duration and restored on commit-settle / Escape.
   private static readonly SEGMENT_DRAG_MAIN_LAYERS = [
     'survey-shots',
     'survey-shot-gradients',
@@ -291,12 +288,12 @@ export default class SurveyLayer {
   ];
 
   // Unified drag-preview source (#mem drag fixes): ONE GeoJSON source holding
-  // every moving feature for the active drag — stations (points), shots (lines),
-  // shot/station labels, loop-closure indicator lines — rebuilt from captured
-  // originals each frame and pushed via a SINGLE setData. Real moved coordinates
-  // (not `*-translate`) so the tiler clips moved geometry — no background wedges
-  // at large offsets (BUG A); one setData so stations/shots/labels can't skew
-  // apart (BUG B).
+  // every moving GEOMETRY feature for the active drag — stations (points), shots
+  // (lines), loop-closure indicator lines — rebuilt from captured originals each
+  // frame and pushed via a SINGLE setData. Real moved coordinates (not
+  // `*-translate`) so the tiler clips moved geometry — no background wedges at
+  // large offsets (BUG A); one setData so stations/shots can't skew apart (BUG B).
+  // Attached text is not previewed (it is hidden from the stock text layers).
   // Layer specs + IDs live in surveyLayer/dragPreviewLayers.ts (DRAG_PREVIEW_SOURCE
   // is imported for the per-frame setData); the layers are created/removed there.
   /** Captured moving geometry for the active drag (originals + movingEnd). */
@@ -3708,38 +3705,23 @@ export default class SurveyLayer {
   }
 
   /** Build the layer-spec context for the drag-preview layers module: shots +
-   *  stations color/size, and the stock label layers whose layout the preview
-   *  text copies (see surveyLayer/dragPreviewLayers.ts). */
+   *  stations color / size / highlight (see surveyLayer/dragPreviewLayers.ts). */
   private dragPreviewLayerCtx(): DragPreviewLayerCtx {
     return {
       colorExpr: this.dragPreviewColorExpr(),
       shotWidth: this.getShotSelectionWidth(),
       stationRadius: this.getStationSelectionRadius(),
       selectHighlight: this.themeColors.selectHighlight,
-      textHalo: this.themeColors.textHalo,
-      stock: {
-        stationLabels: this.stationLabelsLayerId,
-        shotLabels: this.shotLabelsLayerId,
-        sectionLabels: this.labelsLayerId,
-        stationComments: this.stationCommentsLayerId,
-        shotComments: this.shotCommentsLayerId,
-      },
     };
   }
 
-  /** Install the captured drag preview: geometry goes to the per-frame setData
-   *  source; text (labels / comments / section names) goes to a separate source
-   *  set ONCE here (static anchors) and followed by text-translate. Shared by the
-   *  segment and station/shot begins. */
+  /** Install the captured drag preview geometry (shots / stations / closures)
+   *  into the per-frame setData source. Attached text is not previewed - it is
+   *  hidden from the stock text layers for the drag duration by the begin
+   *  methods. Shared by the segment and station/shot begins. */
   private installDragPreview(features: DragPreviewFeature[]): void {
-    this.dragPreviewSet = { features: features.filter(f => !f.label) };
+    this.dragPreviewSet = { features };
     createDragPreviewLayers(this.map, this.dragPreviewLayerCtx());
-    setDragPreviewLabels(
-      this.map,
-      buildDragPreviewFeatureCollection(
-        { features: features.filter(f => f.label) }, this.dragProjector(), 0, 0,
-      ),
-    );
     this.dragPreviewActive = true;
     this.renderDragPreview(0, 0);
   }
@@ -3752,11 +3734,6 @@ export default class SurveyLayer {
     const fc = buildDragPreviewFeatureCollection(this.dragPreviewSet, this.dragProjector(), dx, dy);
     const src = this.map.getSource(DRAG_PREVIEW_SOURCE);
     if (src && 'setData' in src) (src as maplibregl.GeoJSONSource).setData(fc);
-    // Text (labels / comments / section names) stays at its static anchor in the
-    // source and follows via a GPU text-translate, dodging the symbol-placement
-    // throttle that would otherwise freeze it at the drag start (see
-    // dragPreviewLayers.ts). Geometry above already moved through setData.
-    applyDragLabelTranslate(this.map, dx, dy);
     // Re-emit any hover/selected highlight on a moving feature at the same offset
     // so it tracks the cursor instead of sticking at the committed position (#C).
     this.dragOverlayOffset = { dx, dy };
@@ -3839,8 +3816,8 @@ export default class SurveyLayer {
       ? (['all', existingClosureFilter, eitherEndpointExclusion] as unknown as maplibregl.FilterSpecification)
       : eitherEndpointExclusion);
 
-    // Also hide the moving sections' comments (they carry sectionId) so the
-    // following preview copies replace them; restored via dragSavedFilters.
+    // Also hide the moving sections' comments (they carry sectionId) so no stale
+    // text lingers at the old position; restored via dragSavedFilters.
     for (const layerId of [this.stationCommentsLayerId, this.shotCommentsLayerId]) {
       if (this.map.getLayoutProperty(layerId, 'visibility') !== 'visible') continue;
       const existing = this.map.getFilter(layerId);
@@ -3851,14 +3828,11 @@ export default class SurveyLayer {
     }
 
     // Capture the moving geometry once. Everything in the segment moves uniformly.
+    // Attached text (labels / comments / section names) is not captured - it is
+    // hidden from the stock layers above, not previewed.
     const features: DragPreviewFeature[] = [];
     const ctx = this.displayColorContext();
-    const buildLabels = this.labelsCurrentlyBuilt;
     const stationDefault = this.themeColors.stationDefault;
-    const labelColor = this.themeColors.labelColor;
-    const showSectionNames = this.map.getLayoutProperty(this.labelsLayerId, 'visibility') !== 'none';
-    const showStComments = this.map.getLayoutProperty(this.stationCommentsLayerId, 'visibility') === 'visible';
-    const showShComments = this.map.getLayoutProperty(this.shotCommentsLayerId, 'visibility') === 'visible';
 
     for (const section of this.cachedSections) {
       if (!connectedSectionIds.has(section.id)) continue;
@@ -3867,14 +3841,7 @@ export default class SurveyLayer {
         .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index);
       const sectionColor = section.color ?? stationDefault;
 
-      // Section name follows uniformly, anchored at the section's first station.
-      const anchor = sectionStations[0];
-      if (anchor && section.name && showSectionNames) {
-        const ac = metersToMapCoords(anchor.coordinates.x, anchor.coordinates.y, this.gpsOrigin) as [number, number];
-        features.push(textPreviewFeature('sectionLabel', 'point', [ac], 'uniform', section.name, sectionColor));
-      }
-
-      // Stations (points) + station labels + station comments.
+      // Stations (points).
       for (const st of sectionStations) {
         const ref = st.station_ref;
         const coord = metersToMapCoords(st.coordinates.x, st.coordinates.y, this.gpsOrigin) as [number, number];
@@ -3890,15 +3857,9 @@ export default class SurveyLayer {
           movingEnd: 'uniform',
           properties: { kind: 'station', color, ...this.dragOverlayProps(idStr, 'station') },
         });
-        if (buildLabels) {
-          features.push(textPreviewFeature('stationLabel', 'point', [coord], 'uniform', String(ref.station_index), color));
-        }
-        if (showStComments && st.comment) {
-          features.push(textPreviewFeature('stationComment', 'point', [coord], 'uniform', st.comment, labelColor));
-        }
       }
 
-      // Shots (lines) + shot labels + shot comments.
+      // Shots (lines).
       for (let i = 0; i < section.shots.length; i++) {
         const fromSt = sectionStations[i];
         const toSt = sectionStations[i + 1];
@@ -3917,13 +3878,6 @@ export default class SurveyLayer {
           movingEnd: 'uniform',
           properties: { kind: 'shot', color, ...this.dragOverlayProps(`${section.id}:${shot.id}`, 'shot') },
         });
-        if (buildLabels) {
-          const label = `${formatFixed(shot.azimuth_in, undefined, this.cachedPrecision?.azimuth ?? 0)}° ${formatFixed(shot.length, undefined, this.cachedPrecision?.length ?? 1)}m`;
-          features.push(textPreviewFeature('shotLabel', 'midpoint', [fromCoord, toCoord], 'uniform', label, sectionColor));
-        }
-        if (showShComments && shot.comment) {
-          features.push(textPreviewFeature('shotComment', 'midpoint', [fromCoord, toCoord], 'uniform', shot.comment, labelColor));
-        }
       }
     }
 
@@ -4044,13 +3998,12 @@ export default class SurveyLayer {
 
     // 3. Capture the moving geometry once (originals + movingEnd). The bulk
     // features are hidden by filters below; the moving copy renders from the
-    // unified preview source. Only endpoints in the moving set follow the offset,
-    // so a shot stretches around a fixed end instead of translating whole.
+    // preview source. Attached text is hidden from the stock text layers, not
+    // previewed. Only endpoints in the moving set follow the offset, so a shot
+    // stretches around a fixed end instead of translating whole.
     if (!this.geoIndex || !this.cachedSurveyData) return movingStations.map(s => s.station_ref);
     const ctx = this.displayColorContext();
-    const buildLabels = this.labelsCurrentlyBuilt;
     const stationDefault = this.themeColors.stationDefault;
-    const labelColor = this.themeColors.labelColor;
     const showStComments = this.map.getLayoutProperty(this.stationCommentsLayerId, 'visibility') === 'visible';
     const showShComments = this.map.getLayoutProperty(this.shotCommentsLayerId, 'visibility') === 'visible';
     const features: DragPreviewFeature[] = [];
@@ -4060,7 +4013,7 @@ export default class SurveyLayer {
     const excludedShotGlobals = new Set<number>();
 
     // Hide the moving stations from the bulk station + station-label (+ station-
-    // comment, when shown) layers so the following preview copies replace them.
+    // comment, when shown) layers; the labels / comments are dropped for the drag.
     const stationHideLayers = [this.stationsLayerId, this.stationLabelsLayerId];
     if (showStComments) stationHideLayers.push(this.stationCommentsLayerId);
     for (const layerId of stationHideLayers) {
@@ -4072,7 +4025,7 @@ export default class SurveyLayer {
       this.map.setFilter(layerId, composed);
     }
 
-    // Moving stations (points) + station labels + station comments — all uniform.
+    // Moving stations (points) — all uniform.
     for (const st of movingStations) {
       const ref = st.station_ref;
       const coord = metersToMapCoords(st.coordinates.x, st.coordinates.y, this.gpsOrigin) as [number, number];
@@ -4090,12 +4043,6 @@ export default class SurveyLayer {
         movingEnd: 'uniform',
         properties: { kind: 'station', color, ...this.dragOverlayProps(idStr, 'station') },
       });
-      if (buildLabels) {
-        features.push(textPreviewFeature('stationLabel', 'point', [coord], 'uniform', String(ref.station_index), color));
-      }
-      if (showStComments && st.comment) {
-        features.push(textPreviewFeature('stationComment', 'point', [coord], 'uniform', st.comment, labelColor));
-      }
     }
 
     // 4. Connected shots (lines) + shot labels; build the shot exclusion filter.
@@ -4139,13 +4086,6 @@ export default class SurveyLayer {
           movingEnd,
           properties: { kind: 'shot', color, ...this.dragOverlayProps(shotKey, 'shot') },
         });
-        if (buildLabels) {
-          const label = `${formatFixed(shot.azimuth_in, undefined, this.cachedPrecision?.azimuth ?? 0)}° ${formatFixed(shot.length, undefined, this.cachedPrecision?.length ?? 1)}m`;
-          features.push(textPreviewFeature('shotLabel', 'midpoint', [fromCoord, toCoord], movingEnd, label, section.color ?? stationDefault));
-        }
-        if (showShComments && shot.comment) {
-          features.push(textPreviewFeature('shotComment', 'midpoint', [fromCoord, toCoord], movingEnd, shot.comment, labelColor));
-        }
         shotExclusions.push(['all',
           ['==', ['get', 'sectionId'], section.id],
           ['==', ['get', 'shotId'], shot.id],
@@ -4154,7 +4094,7 @@ export default class SurveyLayer {
     }
 
     // Hide the moving shots from the bulk shot / gradient / shot-label (+ shot-
-    // comment, when shown) layers so the following preview copies replace them.
+    // comment, when shown) layers; the labels / comments are dropped for the drag.
     if (shotExclusions.length > 0) {
       const shotExclusion: maplibregl.FilterSpecification = ['!',
         shotExclusions.length === 1 ? shotExclusions[0]! : ['any', ...shotExclusions],
