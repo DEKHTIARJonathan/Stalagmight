@@ -317,6 +317,19 @@ export default class SurveyLayer {
    *  overlay refresh reads the freshly installed geometry (no snap-back, and no
    *  old+offset overshoot). */
   private dragCommitPending = false;
+  /** Deferred custom-render drag-hide (START-flash fix). The moving originals are
+   *  hidden from the custom WebGL layer only once the drag-preview GeoJSON source
+   *  has parsed and drawn its first frame - the preview's setData is async (~5
+   *  frames on a real project) while setDragHide is a synchronous GPU upload, so
+   *  hiding eagerly leaves a window where the geometry is in NEITHER the custom
+   *  layer nor the (not-yet-parsed) preview: a blank flash. Stored so it can be
+   *  force-applied at commit and torn down on end; `dragGeneration` is bumped per
+   *  drag so a late sourcedata callback from a superseded drag is ignored. */
+  private dragGeneration = 0;
+  private pendingDragHide: {
+    exclusion: CustomRenderExclusion;
+    listener: (e: maplibregl.MapSourceDataEvent) => void;
+  } | null = null;
 
   // Visibility state (for hidden feature detection)
   private stationsVisible: boolean = true;
@@ -3720,6 +3733,10 @@ export default class SurveyLayer {
    *  hidden from the stock text layers for the drag duration by the begin
    *  methods. Shared by the segment and station/shot begins. */
   private installDragPreview(features: DragPreviewFeature[]): void {
+    // New drag generation: invalidates any still-pending deferred drag-hide from
+    // a superseded drag (guards the sourcedata callback in
+    // setDragExclusionWhenPreviewReady).
+    this.dragGeneration += 1;
     this.dragPreviewSet = { features };
     createDragPreviewLayers(this.map, this.dragPreviewLayerCtx());
     this.dragPreviewActive = true;
@@ -3898,7 +3915,8 @@ export default class SurveyLayer {
     this.installDragPreview(features);
     // Segment drag hides whole connected sections (shots + stations) in the
     // custom layer, mirroring the sectionId exclusion applied to the stock layers.
-    this.setDragExclusion({ sectionIds: new Set(idsArray) });
+    // Deferred until the preview has drawn (START-flash fix).
+    this.setDragExclusionWhenPreviewReady({ sectionIds: new Set(idsArray) });
   }
 
   /**
@@ -4151,7 +4169,10 @@ export default class SurveyLayer {
     }
 
     this.installDragPreview(features);
-    this.setDragExclusion({
+    // Deferred until the preview has drawn (START-flash fix): hide the moving
+    // originals from the custom layer only once the async preview source is up,
+    // so there is never a frame with the geometry in neither place.
+    this.setDragExclusionWhenPreviewReady({
       stationGlobalIndices: excludedStationGlobals,
       shotGlobalIndices: excludedShotGlobals,
     });
@@ -4165,6 +4186,59 @@ export default class SurveyLayer {
    *  flag (no buffer rebuild). No-op unless the custom render gate is on. */
   private setDragExclusion(exclusion: CustomRenderExclusion | null): void {
     this.customRender?.setDragHide(exclusion);
+  }
+
+  /**
+   * Apply the custom-render drag-hide only once the drag-preview source has
+   * parsed and drawn its first frame (START-flash fix). setDragHide is a
+   * synchronous GPU upload that takes effect on the very next frame, but the
+   * preview's GeoJSON setData is async (worker parse + retile, ~5 frames on a
+   * real project). Hiding the originals eagerly therefore blanks the geometry
+   * for those frames - it is in neither the custom layer nor the not-yet-drawn
+   * preview. Deferring the hide to the source's first `sourcedata`-loaded event
+   * keeps the originals visible until the preview stands in for them (at offset
+   * ~0 they overlap, so there is no visible double either), then swaps to the
+   * preview atomically.
+   */
+  private setDragExclusionWhenPreviewReady(exclusion: CustomRenderExclusion): void {
+    this.clearPendingDragHide();
+    // If the source is already parsed (rare - typically false right after the
+    // begin's setData), hide immediately; nothing to wait for.
+    if (this.map.isSourceLoaded(DRAG_PREVIEW_SOURCE)) {
+      this.setDragExclusion(exclusion);
+      return;
+    }
+    const gen = this.dragGeneration;
+    const listener = (e: maplibregl.MapSourceDataEvent): void => {
+      if (e.sourceId !== DRAG_PREVIEW_SOURCE) return;
+      if (!this.map.isSourceLoaded(DRAG_PREVIEW_SOURCE)) return;
+      this.map.off('sourcedata', listener);
+      if (this.pendingDragHide?.listener === listener) this.pendingDragHide = null;
+      // Ignore a stale callback from a drag that has since ended or been replaced.
+      if (gen !== this.dragGeneration || !this.dragPreviewActive) return;
+      this.setDragExclusion(exclusion);
+    };
+    this.pendingDragHide = { exclusion, listener };
+    this.map.on('sourcedata', listener);
+  }
+
+  /** Tear down a still-pending deferred drag-hide without applying it (on end). */
+  private clearPendingDragHide(): void {
+    if (!this.pendingDragHide) return;
+    this.map.off('sourcedata', this.pendingDragHide.listener);
+    this.pendingDragHide = null;
+  }
+
+  /** Force-apply a still-pending deferred drag-hide immediately (on commit). If a
+   *  very fast drag commits before the async preview ever loaded, the originals
+   *  must be hidden NOW so they cannot show through the preview that is kept alive
+   *  across the IPC window (see commitDragPreview). No-op once already applied. */
+  private flushPendingDragHide(): void {
+    const pending = this.pendingDragHide;
+    if (!pending) return;
+    this.map.off('sourcedata', pending.listener);
+    this.pendingDragHide = null;
+    if (this.dragPreviewActive) this.setDragExclusion(pending.exclusion);
   }
 
   /** Schedule a coalesced preview render at `[dx, dy]`; latest offset wins, one
@@ -4215,7 +4289,19 @@ export default class SurveyLayer {
   commitDragPreview(): void {
     if (!this.dragPreviewActive) return;
     this.cancelDragRender();
-    removeDragPreviewLayers(this.map);
+    // FINISH-flash fix: do NOT remove the preview here. cancelDragRender above
+    // freezes it at the placement offset (its last setData), which is where the
+    // committed geometry will land. The committed geometry does not exist
+    // client-side until the post-IPC flush installs it (~100ms), and the
+    // custom-render drag-hide stays applied until endDragPreview - so removing
+    // the preview now would leave the moved geometry in NEITHER the preview nor
+    // the custom layer for the whole IPC window: a blank hole where the user just
+    // placed it. Instead endDragPreview (sequenced via onNextUpdate, firing in the
+    // same synchronous flush block that installs the committed geometry and clears
+    // the hide) removes the preview and swaps to the committed geometry atomically.
+    // Force-apply any still-deferred hide now so a very fast drag's stale
+    // originals cannot show through the kept preview during the window.
+    this.flushPendingDragHide();
     // Keep the interact overlay following (dragOverlayOffset + moving sets) across
     // the IPC + flush window so the grabbed highlight stays glued to the cursor
     // instead of snapping back to the OLD coords for the ~100ms until the committed
@@ -4236,6 +4322,10 @@ export default class SurveyLayer {
     if (!this.dragPreviewActive) return;
 
     this.cancelDragRender();
+    // Drop any deferred drag-hide that never fired (drag ended before the preview
+    // loaded). removeDragPreviewLayers below is the single removal point for the
+    // preview now that commitDragPreview keeps it alive across the IPC window.
+    this.clearPendingDragHide();
     removeDragPreviewLayers(this.map);
     for (const [layerId, saved] of this.dragSavedFilters) {
       if (this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
