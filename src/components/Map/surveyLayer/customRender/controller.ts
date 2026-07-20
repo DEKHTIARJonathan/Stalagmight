@@ -81,6 +81,17 @@ export interface SurveyCustomControllerOptions {
    * the cached snapshot.
    */
   resync?: () => void;
+  /**
+   * Notified whenever the custom layer's active (drawing) state flips. `true`
+   * once the layer is added AND drawing (stock bulk layers hidden); `false` on
+   * teardown, gate-off, or a fail-safe self-disable. SurveyLayer uses this to
+   * stop publishing the stock bulk shot/station/gradient vector tiles while the
+   * custom layer covers them, and to re-publish them from cached SoA when the
+   * custom layer goes away (#customRender / #mem). Never fires for a failed
+   * enable (the layer that could not draw leaves `active` false, so the stock
+   * pipeline must stay published).
+   */
+  onActiveChange?: (active: boolean) => void;
 }
 
 export interface CustomSyncParams {
@@ -132,6 +143,8 @@ export class SurveyCustomController {
   private readonly scheduleRestore: (fn: () => void) => void;
   /** Fresh-geometry re-sync backing the runtime hook; see options.resync. */
   private readonly resync: (() => void) | undefined;
+  /** Active-state transition callback; see options.onActiveChange. */
+  private readonly onActiveChange: ((active: boolean) => void) | undefined;
   /** Guards handleSelfDisable against re-entrancy while a restore is pending. */
   private selfDisableScheduled = false;
   /** Display toggles mirroring the stock layers' setShowShots /
@@ -166,6 +179,7 @@ export class SurveyCustomController {
     this.layerId = layerId;
     this.scheduleRestore = opts.scheduleRestore ?? defaultScheduleRestore;
     this.resync = opts.resync;
+    this.onActiveChange = opts.onActiveChange;
     this.installHook();
   }
 
@@ -210,6 +224,14 @@ export class SurveyCustomController {
     if (this.active) this.map.triggerRepaint();
   }
 
+  /** Set the active flag, firing {@link onActiveChange} only on a real change so
+   *  SurveyLayer can drop / re-publish the stock bulk sources in lockstep. */
+  private setActive(v: boolean): void {
+    if (this.active === v) return;
+    this.active = v;
+    this.onActiveChange?.(v);
+  }
+
   private enable(data: CustomRenderData): void {
     if (!this.map.getStyle) return;
     // addLayer triggers layer.onAdd synchronously; the layer may disable itself
@@ -236,12 +258,12 @@ export class SurveyCustomController {
       if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
       this.setStockVisibility('visible');
       this.layer = null;
-      this.active = false;
+      this.setActive(false);
       return;
     }
     this.layer = layer;
     this.setStockVisibility('none');
-    this.active = true;
+    this.setActive(true);
     // Ungated lifecycle log (one-shot): gate state + buffer counts.
     console.info('[customRender] enabled; stock survey layers hidden', {
       shotSegments: data.line.segmentCount,
@@ -263,7 +285,7 @@ export class SurveyCustomController {
     if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
     this.layer = null;
     this.setStockVisibility('visible');
-    this.active = false;
+    this.setActive(false);
     this.map.triggerRepaint();
   }
 

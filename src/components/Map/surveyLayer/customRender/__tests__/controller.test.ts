@@ -300,3 +300,67 @@ describe('SurveyCustomController fail-safe visibility', () => {
     expect(info.mock.calls.some((cl) => String(cl[0]).includes('disabled'))).toBe(true);
   });
 });
+
+describe('SurveyCustomController onActiveChange (stock-suppression signal)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.disabledReason = 'program-link-failed';
+    h.layerState.last = null;
+    h.gate.enabled = true;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('fires true when the custom layer starts drawing, once, and false on gate-off', () => {
+    const calls: boolean[] = [];
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map, undefined, { onActiveChange: (a) => calls.push(a) });
+    c.sync(makeParams());
+    expect(calls).toEqual([true]);
+    // A re-sync while still enabled is not a transition — must NOT re-fire.
+    c.sync(makeParams());
+    expect(calls).toEqual([true]);
+    // Gate off -> the stock pipeline must be told to come back.
+    h.gate.enabled = false;
+    c.sync(makeParams());
+    expect(calls).toEqual([true, false]);
+  });
+
+  it('does NOT fire true when the custom layer fails to initialize (stock must stay)', () => {
+    h.layerState.disabledAfterAdd = true;
+    h.layerState.disabledReason = 'webgl2-unavailable';
+    const calls: boolean[] = [];
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map, undefined, { onActiveChange: (a) => calls.push(a) });
+    c.sync(makeParams());
+    // active never became true, so no suppression signal — stock keeps publishing.
+    expect(calls).toEqual([]);
+  });
+
+  it('fires false after a deferred fail-safe self-disable (re-publish trigger)', () => {
+    const holder: { fn: (() => void) | null } = { fn: null };
+    const calls: boolean[] = [];
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map, undefined, {
+      onActiveChange: (a) => calls.push(a),
+      scheduleRestore: (fn) => { holder.fn = fn; },
+    });
+    c.sync(makeParams());
+    expect(calls).toEqual([true]);
+    h.layerState.last?.onSelfDisable?.('gl-error-0x502');
+    // Deferred: not yet restored, so no false yet.
+    expect(calls).toEqual([true]);
+    holder.fn?.();
+    expect(calls).toEqual([true, false]);
+  });
+
+  it('fires false on destroy() when active', () => {
+    const calls: boolean[] = [];
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map, undefined, { onActiveChange: (a) => calls.push(a) });
+    c.sync(makeParams());
+    c.destroy();
+    expect(calls).toEqual([true, false]);
+  });
+});

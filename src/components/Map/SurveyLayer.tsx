@@ -417,6 +417,29 @@ export default class SurveyLayer {
   // `stalagmight_custom_render` gate is on; see surveyLayer/customRender/.
   private customRender: SurveyCustomController | null = null;
 
+  /**
+   * True while the custom WebGL layer is drawing and has taken over the bulk
+   * shots / stations / shot-gradients (#customRender / #mem). When set, those
+   * dedicated `stalx://` vector-tile sources stop building payloads, cutting
+   * tiles, and holding registry/tile caches — the biggest steady-state hold on
+   * 92.stalx — because nothing stock consumes them (the survey-shots /
+   * survey-stations / survey-shot-gradients layers are hidden, hit-testing runs
+   * off the SoA geometry index, and hover/selection render from the interact
+   * overlay). Flipped by the controller's onActiveChange callback; a transition
+   * to `false` (gate off / fail-safe self-disable) re-publishes them from cache.
+   */
+  private customBulkSuppressed = false;
+  /** Bulk geometry groups the custom layer replaces. Their dedicated sources are
+   *  the ones suppressed while {@link customBulkSuppressed}. */
+  private static readonly BULK_GEOMETRY_GROUPS: readonly SurveyFeatureGroupKey[] = [
+    'shotFeatures',
+    'stationFeatures',
+    'shotGradientFeatures',
+  ];
+  /** Monotonic tile-URL version for force-emptying a dropped bulk source. Kept
+   *  far above any registry version so a bump never collides with a live one. */
+  private bulkDropSeq = 1_000_000_000;
+
   // Feature granularity of the bulk sources (#mem). Merged groups are the
   // steady state; per-feature modes (distance / gas-reach / measured path /
   // move_station / move_shot) need per-item feature-state or filters, so
@@ -462,6 +485,7 @@ export default class SurveyLayer {
     this.initializeEventHandlers();
     this.customRender = new SurveyCustomController(map, undefined, {
       resync: () => this.resyncCustomRenderFromStore(),
+      onActiveChange: (active) => this.onCustomActiveChange(active),
     });
   }
 
@@ -588,17 +612,7 @@ export default class SurveyLayer {
     // groups haven't landed. Re-run a full update so everything lands at the new
     // granularity (cachedSections is current — no newer pending args exist).
     if (this.fullUpdateInFlightCount > 0) {
-      this.update(
-        this.cachedSections,
-        this.cachedStations,
-        this.cachedLoopClosures,
-        this.gpsOrigin,
-        this.showDepthGradient,
-        this.depthRange,
-        this.cachedPrecision,
-        this.showIssueSeverity,
-        this.cachedWarnings,
-      );
+      this.rebuildFromCache();
       return;
     }
 
@@ -659,17 +673,7 @@ export default class SurveyLayer {
           // consistently — but only if we're still the current request.
           console.error('[SurveyLayer] granularity swap failed, falling back to full update:', e);
           if (myToken !== this.lastUpdateToken || !hasLiveStyle(this.map)) return;
-          this.update(
-            this.cachedSections,
-            this.cachedStations,
-            this.cachedLoopClosures,
-            this.gpsOrigin,
-            this.showDepthGradient,
-            this.depthRange,
-            this.cachedPrecision,
-            this.showIssueSeverity,
-            this.cachedWarnings,
-          );
+          this.rebuildFromCache();
         },
       },
     );
@@ -4488,6 +4492,89 @@ export default class SurveyLayer {
   }
 
   /**
+   * Whether a bulk group's stock `stalx://` source should be DROPPED right now
+   * (#customRender / #mem) — true only while the custom layer suppresses stock
+   * AND nothing stock still consumes the source:
+   *   - shot-gradients: always droppable (the custom layer draws the gradient).
+   *   - shots / stations: droppable EXCEPT while a measured path is set — the
+   *     stock survey-measure-path overlay (not hidden by the controller) reads
+   *     the `-shots` source, and its per-feature measure content spans both.
+   * Non-bulk groups (labels, closures) are never dropped.
+   */
+  private shouldDropBulkSource(group: SurveyFeatureGroupKey): boolean {
+    if (!this.customBulkSuppressed) return false;
+    if (group === 'shotGradientFeatures') return true;
+    if (group === 'shotFeatures' || group === 'stationFeatures') {
+      return this.measuredPathIds === null && this.measuredPathStationIds === null;
+    }
+    return false;
+  }
+
+  /** The bulk groups to skip building + publishing now. Passed to the worker so
+   *  it never converts their vt payload; also drives applyFeatureChunk's drop. */
+  private suppressedBulkGroups(): SurveyFeatureGroupKey[] {
+    return SurveyLayer.BULK_GEOMETRY_GROUPS.filter((g) => this.shouldDropBulkSource(g));
+  }
+
+  /**
+   * Drop a suppressed bulk source's registry payload and force any resident
+   * tiles to refetch as empty (#mem). The registry hold (compact typed arrays +
+   * one props object per group — ~8.5 MB + ~104k objects on 92.stalx) is the
+   * steady-state cost the custom layer makes redundant. The measure-path overlay
+   * keeps the `-shots` tiles resident even filtered to nothing, so bump the tile
+   * URL to re-request them; the cleared key then serves empty tiles.
+   */
+  private dropBulkSource(group: SurveyFeatureGroupKey): void {
+    const { suffix, kind } = SurveyLayer.GROUP_SOURCE[group];
+    const sourceId = this.sourceId + suffix;
+    clearVtLayerData(sourceId);
+    recordFeatureCount(kind, 0);
+    const source = this.map.getSource(sourceId) as VectorTileSource | undefined;
+    if (source && source.tiles?.[0] && source.tiles[0] !== vtTileUrl(sourceId, 0)) {
+      source.setTiles([vtTileUrl(sourceId, this.bulkDropSeq++)]);
+    }
+    // Drop the section->featureId hover-lookup for a dropped source (rebuilt if
+    // the source is re-published; the interact overlay handles hover meanwhile).
+    if (group === 'shotFeatures') this.sectionShotFeatureIds = new Map();
+    if (group === 'stationFeatures') this.sectionStationFeatureIds = new Map();
+  }
+
+  /**
+   * The custom layer's drawing state flipped (#customRender / #mem). ON: drop the
+   * stock bulk sources it replaces so they stop holding registry + tile caches.
+   * OFF (gate flip / fail-safe self-disable): the stock pipeline must come back
+   * completely — re-publish from cached SoA, unless a flush is already in flight
+   * that will publish them (a flush calls syncCustomRender first, so its own
+   * applyFeatureChunk runs after suppression cleared).
+   */
+  private onCustomActiveChange(active: boolean): void {
+    if (active === this.customBulkSuppressed) return;
+    this.customBulkSuppressed = active;
+    if (!hasLiveStyle(this.map)) return;
+    if (active) {
+      for (const group of this.suppressedBulkGroups()) this.dropBulkSource(group);
+    } else if (
+      !this.updateScheduled &&
+      this.pendingUpdateArgs === null &&
+      this.fullUpdateInFlightCount === 0 &&
+      (this.cachedSections.length > 0 || this.cachedStations.length > 0)
+    ) {
+      this.rebuildFromCache();
+    }
+  }
+
+  /** Re-run a full `update()` from the cached inputs. Shared by theme change,
+   *  granularity mismatch, worker-swap fallback, and custom-render restore — all
+   *  of which need every source rebuilt from the last-known geometry. */
+  private rebuildFromCache(): void {
+    this.update(
+      this.cachedSections, this.cachedStations, this.cachedLoopClosures, this.gpsOrigin,
+      this.showDepthGradient, this.depthRange, this.cachedPrecision, this.showIssueSeverity,
+      this.cachedWarnings,
+    );
+  }
+
+  /**
    * Decide whether label features should materialize for this flush, and
    * record the decision in `labelsCurrentlyBuilt`. Shared by the async
    * (worker) and sync (drag-commit) flush paths.
@@ -4612,6 +4699,10 @@ export default class SurveyLayer {
         issueSeverity,
         mergeFeatures: !perFeature,
       };
+      // syncCustomRender may have just enabled/disabled the custom layer, so read
+      // suppression AFTER it: the worker then skips converting + posting the vt
+      // payload for any bulk group the custom layer covers (#customRender / #mem).
+      const suppressedBulkGroups = this.suppressedBulkGroups();
 
       const tBuildStart = performance.now();
       // Stream the built groups to the sources as they arrive (#mem). The sink
@@ -4632,6 +4723,7 @@ export default class SurveyLayer {
           themeColors: this.themeColors,
           precision: this.cachedPrecision,
           options: buildOptions,
+          suppressedBulkGroups,
         },
         {
           begin: () => {
@@ -4870,6 +4962,15 @@ export default class SurveyLayer {
     this.colorPalette = colorPalette as string[];
 
     if (vtKind) {
+      // Custom render suppression (#customRender / #mem): while the custom WebGL
+      // layer draws these, their dedicated `stalx://` source must not build a
+      // payload, cut tiles, or hold caches. Drop instead of publish. The worker
+      // path already skips emitting suppressed groups; this covers the paths
+      // that still emit (granularity swap, inline fallback, sync drag-commit).
+      if (this.shouldDropBulkSource(group)) {
+        this.dropBulkSource(group);
+        return;
+      }
       // Bulk group -> vector-tile registry (#mem). The worker ships the
       // compact typed-array payload; the sync/inline build paths still hand
       // us GeoJSON, so convert here in that case.
@@ -5074,17 +5175,7 @@ export default class SurveyLayer {
 
     // Rebuild features with new theme colors (colors are embedded in GeoJSON properties)
     if (this.cachedSections.length > 0 || this.cachedStations.length > 0) {
-      this.update(
-        this.cachedSections,
-        this.cachedStations,
-        this.cachedLoopClosures,
-        this.gpsOrigin,
-        this.showDepthGradient,
-        this.depthRange,
-        this.cachedPrecision,
-        this.showIssueSeverity,
-        this.cachedWarnings
-      );
+      this.rebuildFromCache();
     }
   }
 

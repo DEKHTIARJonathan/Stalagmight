@@ -41,6 +41,11 @@ interface BuildArgs {
   themeColors: MapThemeColors;
   precision: DecimalPrecision | undefined;
   options: BuildSurveyFeaturesOptions;
+  /** Bulk groups the custom WebGL layer covers (#customRender / #mem). The
+   *  worker still builds their GeoJSON transient (it feeds the color interner)
+   *  but skips converting + transferring their vt payload, so the main thread
+   *  never receives or holds them. Absent / empty = build + emit everything. */
+  suppressedBulkGroups?: SurveyFeatureGroupKey[];
 }
 
 /** Narrow granularity-swap args (#mem): rebuild ONLY shots + stations (the merge

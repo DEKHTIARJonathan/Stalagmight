@@ -36,6 +36,10 @@ interface BuildArgs {
   themeColors: MapThemeColors;
   precision: DecimalPrecision | undefined;
   options: BuildSurveyFeaturesOptions;
+  /** Bulk groups the custom WebGL layer covers (#customRender / #mem): built for
+   *  the color interner but not converted to vt or posted. Keep in sync with
+   *  featuresWorkerClient.BuildArgs. */
+  suppressedBulkGroups?: SurveyFeatureGroupKey[];
 }
 
 interface BuildMessage {
@@ -173,6 +177,7 @@ self.onmessage = (e: MessageEvent<IncomingMessage>) => {
   try {
     const begin: OutgoingMessage = { kind: 'begin', requestId: msg.requestId };
     self.postMessage(begin);
+    const suppressed = new Set(msg.args.suppressedBulkGroups ?? []);
     // Stream each group out of `buildSurveyFeatures` as its build phase finishes.
     // postMessage's structured clone is synchronous, so the array is fully
     // serialized before the builder drops its reference (it clears the array
@@ -187,6 +192,11 @@ self.onmessage = (e: MessageEvent<IncomingMessage>) => {
       msg.args.precision,
       msg.args.options,
       (group, features, colorPalette) => {
+        // Custom render covers this bulk group (#customRender / #mem): the
+        // GeoJSON build above already interned its colors (so later groups keep
+        // valid colorIndex values), but skip converting + transferring its vt
+        // payload — the main thread has dropped the source.
+        if (suppressed.has(group)) return;
         const vtKind = VT_GROUP_KIND[group];
         if (vtKind) {
           const vt = vtKind === 'line' ? vtLinesFromFeatures(features) : vtPointsFromFeatures(features);
