@@ -61,6 +61,7 @@ interface LineGpu {
   reference: WebGLBuffer;
   dim: WebGLBuffer;
   hide: WebGLBuffer;
+  highlight: WebGLBuffer;
   index: WebGLBuffer;
   count: number;
 }
@@ -73,6 +74,7 @@ interface CircleGpu {
   sizeMul: WebGLBuffer;
   dim: WebGLBuffer;
   hide: WebGLBuffer;
+  highlight: WebGLBuffer;
   allReference: WebGLBuffer;
   index: WebGLBuffer;
   count: number;
@@ -231,6 +233,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
       reference: makeBuffer(gl, gl.ARRAY_BUFFER, l.reference),
       dim: makeBuffer(gl, gl.ARRAY_BUFFER, l.dim),
       hide: makeBuffer(gl, gl.ARRAY_BUFFER, l.hide),
+      highlight: makeBuffer(gl, gl.ARRAY_BUFFER, l.highlight),
       index: makeBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, l.indices),
       count: l.indices.length,
     };
@@ -243,6 +246,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
       sizeMul: makeBuffer(gl, gl.ARRAY_BUFFER, c.sizeMul),
       dim: makeBuffer(gl, gl.ARRAY_BUFFER, c.dim),
       hide: makeBuffer(gl, gl.ARRAY_BUFFER, c.hide),
+      highlight: makeBuffer(gl, gl.ARRAY_BUFFER, c.highlight),
       allReference: makeBuffer(gl, gl.ARRAY_BUFFER, c.allReference),
       index: makeBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, c.indices),
       count: c.indices.length,
@@ -285,6 +289,26 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     if (this.circleGpu) {
       gl.bindBuffer(gl.ARRAY_BUFFER, this.circleGpu.hide);
       gl.bufferData(gl.ARRAY_BUFFER, circleHide, gl.STATIC_DRAW);
+    }
+  }
+
+  /**
+   * Re-upload ONLY the per-vertex highlight buffers (line + circle) after a
+   * Move-Segment hover-set change. Sibling of {@link updateDim}: the buffers keep
+   * every feature, so this recomputes just the flag arrays (controller) and
+   * re-uploads them, no geometry / color rebuild. Array lengths must match the
+   * uploaded geometry's vertex counts.
+   */
+  updateHighlight(lineHighlight: Float32Array, circleHighlight: Float32Array): void {
+    const gl = this.gl;
+    if (!gl || this.disabled) return;
+    if (this.lineGpu) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.lineGpu.highlight);
+      gl.bufferData(gl.ARRAY_BUFFER, lineHighlight, gl.STATIC_DRAW);
+    }
+    if (this.circleGpu) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.circleGpu.highlight);
+      gl.bufferData(gl.ARRAY_BUFFER, circleHighlight, gl.STATIC_DRAW);
     }
   }
 
@@ -422,6 +446,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     this.bindFloat(gl, prog, 'a_reference', g.reference);
     this.bindFloat(gl, prog, 'a_dim', g.dim);
     this.bindFloat(gl, prog, 'a_hide', g.hide);
+    this.bindFloat(gl, prog, 'a_highlight', g.highlight);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
   }
@@ -449,6 +474,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     this.bindFloat(gl, prog, 'a_all_reference', g.allReference);
     this.bindFloat(gl, prog, 'a_dim', g.dim);
     this.bindFloat(gl, prog, 'a_hide', g.hide);
+    this.bindFloat(gl, prog, 'a_highlight', g.highlight);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
   }

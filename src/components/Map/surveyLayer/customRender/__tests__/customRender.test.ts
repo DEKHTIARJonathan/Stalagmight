@@ -558,8 +558,11 @@ describe('zero-datum sizing (stock circle-radius/-stroke parity)', () => {
 
   it('the circle shaders scale radius + stroke by the size multiplier', () => {
     // Quad extent, disc radius, and stroke radius all fold in the multiplier so
-    // a 2x station is not clipped and its stroke band doubles.
-    expect(CIRCLE_VERTEX_SRC).toContain('(u_radius + u_stroke_width) * a_size_mul');
+    // a 2x station is not clipped and its stroke band doubles. The vertex derives
+    // `sizeMul` from `a_size_mul` (times any highlight bump) and the fragment
+    // recomputes both radii from the `v_size_mul` varying.
+    expect(CIRCLE_VERTEX_SRC).toContain('float sizeMul = a_size_mul *');
+    expect(CIRCLE_VERTEX_SRC).toContain('(u_radius + u_stroke_width) * sizeMul');
     expect(CIRCLE_FRAGMENT_SRC).toContain('u_radius * v_size_mul');
     expect(CIRCLE_FRAGMENT_SRC).toContain('u_stroke_width * v_size_mul');
   });
@@ -629,6 +632,65 @@ describe('anchored/immovable dim flag (stock opacity parity)', () => {
     expect(LINE_VERTEX_SRC).toContain('if (a_dim > 0.5) v_color.a *= 0.25;');
     // Circle fragment folds the dim factor into the final alpha.
     expect(CIRCLE_FRAGMENT_SRC).toContain('(v_dim > 0.5) ? 0.25 : 1.0');
+  });
+});
+
+describe('segment highlight flag (Move Segment whole-segment hover)', () => {
+  const stubColor = (shotIdx: number, sectionId: number): Rgba8 => [shotIdx, sectionId, 7, 255];
+  const fill = (g: number): Rgba8 => [g, 0, 0, 255];
+  const stroke = (_g: number): Rgba8 => [9, 9, 9, 255];
+
+  it('buildLineBuffers marks all 4 verts of a highlighted shot, 0 otherwise', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    // highlightForShot is the 9th positional arg (after dim + hide).
+    const b = buildLineBuffers(d, rel, lookup, stubColor, undefined, undefined, undefined, undefined, (sgi) => sgi === 0);
+    expect(Array.from(b.highlight.slice(0, 4))).toEqual([1, 1, 1, 1]);
+    expect(Array.from(b.highlight.slice(4, 8))).toEqual([0, 0, 0, 0]);
+  });
+
+  it('buildCircleBuffers marks every station of a highlighted section, 0 otherwise', () => {
+    const d = makeFixture();
+    const rel = projectStationsRel(d, null, 0, 0);
+    // Whole connected-set semantics: highlight keys off section membership.
+    const hlStation = (g: number): boolean => d.stationSectionIds[g]! === 1;
+    const b = buildCircleBuffers(d, rel, fill, stroke, undefined, undefined, undefined, undefined, hlStation);
+    for (const g of [0, 1, 2]) for (let c = 0; c < 4; c++) expect(b.highlight[g * 4 + c]).toBe(1);
+    for (let c = 0; c < 4; c++) expect(b.highlight[3 * 4 + c]).toBe(0);
+  });
+
+  it('highlight defaults to 0 for every vertex when no predicate is passed', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const line = buildLineBuffers(d, rel, lookup, stubColor);
+    const circle = buildCircleBuffers(d, rel, fill, stroke);
+    expect(Array.from(line.highlight)).toEqual(new Array(line.vertexCount).fill(0));
+    expect(Array.from(circle.highlight)).toEqual(new Array(circle.vertexCount).fill(0));
+  });
+
+  it('computeLineDim / computeCircleDim reproduce the build path highlight arrays (parity)', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const hlShot = (_sgi: number, sid: number): boolean => sid === 1;
+    const hlStation = (g: number): boolean => d.stationSectionIds[g]! === 1;
+    const line = buildLineBuffers(d, rel, lookup, stubColor, undefined, undefined, undefined, undefined, hlShot);
+    const circle = buildCircleBuffers(d, rel, fill, stroke, undefined, undefined, undefined, undefined, hlStation);
+    // computeLine/CircleDim double as the per-vertex flag builders for any predicate.
+    expect(Array.from(computeLineDim(d, lookup, hlShot))).toEqual(Array.from(line.highlight));
+    expect(Array.from(computeCircleDim(d, hlStation))).toEqual(Array.from(circle.highlight));
+  });
+
+  it('the shaders widen highlighted features (line width + circle size)', () => {
+    // Line: the vertex outset scales by the highlight width multiplier and the
+    // fragment recomputes its outset from the same varying so the AA stays correct.
+    expect(LINE_VERTEX_SRC).toContain('in float a_highlight;');
+    expect(LINE_VERTEX_SRC).toContain('u_half_width * widthMul');
+    // Circle: highlight folds into the size multiplier (radius + stroke grow together).
+    expect(CIRCLE_VERTEX_SRC).toContain('in float a_highlight;');
+    expect(CIRCLE_VERTEX_SRC).toContain('a_size_mul * ((a_highlight > 0.5) ? 1.5 : 1.0)');
   });
 });
 

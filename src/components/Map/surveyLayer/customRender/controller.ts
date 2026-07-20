@@ -133,6 +133,9 @@ const EMPTY_DIM: CustomDimState = {
 /** No features hidden (drag inactive): the zero-cost default for the hide flag. */
 const EMPTY_EXCLUSION: CustomRenderExclusion = {};
 
+/** No sections emphasized (no Move-Segment hover): the default highlight set. */
+const EMPTY_HIGHLIGHT: ReadonlySet<number> = new Set<number>();
+
 export class SurveyCustomController {
   private readonly map: MaplibreMap;
   private readonly layerId: string;
@@ -159,6 +162,11 @@ export class SurveyCustomController {
    *  per-vertex hide flag over the FULL buffers instead of omitting features (a
    *  rebuild), and re-applied on every build so a mid-drag flush stays hidden. */
   private hideState: CustomRenderExclusion = EMPTY_EXCLUSION;
+  /** Sections whose shots + stations are emphasized on Move-Segment hover
+   *  (SurveyLayer.setHoveredSegment -> setHighlight). Applied as the per-vertex
+   *  highlight flag and re-applied on every build so a mid-hover flush stays
+   *  emphasized. Anchored sections are excluded upstream (they will not move). */
+  private highlightState: ReadonlySet<number> = EMPTY_HIGHLIGHT;
   /** Cached build products backing the cheap dim-only refresh (setDimming),
    *  the drag hide refresh (setDragHide), and the incremental edit path: the
    *  last CustomRenderData (its per-vertex arrays are rewritten in place) plus
@@ -348,14 +356,15 @@ export class SurveyCustomController {
     // hide attributes stay all-zero without per-item predicate calls).
     const dims = this.hasDimming() ? this.dimPredicates(surveyData) : null;
     const hides = this.hasHide() ? this.hidePredicates(surveyData) : null;
+    const highlights = this.hasHighlight() ? this.highlightPredicates(surveyData) : null;
     const line = buildLineBuffers(
       surveyData, stationRel, lookup, res.colorForShot, params.exclude,
       res.useDepthEndpoints ? res.colorForShotEndpoints : undefined,
-      dims?.dimForShot, hides?.hideForShot,
+      dims?.dimForShot, hides?.hideForShot, highlights?.highlightForShot,
     );
     const circle = buildCircleBuffers(
       surveyData, stationRel, res.fillForStation, res.strokeForStation, params.exclude, allReference,
-      dims?.dimForStation, hides?.hideForStation,
+      dims?.dimForStation, hides?.hideForStation, highlights?.highlightForStation,
     );
 
     const data: CustomRenderData = { anchorX, anchorY, line, circle, ...this.sizeFields(params) };
@@ -438,6 +447,25 @@ export class SurveyCustomController {
     };
   }
 
+  /** True when some section is emphasized (Move-Segment hover active). */
+  private hasHighlight(): boolean {
+    return this.highlightState.size > 0;
+  }
+
+  /** Per-station / per-shot highlight predicates for the current
+   *  {@link highlightState}: a feature is emphasized when its section is in the
+   *  hovered connected set. */
+  private highlightPredicates(surveyData: SurveyData): {
+    highlightForStation: (g: number) => boolean;
+    highlightForShot: (globalShotIdx: number, sectionId: number) => boolean;
+  } {
+    const set = this.highlightState;
+    return {
+      highlightForStation: (g: number): boolean => set.has(surveyData.stationSectionIds[g]!),
+      highlightForShot: (_globalShotIdx: number, sectionId: number): boolean => set.has(sectionId),
+    };
+  }
+
   /**
    * Update the anchored / immovable dim set (SurveyLayer.setAnchoredSections /
    * setImmovableFeatures). Rare (fires on move-tool activation, not per frame),
@@ -494,6 +522,34 @@ export class SurveyCustomController {
   }
 
   /**
+   * Emphasize the hovered connected segment (SurveyLayer.setHoveredSegment for
+   * the Move Segment tool). Sibling of {@link setDimming}: the cheap per-hover
+   * path recomputes ONLY the two per-vertex highlight arrays from the cached SoA
+   * (computeLine/CircleDim double as the per-vertex flag builders for any
+   * predicate) and re-uploads just those GPU buffers - no reprojection or color
+   * packing. Pass an empty array to clear (hover leaves geometry / drag begins).
+   * State is stored regardless so the next full build reproduces it.
+   */
+  setHighlight(sectionIds: readonly number[]): void {
+    this.highlightState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_HIGHLIGHT;
+    if (!this.active || !this.layer || !this.lastData || !this.lastLookup || !this.lastSurveyData) {
+      return;
+    }
+    const survey = this.lastSurveyData;
+    const exclude = this.lastParams?.exclude;
+    const lineHighlight = this.hasHighlight()
+      ? computeLineDim(survey, this.lastLookup, this.highlightPredicates(survey).highlightForShot, exclude)
+      : new Float32Array(this.lastData.line.vertexCount);
+    const circleHighlight = this.hasHighlight()
+      ? computeCircleDim(survey, this.highlightPredicates(survey).highlightForStation, exclude)
+      : new Float32Array(this.lastData.circle.vertexCount);
+    this.lastData.line.highlight = lineHighlight;
+    this.lastData.circle.highlight = circleHighlight;
+    this.layer.updateHighlight(lineHighlight, circleHighlight);
+    this.map.triggerRepaint();
+  }
+
+  /**
    * Try to apply an edit incrementally (only the changed sections' vertex
    * ranges) instead of a full rebuild. Returns false to fall back to build().
    * Requires an active layer with cached products; `planIncrementalUpdate` gates
@@ -531,17 +587,20 @@ export class SurveyCustomController {
     const res = makeColorResolvers(next, params.colorCtx);
     const dims = this.hasDimming() ? this.dimPredicates(next) : null;
     const hides = this.hasHide() ? this.hidePredicates(next) : null;
+    const highlights = this.hasHighlight() ? this.highlightPredicates(next) : null;
     const lineInputs: LineSectionInputs = {
       colorForShot: res.colorForShot,
       colorForShotEndpoints: res.useDepthEndpoints ? res.colorForShotEndpoints : undefined,
       dimForShot: dims?.dimForShot,
       hideForShot: hides?.hideForShot,
+      highlightForShot: highlights?.highlightForShot,
     };
     const circleInputs: CircleStationInputs = {
       fillForStation: res.fillForStation,
       strokeForStation: res.strokeForStation,
       dimForStation: dims?.dimForStation,
       hideForStation: hides?.hideForStation,
+      highlightForStation: highlights?.highlightForStation,
     };
 
     // Re-emit each dirty section's line range + its stations (all-reference

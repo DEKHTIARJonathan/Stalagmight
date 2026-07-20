@@ -263,6 +263,7 @@ const h = vi.hoisted(() => {
     setReferenceShotsVisible(): void {}
     updateDim(): void {}
     updateHide(): void {}
+    updateHighlight(): void {}
     uploadLineVertexRange(): void {
       state.lineUploads++;
     }
@@ -303,8 +304,8 @@ function params(surveyData: SurveyData, colorCtx: DisplayColorContext = ctx()): 
   return { surveyData, gpsOrigin: null, colorCtx, shotWidthPx: 2, stationRadiusPx: 3, stationStrokePx: 1 };
 }
 
-const lineArrays = ['posA', 'posB', 'endpoint', 'side', 'color', 'reference', 'dim', 'hide', 'indices', 'sectionRanges'] as const;
-const circleArrays = ['center', 'corner', 'fill', 'stroke', 'sizeMul', 'dim', 'hide', 'allReference', 'indices'] as const;
+const lineArrays = ['posA', 'posB', 'endpoint', 'side', 'color', 'reference', 'dim', 'hide', 'highlight', 'indices', 'sectionRanges'] as const;
+const circleArrays = ['center', 'corner', 'fill', 'stroke', 'sizeMul', 'dim', 'hide', 'highlight', 'allReference', 'indices'] as const;
 
 function expectDataEqual(a: CustomRenderData, b: CustomRenderData): void {
   expect(a.anchorX).toBe(b.anchorX);
@@ -431,5 +432,28 @@ describe('SurveyCustomController incremental apply', () => {
     // Section id 2 (index 2) stations are all hidden in the incremental result.
     const data = dataOf(c);
     expect(Array.from(data.circle.hide).some((v) => v === 1)).toBe(true);
+  });
+
+  it('applies the segment highlight on the cached buffers and matches a full build', () => {
+    const prev = pinnedSurvey();
+    const c = new SurveyCustomController(makeFakeMap());
+    c.sync(params(prev));
+    // No emphasis yet.
+    expect(Array.from(dataOf(c).circle.highlight).every((v) => v === 0)).toBe(true);
+    expect(Array.from(dataOf(c).line.highlight).every((v) => v === 0)).toBe(true);
+    // Move-Segment hover emphasizes the connected section id 2 (cheap re-upload path).
+    c.setHighlight([2]);
+    expect(Array.from(dataOf(c).circle.highlight).some((v) => v === 1)).toBe(true);
+    expect(Array.from(dataOf(c).line.highlight).some((v) => v === 1)).toBe(true);
+    // Setting the highlight BEFORE sync makes the full build reproduce it: the
+    // oracle for the cheap path must be byte-identical.
+    const ref = new SurveyCustomController(makeFakeMap());
+    ref.setHighlight([2]);
+    ref.sync(params(prev));
+    expectDataEqual(dataOf(c), dataOf(ref));
+    // Hover leaves geometry (or drag begins): clearing zeroes every highlight flag.
+    c.setHighlight([]);
+    expect(Array.from(dataOf(c).circle.highlight).every((v) => v === 0)).toBe(true);
+    expect(Array.from(dataOf(c).line.highlight).every((v) => v === 0)).toBe(true);
   });
 });

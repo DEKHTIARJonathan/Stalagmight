@@ -36,8 +36,10 @@ in vec4 a_color;
 in float a_reference;
 in float a_dim;
 in float a_hide;
+in float a_highlight;
 out vec4 v_color;
 out float v_edge;
+out float v_width_mul;
 void main() {
   // Drag-hidden shots (a moving feature excluded during a move drag): collapse
   // the whole quad to a single clipped point. All 4 verts of a segment share
@@ -47,6 +49,7 @@ void main() {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     v_color = vec4(0.0);
     v_edge = 0.0;
+    v_width_mul = 1.0;
     return;
   }
   // Reference shots hidden (setShowReferenceShots(false)): collapse the whole
@@ -56,6 +59,7 @@ void main() {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     v_color = vec4(0.0);
     v_edge = 0.0;
+    v_width_mul = 1.0;
     return;
   }
   vec4 pa = u_matrix * vec4(a_pos_a, 0.0, 1.0);
@@ -65,7 +69,12 @@ void main() {
   vec2 dir = normalize((sb - sa) * u_viewport);
   vec2 normal = vec2(-dir.y, dir.x);
   vec4 base = (a_endpoint < 0.5) ? pa : pb;
-  float outset = u_half_width + u_aa;
+  // Whole-segment hover emphasis (Move Segment tool): widen highlighted shots,
+  // mirroring the stock section-hover width bump (default hover_width/width = 2).
+  // The fragment recomputes its outset from the same multiplier so the AA feather
+  // scales with the widened line.
+  float widthMul = (a_highlight > 0.5) ? 2.0 : 1.0;
+  float outset = u_half_width * widthMul + u_aa;
   vec2 offsetPx = normal * a_side * outset;
   vec2 offsetClip = offsetPx / u_viewport * 2.0 * base.w;
   gl_Position = vec4(base.xy + offsetClip, base.z, base.w);
@@ -76,6 +85,7 @@ void main() {
   if (a_dim > 0.5) v_color.a *= 0.25;
   else if (a_reference > 0.5) v_color.a *= 0.5;
   v_edge = a_side;
+  v_width_mul = widthMul;
 }`;
 
 export const LINE_FRAGMENT_SRC = `#version 300 es
@@ -84,9 +94,10 @@ uniform float u_half_width;
 uniform float u_aa;
 in vec4 v_color;
 in float v_edge;
+in float v_width_mul;
 out vec4 fragColor;
 void main() {
-  float outset = u_half_width + u_aa;
+  float outset = u_half_width * v_width_mul + u_aa;
   float dist = abs(v_edge) * outset;
   // MapLibre line AA: feather the last u_aa px of the outset.
   float alpha = clamp(min(dist + u_aa, outset - dist) / u_aa, 0.0, 1.0);
@@ -110,6 +121,7 @@ in float a_all_reference;
 in float a_size_mul;
 in float a_dim;
 in float a_hide;
+in float a_highlight;
 out vec4 v_fill;
 out vec4 v_stroke;
 out vec2 v_offset;
@@ -140,16 +152,22 @@ void main() {
     return;
   }
   vec4 c = u_matrix * vec4(a_center, 0.0, 1.0);
+  // Whole-segment hover emphasis (Move Segment tool): enlarge highlighted
+  // stations, mirroring the stock section-hover radius bump (default
+  // hover_radius/radius = 1.5). Folded into the size multiplier so radius +
+  // stroke grow together; the fragment recomputes disc/stroke radii from
+  // v_size_mul, so no separate fragment change is needed.
+  float sizeMul = a_size_mul * ((a_highlight > 0.5) ? 1.5 : 1.0);
   // Zero-datum stations render 2x (a_size_mul), so the quad extent must grow to
   // fit; the fragment recomputes disc/stroke radii with the same multiplier.
-  float ext = (u_radius + u_stroke_width) * a_size_mul + u_aa;
+  float ext = (u_radius + u_stroke_width) * sizeMul + u_aa;
   vec2 offsetPx = a_corner * ext;
   vec2 offsetClip = offsetPx / u_viewport * 2.0 * c.w;
   gl_Position = vec4(c.xy + offsetClip, c.z, c.w);
   v_fill = a_fill;
   v_stroke = a_stroke;
   v_offset = offsetPx;
-  v_size_mul = a_size_mul;
+  v_size_mul = sizeMul;
   v_dim = a_dim;
 }`;
 

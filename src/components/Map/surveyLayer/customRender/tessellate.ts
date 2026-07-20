@@ -68,6 +68,13 @@ export interface LineBuffers {
    *  and re-uploads it, and drag-end zeroes it. All 4 verts of a segment share
    *  the flag so both triangles degenerate together. */
   hide: Float32Array;
+  /** Per-vertex highlight flag (1 = emphasized, else 0). Drives the whole-segment
+   *  hover emphasis for the Move Segment tool (SurveyLayer.setHoveredSegment ->
+   *  controller.setHighlight): the shader widens highlighted shots, mirroring the
+   *  stock section-hover width bump. Independent of dim (a movable connected
+   *  section is highlighted and not dimmed; anchored sections are dimmed and
+   *  excluded from the highlight). Rewritten in place on a hover-set change. */
+  highlight: Float32Array;
   /** Two triangles per segment, `segmentCount*6`, `UNSIGNED_INT`. */
   indices: Uint32Array;
   /** Per-section `[segStart, segCount]` pairs (`sections.length * 2`), in
@@ -106,6 +113,11 @@ export interface CircleBuffers {
    *  Circle counterpart of {@link LineBuffers.hide}: the drag-begin path marks a
    *  moving station hidden without omitting it from the buffers. */
   hide: Float32Array;
+  /** Per-vertex highlight flag (1 = emphasized, else 0). Circle counterpart of
+   *  {@link LineBuffers.highlight}: the shader enlarges highlighted stations for
+   *  the Move Segment whole-segment hover. Rewritten in place on a hover-set
+   *  change (controller.setHighlight). */
+  highlight: Float32Array;
   /** Per-vertex all-reference flag (1 = every shot touching this station is a
    *  reference shot, else 0). Mirrors the stock stations layer's
    *  `allShotsReference` property: the shader collapses these stations when
@@ -264,6 +276,7 @@ export interface LineSectionInputs {
   colorForShotEndpoints?: ((globalShotIdx: number, sectionId: number) => readonly [Rgba8, Rgba8]) | undefined;
   dimForShot?: ((globalShotIdx: number, sectionId: number) => boolean) | undefined;
   hideForShot?: ((globalShotIdx: number, sectionId: number) => boolean) | undefined;
+  highlightForShot?: ((globalShotIdx: number, sectionId: number) => boolean) | undefined;
 }
 
 /**
@@ -287,8 +300,8 @@ function emitLineSection(
 ): number {
   const inner = lookup.get(section.id);
   if (!inner) return startSeg;
-  const { posA, posB, endpoint, side, color, reference, dim, hide, indices } = b;
-  const { colorForShot, colorForShotEndpoints, dimForShot, hideForShot } = inputs;
+  const { posA, posB, endpoint, side, color, reference, dim, hide, highlight, indices } = b;
+  const { colorForShot, colorForShotEndpoints, dimForShot, hideForShot, highlightForShot } = inputs;
   let seg = startSeg;
   for (let i = 0; i < section.shotCount; i++) {
     const shotGlobalIdx = section.shotOffset + i;
@@ -304,6 +317,7 @@ function emitLineSection(
     const isRef = (data.shotFlags[shotGlobalIdx]! & SHOT_FLAG_IS_REFERENCE) !== 0 ? 1 : 0;
     const isDim = dimForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
     const isHide = hideForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
+    const isHighlight = highlightForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
     const ax = stationRel[fromGlobal * 2]!;
     const ay = stationRel[fromGlobal * 2 + 1]!;
     const bx = stationRel[toGlobal * 2]!;
@@ -326,6 +340,7 @@ function emitLineSection(
       reference[v] = isRef;
       dim[v] = isDim;
       hide[v] = isHide;
+      highlight[v] = isHighlight;
     }
     const io = seg * 6;
     indices[io] = base;
@@ -348,6 +363,7 @@ export function buildLineBuffers(
   colorForShotEndpoints?: (globalShotIdx: number, sectionId: number) => readonly [Rgba8, Rgba8],
   dimForShot?: (globalShotIdx: number, sectionId: number) => boolean,
   hideForShot?: (globalShotIdx: number, sectionId: number) => boolean,
+  highlightForShot?: (globalShotIdx: number, sectionId: number) => boolean,
 ): LineBuffers {
   const exSections = exclude?.sectionIds;
   const exShots = exclude?.shotGlobalIndices;
@@ -361,17 +377,19 @@ export function buildLineBuffers(
   const reference = new Float32Array(vertexCount);
   const dim = new Float32Array(vertexCount);
   const hide = new Float32Array(vertexCount);
+  const highlight = new Float32Array(vertexCount);
   const indices = new Uint32Array(segmentCount * 6);
   const sectionRanges = new Uint32Array(data.sections.length * 2);
   const byteLength =
     posA.byteLength + posB.byteLength + endpoint.byteLength + side.byteLength +
-    color.byteLength + reference.byteLength + dim.byteLength + hide.byteLength + indices.byteLength;
+    color.byteLength + reference.byteLength + dim.byteLength + hide.byteLength +
+    highlight.byteLength + indices.byteLength;
   const b: LineBuffers = {
     segmentCount, vertexCount, posA, posB, endpoint, side, color, reference, dim, hide,
-    indices, sectionRanges, byteLength,
+    highlight, indices, sectionRanges, byteLength,
   };
 
-  const inputs: LineSectionInputs = { colorForShot, colorForShotEndpoints, dimForShot, hideForShot };
+  const inputs: LineSectionInputs = { colorForShot, colorForShotEndpoints, dimForShot, hideForShot, highlightForShot };
   let seg = 0;
   for (let si = 0; si < data.sections.length; si++) {
     const section = data.sections[si]!;
@@ -456,6 +474,7 @@ export interface CircleStationInputs {
   strokeForStation: (globalIdx: number) => Rgba8;
   dimForStation?: ((globalIdx: number) => boolean) | undefined;
   hideForStation?: ((globalIdx: number) => boolean) | undefined;
+  highlightForStation?: ((globalIdx: number) => boolean) | undefined;
 }
 
 /**
@@ -475,8 +494,8 @@ function emitStation(
   inputs: CircleStationInputs,
   allRef: number,
 ): void {
-  const { center, corner, fill, stroke, sizeMul, dim, hide, allReference, indices } = b;
-  const { fillForStation, strokeForStation, dimForStation, hideForStation } = inputs;
+  const { center, corner, fill, stroke, sizeMul, dim, hide, highlight, allReference, indices } = b;
+  const { fillForStation, strokeForStation, dimForStation, hideForStation, highlightForStation } = inputs;
   const cx = stationRel[g * 2]!;
   const cy = stationRel[g * 2 + 1]!;
   const [fr, fg, fb, fa] = fillForStation(g);
@@ -485,6 +504,7 @@ function emitStation(
   const sm = (data.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0 ? 2 : 1;
   const dm = dimForStation?.(g) === true ? 1 : 0;
   const hd = hideForStation?.(g) === true ? 1 : 0;
+  const hl = highlightForStation?.(g) === true ? 1 : 0;
   const base = out * 4;
   for (let c = 0; c < 4; c++) {
     const v = base + c;
@@ -503,6 +523,7 @@ function emitStation(
     sizeMul[v] = sm;
     dim[v] = dm;
     hide[v] = hd;
+    highlight[v] = hl;
     allReference[v] = allRef;
   }
   const io = out * 6;
@@ -528,6 +549,7 @@ export function buildCircleBuffers(
   allReferenceFlags?: Float32Array,
   dimForStation?: (globalIdx: number) => boolean,
   hideForStation?: (globalIdx: number) => boolean,
+  highlightForStation?: (globalIdx: number) => boolean,
 ): CircleBuffers {
   const exSections = exclude?.sectionIds;
   const exStations = exclude?.stationGlobalIndices;
@@ -549,17 +571,19 @@ export function buildCircleBuffers(
   const sizeMul = new Float32Array(vertexCount);
   const dim = new Float32Array(vertexCount);
   const hide = new Float32Array(vertexCount);
+  const highlight = new Float32Array(vertexCount);
   const allReference = new Float32Array(vertexCount);
   const indices = new Uint32Array(stationCount * 6);
   const byteLength =
     center.byteLength + corner.byteLength + fill.byteLength + stroke.byteLength +
-    sizeMul.byteLength + dim.byteLength + hide.byteLength + allReference.byteLength + indices.byteLength;
+    sizeMul.byteLength + dim.byteLength + hide.byteLength + highlight.byteLength +
+    allReference.byteLength + indices.byteLength;
   const b: CircleBuffers = {
-    stationCount, vertexCount, center, corner, fill, stroke, sizeMul, dim, hide, allReference,
-    indices, byteLength,
+    stationCount, vertexCount, center, corner, fill, stroke, sizeMul, dim, hide, highlight,
+    allReference, indices, byteLength,
   };
 
-  const inputs: CircleStationInputs = { fillForStation, strokeForStation, dimForStation, hideForStation };
+  const inputs: CircleStationInputs = { fillForStation, strokeForStation, dimForStation, hideForStation, highlightForStation };
   let out = 0;
   for (let g = 0; g < data.stationCount; g++) {
     if (skip(g)) continue;

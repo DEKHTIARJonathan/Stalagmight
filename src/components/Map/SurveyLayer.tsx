@@ -3010,6 +3010,9 @@ export default class SurveyLayer {
       });
     }
     this.hoveredSegmentSectionIds = stringIds;
+    // Custom renderer ignores feature-state; drive its per-vertex highlight flag
+    // so the whole connected segment is emphasized under the custom layer too.
+    this.customRender?.setHighlight(sectionIds);
     this.updateVisualState();
   }
 
@@ -3403,6 +3406,7 @@ export default class SurveyLayer {
     this.hoveredShotId = null;
     this.hoveredSectionId = null;
     this.hoveredSegmentSectionIds = [];
+    this.customRender?.setHighlight([]);
     this.snappedStationId = null;
     this.selectedStationId = null;
     this.selectedShotId = null;
