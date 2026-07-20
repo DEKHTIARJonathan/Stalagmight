@@ -72,6 +72,20 @@ describe('colorPack', () => {
     expect(packCssColor('rgba(255, 0, 0, 0.5)')).toEqual([255, 0, 0, 128]);
   });
 
+  it('parses hsl() / hsla()', () => {
+    // Primary hues at s=100% l=50% are exact.
+    expect(packCssColor('hsl(0, 100%, 50%)')).toEqual([255, 0, 0, 255]);
+    expect(packCssColor('hsl(120, 100%, 50%)')).toEqual([0, 255, 0, 255]);
+    expect(packCssColor('hsl(240, 100%, 50%)')).toEqual([0, 0, 255, 255]);
+    // Grey: any hue, 0 saturation, 50% lightness.
+    expect(packCssColor('hsl(200, 0%, 50%)')).toEqual([128, 128, 128, 255]);
+    // The global view's per-system form (70% sat / 50% light) parses to a
+    // credible mid-tone (not the magenta fallback) and honors alpha.
+    const c = packCssColor('hsl(210, 70%, 50%)');
+    expect(c).not.toEqual([255, 0, 255, 255]);
+    expect(packCssColor('hsla(0, 100%, 50%, 0.5)')).toEqual([255, 0, 0, 128]);
+  });
+
   it('returns a visible fallback for garbage', () => {
     expect(packCssColor('not-a-color')).toEqual([255, 0, 255, 255]);
     expect(packCssColor('#12345')).toEqual([255, 0, 255, 255]);

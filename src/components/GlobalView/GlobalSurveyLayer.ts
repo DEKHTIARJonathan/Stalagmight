@@ -1,7 +1,8 @@
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
-import type { ProjectMetadata } from '../../types/project';
-import type { GeometryShot, SurveyGeometry } from '../../types/survey';
+import { extractSystemStations } from './customRender/globalTessellate';
+import { GlobalCustomController } from './customRender/globalController';
+import { generateSystemColor, type SystemGeometry } from './systemColor';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import { recordFeatureCount, clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
 import {
@@ -22,15 +23,12 @@ import i18n from '../../i18n';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import type { DecimalPrecision } from '../../types/config';
 
-/**
- * System geometry data with associated metadata for the global view.
- */
-export interface SystemGeometry {
-  /** Project metadata */
-  metadata: ProjectMetadata;
-  /** Survey geometry with GPS-transformed coordinates */
-  geometry: SurveyGeometry;
-}
+// `SystemGeometry` + `generateSystemColor` moved to ./systemColor so the custom
+// render buffer builder can reuse them without importing this MapLibre-bound
+// layer (import-cycle avoidance). Re-exported here so existing consumers keep
+// importing them from './GlobalSurveyLayer'.
+export { generateSystemColor } from './systemColor';
+export type { SystemGeometry } from './systemColor';
 
 /**
  * Callbacks for GlobalSurveyLayer interactions.
@@ -46,69 +44,6 @@ export interface GlobalSurveyLayerCallbacks {
   onFeatureHover?: (isHovering: boolean) => void;
   /** Called when a system is right-clicked (for context menu) */
   onSystemContextMenu?: (filePath: string, event: MouseEvent) => void;
-}
-
-/**
- * Generate a deterministic color for a system based on its file_path.
- * Uses HSL with hue derived from a hash of the path, saturation 70%, lightness 50%.
- */
-export function generateSystemColor(filePath: string): string {
-  // Simple hash function (djb2)
-  let hash = 5381;
-  for (let i = 0; i < filePath.length; i++) {
-    hash = ((hash << 5) + hash) + filePath.charCodeAt(i);
-    hash = hash & hash; // Convert to 32-bit integer
-  }
-  // Map hash to hue (0-360)
-  const hue = Math.abs(hash % 360);
-  return `hsl(${hue}, 70%, 50%)`;
-}
-
-/**
- * Extract unique station positions from shots.
- * Returns [lng, lat, allShotsReference] for each unique station.
- * allShotsReference is true when the station only connects to reference shots.
- */
-function extractStations(shots: GeometryShot[]): [number, number, boolean][] {
-  const stationCoords = new Map<string, [number, number]>();
-  const stationsWithNonReferenceShot = new Set<string>();
-
-  for (const shot of shots) {
-    let fromKey: string | undefined;
-    let toKey: string | undefined;
-
-    if (shot.from.length >= 2) {
-      const fromX = shot.from[0];
-      const fromY = shot.from[1];
-      if (fromX === undefined || fromY === undefined) continue;
-      const from: [number, number] = [fromX, fromY];
-      fromKey = `${from[0].toFixed(8)},${from[1].toFixed(8)}`;
-      if (!stationCoords.has(fromKey)) {
-        stationCoords.set(fromKey, from);
-      }
-    }
-    if (shot.to.length >= 2) {
-      const toX = shot.to[0];
-      const toY = shot.to[1];
-      if (toX === undefined || toY === undefined) continue;
-      const to: [number, number] = [toX, toY];
-      toKey = `${to[0].toFixed(8)},${to[1].toFixed(8)}`;
-      if (!stationCoords.has(toKey)) {
-        stationCoords.set(toKey, to);
-      }
-    }
-
-    if (!shot.is_reference) {
-      if (fromKey) stationsWithNonReferenceShot.add(fromKey);
-      if (toKey) stationsWithNonReferenceShot.add(toKey);
-    }
-  }
-
-  return Array.from(stationCoords.entries()).map(([key, coords]) => [
-    coords[0],
-    coords[1],
-    !stationsWithNonReferenceShot.has(key),
-  ]);
 }
 
 /** Shot LineStrings + station Points, split so each feeds its own vt source. */
@@ -148,7 +83,7 @@ export function buildGlobalSurveyFeatures(systems: SystemGeometry[]): GlobalSurv
       });
     }
 
-    const systemStations = extractStations(system.geometry.shots);
+    const systemStations = extractSystemStations(system.geometry.shots);
     for (const [lng, lat, allShotsReference] of systemStations) {
       stations.push({
         type: 'Feature',
@@ -168,6 +103,20 @@ export function buildGlobalSurveyFeatures(systems: SystemGeometry[]): GlobalSurv
     }
   }
   return { shots, stations };
+}
+
+/** Scalar tooltip fields carried by a resolved hit (name + length + station count). */
+interface TooltipProps {
+  name?: string | undefined;
+  totalLength?: number | undefined;
+  stationCount?: number | undefined;
+}
+
+/** Normalize a MapLibre `PointLike` (Point or `[x, y]`) to plain `{x, y}` for
+ *  the geometry hit index. */
+function pointLikeToXY(point: maplibregl.PointLike): { x: number; y: number } {
+  if (Array.isArray(point)) return { x: point[0], y: point[1] };
+  return { x: point.x, y: point.y };
 }
 
 /**
@@ -236,6 +185,19 @@ export default class GlobalSurveyLayer {
   // Precision settings for formatting
   private precision: DecimalPrecision | undefined;
 
+  // Flag-gated custom WebGL render (#customRender). No-op unless the shared
+  // `stalagmight_custom_render` gate is on. When active it draws the whole
+  // global survey from typed-array buffers, hides the stock shots/stations
+  // layers, and resolves interaction hits from the geometry index; the stock
+  // vector-tile publish below is suppressed (see onCustomActiveChange).
+  private customRender: GlobalCustomController | null = null;
+  /** True while the custom layer draws (stock bulk vt publish suppressed). */
+  private customBulkSuppressed = false;
+  /** Last systems fed to update(), so a gate-off restore can republish stock. */
+  private lastSystems: SystemGeometry[] | null = null;
+  /** Monotonic tile-URL version to force a dropped bulk source to serve empty. */
+  private bulkDropSeq = 1_000_000_000;
+
   // Bound event handlers for cleanup
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
   private boundMapLeave: (() => void) | null = null;
@@ -257,6 +219,9 @@ export default class GlobalSurveyLayer {
     this.initializeLayers();
     this.initializeEventHandlers();
     this.initializeTooltip();
+    this.customRender = new GlobalCustomController(map, undefined, {
+      onActiveChange: (active) => this.onCustomActiveChange(active),
+    });
   }
 
   /**
@@ -371,113 +336,62 @@ export default class GlobalSurveyLayer {
     });
   }
 
+  /**
+   * Resolve the system under a screen point (station priority, then shot). When
+   * the custom WebGL layer is active it asks the geometry hit index (the stock
+   * hitbox layers have no vector-tile data then); otherwise it falls back to the
+   * stock `queryRenderedFeatures` on the invisible hitbox layers. Returns the
+   * systemId plus the tooltip scalars, or null for empty space.
+   */
+  private pickSystemAt(point: maplibregl.PointLike): { systemId: string; properties: TooltipProps } | null {
+    if (this.customRender?.isActive()) {
+      const xy = pointLikeToXY(point);
+      const hit = this.customRender.pick((c) => this.map.project(c), xy.x, xy.y);
+      if (!hit) return null;
+      const meta = this.customRender.getSystemMetadata(hit.systemId);
+      return {
+        systemId: hit.systemId,
+        properties: {
+          name: meta?.name,
+          totalLength: meta?.total_length ?? undefined,
+          stationCount: meta?.station_count ?? undefined,
+        },
+      };
+    }
+    // Stock path: query both hitbox layers, stations first.
+    const feature =
+      this.map.queryRenderedFeatures(point, { layers: [this.stationsHitboxLayerId] })[0] ??
+      this.map.queryRenderedFeatures(point, { layers: [this.shotsHitboxLayerId] })[0];
+    const systemId = feature?.properties?.systemId as string | undefined;
+    if (!systemId) return null;
+    return { systemId, properties: (feature?.properties ?? {}) as TooltipProps };
+  }
+
   private initializeEventHandlers(): void {
     // Unified click handler - passes ctrlKey for multi-select
     this.boundClick = (e: maplibregl.MapMouseEvent) => {
-      // Query both hitbox layers - stations have priority
-      const stationFeatures = this.map.queryRenderedFeatures(e.point, {
-        layers: [this.stationsHitboxLayerId],
-      });
-
-      const ctrlKey = e.originalEvent.ctrlKey || e.originalEvent.metaKey;
-
-      if (stationFeatures.length > 0) {
-        const feature = stationFeatures[0];
-        const systemId = feature?.properties?.systemId as string | undefined;
-        if (systemId) {
-          this.callbacks.onSystemClick?.(systemId, e, ctrlKey);
-          return;
-        }
-      }
-
-      const shotFeatures = this.map.queryRenderedFeatures(e.point, {
-        layers: [this.shotsHitboxLayerId],
-      });
-
-      if (shotFeatures.length > 0) {
-        const feature = shotFeatures[0];
-        const systemId = feature?.properties?.systemId as string | undefined;
-        if (systemId) {
-          this.callbacks.onSystemClick?.(systemId, e, ctrlKey);
-        }
+      const hit = this.pickSystemAt(e.point);
+      if (hit) {
+        const ctrlKey = e.originalEvent.ctrlKey || e.originalEvent.metaKey;
+        this.callbacks.onSystemClick?.(hit.systemId, e, ctrlKey);
       }
     };
     this.map.on('click', this.boundClick);
 
     // Double-click handler to open project
     this.boundDoubleClick = (e: maplibregl.MapMouseEvent) => {
-      // Query both hitbox layers - stations have priority
-      const stationFeatures = this.map.queryRenderedFeatures(e.point, {
-        layers: [this.stationsHitboxLayerId],
-      });
-
-      if (stationFeatures.length > 0) {
-        const feature = stationFeatures[0];
-        const systemId = feature?.properties?.systemId as string | undefined;
-        if (systemId) {
-          this.callbacks.onSystemDoubleClick?.(systemId);
-          return;
-        }
-      }
-
-      const shotFeatures = this.map.queryRenderedFeatures(e.point, {
-        layers: [this.shotsHitboxLayerId],
-      });
-
-      if (shotFeatures.length > 0) {
-        const feature = shotFeatures[0];
-        const systemId = feature?.properties?.systemId as string | undefined;
-        if (systemId) {
-          this.callbacks.onSystemDoubleClick?.(systemId);
-        }
-      }
+      const hit = this.pickSystemAt(e.point);
+      if (hit) this.callbacks.onSystemDoubleClick?.(hit.systemId);
     };
     this.map.on('dblclick', this.boundDoubleClick);
 
     // Unified mousemove handler for hover detection and tooltip
     this.boundMouseMove = (e: maplibregl.MapMouseEvent) => {
-      // Query both hitbox layers - stations have priority
-      const stationFeatures = this.map.queryRenderedFeatures(e.point, {
-        layers: [this.stationsHitboxLayerId],
-      });
-      const shotFeatures = this.map.queryRenderedFeatures(e.point, {
-        layers: [this.shotsHitboxLayerId],
-      });
-
-      let newHoveredSystemId: string | null = null;
-      let featureProperties: {
-        name?: string;
-        totalLength?: number;
-        stationCount?: number;
-      } | null = null;
-
-      if (stationFeatures.length > 0) {
-        const feature = stationFeatures[0];
-        newHoveredSystemId = (feature?.properties?.systemId as string) || null;
-        if (feature?.properties) {
-          featureProperties = feature.properties as {
-            name?: string;
-            totalLength?: number;
-            stationCount?: number;
-          };
-        }
-      } else if (shotFeatures.length > 0) {
-        const feature = shotFeatures[0];
-        newHoveredSystemId = (feature?.properties?.systemId as string) || null;
-        if (feature?.properties) {
-          featureProperties = feature.properties as {
-            name?: string;
-            totalLength?: number;
-            stationCount?: number;
-          };
-        }
-      }
+      const hit = this.pickSystemAt(e.point);
+      const newHoveredSystemId = hit?.systemId ?? null;
 
       // Update tooltip position and content
-      this.updateTooltip(
-        newHoveredSystemId ? e.originalEvent : null,
-        featureProperties
-      );
+      this.updateTooltip(newHoveredSystemId ? e.originalEvent : null, hit?.properties ?? null);
 
       if (newHoveredSystemId !== this.hoveredSystemId) {
         this.hoveredSystemId = newHoveredSystemId;
@@ -492,7 +406,9 @@ export default class GlobalSurveyLayer {
         }
 
         this.callbacks.onSystemHover?.(newHoveredSystemId);
-        this.updateVisualState();
+        // Custom layer: hover is a cheap uniform update; stock: paint expressions.
+        if (this.customRender?.isActive()) this.customRender.setHover(newHoveredSystemId);
+        else this.updateVisualState();
       }
     };
     this.map.on('mousemove', this.boundMouseMove);
@@ -504,7 +420,8 @@ export default class GlobalSurveyLayer {
         this.map.getCanvas().style.cursor = '';
         this.callbacks.onFeatureHover?.(false);
         this.callbacks.onSystemHover?.(null);
-        this.updateVisualState();
+        if (this.customRender?.isActive()) this.customRender.setHover(null);
+        else this.updateVisualState();
       }
       // Clear context menu flag (menu closes when mouse leaves)
       this.contextMenuOpen = false;
@@ -520,41 +437,14 @@ export default class GlobalSurveyLayer {
       // Get point from mouse event relative to map container
       const rect = this.map.getContainer().getBoundingClientRect();
       const point: [number, number] = [e.clientX - rect.left, e.clientY - rect.top];
-
-      // Query both hitbox layers - stations have priority
-      const stationFeatures = this.map.queryRenderedFeatures(point, {
-        layers: [this.stationsHitboxLayerId],
-      });
-
-      if (stationFeatures.length > 0) {
-        const feature = stationFeatures[0];
-        const systemId = feature?.properties?.systemId as string | undefined;
-        if (systemId) {
-          // Prevent default browser context menu when we handle the event
-          e.preventDefault();
-          // Hide tooltip while context menu is open
-          this.contextMenuOpen = true;
-          this.hideTooltip();
-          this.callbacks.onSystemContextMenu(systemId, e);
-          return;
-        }
-      }
-
-      const shotFeatures = this.map.queryRenderedFeatures(point, {
-        layers: [this.shotsHitboxLayerId],
-      });
-
-      if (shotFeatures.length > 0) {
-        const feature = shotFeatures[0];
-        const systemId = feature?.properties?.systemId as string | undefined;
-        if (systemId) {
-          // Prevent default browser context menu when we handle the event
-          e.preventDefault();
-          // Hide tooltip while context menu is open
-          this.contextMenuOpen = true;
-          this.hideTooltip();
-          this.callbacks.onSystemContextMenu(systemId, e);
-        }
+      const hit = this.pickSystemAt(point);
+      if (hit) {
+        // Prevent default browser context menu when we handle the event
+        e.preventDefault();
+        // Hide tooltip while context menu is open
+        this.contextMenuOpen = true;
+        this.hideTooltip();
+        this.callbacks.onSystemContextMenu(hit.systemId, e);
       }
     };
     this.map.getCanvas().addEventListener('contextmenu', this.boundContextMenu);
@@ -573,38 +463,16 @@ export default class GlobalSurveyLayer {
           this.touchStartPos.x - rect.left,
           this.touchStartPos.y - rect.top,
         ];
-        // Query hitbox layers at touch position
-        const stationFeatures = this.map.queryRenderedFeatures(point, {
-          layers: [this.stationsHitboxLayerId],
-        });
-        if (stationFeatures.length > 0) {
-          const systemId = stationFeatures[0]?.properties?.systemId as string | undefined;
-          if (systemId) {
-            this.contextMenuOpen = true;
-            this.hideTooltip();
-            const fakeEvent = new MouseEvent('contextmenu', {
-              clientX: this.touchStartPos.x,
-              clientY: this.touchStartPos.y,
-            });
-            this.callbacks.onSystemContextMenu(systemId, fakeEvent);
-            this.touchStartPos = null;
-            return;
-          }
-        }
-        const shotFeatures = this.map.queryRenderedFeatures(point, {
-          layers: [this.shotsHitboxLayerId],
-        });
-        if (shotFeatures.length > 0) {
-          const systemId = shotFeatures[0]?.properties?.systemId as string | undefined;
-          if (systemId) {
-            this.contextMenuOpen = true;
-            this.hideTooltip();
-            const fakeEvent = new MouseEvent('contextmenu', {
-              clientX: this.touchStartPos.x,
-              clientY: this.touchStartPos.y,
-            });
-            this.callbacks.onSystemContextMenu(systemId, fakeEvent);
-          }
+        // Resolve the system at the touch position (custom hit index or stock).
+        const hit = this.pickSystemAt(point);
+        if (hit) {
+          this.contextMenuOpen = true;
+          this.hideTooltip();
+          const fakeEvent = new MouseEvent('contextmenu', {
+            clientX: this.touchStartPos.x,
+            clientY: this.touchStartPos.y,
+          });
+          this.callbacks.onSystemContextMenu(hit.systemId, fakeEvent);
         }
         this.touchStartPos = null;
       }, 500);
@@ -643,12 +511,35 @@ export default class GlobalSurveyLayer {
     // the per-tile MVT bytes, so an extra retained copy here would just double
     // per-shot retention on dense maps.
 
+    this.lastSystems = systems;
+
     // Clear and rebuild system colors
     this.systemColors.clear();
     for (const system of systems) {
       this.systemColors.set(system.metadata.file_path, generateSystemColor(system.metadata.file_path));
     }
 
+    // Feed the custom renderer (reads the shared gate). When it takes over it
+    // hides the stock layers and we skip the stock vector-tile publish entirely
+    // (its onActiveChange already dropped the stock sources) — the custom layer
+    // draws every system, and interaction resolves from its geometry index.
+    this.customRender?.sync(systems);
+    if (this.customRender?.isActive()) {
+      // Re-resolve hover against the freshly rebuilt system-index map (selection
+      // is baked into the rebuilt buffers by sync()).
+      this.customRender.setHover(this.hoveredSystemId);
+      return;
+    }
+
+    this.publishStockGeometry(systems);
+  }
+
+  /**
+   * Stock vector-tile publish path (the pre-custom-render behavior). Split from
+   * update() so onCustomActiveChange can re-run it verbatim when the custom
+   * layer goes away (gate off / fail-safe), restoring the stock pipeline.
+   */
+  private publishStockGeometry(systems: SystemGeometry[]): void {
     // Split into homogeneous shot/station sets, convert to flat vt payloads,
     // and publish each to its own vector-tile source (#mem).
     const { shots, stations } = buildGlobalSurveyFeatures(systems);
@@ -664,6 +555,33 @@ export default class GlobalSurveyLayer {
 
     // Reapply hover/selection styling in case selection existed before data loaded
     this.updateVisualState();
+  }
+
+  /**
+   * The custom layer's drawing state flipped (#customRender). ON: drop the stock
+   * shots/stations vt payloads it replaces so they stop holding registry + tile
+   * caches. OFF (gate flip / fail-safe self-disable): re-publish the stock
+   * pipeline from the last systems so the stock survey comes back completely.
+   */
+  private onCustomActiveChange(active: boolean): void {
+    if (active === this.customBulkSuppressed) return;
+    this.customBulkSuppressed = active;
+    if (!hasLiveStyle(this.map)) return;
+    if (active) {
+      this.dropStockSource(this.shotsSourceId);
+      this.dropStockSource(this.stationsSourceId);
+      recordFeatureCount('global-survey', 0);
+    } else if (this.lastSystems) {
+      this.publishStockGeometry(this.lastSystems);
+    }
+  }
+
+  /** Drop a stock source's registry payload and force resident tiles to refetch
+   *  as empty (mirrors SurveyLayer.dropBulkSource). */
+  private dropStockSource(key: string): void {
+    clearVtLayerData(key);
+    const source = this.map.getSource(key) as { setTiles?: (tiles: string[]) => void } | undefined;
+    source?.setTiles?.([vtTileUrl(key, this.bulkDropSeq++)]);
   }
 
   /**
@@ -737,7 +655,11 @@ export default class GlobalSurveyLayer {
       return;
     }
     this.selectedSystemIds = new Set(systemIds);
-    this.updateVisualState();
+    // Always mirror to the controller so its baked selection stays current even
+    // while inactive (a later gate-on rebuild bakes the right selection); the
+    // re-upload only happens when active.
+    this.customRender?.setSelected(this.selectedSystemIds);
+    if (!this.customRender?.isActive()) this.updateVisualState();
   }
 
   /**
@@ -746,6 +668,8 @@ export default class GlobalSurveyLayer {
    * Also hides stations that only connect to reference shots.
    */
   setShowReferenceShots(visible: boolean): void {
+    // Mirror to the custom layer (shader uniform) + the hit index gating.
+    this.customRender?.setReferenceShotsVisible(visible);
     // Each source is homogeneous now, so no featureType clause is needed:
     // `null` clears the filter (show all shots), otherwise exclude reference.
     const shotFilter: maplibregl.FilterSpecification | null = visible
@@ -784,6 +708,9 @@ export default class GlobalSurveyLayer {
    */
   setSearchFilter(term: string | null): void {
     this.searchFilter = term;
+    // Mirror to the custom layer (per-vertex dim re-upload when active; stores
+    // the term for a later gate-on rebuild otherwise).
+    this.customRender?.setSearch(term);
     this.updateOpacityExpressions();
   }
 
@@ -794,6 +721,12 @@ export default class GlobalSurveyLayer {
    * @param visible - Whether survey layers should be visible
    */
   setVisible(visible: boolean): void {
+    // Mirror to the custom layer (whole-survey draw toggle + hit gating).
+    this.customRender?.setVisible(visible);
+    // While the custom layer is active the stock layers stay hidden (the
+    // controller owns their visibility); do not un-hide them here.
+    if (this.customRender?.isActive()) return;
+
     const visibility = visible ? 'visible' : 'none';
 
     // Set visibility on visual layers
@@ -949,6 +882,9 @@ export default class GlobalSurveyLayer {
 
     if (!hasLiveStyle(this.map)) return;
 
+    // Mirror the station stroke color into the custom layer (shader uniform).
+    this.customRender?.setStrokeColor(colors.strokeColor);
+
     const strokeColor = colors.strokeColor;
 
     // Update station stroke color
@@ -996,11 +932,7 @@ export default class GlobalSurveyLayer {
    */
   private updateTooltip(
     event: MouseEvent | null,
-    properties: {
-      name?: string;
-      totalLength?: number;
-      stationCount?: number;
-    } | null
+    properties: TooltipProps | null
   ): void {
     if (!this.tooltip) return;
 
@@ -1085,6 +1017,11 @@ export default class GlobalSurveyLayer {
    * Destroy the layer, removing all sources and event handlers.
    */
   destroy(): void {
+    // Tear down the custom layer (removes it + restores stock visibility) so it
+    // never outlives Global View (#customRender).
+    this.customRender?.destroy();
+    this.customRender = null;
+
     // Zero memory-probe count for our source so the panel reflects teardown.
     clearFeatureCountsForPrefix('global-survey');
 
