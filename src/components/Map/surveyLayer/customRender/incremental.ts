@@ -22,7 +22,7 @@
  */
 import type { GpsOrigin } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
-import type { DisplayColorContext } from '../features';
+import type { DisplayColorContext, OverlayColorInput } from '../features';
 import { computeMercatorAnchor } from './mercator';
 
 /** What the incremental apply step must recompute. Section indices are into
@@ -86,7 +86,22 @@ export function sameColorGlobals(prev: DisplayColorContext, next: DisplayColorCo
   // Severity mode: any edit rebuilds the severity arrays (new ref) and severity
   // is non-local, so require identical (⇒ only fires when severity is off/stable).
   if (next.showIssueSeverity && prev.issueSeverity !== next.issueSeverity) return false;
+  // An analytical overlay recolors every feature; enter / exit and every
+  // recompute (a fresh value-map ref) forces a full rebuild. A geometry flush
+  // that leaves the overlay untouched keeps the same map refs ⇒ still same.
+  if (!sameOverlay(prev.overlay ?? null, next.overlay ?? null)) return false;
   return true;
+}
+
+/** Two overlay inputs are color-equivalent iff both off, or same mode + same
+ *  value-map identities + same scale. Map identity (not deep-equality) is the
+ *  right test: SurveyLayer replaces the maps wholesale on every overlay
+ *  recompute, so an identity change ⇔ a value change the incremental path can't
+ *  bound locally. */
+function sameOverlay(a: OverlayColorInput | null, b: OverlayColorInput | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.mode === b.mode && a.shots === b.shots && a.stations === b.stations && a.max === b.max;
 }
 
 /**

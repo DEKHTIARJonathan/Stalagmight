@@ -50,6 +50,7 @@ import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity
 import { dimmedZoomOpacity } from './surveyLayer/opacityExpressions';
 import { decideLabelBuild, skippedBuildForCamera } from './surveyLayer/labelBuildDecision';
 import { SurveyCustomController, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
+import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
 import type { SurveyData } from '../../types/survey-data';
 import type { ProjectWarning } from '../../types/commands';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
@@ -2449,6 +2450,8 @@ export default class SurveyLayer {
     this.ensureFeatureGranularity();
     this.applyOverlayPaint();
     this.applyDistanceFeatureState();
+    // Custom renderer (no feature-state): rebuild with the new overlay colors.
+    this.resyncCustomRenderFromStore();
   }
 
   /**
@@ -2467,6 +2470,8 @@ export default class SurveyLayer {
     this.ensureFeatureGranularity();
     this.applyOverlayPaint();
     this.applyGasReachFeatureState();
+    // Custom renderer (no feature-state): rebuild with the new overlay colors.
+    this.resyncCustomRenderFromStore();
   }
 
   /**
@@ -4538,6 +4543,11 @@ export default class SurveyLayer {
       themeColors: this.themeColors,
       showIssueSeverity: this.showIssueSeverity,
       issueSeverity: this.cachedIssueSeverity,
+      // Analytical overlay ramp colors (distance #34 / gas-reach #38): the custom
+      // layer has no feature-state, so it resolves them per feature at build time.
+      overlay: overlayInputFrom(
+        this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState,
+      ),
     };
     this.customRender.sync({
       surveyData,

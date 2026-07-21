@@ -11,6 +11,7 @@
  */
 import type { SurveyData, SectionMetadata } from '../../../../types/survey-data';
 import { STATION_FLAG_IS_ZERO_DATUM } from '../../../../types/survey-data';
+import { encodeFeatureId } from '../../../../utils/ids';
 import {
   resolveShotDisplayColor,
   resolveShotEndpointColors,
@@ -19,6 +20,7 @@ import {
   type DisplayColorContext,
 } from '../features';
 import { packCssColor, type Rgba8 } from './colorPack';
+import { makeOverlayColor } from './overlayColor';
 
 export interface ColorResolvers {
   /** Flat whole-segment shot color (section-color / severity mode). */
@@ -58,7 +60,20 @@ export function makeColorResolvers(
     return v;
   };
 
+  // Analytical overlay (distance / gas-reach): when active it OWNS the shot line
+  // color and the station FILL (the stock overlay swaps line-color / circle-color
+  // only), resolved per feature from the carried value maps through the shared
+  // ramp. The station STROKE and the depth-gradient endpoints yield to it (stock
+  // leaves circle-stroke-color untouched and hides the depth sub-layer). Every
+  // feature's byte comes from the SAME ramp the stock feature-state paint uses.
+  const overlay = colorCtx.overlay ?? null;
+  const overlayColor = overlay ? makeOverlayColor(overlay, colorCtx.themeColors.grayLine) : null;
+
   const colorForShot = (shotGlobalIdx: number, sectionId: number): Rgba8 => {
+    if (overlay && overlayColor) {
+      const fid = encodeFeatureId(sectionId, surveyData.shotIds[shotGlobalIdx]!);
+      return overlayColor(overlay.shots.get(fid) ?? -1);
+    }
     const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
     return pack(resolveShotDisplayColor(surveyData, sectionColor, shotGlobalIdx, colorCtx));
   };
@@ -66,11 +81,22 @@ export function makeColorResolvers(
     shotGlobalIdx: number,
     sectionId: number,
   ): readonly [Rgba8, Rgba8] => {
+    // In overlay mode a shot is one flat ramp color (useDepthEndpoints is false),
+    // but keep the endpoints coherent if a caller asks for them anyway.
+    if (overlay && overlayColor) {
+      const c = colorForShot(shotGlobalIdx, sectionId);
+      return [c, c];
+    }
     const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
     const [from, to] = resolveShotEndpointColors(surveyData, sectionColor, shotGlobalIdx, colorCtx);
     return [pack(from), pack(to)];
   };
   const fillForStation = (g: number): Rgba8 => {
+    if (overlay && overlayColor) {
+      const sectionId = surveyData.stationSectionIds[g]!;
+      const fid = encodeFeatureId(sectionId, surveyData.stationIndices[g]!);
+      return overlayColor(overlay.stations.get(fid) ?? -1);
+    }
     const sectionId = surveyData.stationSectionIds[g]!;
     const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
     return pack(resolveStationDisplayColor(surveyData, sectionColor, g, colorCtx));
@@ -80,7 +106,10 @@ export function makeColorResolvers(
     return pack(resolveStationStrokeColor(isZeroDatum, colorCtx));
   };
 
-  const useDepthEndpoints = colorCtx.showDepthGradient && !colorCtx.showIssueSeverity;
+  // Overlay mode draws flat per-shot ramp colors (stock hides the depth
+  // sub-layer while an overlay is active), so the depth-endpoint path is off.
+  const useDepthEndpoints =
+    colorCtx.showDepthGradient && !colorCtx.showIssueSeverity && !overlay;
 
   return {
     colorForShot,

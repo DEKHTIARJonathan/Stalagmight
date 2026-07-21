@@ -171,6 +171,27 @@ describe('sameColorGlobals', () => {
       ctx({ showIssueSeverity: true, issueSeverity: { ...sev } }),
     )).toBe(false);
   });
+
+  it('treats analytical-overlay changes as color-global (forces a rebuild)', () => {
+    const shots = new Map([[1, 2]]);
+    const stations = new Map([[3, 4]]);
+    const ov = { mode: 'distance' as const, shots, stations, max: 100 };
+    // Enter / exit: null <-> overlay.
+    expect(sameColorGlobals(ctx(), ctx({ overlay: ov }))).toBe(false);
+    expect(sameColorGlobals(ctx({ overlay: ov }), ctx())).toBe(false);
+    // Same map refs (a geometry flush that left the overlay untouched) -> same.
+    expect(sameColorGlobals(ctx({ overlay: ov }), ctx({ overlay: { ...ov } }))).toBe(true);
+    // Recompute (fresh map ref) / mode / scale change -> not same.
+    expect(sameColorGlobals(
+      ctx({ overlay: ov }),
+      ctx({ overlay: { ...ov, shots: new Map([[1, 2]]) } }),
+    )).toBe(false);
+    expect(sameColorGlobals(
+      ctx({ overlay: ov }),
+      ctx({ overlay: { ...ov, mode: 'gasReach' } }),
+    )).toBe(false);
+    expect(sameColorGlobals(ctx({ overlay: ov }), ctx({ overlay: { ...ov, max: 101 } }))).toBe(false);
+  });
 });
 
 describe('coalesceVertexRuns', () => {

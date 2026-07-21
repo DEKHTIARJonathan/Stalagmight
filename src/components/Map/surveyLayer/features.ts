@@ -242,6 +242,33 @@ export interface DisplayColorContext {
   /** Only honored when `issueSeverity` is present (mirrors the builder). */
   showIssueSeverity: boolean;
   issueSeverity?: { shotSeverity: Uint8Array; stationSeverity: Uint8Array } | undefined;
+  /** An analytical overlay (distance gradient / gas reach) active in the CUSTOM
+   *  renderer. Null / absent = off. See {@link OverlayColorInput}. The stock
+   *  feature builder ignores this — it colors by section/depth/severity and lets
+   *  the feature-state paint ramp override on the bulk layers; only the custom
+   *  color resolvers (which have no feature-state) read it. */
+  overlay?: OverlayColorInput | null;
+}
+
+/**
+ * A per-feature analytical-overlay color input for the custom renderer: the
+ * distance gradient (#34) or the gas reachable-frontier (#38). Under the stock
+ * layers these overlays are a `feature-state` paint ramp on the (hidden) bulk
+ * layers; the custom layer has no feature-state, so it resolves the ramp color
+ * per feature at build time from the SAME value maps the stock feature-state is
+ * fed (keyed by `encodeFeatureId`) and the SAME interpolate scale `max`. The
+ * near/far hues and the grey unreachable color are chosen from `mode` +
+ * theme by the custom color module, so the resulting bytes match the stock
+ * ramp. `-1` (or a missing key) means unreachable and renders grey.
+ */
+export interface OverlayColorInput {
+  mode: 'distance' | 'gasReach';
+  /** featureId -> value (shot: avg of its endpoints; -1 = unreachable). */
+  shots: ReadonlyMap<number, number>;
+  /** featureId -> value (the station's own; -1 = unreachable). */
+  stations: ReadonlyMap<number, number>;
+  /** Interpolate scale far end (distance: max reachable; gas: turn budget). */
+  max: number;
 }
 
 /** Severity → color (2=error, 1=warning, else clear). */
