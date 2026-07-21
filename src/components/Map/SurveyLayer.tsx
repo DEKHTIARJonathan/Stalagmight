@@ -4816,7 +4816,7 @@ export default class SurveyLayer {
         // Keep the removed sections' labels excluded until they are re-added (undo)
         // - a persistent, tile-timing-independent hide derived from this flush's
         // removals + the surviving sections; no-op until a first removal.
-        this.labelRestore.applyRemovedExclusion(removedSectionIds, sections);
+        this.labelRestore.applyRemovedExclusion(removedSectionIds, sections, surveyData);
         // Rebuild the interact overlay against the new geometry so a selected /
         // hovered / snapped feature this flush removed (a deleted shot / station /
         // section member) is dropped now instead of lingering until the async
@@ -5275,7 +5275,9 @@ export default class SurveyLayer {
         this.pendingDragCommitLabelReloads = null;
       }
     }
-
+    // Drop any transient per-feature (single shot/station delete) label hide once
+    // this flush's label tiles have reloaded truthfully (labelRestore.ts).
+    this.labelRestore.settleFeatureExclusion(this.labelReloadsThisFlush);
   }
 
   /**

@@ -11,7 +11,11 @@ import {
   buildCircleBuffers,
   computeLineDim,
   computeCircleDim,
+  recomputeLineColors,
+  recomputeCircleColors,
 } from '../tessellate';
+import { planColorOnlyUpdate } from '../incremental';
+import type { DisplayColorContext } from '../../features';
 import {
   LINE_VERTEX_SRC,
   LINE_FRAGMENT_SRC,
@@ -897,6 +901,180 @@ describe('drag hide flag (per-vertex, no rebuild)', () => {
     expect(excluded.segmentCount).toBe(1);
     expect(Array.from(full.posA.slice(8, 16))).toEqual(Array.from(excluded.posA.slice(0, 8)));
     expect(Array.from(full.colorFrom.slice(16, 32))).toEqual(Array.from(excluded.colorFrom.slice(0, 16)));
+  });
+});
+
+describe('color-only fast path (recomputeLine/CircleColors byte-identity)', () => {
+  // A deterministic PRNG so the property sweep is reproducible.
+  function mulberry32(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /** Random but valid survey: each section owns N stations (indices 0..N-1) and
+   *  up to N-1 shots, with the occasional dropped endpoint so invalid shots are
+   *  exercised (the color recompute must skip them in lock-step with the build). */
+  function randomSurvey(rng: () => number): SurveyData {
+    const d = emptySurveyData();
+    const sectionCount = 1 + Math.floor(rng() * 4);
+    const sections = [];
+    const stationSectionIds: number[] = [];
+    const stationIndices: number[] = [];
+    const stationCoords: number[] = [];
+    const stationFlags: number[] = [];
+    const shotIds: number[] = [];
+    const shotSectionIds: number[] = [];
+    const shotFlags: number[] = [];
+    let shotOffset = 0;
+    for (let s = 0; s < sectionCount; s++) {
+      const id = s + 1;
+      const nStations = 2 + Math.floor(rng() * 5);
+      // Drop a random interior station sometimes to force an invalid shot.
+      const dropIdx = rng() < 0.3 ? 1 + Math.floor(rng() * (nStations - 1)) : -1;
+      for (let i = 0; i < nStations; i++) {
+        if (i === dropIdx) continue;
+        stationSectionIds.push(id);
+        stationIndices.push(i);
+        stationCoords.push(rng() * 100, rng() * 100, -rng() * 10);
+        stationFlags.push(rng() < 0.2 ? STATION_FLAG_IS_ZERO_DATUM : 0);
+      }
+      const nShots = nStations - 1;
+      for (let i = 0; i < nShots; i++) {
+        shotIds.push(i);
+        shotSectionIds.push(id);
+        shotFlags.push(rng() < 0.25 ? SHOT_FLAG_IS_REFERENCE : 0);
+      }
+      sections.push({
+        id, name: `S${id}`, surveyor: null, date: null, color: '#abcdef',
+        direction: 'in' as never, quality: 0, next_shot_id: nShots, shotOffset, shotCount: nShots,
+      });
+      shotOffset += nShots;
+    }
+    d.sections = sections;
+    d.stationCount = stationSectionIds.length;
+    d.stationSectionIds = new Int32Array(stationSectionIds);
+    d.stationIndices = new Uint32Array(stationIndices);
+    d.stationCoords = new Float64Array(stationCoords);
+    d.stationFlags = new Uint8Array(stationFlags);
+    d.shotCount = shotIds.length;
+    d.shotIds = new Int32Array(shotIds);
+    d.shotSectionIds = new Int32Array(shotSectionIds);
+    d.shotFlags = new Uint8Array(shotFlags);
+    return d;
+  }
+
+  it('recomputeLineColors rewrites colorFrom/colorTo to a full-rebuild byte-for-byte', () => {
+    for (let seed = 1; seed <= 40; seed++) {
+      const rng = mulberry32(seed);
+      const d = randomSurvey(rng);
+      const lookup = buildStationLookup(d);
+      const rel = projectStationsRel(d, null, 0, 0);
+      // Two arbitrary resolver "modes" (flat A -> depth-endpoint B), plus stubs
+      // whose output changes with the mode so a stale byte would surface.
+      const colorA = (sgi: number, sid: number): Rgba8 => [sgi & 255, sid & 255, 1, 255];
+      const colorB = (sgi: number, sid: number): Rgba8 => [(sgi * 3) & 255, (sid * 7) & 255, 2, 200];
+      const endsB = (sgi: number, sid: number): readonly [Rgba8, Rgba8] => [
+        [(sgi * 5) & 255, 0, 0, 255],
+        [(sid * 11) & 255, 255, 0, 128],
+      ];
+      // Build at A (flat), then color-only recompute to B (depth endpoints).
+      const buf = buildLineBuffers(d, rel, lookup, colorA);
+      const posBefore = Float32Array.from(buf.posA);
+      const refBefore = Float32Array.from(buf.reference);
+      const idxBefore = Uint32Array.from(buf.indices);
+      recomputeLineColors(buf, d, lookup, colorB, endsB);
+      const full = buildLineBuffers(d, rel, lookup, colorB, undefined, endsB);
+      expect(Array.from(buf.colorFrom)).toEqual(Array.from(full.colorFrom));
+      expect(Array.from(buf.colorTo)).toEqual(Array.from(full.colorTo));
+      // Non-color buffers must be untouched by the color-only rewrite.
+      expect(Array.from(buf.posA)).toEqual(Array.from(posBefore));
+      expect(Array.from(buf.reference)).toEqual(Array.from(refBefore));
+      expect(Array.from(buf.indices)).toEqual(Array.from(idxBefore));
+    }
+  });
+
+  it('recomputeCircleColors rewrites fill/stroke to a full-rebuild byte-for-byte', () => {
+    for (let seed = 101; seed <= 140; seed++) {
+      const rng = mulberry32(seed);
+      const d = randomSurvey(rng);
+      const rel = projectStationsRel(d, null, 0, 0);
+      const fillA = (g: number): Rgba8 => [g & 255, 0, 0, 255];
+      const strokeA = (_g: number): Rgba8 => [1, 1, 1, 255];
+      const fillB = (g: number): Rgba8 => [(g * 9) & 255, 3, 4, 222];
+      const strokeB = (g: number): Rgba8 => [(g * 13) & 255, 2, 2, 255];
+      const allRef = computeStationAllReference(d, buildStationLookup(d));
+      const buf = buildCircleBuffers(d, rel, fillA, strokeA, undefined, allRef);
+      const centerBefore = Float32Array.from(buf.center);
+      const sizeBefore = Float32Array.from(buf.sizeMul);
+      const allRefBefore = Float32Array.from(buf.allReference);
+      recomputeCircleColors(buf, d, fillB, strokeB);
+      const full = buildCircleBuffers(d, rel, fillB, strokeB, undefined, allRef);
+      expect(Array.from(buf.fill)).toEqual(Array.from(full.fill));
+      expect(Array.from(buf.stroke)).toEqual(Array.from(full.stroke));
+      // Geometry / size / all-reference untouched.
+      expect(Array.from(buf.center)).toEqual(Array.from(centerBefore));
+      expect(Array.from(buf.sizeMul)).toEqual(Array.from(sizeBefore));
+      expect(Array.from(buf.allReference)).toEqual(Array.from(allRefBefore));
+    }
+  });
+});
+
+describe('planColorOnlyUpdate gate', () => {
+  const theme = { stationDefault: '#fff' } as never;
+  const baseCtx = (over: Partial<Record<string, unknown>> = {}): DisplayColorContext =>
+    ({
+      themeColors: theme,
+      showDepthGradient: false,
+      showIssueSeverity: false,
+      depthRange: { min: 0, max: 1 },
+      issueSeverity: undefined,
+      overlay: null,
+      commentTint: false,
+      ...over,
+    }) as unknown as DisplayColorContext;
+
+  it('fires when a color global changed but geometry is byte-stable', () => {
+    const d = makeFixture();
+    const [ax, ay] = computeMercatorAnchor(d, null);
+    // Depth-gradient toggle: color-only, geometry identical.
+    expect(planColorOnlyUpdate(d, d, baseCtx(), baseCtx({ showDepthGradient: true }), null, null, ax, ay)).toBe(true);
+  });
+
+  it('does not fire when the color globals are unchanged (a no-op / geometry edit)', () => {
+    const d = makeFixture();
+    const [ax, ay] = computeMercatorAnchor(d, null);
+    expect(planColorOnlyUpdate(d, d, baseCtx(), baseCtx(), null, null, ax, ay)).toBe(false);
+  });
+
+  it('falls back when geometry ALSO changed (combined edit)', () => {
+    const prev = makeFixture();
+    const next = makeFixture();
+    next.stationCoords = Float64Array.from(prev.stationCoords);
+    next.stationCoords[0] = 5; // move station 0's x
+    const [ax, ay] = computeMercatorAnchor(prev, null);
+    // A color global changed AND a station moved -> not color-only.
+    expect(planColorOnlyUpdate(prev, next, baseCtx(), baseCtx({ commentTint: true }), null, null, ax, ay)).toBe(false);
+  });
+
+  it('falls back when a shot reference flag changed (feeds reference/all-reference)', () => {
+    const prev = makeFixture();
+    const next = makeFixture();
+    next.shotFlags = Uint8Array.from([SHOT_FLAG_IS_REFERENCE, 0, 0]);
+    const [ax, ay] = computeMercatorAnchor(prev, null);
+    expect(planColorOnlyUpdate(prev, next, baseCtx(), baseCtx({ showIssueSeverity: true }), null, null, ax, ay)).toBe(false);
+  });
+
+  it('falls back on an anchor shift even when only color changed', () => {
+    const d = makeFixture();
+    const [ax, ay] = computeMercatorAnchor(d, null);
+    // A wrong cached anchor (as if the bbox extent moved) forces a full rebuild.
+    expect(planColorOnlyUpdate(d, d, baseCtx(), baseCtx({ showDepthGradient: true }), null, null, ax + 1, ay)).toBe(false);
   });
 });
 

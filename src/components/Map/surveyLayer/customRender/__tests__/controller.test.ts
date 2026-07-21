@@ -54,8 +54,10 @@ const h = vi.hoisted(() => {
       return this.reason;
     }
 
+    updateCalls = 0;
     update(data: unknown): void {
       this.data = data;
+      this.updateCalls++;
     }
 
     // Display toggles the controller re-applies on enable + on setShow* calls.
@@ -70,6 +72,23 @@ const h = vi.hoisted(() => {
     }
     setReferenceShotsVisible(v: boolean): void {
       this.referenceShotsVisible = v;
+    }
+
+    // Buffer sub-uploads the controller's incremental / color-only fast paths
+    // call; the fake just records that they ran (no GL).
+    updateColorsCalls = 0;
+    updateColors(): void {
+      this.updateColorsCalls++;
+    }
+    updateDim(): void {}
+    updateHide(): void {}
+    updateHighlight(): void {}
+    uploadCalls = 0;
+    uploadLineVertexRange(): void {
+      this.uploadCalls++;
+    }
+    uploadCircleVertexRange(): void {
+      this.uploadCalls++;
     }
   }
 
@@ -362,5 +381,72 @@ describe('SurveyCustomController onActiveChange (stock-suppression signal)', () 
     c.sync(makeParams());
     c.destroy();
     expect(calls).toEqual([true, false]);
+  });
+});
+
+describe('SurveyCustomController color-only fast path', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.enabled = true;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  // Shared geometry + themeColors refs so only the toggled color global differs
+  // (mirrors production, where this.themeColors is a stable instance field).
+  const scenario = () => {
+    const themeColors = makeParams().colorCtx.themeColors;
+    const surveyData = makeFixture();
+    const base = { gpsOrigin: null, shotWidthPx: 2, stationRadiusPx: 3, stationStrokePx: 1 };
+    const ctx = (over: Record<string, unknown>): CustomSyncParams['colorCtx'] =>
+      ({ showDepthGradient: false, showIssueSeverity: false, depthRange: { min: 0, max: 1 }, themeColors, ...over }) as unknown as CustomSyncParams['colorCtx'];
+    return { surveyData, base, ctx };
+  };
+
+  it('a pure color-global change re-uploads colors, no rebuild or layer re-create', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    const { surveyData, base, ctx } = scenario();
+    c.sync({ ...base, surveyData, colorCtx: ctx({}) });
+    const layer = h.layerState.last!;
+    expect(layer.updateColorsCalls).toBe(0);
+    // Toggle depth gradient ON: same geometry + themeColors -> color-only path.
+    c.sync({ ...base, surveyData, colorCtx: ctx({ showDepthGradient: true }) });
+    expect(h.layerState.last).toBe(layer); // no re-create
+    expect(layer.updateColorsCalls).toBe(1); // colors re-uploaded
+    expect(layer.updateCalls).toBe(0); // NOT a full rebuild
+    expect(layer.uploadCalls).toBe(0); // NOT the geometry-incremental path
+  });
+
+  it('a geometry edit with stable colors still takes the incremental path', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    const { surveyData, base, ctx } = scenario();
+    const color = ctx({});
+    c.sync({ ...base, surveyData, colorCtx: color });
+    const layer = h.layerState.last!;
+    // Move a station (same colorCtx ref) -> geometry incremental, not color-only.
+    const moved = makeFixture();
+    moved.stationCoords[3] = 55; // station 1's x
+    c.sync({ ...base, surveyData: moved, colorCtx: color });
+    expect(layer.updateColorsCalls).toBe(0);
+    expect(layer.updateCalls).toBe(0);
+    expect(layer.uploadCalls).toBeGreaterThan(0);
+  });
+
+  it('a combined geometry + color change falls back to a full rebuild', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    const { surveyData, base, ctx } = scenario();
+    c.sync({ ...base, surveyData, colorCtx: ctx({}) });
+    const layer = h.layerState.last!;
+    const moved = makeFixture();
+    moved.stationCoords[3] = 55;
+    c.sync({ ...base, surveyData: moved, colorCtx: ctx({ showDepthGradient: true }) });
+    expect(layer.updateColorsCalls).toBe(0);
+    expect(layer.uploadCalls).toBe(0);
+    expect(layer.updateCalls).toBe(1); // full rebuild via update()
   });
 });

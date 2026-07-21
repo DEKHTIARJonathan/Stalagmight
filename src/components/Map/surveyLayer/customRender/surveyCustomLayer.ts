@@ -314,6 +314,37 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     }
   }
 
+  /**
+   * Re-upload ONLY the per-vertex color buffers (line colorFrom / colorTo,
+   * circle fill / stroke) after a GLOBAL recolor that left geometry unchanged
+   * (overlay enter/exit, theme change, depth / severity toggle). The cheap
+   * color-only fast path: positions, sizes, reference / dim / hide / highlight,
+   * and indices stay as built, so this swaps just the four color attributes.
+   * Array lengths must match the uploaded geometry's vertex counts (the
+   * controller recomputes them in place from the same SoA).
+   */
+  updateColors(
+    lineColorFrom: Uint8Array,
+    lineColorTo: Uint8Array,
+    circleFill: Uint8Array,
+    circleStroke: Uint8Array,
+  ): void {
+    const gl = this.gl;
+    if (!gl || this.disabled) return;
+    if (this.lineGpu) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.lineGpu.colorFrom);
+      gl.bufferData(gl.ARRAY_BUFFER, lineColorFrom, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.lineGpu.colorTo);
+      gl.bufferData(gl.ARRAY_BUFFER, lineColorTo, gl.STATIC_DRAW);
+    }
+    if (this.circleGpu) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.circleGpu.fill);
+      gl.bufferData(gl.ARRAY_BUFFER, circleFill, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.circleGpu.stroke);
+      gl.bufferData(gl.ARRAY_BUFFER, circleStroke, gl.STATIC_DRAW);
+    }
+  }
+
   /** `gl.bufferSubData` a `[vStart, vStart+vCount)` vertex slice of one attribute
    *  from `src` (interleave `elemPerVertex`), reusing the WebGL2 srcOffset/length
    *  overload so no temporary slice is allocated. */

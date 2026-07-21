@@ -38,13 +38,15 @@ import {
   recomputeLineSection,
   recomputeStation,
   recomputeSectionAllReference,
+  recomputeLineColors,
+  recomputeCircleColors,
   type StationRel,
   type CustomRenderExclusion,
   type LineSectionInputs,
   type CircleStationInputs,
 } from './tessellate';
 import { makeColorResolvers } from './colorResolvers';
-import { planIncrementalUpdate, coalesceVertexRuns } from './incremental';
+import { planIncrementalUpdate, planColorOnlyUpdate, coalesceVertexRuns } from './incremental';
 import { SurveyCustomLayer, type CustomRenderData } from './surveyCustomLayer';
 import {
   readCustomRenderGate,
@@ -214,9 +216,14 @@ export class SurveyCustomController {
       if (this.active) this.disable();
       return;
     }
-    // Fast path: an edit that left the SoA layout unchanged only moved / recolored
-    // a few sections. Re-emit + sub-upload just those instead of a full rebuild.
-    if (this.active && this.layer && prevParams && this.tryIncremental(prevParams, params)) return;
+    // Fast paths (active layer + a prior snapshot to diff against): a geometry
+    // edit that left the SoA layout unchanged re-emits just the changed sections;
+    // a pure global recolor (overlay / theme / depth-mode toggle) with unchanged
+    // geometry re-uploads just the two color buffers. Either beats a full rebuild.
+    if (this.active && this.layer && prevParams) {
+      if (this.tryIncremental(prevParams, params)) return;
+      if (this.tryColorOnly(prevParams, params)) return;
+    }
     const data = this.build(params);
     if (!this.active) this.enable(data);
     else this.layer?.update(data);
@@ -700,6 +707,50 @@ export class SurveyCustomController {
     }
 
     // Refresh caches + size uniforms (a size-only change needs no upload).
+    Object.assign(this.lastData, this.sizeFields(params));
+    this.lastSurveyData = next;
+    this.map.triggerRepaint();
+    return true;
+  }
+
+  /**
+   * Try to apply a pure global recolor (analytical-overlay enter/exit, theme
+   * change, depth / severity toggle) as a color-only re-upload instead of a full
+   * rebuild. The geometry is unchanged, so this recomputes ONLY the four color
+   * arrays via the shared resolvers (in the SAME SoA order the full build wrote
+   * them, so the bytes are identical to a rebuild) and re-uploads just the two
+   * color buffers. Returns false to fall back to build() when the change is not
+   * color-only (see {@link planColorOnlyUpdate}) or a build-time exclusion is
+   * active (compaction breaks the g↦[4g] map, as for {@link tryIncremental}).
+   */
+  private tryColorOnly(prevParams: CustomSyncParams, params: CustomSyncParams): boolean {
+    const prev = this.lastSurveyData;
+    const layer = this.layer;
+    const line = this.lastData?.line;
+    const circle = this.lastData?.circle;
+    const lookup = this.lastLookup;
+    if (!prev || !layer || !this.lastData || !line || !circle || !lookup) return false;
+    if (prevParams.exclude || params.exclude) return false;
+    const next = params.surveyData;
+    if (
+      !planColorOnlyUpdate(
+        prev, next, prevParams.colorCtx, params.colorCtx,
+        prevParams.gpsOrigin, params.gpsOrigin, this.lastData.anchorX, this.lastData.anchorY,
+      )
+    ) {
+      return false;
+    }
+
+    const res = makeColorResolvers(next, params.colorCtx);
+    recomputeLineColors(
+      line, next, lookup, res.colorForShot,
+      res.useDepthEndpoints ? res.colorForShotEndpoints : undefined,
+    );
+    recomputeCircleColors(circle, next, res.fillForStation, res.strokeForStation);
+    layer.updateColors(line.colorFrom, line.colorTo, circle.fill, circle.stroke);
+
+    // Cache coherence: geometry buffers are untouched; refresh the survey ref +
+    // size uniforms (a size-only change rides here with no extra upload).
     Object.assign(this.lastData, this.sizeFields(params));
     this.lastSurveyData = next;
     this.map.triggerRepaint();

@@ -17,6 +17,7 @@
 // module holds the pure decision logic so it can be unit-tested without MapLibre.
 
 import type maplibregl from 'maplibre-gl';
+import type { SurveyData } from '../../../types/survey-data';
 
 /** MapLibre symbol layers that render survey text from the `stalx://` label VT
  *  sources (`-shot-labels`, `-station-labels`, `-section-labels`). These are the
@@ -30,6 +31,22 @@ export const TEXT_LABEL_LAYER_IDS: ReadonlySet<string> = new Set([
   'survey-labels',
   'survey-station-comments',
   'survey-shot-comments',
+]);
+
+/** Label layers reading the `-shot-labels` source (features carry sectionId +
+ *  shotId): both the shot labels and the shot comments render from it, so a
+ *  per-shot removal exclusion targets both. */
+export const SHOT_LABEL_LAYER_IDS: ReadonlySet<string> = new Set([
+  'survey-shot-labels',
+  'survey-shot-comments',
+]);
+
+/** Label layers reading the `-station-labels` source (features carry sectionId +
+ *  stationIndex): both the station labels and the station comments render from
+ *  it, so a station removal exclusion targets both. */
+export const STATION_LABEL_LAYER_IDS: ReadonlySet<string> = new Set([
+  'survey-station-labels',
+  'survey-station-comments',
 ]);
 
 /** Feature-group keys served by the label VT sources whose reload completion the
@@ -105,6 +122,101 @@ export function buildSectionLabelExclusion(
   return ['!', ['in', ['get', 'sectionId'], ['literal', [...sectionIds]]]] as unknown as maplibregl.FilterSpecification;
 }
 
+/** A `setFilter` exclusion hiding shot-label features whose `sectionId:shotId`
+ *  composite is in `shotKeys` (the `-shot-labels` source carries both props).
+ *  Keyed on `shotId` because it is STABLE across a deletion (unlike a station's
+ *  positional index, which renumbers), so a removed shot's label can be targeted
+ *  exactly. */
+export function buildShotLabelExclusion(
+  shotKeys: readonly string[],
+): maplibregl.FilterSpecification {
+  const needle = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'shotId']]];
+  return ['!', ['in', needle, ['literal', [...shotKeys]]]] as unknown as maplibregl.FilterSpecification;
+}
+
+/** Compose a layer's true base filter with zero or more removal exclusions via
+ *  `all` (nulls skipped), preserving the base's reference / zoom gating. */
+export function composeLabelFilters(
+  base: maplibregl.FilterSpecification | undefined,
+  exclusions: ReadonlyArray<maplibregl.FilterSpecification | null>,
+): maplibregl.FilterSpecification | null {
+  const parts = exclusions.filter((e): e is maplibregl.FilterSpecification => e != null);
+  if (parts.length === 0) return base ?? null;
+  const withBase = base && typeof base === 'object' ? [base, ...parts] : parts;
+  return (withBase.length === 1 ? withBase[0]! : ['all', ...withBase]) as unknown as maplibregl.FilterSpecification;
+}
+
+/** Per-feature removals within SURVIVING sections (whole-section removals are
+ *  handled by the persistent section-level exclusion). Returned by
+ *  {@link diffRemovedFeatures} for the reload-settled per-feature hide. */
+export interface RemovedFeatures {
+  /** Shots gone this flush, keyed by their STABLE (sectionId, shotId). */
+  shots: Array<{ sectionId: number; shotId: number }>;
+  /** Sections that lost >= 1 station. Station labels are hidden WHOLESALE per
+   *  section (not per index): deleting a shot removes the endpoint station AND
+   *  renumbers every higher index down, so a specific old index cannot be
+   *  identified from a set-diff and an index-keyed hide would hit the wrong
+   *  label after reload. The reload-settled drop bridges only the reload window,
+   *  after which the tiles carry the renumbered, truthful labels. */
+  stationSections: number[];
+}
+
+/**
+ * Diff two survey SoAs for per-feature removals inside surviving sections. A
+ * shot is removed when its (sectionId, shotId) is absent from `next`; a section
+ * "lost a station" when its station count dropped. Sections absent from `next`
+ * entirely are skipped (the section-level exclusion owns those). Pure - O(shots +
+ * stations), unit-tested without MapLibre.
+ */
+export function diffRemovedFeatures(prev: SurveyData | null, next: SurveyData): RemovedFeatures {
+  const shots: Array<{ sectionId: number; shotId: number }> = [];
+  const stationSections: number[] = [];
+  if (!prev) return { shots, stationSections };
+  // Fast path (every non-deletion flush): a per-feature removal strictly reduces
+  // the shot or station total, so skip the O(N) id diff when neither shrank. A
+  // rare add+delete in one flush falls back to the pre-existing straggler.
+  if (next.shotCount >= prev.shotCount && next.stationCount >= prev.stationCount) {
+    return { shots, stationSections };
+  }
+  const survivingSectionIds = new Set<number>();
+  for (const s of next.sections) survivingSectionIds.add(s.id);
+
+  // Removed shots: prev shot in a surviving section whose (sectionId, shotId) is
+  // no longer present in next.
+  const nextShotIds = new Map<number, Set<number>>();
+  for (let i = 0; i < next.shotCount; i++) {
+    const sid = next.shotSectionIds[i]!;
+    let set = nextShotIds.get(sid);
+    if (!set) {
+      set = new Set();
+      nextShotIds.set(sid, set);
+    }
+    set.add(next.shotIds[i]!);
+  }
+  for (let i = 0; i < prev.shotCount; i++) {
+    const sid = prev.shotSectionIds[i]!;
+    if (!survivingSectionIds.has(sid)) continue;
+    if (!nextShotIds.get(sid)?.has(prev.shotIds[i]!)) shots.push({ sectionId: sid, shotId: prev.shotIds[i]! });
+  }
+
+  // Sections that lost a station: compare per-section station counts.
+  const prevCounts = new Map<number, number>();
+  for (let g = 0; g < prev.stationCount; g++) {
+    const sid = prev.stationSectionIds[g]!;
+    prevCounts.set(sid, (prevCounts.get(sid) ?? 0) + 1);
+  }
+  const nextCounts = new Map<number, number>();
+  for (let g = 0; g < next.stationCount; g++) {
+    const sid = next.stationSectionIds[g]!;
+    nextCounts.set(sid, (nextCounts.get(sid) ?? 0) + 1);
+  }
+  for (const [sid, prevCount] of prevCounts) {
+    if (!survivingSectionIds.has(sid)) continue;
+    if ((nextCounts.get(sid) ?? 0) < prevCount) stationSections.push(sid);
+  }
+  return { shots, stationSections };
+}
+
 /** Compose an exclusion onto a layer's existing filter (preserving reference /
  *  zoom gating) with `all`, or use it directly when there is no base filter. */
 export function composeLabelFilter(
@@ -147,8 +259,24 @@ export class LabelRestoreController {
    *  reliance on tile-reload / fade timing (which un-hides labels still resident
    *  in not-yet-replaced tiles). */
   private removedIds = new Set<number>();
+  /** Per-feature TRANSIENT exclusions bridging only the label-tile reload window
+   *  (dropped once this flush's reloads settle - see {@link settleFeatureExclusion}).
+   *  `removedShotKeys` are stable `sectionId:shotId`; `removedStationSectionIds`
+   *  hide a section's station labels wholesale because station indices renumber
+   *  on delete (an index-keyed hide would target the wrong label after reload). */
+  private removedShotKeys = new Set<string>();
+  private removedStationSectionIds = new Set<number>();
+  /** Generation guard + fallback timer for the transient per-feature drop, so a
+   *  newer removal supersedes an older settle and a hide is never stranded. */
+  private featurePending: { generation: number; timeout: ReturnType<typeof setTimeout> } | null = null;
+  private featureGeneration = 0;
+  /** Previous flush's survey SoA, tracked here (updated every flush that reports
+   *  removals) so the caller passes only the current SoA - the per-feature diff
+   *  needs the immediately-preceding one, which the caller has already
+   *  overwritten by the time the removal exclusion is applied. */
+  private lastFlushSurveyData: SurveyData | null = null;
   /** True base filters (no removal exclusion) of the text layers, captured once
-   *  when the first removal is applied and restored when the set empties. */
+   *  when the first removal is applied and restored when every set empties. */
   private removedBaseFilters: DragFilterMap | null = null;
 
   constructor(private readonly map: LabelFilterMap) {}
@@ -183,7 +311,18 @@ export class LabelRestoreController {
    * filters are restored. Timing-independent by construction. No-op until a first
    * removal, so ordinary flushes cost nothing.
    */
-  applyRemovedExclusion(removedThisFlush: readonly number[], sections: readonly { id: number }[]): void {
+  applyRemovedExclusion(
+    removedThisFlush: readonly number[],
+    sections: readonly { id: number }[],
+    surveyData?: SurveyData,
+  ): void {
+    // Per-feature removals (single shot / station deletions in a surviving
+    // section) hide by (sectionId, shotId) / per-section station labels until the
+    // reload settles. Diffed against the tracked previous SoA, then advance it.
+    if (surveyData) {
+      this.applyRemovedFeatureExclusion(diffRemovedFeatures(this.lastFlushSurveyData, surveyData));
+      this.lastFlushSurveyData = surveyData;
+    }
     if (removedThisFlush.length === 0 && this.removedIds.size === 0) return;
     for (const id of removedThisFlush) this.removedIds.add(id);
     if (this.removedIds.size > 0) {
@@ -191,8 +330,69 @@ export class LabelRestoreController {
       for (const s of sections) present.add(s.id);
       for (const id of this.removedIds) if (present.has(id)) this.removedIds.delete(id);
     }
-    if (this.removedIds.size === 0) {
-      // Everything re-added: restore the captured base filters and drop them.
+    this.reapplyExclusions();
+  }
+
+  /**
+   * Hide the labels of individually-removed shots / stations in surviving
+   * sections, in the same frame their custom-rendered geometry vanished, so no
+   * stale label lingers on the resident tiles until the async reload. Called
+   * synchronously in the flush (BEFORE the worker rebuild). The hide is TRANSIENT:
+   * {@link settleFeatureExclusion} drops it once this flush's label tiles reload,
+   * because station indices renumber on delete and a persistent index-keyed hide
+   * would target the wrong (shifted) label after reload. No-op with nothing
+   * removed, so ordinary flushes cost nothing.
+   */
+  applyRemovedFeatureExclusion(removed: RemovedFeatures): void {
+    if (removed.shots.length === 0 && removed.stationSections.length === 0) return;
+    for (const s of removed.shots) this.removedShotKeys.add(`${s.sectionId}:${s.shotId}`);
+    for (const sid of removed.stationSections) this.removedStationSectionIds.add(sid);
+    this.reapplyExclusions();
+    // Arm the fallback drop; the reload-settled drop (settleFeatureExclusion)
+    // supersedes it when this flush's reloads arrive.
+    if (this.featurePending) clearTimeout(this.featurePending.timeout);
+    const generation = ++this.featureGeneration;
+    const timeout = setTimeout(() => this.dropFeatureExclusion(generation), LABEL_RESTORE_FALLBACK_MS);
+    this.featurePending = { generation, timeout };
+  }
+
+  /**
+   * Drop the transient per-feature exclusion once THIS flush's label tiles have
+   * reloaded (the removed feature gone, neighbors renumbered ⇒ truthful). Called
+   * from endApplyFeatures with the flush's label reloads; a no-op when no
+   * per-feature hide is pending. When no label tile reloaded (labels not built)
+   * the fallback timer drops the harmless hide instead.
+   */
+  settleFeatureExclusion(reloads: Promise<unknown>[]): void {
+    const pending = this.featurePending;
+    if (!pending || reloads.length === 0) return;
+    const generation = pending.generation;
+    void Promise.allSettled(reloads).then(() => this.dropFeatureExclusion(generation));
+  }
+
+  /** Clear the transient per-feature sets (if `generation` is still current) and
+   *  reapply, restoring the affected layers to base + any persistent section hide. */
+  private dropFeatureExclusion(generation: number): void {
+    if (!this.featurePending || this.featurePending.generation !== generation) return;
+    clearTimeout(this.featurePending.timeout);
+    this.featurePending = null;
+    this.removedShotKeys.clear();
+    this.removedStationSectionIds.clear();
+    this.reapplyExclusions();
+  }
+
+  /**
+   * Single authority that (re)derives every text layer's filter from the base +
+   * the persistent section exclusion + the transient per-feature exclusions.
+   * When all three sets are empty the captured base filters are restored and
+   * dropped. Called by both the section and per-feature entry points so they
+   * never clobber each other.
+   */
+  private reapplyExclusions(): void {
+    const active =
+      this.removedIds.size > 0 || this.removedShotKeys.size > 0 || this.removedStationSectionIds.size > 0;
+    if (!active) {
+      // Everything re-added / reload-settled: restore the captured base and drop it.
       if (this.removedBaseFilters) this.restore(this.removedBaseFilters);
       this.removedBaseFilters = null;
       return;
@@ -206,9 +406,16 @@ export class LabelRestoreController {
         this.removedBaseFilters.set(layerId, this.map.getFilter(layerId) ?? undefined);
       }
     }
-    const exclusion = buildSectionLabelExclusion([...this.removedIds]);
+    const sectionExcl = this.removedIds.size > 0 ? buildSectionLabelExclusion([...this.removedIds]) : null;
+    const shotExcl = this.removedShotKeys.size > 0 ? buildShotLabelExclusion([...this.removedShotKeys]) : null;
+    const stationExcl =
+      this.removedStationSectionIds.size > 0 ? buildSectionLabelExclusion([...this.removedStationSectionIds]) : null;
     for (const [layerId, base] of this.removedBaseFilters) {
-      if (this.map.getLayer(layerId)) this.map.setFilter(layerId, composeLabelFilter(base, exclusion));
+      if (!this.map.getLayer(layerId)) continue;
+      const exclusions = [sectionExcl];
+      if (SHOT_LABEL_LAYER_IDS.has(layerId)) exclusions.push(shotExcl);
+      if (STATION_LABEL_LAYER_IDS.has(layerId)) exclusions.push(stationExcl);
+      this.map.setFilter(layerId, composeLabelFilters(base, exclusions));
     }
   }
 
@@ -229,8 +436,15 @@ export class LabelRestoreController {
       clearTimeout(this.pending.timeout);
       this.pending = null;
     }
+    if (this.featurePending) {
+      clearTimeout(this.featurePending.timeout);
+      this.featurePending = null;
+    }
     this.removedIds.clear();
+    this.removedShotKeys.clear();
+    this.removedStationSectionIds.clear();
     this.removedBaseFilters = null;
+    this.lastFlushSurveyData = null;
   }
 
   /** Apply a queued drag restore if it still belongs to `generation` (a

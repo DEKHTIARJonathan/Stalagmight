@@ -459,6 +459,88 @@ export function recomputeLineSection(
 }
 
 /**
+ * Rewrite ONLY the per-vertex line color attributes (`colorFrom` / `colorTo`) in
+ * place, replaying {@link buildLineBuffers}' exact valid-shot iteration so the
+ * k-th drawn segment's 4 verts line up byte-for-byte with a full rebuild. The
+ * color-only fast path for a GLOBAL recolor (analytical-overlay enter/exit,
+ * theme change, depth / severity toggle) where geometry is unchanged: positions,
+ * reference / dim / hide / highlight, and indices are left untouched, so only the
+ * two color buffers need re-uploading. Live (unexcluded) path only, matching the
+ * incremental preconditions. In flat modes `colorFrom === colorTo`; the
+ * depth-endpoint resolver, when supplied, splits them (per-shot depth ramp).
+ */
+export function recomputeLineColors(
+  b: LineBuffers,
+  data: SurveyData,
+  lookup: Map<number, Map<number, number>>,
+  colorForShot: (globalShotIdx: number, sectionId: number) => Rgba8,
+  colorForShotEndpoints:
+    | ((globalShotIdx: number, sectionId: number) => readonly [Rgba8, Rgba8])
+    | undefined,
+): void {
+  const { colorFrom, colorTo } = b;
+  let seg = 0;
+  for (const section of data.sections) {
+    const inner = lookup.get(section.id);
+    if (!inner) continue;
+    for (let i = 0; i < section.shotCount; i++) {
+      const fromGlobal = inner.get(i);
+      const toGlobal = inner.get(i + 1);
+      if (fromGlobal === undefined || toGlobal === undefined) continue;
+      const shotGlobalIdx = section.shotOffset + i;
+      const ends = colorForShotEndpoints?.(shotGlobalIdx, section.id);
+      const colA = ends ? ends[0] : colorForShot(shotGlobalIdx, section.id);
+      const colB = ends ? ends[1] : colA;
+      const base = seg * 4;
+      for (let c = 0; c < 4; c++) {
+        const o = (base + c) * 4;
+        colorFrom[o] = colA[0];
+        colorFrom[o + 1] = colA[1];
+        colorFrom[o + 2] = colA[2];
+        colorFrom[o + 3] = colA[3];
+        colorTo[o] = colB[0];
+        colorTo[o + 1] = colB[1];
+        colorTo[o + 2] = colB[2];
+        colorTo[o + 3] = colB[3];
+      }
+      seg++;
+    }
+  }
+}
+
+/**
+ * Rewrite ONLY the per-vertex circle color attributes (`fill` / `stroke`) in
+ * place, replaying {@link buildCircleBuffers}' live-path station iteration
+ * (output slot == global index). Circle counterpart of {@link recomputeLineColors}
+ * for the color-only fast path; leaves center / size / dim / hide / highlight /
+ * all-reference untouched.
+ */
+export function recomputeCircleColors(
+  b: CircleBuffers,
+  data: SurveyData,
+  fillForStation: (globalIdx: number) => Rgba8,
+  strokeForStation: (globalIdx: number) => Rgba8,
+): void {
+  const { fill, stroke } = b;
+  for (let g = 0; g < data.stationCount; g++) {
+    const [fr, fg, fb, fa] = fillForStation(g);
+    const [sr, sg, sb, sa] = strokeForStation(g);
+    const base = g * 4;
+    for (let c = 0; c < 4; c++) {
+      const o = (base + c) * 4;
+      fill[o] = fr;
+      fill[o + 1] = fg;
+      fill[o + 2] = fb;
+      fill[o + 3] = fa;
+      stroke[o] = sr;
+      stroke[o + 1] = sg;
+      stroke[o + 2] = sb;
+      stroke[o + 3] = sa;
+    }
+  }
+}
+
+/**
  * Recompute ONLY the per-vertex line dim flags for the CURRENT anchored /
  * immovable set, replaying {@link buildLineBuffers}' exact skip + iteration so
  * the k-th drawn segment lines up vertex-for-vertex. Lets the controller refresh

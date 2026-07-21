@@ -190,6 +190,55 @@ export function planIncrementalUpdate(
 }
 
 /**
+ * Whether an edit is a COLOR-ONLY global recolor: the color globals changed
+ * (analytical-overlay enter/exit or recompute, theme, depth / severity / depth-
+ * range / move-comment-tint toggle) while every geometry input the color-only
+ * fast path does NOT recompute is byte-stable. When true the controller
+ * recomputes only the color arrays via `makeColorResolvers(next, nextCtx)` and
+ * re-uploads the two color buffers, skipping reprojection, tessellation, and the
+ * position / reference / all-reference / size buffers entirely (~low ms vs the
+ * full-rebuild reproject + tessellate).
+ *
+ * Returns false (⇒ the caller full-rebuilds, or the geometry-incremental path
+ * ran first) when the color globals are UNCHANGED (nothing to recolor globally —
+ * a geometry edit or no-op), on a gps / layout / anchor change, or when any
+ * non-color geometry input moved too (a combined edit the color-only path cannot
+ * bound): station x/y (⇒ positions), station flags (⇒ zero-datum `sizeMul`), or
+ * shot flags (⇒ per-vertex `reference` + per-station `allReference`). Section
+ * colors, depths, and z are pure color inputs and MAY change — the resolvers
+ * read them from `next`, so the recolor stays correct.
+ */
+export function planColorOnlyUpdate(
+  prev: SurveyData,
+  next: SurveyData,
+  prevCtx: DisplayColorContext,
+  nextCtx: DisplayColorContext,
+  prevGpsOrigin: GpsOrigin | null,
+  nextGpsOrigin: GpsOrigin | null,
+  cachedAnchorX: number,
+  cachedAnchorY: number,
+): boolean {
+  if (sameColorGlobals(prevCtx, nextCtx)) return false;
+  if (!sameGpsOrigin(prevGpsOrigin, nextGpsOrigin)) return false;
+  if (!sameSurveyLayout(prev, next)) return false;
+  const [ax, ay] = computeMercatorAnchor(next, nextGpsOrigin);
+  if (ax !== cachedAnchorX || ay !== cachedAnchorY) return false;
+  const pC = prev.stationCoords;
+  const nC = next.stationCoords;
+  for (let g = 0; g < next.stationCount; g++) {
+    const b = g * 3;
+    // x/y feed posA/posB (not reprojected here); station flags feed sizeMul.
+    if (pC[b] !== nC[b] || pC[b + 1] !== nC[b + 1]) return false;
+    if (prev.stationFlags[g] !== next.stationFlags[g]) return false;
+  }
+  // Shot flags feed the reference + all-reference buffers (not recomputed here).
+  for (let gi = 0; gi < next.shotCount; gi++) {
+    if (prev.shotFlags[gi] !== next.shotFlags[gi]) return false;
+  }
+  return true;
+}
+
+/**
  * Coalesce a sorted list of vertex-slot starts (each `count` verts wide) into
  * `[startVertex, vertexCount]` runs, so scattered per-station updates collapse
  * into as few `bufferSubData` calls as the layout allows. `slots` must be sorted

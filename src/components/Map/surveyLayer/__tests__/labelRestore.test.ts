@@ -7,12 +7,33 @@ import {
   partitionDragFilters,
   shouldDeferTextRestore,
   diffRemovedSectionIds,
+  diffRemovedFeatures,
   buildSectionLabelExclusion,
+  buildShotLabelExclusion,
   composeLabelFilter,
+  composeLabelFilters,
   LabelRestoreController,
   type DragFilterMap,
   type LabelFilterMap,
 } from '../labelRestore';
+import { emptySurveyData, type SurveyData } from '../../../../types/survey-data';
+
+/** Minimal survey SoA for the removal diff: ids + section membership only. */
+function survey(opts: {
+  sections: number[];
+  shots: Array<{ sectionId: number; shotId: number }>;
+  stations: Array<{ sectionId: number; stationIndex: number }>;
+}): SurveyData {
+  const d = emptySurveyData();
+  d.sections = opts.sections.map((id) => ({ id }) as never);
+  d.shotCount = opts.shots.length;
+  d.shotIds = new Int32Array(opts.shots.map((s) => s.shotId));
+  d.shotSectionIds = new Int32Array(opts.shots.map((s) => s.sectionId));
+  d.stationCount = opts.stations.length;
+  d.stationSectionIds = new Int32Array(opts.stations.map((s) => s.sectionId));
+  d.stationIndices = new Uint32Array(opts.stations.map((s) => s.stationIndex));
+  return d;
+}
 
 // A distinct stand-in filter per layer so we can assert values survive the split.
 const F = (tag: string): maplibregl.FilterSpecification =>
@@ -150,6 +171,97 @@ describe('composeLabelFilter', () => {
   });
 });
 
+describe('buildShotLabelExclusion', () => {
+  it('hides features whose sectionId:shotId composite is in the removed set', () => {
+    expect(buildShotLabelExclusion(['3:7', '3:8'])).toEqual([
+      '!',
+      ['in', ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'shotId']]], ['literal', ['3:7', '3:8']]],
+    ]);
+  });
+});
+
+describe('composeLabelFilters', () => {
+  const s = buildSectionLabelExclusion([5]);
+  const sh = buildShotLabelExclusion(['5:1']);
+  it('returns the base alone when no exclusions apply', () => {
+    const base = F('base');
+    expect(composeLabelFilters(base, [null, null])).toBe(base);
+    expect(composeLabelFilters(undefined, [null])).toBeNull();
+  });
+  it('uses a single exclusion directly with no base', () => {
+    expect(composeLabelFilters(undefined, [s, null])).toBe(s);
+  });
+  it('ANDs base + every present exclusion in order', () => {
+    const base = F('base');
+    expect(composeLabelFilters(base, [s, sh])).toEqual(['all', base, s, sh]);
+  });
+});
+
+describe('diffRemovedFeatures', () => {
+  // Section 1: stations idx 0..4, shots ids 0..3 (0-1,1-2,2-3,3-4).
+  const full = survey({
+    sections: [1],
+    shots: [0, 1, 2, 3].map((shotId) => ({ sectionId: 1, shotId })),
+    stations: [0, 1, 2, 3, 4].map((stationIndex) => ({ sectionId: 1, stationIndex })),
+  });
+
+  it('returns empty for a null prev (app start / first flush)', () => {
+    expect(diffRemovedFeatures(null, full)).toEqual({ shots: [], stationSections: [] });
+  });
+
+  it('fast-paths to empty when neither total shrank (no deletion this flush)', () => {
+    const added = survey({
+      sections: [1],
+      shots: [0, 1, 2, 3, 4].map((shotId) => ({ sectionId: 1, shotId })),
+      stations: [0, 1, 2, 3, 4, 5].map((stationIndex) => ({ sectionId: 1, stationIndex })),
+    });
+    expect(diffRemovedFeatures(full, added)).toEqual({ shots: [], stationSections: [] });
+  });
+
+  it('index-shift hazard: a mid-section station delete reports the SECTION, not an index', () => {
+    // Delete shot id 1 -> removes station at old index 2; stations 3,4 renumber to
+    // 2,3. next has stations idx 0..3 and shots ids 0,2,3.
+    const next = survey({
+      sections: [1],
+      shots: [0, 2, 3].map((shotId) => ({ sectionId: 1, shotId })),
+      stations: [0, 1, 2, 3].map((stationIndex) => ({ sectionId: 1, stationIndex })),
+    });
+    const { shots, stationSections } = diffRemovedFeatures(full, next);
+    // The removed shot is keyed by its STABLE id (1), never a positional index.
+    expect(shots).toEqual([{ sectionId: 1, shotId: 1 }]);
+    // Station removal is reported SECTION-scoped. A naive index set-diff would say
+    // "index 4 removed" (the highest, vanished by renumbering) - the WRONG label -
+    // so we never key stations by index; the whole section's station labels hide.
+    expect(stationSections).toEqual([1]);
+  });
+
+  it('ignores whole-section removals (owned by the persistent section exclusion)', () => {
+    const next = survey({
+      sections: [2],
+      shots: [{ sectionId: 2, shotId: 0 }],
+      stations: [0, 1].map((stationIndex) => ({ sectionId: 2, stationIndex })),
+    });
+    // Section 1 vanished entirely; its shots/stations are NOT reported per-feature.
+    expect(diffRemovedFeatures(full, next)).toEqual({ shots: [], stationSections: [] });
+  });
+
+  it('reports a removed shot even when no station left the section', () => {
+    // A section keeping its station set but dropping one shot (e.g. a dangling
+    // shot delete). shotCount shrank so the fast path proceeds.
+    const prev = survey({
+      sections: [1],
+      shots: [0, 1].map((shotId) => ({ sectionId: 1, shotId })),
+      stations: [0, 1].map((stationIndex) => ({ sectionId: 1, stationIndex })),
+    });
+    const next = survey({
+      sections: [1],
+      shots: [{ sectionId: 1, shotId: 0 }],
+      stations: [0, 1].map((stationIndex) => ({ sectionId: 1, stationIndex })),
+    });
+    expect(diffRemovedFeatures(prev, next)).toEqual({ shots: [{ sectionId: 1, shotId: 1 }], stationSections: [] });
+  });
+});
+
 // A minimal map surface for the controller: records filters + layer existence.
 class FakeFilterMap implements LabelFilterMap {
   filters = new Map<string, maplibregl.FilterSpecification | null | undefined>();
@@ -251,6 +363,107 @@ describe('LabelRestoreController', () => {
       // The important guarantee is simply that dispose does not throw and resets.
       c.applyRemovedExclusion([], secs([0, 5]));
       expect(map.filters.has('survey-shot-labels')).toBe(true);
+    });
+  });
+
+  describe('per-feature removal exclusion (single shot/station delete)', () => {
+    // prev: section 1 has shots 0,1,2,3 + stations 0..4. Establish it as the
+    // tracked baseline with a first (removal-free) flush, then delete.
+    const prev = survey({
+      sections: [1],
+      shots: [0, 1, 2, 3].map((shotId) => ({ sectionId: 1, shotId })),
+      stations: [0, 1, 2, 3, 4].map((stationIndex) => ({ sectionId: 1, stationIndex })),
+    });
+    // Delete shot id 1: removes station idx 2, renumbers 3,4 -> 2,3.
+    const afterDelete = survey({
+      sections: [1],
+      shots: [0, 2, 3].map((shotId) => ({ sectionId: 1, shotId })),
+      stations: [0, 1, 2, 3].map((stationIndex) => ({ sectionId: 1, stationIndex })),
+    });
+
+    it('hides the removed shot (by shotId) and the section station labels in-frame', () => {
+      const map = new FakeFilterMap(TEXT_LABEL_LAYER_IDS);
+      const c = new LabelRestoreController(map);
+      c.applyRemovedExclusion([], secs([1]), prev); // baseline flush, no removal
+      expect(map.filters.size).toBe(0);
+      c.applyRemovedExclusion([], secs([1]), afterDelete); // the delete flush
+      const shotExcl = buildShotLabelExclusion(['1:1']);
+      const stationExcl = buildSectionLabelExclusion([1]);
+      // Shot layers hide the removed shotId; station layers hide the section's
+      // station labels wholesale (index-shift-safe); section labels untouched.
+      expect(map.getFilter('survey-shot-labels')).toEqual(shotExcl);
+      expect(map.getFilter('survey-shot-comments')).toEqual(shotExcl);
+      expect(map.getFilter('survey-station-labels')).toEqual(stationExcl);
+      expect(map.getFilter('survey-station-comments')).toEqual(stationExcl);
+      expect(map.getFilter('survey-labels')).toBeNull();
+    });
+
+    it('drops the per-feature hide once this flush label tiles reload (truthful)', async () => {
+      const map = new FakeFilterMap(TEXT_LABEL_LAYER_IDS);
+      const c = new LabelRestoreController(map);
+      c.applyRemovedExclusion([], secs([1]), prev);
+      c.applyRemovedExclusion([], secs([1]), afterDelete);
+      expect(map.getFilter('survey-shot-labels')).toEqual(buildShotLabelExclusion(['1:1']));
+      let land!: () => void;
+      const reload = new Promise<void>((r) => { land = r; });
+      c.settleFeatureExclusion([reload]);
+      land();
+      await flushMicrotasks();
+      // After reload the tiles carry the renumbered, truthful labels -> restore.
+      expect(map.getFilter('survey-shot-labels')).toBeNull();
+      expect(map.getFilter('survey-station-labels')).toBeNull();
+    });
+
+    it('falls back to the timer if the reloads never settle', () => {
+      vi.useFakeTimers();
+      const map = new FakeFilterMap(TEXT_LABEL_LAYER_IDS);
+      const c = new LabelRestoreController(map);
+      c.applyRemovedExclusion([], secs([1]), prev);
+      c.applyRemovedExclusion([], secs([1]), afterDelete);
+      c.settleFeatureExclusion([new Promise<void>(() => {})]); // never resolves
+      expect(map.getFilter('survey-station-labels')).toEqual(buildSectionLabelExclusion([1]));
+      vi.advanceTimersByTime(LABEL_RESTORE_FALLBACK_MS);
+      expect(map.getFilter('survey-station-labels')).toBeNull();
+    });
+
+    it('composes with a persistent section exclusion and leaves it intact on drop', async () => {
+      const map = new FakeFilterMap(TEXT_LABEL_LAYER_IDS);
+      const c = new LabelRestoreController(map);
+      // Section 9 deleted earlier (persistent), then a shot deleted in section 1.
+      c.applyRemovedExclusion([9], secs([1]), prev);
+      c.applyRemovedExclusion([], secs([1]), afterDelete);
+      // Station-labels carry BOTH the section-9 persistent hide and the section-1
+      // transient station hide.
+      expect(map.getFilter('survey-station-labels')).toEqual([
+        'all', buildSectionLabelExclusion([9]), buildSectionLabelExclusion([1]),
+      ]);
+      let land!: () => void;
+      const reload = new Promise<void>((r) => { land = r; });
+      c.settleFeatureExclusion([reload]);
+      land();
+      await flushMicrotasks();
+      // Transient dropped; the persistent section-9 hide remains.
+      expect(map.getFilter('survey-station-labels')).toEqual(buildSectionLabelExclusion([9]));
+    });
+
+    it('a superseding delete supersedes the earlier settle generation', async () => {
+      const map = new FakeFilterMap(TEXT_LABEL_LAYER_IDS);
+      const c = new LabelRestoreController(map);
+      c.applyRemovedExclusion([], secs([1]), prev);
+      c.applyRemovedExclusion([], secs([1]), afterDelete); // delete A (gen 1)
+      let landA!: () => void;
+      const reloadA = new Promise<void>((r) => { landA = r; });
+      c.settleFeatureExclusion([reloadA]);
+      // A second delete (shot id 2) before A's reload settles -> new gen.
+      const afterDelete2 = survey({
+        sections: [1],
+        shots: [{ sectionId: 1, shotId: 0 }, { sectionId: 1, shotId: 3 }],
+        stations: [0, 1, 2].map((stationIndex) => ({ sectionId: 1, stationIndex })),
+      });
+      c.applyRemovedExclusion([], secs([1]), afterDelete2);
+      landA(); // A's stale settle must NOT drop the (newer) exclusion
+      await flushMicrotasks();
+      expect(map.getFilter('survey-station-labels')).toEqual(buildSectionLabelExclusion([1]));
     });
   });
 
