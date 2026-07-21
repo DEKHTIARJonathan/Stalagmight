@@ -32,6 +32,43 @@ export interface DistanceFeatureState {
   max: number;
 }
 
+/** What an analytical-overlay apply effect should do this render. */
+export type OverlayApplyAction = 'ramp' | 'off' | 'hold';
+
+/**
+ * Decide how an analytical-overlay apply effect (distance #34 / gas-reach #38 —
+ * both mirror this shape) should drive the survey layer for the current
+ * `(mode, field, geometry)` tuple. Shared by both overlays; lives here as the
+ * canonical overlay helper.
+ *
+ * The per-feature value map is fetched ASYNCHRONOUSLY: changing the origin / gas
+ * parameters clears the cached field to `null` (uiStore.setDistanceGradientOrigin
+ * / gasPlanStore setters) and a fresh one lands a tick later. A naive
+ * `field ? on : off` effect would drive the layer OFF (base colors) for that one
+ * tick and back ON — a visible blink of section colors before the new ramp,
+ * worst under the custom renderer where OFF is a full buffer rebuild. This guard
+ * splits the "off" case in two:
+ *   - `'ramp'`: the field is ready → install / refresh the ramp.
+ *   - `'off'` : the mode is genuinely off (disabled, superseded by severity, or
+ *               no geometry) → restore base colors immediately (deactivation
+ *               must NOT be held).
+ *   - `'hold'`: the mode is on and geometry is present but the field is
+ *               transiently absent (recompute in flight) → keep the CURRENT
+ *               colors (the old ramp), no layer call, until the new field lands.
+ *
+ * A genuinely EMPTY result (no reachable features) is still a NON-null field
+ * object, so the caller passes `hasField = true` and it maps to `'ramp'` (the
+ * all-grey ramp) — never `'hold'` on stale colors.
+ */
+export function overlayApplyAction(
+  modeOn: boolean,
+  hasField: boolean,
+  hasSurvey: boolean,
+): OverlayApplyAction {
+  if (!modeOn || !hasSurvey) return 'off';
+  return hasField ? 'ramp' : 'hold';
+}
+
 /**
  * Build per-feature `dist` values from a `DistanceField`. Station value is its
  * own distance; shot value is the average of its two endpoint stations (so the

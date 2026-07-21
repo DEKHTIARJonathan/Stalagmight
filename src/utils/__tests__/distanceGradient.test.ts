@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildDistanceFeatureState,
   distanceColorExpression,
+  overlayApplyAction,
   UNREACHABLE_DIST,
 } from '../distanceGradient';
 import { encodeFeatureId, FEATURE_ID_STRIDE } from '../ids';
@@ -81,5 +82,36 @@ describe('distanceColorExpression', () => {
   it('guards a degenerate max<=0 by using a strictly-ascending stop (1)', () => {
     const s = JSON.stringify(distanceColorExpression('#aaaaaa', '#bbbbbb', 0, '#888888'));
     expect(s).toContain('"#aaaaaa",1,"#bbbbbb"'); // safeMax = 1, not 0
+  });
+});
+
+describe('overlayApplyAction (origin-change blink guard)', () => {
+  it('ramps when the mode is on, the field is ready, and geometry exists', () => {
+    expect(overlayApplyAction(true, true, true)).toBe('ramp');
+  });
+
+  it('HOLDS the current ramp when the field is transiently null mid-recompute', () => {
+    // The fix: origin change clears the field -> mode still on, geometry present,
+    // field null -> keep the old ramp (no base-color frame) until the new one lands.
+    expect(overlayApplyAction(true, false, true)).toBe('hold');
+  });
+
+  it('turns OFF immediately on real deactivation, regardless of field/geometry', () => {
+    // Deactivation must restore base now (never held), whether or not a stale
+    // field object lingers.
+    expect(overlayApplyAction(false, true, true)).toBe('off');
+    expect(overlayApplyAction(false, false, true)).toBe('off');
+    expect(overlayApplyAction(false, true, false)).toBe('off');
+  });
+
+  it('turns OFF when there is no geometry to color (even with the mode on)', () => {
+    expect(overlayApplyAction(true, true, false)).toBe('off');
+    expect(overlayApplyAction(true, false, false)).toBe('off');
+  });
+
+  it('a genuinely empty result is a non-null field -> ramp (all-grey), not hold', () => {
+    // The caller passes hasField=true for a non-null-but-empty field, so it
+    // renders the all-grey ramp instead of holding stale colors.
+    expect(overlayApplyAction(true, true, true)).toBe('ramp');
   });
 });

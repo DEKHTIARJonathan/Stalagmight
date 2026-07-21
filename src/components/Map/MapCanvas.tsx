@@ -18,7 +18,7 @@ import {
   getEffectiveShowShotComments,
 } from '../../store/displaySelectors';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
-import { buildDistanceFeatureState } from '../../utils/distanceGradient';
+import { buildDistanceFeatureState, overlayApplyAction } from '../../utils/distanceGradient';
 import { buildGasReachFeatureState } from '../../utils/gasReach';
 import { buildMeasuredPathIds, buildMeasuredStationIds, MEASURE_TINT } from '../../utils/measurePath';
 import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
@@ -1955,8 +1955,10 @@ function MapCanvas() {
       // section metadata + shot ids — never the lazy `section.shots` objects.
       const state = buildDistanceFeatureState(surveyData, distanceField);
       surveyLayerRef.current.setDistanceGradient(true, state);
-    } else {
-      // Severity coloring (incl. the Warnings-tab auto-highlight) takes precedence.
+    } else if (overlayApplyAction(showDistanceGradient && !effectiveIssueSeverity, distanceField != null, surveyData != null) === 'off') {
+      // Real off (mode disabled, severity coloring wins, or no geometry) -> base
+      // now. NOT while the origin is recomputing (field transiently null, mode
+      // still on): 'hold' keeps the old ramp so a re-root never blinks base (#customRender).
       surveyLayerRef.current.setDistanceGradient(false, null);
     }
   }, [showDistanceGradient, effectiveIssueSeverity, distanceField, surveyData, mapLoaded, surveyLayerRef]);
@@ -1970,7 +1972,9 @@ function MapCanvas() {
       // typed arrays, never the lazy `section.shots` objects.
       const state = buildGasReachFeatureState(surveyData, gasReachField);
       surveyLayerRef.current.setGasReach(true, state);
-    } else {
+    } else if (overlayApplyAction(showGasPlan, gasReachField != null, surveyData != null) === 'off') {
+      // 'hold' during a gas param/origin recompute (field transiently null) keeps
+      // the old ramp; only a real off restores base (mirrors the distance guard).
       surveyLayerRef.current.setGasReach(false, null);
     }
   }, [showGasPlan, gasReachField, surveyData, mapLoaded, surveyLayerRef]);
