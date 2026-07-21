@@ -38,6 +38,88 @@ export interface VtLayerPublication {
 
 const registry = new Map<string, { data: VtLayerData; version: number }>();
 
+/**
+ * Per-source convergence watermarks (#customRender label-stale fix).
+ *
+ * `target` counts payload CONTENT changes published for the source (every
+ * `setVtLayerData` whose diff is non-null). `settled` is the highest `target`
+ * whose reload has cleanly brought the source's RESIDENT tiles into sync with
+ * the registry payload. When `settled < target` the resident tiles lag the
+ * payload — a reload was superseded/abandoned mid-flight, or skipped.
+ *
+ * Why this is needed: the `dirtyBounds` diff compares the new payload against
+ * the PREVIOUS REGISTRY payload, not against what the resident tiles actually
+ * hold. Under rapid churn (fast undo/redo, drag storms) a reload can be
+ * superseded before it re-cuts every tile, leaving stale label features
+ * resident while the registry payload is already fresh. A later `dirtyBounds`
+ * === null publish (the "no-op net publish") then skips the reload entirely, and
+ * a bounded rectangle only re-cuts its own region — so the stranded tiles are
+ * never reconciled and keep painting labels from a prior geometry state. The
+ * watermarks let the reload decision key off the resident-tile lag instead of a
+ * snapshot equality that can no-op while the tiles are stale.
+ */
+interface ReloadConvergence {
+  target: number;
+  settled: number;
+}
+const convergence = new Map<string, ReloadConvergence>();
+function getConvergence(key: string): ReloadConvergence {
+  let conv = convergence.get(key);
+  if (!conv) {
+    conv = { target: 0, settled: 0 };
+    convergence.set(key, conv);
+  }
+  return conv;
+}
+
+/** How a publication must reconcile the resident tiles, given the payload diff
+ *  and the source's convergence watermarks. */
+export interface ReloadDecision {
+  /** Whether any reload must run at all. `false` is the flash-free / autosave
+   *  no-op: the payload is unchanged AND the resident tiles are known current. */
+  reload: boolean;
+  /** Effective reload region (`undefined` = full). Meaningful only when
+   *  `reload`. A backlog upgrades a bounded rectangle to a full reconcile. */
+  bounds: VtDirtyBounds | undefined;
+  /** The `target` this reload brings the resident tiles to; stamped into
+   *  `settled` when it completes cleanly. */
+  targetAtStart: number;
+  /** True only for a null-payload reconcile (resident tiles lag but the content
+   *  did not change). The caller must additionally skip when a reload is already
+   *  in flight for the source — that in-flight reload will converge the tiles,
+   *  so forcing another would just thrash. */
+  reconcile: boolean;
+}
+
+/**
+ * Decide how a publication reconciles the resident tiles. Advances
+ * `conv.target` when the payload content changed (a non-null diff), then:
+ *
+ *   - content unchanged (`dirtyBounds === null`): skip when the tiles are
+ *     already settled (`settled >= target`); otherwise force a full reconcile
+ *     (`reconcile`) so stranded tiles are re-cut;
+ *   - content changed: honour the bounded rectangle only when the tiles were
+ *     already caught up to the previous payload (`settled >= target - 1`);
+ *     a backlog upgrades to a full reload, since a rectangle cannot reconcile
+ *     tiles a prior superseded reload left stale outside it.
+ *
+ * Pure apart from the intended `conv.target` advance.
+ */
+export function decideReload(
+  conv: ReloadConvergence,
+  dirtyBounds: VtDirtyBounds | null | undefined,
+): ReloadDecision {
+  const contentChanged = dirtyBounds !== null;
+  if (contentChanged) conv.target += 1;
+  const behind = conv.settled < conv.target;
+  if (!contentChanged) {
+    if (!behind) return { reload: false, bounds: undefined, targetAtStart: conv.target, reconcile: false };
+    return { reload: true, bounds: undefined, targetAtStart: conv.target, reconcile: true };
+  }
+  const bounds = conv.settled < conv.target - 1 ? undefined : (dirtyBounds ?? undefined);
+  return { reload: true, bounds, targetAtStart: conv.target, reconcile: false };
+}
+
 interface ReloadState {
   generation: number;
   inFlightReloads: Map<string, Promise<void>>;
@@ -51,6 +133,36 @@ interface ReloadState {
   pending: { bounds: VtDirtyBounds | undefined } | null;
 }
 const reloadStates = new WeakMap<VectorTileSource, ReloadState>();
+
+/**
+ * Debounced trailing full reconcile per source (#customRender label-stale fix).
+ *
+ * A single quiescent full reload always converges the resident tiles to the
+ * registry payload (verified live); the in-flight reload machinery does not,
+ * because `getIds()` is snapshotted and superseded / worker-token-superseded /
+ * dead-tile reloads can no-op — a delete + adjustment + warnings burst flushes
+ * several reloads at once and none of them re-cuts every tile. So after every
+ * regular reload completes, arm a short debounce that, once activity stops,
+ * re-cuts every resident tile. The debounce collapses a churn (fast undo/redo,
+ * drag storm, delete + re-solve) into ONE trailing pass and self-terminates: the
+ * reconcile pass runs with `isReconcile` and never arms another, so a quiescent
+ * source stops reloading. In-place, so it never blanks the map.
+ */
+const RECONCILE_DELAY_MS = 200;
+const reconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
+function scheduleReconcile(source: VectorTileSource, key: string): void {
+  const existing = reconcileTimers.get(key);
+  if (existing) clearTimeout(existing);
+  reconcileTimers.set(
+    key,
+    setTimeout(() => {
+      reconcileTimers.delete(key);
+      const version = registry.get(key)?.version;
+      if (version === undefined) return; // source dropped (project close / teardown)
+      void reloadVtSource(source, key, version, undefined, true);
+    }, RECONCILE_DELAY_MS),
+  );
+}
 
 let protocolRegistered = false;
 
@@ -81,6 +193,12 @@ export function setVtLayerData(key: string, data: VtLayerData): VtLayerPublicati
  *  to empty tiles until the next `setVtLayerData`. */
 export function clearVtLayerData(key: string): void {
   registry.delete(key);
+  convergence.delete(key);
+  const timer = reconcileTimers.get(key);
+  if (timer) {
+    clearTimeout(timer);
+    reconcileTimers.delete(key);
+  }
 }
 
 /** Tile URL template for a registry key at a version. */
@@ -276,20 +394,46 @@ export function reloadVtSource(
   key: string,
   version: number,
   dirtyBounds?: VtDirtyBounds | null,
+  isReconcile = false,
 ): Promise<boolean> {
   if (!source) return Promise.resolve(true);
-  if (dirtyBounds === null) return Promise.resolve(true);
+  // Arm the debounced trailing reconcile for ANY publish activity — including a
+  // watermark null-skip and a superseded reload that never reaches a clean
+  // completion. Neither the in-flight machinery nor the watermark completion is a
+  // per-tile convergence guarantee under concurrency, so once publishes stop the
+  // trailing pass re-cuts every resident tile. Debounced: rapid publishes reset
+  // it, so it only fires when the source has quiesced. The reconcile pass itself
+  // (isReconcile) never arms another, so a settled source stops reloading.
+  if (!isReconcile) scheduleReconcile(source, key);
+  // Decide against the resident-tile convergence watermarks, not a bare payload
+  // diff: a null diff still forces a reconcile when a prior reload left tiles
+  // stale, and a bounded rectangle upgrades to a full reload when there is a
+  // backlog (#customRender label-stale fix).
+  const conv = getConvergence(key);
+  const decision = decideReload(conv, dirtyBounds);
+  if (!decision.reload) return Promise.resolve(true);
+  // A null-payload reconcile: if a reload is already in flight it will bring the
+  // tiles current, so do not thrash by starting another full reconcile behind it.
+  if (decision.reconcile && reloadStates.get(source)) return Promise.resolve(true);
+  const targetAtStart = decision.targetAtStart;
+  dirtyBounds = decision.bounds;
   const tiles = [vtTileUrl(key, version)];
 
   // The first publication can race the source's initial empty v0 request. A
   // normal setTiles() is safe here because no survey geometry is resident yet.
   if (source.tiles[0] === vtTileUrl(key, 0)) {
     source.setTiles(tiles);
+    conv.settled = Math.max(conv.settled, targetAtStart);
     return Promise.resolve(true);
   }
 
   const manager = source.map.style.tileManagers[key];
-  if (!manager) return Promise.resolve(true);
+  if (!manager) {
+    // No resident tiles yet; whenever they load the protocol serves the current
+    // payload, so mark the source settled to the published target.
+    conv.settled = Math.max(conv.settled, targetAtStart);
+    return Promise.resolve(true);
+  }
 
   let state = reloadStates.get(source);
   if (!state) {
@@ -334,6 +478,9 @@ export function reloadVtSource(
 
       if (source.map.style?.tileManagers[key] !== manager) {
         reloadStates.delete(source);
+        // The tile manager was replaced (style reload): the fresh tiles serve the
+        // current payload through the protocol, so treat the target as settled.
+        conv.settled = Math.max(conv.settled, targetAtStart);
         settle(true);
         return;
       }
@@ -394,6 +541,11 @@ export function reloadVtSource(
         return;
       }
       reloadStates.delete(source);
+      // This generation re-cut every resident tile it owns to the current payload
+      // (a full reload covers all tiles; a bounded one is only issued when the
+      // rest were already settled; a rejection falls back to setTiles below, which
+      // refetches every tile). The resident tiles have converged to targetAtStart.
+      conv.settled = Math.max(conv.settled, targetAtStart);
       if (results.some((result) => result.status === 'rejected')) {
         // A failed replacement could leave an old tile resident. Clear through
         // the normal path so nothing stale stays on screen.

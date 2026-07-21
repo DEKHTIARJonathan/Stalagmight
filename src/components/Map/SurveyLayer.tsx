@@ -5144,22 +5144,23 @@ export default class SurveyLayer {
       }
       const sourceId = this.sourceId + suffix;
       const { version, dirtyBounds } = setVtLayerData(sourceId, data);
-      // Flash-free publication (#mem): when nothing this layer serves changed
-      // (a rebuild that touched a different source, or a no-op republish), the
-      // diff is null — skip the reload entirely so resident tiles are untouched.
-      // Otherwise reload only the tiles overlapping the edited region in place,
-      // keeping existing geometry renderable until each replacement lands. The
-      // very first publication (source still on the v0 URL) is bootstrapped by
-      // reloadVtSource with a plain setTiles.
-      if (dirtyBounds !== null) {
-        const source = this.map.getSource(sourceId) as VectorTileSource | undefined;
-        const reload = reloadVtSource(source, sourceId, version, dirtyBounds);
-        // Track label-source reloads so a drag-commit endDragPreview can hold the
-        // moved sections' text filters hidden until the tiles carry post-move
-        // coordinates (else the labels flash at the old position).
-        if (LABEL_VT_GROUPS.has(group)) this.labelReloadsThisFlush.push(reload);
-        else void reload;
-      }
+      // Flash-free publication (#mem): reloadVtSource decides against the
+      // resident-tile convergence watermarks, not this diff alone. A null diff
+      // still reconciles tiles a superseded/abandoned earlier reload left stale
+      // (#customRender label-stale fix), and no-ops when they are already
+      // current; a rectangle reloads only the edited region in place, keeping
+      // existing geometry renderable until each replacement lands. The very
+      // first publication (source still on the v0 URL) is bootstrapped with a
+      // plain setTiles. So drive it every publish, including the null one.
+      const source = this.map.getSource(sourceId) as VectorTileSource | undefined;
+      const reload = reloadVtSource(source, sourceId, version, dirtyBounds);
+      // Track label-source reloads so a drag-commit endDragPreview can hold the
+      // moved sections' text filters hidden until the tiles carry post-move
+      // coordinates (else the labels flash at the old position). Only genuine
+      // content-change reloads gate the restore; a background reconcile (null
+      // diff) must not, so it would defer the restore behind unrelated work.
+      if (dirtyBounds !== null && LABEL_VT_GROUPS.has(group)) this.labelReloadsThisFlush.push(reload);
+      else void reload;
       recordFeatureCount(kind, vtGroupCount(data));
       this.applyColorPaint();
       return;

@@ -7,6 +7,7 @@ vi.mock('maplibre-gl', () => ({ addProtocol: maplibreMocks.addProtocol }));
 
 import {
   clearVtLayerData,
+  decideReload,
   ensureVtProtocol,
   reloadVtSource,
   setVtLayerData,
@@ -787,5 +788,136 @@ describe('vector tile registry', () => {
       const unchanged = setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[0, 0], [10, 20]])));
       expect(unchanged.dirtyBounds).toBeNull();
     });
+  });
+
+  // The reload decision must key off whether the RESIDENT tiles have converged to
+  // the payload, not the payload-vs-previous-snapshot diff alone. A superseded /
+  // abandoned reload leaves `settled < target`; a later null diff ("no-op net
+  // publish") or a bounded rectangle would then leave those stranded tiles stale
+  // (#customRender label-stale fix — labels from a prior geometry state lingering
+  // while the custom-rendered geometry is already correct).
+  describe('decideReload convergence', () => {
+    const rect: [number, number, number, number] = [0.1, 0.1, 0.2, 0.2];
+
+    it('honours a bounded rectangle for a content change when tiles were caught up', () => {
+      const conv = { target: 1, settled: 1 };
+      const d = decideReload(conv, rect);
+      expect(conv.target).toBe(2); // content change advances the target
+      expect(d).toEqual({ reload: true, bounds: rect, targetAtStart: 2, reconcile: false });
+    });
+
+    it('upgrades a bounded rectangle to a full reload when there is a backlog', () => {
+      // One content change already published (target 1) but never settled (0):
+      // the resident tiles lag, so a rectangle cannot reconcile the tiles a prior
+      // superseded reload left stale outside it — force a full reload.
+      const conv = { target: 1, settled: 0 };
+      const d = decideReload(conv, rect);
+      expect(conv.target).toBe(2);
+      expect(d).toEqual({ reload: true, bounds: undefined, targetAtStart: 2, reconcile: false });
+    });
+
+    it('keeps a structural change (undefined diff) a full reload', () => {
+      const conv = { target: 1, settled: 1 };
+      const d = decideReload(conv, undefined);
+      expect(conv.target).toBe(2);
+      expect(d.reload).toBe(true);
+      expect(d.bounds).toBeUndefined();
+      expect(d.reconcile).toBe(false);
+    });
+
+    it('skips a null publish when the resident tiles are already settled (flash-free no-op)', () => {
+      const conv = { target: 3, settled: 3 };
+      const d = decideReload(conv, null);
+      expect(conv.target).toBe(3); // a null diff never advances the target
+      expect(d.reload).toBe(false);
+      expect(d.reconcile).toBe(false);
+    });
+
+    it('forces a full reconcile on a null publish when the resident tiles lag', () => {
+      // The "no-op net publish": the payload equals the previous snapshot, but a
+      // superseded reload left the resident tiles behind. Reconcile them fully.
+      const conv = { target: 3, settled: 1 };
+      const d = decideReload(conv, null);
+      expect(conv.target).toBe(3);
+      expect(d).toEqual({ reload: true, bounds: undefined, targetAtStart: 3, reconcile: true });
+    });
+  });
+});
+
+// End-to-end guard through reloadVtSource: once a reload settles the source, a
+// null-diff republish is a true no-op (no tile reload); but if the resident tiles
+// were left behind, a null-diff republish reconciles them with a full reload.
+describe('reloadVtSource resident-tile convergence', () => {
+  function makeSource(key: string, reloadTile = vi.fn(() => Promise.resolve())) {
+    const resident = { state: 'loaded', tileID: { canonical: { z: 2, x: 0, y: 0 } } };
+    const manager = {
+      _outOfViewCache: { reset: vi.fn(), filter: vi.fn() },
+      getIds: vi.fn(() => ['resident']),
+      getTileByID: vi.fn(() => resident),
+      _reloadTile: reloadTile,
+    };
+    const source = {
+      map: { style: { tileManagers: { [key]: manager } }, triggerRepaint: vi.fn() },
+      tiles: [`stalx://${key}/{z}/{x}/{y}?v=1`],
+      setTiles: vi.fn(),
+    };
+    return { source, manager, reloadTile };
+  }
+
+  it('arms a debounced trailing reconcile that re-cuts resident tiles, then self-terminates', async () => {
+    // The in-flight reload machinery does not guarantee per-tile convergence under
+    // concurrency, so a trailing quiescent reconcile re-cuts every resident tile;
+    // it must fire once (debounced) and NOT re-arm on a quiescent source.
+    vi.useFakeTimers();
+    const key = 'reconcile-arm-test';
+    setVtLayerData(key, vtPointsFromFeatures(pointsAt([[1, 1]])));
+    const reloadTile = vi.fn(() => Promise.resolve());
+    const resident = { state: 'loaded', tileID: { canonical: { z: 2, x: 0, y: 0 } } };
+    const manager = {
+      _outOfViewCache: { reset: vi.fn(), filter: vi.fn() },
+      getIds: vi.fn(() => ['t']),
+      getTileByID: vi.fn(() => resident),
+      _reloadTile: reloadTile,
+    };
+    const source = {
+      map: { style: { tileManagers: { [key]: manager } }, triggerRepaint: vi.fn() },
+      tiles: [`stalx://${key}/{z}/{x}/{y}?v=1`],
+      setTiles: vi.fn(),
+    };
+    try {
+      const p = reloadVtSource(source as unknown as VectorTileSource, key, 2, undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      await p;
+      const afterRegular = reloadTile.mock.calls.length;
+      expect(afterRegular).toBe(1);
+
+      // The debounced trailing reconcile fires and re-cuts the resident tile.
+      await vi.advanceTimersByTimeAsync(300);
+      const afterReconcile = reloadTile.mock.calls.length;
+      expect(afterReconcile).toBeGreaterThan(afterRegular);
+
+      // Quiescent: the reconcile pass does not arm another (no runaway reloads).
+      await vi.advanceTimersByTimeAsync(600);
+      expect(reloadTile.mock.calls.length).toBe(afterReconcile);
+    } finally {
+      vi.useRealTimers();
+      clearVtLayerData(key);
+    }
+  });
+
+  it('no-ops repeated null publishes once the resident tiles have settled (flash-free path)', async () => {
+    // Guards the flash-free / autosave no-op: after a content change settles the
+    // source, the recurring null-diff republishes (e.g. a warnings refresh) must
+    // NOT thrash the tiles with reconciling reloads.
+    const key = 'converged-null-test';
+    const { source, reloadTile } = makeSource(key);
+    await expect(
+      reloadVtSource(source as unknown as VectorTileSource, key, 2, [0.01, 0.01, 0.05, 0.05]),
+    ).resolves.toBe(true);
+    expect(reloadTile).toHaveBeenCalledTimes(1);
+    await expect(reloadVtSource(source as unknown as VectorTileSource, key, 3, null)).resolves.toBe(true);
+    await expect(reloadVtSource(source as unknown as VectorTileSource, key, 4, null)).resolves.toBe(true);
+    expect(reloadTile).toHaveBeenCalledTimes(1);
+    clearVtLayerData(key);
   });
 });
