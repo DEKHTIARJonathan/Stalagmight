@@ -46,6 +46,7 @@ export const LABEL_VT_GROUPS: ReadonlySet<string> = new Set([
  *  never be stranded hidden. */
 export const LABEL_RESTORE_FALLBACK_MS = 2000;
 
+
 export type DragFilterMap = Map<string, maplibregl.FilterSpecification | undefined>;
 
 /**
@@ -126,30 +127,37 @@ export type LabelFilterMap = Pick<maplibregl.Map, 'getLayer' | 'getFilter' | 'se
  *
  *   - Drag commit: the moved sections' labels are hidden by SurveyLayer during
  *     the drag; on commit it hands the saved base filters here via
- *     {@link deferRestore} to release once the reloads settle.
+ *     {@link deferRestore} to release once the reloads settle (a monotonic
+ *     generation guards the pending restore; a fallback timer means labels can
+ *     never be stranded hidden if a reload never resolves).
  *   - Delete / undo-of-add: geometry is custom-rendered (removed synchronously in
  *     the flush) but the label tiles still hold the removed sections until an
- *     async reload. {@link hideRemovedSections} hides them in that same frame;
- *     {@link settleRemoval} releases once the flush's label reloads land.
- *
- * A monotonic generation guards the pending restore so a superseding op owns the
- * filters and a late settle from a superseded one no-ops; a fallback timer means
- * labels can never be stranded hidden if a reload never resolves.
+ *     async reload that does not reliably purge every tile. {@link
+ *     applyRemovedExclusion} instead keeps a persistent per-section exclusion,
+ *     re-derived every flush, that hides the removed labels in the geometry frame
+ *     and only drops when the section is re-added - no tile-timing dependence.
  */
 export class LabelRestoreController {
   private pending: { filters: DragFilterMap; generation: number; timeout: ReturnType<typeof setTimeout> } | null =
     null;
-  /** Base filters hidden by {@link hideRemovedSections}, awaiting settleRemoval. */
-  private held: DragFilterMap | null = null;
   private generation = 0;
+  /** Sections deleted (and not yet re-added) whose labels are excluded right now.
+   *  Persistent across flushes: the exclusion is re-derived from this set every
+   *  flush, so a removed section's labels stay hidden until it is re-added - no
+   *  reliance on tile-reload / fade timing (which un-hides labels still resident
+   *  in not-yet-replaced tiles). */
+  private removedIds = new Set<number>();
+  /** True base filters (no removal exclusion) of the text layers, captured once
+   *  when the first removal is applied and restored when the set empties. */
+  private removedBaseFilters: DragFilterMap | null = null;
 
   constructor(private readonly map: LabelFilterMap) {}
 
   /**
-   * Schedule the deferred restore of `filters` behind `reloads`. When no label
-   * tile reloaded (Escape / cancel / no label change) restore synchronously -
-   * there is no stale-tile frame to hide. A superseding call flushes the prior
-   * pending first so nothing is stranded.
+   * Schedule the deferred restore of `filters` behind `reloads` (drag-commit
+   * path). When no label tile reloaded (Escape / cancel / no label change)
+   * restore synchronously - there is no stale-tile frame to hide. A superseding
+   * call flushes the prior pending first so nothing is stranded.
    */
   deferRestore(filters: DragFilterMap, reloads: Promise<unknown>[] | null): void {
     if (filters.size === 0) return;
@@ -165,38 +173,46 @@ export class LabelRestoreController {
   }
 
   /**
-   * Hide the removed sections' text-label layers (composing the exclusion onto
-   * each layer's base filter), saving the base filters for a later
-   * {@link settleRemoval}. Force-applies any pending restore first so the saved
-   * filters are the true base, not an already-hidden state. Returns true when at
-   * least one layer was hidden.
+   * Maintain the persistent exclusion that hides deleted sections' text labels.
+   * Called every custom-render flush: `removedThisFlush` are the sections this
+   * flush dropped; `sections` is the surviving set (so a re-added section - undo
+   * of a delete - drops out and its labels return). The exclusion is re-derived
+   * from the accumulated {@link removedIds} and re-applied to each text layer, so
+   * a removed section's labels are hidden in the same frame its geometry vanishes
+   * and NEVER fade back in from stale tiles; when the set empties the true base
+   * filters are restored. Timing-independent by construction. No-op until a first
+   * removal, so ordinary flushes cost nothing.
    */
-  hideRemovedSections(sectionIds: readonly number[]): boolean {
-    if (sectionIds.length === 0) return false;
-    this.flushPending();
-    const exclusion = buildSectionLabelExclusion(sectionIds);
-    const saved: DragFilterMap = new Map();
-    for (const layerId of TEXT_LABEL_LAYER_IDS) {
-      if (!this.map.getLayer(layerId)) continue;
-      const existing = this.map.getFilter(layerId) ?? undefined;
-      saved.set(layerId, existing);
-      this.map.setFilter(layerId, composeLabelFilter(existing, exclusion));
+  applyRemovedExclusion(removedThisFlush: readonly number[], sections: readonly { id: number }[]): void {
+    if (removedThisFlush.length === 0 && this.removedIds.size === 0) return;
+    for (const id of removedThisFlush) this.removedIds.add(id);
+    if (this.removedIds.size > 0) {
+      const present = new Set<number>();
+      for (const s of sections) present.add(s.id);
+      for (const id of this.removedIds) if (present.has(id)) this.removedIds.delete(id);
     }
-    if (saved.size === 0) return false;
-    this.held = saved;
-    return true;
+    if (this.removedIds.size === 0) {
+      // Everything re-added: restore the captured base filters and drop them.
+      if (this.removedBaseFilters) this.restore(this.removedBaseFilters);
+      this.removedBaseFilters = null;
+      return;
+    }
+    // Capture the true base once (current filters carry no removal exclusion yet;
+    // a delete never overlaps a drag, so this is the real zoom-gating base).
+    if (!this.removedBaseFilters) {
+      this.removedBaseFilters = new Map();
+      for (const layerId of TEXT_LABEL_LAYER_IDS) {
+        if (!this.map.getLayer(layerId)) continue;
+        this.removedBaseFilters.set(layerId, this.map.getFilter(layerId) ?? undefined);
+      }
+    }
+    const exclusion = buildSectionLabelExclusion([...this.removedIds]);
+    for (const [layerId, base] of this.removedBaseFilters) {
+      if (this.map.getLayer(layerId)) this.map.setFilter(layerId, composeLabelFilter(base, exclusion));
+    }
   }
 
-  /** Release the filters hidden by {@link hideRemovedSections}, deferred behind
-   *  `reloads` (this flush's label-source reloads). No-op when nothing is held. */
-  settleRemoval(reloads: Promise<unknown>[]): void {
-    const held = this.held;
-    if (!held) return;
-    this.held = null;
-    this.deferRestore(held, reloads);
-  }
-
-  /** Force-apply any queued restore now (a superseding op captures true base
+  /** Force-apply any queued drag restore now (a superseding op captures true base
    *  filters). No-op when nothing is queued. */
   flushPending(): void {
     const pending = this.pending;
@@ -213,11 +229,12 @@ export class LabelRestoreController {
       clearTimeout(this.pending.timeout);
       this.pending = null;
     }
-    this.held = null;
+    this.removedIds.clear();
+    this.removedBaseFilters = null;
   }
 
-  /** Apply a queued restore if it still belongs to `generation` (a superseding op
-   *  has taken over the filters otherwise -> skip). */
+  /** Apply a queued drag restore if it still belongs to `generation` (a
+   *  superseding op has taken over the filters otherwise -> skip). */
   private settle(generation: number): void {
     if (!this.pending || this.pending.generation !== generation) return;
     this.flushPending();

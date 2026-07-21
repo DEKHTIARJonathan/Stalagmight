@@ -4777,9 +4777,10 @@ export default class SurveyLayer {
       // endApplyFeatures, so it has no such gap) and skipped mid-drag (the drag
       // paths own the overlay follow + label filters).
       if (this.customBulkSuppressed && !this.dragPreviewActive) {
-        // Hide the removed sections' labels until the label tiles reload without
-        // them (released in endApplyFeatures); no-op when nothing was removed.
-        this.labelRestore.hideRemovedSections(removedSectionIds);
+        // Keep the removed sections' labels excluded until they are re-added (undo)
+        // - a persistent, tile-timing-independent hide derived from this flush's
+        // removals + the surviving sections; no-op until a first removal.
+        this.labelRestore.applyRemovedExclusion(removedSectionIds, sections);
         // Rebuild the interact overlay against the new geometry so a selected /
         // hovered / snapped feature this flush removed (a deleted shot / station /
         // section member) is dropped now instead of lingering until the async
@@ -5225,11 +5226,6 @@ export default class SurveyLayer {
       }
     }
 
-    // Release any removed-section label hide applied at this flush's prelude, once
-    // this flush's label-source reloads land (so the removed sections' stale labels
-    // are never shown in the gap). No-op unless a removal hid something. Mutually
-    // exclusive with the drag-commit block above (a removal flush has no callback).
-    this.labelRestore.settleRemoval(this.labelReloadsThisFlush);
   }
 
   /**
