@@ -81,6 +81,10 @@ import {
   LabelRestoreController,
 } from './surveyLayer/labelRestore';
 import {
+  InteractOverlayHideController,
+  overlayTouchesRemovedSections,
+} from './surveyLayer/interactOverlayHide';
+import {
   vtLinesFromFeatures,
   vtPointsFromFeatures,
   vtGroupCount,
@@ -353,6 +357,10 @@ export default class SurveyLayer {
    *  (removed sections' labels are hidden in the flush that drops their geometry
    *  and released once the label tiles reload without them). See labelRestore.ts. */
   private readonly labelRestore: LabelRestoreController;
+  /** Hides the interact-overlay layers across a removal flush's async re-tile so a
+   *  deleted feature's hover/selection highlight drops in the geometry frame
+   *  instead of lingering on the stale GeoJSON tile. See interactOverlayHide.ts. */
+  private readonly interactHide: InteractOverlayHideController;
 
   // Visibility state (for hidden feature detection)
   private stationsVisible: boolean = true;
@@ -526,6 +534,12 @@ export default class SurveyLayer {
     this.map = map;
     this.callbacks = callbacks;
     this.labelRestore = new LabelRestoreController(map);
+    this.interactHide = new InteractOverlayHideController(map, this.interactSourceId, [
+      this.interactShotsLayerId,
+      this.interactShotsMeasuredLayerId,
+      this.interactStationsLayerId,
+      this.stationsHighlightLayerId,
+    ]);
     this.initializeSources();
     this.initializeLayers();
     this.initializeEventHandlers();
@@ -4790,8 +4804,22 @@ export default class SurveyLayer {
           this.selectedShotId || this.hoveredShotId || this.selectedStationId ||
           this.hoveredStationId || this.snappedStationId || this.highlightedStationIds.length > 0
         ) {
+          // Did the overlay paint a feature this flush deleted? (checked BEFORE the
+          // rebuild, which resolves the removed feature to nothing.)
+          const stale = overlayTouchesRemovedSections(
+            [this.selectedShotId, this.hoveredShotId, this.selectedStationId,
+              this.hoveredStationId, this.snappedStationId, ...this.highlightedStationIds],
+            removedSectionIds,
+          );
           this.lastInteractKey = null;
           this.refreshInteractOverlay();
+          // refreshInteractOverlay's setData drops the removed feature from the
+          // overlay DATA now, but the GeoJSON source's stale tile keeps painting its
+          // highlight until the async re-tile lands (~250ms under the delete's worker
+          // load). Hide the interact layers (a pure render-skip) until that re-tile
+          // settles so the highlight drops in the geometry frame, like the custom
+          // geometry does. Only when a deleted feature was actually highlighted.
+          if (stale) this.interactHide.hideUntilRetile();
         }
       }
       const buildOptions = {
@@ -5315,6 +5343,9 @@ export default class SurveyLayer {
     // fire on a torn-down map (the setFilter is getLayer-guarded, but drop the
     // timer to avoid a dangling handle).
     this.labelRestore.dispose();
+    // Restore any interact layers left hidden by an in-flight removal re-tile and
+    // drop its listener/timer so nothing fires on the torn-down map.
+    this.interactHide.dispose();
 
     // Tear down the custom-render prototype (removes its layer, restores stock
     // layer visibility, and unregisters the runtime sync hook) (#customRender).
