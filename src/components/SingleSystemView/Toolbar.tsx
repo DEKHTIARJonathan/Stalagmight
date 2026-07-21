@@ -230,8 +230,9 @@ export default function Toolbar({
     appMode,
     dataTableFullScreen,
     showToolbarIcons,
-    canUndo,
-    canRedo,
+    // canUndo/canRedo intentionally omitted: the undo/redo buttons now hold a
+    // constant-width chevron slot, so their availability no longer changes the
+    // left cluster width and must not kick off a reset -> re-fit on every edit.
     editingBlocked,
     speleoLinkPresent,
     t,
@@ -366,11 +367,16 @@ export default function Toolbar({
             >
               <span className="inline-flex items-center gap-0.5">
                 {historyCondensed ? <UndoIcon size={16} /> : t('common.actions.undo')}
-                {canUndo && !placementModeActive && (
-                  <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="undo-chevron">
-                    <ChevronDownIcon size={10} />
-                  </span>
-                )}
+                {/* Always occupy the chevron slot so toggling canUndo/placement never
+                    changes the button width (a width change would re-trigger the
+                    carousel-fit compaction). `invisible` hides paint but keeps layout. */}
+                <span
+                  className={`text-[10px] opacity-60 ${canUndo && !placementModeActive ? '' : 'invisible'}`}
+                  aria-hidden="true"
+                  data-testid="undo-chevron"
+                >
+                  <ChevronDownIcon size={10} />
+                </span>
               </span>
             </UndoHistoryDropdown>
             <UndoHistoryDropdown
@@ -383,11 +389,15 @@ export default function Toolbar({
             >
               <span className="inline-flex items-center gap-0.5">
                 {historyCondensed ? <RedoIcon size={16} /> : t('common.actions.redo')}
-                {canRedo && !placementModeActive && (
-                  <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="redo-chevron">
-                    <ChevronDownIcon size={10} />
-                  </span>
-                )}
+                {/* See the undo chevron: constant-width slot so redo availability
+                    never nudges the layout into a compaction step. */}
+                <span
+                  className={`text-[10px] opacity-60 ${canRedo && !placementModeActive ? '' : 'invisible'}`}
+                  aria-hidden="true"
+                  data-testid="redo-chevron"
+                >
+                  <ChevronDownIcon size={10} />
+                </span>
               </span>
             </UndoHistoryDropdown>
           </>
