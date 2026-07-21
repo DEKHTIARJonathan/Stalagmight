@@ -920,4 +920,122 @@ describe('reloadVtSource resident-tile convergence', () => {
     expect(reloadTile).toHaveBeenCalledTimes(1);
     clearVtLayerData(key);
   });
+
+  // #customRender station-label converge: the trailing reconcile is a DIRECT
+  // `_reloadTile` sweep of every LOADED resident tile, bypassing the in-flight
+  // generation / deferral machinery. Under a delete's churn that machinery leaves
+  // resident tiles `loaded` but holding stale geometry (payload fresh) because
+  // every content reload got superseded before re-cutting; a reload routed
+  // through the generation path defers behind a stuck in-flight entry and never
+  // re-cuts. The quiescent direct sweep always converges them (verified live).
+  it('reconcile directly re-cuts loaded resident tiles it never converged in-flight', async () => {
+    vi.useFakeTimers();
+    const key = 'reconcile-direct-test';
+    setVtLayerData(key, vtPointsFromFeatures(pointsAt([[1, 1]])));
+    // A loaded tile that a superseded in-flight reload left stale: `_reloadTile`
+    // has NOT been called on it, yet it is `loaded` (no abortController).
+    const reloadTile = vi.fn(() => Promise.resolve());
+    const tile = { state: 'loaded', tileID: { canonical: { z: 2, x: 0, y: 0 } } };
+    const manager = {
+      _outOfViewCache: { reset: vi.fn(), filter: vi.fn() },
+      getIds: vi.fn(() => ['t']),
+      getTileByID: vi.fn(() => tile),
+      _reloadTile: reloadTile,
+    };
+    const source = {
+      map: { style: { tileManagers: { [key]: manager } }, triggerRepaint: vi.fn() },
+      tiles: [`stalx://${key}/{z}/{x}/{y}?v=1`],
+      setTiles: vi.fn(),
+    };
+    try {
+      // A null-diff publish whose watermark is behind (settled < target) arms the
+      // reconcile without any in-flight reload converging the tile.
+      void reloadVtSource(source as unknown as VectorTileSource, key, 2, null);
+      await vi.advanceTimersByTimeAsync(300);
+      // The direct sweep re-cut the loaded tile even though no in-flight reload did.
+      expect(reloadTile).toHaveBeenCalledWith('t', 'expired');
+      const calls = reloadTile.mock.calls.length;
+      // Quiescent: no runaway (a loaded, converged source stops reloading).
+      await vi.advanceTimersByTimeAsync(600);
+      expect(reloadTile.mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+      clearVtLayerData(key);
+    }
+  });
+
+  it('reconcile skips a mid-load tile, re-arms, then re-cuts it once it is loaded', async () => {
+    vi.useFakeTimers();
+    const key = 'reconcile-rearm-test';
+    setVtLayerData(key, vtPointsFromFeatures(pointsAt([[1, 1]])));
+    const reloadTile = vi.fn(() => Promise.resolve());
+    // Mid-load at the first reconcile (reloading a loading tile throws in MapLibre,
+    // and its in-flight load can land intermediate-payload geometry), then loaded.
+    const tile: { state: string; tileID: { canonical: { z: number; x: number; y: number } } } = {
+      state: 'loading',
+      tileID: { canonical: { z: 2, x: 0, y: 0 } },
+    };
+    const manager = {
+      _outOfViewCache: { reset: vi.fn(), filter: vi.fn() },
+      getIds: vi.fn(() => ['t']),
+      getTileByID: vi.fn(() => tile),
+      _reloadTile: reloadTile,
+    };
+    const source = {
+      map: { style: { tileManagers: { [key]: manager } }, triggerRepaint: vi.fn() },
+      tiles: [`stalx://${key}/{z}/{x}/{y}?v=1`],
+      setTiles: vi.fn(),
+    };
+    try {
+      void reloadVtSource(source as unknown as VectorTileSource, key, 2, null);
+      // First reconcile: tile still loading -> skipped, NOT reloaded, re-armed.
+      await vi.advanceTimersByTimeAsync(300);
+      expect(reloadTile).not.toHaveBeenCalled();
+      // The tile finishes loading (with stale intermediate geometry).
+      tile.state = 'loaded';
+      // The re-armed reconcile fires and re-cuts it to the current payload.
+      await vi.advanceTimersByTimeAsync(300);
+      expect(reloadTile).toHaveBeenCalledWith('t', 'expired');
+      const calls = reloadTile.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(600);
+      expect(reloadTile.mock.calls.length).toBe(calls); // converged -> self-terminates
+    } finally {
+      vi.useRealTimers();
+      clearVtLayerData(key);
+    }
+  });
+
+  it('bounds reconcile retries so a perpetually-loading tile cannot spin the timer forever', async () => {
+    vi.useFakeTimers();
+    const key = 'reconcile-bounded-test';
+    setVtLayerData(key, vtPointsFromFeatures(pointsAt([[1, 1]])));
+    const reloadTile = vi.fn(() => Promise.resolve());
+    // A tile that never leaves 'loading' — the reconcile can never re-cut it.
+    const tile = { state: 'loading', tileID: { canonical: { z: 2, x: 0, y: 0 } } };
+    const manager = {
+      _outOfViewCache: { reset: vi.fn(), filter: vi.fn() },
+      getIds: vi.fn(() => ['t']),
+      getTileByID: vi.fn(() => tile),
+      _reloadTile: reloadTile,
+    };
+    const source = {
+      map: { style: { tileManagers: { [key]: manager } }, triggerRepaint: vi.fn() },
+      tiles: [`stalx://${key}/{z}/{x}/{y}?v=1`],
+      setTiles: vi.fn(),
+    };
+    try {
+      void reloadVtSource(source as unknown as VectorTileSource, key, 2, null);
+      // Run well past the retry cap (25 * 200ms = 5s); the timer must stop re-arming.
+      await vi.advanceTimersByTimeAsync(200 * 40);
+      const timersAfterCap = vi.getTimerCount();
+      await vi.advanceTimersByTimeAsync(200 * 10);
+      // No reload ever fired (tile never loaded) and the reconcile stopped re-arming.
+      expect(reloadTile).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(timersAfterCap);
+      expect(timersAfterCap).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      clearVtLayerData(key);
+    }
+  });
 });

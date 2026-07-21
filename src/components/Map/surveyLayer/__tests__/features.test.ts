@@ -15,7 +15,9 @@ import {
   commentColorForKey,
   resolveShotDisplayColor,
   resolveShotEndpointColors,
+  SURVEY_FEATURE_GROUP_ORDER,
   type DisplayColorContext,
+  type SurveyFeatureGroupKey,
 } from '../features';
 import { surveyDataFromLegacy } from '../../../../types/survey-data';
 import { getMapThemeColors } from '../../../../utils/themeColors';
@@ -292,6 +294,65 @@ describe('buildSurveyFeatures streaming emit (#mem)', () => {
       }
     });
   }
+
+  // #customRender station-label converge: the per-station labels must stream
+  // early (right after their geometry) and never last. A delete fires a burst of
+  // superseding flushes (edit + coordinate re-solve + warnings); the streamed
+  // apply drops whichever label group rides the tail on a mid-stream token
+  // supersession. When station labels rode last, a superseded flush landed the
+  // shot labels but dropped the station labels, so station labels lagged the
+  // shots by a reconcile. This locks the emit sequence that keeps station labels
+  // adjacent to the shot labels.
+  it('emits station labels early (after shots, before section labels / loop closures), never last', () => {
+    const { sections, stations } = fixture();
+    const data = surveyDataFromLegacy(sections, stations);
+
+    const order: SurveyFeatureGroupKey[] = [];
+    buildSurveyFeatures(
+      data,
+      undefined,
+      null,
+      false,
+      depthRange,
+      theme,
+      undefined,
+      { buildLabels: true },
+      (group) => {
+        order.push(group);
+      },
+    );
+
+    // Every group is streamed exactly once, in the documented order.
+    expect(order).toEqual([...SURVEY_FEATURE_GROUP_ORDER]);
+
+    const iShotLabels = order.indexOf('shotLabelFeatures');
+    const iStationLabels = order.indexOf('stationLabelFeatures');
+    const iSectionLabels = order.indexOf('sectionLabelFeatures');
+    const iLoop = order.indexOf('loopClosureFeatures');
+
+    // Station labels stream AFTER the shot labels but BEFORE the coarse section
+    // labels and the loop closures — never on the drop-prone tail.
+    expect(iShotLabels).toBeGreaterThanOrEqual(0);
+    expect(iStationLabels).toBeGreaterThan(iShotLabels);
+    expect(iStationLabels).toBeLessThan(iSectionLabels);
+    expect(iStationLabels).toBeLessThan(iLoop);
+    // And station labels are never the final streamed group.
+    expect(iStationLabels).toBeLessThan(order.length - 1);
+
+    // Under the custom renderer the bulk geometry groups (shots / gradients /
+    // stations) are suppressed and never streamed, so the label groups stream
+    // back-to-back. The station labels must land immediately after the shot
+    // labels — zero groups between them — so no single-chunk supersession can
+    // apply the shot labels yet drop the station labels.
+    const labelSubsequence = order.filter((g) =>
+      g === 'shotLabelFeatures' || g === 'stationLabelFeatures' || g === 'sectionLabelFeatures',
+    );
+    expect(labelSubsequence).toEqual([
+      'shotLabelFeatures',
+      'stationLabelFeatures',
+      'sectionLabelFeatures',
+    ]);
+  });
 });
 
 describe('resolveShotEndpointColors (custom-render depth gradient)', () => {

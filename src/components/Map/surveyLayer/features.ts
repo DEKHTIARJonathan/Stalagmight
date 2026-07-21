@@ -89,22 +89,28 @@ export type SurveyFeatureGroupKey =
   | 'loopClosureFeatures';
 
 /**
- * Emit order for the chunked worker->main transfer (#mem): the big structural
- * groups (shots, stations, section labels) first, then the zoom-gated /
- * conditional extras. Single source of truth so the worker, the client and the
- * source-suffix map never drift. Streaming one group at a time means the main
- * thread never holds the full ~178k-feature set as one live JS array in
- * addition to what MapLibre already retains: the transient clone-receive burst
- * that sizes the (non-decommitting) JSC heap is bounded by the largest single
- * group instead of the sum of all of them.
+ * Emit order for the chunked worker->main transfer (#mem). Streaming one group
+ * at a time means the main thread never holds the full ~178k-feature set as one
+ * live JS array in addition to what MapLibre already retains: the transient
+ * clone-receive burst that sizes the (non-decommitting) JSC heap is bounded by
+ * the largest single group instead of the sum of all of them.
+ *
+ * The per-feature LABEL groups lead: shot labels, then station labels, right
+ * after their geometry. A mid-stream token supersession (a delete's edit +
+ * coordinate re-solve + warnings burst) drops whichever group streams last, so
+ * the per-station labels must not ride the tail — otherwise a superseded flush
+ * lands the shot labels but drops the station labels, and the station labels lag
+ * the shots by a reconcile (#customRender station-label converge). Section
+ * labels (one per section, coarse) and loop closures (small) trail. This mirrors
+ * the emitAndClear sequence in `buildSurveyFeatures`; keep the two in sync.
  */
 export const SURVEY_FEATURE_GROUP_ORDER: readonly SurveyFeatureGroupKey[] = [
   'shotFeatures',
-  'stationFeatures',
-  'sectionLabelFeatures',
   'shotGradientFeatures',
   'shotLabelFeatures',
+  'stationFeatures',
   'stationLabelFeatures',
+  'sectionLabelFeatures',
   'loopClosureFeatures',
 ];
 
@@ -849,9 +855,17 @@ export function buildSurveyFeatures(
       },
     });
   }
-  emitAndClear('sectionLabelFeatures', sectionLabelFeatures);
-
   // ─── Station labels (zoom-gated; T3a) ─────────────────────────
+  // Built after the section-label loop but emitted BEFORE it (see the emit
+  // ordering at the end of this function). The per-station labels must stream
+  // adjacent to the shot labels and never last: a delete fires a burst of
+  // superseding flushes (edit + coordinate re-solve + warnings), and a
+  // mid-stream token supersession drops whichever label group streams last.
+  // When station labels rode last, a superseded flush landed the shot labels
+  // early but dropped the station labels, so station labels only refreshed from
+  // the rare settling flush and visibly lagged the shots by a reconcile. Emitted
+  // early they track the shot labels frame-for-frame (#customRender station-label
+  // converge).
   if (buildLabels) {
     // Per-section min station_index (== "is first in section" predicate)
     const sectionMinIndices = new Map<number, number>();
@@ -934,7 +948,15 @@ export function buildSurveyFeatures(
       }
     }
   }
+  // Label emit order: station labels FIRST (right after the shot-derived groups
+  // and the station circles), then section labels, then loop closures. Streaming
+  // the per-station labels before the section labels / loop closures keeps them
+  // off the drop-prone tail of a superseded flush, so they converge with the
+  // shot labels instead of a reconcile behind (#customRender station-label
+  // converge). The build order above is unchanged; only the emit sequence the
+  // streamed apply consumes differs. Keep in sync with SURVEY_FEATURE_GROUP_ORDER.
   emitAndClear('stationLabelFeatures', stationLabelFeatures);
+  emitAndClear('sectionLabelFeatures', sectionLabelFeatures);
   emitAndClear('loopClosureFeatures', loopClosureFeatures);
 
   return {

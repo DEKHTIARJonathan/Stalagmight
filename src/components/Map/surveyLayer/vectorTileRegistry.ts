@@ -150,6 +150,93 @@ const reloadStates = new WeakMap<VectorTileSource, ReloadState>();
  */
 const RECONCILE_DELAY_MS = 200;
 const reconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/**
+ * Bounded per-source reconcile-retry counter. A reconcile that runs while some
+ * resident tiles are still mid-load skips them (reloading a loading tile throws
+ * in MapLibre) and re-arms itself so a later quiescent pass re-cuts them; the cap
+ * stops a perpetually-loading tile from spinning the timer forever. Reset on each
+ * genuine content publish (a new edit is fresh work, not a stuck retry).
+ */
+const RECONCILE_MAX_RETRIES = 25;
+const reconcileRetries = new Map<string, number>();
+
+/**
+ * The quiescent trailing reconcile: a DIRECT, unconditional re-cut of every
+ * resident tile, deliberately bypassing the in-flight generation / deferral
+ * machinery of {@link reloadVtSource}.
+ *
+ * Why not just call `reloadVtSource(..., isReconcile=true)`? Under a delete's
+ * churn (fast undo/redo → edit + coordinate re-solve + warnings) the generation
+ * machinery leaves the source with a lingering `reloadStates` entry whose
+ * `inFlightReloads` holds a reload that never re-cut its tile (its MapLibre
+ * reloadPromise drain never fired, or a deferred reload was skipped by a
+ * generation bump). Every subsequent reload — including a reconcile routed
+ * through `reloadVtSource` — then queues BEHIND that stuck entry and skips its
+ * own `_reloadTile`, so the resident tiles never converge to the (already fresh)
+ * registry payload. That is the permanent stale-label strand: verified live, a
+ * hard `_reloadTile` sweep or `setTiles` fixes it while the in-flight path does
+ * not. The debounce guarantees this runs only once the source has quiesced, so a
+ * plain `_reloadTile('expired')` on each loaded tile is safe and re-cuts it
+ * against the current payload in place (no blank). Tiles genuinely mid-load are
+ * skipped — MapLibre rejects reloading a loading/aborting tile, and they will
+ * finish loading against the current payload through the protocol anyway.
+ */
+function reconcileResidentTiles(source: VectorTileSource, key: string): void {
+  const manager = source.map.style?.tileManagers?.[key];
+  if (!manager) return;
+  // Drop any lingering per-source reload state so a stuck in-flight reload cannot
+  // make MapLibre queue this sweep's reloads behind it; a mid-load tile is still
+  // guarded below. Its orphaned promise settles harmlessly on its own next check.
+  const stale = reloadStates.get(source);
+  if (stale) {
+    stale.settle?.(false);
+    reloadStates.delete(source);
+  }
+  // Invalidate the out-of-view cache in full so a later zoom cannot reintroduce a
+  // pre-edit tile after we have re-cut the resident pyramid.
+  evictCachedTiles(manager as { _outOfViewCache?: TileCacheLike }, undefined);
+  let ids = manager.getIds();
+  if (ids.length === 0 && manager.transform) {
+    manager.update(manager.transform, manager.terrain);
+    ids = manager.getIds();
+  }
+  let skipped = 0;
+  for (const id of ids) {
+    const tile = manager.getTileByID(id) as ReloadTile | undefined;
+    if (!tile) continue;
+    // A tile mid-load: leave it — reloading a loading/aborting tile throws in
+    // MapLibre. Its in-flight load can still land geometry cut from an
+    // intermediate churn payload, so count it and retry below once it settles.
+    if (tile.abortController || tile.state === 'loading') {
+      skipped++;
+      continue;
+    }
+    manager._reloadTile(id, 'expired');
+  }
+  source.map.triggerRepaint();
+  const conv = getConvergence(key);
+  if (skipped === 0) {
+    // The sweep re-cut every resident tile to the current payload: the source
+    // has converged to the latest published target.
+    conv.settled = conv.target;
+    reconcileRetries.delete(key);
+    return;
+  }
+  // Some tiles were still mid-load; their in-flight reload may land stale
+  // geometry cut from an intermediate churn payload (verified live: after a
+  // delete's fast undo/redo the tiles finish loading `loaded` but stale, and a
+  // reconcile that fired while they loaded skipped them and never returned). Do
+  // NOT mark the source settled, and re-arm a debounced pass to re-cut them once
+  // they settle — bounded so a stuck-loading tile cannot spin the timer forever.
+  const retries = (reconcileRetries.get(key) ?? 0) + 1;
+  if (retries > RECONCILE_MAX_RETRIES) {
+    reconcileRetries.delete(key);
+    return;
+  }
+  reconcileRetries.set(key, retries);
+  scheduleReconcile(source, key);
+}
+
 function scheduleReconcile(source: VectorTileSource, key: string): void {
   const existing = reconcileTimers.get(key);
   if (existing) clearTimeout(existing);
@@ -159,7 +246,7 @@ function scheduleReconcile(source: VectorTileSource, key: string): void {
       reconcileTimers.delete(key);
       const version = registry.get(key)?.version;
       if (version === undefined) return; // source dropped (project close / teardown)
-      void reloadVtSource(source, key, version, undefined, true);
+      reconcileResidentTiles(source, key);
     }, RECONCILE_DELAY_MS),
   );
 }
@@ -194,6 +281,7 @@ export function setVtLayerData(key: string, data: VtLayerData): VtLayerPublicati
 export function clearVtLayerData(key: string): void {
   registry.delete(key);
   convergence.delete(key);
+  reconcileRetries.delete(key);
   const timer = reconcileTimers.get(key);
   if (timer) {
     clearTimeout(timer);
@@ -402,9 +490,12 @@ export function reloadVtSource(
   // completion. Neither the in-flight machinery nor the watermark completion is a
   // per-tile convergence guarantee under concurrency, so once publishes stop the
   // trailing pass re-cuts every resident tile. Debounced: rapid publishes reset
-  // it, so it only fires when the source has quiesced. The reconcile pass itself
-  // (isReconcile) never arms another, so a settled source stops reloading.
-  if (!isReconcile) scheduleReconcile(source, key);
+  // it, so it only fires when the source has quiesced. A genuine publish is fresh
+  // work, so clear any stuck reconcile-retry backlog before arming.
+  if (!isReconcile) {
+    reconcileRetries.delete(key);
+    scheduleReconcile(source, key);
+  }
   // Decide against the resident-tile convergence watermarks, not a bare payload
   // diff: a null diff still forces a reconcile when a prior reload left tiles
   // stale, and a bounded rectangle upgrades to a full reload when there is a
