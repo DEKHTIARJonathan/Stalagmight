@@ -248,6 +248,15 @@ export interface DisplayColorContext {
    *  the feature-state paint ramp override on the bulk layers; only the custom
    *  color resolvers (which have no feature-state) read it. */
   overlay?: OverlayColorInput | null;
+  /** Move-comment palette tint (#52) active in the CUSTOM renderer. When true, a
+   *  shot / station that OWNS a comment resolves to its deterministic
+   *  `commentColorForKey` color (everything else keeps its base color), mirroring
+   *  the stock `coalesce(['get','commentColor'], base)` paint the move_comment
+   *  tool applies. The stock feature builder ignores this (it writes a
+   *  `commentColor` PROPERTY the paint reads); only the custom color resolvers
+   *  (which have no per-feature properties) recompute the same color at build
+   *  time. Yields to an active `overlay` (distance / gas own color outright). */
+  commentTint?: boolean;
 }
 
 /**

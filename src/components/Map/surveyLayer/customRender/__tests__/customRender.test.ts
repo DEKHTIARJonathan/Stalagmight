@@ -14,6 +14,7 @@ import {
 } from '../tessellate';
 import {
   LINE_VERTEX_SRC,
+  LINE_FRAGMENT_SRC,
   CIRCLE_VERTEX_SRC,
   CIRCLE_FRAGMENT_SRC,
 } from '../shaders';
@@ -237,7 +238,8 @@ describe('line tessellation', () => {
     expect(b.posB.length).toBe(16);
     expect(b.endpoint.length).toBe(8);
     expect(b.side.length).toBe(8);
-    expect(b.color.length).toBe(32);
+    expect(b.colorFrom.length).toBe(32);
+    expect(b.colorTo.length).toBe(32);
     expect(b.indices.length).toBe(12);
   });
 
@@ -273,12 +275,14 @@ describe('line tessellation', () => {
     const lookup = buildStationLookup(d);
     const rel = projectStationsRel(d, null, 0, 0);
     const b = buildLineBuffers(d, rel, lookup, stubColor);
-    // Segment 0 = shot global 0, section 1 -> [0, 1, 7, 255].
+    // Segment 0 = shot global 0, section 1 -> [0, 1, 7, 255]. Flat mode: colorFrom
+    // and colorTo are identical (the fragment's from->to mix is a no-op).
     for (let v = 0; v < 4; v++) {
-      expect(Array.from(b.color.slice(v * 4, v * 4 + 4))).toEqual([0, 1, 7, 255]);
+      expect(Array.from(b.colorFrom.slice(v * 4, v * 4 + 4))).toEqual([0, 1, 7, 255]);
+      expect(Array.from(b.colorTo.slice(v * 4, v * 4 + 4))).toEqual([0, 1, 7, 255]);
     }
     // Segment 1 = shot global 1, section 1 -> [1, 1, 7, 255].
-    expect(Array.from(b.color.slice(16, 20))).toEqual([1, 1, 7, 255]);
+    expect(Array.from(b.colorFrom.slice(16, 20))).toEqual([1, 1, 7, 255]);
   });
 });
 
@@ -354,7 +358,7 @@ describe('tessellation exclusion (move-drag hide semantics)', () => {
     expect(b.indices.length).toBe(6);
     expect(Array.from(b.indices)).toEqual([0, 1, 2, 2, 1, 3]);
     // The surviving segment is shot global 1 (station idx1 -> idx2), color stub(1, 1).
-    expect(Array.from(b.color.slice(0, 4))).toEqual([1, 1, 7, 255]);
+    expect(Array.from(b.colorFrom.slice(0, 4))).toEqual([1, 1, 7, 255]);
     expect(b.posA[0]).toBeCloseTo(rel[2]!, 6); // station global 1
     expect(b.posB[0]).toBeCloseTo(rel[4]!, 6); // station global 2
   });
@@ -414,7 +418,8 @@ describe('tessellation exclusion (move-drag hide semantics)', () => {
     const emptyLine = buildLineBuffers(d, rel, lookup, stubColor, {});
     expect(emptyLine.segmentCount).toBe(baseLine.segmentCount);
     expect(Array.from(emptyLine.indices)).toEqual(Array.from(baseLine.indices));
-    expect(Array.from(emptyLine.color)).toEqual(Array.from(baseLine.color));
+    expect(Array.from(emptyLine.colorFrom)).toEqual(Array.from(baseLine.colorFrom));
+    expect(Array.from(emptyLine.colorTo)).toEqual(Array.from(baseLine.colorTo));
     expect(Array.from(emptyLine.posA)).toEqual(Array.from(baseLine.posA));
 
     const baseCircle = buildCircleBuffers(d, rel, fill, stroke);
@@ -497,27 +502,29 @@ describe('depth-gradient per-endpoint colors', () => {
     [shotIdx, 255, 0, 255],
   ];
 
-  it('assigns the from-color to A vertices and to-color to B vertices', () => {
+  it('replicates the from-color and to-color across all 4 verts (round-cap layout)', () => {
     const d = makeFixture();
     const lookup = buildStationLookup(d);
     const rel = projectStationsRel(d, null, 0, 0);
     const b = buildLineBuffers(d, rel, lookup, stubColor, undefined, endpoints);
-    // Segment 0: v0/v1 are endpoint A (from), v2/v3 endpoint B (to).
-    expect(Array.from(b.color.slice(0, 4))).toEqual([0, 0, 0, 255]); // v0 from
-    expect(Array.from(b.color.slice(4, 8))).toEqual([0, 0, 0, 255]); // v1 from
-    expect(Array.from(b.color.slice(8, 12))).toEqual([0, 255, 0, 255]); // v2 to
-    expect(Array.from(b.color.slice(12, 16))).toEqual([0, 255, 0, 255]); // v3 to
+    // Both endpoint colors ride on every vertex; the fragment picks A(from)/B(to)
+    // by the clamped along-fraction, so a rounded cap holds its endpoint color.
+    for (let v = 0; v < 4; v++) {
+      expect(Array.from(b.colorFrom.slice(v * 4, v * 4 + 4))).toEqual([0, 0, 0, 255]);
+      expect(Array.from(b.colorTo.slice(v * 4, v * 4 + 4))).toEqual([0, 255, 0, 255]);
+    }
     // Endpoint attribute still selects A(0)/B(1) consistently.
     expect(Array.from(b.endpoint.slice(0, 4))).toEqual([0, 0, 1, 1]);
   });
 
-  it('without the endpoint resolver, all 4 verts keep the flat color', () => {
+  it('without the endpoint resolver, from == to == the flat color on every vert', () => {
     const d = makeFixture();
     const lookup = buildStationLookup(d);
     const rel = projectStationsRel(d, null, 0, 0);
     const b = buildLineBuffers(d, rel, lookup, stubColor);
     for (let v = 0; v < 4; v++) {
-      expect(Array.from(b.color.slice(v * 4, v * 4 + 4))).toEqual([0, 1, 7, 255]);
+      expect(Array.from(b.colorFrom.slice(v * 4, v * 4 + 4))).toEqual([0, 1, 7, 255]);
+      expect(Array.from(b.colorTo.slice(v * 4, v * 4 + 4))).toEqual([0, 1, 7, 255]);
     }
   });
 });
@@ -621,17 +628,38 @@ describe('anchored/immovable dim flag (stock opacity parity)', () => {
   });
 
   it('the shaders dim by 0.25 and let dim WIN over the reference 0.5 case', () => {
-    // Line vertex opacity: the 0.25 dim multiply must precede the 0.5 reference
-    // multiply so a shot that is both dimmed and reference resolves to 0.25
-    // (stock case order). The reference EARLY-OUT (hide-reference collapse) also
-    // mentions a_reference but is a separate concern, so key off the multipliers.
-    const dimMul = LINE_VERTEX_SRC.indexOf('v_color.a *= 0.25');
-    const refMul = LINE_VERTEX_SRC.indexOf('v_color.a *= 0.5');
-    expect(dimMul).toBeGreaterThanOrEqual(0);
-    expect(refMul).toBeGreaterThan(dimMul);
-    expect(LINE_VERTEX_SRC).toContain('if (a_dim > 0.5) v_color.a *= 0.25;');
+    // Line vertex opacity multiplier: the dim 0.25 case must PRECEDE the reference
+    // 0.5 case in the ternary so a shot that is both dimmed and reference resolves
+    // to 0.25 (stock case order). The fragment applies v_alpha_mul to the color.
+    expect(LINE_VERTEX_SRC).toContain(
+      'v_alpha_mul = (a_dim > 0.5) ? 0.25 : ((a_reference > 0.5) ? 0.5 : 1.0);',
+    );
+    expect(LINE_FRAGMENT_SRC).toContain('col.a * v_alpha_mul * alpha');
     // Circle fragment folds the dim factor into the final alpha.
     expect(CIRCLE_FRAGMENT_SRC).toContain('(v_dim > 0.5) ? 0.25 : 1.0');
+  });
+});
+
+describe('round caps (shot-shot junction shaders)', () => {
+  it('the line vertex extends the quad along the segment past both endpoints', () => {
+    // The along-axis extension (dir * capSign * outset) is what gives the fragment
+    // capsule room to round the caps; vertex count is unchanged (still 4/segment).
+    expect(LINE_VERTEX_SRC).toContain('float capSign = (a_endpoint < 0.5) ? -1.0 : 1.0;');
+    expect(LINE_VERTEX_SRC).toContain('normal * a_side * outset + dir * capSign * outset');
+    // The fragment gets signed perpendicular, along-axis position, and length.
+    expect(LINE_VERTEX_SRC).toContain('v_perp = a_side * outset;');
+    expect(LINE_VERTEX_SRC).toContain('v_len = segLen;');
+  });
+
+  it('the line fragment uses a capsule (segment) SDF so ends round with the AA feather', () => {
+    // Distance to the SEGMENT [0, v_len], not the infinite centerline: in the body
+    // it collapses to abs(perp) (butt-cap parity); past an endpoint it rounds.
+    expect(LINE_FRAGMENT_SRC).toContain('float alongClamp = clamp(v_along, 0.0, v_len);');
+    expect(LINE_FRAGMENT_SRC).toContain('length(vec2(v_along - alongClamp, v_perp))');
+    expect(LINE_FRAGMENT_SRC).toContain('clamp(min(dist + u_aa, outset - dist) / u_aa, 0.0, 1.0)');
+    // Endpoint color clamp: from->to mixed by the CLAMPED along-fraction.
+    expect(LINE_FRAGMENT_SRC).toContain('clamp(v_along / v_len, 0.0, 1.0)');
+    expect(LINE_FRAGMENT_SRC).toContain('mix(v_color_from, v_color_to, t)');
   });
 });
 
@@ -683,14 +711,34 @@ describe('segment highlight flag (Move Segment whole-segment hover)', () => {
     expect(Array.from(computeCircleDim(d, hlStation))).toEqual(Array.from(circle.highlight));
   });
 
-  it('the shaders widen highlighted features (line width + circle size)', () => {
-    // Line: the vertex outset scales by the highlight width multiplier and the
-    // fragment recomputes its outset from the same varying so the AA stays correct.
+  it('the shaders widen highlighted features by graded level (hover 2, selection 1)', () => {
+    // Line: level 2 (hover) -> 2x width (stock hover_width/width), level 1
+    // (selection) -> 1.5x (stock selection_width/width), else 1x. The fragment
+    // recomputes its outset from the same varying so the AA stays correct.
     expect(LINE_VERTEX_SRC).toContain('in float a_highlight;');
     expect(LINE_VERTEX_SRC).toContain('u_half_width * widthMul');
-    // Circle: highlight folds into the size multiplier (radius + stroke grow together).
+    expect(LINE_VERTEX_SRC).toContain('(a_highlight > 1.5) ? 2.0 : ((a_highlight > 0.5) ? 1.5 : 1.0)');
+    // Circle: level 2 -> 1.5x, level 1 -> 1.25x (stock hover_radius / selection_radius
+    // over radius), folded into the size multiplier (radius + stroke grow together).
     expect(CIRCLE_VERTEX_SRC).toContain('in float a_highlight;');
-    expect(CIRCLE_VERTEX_SRC).toContain('a_size_mul * ((a_highlight > 0.5) ? 1.5 : 1.0)');
+    expect(CIRCLE_VERTEX_SRC).toContain('(a_highlight > 1.5) ? 1.5 : ((a_highlight > 0.5) ? 1.25 : 1.0)');
+  });
+
+  it('build/compute carry graded emphasis levels (selection 1, hover 2)', () => {
+    const d = makeFixture();
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    // Section 1 at hover level (2), station shots as a numeric-returning predicate.
+    const hlShot = (_sgi: number, sid: number): number => (sid === 1 ? 2 : 0);
+    const hlStation = (g: number): number => (d.stationSectionIds[g]! === 1 ? 1 : 0);
+    const line = buildLineBuffers(d, rel, lookup, stubColor, undefined, undefined, undefined, undefined, hlShot);
+    const circle = buildCircleBuffers(d, rel, fill, stroke, undefined, undefined, undefined, undefined, hlStation);
+    // Levels flow through verbatim (not clamped to 0/1).
+    expect(Array.from(line.highlight.slice(0, 4))).toEqual([2, 2, 2, 2]);
+    for (const g of [0, 1, 2]) for (let c = 0; c < 4; c++) expect(circle.highlight[g * 4 + c]).toBe(1);
+    // computeLine/CircleDim reproduce the same levels for the cheap refresh path.
+    expect(Array.from(computeLineDim(d, lookup, hlShot))).toEqual(Array.from(line.highlight));
+    expect(Array.from(computeCircleDim(d, hlStation))).toEqual(Array.from(circle.highlight));
   });
 });
 
@@ -848,7 +896,7 @@ describe('drag hide flag (per-vertex, no rebuild)', () => {
     expect(Array.from(full.hide.slice(4, 8))).toEqual([0, 0, 0, 0]);
     expect(excluded.segmentCount).toBe(1);
     expect(Array.from(full.posA.slice(8, 16))).toEqual(Array.from(excluded.posA.slice(0, 8)));
-    expect(Array.from(full.color.slice(16, 32))).toEqual(Array.from(excluded.color.slice(0, 16)));
+    expect(Array.from(full.colorFrom.slice(16, 32))).toEqual(Array.from(excluded.colorFrom.slice(0, 16)));
   });
 });
 

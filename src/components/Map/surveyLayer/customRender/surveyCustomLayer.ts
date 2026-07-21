@@ -57,7 +57,8 @@ interface LineGpu {
   posB: WebGLBuffer;
   endpoint: WebGLBuffer;
   side: WebGLBuffer;
-  color: WebGLBuffer;
+  colorFrom: WebGLBuffer;
+  colorTo: WebGLBuffer;
   reference: WebGLBuffer;
   dim: WebGLBuffer;
   hide: WebGLBuffer;
@@ -229,7 +230,8 @@ export class SurveyCustomLayer implements CustomLayerInterface {
       posB: makeBuffer(gl, gl.ARRAY_BUFFER, l.posB),
       endpoint: makeBuffer(gl, gl.ARRAY_BUFFER, l.endpoint),
       side: makeBuffer(gl, gl.ARRAY_BUFFER, l.side),
-      color: makeBuffer(gl, gl.ARRAY_BUFFER, l.color),
+      colorFrom: makeBuffer(gl, gl.ARRAY_BUFFER, l.colorFrom),
+      colorTo: makeBuffer(gl, gl.ARRAY_BUFFER, l.colorTo),
       reference: makeBuffer(gl, gl.ARRAY_BUFFER, l.reference),
       dim: makeBuffer(gl, gl.ARRAY_BUFFER, l.dim),
       hide: makeBuffer(gl, gl.ARRAY_BUFFER, l.hide),
@@ -345,7 +347,8 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     const l = this.data.line;
     this.subUpload(this.lineGpu.posA, l.posA, 2, vStart, vCount);
     this.subUpload(this.lineGpu.posB, l.posB, 2, vStart, vCount);
-    this.subUpload(this.lineGpu.color, l.color, 4, vStart, vCount);
+    this.subUpload(this.lineGpu.colorFrom, l.colorFrom, 4, vStart, vCount);
+    this.subUpload(this.lineGpu.colorTo, l.colorTo, 4, vStart, vCount);
     this.subUpload(this.lineGpu.reference, l.reference, 1, vStart, vCount);
   }
 
@@ -442,7 +445,8 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     this.bindVec2(gl, prog, 'a_pos_b', g.posB);
     this.bindFloat(gl, prog, 'a_endpoint', g.endpoint);
     this.bindFloat(gl, prog, 'a_side', g.side);
-    this.bindColor(gl, prog, 'a_color', g.color);
+    this.bindColor(gl, prog, 'a_color_from', g.colorFrom);
+    this.bindColor(gl, prog, 'a_color_to', g.colorTo);
     this.bindFloat(gl, prog, 'a_reference', g.reference);
     this.bindFloat(gl, prog, 'a_dim', g.dim);
     this.bindFloat(gl, prog, 'a_hide', g.hide);

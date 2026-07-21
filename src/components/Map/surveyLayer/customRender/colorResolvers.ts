@@ -13,6 +13,7 @@ import type { SurveyData, SectionMetadata } from '../../../../types/survey-data'
 import { STATION_FLAG_IS_ZERO_DATUM } from '../../../../types/survey-data';
 import { encodeFeatureId } from '../../../../utils/ids';
 import {
+  commentColorForKey,
   resolveShotDisplayColor,
   resolveShotEndpointColors,
   resolveStationDisplayColor,
@@ -69,10 +70,19 @@ export function makeColorResolvers(
   const overlay = colorCtx.overlay ?? null;
   const overlayColor = overlay ? makeOverlayColor(overlay, colorCtx.themeColors.grayLine) : null;
 
+  // Move-comment palette tint (#52): a shot / station that owns a comment paints
+  // in its deterministic palette color; everything else keeps its base color.
+  // Mirrors the stock `coalesce(['get','commentColor'], base)`; the tint yields
+  // to an active overlay (checked first) exactly as `shotsLineColor` does.
+  const commentTint = colorCtx.commentTint === true;
+
   const colorForShot = (shotGlobalIdx: number, sectionId: number): Rgba8 => {
     if (overlay && overlayColor) {
       const fid = encodeFeatureId(sectionId, surveyData.shotIds[shotGlobalIdx]!);
       return overlayColor(overlay.shots.get(fid) ?? -1);
+    }
+    if (commentTint && surveyData.shotComments.get(shotGlobalIdx)) {
+      return pack(commentColorForKey(`${sectionId}:s${surveyData.shotIds[shotGlobalIdx]!}`));
     }
     const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
     return pack(resolveShotDisplayColor(surveyData, sectionColor, shotGlobalIdx, colorCtx));
@@ -92,12 +102,14 @@ export function makeColorResolvers(
     return [pack(from), pack(to)];
   };
   const fillForStation = (g: number): Rgba8 => {
+    const sectionId = surveyData.stationSectionIds[g]!;
     if (overlay && overlayColor) {
-      const sectionId = surveyData.stationSectionIds[g]!;
       const fid = encodeFeatureId(sectionId, surveyData.stationIndices[g]!);
       return overlayColor(overlay.stations.get(fid) ?? -1);
     }
-    const sectionId = surveyData.stationSectionIds[g]!;
+    if (commentTint && surveyData.stationComments.get(g)) {
+      return pack(commentColorForKey(`${sectionId}:st${surveyData.stationIndices[g]!}`));
+    }
     const sectionColor = sectionById.get(sectionId)?.color ?? stationDefault;
     return pack(resolveStationDisplayColor(surveyData, sectionColor, g, colorCtx));
   };
@@ -106,10 +118,11 @@ export function makeColorResolvers(
     return pack(resolveStationStrokeColor(isZeroDatum, colorCtx));
   };
 
-  // Overlay mode draws flat per-shot ramp colors (stock hides the depth
-  // sub-layer while an overlay is active), so the depth-endpoint path is off.
+  // Overlay mode draws flat per-shot ramp colors, and move-comment hides the
+  // depth sub-layer too (applyOverlayPaint), so in both the depth-endpoint path
+  // is off and shots draw the flat colorForShot (with the comment tint coalesced).
   const useDepthEndpoints =
-    colorCtx.showDepthGradient && !colorCtx.showIssueSeverity && !overlay;
+    colorCtx.showDepthGradient && !colorCtx.showIssueSeverity && !overlay && !commentTint;
 
   return {
     colorForShot,

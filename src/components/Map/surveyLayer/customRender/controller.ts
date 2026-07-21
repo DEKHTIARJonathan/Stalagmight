@@ -133,8 +133,15 @@ const EMPTY_DIM: CustomDimState = {
 /** No features hidden (drag inactive): the zero-cost default for the hide flag. */
 const EMPTY_EXCLUSION: CustomRenderExclusion = {};
 
-/** No sections emphasized (no Move-Segment hover): the default highlight set. */
+/** No sections emphasized: the default for each highlight-source set. */
 const EMPTY_HIGHLIGHT: ReadonlySet<number> = new Set<number>();
+
+/** Emphasis levels stored in the per-vertex highlight flag, mirroring the stock
+ *  feature-state bumps. Hover wins over selection when a section is in both
+ *  (matches the stock paint case order: `hover` before `selected`). */
+const HIGHLIGHT_HOVER = 2;
+const HIGHLIGHT_SELECT = 1;
+const HIGHLIGHT_NONE = 0;
 
 export class SurveyCustomController {
   private readonly map: MaplibreMap;
@@ -162,11 +169,18 @@ export class SurveyCustomController {
    *  per-vertex hide flag over the FULL buffers instead of omitting features (a
    *  rebuild), and re-applied on every build so a mid-drag flush stays hidden. */
   private hideState: CustomRenderExclusion = EMPTY_EXCLUSION;
-  /** Sections whose shots + stations are emphasized on Move-Segment hover
-   *  (SurveyLayer.setHoveredSegment -> setHighlight). Applied as the per-vertex
-   *  highlight flag and re-applied on every build so a mid-hover flush stays
-   *  emphasized. Anchored sections are excluded upstream (they will not move). */
-  private highlightState: ReadonlySet<number> = EMPTY_HIGHLIGHT;
+  /** The three section-emphasis sources, merged per section into a highlight
+   *  LEVEL (hover 2 > selection 1 > none 0) applied as the per-vertex highlight
+   *  flag and re-applied on every build so a mid-interaction flush stays
+   *  emphasized. `segmentHoverState` is the Move-Segment connected set
+   *  (setHighlight); `sectionHoverState` is single-section / panel-row hover
+   *  (setSectionHover); `sectionSelectState` is the selected section
+   *  (setSectionSelect). Hover (segment or section) both map to level 2, matching
+   *  the stock `hover` feature-state; selection maps to level 1 (stock
+   *  `selected`). Anchored sections are excluded from segment-hover upstream. */
+  private segmentHoverState: ReadonlySet<number> = EMPTY_HIGHLIGHT;
+  private sectionHoverState: ReadonlySet<number> = EMPTY_HIGHLIGHT;
+  private sectionSelectState: ReadonlySet<number> = EMPTY_HIGHLIGHT;
   /** Cached build products backing the cheap dim-only refresh (setDimming),
    *  the drag hide refresh (setDragHide), and the incremental edit path: the
    *  last CustomRenderData (its per-vertex arrays are rewritten in place) plus
@@ -447,22 +461,37 @@ export class SurveyCustomController {
     };
   }
 
-  /** True when some section is emphasized (Move-Segment hover active). */
+  /** True when any emphasis source has a section (hover / selection active). */
   private hasHighlight(): boolean {
-    return this.highlightState.size > 0;
+    return (
+      this.segmentHoverState.size > 0 ||
+      this.sectionHoverState.size > 0 ||
+      this.sectionSelectState.size > 0
+    );
   }
 
-  /** Per-station / per-shot highlight predicates for the current
-   *  {@link highlightState}: a feature is emphasized when its section is in the
-   *  hovered connected set. */
+  /** Merged emphasis level for one section: hover (2) if in either hover source,
+   *  else selection (1) if selected, else none (0). Hover wins over selection,
+   *  matching the stock paint case order (`hover` before `selected`). */
+  private highlightLevel(sectionId: number): number {
+    if (this.segmentHoverState.has(sectionId) || this.sectionHoverState.has(sectionId)) {
+      return HIGHLIGHT_HOVER;
+    }
+    if (this.sectionSelectState.has(sectionId)) return HIGHLIGHT_SELECT;
+    return HIGHLIGHT_NONE;
+  }
+
+  /** Per-station / per-shot highlight predicates resolving the merged emphasis
+   *  level for a feature's section (0 none, 1 selection, 2 hover). */
   private highlightPredicates(surveyData: SurveyData): {
-    highlightForStation: (g: number) => boolean;
-    highlightForShot: (globalShotIdx: number, sectionId: number) => boolean;
+    highlightForStation: (g: number) => number;
+    highlightForShot: (globalShotIdx: number, sectionId: number) => number;
   } {
-    const set = this.highlightState;
     return {
-      highlightForStation: (g: number): boolean => set.has(surveyData.stationSectionIds[g]!),
-      highlightForShot: (_globalShotIdx: number, sectionId: number): boolean => set.has(sectionId),
+      highlightForStation: (g: number): number =>
+        this.highlightLevel(surveyData.stationSectionIds[g]!),
+      highlightForShot: (_globalShotIdx: number, sectionId: number): number =>
+        this.highlightLevel(sectionId),
     };
   }
 
@@ -523,15 +552,55 @@ export class SurveyCustomController {
 
   /**
    * Emphasize the hovered connected segment (SurveyLayer.setHoveredSegment for
-   * the Move Segment tool). Sibling of {@link setDimming}: the cheap per-hover
-   * path recomputes ONLY the two per-vertex highlight arrays from the cached SoA
-   * (computeLine/CircleDim double as the per-vertex flag builders for any
-   * predicate) and re-uploads just those GPU buffers - no reprojection or color
-   * packing. Pass an empty array to clear (hover leaves geometry / drag begins).
-   * State is stored regardless so the next full build reproduces it.
+   * the Move Segment tool) at hover level. Pass an empty array to clear (hover
+   * leaves geometry / drag begins). See {@link refreshHighlight}.
    */
   setHighlight(sectionIds: readonly number[]): void {
-    this.highlightState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_HIGHLIGHT;
+    this.segmentHoverState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_HIGHLIGHT;
+    this.refreshHighlight();
+  }
+
+  /**
+   * Emphasize the single hovered / panel-row-hovered section at hover level
+   * (SurveyLayer.setHoveredSection). Empty array clears. The stock renderer used
+   * the same `hover` feature-state the Move-Segment set does, so both feed the
+   * hover level here. See {@link refreshHighlight}.
+   */
+  setSectionHover(sectionIds: readonly number[]): void {
+    this.sectionHoverState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_HIGHLIGHT;
+    this.refreshHighlight();
+  }
+
+  /**
+   * Emphasize the selected section at the (smaller) selection level
+   * (SurveyLayer.setSelectedSection). Empty array clears. When a section is both
+   * selected and hovered the merge yields hover level (hover wins). See
+   * {@link refreshHighlight}.
+   */
+  setSectionSelect(sectionIds: readonly number[]): void {
+    this.sectionSelectState = sectionIds.length > 0 ? new Set(sectionIds) : EMPTY_HIGHLIGHT;
+    this.refreshHighlight();
+  }
+
+  /** Clear every emphasis source (segment hover, section hover, selection) in one
+   *  refresh. Cheaper + clearer than three empty setters at a clear-all site. */
+  clearHighlights(): void {
+    this.segmentHoverState = EMPTY_HIGHLIGHT;
+    this.sectionHoverState = EMPTY_HIGHLIGHT;
+    this.sectionSelectState = EMPTY_HIGHLIGHT;
+    this.refreshHighlight();
+  }
+
+  /**
+   * Recompute + re-upload the two per-vertex highlight-level arrays from the
+   * merged emphasis sources. Sibling of {@link setDimming}: the cheap
+   * per-interaction path recomputes ONLY the highlight arrays from the cached SoA
+   * (computeLine/CircleDim double as the per-vertex flag builders for any
+   * predicate) and re-uploads just those GPU buffers - no reprojection or color
+   * packing. State is stored on the source sets regardless so the next full build
+   * reproduces it.
+   */
+  private refreshHighlight(): void {
     if (!this.active || !this.layer || !this.lastData || !this.lastLookup || !this.lastSurveyData) {
       return;
     }

@@ -38,6 +38,17 @@ import type { Rgba8 } from './colorPack';
  *  in global station-index order. */
 export type StationRel = Float32Array;
 
+/**
+ * Coerce a per-vertex flag predicate's result to the numeric value stored in a
+ * flag buffer. Dim / hide predicates return a boolean (→ 0 / 1); the highlight
+ * predicate returns a graded emphasis LEVEL (0 none, 1 selection, 2 hover) which
+ * passes through unchanged. `undefined` (predicate absent) → 0. Keeps the dim /
+ * hide byte-parity guarantees while letting one flag buffer carry a level.
+ */
+function flagValue(v: number | boolean | undefined): number {
+  return v === true ? 1 : v === false || v === undefined ? 0 : v;
+}
+
 export interface LineBuffers {
   segmentCount: number;
   vertexCount: number;
@@ -49,8 +60,17 @@ export interface LineBuffers {
   endpoint: Float32Array;
   /** Physical extrusion side, -1 / +1; also the AA cross-width coordinate. */
   side: Float32Array;
-  /** Per-vertex RGBA8. */
-  color: Uint8Array;
+  /** Per-vertex from-endpoint RGBA8, replicated across all 4 verts of a segment.
+   *  With round caps the quad is extended past both endpoints (shaders.ts), so
+   *  the fragment can no longer rely on a single interpolated color anchored at
+   *  the true endpoints; it interpolates `colorFrom`->`colorTo` by the CLAMPED
+   *  along-fraction, which reproduces the flat / depth-gradient body exactly AND
+   *  holds the endpoint color across each rounded cap. In flat / severity /
+   *  overlay modes `colorFrom === colorTo`. */
+  colorFrom: Uint8Array;
+  /** Per-vertex to-endpoint RGBA8, replicated across all 4 verts. See
+   *  {@link colorFrom}. */
+  colorTo: Uint8Array;
   /** Per-vertex reference flag (1 = reference shot, else 0). Mirrors the stock
    *  shots layer's `isReference` property: the shader dims reference shots to
    *  0.5 opacity and collapses them when reference shots are hidden. */
@@ -68,12 +88,14 @@ export interface LineBuffers {
    *  and re-uploads it, and drag-end zeroes it. All 4 verts of a segment share
    *  the flag so both triangles degenerate together. */
   hide: Float32Array;
-  /** Per-vertex highlight flag (1 = emphasized, else 0). Drives the whole-segment
-   *  hover emphasis for the Move Segment tool (SurveyLayer.setHoveredSegment ->
-   *  controller.setHighlight): the shader widens highlighted shots, mirroring the
-   *  stock section-hover width bump. Independent of dim (a movable connected
-   *  section is highlighted and not dimmed; anchored sections are dimmed and
-   *  excluded from the highlight). Rewritten in place on a hover-set change. */
+  /** Per-vertex highlight LEVEL (0 none, 1 selection, 2 hover). Drives section
+   *  emphasis under the custom layer: segment-hover (Move Segment tool,
+   *  SurveyLayer.setHoveredSegment), single-section + panel-row hover
+   *  (setHoveredSection) resolve to level 2; section selection (setSelectedSection)
+   *  to level 1; the shader widens by the matching stock feature-state bump
+   *  (hover 2x, selection 1.5x). Independent of dim (a movable connected section
+   *  is highlighted and not dimmed; anchored sections are dimmed and excluded from
+   *  the highlight). Rewritten in place on a hover/selection-set change. */
   highlight: Float32Array;
   /** Two triangles per segment, `segmentCount*6`, `UNSIGNED_INT`. */
   indices: Uint32Array;
@@ -113,10 +135,10 @@ export interface CircleBuffers {
    *  Circle counterpart of {@link LineBuffers.hide}: the drag-begin path marks a
    *  moving station hidden without omitting it from the buffers. */
   hide: Float32Array;
-  /** Per-vertex highlight flag (1 = emphasized, else 0). Circle counterpart of
-   *  {@link LineBuffers.highlight}: the shader enlarges highlighted stations for
-   *  the Move Segment whole-segment hover. Rewritten in place on a hover-set
-   *  change (controller.setHighlight). */
+  /** Per-vertex highlight LEVEL (0 none, 1 selection, 2 hover). Circle
+   *  counterpart of {@link LineBuffers.highlight}: the shader enlarges highlighted
+   *  stations by the matching stock feature-state radius bump (hover 1.5x,
+   *  selection 1.25x). Rewritten in place on a hover/selection-set change. */
   highlight: Float32Array;
   /** Per-vertex all-reference flag (1 = every shot touching this station is a
    *  reference shot, else 0). Mirrors the stock stations layer's
@@ -276,7 +298,9 @@ export interface LineSectionInputs {
   colorForShotEndpoints?: ((globalShotIdx: number, sectionId: number) => readonly [Rgba8, Rgba8]) | undefined;
   dimForShot?: ((globalShotIdx: number, sectionId: number) => boolean) | undefined;
   hideForShot?: ((globalShotIdx: number, sectionId: number) => boolean) | undefined;
-  highlightForShot?: ((globalShotIdx: number, sectionId: number) => boolean) | undefined;
+  /** Emphasis LEVEL for a shot (0 none, 1 selection, 2 hover), or a boolean the
+   *  writer coerces to 0 / 1 (legacy callers / tests). */
+  highlightForShot?: ((globalShotIdx: number, sectionId: number) => number | boolean) | undefined;
 }
 
 /**
@@ -300,7 +324,7 @@ function emitLineSection(
 ): number {
   const inner = lookup.get(section.id);
   if (!inner) return startSeg;
-  const { posA, posB, endpoint, side, color, reference, dim, hide, highlight, indices } = b;
+  const { posA, posB, endpoint, side, colorFrom, colorTo, reference, dim, hide, highlight, indices } = b;
   const { colorForShot, colorForShotEndpoints, dimForShot, hideForShot, highlightForShot } = inputs;
   let seg = startSeg;
   for (let i = 0; i < section.shotCount; i++) {
@@ -310,14 +334,16 @@ function emitLineSection(
     const toGlobal = inner.get(i + 1);
     if (fromGlobal === undefined || toGlobal === undefined) continue;
     // Per-endpoint colors (depth gradient) win; else the flat segment color at
-    // both ends. `LINE_EP[c]` selects the A (0) or B (1) color per vertex.
+    // both ends. Both endpoint colors are replicated on every vertex so the
+    // fragment can interpolate from->to by the clamped along-fraction (round
+    // caps, shaders.ts); in the flat path colA === colB.
     const ends = colorForShotEndpoints?.(shotGlobalIdx, section.id);
     const colA = ends ? ends[0] : colorForShot(shotGlobalIdx, section.id);
     const colB = ends ? ends[1] : colA;
     const isRef = (data.shotFlags[shotGlobalIdx]! & SHOT_FLAG_IS_REFERENCE) !== 0 ? 1 : 0;
     const isDim = dimForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
     const isHide = hideForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
-    const isHighlight = highlightForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
+    const isHighlight = flagValue(highlightForShot?.(shotGlobalIdx, section.id));
     const ax = stationRel[fromGlobal * 2]!;
     const ay = stationRel[fromGlobal * 2 + 1]!;
     const bx = stationRel[toGlobal * 2]!;
@@ -332,11 +358,14 @@ function emitLineSection(
       posB[v * 2 + 1] = by;
       endpoint[v] = LINE_EP[c]!;
       side[v] = LINE_SIDE[c]!;
-      const [r, g, b, a] = LINE_EP[c] === 0 ? colA : colB;
-      color[v * 4] = r;
-      color[v * 4 + 1] = g;
-      color[v * 4 + 2] = b;
-      color[v * 4 + 3] = a;
+      colorFrom[v * 4] = colA[0];
+      colorFrom[v * 4 + 1] = colA[1];
+      colorFrom[v * 4 + 2] = colA[2];
+      colorFrom[v * 4 + 3] = colA[3];
+      colorTo[v * 4] = colB[0];
+      colorTo[v * 4 + 1] = colB[1];
+      colorTo[v * 4 + 2] = colB[2];
+      colorTo[v * 4 + 3] = colB[3];
       reference[v] = isRef;
       dim[v] = isDim;
       hide[v] = isHide;
@@ -363,7 +392,7 @@ export function buildLineBuffers(
   colorForShotEndpoints?: (globalShotIdx: number, sectionId: number) => readonly [Rgba8, Rgba8],
   dimForShot?: (globalShotIdx: number, sectionId: number) => boolean,
   hideForShot?: (globalShotIdx: number, sectionId: number) => boolean,
-  highlightForShot?: (globalShotIdx: number, sectionId: number) => boolean,
+  highlightForShot?: (globalShotIdx: number, sectionId: number) => number | boolean,
 ): LineBuffers {
   const exSections = exclude?.sectionIds;
   const exShots = exclude?.shotGlobalIndices;
@@ -373,7 +402,8 @@ export function buildLineBuffers(
   const posB = new Float32Array(vertexCount * 2);
   const endpoint = new Float32Array(vertexCount);
   const side = new Float32Array(vertexCount);
-  const color = new Uint8Array(vertexCount * 4);
+  const colorFrom = new Uint8Array(vertexCount * 4);
+  const colorTo = new Uint8Array(vertexCount * 4);
   const reference = new Float32Array(vertexCount);
   const dim = new Float32Array(vertexCount);
   const hide = new Float32Array(vertexCount);
@@ -382,10 +412,10 @@ export function buildLineBuffers(
   const sectionRanges = new Uint32Array(data.sections.length * 2);
   const byteLength =
     posA.byteLength + posB.byteLength + endpoint.byteLength + side.byteLength +
-    color.byteLength + reference.byteLength + dim.byteLength + hide.byteLength +
-    highlight.byteLength + indices.byteLength;
+    colorFrom.byteLength + colorTo.byteLength + reference.byteLength + dim.byteLength +
+    hide.byteLength + highlight.byteLength + indices.byteLength;
   const b: LineBuffers = {
-    segmentCount, vertexCount, posA, posB, endpoint, side, color, reference, dim, hide,
+    segmentCount, vertexCount, posA, posB, endpoint, side, colorFrom, colorTo, reference, dim, hide,
     highlight, indices, sectionRanges, byteLength,
   };
 
@@ -439,7 +469,7 @@ export function recomputeLineSection(
 export function computeLineDim(
   data: SurveyData,
   lookup: Map<number, Map<number, number>>,
-  dimForShot: (globalShotIdx: number, sectionId: number) => boolean,
+  dimForShot: (globalShotIdx: number, sectionId: number) => number | boolean,
   exclude?: CustomRenderExclusion,
 ): Float32Array {
   const exSections = exclude?.sectionIds;
@@ -455,7 +485,7 @@ export function computeLineDim(
       const shotGlobalIdx = section.shotOffset + i;
       if (exShots?.has(shotGlobalIdx)) continue;
       if (inner.get(i) === undefined || inner.get(i + 1) === undefined) continue;
-      const isDim = dimForShot(shotGlobalIdx, section.id) === true ? 1 : 0;
+      const isDim = flagValue(dimForShot(shotGlobalIdx, section.id));
       const base = seg * 4;
       for (let c = 0; c < 4; c++) dim[base + c] = isDim;
       seg++;
@@ -474,7 +504,9 @@ export interface CircleStationInputs {
   strokeForStation: (globalIdx: number) => Rgba8;
   dimForStation?: ((globalIdx: number) => boolean) | undefined;
   hideForStation?: ((globalIdx: number) => boolean) | undefined;
-  highlightForStation?: ((globalIdx: number) => boolean) | undefined;
+  /** Emphasis LEVEL for a station (0 none, 1 selection, 2 hover), or a boolean
+   *  the writer coerces to 0 / 1 (legacy callers / tests). */
+  highlightForStation?: ((globalIdx: number) => number | boolean) | undefined;
 }
 
 /**
@@ -504,7 +536,7 @@ function emitStation(
   const sm = (data.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0 ? 2 : 1;
   const dm = dimForStation?.(g) === true ? 1 : 0;
   const hd = hideForStation?.(g) === true ? 1 : 0;
-  const hl = highlightForStation?.(g) === true ? 1 : 0;
+  const hl = flagValue(highlightForStation?.(g));
   const base = out * 4;
   for (let c = 0; c < 4; c++) {
     const v = base + c;
@@ -549,7 +581,7 @@ export function buildCircleBuffers(
   allReferenceFlags?: Float32Array,
   dimForStation?: (globalIdx: number) => boolean,
   hideForStation?: (globalIdx: number) => boolean,
-  highlightForStation?: (globalIdx: number) => boolean,
+  highlightForStation?: (globalIdx: number) => number | boolean,
 ): CircleBuffers {
   const exSections = exclude?.sectionIds;
   const exStations = exclude?.stationGlobalIndices;
@@ -645,7 +677,7 @@ export function recomputeSectionAllReference(
  */
 export function computeCircleDim(
   data: SurveyData,
-  dimForStation: (globalIdx: number) => boolean,
+  dimForStation: (globalIdx: number) => number | boolean,
   exclude?: CustomRenderExclusion,
 ): Float32Array {
   const exSections = exclude?.sectionIds;
@@ -661,7 +693,7 @@ export function computeCircleDim(
   let out = 0;
   for (let g = 0; g < data.stationCount; g++) {
     if (skip(g)) continue;
-    const isDim = dimForStation(g) === true ? 1 : 0;
+    const isDim = flagValue(dimForStation(g));
     const base = out * 4;
     for (let c = 0; c < 4; c++) dim[base + c] = isDim;
     out++;

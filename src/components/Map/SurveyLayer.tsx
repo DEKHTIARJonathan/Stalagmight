@@ -583,6 +583,7 @@ export default class SurveyLayer {
       this.hoveredStationId = null;
       this.hoveredShotId = null;
       this.hoveredSectionId = null;
+      this.customRender?.setSectionHover([]);
       this.updateVisualState();
       this.map.getCanvas().style.cursor = '';
 
@@ -621,6 +622,9 @@ export default class SurveyLayer {
     if (isMoveComment !== wasMoveComment) {
       this.applyOverlayPaint();
       this.applyCommentToolTint();
+      // Custom renderer (no feature-state / commentColor property): rebuild so the
+      // shot/station tint appears or clears, mirroring distance/gas mode changes.
+      this.resyncCustomRenderFromStore();
     }
   }
 
@@ -3005,6 +3009,9 @@ export default class SurveyLayer {
       });
     }
     this.hoveredSectionId = stringId;
+    // Custom renderer ignores feature-state; drive its per-vertex highlight flag
+    // at hover level (the stock section hover used the same `hover` state).
+    this.customRender?.setSectionHover(sectionId !== null ? [sectionId] : []);
     this.updateVisualState();
   }
 
@@ -3088,6 +3095,9 @@ export default class SurveyLayer {
       });
     }
     this.selectedSectionId = stringId;
+    // Custom renderer ignores feature-state; drive its per-vertex highlight flag
+    // at selection level (smaller bump than hover, matching stock `selected`).
+    this.customRender?.setSectionSelect(sectionId !== null ? [sectionId] : []);
     this.updateVisualState();
   }
 
@@ -3422,11 +3432,12 @@ export default class SurveyLayer {
     this.hoveredShotId = null;
     this.hoveredSectionId = null;
     this.hoveredSegmentSectionIds = [];
-    this.customRender?.setHighlight([]);
     this.snappedStationId = null;
     this.selectedStationId = null;
     this.selectedShotId = null;
     this.selectedSectionId = null;
+    // Custom renderer: drop every section-emphasis source in one refresh.
+    this.customRender?.clearHighlights();
     this.setHighlightedStations([]);
     this.callbacks.onStationHover?.(null);
     this.callbacks.onShotHover?.(null);
@@ -4545,9 +4556,10 @@ export default class SurveyLayer {
       issueSeverity: this.cachedIssueSeverity,
       // Analytical overlay ramp colors (distance #34 / gas-reach #38): the custom
       // layer has no feature-state, so it resolves them per feature at build time.
-      overlay: overlayInputFrom(
-        this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState,
-      ),
+      overlay: overlayInputFrom(this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState),
+      // Move-comment palette tint (#52): custom features carry no commentColor
+      // property, so the resolvers recompute it (only while move_comment is active).
+      commentTint: this.activeTool === 'move_comment',
     };
     this.customRender.sync({
       surveyData,

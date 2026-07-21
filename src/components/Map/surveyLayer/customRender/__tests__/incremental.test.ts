@@ -192,6 +192,15 @@ describe('sameColorGlobals', () => {
     )).toBe(false);
     expect(sameColorGlobals(ctx({ overlay: ov }), ctx({ overlay: { ...ov, max: 101 } }))).toBe(false);
   });
+
+  it('forces a rebuild whenever the move-comment tint is active (enter/exit/while-on)', () => {
+    // Enter / exit the tool.
+    expect(sameColorGlobals(ctx(), ctx({ commentTint: true }))).toBe(false);
+    expect(sameColorGlobals(ctx({ commentTint: true }), ctx())).toBe(false);
+    // While on: a flush can relocate a comment (recolor a feature) without any
+    // coord/flag/section-color change the diff tracks, so stay conservative.
+    expect(sameColorGlobals(ctx({ commentTint: true }), ctx({ commentTint: true }))).toBe(false);
+  });
 });
 
 describe('coalesceVertexRuns', () => {
@@ -325,7 +334,7 @@ function params(surveyData: SurveyData, colorCtx: DisplayColorContext = ctx()): 
   return { surveyData, gpsOrigin: null, colorCtx, shotWidthPx: 2, stationRadiusPx: 3, stationStrokePx: 1 };
 }
 
-const lineArrays = ['posA', 'posB', 'endpoint', 'side', 'color', 'reference', 'dim', 'hide', 'highlight', 'indices', 'sectionRanges'] as const;
+const lineArrays = ['posA', 'posB', 'endpoint', 'side', 'colorFrom', 'colorTo', 'reference', 'dim', 'hide', 'highlight', 'indices', 'sectionRanges'] as const;
 const circleArrays = ['center', 'corner', 'fill', 'stroke', 'sizeMul', 'dim', 'hide', 'highlight', 'allReference', 'indices'] as const;
 
 function expectDataEqual(a: CustomRenderData, b: CustomRenderData): void {
@@ -462,10 +471,10 @@ describe('SurveyCustomController incremental apply', () => {
     // No emphasis yet.
     expect(Array.from(dataOf(c).circle.highlight).every((v) => v === 0)).toBe(true);
     expect(Array.from(dataOf(c).line.highlight).every((v) => v === 0)).toBe(true);
-    // Move-Segment hover emphasizes the connected section id 2 (cheap re-upload path).
+    // Move-Segment hover emphasizes the connected section id 2 at HOVER level (2).
     c.setHighlight([2]);
-    expect(Array.from(dataOf(c).circle.highlight).some((v) => v === 1)).toBe(true);
-    expect(Array.from(dataOf(c).line.highlight).some((v) => v === 1)).toBe(true);
+    expect(Array.from(dataOf(c).circle.highlight).some((v) => v === 2)).toBe(true);
+    expect(Array.from(dataOf(c).line.highlight).some((v) => v === 2)).toBe(true);
     // Setting the highlight BEFORE sync makes the full build reproduce it: the
     // oracle for the cheap path must be byte-identical.
     const ref = new SurveyCustomController(makeFakeMap());
@@ -476,5 +485,31 @@ describe('SurveyCustomController incremental apply', () => {
     c.setHighlight([]);
     expect(Array.from(dataOf(c).circle.highlight).every((v) => v === 0)).toBe(true);
     expect(Array.from(dataOf(c).line.highlight).every((v) => v === 0)).toBe(true);
+  });
+
+  it('section hover (level 2) and selection (level 1) merge with hover winning', () => {
+    const prev = pinnedSurvey();
+    const c = new SurveyCustomController(makeFakeMap());
+    c.sync(params(prev));
+    // Selection alone: connected section id 2 emphasized at SELECTION level (1).
+    c.setSectionSelect([2]);
+    expect(Array.from(dataOf(c).line.highlight).some((v) => v === 1)).toBe(true);
+    expect(Array.from(dataOf(c).line.highlight).some((v) => v === 2)).toBe(false);
+    // Hovering the SAME section promotes it to hover level (2); hover wins.
+    c.setSectionHover([2]);
+    expect(Array.from(dataOf(c).line.highlight).some((v) => v === 2)).toBe(true);
+    expect(Array.from(dataOf(c).line.highlight).some((v) => v === 1)).toBe(false);
+    // Full build with both sources set reproduces the merged levels byte-for-byte.
+    const ref = new SurveyCustomController(makeFakeMap());
+    ref.setSectionSelect([2]);
+    ref.setSectionHover([2]);
+    ref.sync(params(prev));
+    expectDataEqual(dataOf(c), dataOf(ref));
+    // Leaving the hover drops back to selection level (1); clearHighlights zeroes all.
+    c.setSectionHover([]);
+    expect(Array.from(dataOf(c).line.highlight).some((v) => v === 1)).toBe(true);
+    c.clearHighlights();
+    expect(Array.from(dataOf(c).line.highlight).every((v) => v === 0)).toBe(true);
+    expect(Array.from(dataOf(c).circle.highlight).every((v) => v === 0)).toBe(true);
   });
 });

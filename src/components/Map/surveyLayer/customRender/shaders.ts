@@ -12,9 +12,32 @@
  * feather. What differs: MapLibre extrudes in tile space using its packed
  * `a_pos_normal` / `a_data` encoding and `projectTile()`; here each vertex
  * carries both segment endpoints (anchor-relative mercator) and the normal is
- * computed from the projected screen-space direction, so butt-cap quads work
- * with a raw projection matrix. The perspective `v_gamma_scale` term is dropped
+ * computed from the projected screen-space direction, so the quads work with a
+ * raw projection matrix. The perspective `v_gamma_scale` term is dropped
  * (prototype assumes near-nadir viewing); note this if AA looks soft under pitch.
+ *
+ * ROUND CAPS: the shot quad is extended by `outset` ALONG the segment past both
+ * endpoints (in the vertex shader, so the vertex count is unchanged), and the
+ * fragment measures distance to the line SEGMENT (a capsule SDF) rather than to
+ * the infinite centerline. Inside the body that distance is `abs(perp)` (the old
+ * butt-cap AA path, byte-for-byte), and past an endpoint it is the radial
+ * distance to that endpoint, so the end rounds off with the same feather. This
+ * removes the notches where consecutive shots meet at a shared station (stock's
+ * depth-gradient sublayer likewise used `line-cap: round`). Per-endpoint depth
+ * color is carried as two attributes and interpolated by the CLAMPED
+ * along-fraction, so each rounded cap holds its endpoint color exactly.
+ *
+ * TRANSLUCENT DOUBLE-BLEND (measured, accepted): where two TRANSLUCENT shots
+ * (reference at 0.5, dimmed at 0.25) share a station, their round caps overlap in
+ * a ~outset-wide disc and premultiplied blending applies twice, so the joint
+ * reads brighter/more-saturated than the shot body (a live probe on 4naharon
+ * measured a reference joint at 0.75 effective coverage vs 0.5 mid-shot, matching
+ * the prediction). This is only visible with reference shots shown AND stations
+ * hidden AND zoomed in: the station disc (radius >= the line half-width) is drawn
+ * over every junction and covers the overlap in normal use, and stock's
+ * round-capped depth sublayer had the same behavior. Accepted as-is; if it ever
+ * needs removing, zero `capSign` for translucent verts (a_reference / a_dim) to
+ * give those shots butt caps.
  */
 
 /** All px sizes are DEVICE pixels; `u_viewport` is `[drawingBufferWidth,
@@ -32,13 +55,18 @@ in vec2 a_pos_a;
 in vec2 a_pos_b;
 in float a_endpoint;
 in float a_side;
-in vec4 a_color;
+in vec4 a_color_from;
+in vec4 a_color_to;
 in float a_reference;
 in float a_dim;
 in float a_hide;
 in float a_highlight;
-out vec4 v_color;
-out float v_edge;
+out vec4 v_color_from;
+out vec4 v_color_to;
+out float v_alpha_mul;
+out float v_perp;
+out float v_along;
+out float v_len;
 out float v_width_mul;
 void main() {
   // Drag-hidden shots (a moving feature excluded during a move drag): collapse
@@ -47,8 +75,12 @@ void main() {
   // layers' setFilter exclusion without omitting the shot from the buffers.
   if (a_hide > 0.5) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-    v_color = vec4(0.0);
-    v_edge = 0.0;
+    v_color_from = vec4(0.0);
+    v_color_to = vec4(0.0);
+    v_alpha_mul = 1.0;
+    v_perp = 0.0;
+    v_along = 0.0;
+    v_len = 1.0;
     v_width_mul = 1.0;
     return;
   }
@@ -57,8 +89,12 @@ void main() {
   // of a segment share a_reference, so both triangles degenerate together.
   if (a_reference > 0.5 && u_hide_reference > 0.5) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-    v_color = vec4(0.0);
-    v_edge = 0.0;
+    v_color_from = vec4(0.0);
+    v_color_to = vec4(0.0);
+    v_alpha_mul = 1.0;
+    v_perp = 0.0;
+    v_along = 0.0;
+    v_len = 1.0;
     v_width_mul = 1.0;
     return;
   }
@@ -66,25 +102,44 @@ void main() {
   vec4 pb = u_matrix * vec4(a_pos_b, 0.0, 1.0);
   vec2 sa = pa.xy / pa.w;
   vec2 sb = pb.xy / pb.w;
-  vec2 dir = normalize((sb - sa) * u_viewport);
+  // Screen-pixel A->B vector (NDC delta * 0.5 * viewport) and its length; dir is
+  // the unit segment direction, normal the perpendicular. Guard a zero-length
+  // (coincident-endpoint) segment so normalize() never yields NaN.
+  vec2 segPx = (sb - sa) * u_viewport * 0.5;
+  float segLen = length(segPx);
+  vec2 dir = (segLen > 0.0001) ? (segPx / segLen) : vec2(1.0, 0.0);
   vec2 normal = vec2(-dir.y, dir.x);
   vec4 base = (a_endpoint < 0.5) ? pa : pb;
-  // Whole-segment hover emphasis (Move Segment tool): widen highlighted shots,
-  // mirroring the stock section-hover width bump (default hover_width/width = 2).
-  // The fragment recomputes its outset from the same multiplier so the AA feather
-  // scales with the widened line.
-  float widthMul = (a_highlight > 0.5) ? 2.0 : 1.0;
+  // Section emphasis level carried in a_highlight: 2 = hover, 1 = selection,
+  // 0 = none. Widen highlighted shots, mirroring the stock feature-state width
+  // bumps (hover_width/width = 4/2 = 2x, selection_width/width = 3/2 = 1.5x).
+  // Segment-hover (Move Segment), single-section hover, and panel-row hover all
+  // resolve to level 2; section selection to level 1. When a section is both
+  // hovered and selected the controller merges to level 2 (hover wins), matching
+  // the stock paint case order (hover before selected). The fragment recomputes
+  // its outset from the same multiplier so the AA feather scales with the line.
+  float widthMul = (a_highlight > 1.5) ? 2.0 : ((a_highlight > 0.5) ? 1.5 : 1.0);
   float outset = u_half_width * widthMul + u_aa;
-  vec2 offsetPx = normal * a_side * outset;
+  // Round caps: extrude by outset ALONG the segment past each endpoint (A verts
+  // backward, B verts forward) in addition to the perpendicular width offset, so
+  // the fragment's capsule SDF has room to round the ends. capSign folds the
+  // along-extension into the same clip offset; vertex count is unchanged.
+  float capSign = (a_endpoint < 0.5) ? -1.0 : 1.0;
+  vec2 offsetPx = normal * a_side * outset + dir * capSign * outset;
   vec2 offsetClip = offsetPx / u_viewport * 2.0 * base.w;
   gl_Position = vec4(base.xy + offsetClip, base.z, base.w);
+  v_color_from = a_color_from;
+  v_color_to = a_color_to;
   // Dimmed shots (anchored / immovable during move tools) draw at 0.25 and this
   // WINS over the reference 0.5 case, matching the stock line-opacity case order
   // (immovable 0.25, anchored 0.25, isReference 0.5, else 1).
-  v_color = a_color;
-  if (a_dim > 0.5) v_color.a *= 0.25;
-  else if (a_reference > 0.5) v_color.a *= 0.5;
-  v_edge = a_side;
+  v_alpha_mul = (a_dim > 0.5) ? 0.25 : ((a_reference > 0.5) ? 0.5 : 1.0);
+  // Signed perpendicular px, along-axis px (from endpoint A; the cap extension
+  // shifts each base vert by capSign*outset), and segment length px. The fragment
+  // rebuilds the capsule distance and the clamped color fraction from these.
+  v_perp = a_side * outset;
+  v_along = ((a_endpoint < 0.5) ? 0.0 : segLen) + capSign * outset;
+  v_len = segLen;
   v_width_mul = widthMul;
 }`;
 
@@ -92,17 +147,31 @@ export const LINE_FRAGMENT_SRC = `#version 300 es
 precision highp float;
 uniform float u_half_width;
 uniform float u_aa;
-in vec4 v_color;
-in float v_edge;
+in vec4 v_color_from;
+in vec4 v_color_to;
+in float v_alpha_mul;
+in float v_perp;
+in float v_along;
+in float v_len;
 in float v_width_mul;
 out vec4 fragColor;
 void main() {
   float outset = u_half_width * v_width_mul + u_aa;
-  float dist = abs(v_edge) * outset;
+  // Capsule SDF: distance to the SEGMENT [0, v_len] along-axis. In the body
+  // (0..v_len) alongClamp == v_along so dist == abs(v_perp), byte-for-byte the
+  // old butt-cap AA path; past an endpoint it is the radial distance to that
+  // endpoint, rounding the cap with the same feather.
+  float alongClamp = clamp(v_along, 0.0, v_len);
+  float dist = length(vec2(v_along - alongClamp, v_perp));
   // MapLibre line AA: feather the last u_aa px of the outset.
   float alpha = clamp(min(dist + u_aa, outset - dist) / u_aa, 0.0, 1.0);
-  float a = v_color.a * alpha;
-  fragColor = vec4(v_color.rgb * a, a);
+  // Per-endpoint depth color, interpolated by the CLAMPED along-fraction so each
+  // rounded cap holds the endpoint color exactly (stock round-cap-gradient
+  // parity); flat / severity / overlay modes have from == to (a no-op mix).
+  float t = (v_len > 0.0001) ? clamp(v_along / v_len, 0.0, 1.0) : 0.0;
+  vec4 col = mix(v_color_from, v_color_to, t);
+  float a = col.a * v_alpha_mul * alpha;
+  fragColor = vec4(col.rgb * a, a);
 }`;
 
 export const CIRCLE_VERTEX_SRC = `#version 300 es
@@ -152,12 +221,14 @@ void main() {
     return;
   }
   vec4 c = u_matrix * vec4(a_center, 0.0, 1.0);
-  // Whole-segment hover emphasis (Move Segment tool): enlarge highlighted
-  // stations, mirroring the stock section-hover radius bump (default
-  // hover_radius/radius = 1.5). Folded into the size multiplier so radius +
-  // stroke grow together; the fragment recomputes disc/stroke radii from
-  // v_size_mul, so no separate fragment change is needed.
-  float sizeMul = a_size_mul * ((a_highlight > 0.5) ? 1.5 : 1.0);
+  // Section emphasis level carried in a_highlight: 2 = hover, 1 = selection,
+  // 0 = none. Enlarge highlighted stations, mirroring the stock feature-state
+  // radius bumps (hover_radius/radius = 6/4 = 1.5x, selection_radius/radius =
+  // 5/4 = 1.25x). Folded into the size multiplier so radius + stroke grow
+  // together; the fragment recomputes disc/stroke radii from v_size_mul, so no
+  // separate fragment change is needed.
+  float hlMul = (a_highlight > 1.5) ? 1.5 : ((a_highlight > 0.5) ? 1.25 : 1.0);
+  float sizeMul = a_size_mul * hlMul;
   // Zero-datum stations render 2x (a_size_mul), so the quad extent must grow to
   // fit; the fragment recomputes disc/stroke radii with the same multiplier.
   float ext = (u_radius + u_stroke_width) * sizeMul + u_aa;

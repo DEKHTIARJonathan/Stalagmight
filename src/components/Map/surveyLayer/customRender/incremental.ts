@@ -90,6 +90,12 @@ export function sameColorGlobals(prev: DisplayColorContext, next: DisplayColorCo
   // recompute (a fresh value-map ref) forces a full rebuild. A geometry flush
   // that leaves the overlay untouched keeps the same map refs ⇒ still same.
   if (!sameOverlay(prev.overlay ?? null, next.overlay ?? null)) return false;
+  // Move-comment tint (#52) reads per-feature comment ownership the incremental
+  // diff doesn't track (adding / moving / removing a comment recolors a feature
+  // without any coord / flag / section-color change). Toggling the tool and every
+  // flush while it is active force a full rebuild; the tool is not a hot-edit path
+  // (full rebuild is ~1 ms on 4naharon), so the conservative gate is cheap.
+  if ((prev.commentTint === true) || (next.commentTint === true)) return false;
   return true;
 }
 
