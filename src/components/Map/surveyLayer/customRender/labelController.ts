@@ -11,11 +11,12 @@
  * (`readCustomLabelsGate`) are on. With either off the stock label layers stay
  * live and this is a no-op — the gate-OFF path is byte-identical to before.
  *
- * PHASE 2 SCOPE: STATION labels only. It builds station-label descriptors, hides
- * the stock `survey-station-labels` layer while active, and drives that kind's
- * visibility via a shader uniform (`setStationLabelsVisible`). The other four
- * stock text layers stay untouched this phase; Phase 3 extends `kindEnabled`,
- * the built kind set, and the suppressed-layer list.
+ * SCOPE (Phase 3): ALL FIVE kinds — shot labels, station labels, section names,
+ * station comments, shot comments. It builds every kind's descriptors, hides the
+ * five stock text layers while active, and drives each kind's visibility via a
+ * shader uniform (the `setShow*` setters). Reference-shot hiding and the
+ * move-comment palette tint are reproduced from the flags + `commentColor`
+ * resolver already threaded through the tessellator.
  *
  * FONT READINESS: the SDF atlas needs the bundled font loaded (async). If a sync
  * arrives before the font resolves, it is remembered and built once the font is
@@ -26,10 +27,12 @@ import type { GpsOrigin, DecimalPrecision } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
 import type { MapThemeColors } from '../../../../utils/themeColors';
 import { debugLog } from '../../../../utils/debugLog';
+import { commentColorForKey } from '../features';
 import { computeMercatorAnchor } from './mercator';
 import { buildLabelDescriptors, buildLabelBuffers } from './labelTessellate';
 import { labelColorContextFrom } from './labelText';
-import { LABEL_KIND, LABEL_KIND_COUNT } from './labelShaders';
+import { LABEL_KIND, LABEL_KIND_COUNT, type LabelKind } from './labelShaders';
+import { packCssColor, type Rgba8 } from './colorPack';
 import {
   GlyphAtlas,
   ensureLabelFont,
@@ -42,12 +45,15 @@ import { SurveyCustomLabelLayer, type LabelRenderData } from './surveyCustomLabe
 import { readCustomLabelsGate, CUSTOM_LABELS_SYNC_HOOK } from './labelsGate';
 import { readCustomRenderGate } from './gate';
 
-/** Stock text layers hidden while the custom LABEL layer is on (Phase 2: only
- *  station labels are drawn by the custom layer). */
-const HIDDEN_STOCK_LABEL_LAYERS = ['survey-station-labels'] as const;
-
-/** The kinds the Phase-2 build materializes (station labels only). */
-const STATION_ONLY_KINDS = new Set([LABEL_KIND.STATION_LABEL]);
+/** The stock text layer each kind replaces — suppressed while the custom label
+ *  layer is active, restored (to the kind's desired toggle) when it goes away. */
+const STOCK_LABEL_LAYER_BY_KIND: Record<LabelKind, string> = {
+  [LABEL_KIND.SHOT_LABEL]: 'survey-shot-labels',
+  [LABEL_KIND.STATION_LABEL]: 'survey-station-labels',
+  [LABEL_KIND.SECTION_NAME]: 'survey-labels',
+  [LABEL_KIND.STATION_COMMENT]: 'survey-station-comments',
+  [LABEL_KIND.SHOT_COMMENT]: 'survey-shot-comments',
+};
 
 /** Same off-the-render-stack deferral as the geometry controller. */
 function defaultScheduleRestore(fn: () => void): void {
@@ -63,6 +69,9 @@ export interface LabelSyncParams {
   showDepthGradient: boolean;
   depthRange: { min: number; max: number };
   precision?: DecimalPrecision | undefined;
+  /** move_comment tool active → comment labels use the FNV-1a palette tint
+   *  (`commentColorForKey`), mirroring the stock `commentTextColor()` (#52). */
+  commentTint?: boolean | undefined;
 }
 
 export interface SurveyLabelControllerOptions {
@@ -97,11 +106,12 @@ export class SurveyLabelController {
   private readonly scheduleRestore: (fn: () => void) => void;
   private readonly resync: (() => void) | undefined;
 
-  /** Desired station-label visibility (the setShowStationLabels toggle). Held so
-   *  a re-enable / stock restore reproduces it; drives `u_kind_visible` while
-   *  active and the stock layer's restored visibility while inactive. Default
-   *  false mirrors the stock layer's initial `visibility: 'none'`. */
-  private stationLabelsVisible = false;
+  /** Per-kind desired visibility (the setShow* toggles + comment-tool override),
+   *  indexed by {@link LabelKind}. Held so a re-enable / stock restore reproduces
+   *  it; drives `u_kind_visible` while active and each stock layer's restored
+   *  visibility while inactive. Defaults mirror the stock layers' initial
+   *  `visibility`: section names visible, everything else hidden. */
+  private kindVisible: boolean[] = [false, false, true, false, false];
   /** setShowReferenceShots state (false → collapse reference / all-reference). */
   private referenceShotsVisible = true;
 
@@ -125,15 +135,15 @@ export class SurveyLabelController {
     }
   }
 
-  /** True while the custom label layer is drawing (stock station labels hidden).
-   *  SurveyLayer reads this to route setShowStationLabels to the custom uniform
-   *  vs the stock layer's visibility. */
+  /** True while the custom label layer is drawing (stock text layers hidden).
+   *  SurveyLayer reads this to route the setShow* toggles to the custom uniforms
+   *  vs the stock layers' visibility. */
   isActive(): boolean {
     return this.active;
   }
 
   /** Re-evaluate the composed gate and apply / refresh / tear down the label
-   *  layer. Station labels only this phase. */
+   *  layer (all five kinds). */
   sync(params: LabelSyncParams): void {
     this.pendingParams = params;
     const enabled = readCustomRenderGate() && readCustomLabelsGate();
@@ -150,11 +160,27 @@ export class SurveyLabelController {
     }
   }
 
-  /** Mirror setShowStationLabels: drive the custom station-label kind's uniform
-   *  when active (stock stays suppressed); store the desired state either way so
-   *  a later enable / stock restore reproduces it. */
+  /** Mirror the five setShow* toggles: drive the kind's uniform when active
+   *  (stock stays suppressed); store the desired state either way so a later
+   *  enable / stock restore reproduces it. */
+  setShotLabelsVisible(visible: boolean): void {
+    this.setKindVisible(LABEL_KIND.SHOT_LABEL, visible);
+  }
   setStationLabelsVisible(visible: boolean): void {
-    this.stationLabelsVisible = visible;
+    this.setKindVisible(LABEL_KIND.STATION_LABEL, visible);
+  }
+  setSectionNamesVisible(visible: boolean): void {
+    this.setKindVisible(LABEL_KIND.SECTION_NAME, visible);
+  }
+  setStationCommentsVisible(visible: boolean): void {
+    this.setKindVisible(LABEL_KIND.STATION_COMMENT, visible);
+  }
+  setShotCommentsVisible(visible: boolean): void {
+    this.setKindVisible(LABEL_KIND.SHOT_COMMENT, visible);
+  }
+
+  private setKindVisible(kind: LabelKind, visible: boolean): void {
+    this.kindVisible[kind] = visible;
     if (this.active) this.pushStyle();
   }
 
@@ -168,10 +194,8 @@ export class SurveyLabelController {
    *  reference-hide) the layer folds with live zoom each frame. */
   private computeStyle(): LabelStyleInputs {
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
-    const kindEnabled = new Array(LABEL_KIND_COUNT).fill(false) as boolean[];
-    kindEnabled[LABEL_KIND.STATION_LABEL] = this.stationLabelsVisible;
     const haloColors = this.lastThemeColors ? resolveHaloColors(this.lastThemeColors) : [];
-    return { dpr, kindEnabled, haloColors, hideReference: !this.referenceShotsVisible };
+    return { dpr, kindEnabled: this.kindVisible.slice(), haloColors, hideReference: !this.referenceShotsVisible };
   }
 
   private pushStyle(): void {
@@ -179,15 +203,21 @@ export class SurveyLabelController {
     if (this.active) this.map.triggerRepaint();
   }
 
-  /** Build the GPU-ready label buffers from SoA (station labels only this phase). */
+  /** Build the GPU-ready label buffers from SoA (all five kinds). */
   private build(params: LabelSyncParams): LabelRenderData {
     const t0 = performance.now();
     const { surveyData, gpsOrigin } = params;
     this.lastThemeColors = params.themeColors;
     const [anchorX, anchorY] = computeMercatorAnchor(surveyData, gpsOrigin);
     const colorCtx = labelColorContextFrom(params.showDepthGradient, params.depthRange, params.themeColors);
+    // Comment palette tint (#52): only while move_comment is active; else comments
+    // use the flat labelColor (the tessellator's fallback). Same key + palette as
+    // colorResolvers.ts / features.ts, so the label tint matches the geometry tint.
+    const commentColor = params.commentTint
+      ? (ownerKey: string): Rgba8 => packCssColor(commentColorForKey(ownerKey))
+      : undefined;
     const descriptors = buildLabelDescriptors(
-      surveyData, gpsOrigin, anchorX, anchorY, { colorCtx, precision: params.precision }, STATION_ONLY_KINDS,
+      surveyData, gpsOrigin, anchorX, anchorY, { colorCtx, precision: params.precision, commentColor },
     );
     const buffers = buildLabelBuffers(descriptors, this.atlas!);
     debugLog('[customRender] label build', {
@@ -212,7 +242,7 @@ export class SurveyLabelController {
       const reason = layer.getDisabledReason() ?? 'unknown';
       console.warn(
         `[customRender] custom label layer failed to initialize (${reason}); ` +
-          'keeping stock station labels visible',
+          'keeping stock label layers visible',
       );
       if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
       this.setStockLabelVisibility('restore');
@@ -223,7 +253,7 @@ export class SurveyLabelController {
     this.layer = layer;
     this.setStockLabelVisibility('suppress');
     this.active = true;
-    console.info('[customRender] label layer enabled; stock station labels hidden', {
+    console.info('[customRender] label layer enabled; stock label layers hidden', {
       glyphs: data.buffers.glyphCount,
     });
     this.map.triggerRepaint();
@@ -231,7 +261,7 @@ export class SurveyLabelController {
 
   private disable(): void {
     this.teardown();
-    console.info('[customRender] label layer disabled; stock station labels restored');
+    console.info('[customRender] label layer disabled; stock label layers restored');
   }
 
   /** Remove the custom label layer + restore the stock station-label visibility
@@ -253,7 +283,7 @@ export class SurveyLabelController {
     if (!this.active || this.selfDisableScheduled) return;
     this.selfDisableScheduled = true;
     console.warn(
-      `[customRender] custom label layer self-disabled (${reason}); restoring stock station labels`,
+      `[customRender] custom label layer self-disabled (${reason}); restoring stock label layers`,
     );
     this.scheduleRestore(() => {
       this.selfDisableScheduled = false;
@@ -261,12 +291,13 @@ export class SurveyLabelController {
     });
   }
 
-  /** `suppress` → hide the stock label layers; `restore` → set them back to the
-   *  DESIRED toggle state (not blindly 'visible', unlike geometry — labels have a
-   *  meaningful user toggle). */
+  /** `suppress` → hide all five stock text layers; `restore` → set each back to
+   *  its kind's DESIRED toggle state (not blindly 'visible', unlike geometry —
+   *  labels have meaningful per-kind user toggles). */
   private setStockLabelVisibility(mode: 'suppress' | 'restore'): void {
-    const v = mode === 'suppress' ? 'none' : this.stationLabelsVisible ? 'visible' : 'none';
-    for (const id of HIDDEN_STOCK_LABEL_LAYERS) {
+    for (let k = 0; k < LABEL_KIND_COUNT; k++) {
+      const id = STOCK_LABEL_LAYER_BY_KIND[k as LabelKind];
+      const v = mode === 'suppress' ? 'none' : this.kindVisible[k] ? 'visible' : 'none';
       if (this.map.getLayer?.(id)) {
         try {
           this.map.setLayoutProperty(id, 'visibility', v);

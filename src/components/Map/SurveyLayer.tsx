@@ -3120,8 +3120,11 @@ export default class SurveyLayer {
     return { min: this.depthRange.min, max: this.depthRange.max };
   }
 
-  // Control shot data labels visibility
+  // Control shot data labels visibility. Custom label layer active: drive its
+  // uniform, leave stock suppressed (else labels double). Off: stock as before.
   setShowShotLabels(show: boolean) {
+    this.customLabels?.setShotLabelsVisible(show);
+    if (this.customLabels?.isActive()) return;
     this.map.setLayoutProperty(
       this.shotLabelsLayerId,
       'visibility',
@@ -3129,8 +3132,10 @@ export default class SurveyLayer {
     );
   }
 
-  // Control section name labels visibility
+  // Control section name labels visibility (custom uniform when active, else stock).
   setShowSectionNames(show: boolean) {
+    this.customLabels?.setSectionNamesVisible(show);
+    if (this.customLabels?.isActive()) return;
     this.map.setLayoutProperty(
       this.labelsLayerId,
       'visibility',
@@ -3152,11 +3157,14 @@ export default class SurveyLayer {
     );
   }
 
-  // Control station comments visibility
+  // Control station comments visibility. Effective visibility folds in the
+  // comment-tool override (forces visible); the custom uniform mirrors it.
   setShowStationComments(show: boolean) {
     this.cachedShowStationComments = show;
+    this.customLabels?.setStationCommentsVisible(this.commentToolActive || show);
     // Skip if comment tool override is forcing visibility on
     if (this.commentToolActive) return;
+    if (this.customLabels?.isActive()) return;
     this.map.setLayoutProperty(
       this.stationCommentsLayerId,
       'visibility',
@@ -3164,11 +3172,13 @@ export default class SurveyLayer {
     );
   }
 
-  // Control shot comments visibility
+  // Control shot comments visibility (custom uniform mirrors the effective state).
   setShowShotComments(show: boolean) {
     this.cachedShowShotComments = show;
+    this.customLabels?.setShotCommentsVisible(this.commentToolActive || show);
     // Skip if comment tool override is forcing visibility on
     if (this.commentToolActive) return;
+    if (this.customLabels?.isActive()) return;
     this.map.setLayoutProperty(
       this.shotCommentsLayerId,
       'visibility',
@@ -3328,7 +3338,9 @@ export default class SurveyLayer {
   /** Force both comment layers visible with overlap priority (comment/move_comment tool) */
   private _enableCommentToolOverride(): void {
     this.commentToolActive = true;
-    // Force visible
+    // Force visible (custom uniforms mirror the forced-visible override)
+    this.customLabels?.setStationCommentsVisible(true);
+    this.customLabels?.setShotCommentsVisible(true);
     this.map.setLayoutProperty(this.stationCommentsLayerId, 'visibility', 'visible');
     this.map.setLayoutProperty(this.shotCommentsLayerId, 'visibility', 'visible');
     // Allow overlap so comments always render on top of other labels
@@ -3339,7 +3351,9 @@ export default class SurveyLayer {
   /** Restore comment layer visibility and overlap from cached display settings */
   private _disableCommentToolOverride(): void {
     this.commentToolActive = false;
-    // Restore visibility from cached display state
+    // Restore visibility from cached display state (custom uniforms mirror it)
+    this.customLabels?.setStationCommentsVisible(this.cachedShowStationComments);
+    this.customLabels?.setShotCommentsVisible(this.cachedShowShotComments);
     this.map.setLayoutProperty(
       this.stationCommentsLayerId, 'visibility',
       this.cachedShowStationComments ? 'visible' : 'none'
@@ -4593,6 +4607,7 @@ export default class SurveyLayer {
       showDepthGradient: this.showDepthGradient,
       depthRange: this.depthRange,
       precision: this.cachedPrecision,
+      commentTint: this.activeTool === 'move_comment',
     });
   }
 

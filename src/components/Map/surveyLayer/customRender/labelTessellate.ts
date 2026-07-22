@@ -70,6 +70,17 @@ export interface LabelDescriptor {
 export interface LabelBuildContext {
   colorCtx: LabelColorContext;
   precision?: DecimalPrecision | undefined;
+  /**
+   * Comment-label text color resolver for the `move_comment` palette tint (#52).
+   * Given a comment's OWNER key (`${sectionId}:s${shotId}` for shot comments,
+   * `${sectionId}:st${stationIndex}` for station comments — the exact keys
+   * `features.ts` / `colorResolvers.ts` use), returns the packed tint color.
+   * ABSENT (the common case) = comments use the flat `labelColor`, matching the
+   * stock `commentTextColor()` when the tool is not active. Injected (never
+   * imported here) so this pure module never depends on `features.ts`
+   * (`commentColorForKey`) — no import cycle.
+   */
+  commentColor?: ((ownerKey: string) => Rgba8) | undefined;
 }
 
 /**
@@ -186,7 +197,9 @@ export function buildLabelDescriptors(
           text: formatCommentLabel(shotComment),
           anchorX: ax,
           anchorY: ay,
-          color: packCssColor(colorCtx.labelColor),
+          color: ctx.commentColor
+            ? ctx.commentColor(`${section.id}:s${data.shotIds[shotGlobalIdx]!}`)
+            : packCssColor(colorCtx.labelColor),
           ordinal: 0,
           flags: 0,
         });
@@ -232,7 +245,9 @@ export function buildLabelDescriptors(
           text: formatCommentLabel(stationComment),
           anchorX: ax,
           anchorY: ay,
-          color: packCssColor(colorCtx.labelColor),
+          color: ctx.commentColor
+            ? ctx.commentColor(`${sid}:st${stationIndex}`)
+            : packCssColor(colorCtx.labelColor),
           ordinal: 0,
           flags: 0,
         });
