@@ -50,6 +50,11 @@ export function createDragPreviewLayers(map: maplibregl.Map, ctx: DragPreviewLay
       'line-color': ctx.colorExpr,
       'line-width': ctx.shotWidth,
       'line-opacity': 0.85,
+      // Viewport (screen-px) anchor so a synchronous per-pointermove translate
+      // tracks the cursor 1:1 (see setDragPreviewTranslate + the ghost-follow
+      // note in SurveyLayer). Starts at [0,0]; the re-baked geometry carries the
+      // bulk of the offset, this only spans the residual to the live cursor.
+      'line-translate-anchor': 'viewport',
     },
   });
   map.addLayer({
@@ -62,6 +67,7 @@ export function createDragPreviewLayers(map: maplibregl.Map, ctx: DragPreviewLay
       'line-width': 3,
       'line-opacity': 0.85,
       'line-dasharray': [6, 4],
+      'line-translate-anchor': 'viewport',
     },
   });
   map.addLayer({
@@ -75,8 +81,24 @@ export function createDragPreviewLayers(map: maplibregl.Map, ctx: DragPreviewLay
       'circle-stroke-color': ctx.selectHighlight,
       'circle-stroke-width': 2.5,
       'circle-opacity': 0.85,
+      'circle-translate-anchor': 'viewport',
     },
   });
+}
+
+/**
+ * Apply a synchronous screen-space (viewport-anchored) translate to every
+ * drag-preview layer at once, so all moving geometry follows the cursor in
+ * lockstep with no worker round-trip (a bare `setPaintProperty`, applied on the
+ * next render). Uniform across shots / closures / stations, so they cannot skew
+ * apart. Idempotent + guarded for missing layers (mid-teardown / never created).
+ */
+export function setDragPreviewTranslate(map: maplibregl.Map, offset: [number, number]): void {
+  for (const id of ALL_LAYER_IDS) {
+    if (!map.getLayer(id)) continue;
+    const prop = id === STATIONS_LAYER ? 'circle-translate' : 'line-translate';
+    map.setPaintProperty(id, prop, offset);
+  }
 }
 
 /** Remove the unified drag-preview source and layers (idempotent). */
