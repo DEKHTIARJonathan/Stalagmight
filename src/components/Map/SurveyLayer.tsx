@@ -497,6 +497,25 @@ export default class SurveyLayer {
     'stationFeatures',
     'shotGradientFeatures',
   ];
+
+  /**
+   * True while the custom WebGL LABEL layer is drawing and has taken over the
+   * three label VT groups (#customRender labels / #mem). Those dedicated
+   * `stalx://` sources then stop building payloads + holding registry / tile
+   * caches — nothing stock consumes them (the five stock text layers are hidden,
+   * the custom layer draws every label AND comment). Flipped by the label
+   * controller's onActiveChange callback; a transition to `false` (gate opt-out /
+   * fail-safe self-disable) re-publishes them from cache. INDEPENDENT of
+   * {@link customBulkSuppressed}: custom labels over STOCK geometry is the default
+   * shipping combo (labels gate default-on, geometry gate default-off). */
+  private customLabelsSuppressed = false;
+  /** Label VT groups the custom label layer replaces. Comments ride the shot /
+   *  station label sources, so dropping these three covers comments too. */
+  private static readonly BULK_LABEL_GROUPS: readonly SurveyFeatureGroupKey[] = [
+    'sectionLabelFeatures',
+    'shotLabelFeatures',
+    'stationLabelFeatures',
+  ];
   /** Monotonic tile-URL version for force-emptying a dropped bulk source. Kept
    *  far above any registry version so a bump never collides with a live one. */
   private bulkDropSeq = 1_000_000_000;
@@ -558,6 +577,7 @@ export default class SurveyLayer {
     // resyncCustomRenderFromStore syncs BOTH controllers, so one hook covers both.
     this.customLabels = new SurveyLabelController(map, undefined, {
       resync: () => this.resyncCustomRenderFromStore(),
+      onActiveChange: (active) => this.onCustomLabelsActiveChange(active),
     });
   }
 
@@ -4655,15 +4675,27 @@ export default class SurveyLayer {
 
   /**
    * Whether a bulk group's stock `stalx://` source should be DROPPED right now
-   * (#customRender / #mem) — true only while the custom layer suppresses stock
-   * AND nothing stock still consumes the source:
+   * (#customRender / #mem) — true only while the matching custom layer suppresses
+   * stock AND nothing stock still consumes the source:
+   *   - label groups (section / shot / station labels): droppable while the custom
+   *     LABEL layer is active. Comments ride the shot/station label sources, so
+   *     dropping those covers them too — the custom layer draws every label AND
+   *     comment. Keyed on {@link customLabelsSuppressed}, INDEPENDENT of the
+   *     geometry suppression (custom labels + stock geometry is the default combo).
    *   - shot-gradients: always droppable (the custom layer draws the gradient).
    *   - shots / stations: droppable EXCEPT while a measured path is set — the
    *     stock survey-measure-path overlay (not hidden by the controller) reads
    *     the `-shots` source, and its per-feature measure content spans both.
-   * Non-bulk groups (labels, closures) are never dropped.
+   * Loop closures keep the GeoJSON path and are never dropped.
    */
   private shouldDropBulkSource(group: SurveyFeatureGroupKey): boolean {
+    if (
+      group === 'sectionLabelFeatures' ||
+      group === 'shotLabelFeatures' ||
+      group === 'stationLabelFeatures'
+    ) {
+      return this.customLabelsSuppressed;
+    }
     if (!this.customBulkSuppressed) return false;
     if (group === 'shotGradientFeatures') return true;
     if (group === 'shotFeatures' || group === 'stationFeatures') {
@@ -4672,10 +4704,13 @@ export default class SurveyLayer {
     return false;
   }
 
-  /** The bulk groups to skip building + publishing now. Passed to the worker so
-   *  it never converts their vt payload; also drives applyFeatureChunk's drop. */
+  /** The bulk + label groups to skip building + publishing now. Passed to the
+   *  worker so it never converts their vt payload; also drives applyFeatureChunk's
+   *  drop for the sync / inline / granularity-swap paths. */
   private suppressedBulkGroups(): SurveyFeatureGroupKey[] {
-    return SurveyLayer.BULK_GEOMETRY_GROUPS.filter((g) => this.shouldDropBulkSource(g));
+    return [...SurveyLayer.BULK_GEOMETRY_GROUPS, ...SurveyLayer.BULK_LABEL_GROUPS].filter((g) =>
+      this.shouldDropBulkSource(g),
+    );
   }
 
   /**
@@ -4714,8 +4749,42 @@ export default class SurveyLayer {
     this.customBulkSuppressed = active;
     if (!hasLiveStyle(this.map)) return;
     if (active) {
-      for (const group of this.suppressedBulkGroups()) this.dropBulkSource(group);
-    } else if (
+      for (const group of SurveyLayer.BULK_GEOMETRY_GROUPS) {
+        if (this.shouldDropBulkSource(group)) this.dropBulkSource(group);
+      }
+    } else {
+      this.rebuildFromCacheIfIdle();
+    }
+  }
+
+  /**
+   * The custom LABEL layer's drawing state flipped (#customRender labels / #mem).
+   * The mirror of {@link onCustomActiveChange} for the three label VT groups,
+   * driven independently by the label controller's onActiveChange. ON: drop the
+   * stock label sources (comments ride shot/station labels, so those cover them).
+   * OFF (gate opt-out / fail-safe self-disable): re-publish from cache so the
+   * stock label path comes back completely — unless a flush is already in flight
+   * that will re-consult suppression and publish them.
+   */
+  private onCustomLabelsActiveChange(active: boolean): void {
+    if (active === this.customLabelsSuppressed) return;
+    this.customLabelsSuppressed = active;
+    if (!hasLiveStyle(this.map)) return;
+    if (active) {
+      for (const group of SurveyLayer.BULK_LABEL_GROUPS) {
+        if (this.shouldDropBulkSource(group)) this.dropBulkSource(group);
+      }
+    } else {
+      this.rebuildFromCacheIfIdle();
+    }
+  }
+
+  /** Re-publish every source from cached geometry once no full build is already
+   *  in flight / scheduled (a flush calls syncCustomRender first, so its own
+   *  applyFeatureChunk re-consults the now-cleared suppression). Shared by both
+   *  custom-render restore paths (geometry + labels). */
+  private rebuildFromCacheIfIdle(): void {
+    if (
       !this.updateScheduled &&
       this.pendingUpdateArgs === null &&
       this.fullUpdateInFlightCount === 0 &&
