@@ -18,6 +18,18 @@
  * move-comment palette tint are reproduced from the flags + `commentColor`
  * resolver already threaded through the tessellator.
  *
+ * SCOPE (Phase 4): the build is now VIEWPORT-SCOPED with screen-space COLLISION.
+ * Only anchors inside the padded viewport build; below the label-build zoom
+ * (13.5/13 hysteresis) only the cheap section names build (down to their own
+ * minzoom 10), below 10 nothing. A greedy grid declutters the on-screen set
+ * (`labelCollide.ts`), baking `LABEL_FLAG.HIDE` into the fresh buffer. The build
+ * runs synchronously on every `sync()` (edits stay immediate — the whole point of
+ * this project) AND on camera settle via a controller-owned moveend/zoomend
+ * listener, coalesced to one rebuild per settle and never fired mid-animation.
+ * A per-kind toggle stays a pure uniform flip (no rebuild) as in Phase 3; its
+ * effect on the collision candidate set lands at the next build (camera settle /
+ * edit) rather than immediately — see the note on {@link setKindVisible}.
+ *
  * FONT READINESS: the SDF atlas needs the bundled font loaded (async). If a sync
  * arrives before the font resolves, it is remembered and built once the font is
  * ready (then `triggerRepaint`); every later sync is synchronous.
@@ -28,10 +40,19 @@ import type { SurveyData } from '../../../../types/survey-data';
 import type { MapThemeColors } from '../../../../utils/themeColors';
 import { debugLog } from '../../../../utils/debugLog';
 import { commentColorForKey } from '../features';
+import { lngLatToMercator } from '../vectorTileData';
 import { computeMercatorAnchor } from './mercator';
-import { buildLabelDescriptors, buildLabelBuffers } from './labelTessellate';
+import {
+  buildLabelDescriptors,
+  shapeDescriptors,
+  buildLabelBuffersFromShaped,
+  type ViewportRel,
+} from './labelTessellate';
+import { shapedExtent } from './labelLayout';
+import { collideLabels } from './labelCollide';
 import { labelColorContextFrom } from './labelText';
-import { LABEL_KIND, LABEL_KIND_COUNT, type LabelKind } from './labelShaders';
+import { LABEL_KIND, LABEL_KIND_COUNT, LABEL_FLAG, type LabelKind } from './labelShaders';
+import { LABEL_KIND_STYLE } from './labelStyle';
 import { packCssColor, type Rgba8 } from './colorPack';
 import {
   GlyphAtlas,
@@ -55,11 +76,45 @@ const STOCK_LABEL_LAYER_BY_KIND: Record<LabelKind, string> = {
   [LABEL_KIND.SHOT_COMMENT]: 'survey-shot-comments',
 };
 
-/** Same off-the-render-stack deferral as the geometry controller. */
+/** Same off-the-render-stack deferral as the geometry controller. Used both for
+ *  the fail-safe restore and to coalesce camera-settle viewport rebuilds. */
 function defaultScheduleRestore(fn: () => void): void {
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => fn());
   else if (typeof queueMicrotask === 'function') queueMicrotask(fn);
   else setTimeout(fn, 0);
+}
+
+// ─── Phase 4: viewport scoping + camera-triggered rebuild ─────────────────────
+
+/** Zoom hysteresis for the EXPENSIVE label kinds (shot/station labels + comments),
+ *  matching the stock `SurveyLayer.LABEL_BUILD_ZOOM` / `LABEL_DROP_ZOOM` +
+ *  `labelBuildDecision.ts`: build once past 13.5, drop only once below 13. Below
+ *  the band those kinds build NOTHING. */
+const LABEL_BUILD_ZOOM = 13.5;
+const LABEL_DROP_ZOOM = 13;
+/** Section names are cheap (1 per section) and orienting, so they follow their
+ *  own `minzoom` (10, the stock `survey-labels` layer) rather than the expensive
+ *  band — they still show at z10..13.5. Below 10 the shader hides them anyway. */
+const SECTION_NAME_MIN_ZOOM = LABEL_KIND_STYLE[LABEL_KIND.SECTION_NAME].minzoom;
+/** Padded-viewport margin as a fraction of the viewport span, applied to EACH
+ *  side (0.5 → the build box is 2× the viewport per axis, a half-screen margin
+ *  all round). Generous enough that a modest pan does not reach blank areas
+ *  before the next camera-settle rebuild; tunable. */
+const VIEWPORT_PADDING = 0.5;
+
+/** Below the expensive band but at/above section minzoom: only section names. */
+const SECTION_ONLY_KINDS: ReadonlySet<LabelKind> = new Set([LABEL_KIND.SECTION_NAME]);
+/** Below section minzoom: nothing builds. */
+const NO_KINDS: ReadonlySet<LabelKind> = new Set();
+
+/** The padded viewport rect (anchor-relative mercator) + a projector from
+ *  anchor-relative mercator to CSS screen px — both derived from ONE
+ *  `map.getBounds()` read. `null` when the map cannot supply bounds / a canvas
+ *  (unit-test fakes), in which case the build skips viewport scoping + collision
+ *  (whole-survey, Phase-3 behavior). */
+interface ViewportContext {
+  viewport: ViewportRel;
+  project: (relX: number, relY: number) => readonly [number, number];
 }
 
 export interface LabelSyncParams {
@@ -77,6 +132,9 @@ export interface LabelSyncParams {
 export interface SurveyLabelControllerOptions {
   /** Defer the fail-safe restore off the render stack (tests inject inline). */
   scheduleRestore?: (fn: () => void) => void;
+  /** Coalesce + defer a camera-settle viewport rebuild off the render stack
+   *  (tests inject inline to run it synchronously). */
+  scheduleRebuild?: (fn: () => void) => void;
   /** Fresh-geometry resync backing the runtime hook (SurveyLayer reads the store).
    *  Absent (unit tests): replay the cached snapshot. */
   resync?: () => void;
@@ -104,7 +162,17 @@ export class SurveyLabelController {
   private hookInstalled = false;
   private selfDisableScheduled = false;
   private readonly scheduleRestore: (fn: () => void) => void;
+  private readonly scheduleRebuild: (fn: () => void) => void;
   private readonly resync: (() => void) | undefined;
+
+  /** Hysteresis latch for the expensive kinds (§4): true once past LABEL_BUILD_ZOOM,
+   *  stays true until below LABEL_DROP_ZOOM. Drives {@link kindsToBuild}. */
+  private fullLabelsBuilt = false;
+  /** One camera-settle viewport rebuild is queued (coalesces a moveend+zoomend
+   *  burst into a single rebuild). */
+  private viewportRebuildScheduled = false;
+  /** Bound moveend/zoomend handler, kept for `off()` in destroy. */
+  private boundCameraSettle: (() => void) | null = null;
 
   /** Per-kind desired visibility (the setShow* toggles + comment-tool override),
    *  indexed by {@link LabelKind}. Held so a re-enable / stock restore reproduces
@@ -119,8 +187,16 @@ export class SurveyLabelController {
     this.map = map;
     this.layerId = layerId;
     this.scheduleRestore = opts.scheduleRestore ?? defaultScheduleRestore;
+    this.scheduleRebuild = opts.scheduleRebuild ?? defaultScheduleRestore;
     this.resync = opts.resync;
     this.installHook();
+    // Camera-settle viewport rebuild (§4): re-scope + re-collide once the camera
+    // stops. Coalesced, never per frame, never mid-animation. Both events route
+    // here (a zoom fires moveend too — coalescing collapses the pair). Guarded
+    // for unit-test fakes without an event emitter.
+    this.boundCameraSettle = () => this.onCameraSettle();
+    this.map.on?.('moveend', this.boundCameraSettle);
+    this.map.on?.('zoomend', this.boundCameraSettle);
     if (opts.atlas) {
       this.atlas = opts.atlas;
     } else {
@@ -181,6 +257,14 @@ export class SurveyLabelController {
 
   private setKindVisible(kind: LabelKind, visible: boolean): void {
     this.kindVisible[kind] = visible;
+    // A toggle is a pure uniform flip (§7): the shader hides/shows the kind with
+    // no buffer rebuild. Collision was baked at the last build with the previous
+    // candidate set, so a toggled-off kind still occupies collision space (and a
+    // toggled-on kind is not yet re-decluttered against) until the next build
+    // (camera settle / edit) re-runs collision with the current `kindVisible`.
+    // The design permits this approximation (§5, "or accept the approximation");
+    // Phase 5's flags-only re-upload path can rerun collision on toggle if the
+    // residual staleness proves visible.
     if (this.active) this.pushStyle();
   }
 
@@ -203,7 +287,13 @@ export class SurveyLabelController {
     if (this.active) this.map.triggerRepaint();
   }
 
-  /** Build the GPU-ready label buffers from SoA (all five kinds). */
+  /**
+   * Build the GPU-ready label buffers from SoA, VIEWPORT-SCOPED with COLLISION
+   * baked in (§4/§5). Below the expensive-kinds zoom band only section names
+   * build; below their minzoom nothing does. In a unit-test fake with no
+   * `getZoom` the zoom gate + viewport + collision are all skipped (whole-survey,
+   * all kinds — the Phase-3 behavior those tests lock).
+   */
   private build(params: LabelSyncParams): LabelRenderData {
     const t0 = performance.now();
     const { surveyData, gpsOrigin } = params;
@@ -216,18 +306,123 @@ export class SurveyLabelController {
     const commentColor = params.commentTint
       ? (ownerKey: string): Rgba8 => packCssColor(commentColorForKey(ownerKey))
       : undefined;
+
+    const zoom = this.map.getZoom?.();
+    const hasData = surveyData.stationCount > 0;
+    const kinds = zoom === undefined ? undefined : this.kindsToBuild(zoom, hasData);
+    const vpCtx = zoom === undefined ? null : this.computeViewportContext(anchorX, anchorY);
+
     const descriptors = buildLabelDescriptors(
-      surveyData, gpsOrigin, anchorX, anchorY, { colorCtx, precision: params.precision, commentColor },
+      surveyData, gpsOrigin, anchorX, anchorY,
+      { colorCtx, precision: params.precision, commentColor },
+      kinds, vpCtx?.viewport,
     );
-    const buffers = buildLabelBuffers(descriptors, this.atlas!);
+    const shaped = shapeDescriptors(descriptors, this.atlas!);
+
+    // Collision (§5): bake HIDE into the fresh flags BEFORE emit, so the loser
+    // set rides the same buffer with no separate upload. Only runs when the map
+    // can project (a fake without bounds/canvas keeps every label, no collision).
+    let hiddenCount = 0;
+    if (vpCtx !== null && zoom !== undefined) {
+      const extents = shaped.map(shapedExtent);
+      const hidden = collideLabels(descriptors, extents, {
+        zoom,
+        project: vpCtx.project,
+        kindVisible: this.kindVisible,
+        hideReference: !this.referenceShotsVisible,
+      });
+      for (const i of hidden) descriptors[i]!.flags |= LABEL_FLAG.HIDE;
+      hiddenCount = hidden.length;
+    }
+
+    const buffers = buildLabelBuffersFromShaped(descriptors, shaped);
     debugLog('[customRender] label build', {
       ms: +(performance.now() - t0).toFixed(1),
+      zoom: zoom === undefined ? null : +zoom.toFixed(2),
       labels: descriptors.length,
+      hidden: hiddenCount,
       glyphs: buffers.glyphCount,
       mb: +(buffers.byteLength / 1048576).toFixed(2),
     });
     this.lastData = { anchorX, anchorY, buffers, atlas: this.atlas! };
     return this.lastData;
+  }
+
+  /**
+   * Which kinds to build at `zoom` (§4). The expensive kinds (shot/station
+   * labels + comments) follow the 13.5/13 hysteresis; section names follow their
+   * own minzoom (10) so they still show at z10..13.5. Returns `undefined` (=
+   * every kind) once past the band, a section-only set in [10, band), or an
+   * empty set below 10. Also latches {@link fullLabelsBuilt} for the hysteresis.
+   */
+  private kindsToBuild(zoom: number, hasData: boolean): ReadonlySet<LabelKind> | undefined {
+    const wantFull = this.fullLabelsBuilt ? zoom >= LABEL_DROP_ZOOM : zoom >= LABEL_BUILD_ZOOM;
+    this.fullLabelsBuilt = wantFull && hasData;
+    if (wantFull) return undefined;
+    if (zoom >= SECTION_NAME_MIN_ZOOM) return SECTION_ONLY_KINDS;
+    return NO_KINDS;
+  }
+
+  /**
+   * The padded viewport rect (anchor-relative mercator) + a mercator→CSS-px
+   * projector, both from one `map.getBounds()`. Rotation + pitch are disabled
+   * app-wide (north-up, 0° pitch), so mercator→screen is an exact axis-aligned
+   * affine — no per-label `map.project`. `null` when the map cannot supply
+   * bounds / a canvas (unit-test fakes → no viewport scoping, no collision).
+   */
+  private computeViewportContext(anchorX: number, anchorY: number): ViewportContext | null {
+    const bounds = this.map.getBounds?.();
+    const canvas = this.map.getCanvas?.();
+    if (!bounds || !canvas) return null;
+    const [minX] = lngLatToMercator(bounds.getWest(), bounds.getNorth()); // x ← lng
+    const [maxX] = lngLatToMercator(bounds.getEast(), bounds.getNorth());
+    const [, minY] = lngLatToMercator(bounds.getWest(), bounds.getNorth()); // y ← lat; north → min
+    const [, maxY] = lngLatToMercator(bounds.getWest(), bounds.getSouth()); // south → max
+    const spanX = maxX - minX;
+    const spanY = maxY - minY;
+    const width = canvas.clientWidth || canvas.width;
+    const height = canvas.clientHeight || canvas.height;
+    if (!(spanX > 0) || !(spanY > 0) || !(width > 0) || !(height > 0)) return null;
+    const padX = spanX * VIEWPORT_PADDING;
+    const padY = spanY * VIEWPORT_PADDING;
+    const viewport: ViewportRel = {
+      minX: minX - padX - anchorX,
+      maxX: maxX + padX - anchorX,
+      minY: minY - padY - anchorY,
+      maxY: maxY + padY - anchorY,
+    };
+    const sx = width / spanX;
+    const sy = height / spanY;
+    const project = (relX: number, relY: number): readonly [number, number] => [
+      (relX + anchorX - minX) * sx,
+      (relY + anchorY - minY) * sy,
+    ];
+    return { viewport, project };
+  }
+
+  /**
+   * A camera gesture ended (moveend/zoomend). Coalesce a burst into ONE deferred
+   * viewport rebuild (never per frame, §4); the deferred callback skips if the
+   * camera is still animating (a chained ease) and waits for the next settle.
+   */
+  private onCameraSettle(): void {
+    if (!this.active || this.viewportRebuildScheduled) return;
+    this.viewportRebuildScheduled = true;
+    this.scheduleRebuild(() => {
+      this.viewportRebuildScheduled = false;
+      if (!this.active) return;
+      if (this.map.isMoving?.()) return; // still animating — the next settle rebuilds
+      this.rebuildViewport();
+    });
+  }
+
+  /** Re-scope + re-collide from the last sync params (geometry unchanged on a
+   *  camera move, so replaying them is correct and cheap) and swap the buffer. */
+  private rebuildViewport(): void {
+    if (!this.active || !this.atlas || !this.pendingParams) return;
+    const data = this.build(this.pendingParams);
+    this.layer?.update(data);
+    this.map.triggerRepaint?.();
   }
 
   private enable(data: LabelRenderData): void {
@@ -321,6 +516,11 @@ export class SurveyLabelController {
 
   destroy(): void {
     if (this.active) this.disable();
+    if (this.boundCameraSettle) {
+      this.map.off?.('moveend', this.boundCameraSettle);
+      this.map.off?.('zoomend', this.boundCameraSettle);
+      this.boundCameraSettle = null;
+    }
     if (this.hookInstalled && typeof window !== 'undefined') {
       delete (window as unknown as Record<string, unknown>)[CUSTOM_LABELS_SYNC_HOOK];
       this.hookInstalled = false;

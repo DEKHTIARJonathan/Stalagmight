@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import { emptySurveyData, STATION_FLAG_IS_ZERO_DATUM, type SurveyData } from '../../../../../types/survey-data';
 import type { MapThemeColors } from '../../../../../utils/themeColors';
-import { GlyphAtlas } from '../glyphAtlas';
+import { GlyphAtlas, SDF_BUFFER, type GlyphRasterizer, type RasterizedGlyph } from '../glyphAtlas';
 import { LABEL_KIND } from '../labelShaders';
+import type { LabelRenderData } from '../surveyCustomLabelLayer';
 import { SurveyLabelController, type LabelSyncParams } from '../labelController';
 
 /**
@@ -409,5 +410,233 @@ describe('SurveyLabelController teardown', () => {
     c.destroy();
     expect(removed).toContain(CUSTOM_ID);
     expect(visibility[STOCK_LABEL]).toBe('visible');
+  });
+});
+
+// ─── Phase 4: viewport scoping + collision + camera-triggered rebuild ─────────
+
+/** Fixed-metric fake atlas (one 10x18 quad per non-space char) so a build
+ *  produces real glyphs — needed to inspect which KINDS the zoom gate built. */
+function fakeGlyphAtlas(): GlyphAtlas {
+  const raster: GlyphRasterizer = (c: string): RasterizedGlyph => {
+    const empty = c === ' ';
+    const w = empty ? 0 : 10;
+    const h = empty ? 0 : 18;
+    return {
+      data: new Uint8Array(Math.max(0, w * h)),
+      width: w,
+      height: h,
+      glyphWidth: Math.max(0, w - 2 * SDF_BUFFER),
+      glyphHeight: Math.max(0, h - 2 * SDF_BUFFER),
+      glyphTop: 15,
+      glyphLeft: 1,
+      glyphAdvance: empty ? 6 : 12,
+    };
+  };
+  return new GlyphAtlas({ rasterizer: raster });
+}
+
+interface CameraMap extends FakeMap {
+  state: { zoom: number; moving: boolean };
+  fire: (type: string) => void;
+}
+
+/** Fake map with camera hooks (getZoom / getBounds / getCanvas / isMoving /
+ *  on / off) so the Phase-4 zoom gate + viewport + camera-settle rebuild run. A
+ *  wide bounds admits the whole fixture; `state` drives zoom + isMoving. */
+function makeCameraMap(zoom = 18): CameraMap {
+  const base = makeFakeMap();
+  const state = { zoom, moving: false };
+  const listeners = new Map<string, Set<() => void>>();
+  const extra = {
+    getZoom: () => state.zoom,
+    isMoving: () => state.moving,
+    getBounds: () => ({
+      getWest: () => -0.01,
+      getEast: () => 0.01,
+      getNorth: () => 0.01,
+      getSouth: () => -0.01,
+    }),
+    getCanvas: () => ({ clientWidth: 800, clientHeight: 600, width: 800, height: 600 }),
+    on: (type: string, fn: () => void) => {
+      const set = listeners.get(type) ?? new Set<() => void>();
+      set.add(fn);
+      listeners.set(type, set);
+    },
+    off: (type: string, fn: () => void) => {
+      listeners.get(type)?.delete(fn);
+    },
+  };
+  Object.assign(base.map as unknown as Record<string, unknown>, extra);
+  const fire = (type: string): void => {
+    for (const fn of listeners.get(type) ?? []) fn();
+  };
+  return { ...base, state, fire };
+}
+
+/** The distinct label KINDS present in the last-built buffer (via a_kind). */
+function builtKinds(layer: FakeLabelLayer): Set<number> {
+  const data = layer.data as LabelRenderData;
+  return new Set(Array.from(data.buffers.kind));
+}
+
+/** Deferred rebuild scheduler holder (drives coalescing tests). */
+function rebuildHolder(): { fn: (() => void) | null; count: number; run: () => void } {
+  const h2 = {
+    fn: null as (() => void) | null,
+    count: 0,
+    run(): void {
+      const f = h2.fn;
+      h2.fn = null;
+      f?.();
+    },
+  };
+  return h2;
+}
+
+type FakeLabelLayer = NonNullable<typeof h.layerState.last>;
+
+function cameraController(map: MaplibreMap, opts: Record<string, unknown> = {}): SurveyLabelController {
+  return new SurveyLabelController(map, undefined, { atlas: fakeGlyphAtlas(), ...opts });
+}
+
+describe('SurveyLabelController zoom gate (viewport build set)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.render = true;
+    h.gate.labels = true;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('builds all kinds above the build zoom (13.5)', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.sync(makeParams());
+    const kinds = builtKinds(h.layerState.last!);
+    // Fixture has shot labels, station labels, section names (no comments).
+    expect(kinds.has(LABEL_KIND.SHOT_LABEL)).toBe(true);
+    expect(kinds.has(LABEL_KIND.STATION_LABEL)).toBe(true);
+    expect(kinds.has(LABEL_KIND.SECTION_NAME)).toBe(true);
+  });
+
+  it('builds ONLY section names between section-minzoom (10) and the build band', () => {
+    const cam = makeCameraMap(12);
+    const c = cameraController(cam.map);
+    c.sync(makeParams());
+    expect(builtKinds(h.layerState.last!)).toEqual(new Set([LABEL_KIND.SECTION_NAME]));
+  });
+
+  it('builds nothing below section minzoom (10)', () => {
+    const cam = makeCameraMap(8);
+    const c = cameraController(cam.map);
+    c.sync(makeParams());
+    const data = h.layerState.last!.data as LabelRenderData;
+    expect(data.buffers.glyphCount).toBe(0);
+  });
+
+  it('keeps the full label set on the way down through the hysteresis band [13, 13.5)', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.sync(makeParams()); // build full at 18
+    cam.state.zoom = 13.2; // inside the band, still >= drop (13)
+    c.sync(makeParams());
+    // Hysteresis: already-built stays full (shot labels present at 13.2).
+    expect(builtKinds(h.layerState.last!).has(LABEL_KIND.SHOT_LABEL)).toBe(true);
+    // A FRESH controller at the same 13.2 builds section-only (below build 13.5).
+    const fresh = cameraController(makeCameraMap(13.2).map);
+    fresh.sync(makeParams());
+    expect(builtKinds(h.layerState.last!)).toEqual(new Set([LABEL_KIND.SECTION_NAME]));
+  });
+});
+
+describe('SurveyLabelController camera-settle rebuild', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.render = true;
+    h.gate.labels = true;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('rebuilds the viewport on a camera settle (moveend)', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map, { scheduleRebuild: (fn: () => void) => fn() });
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    const before = layer.updateCalls;
+    cam.fire('moveend');
+    expect(layer.updateCalls).toBe(before + 1);
+  });
+
+  it('coalesces a moveend + zoomend burst into a single rebuild', () => {
+    const cam = makeCameraMap(18);
+    const hold = rebuildHolder();
+    const c = cameraController(cam.map, {
+      scheduleRebuild: (fn: () => void) => {
+        hold.fn = fn;
+        hold.count++;
+      },
+    });
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    const before = layer.updateCalls;
+    cam.fire('moveend');
+    cam.fire('zoomend');
+    // Only one rebuild was scheduled (the second event coalesced).
+    expect(hold.count).toBe(1);
+    hold.run();
+    expect(layer.updateCalls).toBe(before + 1);
+    // A later settle schedules a fresh rebuild.
+    cam.fire('moveend');
+    expect(hold.count).toBe(2);
+  });
+
+  it('never rebuilds mid-animation (isMoving) — waits for the next settle', () => {
+    const cam = makeCameraMap(18);
+    const hold = rebuildHolder();
+    const c = cameraController(cam.map, {
+      scheduleRebuild: (fn: () => void) => {
+        hold.fn = fn;
+      },
+    });
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    const before = layer.updateCalls;
+    cam.state.moving = true;
+    cam.fire('moveend');
+    hold.run(); // camera still animating → skip
+    expect(layer.updateCalls).toBe(before);
+    cam.state.moving = false;
+    cam.fire('moveend');
+    hold.run(); // settled → rebuild
+    expect(layer.updateCalls).toBe(before + 1);
+  });
+
+  it('an edit sync() rebuilds synchronously (no scheduler)', () => {
+    const cam = makeCameraMap(18);
+    let scheduled = 0;
+    const c = cameraController(cam.map, { scheduleRebuild: () => scheduled++ });
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    const before = layer.updateCalls;
+    c.sync(makeParams()); // an edit re-sync
+    expect(layer.updateCalls).toBe(before + 1);
+    expect(scheduled).toBe(0); // the edit path never defers
+  });
+
+  it('does not rebuild after destroy (listeners removed)', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map, { scheduleRebuild: (fn: () => void) => fn() });
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    c.destroy();
+    const after = layer.updateCalls;
+    expect(() => cam.fire('moveend')).not.toThrow();
+    expect(layer.updateCalls).toBe(after);
   });
 });

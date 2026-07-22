@@ -472,8 +472,10 @@ export default class SurveyLayer {
   // `stalagmight_custom_render` gate is on; see surveyLayer/customRender/.
   private customRender: SurveyCustomController | null = null;
   // Flag-gated custom WebGL LABEL layer (#customRender labels). No-op unless BOTH
-  // the render gate AND `stalagmight_custom_labels` are on. Station labels only
-  // this phase; drives the stock `survey-station-labels` layer's suppression.
+  // the render gate AND `stalagmight_custom_labels` are on. Draws all five label
+  // kinds, VIEWPORT-SCOPED with screen-space collision, rebuilding on camera
+  // settle (its own moveend/zoomend listener); suppresses the five stock text
+  // layers while active.
   private customLabels: SurveyLabelController | null = null;
 
   /**
@@ -4599,7 +4601,8 @@ export default class SurveyLayer {
       stationStrokePx: 1,
     });
     // Custom LABEL layer (#customRender labels). Shares surveyData + theme; its
-    // own composed gate no-ops when off. Station labels only this phase.
+    // own composed gate no-ops when off. Builds all five kinds, viewport-scoped
+    // with collision; a synchronous rebuild here keeps the edit path immediate.
     this.customLabels?.sync({
       surveyData,
       gpsOrigin: this.gpsOrigin,
