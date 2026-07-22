@@ -291,9 +291,11 @@ export function countValidShots(
  * `colorForShot` path (byte-identical to the previous behavior).
  */
 // Per-segment vertex template: [endpoint, side] for the 4 corners.
-// v0 A-left, v1 A-right, v2 B-left, v3 B-right.
-const LINE_EP = [0, 0, 1, 1];
-const LINE_SIDE = [-1, 1, -1, 1];
+// v0 A-left, v1 A-right, v2 B-left, v3 B-right. Exported so the drag-ghost
+// tessellator (ghostTessellate.ts) emits capsule quads with the SAME vertex
+// layout — one source of truth for the extrusion the round-cap shaders assume.
+export const LINE_EP = [0, 0, 1, 1];
+export const LINE_SIDE = [-1, 1, -1, 1];
 
 /**
  * Optional per-shot resolvers/predicates a section emit reads. Bundled so the
@@ -584,8 +586,9 @@ export function computeLineDim(
 }
 
 // Unit corners: v0 bottom-left, v1 bottom-right, v2 top-right, v3 top-left.
-const CIRCLE_CX = [-1, 1, 1, -1];
-const CIRCLE_CY = [-1, -1, 1, 1];
+// Exported so the drag-ghost tessellator reuses the same station quad template.
+export const CIRCLE_CX = [-1, 1, 1, -1];
+export const CIRCLE_CY = [-1, -1, 1, 1];
 
 /** Optional per-station resolvers/predicates one station emit reads. */
 export interface CircleStationInputs {
