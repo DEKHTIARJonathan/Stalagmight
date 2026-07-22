@@ -76,13 +76,6 @@ describe('computeLabelUniforms', () => {
     expect(computeLabelUniforms(18, inputs()).opacity[S]).toBeCloseTo(1, 6);
   });
 
-  it('carries the zoom-band decimation modulus (station) and 1 for section names', () => {
-    expect(computeLabelUniforms(15, inputs()).decimMod[S]).toBe(5);
-    expect(computeLabelUniforms(17, inputs()).decimMod[S]).toBe(2);
-    expect(computeLabelUniforms(19, inputs()).decimMod[S]).toBe(1);
-    expect(computeLabelUniforms(19, inputs()).decimMod[SEC]).toBe(1);
-  });
-
   it('gates kind visibility on the toggle AND the static minzoom', () => {
     // Station minzoom 14: hidden below, shown at/above when enabled.
     expect(computeLabelUniforms(13.9, inputs()).kindVisible[S]).toBe(0);
@@ -122,20 +115,16 @@ describe('computeLabelUniforms — all five kinds (stock parity)', () => {
     expect(LABEL_KIND_STYLE[SHOT].haloWidth).toBe(2);
     expect(computeLabelUniforms(13.9, inputs()).kindVisible[SHOT]).toBe(0);
     expect(computeLabelUniforms(14, inputs()).kindVisible[SHOT]).toBe(1);
-    // Shot labels decimate on the same zoom bands as station labels.
-    expect(computeLabelUniforms(15, inputs()).decimMod[SHOT]).toBe(5);
-    expect(computeLabelUniforms(19, inputs()).decimMod[SHOT]).toBe(1);
   });
 
-  it('section names: size 12→11 / 18→14, opacity 1, halo 1.5, minzoom 10, never decimate', () => {
+  it('section names: size 12→11 / 18→14, opacity 1, halo 1.5, minzoom 10', () => {
     expect(computeLabelUniforms(12, inputs()).textSizePx[SEC]).toBeCloseTo(11, 6);
     expect(computeLabelUniforms(18, inputs()).textSizePx[SEC]).toBeCloseTo(14, 6);
     expect(computeLabelUniforms(15, inputs()).opacity[SEC]).toBeCloseTo(1, 6);
     expect(LABEL_KIND_STYLE[SEC].haloWidth).toBe(1.5);
-    expect(computeLabelUniforms(15, inputs()).decimMod[SEC]).toBe(1);
   });
 
-  it('comments: size 14→8 / 18→10, opacity 0.85 constant, halo 1.5, minzoom 14, never decimate', () => {
+  it('comments: size 14→8 / 18→10, opacity 0.85 constant, halo 1.5, minzoom 14', () => {
     for (const K of [STC, SHC]) {
       expect(computeLabelUniforms(14, inputs()).textSizePx[K]).toBeCloseTo(8, 6);
       expect(computeLabelUniforms(18, inputs()).textSizePx[K]).toBeCloseTo(10, 6);
@@ -144,7 +133,6 @@ describe('computeLabelUniforms — all five kinds (stock parity)', () => {
       expect(LABEL_KIND_STYLE[K].haloWidth).toBe(1.5);
       expect(computeLabelUniforms(13.9, inputs()).kindVisible[K]).toBe(0);
       expect(computeLabelUniforms(14, inputs()).kindVisible[K]).toBe(1);
-      expect(computeLabelUniforms(15, inputs()).decimMod[K]).toBe(1);
     }
   });
 });

@@ -20,9 +20,18 @@
  *    UNSIGNED_BYTE) so the fragment can index per-kind uniform arrays and the
  *    vertex can test flag bits — the design's `(a_flags & HIDE) != 0` sketch.
  *  - Per-kind uniform arrays (size 5, one slot per {@link LABEL_KIND}) so zoom
- *    size / opacity / decimation band / visibility / halo are CPU-recomputed each
- *    frame WITHOUT any buffer rebuild (§3 of the design: the load-bearing "no
- *    rebuild for zoom / toggle / theme / decimation" property).
+ *    size / opacity / visibility / halo are CPU-recomputed each frame WITHOUT any
+ *    buffer rebuild (§3 of the design: the load-bearing "no rebuild for zoom /
+ *    toggle / theme" property).
+ *  - A per-label float `a_reveal_zoom` (the min zoom at which the label is
+ *    visible) evaluated against the live `u_zoom` each frame. This REPLACES both
+ *    the old per-build boolean `COLLIDE_HIDE` flag AND the per-frame
+ *    `mod(a_ordinal, N)` decimation: declutter + decimation are computed ONCE per
+ *    build (`labelReveal.ts`) as a single reveal threshold. Because the shader
+ *    test is `u_zoom >= a_reveal_zoom`, the visible set is MONOTONE in zoom by
+ *    construction — zooming in only ever ADDS labels (never removes one), a band
+ *    crossing never flashes the full set, and admission tracks live zoom with no
+ *    rebuild. Zoom-in needs no rebuild at all (the built set is a superset).
  *
  * SDF ENCODING (must agree with `glyphAtlas.ts`): TinySDF with `cutoff = 0.25`
  * puts the glyph EDGE at byte `255 * (1 - cutoff) = 191`, i.e. normalized
@@ -50,30 +59,35 @@ export type LabelKind = (typeof LABEL_KIND)[keyof typeof LABEL_KIND];
 export const LABEL_KIND_COUNT = 5;
 
 /**
- * `a_flags` bitfield (a UNSIGNED_BYTE integer attribute). The shader tests these
- * bits directly; `labelTessellate.ts` sets them. Kept here because the shader is
- * the contract for their meaning.
+ * `a_flags` bitfield (a UNSIGNED_BYTE integer attribute). Kept here because the
+ * shader is the contract for their meaning. `labelTessellate.ts` sets them.
  *  - FIRST_IN_SECTION: station label that is first in its section -> always shown
  *    (overrides decimation), mirroring the stock `isFirstInSection` filter branch.
+ *    CPU-ONLY now: the reveal pass (`labelReveal.ts`) reads it to floor the reveal
+ *    zoom at the kind minzoom; the SHADER no longer tests it (decimation moved
+ *    out of the shader into `a_reveal_zoom`). Still stamped for the CPU refresh
+ *    paths + parity tests.
  *  - REFERENCE: shot label of a reference shot -> collapsed when reference shots
  *    are hidden.
  *  - ALL_REFERENCE: station label / all-reference section name -> collapsed with
  *    reference shots (mirrors `allShotsReference` / `allStationsReference`).
  *  - DIM: anchored / immovable label -> drawn at 0.25 opacity (move tools).
- *  - COLLIDE_HIDE: collision loser (declutter) -> collapsed (draws nothing).
  *  - DRAG_HIDE: drag-excluded (a move tool is dragging this feature) -> collapsed.
- *    Split from COLLIDE_HIDE (Phase 5) so the two can be re-uploaded independently:
- *    a drag flip (flags-only upload) must not disturb the frozen collision result,
- *    and a collision rerun must not disturb the active drag. The shader collapses
- *    on EITHER bit, so their meaning to the fragment stage is identical.
+ *    A flags-only upload flips it without disturbing the per-label reveal zoom
+ *    (which the reveal-only upload path owns), so an active drag and a reveal
+ *    rerun never clobber each other.
+ *
+ * The old `COLLIDE_HIDE` bit is GONE: collision decluttering is no longer a
+ * boolean baked per zoom (which flashed stale bits on band crossings and evicted
+ * lower-zoom winners) but a per-label reveal zoom (`a_reveal_zoom`) evaluated per
+ * frame — see the module header + `labelReveal.ts`.
  */
 export const LABEL_FLAG = {
   FIRST_IN_SECTION: 1 << 0,
   REFERENCE: 1 << 1,
   ALL_REFERENCE: 1 << 2,
   DIM: 1 << 3,
-  COLLIDE_HIDE: 1 << 4,
-  DRAG_HIDE: 1 << 5,
+  DRAG_HIDE: 1 << 4,
 } as const;
 
 /** Normalized SDF value at the glyph edge (= `1 - cutoff`, cutoff 0.25). See the
@@ -90,7 +104,7 @@ export const LABEL_ATTRIBS = {
   uv: 'a_uv', // vec2 FLOAT   atlas PIXEL coords (normalized in shader)
   color: 'a_color', // vec4 UNSIGNED_BYTE (normalized) data-driven text color
   kind: 'a_kind', // uint UNSIGNED_BYTE (integer) LABEL_KIND
-  ordinal: 'a_ordinal', // float FLOAT  decimation key (shot index / station ordinal)
+  revealZoom: 'a_reveal_zoom', // float FLOAT  min live zoom at which the label draws
   flags: 'a_flags', // uint UNSIGNED_BYTE (integer) LABEL_FLAG bitfield
 } as const;
 
@@ -102,9 +116,9 @@ export const LABEL_UNIFORMS = {
   atlas: 'u_atlas',
   fontSize: 'u_font_size',
   sdfRadius: 'u_sdf_radius',
+  zoom: 'u_zoom', // live map zoom, compared against a_reveal_zoom
   textSizePx: 'u_text_size_px', // float[5]
   opacity: 'u_opacity', // float[5]
-  decimMod: 'u_decim_mod', // float[5]
   kindVisible: 'u_kind_visible', // float[5]
   haloColor: 'u_halo_color', // vec4[5]
   haloWidthPx: 'u_halo_width_px', // float[5]
@@ -114,11 +128,9 @@ export const LABEL_UNIFORMS = {
 // The flag-bit literals are inlined into the GLSL (a `#define` block) so the
 // shader and the TS `LABEL_FLAG` table share one set of numbers by construction.
 const FLAG_DEFINES = `
-#define FLAG_FIRST_IN_SECTION ${LABEL_FLAG.FIRST_IN_SECTION}u
 #define FLAG_REFERENCE ${LABEL_FLAG.REFERENCE}u
 #define FLAG_ALL_REFERENCE ${LABEL_FLAG.ALL_REFERENCE}u
 #define FLAG_DIM ${LABEL_FLAG.DIM}u
-#define FLAG_COLLIDE_HIDE ${LABEL_FLAG.COLLIDE_HIDE}u
 #define FLAG_DRAG_HIDE ${LABEL_FLAG.DRAG_HIDE}u
 #define KIND_COUNT ${LABEL_KIND_COUNT}`;
 
@@ -127,10 +139,13 @@ const FLAG_DEFINES = `
  * offset scaled by the per-kind rendered text size (em -> screen px), and
  * COLLAPSES the whole glyph quad to a clipped point (`vec4(2,2,2,1)`, the
  * geometry layer's degenerate-vertex idiom) whenever the label should not draw:
- * kind toggled off / below its minzoom (`u_kind_visible`), a hide flag
- * (COLLIDE_HIDE or DRAG_HIDE), reference-hidden, or thinned out by the decimation band
- * (`mod(a_ordinal, N)`) unless it is first-in-section. All four verts of a glyph
- * share `a_anchor`/`a_kind`/`a_ordinal`/`a_flags`, so both triangles degenerate
+ * kind toggled off / below its minzoom (`u_kind_visible`), drag-excluded
+ * (DRAG_HIDE), reference-hidden, or NOT YET REVEALED (`u_zoom < a_reveal_zoom`).
+ * The reveal test folds in BOTH the declutter/collision result and the
+ * decimation band, computed once per build (`labelReveal.ts`); because it is a
+ * single monotone `u_zoom >= a_reveal_zoom` compare, zooming in only adds labels
+ * and never removes one. All four verts of a glyph share
+ * `a_anchor`/`a_kind`/`a_reveal_zoom`/`a_flags`, so both triangles degenerate
  * together — same guarantee the line/circle collapses rely on.
  */
 export const LABEL_VERTEX_SRC = `#version 300 es
@@ -139,9 +154,9 @@ ${FLAG_DEFINES}
 uniform mat4 u_matrix;
 uniform vec2 u_viewport;
 uniform vec2 u_atlas_size;
+uniform float u_zoom;
 uniform float u_text_size_px[KIND_COUNT];
 uniform float u_opacity[KIND_COUNT];
-uniform float u_decim_mod[KIND_COUNT];
 uniform float u_kind_visible[KIND_COUNT];
 uniform float u_hide_reference;
 in vec2 a_anchor;
@@ -149,7 +164,7 @@ in vec2 a_offset_em;
 in vec2 a_uv;
 in vec4 a_color;
 in uint a_kind;
-in float a_ordinal;
+in float a_reveal_zoom;
 in uint a_flags;
 out vec2 v_uv;
 out vec4 v_color;
@@ -168,21 +183,18 @@ void main() {
   int kind = int(a_kind);
   // Per-kind on/off (setShow* toggles + minzoom gate baked into the uniform).
   if (u_kind_visible[kind] < 0.5) { collapse(); return; }
-  // Collision loser OR drag-excluded: either collapses the glyph.
-  if ((a_flags & (FLAG_COLLIDE_HIDE | FLAG_DRAG_HIDE)) != 0u) { collapse(); return; }
+  // Drag-excluded: a move tool is dragging this feature.
+  if ((a_flags & FLAG_DRAG_HIDE) != 0u) { collapse(); return; }
   // Reference-shots hidden: collapse reference shot labels and all-reference
   // station labels / section names (mirrors the stock setFilter parity).
   if (u_hide_reference > 0.5 && (a_flags & (FLAG_REFERENCE | FLAG_ALL_REFERENCE)) != 0u) {
     collapse();
     return;
   }
-  // Zoom-band decimation: keep every N-th ordinal, but a first-in-section
-  // station label always shows (stock 'any(isFirstInSection, ordinal%N==0)').
-  float n = u_decim_mod[kind];
-  if (n > 1.5 && (a_flags & FLAG_FIRST_IN_SECTION) == 0u && mod(a_ordinal, n) >= 0.5) {
-    collapse();
-    return;
-  }
+  // Reveal-zoom declutter + decimation, baked once per build. Monotone in zoom
+  // by construction: the visible set { u_zoom >= a_reveal_zoom } only grows as
+  // the camera zooms in, so no label vanishes and a band crossing never flashes.
+  if (u_zoom < a_reveal_zoom) { collapse(); return; }
   vec4 anchorClip = u_matrix * vec4(a_anchor, 0.0, 1.0);
   // em -> screen px via the per-kind rendered size (1 em == u_text_size_px[kind]).
   vec2 offsetPx = a_offset_em * u_text_size_px[kind];

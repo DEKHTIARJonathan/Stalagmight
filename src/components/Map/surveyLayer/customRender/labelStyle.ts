@@ -10,8 +10,9 @@
  * reference-hide) and gets the full per-kind uniform arrays the shader reads.
  * Recomputing every frame (not on a zoom band only) reproduces MapLibre's
  * CONTINUOUS `interpolate` size/opacity ramps exactly, at negligible cost (five
- * lerps). Zoom-band decimation comes from `labelDecimation.ts` so the shader
- * uniform and the (later) CPU collision candidate filter agree by construction.
+ * lerps). Decimation is NO LONGER a per-frame uniform: it is folded into the
+ * per-label reveal zoom (`labelReveal.ts` / `labelDecimation.ts`) so the shader
+ * only compares the live zoom against the baked `a_reveal_zoom`.
  *
  * PURE: no GL, no DOM. Phase 3 adds the other four kinds' toggles/halo wiring on
  * top of this same table — only the controller's `kindEnabled` / `haloColors`
@@ -20,7 +21,6 @@
 import type { MapThemeColors } from '../../../../utils/themeColors';
 import { packCssColor, type Rgba8 } from './colorPack';
 import { LABEL_KIND, LABEL_KIND_COUNT, type LabelKind } from './labelShaders';
-import { decimationModulusForKind } from './labelDecimation';
 
 /** A MapLibre-style `interpolate(linear, zoom, ...)` stop list: `[zoom, value]`
  *  pairs in ascending zoom. A single stop == a constant (zoom-independent). */
@@ -145,8 +145,6 @@ export interface LabelUniforms {
   textSizePx: Float32Array;
   /** `u_opacity[5]` — 0..1. */
   opacity: Float32Array;
-  /** `u_decim_mod[5]` — zoom-band modulus (1 = show all). */
-  decimMod: Float32Array;
   /** `u_kind_visible[5]` — toggle AND (zoom ≥ minzoom). */
   kindVisible: Float32Array;
   /** `u_halo_color[5]` — RGBA 0..1, 4 floats per kind. */
@@ -167,7 +165,6 @@ export function computeLabelUniforms(zoom: number, inputs: LabelStyleInputs): La
   const n = LABEL_KIND_COUNT;
   const textSizePx = new Float32Array(n);
   const opacity = new Float32Array(n);
-  const decimMod = new Float32Array(n);
   const kindVisible = new Float32Array(n);
   const haloColor = new Float32Array(n * 4);
   const haloWidthPx = new Float32Array(n);
@@ -175,7 +172,6 @@ export function computeLabelUniforms(zoom: number, inputs: LabelStyleInputs): La
     const cfg = LABEL_KIND_STYLE[k as LabelKind];
     textSizePx[k] = interpolateStops(zoom, cfg.size) * inputs.dpr;
     opacity[k] = interpolateStops(zoom, cfg.opacity);
-    decimMod[k] = decimationModulusForKind(k as LabelKind, zoom);
     kindVisible[k] = inputs.kindEnabled[k] && zoom >= cfg.minzoom ? 1 : 0;
     haloWidthPx[k] = cfg.haloWidth * inputs.dpr;
     const c = inputs.haloColors[k] ?? ([0, 0, 0, 255] as Rgba8);
@@ -187,7 +183,6 @@ export function computeLabelUniforms(zoom: number, inputs: LabelStyleInputs): La
   return {
     textSizePx,
     opacity,
-    decimMod,
     kindVisible,
     haloColor,
     haloWidthPx,
