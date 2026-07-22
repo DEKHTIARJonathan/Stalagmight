@@ -46,6 +46,7 @@ import {
   setDragPreviewTranslate,
   type DragPreviewLayerCtx,
 } from './surveyLayer/dragPreviewLayers';
+import { GhostFollow } from './surveyLayer/dragGhostFollow';
 import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
 import { dimmedZoomOpacity } from './surveyLayer/opacityExpressions';
@@ -312,33 +313,29 @@ export default class SurveyLayer {
   // is imported for the per-frame setData); the layers are created/removed there.
   /** Captured moving geometry for the active drag (originals + movingEnd). */
   private dragPreviewSet: DragPreviewSet | null = null;
-  /** rAF coalescer for the per-frame preview render: MapCanvas may push several
-   *  offsets per frame (pointermove + the map-'move' re-apply), but the preview
-   *  only needs the latest — one setData per frame. */
+  /** rAF coalescer for the per-frame interact-overlay follow: MapCanvas may push
+   *  several offsets per frame (pointermove + the map-'move' re-apply), but the
+   *  overlay only needs the latest — one small setData per frame. (The GHOST is
+   *  now driven single-flight by {@link ghostFollow}, decoupled from this rAF.) */
   private dragUpdateRaf: number | null = null;
   private pendingDragOffset: { dx: number; dy: number } | null = null;
   /** Ghost-follow (#mem drag latency): the preview `setData` round-trips through
-   *  the MapLibre worker (parse + retile), landing SEVERAL frames after the
-   *  pointermove for a large moving set — the ghost visibly lags the cursor and
-   *  lags MORE than the small interact-overlay highlight (which re-tiles in ~1
-   *  frame), which reads as broken. We keep the per-frame re-`setData` (it
-   *  re-clips the real moved geometry, avoiding large-offset wedges — BUG A) but
-   *  additionally apply a SYNCHRONOUS screen-space `*-translate` on every
-   *  pointermove so the ghost tracks the cursor with no worker in the loop. The
-   *  translate only spans the residual between the last-LANDED bake and the live
-   *  cursor (a few frames of motion), rebased to ~0 whenever fresh tiles land, so
-   *  it never re-opens the wedges and — being uniform across all preview layers —
-   *  cannot skew shots from stations (BUG B). `liveOffset` = latest cursor,
-   *  `bakedOffset` = offset the currently-drawn tiles were built with,
-   *  `requestedOffset` = offset of the last `setData` awaiting its tiles. */
-  private dragPreviewLiveOffset = { dx: 0, dy: 0 };
-  private dragPreviewBakedOffset = { dx: 0, dy: 0 };
-  private dragPreviewRequestedOffset = { dx: 0, dy: 0 };
-  /** Persistent `sourcedata` listener that rebases the translate residual to ~0
-   *  once the preview's fresh tiles land (registered for the drag's lifetime;
-   *  removed in endDragPreview). Without a land-triggered rebase, holding still
-   *  after motion would leave a stale residual and overshoot the cursor. */
-  private dragPreviewRebaseListener: ((e: maplibregl.MapSourceDataEvent) => void) | null = null;
+   *  the MapLibre worker, so a bake lands SEVERAL frames after the pointermove. A
+   *  synchronous, viewport-anchored `*-translate` keeps the ghost glued to the
+   *  cursor between bakes, while the periodic re-`setData` re-clips the real
+   *  geometry (avoids large-offset wedges / shot-station skew). The state machine
+   *  bakes SINGLE-FLIGHT (at most one setData pending, its position recorded), so
+   *  the displayed geometry always equals the last LANDED bake and the translate
+   *  is always `live - landed` — no elastic overshoot regardless of land timing.
+   *  See {@link GhostFollow}. Null while no drag is active. */
+  private ghostFollow: GhostFollow | null = null;
+  /** Persistent `sourcedata` listener that confirms the ONE in-flight ghost bake
+   *  has landed (registered for the drag's lifetime; removed in endDragPreview /
+   *  destroy). Single-flight + `isSourceLoaded` makes the event unambiguous. */
+  private ghostLandListener: ((e: maplibregl.MapSourceDataEvent) => void) | null = null;
+  /** Fallback timer that force-lands the in-flight ghost bake if the sourcedata
+   *  confirmation is missed, so the single-flight queue cannot stall. */
+  private ghostBakeTimeout: ReturnType<typeof setTimeout> | null = null;
   /** Interact-overlay follow (#C): a hover/selected highlight on a moving
    *  station/shot is re-emitted at the drag offset each frame so it tracks the
    *  cursor. Stationary overlay features (snap ring, highlightedStationIds,
@@ -450,6 +447,10 @@ export default class SurveyLayer {
   // thrashing if the user zooms across the threshold rapidly.
   private static readonly LABEL_BUILD_ZOOM = 13.5;
   private static readonly LABEL_DROP_ZOOM = 13;
+  /** Fallback deadline (ms) after which an unconfirmed in-flight ghost bake is
+   *  force-landed so the single-flight queue cannot stall (the real sourcedata
+   *  land normally beats this comfortably). See bakeGhostPreview. */
+  private static readonly GHOST_BAKE_TIMEOUT_MS = 250;
   /** Whether label features are currently materialized in the sources.
    *  Starts false — nothing is built yet — so the FIRST build uses the
    *  BUILD threshold (13.5), not the drop threshold. With the old `true`
@@ -2995,11 +2996,11 @@ export default class SurveyLayer {
     this.snappedStationId = newId;
 
     // During a live move drag EVERY interact refresh is funneled through the
-    // per-frame renderDragPreview pass, so the snap ring, the grabbed highlight and
-    // the moving preview all update in the SAME rAF tick (lockstep, no out-of-band
-    // frame where the overlay leads or trails the preview). A snap-target change is
-    // driven by the same pointer move that schedules that frame, so the ring lands
-    // one frame later at most; outside a drag, refresh immediately as before.
+    // per-frame renderOverlayFollow pass, so the snap ring and the grabbed
+    // highlight update together in the SAME rAF tick. A snap-target change is
+    // driven by the same pointer move that schedules that frame, so the ring
+    // lands one frame later at most; outside a drag, refresh immediately as
+    // before. (The moving ghost follows synchronously via its own translate.)
     if (this.dragPreviewActive && !this.dragCommitPending) return;
 
     // Snap ring renders from the interact overlay (#mem): pushing one small
@@ -3904,71 +3905,84 @@ export default class SurveyLayer {
     this.dragPreviewSet = { features };
     createDragPreviewLayers(this.map, this.dragPreviewLayerCtx());
     this.dragPreviewActive = true;
-    // Reset the ghost-follow offsets + arm the land-triggered rebase for this
-    // drag (see the field docs). At offset 0 the translate is 0, so the initial
-    // frame is byte-identical to before.
-    this.dragPreviewLiveOffset = { dx: 0, dy: 0 };
-    this.dragPreviewBakedOffset = { dx: 0, dy: 0 };
-    this.dragPreviewRequestedOffset = { dx: 0, dy: 0 };
-    this.armDragPreviewRebase();
-    this.renderDragPreview(0, 0);
+    // Ghost-follow: arm the land confirmation, then start the single-flight
+    // machine (issues the first bake at offset 0, translate 0 — byte-identical
+    // to before at rest). The interact overlay follows separately at offset 0.
+    this.armGhostLand();
+    this.ghostFollow = new GhostFollow({
+      bake: (pos) => this.bakeGhostPreview(pos.dx, pos.dy),
+      translate: (t) => setDragPreviewTranslate(this.map, [t.dx, t.dy]),
+    });
+    this.ghostFollow.start();
+    this.renderOverlayFollow(0, 0);
   }
 
-  /** Re-project the captured moving set at the current offset and push it in ONE
-   *  setData. Projecting from originals every frame (never accumulating) keeps
-   *  the preview correct across a mid-drag zoom. Records the requested offset so
-   *  the land-triggered rebase can zero the translate residual once these tiles
-   *  draw ({@link armDragPreviewRebase}). */
-  private renderDragPreview(dx: number, dy: number): void {
+  /** Re-project the captured moving set at `[dx, dy]` and push it in ONE setData
+   *  (the ghost BAKE). Projecting from originals every time (never accumulating)
+   *  keeps the preview correct across a mid-drag zoom. Single-flight: the caller
+   *  ({@link GhostFollow}) guarantees at most one bake is outstanding, and a
+   *  fallback timer force-lands it if the sourcedata confirmation is missed so the
+   *  queue cannot stall. */
+  private bakeGhostPreview(dx: number, dy: number): void {
     if (!this.dragPreviewActive || !this.dragPreviewSet) return;
     const fc = buildDragPreviewFeatureCollection(this.dragPreviewSet, this.dragProjector(), dx, dy);
-    this.dragPreviewRequestedOffset = { dx, dy };
     const src = this.map.getSource(DRAG_PREVIEW_SOURCE);
     if (src && 'setData' in src) (src as maplibregl.GeoJSONSource).setData(fc);
-    // Re-emit any hover/selected highlight on a moving feature at the same offset
-    // so it tracks the cursor instead of sticking at the committed position (#C).
+    if (this.ghostBakeTimeout !== null) clearTimeout(this.ghostBakeTimeout);
+    this.ghostBakeTimeout = setTimeout(() => this.onGhostBakeLanded(), SurveyLayer.GHOST_BAKE_TIMEOUT_MS);
+  }
+
+  /** Re-emit any hover/selected highlight on a moving feature at the drag offset
+   *  so it tracks the cursor instead of sticking at the committed position (#C).
+   *  A small setData, coalesced one-per-frame by the rAF (see scheduleDragRender).
+   *  Kept separate from the ghost bake so the highlight stays as responsive as
+   *  before while the ghost bakes single-flight. */
+  private renderOverlayFollow(dx: number, dy: number): void {
+    if (!this.dragPreviewActive) return;
     this.dragOverlayOffset = { dx, dy };
     this.refreshInteractOverlay();
   }
 
-  /** Apply the ghost's screen-space translate from the current live/baked gap.
-   *  Synchronous (bare setPaintProperty, no worker) so the ghost tracks the
-   *  cursor immediately; the residual is tiny once the rebase has run. */
-  private applyDragPreviewTranslate(): void {
-    if (!this.dragPreviewActive) return;
-    const live = this.dragPreviewLiveOffset;
-    const baked = this.dragPreviewBakedOffset;
-    setDragPreviewTranslate(this.map, [live.dx - baked.dx, live.dy - baked.dy]);
+  /** The one in-flight ghost bake landed (sourcedata-confirmed or timeout). Clear
+   *  the fallback timer and advance the state machine (which re-derives the
+   *  translate from the live cursor and chains the next bake if warranted). */
+  private onGhostBakeLanded(): void {
+    if (this.ghostBakeTimeout !== null) {
+      clearTimeout(this.ghostBakeTimeout);
+      this.ghostBakeTimeout = null;
+    }
+    this.ghostFollow?.land();
   }
 
-  /** Arm the persistent `sourcedata` rebase for the active drag: when the preview
-   *  source finishes loading the tiles for the last `setData`, adopt that offset
-   *  as the new baked offset and re-derive the translate from the live cursor
-   *  (shrinking the residual to ~0 if the cursor has since settled). Idempotent. */
-  private armDragPreviewRebase(): void {
-    if (this.dragPreviewRebaseListener) return;
+  /** Arm the persistent `sourcedata` land confirmation for the active drag. With
+   *  single-flight baking, `isSourceLoaded` true while a bake is in flight means
+   *  THAT bake's tiles are the ones now drawn — an unambiguous land signal. */
+  private armGhostLand(): void {
+    if (this.ghostLandListener) return;
     const listener = (e: maplibregl.MapSourceDataEvent): void => {
       if (e.sourceId !== DRAG_PREVIEW_SOURCE) return;
-      if (!this.map.isSourceLoaded(DRAG_PREVIEW_SOURCE)) return;
       if (!this.dragPreviewActive) return;
-      this.dragPreviewBakedOffset = { ...this.dragPreviewRequestedOffset };
-      this.applyDragPreviewTranslate();
+      if (!this.ghostFollow?.hasBakeInFlight()) return;
+      if (!this.map.isSourceLoaded(DRAG_PREVIEW_SOURCE)) return;
+      this.onGhostBakeLanded();
     };
-    this.dragPreviewRebaseListener = listener;
+    this.ghostLandListener = listener;
     this.map.on('sourcedata', listener);
   }
 
-  /** Tear down the ghost-follow rebase listener + zero the preview translate
-   *  (called on drag end, before the layers are removed). */
-  private disarmDragPreviewRebase(): void {
-    if (this.dragPreviewRebaseListener) {
-      this.map.off('sourcedata', this.dragPreviewRebaseListener);
-      this.dragPreviewRebaseListener = null;
+  /** Tear down the ghost-follow machine, its land listener + fallback timer, and
+   *  zero the preview translate (called on drag end, before the layers go). */
+  private disarmGhostFollow(): void {
+    if (this.ghostLandListener) {
+      this.map.off('sourcedata', this.ghostLandListener);
+      this.ghostLandListener = null;
+    }
+    if (this.ghostBakeTimeout !== null) {
+      clearTimeout(this.ghostBakeTimeout);
+      this.ghostBakeTimeout = null;
     }
     setDragPreviewTranslate(this.map, [0, 0]);
-    this.dragPreviewLiveOffset = { dx: 0, dy: 0 };
-    this.dragPreviewBakedOffset = { dx: 0, dy: 0 };
-    this.dragPreviewRequestedOffset = { dx: 0, dy: 0 };
+    this.ghostFollow = null;
   }
 
   /** The map-backed projector used for the preview + overlay offset transforms. */
@@ -4476,20 +4490,19 @@ export default class SurveyLayer {
     if (this.dragPreviewActive) this.setDragExclusion(pending.exclusion);
   }
 
-  /** Schedule a coalesced preview render at `[dx, dy]`; latest offset wins, one
-   *  setData per animation frame. The ghost's screen-space translate is applied
-   *  SYNCHRONOUSLY here (no rAF, no worker) so it tracks the cursor this frame,
-   *  while the coalesced setData re-bakes the tile-clipped geometry underneath. */
+  /** Drive both followers from a pointermove offset. The GHOST is handed to the
+   *  single-flight machine SYNCHRONOUSLY (applies the screen-space translate this
+   *  frame with no worker, and bakes at most one setData in flight). The interact
+   *  overlay follow stays rAF-coalesced (one small setData per frame). */
   private scheduleDragRender(dx: number, dy: number): void {
-    this.dragPreviewLiveOffset = { dx, dy };
-    this.applyDragPreviewTranslate();
+    this.ghostFollow?.move(dx, dy);
     this.pendingDragOffset = { dx, dy };
     if (this.dragUpdateRaf !== null) return;
     this.dragUpdateRaf = requestAnimationFrame(() => {
       this.dragUpdateRaf = null;
       const off = this.pendingDragOffset;
       this.pendingDragOffset = null;
-      if (off) this.renderDragPreview(off.dx, off.dy);
+      if (off) this.renderOverlayFollow(off.dx, off.dy);
     });
   }
 
@@ -4561,9 +4574,9 @@ export default class SurveyLayer {
     if (!this.dragPreviewActive) return;
 
     this.cancelDragRender();
-    // Tear down the ghost-follow rebase listener + zero the preview translate
-    // before the layers are removed.
-    this.disarmDragPreviewRebase();
+    // Tear down the ghost-follow machine + listener/timer + zero the preview
+    // translate before the layers are removed.
+    this.disarmGhostFollow();
     // Drop any deferred drag-hide that never fired (drag ended before the preview
     // loaded). removeDragPreviewLayers below is the single removal point for the
     // preview now that commitDragPreview keeps it alive across the IPC window.
@@ -5641,11 +5654,15 @@ export default class SurveyLayer {
     }
     this.pendingHoverEvent = null;
     this.cancelDragRender();
-    // Drop the ghost-follow rebase listener so it cannot fire on a torn-down map
-    // (listener-only; the preview layers are removed with the map).
-    if (this.dragPreviewRebaseListener) {
-      this.map.off('sourcedata', this.dragPreviewRebaseListener);
-      this.dragPreviewRebaseListener = null;
+    // Drop the ghost-follow land listener + fallback timer so neither fires on a
+    // torn-down map (listener-only; the preview layers are removed with the map).
+    if (this.ghostLandListener) {
+      this.map.off('sourcedata', this.ghostLandListener);
+      this.ghostLandListener = null;
+    }
+    if (this.ghostBakeTimeout !== null) {
+      clearTimeout(this.ghostBakeTimeout);
+      this.ghostBakeTimeout = null;
     }
 
     // Clean up touch long-press timer
