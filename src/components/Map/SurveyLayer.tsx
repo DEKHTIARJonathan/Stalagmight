@@ -40,16 +40,15 @@ import {
 } from './surveyLayer/dragPreviewSource';
 import { DRAG_PREVIEW_SOURCE, type DragPreviewLayerCtx } from './surveyLayer/dragPreviewLayers';
 import { DragGhostController } from './surveyLayer/dragGhostController';
-import { buildGhostBuffers } from './surveyLayer/customRender/ghostTessellate';
 import type { GhostRenderData } from './surveyLayer/customRender/surveyGhostLayer';
-import { packCssColor } from './surveyLayer/customRender/colorPack';
+import { buildGhostRenderData } from './surveyLayer/dragGhostData';
 import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
 import { dimmedZoomOpacity } from './surveyLayer/opacityExpressions';
 import { decideLabelBuild, skippedBuildForCamera } from './surveyLayer/labelBuildDecision';
 import { SurveyCustomController, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
-import { makeOverlayColor, overlayInputFrom } from './surveyLayer/customRender/overlayColor';
+import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
 import type { SurveyData } from '../../types/survey-data';
 import type { ProjectWarning } from '../../types/commands';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
@@ -2322,10 +2321,19 @@ export default class SurveyLayer {
 
     const features: GeoJSON.Feature[] = [];
 
+    // While the custom ghost is active, the grabbed MOVING feature's highlight is
+    // drawn IN the ghost (shares its offset uniform, no lag), so suppress the
+    // per-frame overlay copy for moving features; non-moving overlay state stays.
+    const suppress = this.dragGhost.isCustom();
+    const keepShot = (id: string | null): string | null =>
+      suppress && id && this.dragMovingShots.has(id) ? null : id;
+    const keepStation = (id: string | null): string | null =>
+      suppress && id && this.dragMovingStationKeys.has(id) ? null : id;
+
     // Shots: hover wins over selection on the same shot (matches the old
     // paint case order: hover width > selected width).
-    const hoveredShot = this.hoveredShotId;
-    const selectedShot = this.selectedShotId !== this.hoveredShotId ? this.selectedShotId : null;
+    const hoveredShot = keepShot(this.hoveredShotId);
+    const selectedShot = keepShot(this.selectedShotId !== this.hoveredShotId ? this.selectedShotId : null);
     if (hoveredShot) {
       const fid = this.parseFeatureId(hoveredShot);
       // Old behavior: no hover feedback for anchored/immovable shots.
@@ -2340,9 +2348,9 @@ export default class SurveyLayer {
     }
 
     // Stations: hover wins over selection on the same station.
-    const hoveredStation = this.hoveredStationId;
+    const hoveredStation = keepStation(this.hoveredStationId);
     const selectedStation =
-      this.selectedStationId !== this.hoveredStationId ? this.selectedStationId : null;
+      keepStation(this.selectedStationId !== this.hoveredStationId ? this.selectedStationId : null);
     if (hoveredStation) {
       const fid = this.parseFeatureId(hoveredStation);
       if (fid === null || (!this.isFeatureAnchored(fid) && !this.isStationImmovable(fid))) {
@@ -3914,34 +3922,29 @@ export default class SurveyLayer {
    *  alpha. Sizes mirror {@link dragPreviewLayerCtx} (selection width/radius,
    *  2.5px stroke) scaled to device px, matching the custom bulk layer's dpr. */
   private dragGhostData(set: DragPreviewSet): GhostRenderData {
-    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
-    const overlay = overlayInputFrom(
-      this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState,
-    );
-    const ramp = overlay ? makeOverlayColor(overlay, this.themeColors.grayLine) : null;
-    const shotWidth = this.getShotSelectionWidth();
-    const { anchorX, anchorY, line, circle } = buildGhostBuffers(set, {
-      fillAlpha: 0.85,
-      strokeColor: packCssColor(this.themeColors.selectHighlight),
-      widthMulFor: (f) => (f.properties.kind === 'closure' ? 3 / shotWidth : 1),
-      colorFor: (f) => {
-        // Closures always use their error color (the stock ghost closure layer
-        // reads `['get','color']`, not the overlay ramp).
-        if (ramp && overlay && f.properties.kind !== 'closure') {
-          const key = overlay.mode === 'distance' ? 'dist' : 'gasReach';
-          const v = f.properties[key];
-          return ramp(typeof v === 'number' ? v : -1);
-        }
-        return packCssColor(String(f.properties.color ?? '#ffffff'));
-      },
+    return buildGhostRenderData(set, {
+      dpr: (typeof window !== 'undefined' && window.devicePixelRatio) || 1,
+      themeColors: this.themeColors,
+      overlay: overlayInputFrom(this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState),
+      shotsVisible: this.shotsVisible,
+      stationsVisible: this.stationsVisible,
+      selShotWidth: this.getShotSelectionWidth(),
+      hoverShotWidth: this.getShotHoverWidth(),
+      selRadius: this.getStationSelectionRadius(),
+      hoverRadius: this.getStationHoverRadius(),
+      hoveredShotId: this.hoveredShotId,
+      selectedShotId: this.selectedShotId,
+      hoveredStationId: this.hoveredStationId,
+      selectedStationId: this.selectedStationId,
+      movingEndForShot: (id) => this.dragMovingShots.get(id),
+      isMovingStation: (id) => this.dragMovingStationKeys.has(id),
+      parseFid: (id) => this.parseFeatureId(id),
+      isAnchored: (fid) => this.isFeatureAnchored(fid),
+      isShotImmovable: (fid) => this.isShotImmovable(fid),
+      isStationImmovable: (fid) => this.isStationImmovable(fid),
+      shotFeature: (id, w) => this.shotOverlayFeature(id, w),
+      stationFeature: (id, s) => this.stationOverlayFeature(id, s),
     });
-    return {
-      anchorX, anchorY, line, circle,
-      lineHalfWidthPx: (shotWidth / 2) * dpr,
-      circleRadiusPx: this.getStationSelectionRadius() * dpr,
-      circleStrokePx: 2.5 * dpr,
-      aaPx: dpr,
-    };
   }
 
   /** Re-emit any hover/selected highlight on a moving feature at the drag offset
