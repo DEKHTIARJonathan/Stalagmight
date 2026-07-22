@@ -113,7 +113,7 @@
     "src/components/Map/MapDevStats.tsx": 710,
     "src/components/Map/MoveCommentCursorTag.tsx": 45,
     "src/components/Map/PlacementOverlay.tsx": 194,
-    "src/components/Map/SurveyLayer.tsx": 3774,
+    "src/components/Map/SurveyLayer.tsx": 3780,
     "src/components/Map/index.ts": 2,
     "src/components/Map/mapUtils.ts": 4,
     "src/components/Map/panZoomDebug.ts": 281,

@@ -11,6 +11,7 @@ import {
   ensureVtProtocol,
   reloadVtSource,
   setVtLayerData,
+  shouldSuppressMapError,
   vtTileUrl,
 } from '../vectorTileRegistry';
 import { vtPointsFromFeatures } from '../vectorTileData';
@@ -955,6 +956,47 @@ describe('vector tile registry', () => {
       expect(conv.target).toBe(3);
       expect(d).toEqual({ reload: true, bounds: undefined, targetAtStart: 3, reconcile: true });
     });
+  });
+});
+
+// The SurveyLayer boundary filter: some VT reload-removed ErrorEvents come from
+// reloadPromises MapLibre mints internally, which never pass through
+// reloadTileGuarded - the ErrorEvent fires from MapLibre's own _loadTile catch,
+// upstream of anything the registry can wrap. SurveyLayer installs one map error
+// listener that suppresses exactly this message for its stalx:// sources and
+// re-logs everything else. SurveyLayer is not unit-instantiable, so test the
+// extracted pure predicate directly.
+describe('shouldSuppressMapError (boundary filter)', () => {
+  const PREFIX = 'survey-data';
+  const reloadErr = new Error(
+    'Should not be trying to reload a tile that was never loaded or has been removed',
+  );
+
+  it('suppresses a reload-removed error for a survey stalx source', () => {
+    expect(shouldSuppressMapError({ error: reloadErr, sourceId: 'survey-data-shots' }, PREFIX)).toBe(true);
+    expect(shouldSuppressMapError({ error: reloadErr, sourceId: 'survey-data-station-labels' }, PREFIX)).toBe(true);
+  });
+
+  it('passes through the same message from a non-survey source', () => {
+    expect(shouldSuppressMapError({ error: reloadErr, sourceId: 'satellite-tiles' }, PREFIX)).toBe(false);
+    expect(shouldSuppressMapError({ error: reloadErr, sourceId: 'other-source' }, PREFIX)).toBe(false);
+  });
+
+  it('passes through a different-message error from a survey source', () => {
+    expect(shouldSuppressMapError({ error: new Error('worker parse failed'), sourceId: 'survey-data-shots' }, PREFIX)).toBe(false);
+  });
+
+  it('does not throw and returns false for events with missing or malformed fields', () => {
+    expect(shouldSuppressMapError({ error: reloadErr }, PREFIX)).toBe(false); // no sourceId
+    expect(shouldSuppressMapError({ sourceId: 'survey-data-shots' }, PREFIX)).toBe(false); // no error
+    expect(shouldSuppressMapError({}, PREFIX)).toBe(false);
+    expect(shouldSuppressMapError(null, PREFIX)).toBe(false);
+    expect(shouldSuppressMapError(undefined, PREFIX)).toBe(false);
+    // Non-string sourceId short-circuits; a non-Error error is stringified, not dereferenced.
+    expect(shouldSuppressMapError({ error: 'Should not be trying to reload', sourceId: 42 }, PREFIX)).toBe(false);
+    expect(shouldSuppressMapError({ error: 42, sourceId: 'survey-data-shots' }, PREFIX)).toBe(false);
+    // A non-Error error object whose stringified message matches is still classified.
+    expect(shouldSuppressMapError({ error: 'Should not be trying to reload', sourceId: 'survey-data-shots' }, PREFIX)).toBe(true);
   });
 });
 

@@ -75,7 +75,7 @@ import { MEASURE_TINT } from '../../utils/measurePath';
 import { distanceToLineSegment } from './surveyLayer/hitTest';
 import { recordFeatureCount, clearFeatureCountsForPrefix, recordPerfTiming } from '../../utils/memoryProbe';
 import { buildSurveyFeaturesStreamed, buildGranularitySwapStreamed } from './surveyLayer/featuresWorkerClient';
-import { ensureVtProtocol, setVtLayerData, vtTileUrl, clearVtLayerData, reloadVtSource } from './surveyLayer/vectorTileRegistry';
+import { ensureVtProtocol, setVtLayerData, vtTileUrl, clearVtLayerData, reloadVtSource, shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/vectorTileRegistry';
 import {
   LABEL_VT_GROUPS,
   partitionDragFilters,
@@ -1458,6 +1458,11 @@ export default class SurveyLayer {
     // station priority. Replaces per-layer click handlers for nearest-to-click.
     this.map.on('click', this.handleMapClick);
 
+    // Boundary filter for the residual VT reload-removed ErrorEvents that
+    // MapLibre fires from its own _loadTile catch, upstream of the registry's
+    // guards (see handleMapError). Installed once here; removed in destroy().
+    this.map.on('error', this.handleMapError);
+
     // Note: Per-layer click handlers removed - unified handler handles all click logic
 
     // Process hover update for a given mouse event
@@ -1792,6 +1797,18 @@ export default class SurveyLayer {
    * Stations take priority over shots unless the active tool suppresses one type
    * (move_shot suppresses stations, move_station suppresses shots).
    */
+  // Boundary filter for the residual VT reload-removed noise MapLibre fires from
+  // its own _loadTile catch, upstream of the registry guards (rationale on
+  // shouldSuppressMapError). Suppress exactly that message for this survey's
+  // stalx:// sources; re-log every other error, since MapLibre only console.errors
+  // an ErrorEvent when it has NO listener (verified vs maplibre-gl 5.16
+  // Evented.fire), so registering this listener would otherwise silence the map's
+  // default logging for ALL errors.
+  private handleMapError = (evt: MapErrorEventLike): void => {
+    if (shouldSuppressMapError(evt, this.sourceId)) return;
+    console.error(evt?.error ?? evt);
+  };
+
   private handleMapClick = (e: MapMouseEvent): void => {
     // Ctrl+click in move tools is for panning, not interacting with features
     if (e.originalEvent.ctrlKey &&
@@ -5557,6 +5574,7 @@ export default class SurveyLayer {
     try {
       // Unregister event handlers first (before removing layers)
       this.map.off('click', this.handleMapClick);
+      this.map.off('error', this.handleMapError);
       this.map.off('contextmenu', this.handleContextMenu);
 
       if (this.boundMouseMove) {
