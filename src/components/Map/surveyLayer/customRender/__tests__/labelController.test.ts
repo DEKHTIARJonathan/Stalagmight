@@ -7,6 +7,8 @@ import { LABEL_KIND, LABEL_FLAG } from '../labelShaders';
 import { FEATURE_ID_STRIDE } from '../../../../../utils/ids';
 import type { LabelRenderData } from '../surveyCustomLabelLayer';
 import { SurveyLabelController, type LabelSyncParams } from '../labelController';
+import { computeMercatorAnchor } from '../mercator';
+import { projectStationsRel } from '../tessellate';
 
 /**
  * Label controller (#customRender labels, Phase 2). Same fake-GL idiom as
@@ -53,6 +55,8 @@ const h = vi.hoisted(() => {
     }
     flagsCalls = 0;
     lastFlags: Uint8Array | null = null;
+    revealCalls = 0;
+    lastReveal: Float32Array | null = null;
     update(data: unknown): void {
       this.data = data;
       this.updateCalls++;
@@ -62,6 +66,12 @@ const h = vi.hoisted(() => {
       const d = this.data as { buffers?: { flags: Uint8Array } } | null;
       if (d?.buffers) d.buffers.flags = flags;
       this.flagsCalls++;
+    }
+    updateReveal(revealZoom: Float32Array): void {
+      this.lastReveal = revealZoom;
+      const d = this.data as { buffers?: { revealZoom: Float32Array } } | null;
+      if (d?.buffers) d.buffers.revealZoom = revealZoom;
+      this.revealCalls++;
     }
     setStyleInputs(style: { kindEnabled: boolean[]; haloColors: unknown[]; hideReference: boolean }): void {
       this.lastStyle = style;
@@ -466,26 +476,43 @@ function fakeGlyphAtlas(): GlyphAtlas {
 }
 
 interface CameraMap extends FakeMap {
-  state: { zoom: number; moving: boolean };
+  state: { zoom: number; moving: boolean; cLng: number; cLat: number };
   fire: (type: string) => void;
 }
 
-/** Fake map with camera hooks (getZoom / getBounds / getCanvas / isMoving /
- *  on / off) so the Phase-4 zoom gate + viewport + camera-settle rebuild run. A
- *  wide bounds admits the whole fixture; `state` drives zoom + isMoving. */
+/** Survey mercator center in DEGREES for the fixture (stations 0..100 m, so the
+ *  center is ~50 m from the origin). The camera is centered here so the fixture
+ *  is in view; `boundsForZoom` derives a physically consistent viewport. */
+const FIXTURE_CENTER_DEG = 50 / 111320;
+
+/** Fake map with camera hooks so the reveal path (zoom gate + viewport + reveal
+ *  pass + conditional camera-settle rebuild) runs. Crucially, the bounds are
+ *  DERIVED from `state.zoom` (world-pixel scale = 512·2^zoom, MapLibre's 512
+ *  tile), so zooming in genuinely shrinks the viewport and raises the world-pixel
+ *  scale — the physical premise the reveal pass relies on. `state.cLng/cLat` pan
+ *  the center. */
 function makeCameraMap(zoom = 18): CameraMap {
   const base = makeFakeMap();
-  const state = { zoom, moving: false };
+  const state = { zoom, moving: false, cLng: FIXTURE_CENTER_DEG, cLat: FIXTURE_CENTER_DEG };
   const listeners = new Map<string, Set<() => void>>();
+  const bounds = (): { west: number; east: number; north: number; south: number } => {
+    const wps = 512 * 2 ** state.zoom; // px per unit mercator (mercX = lng/360 + 0.5)
+    const lngHalf = ((360 * 800) / wps) / 2;
+    const latHalf = ((360 * 600) / wps) / 2;
+    return {
+      west: state.cLng - lngHalf,
+      east: state.cLng + lngHalf,
+      north: state.cLat + latHalf,
+      south: state.cLat - latHalf,
+    };
+  };
   const extra = {
     getZoom: () => state.zoom,
     isMoving: () => state.moving,
-    getBounds: () => ({
-      getWest: () => -0.01,
-      getEast: () => 0.01,
-      getNorth: () => 0.01,
-      getSouth: () => -0.01,
-    }),
+    getBounds: () => {
+      const b = bounds();
+      return { getWest: () => b.west, getEast: () => b.east, getNorth: () => b.north, getSouth: () => b.south };
+    },
     getCanvas: () => ({ clientWidth: 800, clientHeight: 600, width: 800, height: 600 }),
     on: (type: string, fn: () => void) => {
       const set = listeners.get(type) ?? new Set<() => void>();
@@ -501,6 +528,18 @@ function makeCameraMap(zoom = 18): CameraMap {
     for (const fn of listeners.get(type) ?? []) fn();
   };
   return { ...base, state, fire };
+}
+
+/** Fake map with a zoom + camera-settle listeners but NO bounds/canvas, so the
+ *  build runs the zoom gate (which kinds to build) but SKIPS viewport scoping +
+ *  the reveal pass — every candidate label is emitted at reveal 0. Used by the
+ *  flag-plumbing tests (dim / drag / toggle) that assert on specific labels'
+ *  flags without collision decluttering removing any. */
+function zoomOnlyMap(zoom = 18): CameraMap {
+  const cam = makeCameraMap(zoom);
+  delete (cam.map as unknown as Record<string, unknown>).getBounds;
+  delete (cam.map as unknown as Record<string, unknown>).getCanvas;
+  return cam;
 }
 
 /** The distinct label KINDS present in the last-built buffer (via a_kind). */
@@ -541,7 +580,7 @@ describe('SurveyLabelController zoom gate (viewport build set)', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('builds all kinds above the build zoom (13.5)', () => {
-    const cam = makeCameraMap(18);
+    const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     c.sync(makeParams());
     const kinds = builtKinds(h.layerState.last!);
@@ -552,14 +591,14 @@ describe('SurveyLabelController zoom gate (viewport build set)', () => {
   });
 
   it('builds ONLY section names between section-minzoom (10) and the build band', () => {
-    const cam = makeCameraMap(12);
+    const cam = zoomOnlyMap(12);
     const c = cameraController(cam.map);
     c.sync(makeParams());
     expect(builtKinds(h.layerState.last!)).toEqual(new Set([LABEL_KIND.SECTION_NAME]));
   });
 
   it('builds nothing below section minzoom (10)', () => {
-    const cam = makeCameraMap(8);
+    const cam = zoomOnlyMap(8);
     const c = cameraController(cam.map);
     c.sync(makeParams());
     const data = h.layerState.last!.data as LabelRenderData;
@@ -567,7 +606,7 @@ describe('SurveyLabelController zoom gate (viewport build set)', () => {
   });
 
   it('keeps the full label set on the way down through the hysteresis band [13, 13.5)', () => {
-    const cam = makeCameraMap(18);
+    const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     c.sync(makeParams()); // build full at 18
     cam.state.zoom = 13.2; // inside the band, still >= drop (13)
@@ -575,13 +614,13 @@ describe('SurveyLabelController zoom gate (viewport build set)', () => {
     // Hysteresis: already-built stays full (shot labels present at 13.2).
     expect(builtKinds(h.layerState.last!).has(LABEL_KIND.SHOT_LABEL)).toBe(true);
     // A FRESH controller at the same 13.2 builds section-only (below build 13.5).
-    const fresh = cameraController(makeCameraMap(13.2).map);
+    const fresh = cameraController(zoomOnlyMap(13.2).map);
     fresh.sync(makeParams());
     expect(builtKinds(h.layerState.last!)).toEqual(new Set([LABEL_KIND.SECTION_NAME]));
   });
 });
 
-describe('SurveyLabelController camera-settle rebuild', () => {
+describe('SurveyLabelController camera-settle rebuild (conditional)', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
@@ -592,17 +631,28 @@ describe('SurveyLabelController camera-settle rebuild', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('rebuilds the viewport on a camera settle (moveend)', () => {
+  it('does NOT rebuild on a settle that stays inside the padded viewport (pan within margin)', () => {
     const cam = makeCameraMap(18);
     const c = cameraController(cam.map, { scheduleRebuild: (fn: () => void) => fn() });
     c.sync(makeParams());
     const layer = h.layerState.last!;
     const before = layer.updateCalls;
+    cam.fire('moveend'); // camera unchanged → still covered → no rebuild
+    expect(layer.updateCalls).toBe(before);
+  });
+
+  it('rebuilds on a settle that EXITS the padded viewport (a big pan)', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map, { scheduleRebuild: (fn: () => void) => fn() });
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    const before = layer.updateCalls;
+    cam.state.cLng += 0.05; // pan far east, out of the built padded viewport
     cam.fire('moveend');
     expect(layer.updateCalls).toBe(before + 1);
   });
 
-  it('coalesces a moveend + zoomend burst into a single rebuild', () => {
+  it('coalesces a moveend + zoomend burst into a single evaluation', () => {
     const cam = makeCameraMap(18);
     const hold = rebuildHolder();
     const c = cameraController(cam.map, {
@@ -614,13 +664,14 @@ describe('SurveyLabelController camera-settle rebuild', () => {
     c.sync(makeParams());
     const layer = h.layerState.last!;
     const before = layer.updateCalls;
+    cam.state.cLng += 0.05; // exit → the eventual evaluation will rebuild
     cam.fire('moveend');
     cam.fire('zoomend');
-    // Only one rebuild was scheduled (the second event coalesced).
+    // Only one evaluation was scheduled (the second event coalesced).
     expect(hold.count).toBe(1);
     hold.run();
     expect(layer.updateCalls).toBe(before + 1);
-    // A later settle schedules a fresh rebuild.
+    // A later settle schedules a fresh evaluation.
     cam.fire('moveend');
     expect(hold.count).toBe(2);
   });
@@ -636,13 +687,14 @@ describe('SurveyLabelController camera-settle rebuild', () => {
     c.sync(makeParams());
     const layer = h.layerState.last!;
     const before = layer.updateCalls;
+    cam.state.cLng += 0.05; // exit condition present
     cam.state.moving = true;
     cam.fire('moveend');
     hold.run(); // camera still animating → skip
     expect(layer.updateCalls).toBe(before);
     cam.state.moving = false;
     cam.fire('moveend');
-    hold.run(); // settled → rebuild
+    hold.run(); // settled + exited → rebuild
     expect(layer.updateCalls).toBe(before + 1);
   });
 
@@ -665,18 +717,115 @@ describe('SurveyLabelController camera-settle rebuild', () => {
     const layer = h.layerState.last!;
     c.destroy();
     const after = layer.updateCalls;
+    cam.state.cLng += 0.05;
     expect(() => cam.fire('moveend')).not.toThrow();
     expect(layer.updateCalls).toBe(after);
   });
 });
 
-// ─── Phase 5: dim + drag-hide flags, collision rerun, synchronous placement ──
+describe('SurveyLabelController NO rebuild on zoom-in (reveal-zoom admission)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.render = true;
+    h.gate.labels = true;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
 
-/** Per-vertex (kind, ordinal, flag byte) from the layer's current buffers — after
- *  a build OR a flags-only refresh (updateFlags keeps data.buffers.flags coherent). */
-function vfl(layer: FakeLabelLayer): { kind: Uint8Array; ordinal: Float32Array; flags: Uint8Array } {
+  it('a modest zoom-in within the emit slack does NOT rebuild (the core latency fix)', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map, { scheduleRebuild: (fn: () => void) => fn() });
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    const before = layer.updateCalls;
+    // Zoom in half a level: the viewport shrinks (still inside the built padded
+    // box) and 18.5 <= buildZoom(18) + EMIT_SLACK/2 (19). The shader admits more
+    // labels per frame from their reveal zooms — no rebuild.
+    cam.state.zoom = 18.5;
+    cam.fire('zoomend');
+    expect(layer.updateCalls).toBe(before);
+  });
+
+  it('a deep zoom-in past buildZoom + EMIT_SLACK/2 rebuilds once (extends the slack)', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map, { scheduleRebuild: (fn: () => void) => fn() });
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    const before = layer.updateCalls;
+    cam.state.zoom = 19.5; // > 18 + 1
+    cam.fire('zoomend');
+    expect(layer.updateCalls).toBe(before + 1);
+  });
+});
+
+describe('SurveyLabelController emit slack (vertex-load bound)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.render = true;
+    h.gate.labels = true;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('emits FEWER glyphs at a low build zoom than a high one (labels past the horizon are dropped)', () => {
+    // At z14 the fixture (10 m spacing) is densely packed on screen → heavy
+    // collision → many labels reveal past buildZoom + slack (16) and are NOT
+    // emitted. At z18 the same survey is spread out → less collision, higher
+    // horizon (20) → strictly more glyphs emitted. Correctness is never wrong:
+    // the missing low-zoom labels appear after a settle/zoom-in rebuild.
+    const low = cameraController(makeCameraMap(14).map);
+    low.sync(makeParams());
+    const lowGlyphs = (h.layerState.last!.data as LabelRenderData).buffers.glyphCount;
+
+    const high = cameraController(makeCameraMap(18).map);
+    high.sync(makeParams());
+    const highGlyphs = (h.layerState.last!.data as LabelRenderData).buffers.glyphCount;
+
+    expect(highGlyphs).toBeGreaterThan(lowGlyphs);
+  });
+});
+
+describe('SurveyLabelController shape cache reuse', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.render = true;
+    h.gate.labels = true;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('reuses shaped labels across camera rebuilds — same ShapedLabel object per (kind, text)', () => {
+    // Spy on the atlas so we can prove a re-scope does NOT re-shape unchanged
+    // labels: a cached (kind, text) hits the cache and never touches the atlas.
+    const atlas = fakeGlyphAtlas();
+    const getGlyph = vi.spyOn(atlas, 'getGlyph');
+    const cam = makeCameraMap(18);
+    const c = new SurveyLabelController(cam.map, undefined, {
+      atlas,
+      scheduleRebuild: (fn: () => void) => fn(),
+    });
+    c.sync(makeParams());
+    const afterFirst = getGlyph.mock.calls.length;
+    expect(afterFirst).toBeGreaterThan(0); // shaped on the first build
+    // A camera-settle rebuild that EXITS the viewport (so build() runs again) on
+    // the SAME geometry must not re-shape — every (kind, text) is cache-served.
+    cam.state.cLng += 0.05;
+    cam.fire('moveend');
+    expect(getGlyph.mock.calls.length).toBe(afterFirst); // zero further shaping
+  });
+});
+
+// ─── dim + drag-hide flags, reveal rerun, synchronous placement ───────────────
+
+function vfl(layer: FakeLabelLayer): { kind: Uint8Array; revealZoom: Float32Array; flags: Uint8Array } {
   const d = layer.data as LabelRenderData;
-  return { kind: d.buffers.kind, ordinal: d.buffers.ordinal, flags: d.buffers.flags };
+  return { kind: d.buffers.kind, revealZoom: d.buffers.revealZoom, flags: d.buffers.flags };
 }
 
 /** Does ANY vertex of `kind` have `bit` set? */
@@ -698,11 +847,23 @@ function allKindHaveBit(layer: FakeLabelLayer, kind: number, bit: number): boole
   return seen;
 }
 
-/** Flag byte for the station label with global ordinal `g` (0 if absent). */
-function stationLabelFlag(layer: FakeLabelLayer, g: number): number {
-  const { kind, ordinal, flags } = vfl(layer);
+/** Anchor-relative mercator of station global `g` (per-vertex ordinal is gone
+ *  from the buffer, so labels are identified by their anchor — deterministic
+ *  from the fixture coords). */
+function stationAnchor(params: LabelSyncParams, g: number): [number, number] {
+  const [ax, ay] = computeMercatorAnchor(params.surveyData, params.gpsOrigin);
+  const rel = projectStationsRel(params.surveyData, params.gpsOrigin, ax, ay);
+  return [rel[g * 2]!, rel[g * 2 + 1]!];
+}
+
+/** Flag byte of the station label whose anchor matches station `g` (0 if absent). */
+function stationLabelFlag(layer: FakeLabelLayer, params: LabelSyncParams, g: number): number {
+  const [ax, ay] = stationAnchor(params, g);
+  const d = layer.data as LabelRenderData;
+  const { kind, flags, anchor } = d.buffers;
   for (let v = 0; v < kind.length; v++) {
-    if (kind[v] === LABEL_KIND.STATION_LABEL && ordinal[v] === g) return flags[v]!;
+    if (kind[v] !== LABEL_KIND.STATION_LABEL) continue;
+    if (Math.abs(anchor[v * 2]! - ax) < 1e-9 && Math.abs(anchor[v * 2 + 1]! - ay) < 1e-9) return flags[v]!;
   }
   return 0;
 }
@@ -733,7 +894,7 @@ describe('SurveyLabelController dim parity (DIM flag)', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('anchored dim: shot/station/section labels dim, comments do NOT (stock parity)', () => {
-    const cam = makeCameraMap(18);
+    const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     c.sync(commentParams());
     const layer = h.layerState.last!;
@@ -749,23 +910,24 @@ describe('SurveyLabelController dim parity (DIM flag)', () => {
   });
 
   it('immovable dim: only the immovable station label dims; section names never do', () => {
-    const cam = makeCameraMap(18);
+    const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
-    c.sync(commentParams());
+    const p = commentParams();
+    c.sync(p);
     const layer = h.layerState.last!;
     // Immovable station g0 == section 1, station index 0.
     c.setDimming({
       ...EMPTY_DIM,
       immovableStationFeatureIds: new Set([1 * FEATURE_ID_STRIDE + 0]),
     });
-    expect(stationLabelFlag(layer, 0) & LABEL_FLAG.DIM).toBe(LABEL_FLAG.DIM); // g0 dims
-    expect(stationLabelFlag(layer, 1) & LABEL_FLAG.DIM).toBe(0); // g1 does not
+    expect(stationLabelFlag(layer, p, 0) & LABEL_FLAG.DIM).toBe(LABEL_FLAG.DIM); // g0 dims
+    expect(stationLabelFlag(layer, p, 1) & LABEL_FLAG.DIM).toBe(0); // g1 does not
     // Section names are not immovable-dimmed.
     expect(anyKindHasBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DIM)).toBe(false);
   });
 
   it('clearing the dim set removes DIM (flags-only)', () => {
-    const cam = makeCameraMap(18);
+    const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     c.sync(commentParams());
     const layer = h.layerState.last!;
@@ -788,14 +950,15 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('hides the dragged station label + its comment, not other stations or section names', () => {
-    const cam = makeCameraMap(18);
+    const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
-    c.sync(commentParams());
+    const p = commentParams();
+    c.sync(p);
     const layer = h.layerState.last!;
     c.setDragHide({ stationGlobalIndices: new Set([0]) }); // drag station g0
     expect(layer.flagsCalls).toBeGreaterThan(0);
-    expect(stationLabelFlag(layer, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
-    expect(stationLabelFlag(layer, 1) & LABEL_FLAG.DRAG_HIDE).toBe(0);
+    expect(stationLabelFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(stationLabelFlag(layer, p, 1) & LABEL_FLAG.DRAG_HIDE).toBe(0);
     // The station comment (only g0 has one) hides with its station.
     expect(anyKindHasBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.DRAG_HIDE)).toBe(true);
     // Section names never drag-hide (stock keeps survey-labels out of hide layers).
@@ -803,7 +966,7 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
   });
 
   it('hides the dragged shot label + its comment', () => {
-    const cam = makeCameraMap(18);
+    const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     c.sync(commentParams());
     const layer = h.layerState.last!;
@@ -813,7 +976,7 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
   });
 
   it('a whole-section drag hides that section labels but not section names', () => {
-    const cam = makeCameraMap(18);
+    const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     c.sync(commentParams());
     const layer = h.layerState.last!;
@@ -824,42 +987,45 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
   });
 
   it('setDragHide(null) clears every DRAG_HIDE (drag end)', () => {
-    const cam = makeCameraMap(18);
+    const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
-    c.sync(commentParams());
+    const p = commentParams();
+    c.sync(p);
     const layer = h.layerState.last!;
     c.setDragHide({ stationGlobalIndices: new Set([0]) });
-    expect(stationLabelFlag(layer, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(stationLabelFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
     c.setDragHide(null);
     expect(anyKindHasBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.DRAG_HIDE)).toBe(false);
   });
 
   it('DIM and DRAG_HIDE compose without disturbing each other', () => {
-    const cam = makeCameraMap(18);
+    const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
-    c.sync(commentParams());
+    const p = commentParams();
+    c.sync(p);
     const layer = h.layerState.last!;
     c.setDimming({ ...EMPTY_DIM, anchoredSectionIds: new Set([1]) });
     c.setDragHide({ stationGlobalIndices: new Set([0]) });
     // g0 has both bits; the dim persists through the drag flag upload.
-    const f0 = stationLabelFlag(layer, 0);
+    const f0 = stationLabelFlag(layer, p, 0);
     expect(f0 & LABEL_FLAG.DIM).toBe(LABEL_FLAG.DIM);
     expect(f0 & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
     // g1 (section 1, not dragged) keeps DIM but not DRAG_HIDE.
-    const f1 = stationLabelFlag(layer, 1);
+    const f1 = stationLabelFlag(layer, p, 1);
     expect(f1 & LABEL_FLAG.DIM).toBe(LABEL_FLAG.DIM);
     expect(f1 & LABEL_FLAG.DRAG_HIDE).toBe(0);
   });
 
   it('re-applies drag-hide on a mid-drag rebuild (state survives build)', () => {
-    const cam = makeCameraMap(18);
+    const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
-    c.sync(commentParams());
+    const p = commentParams();
+    c.sync(p);
     const layer = h.layerState.last!;
     c.setDragHide({ stationGlobalIndices: new Set([0]) });
     // A mid-drag geometry flush re-syncs; the fresh build must re-bake DRAG_HIDE.
     c.sync(commentParams());
-    expect(stationLabelFlag(layer, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(stationLabelFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
   });
 });
 
@@ -875,7 +1041,7 @@ describe('SurveyLabelController synchronous placement (undo/redo)', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('a sync with moved coordinates places labels at the new anchor in the SAME call', () => {
-    const cam = makeCameraMap(18);
+    const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     c.sync(makeParams());
     const layer = h.layerState.last!;
@@ -894,7 +1060,7 @@ describe('SurveyLabelController synchronous placement (undo/redo)', () => {
   });
 });
 
-describe('SurveyLabelController collision rerun on toggle', () => {
+describe('SurveyLabelController reveal rerun on toggle', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
@@ -905,16 +1071,28 @@ describe('SurveyLabelController collision rerun on toggle', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('a kind toggle reruns collision (flags-only) when a projector exists', () => {
+  it('a kind toggle reruns the reveal pass (reveal-only upload), NOT a buffer rebuild', () => {
+    const cam = makeCameraMap(18); // has bounds → reveal + rerunReveal actually run
+    const c = cameraController(cam.map);
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    const revealBefore = layer.revealCalls;
+    const updatesBefore = layer.updateCalls;
+    c.setShotLabelsVisible(false);
+    // Declutter re-ran via a reveal-only upload — NOT a buffer rebuild.
+    expect(layer.revealCalls).toBeGreaterThan(revealBefore);
+    expect(layer.updateCalls).toBe(updatesBefore);
+  });
+
+  it('a reference-shots toggle reruns the reveal pass (reveal-only upload)', () => {
     const cam = makeCameraMap(18);
     const c = cameraController(cam.map);
     c.sync(makeParams());
     const layer = h.layerState.last!;
-    const before = layer.flagsCalls;
+    const revealBefore = layer.revealCalls;
     const updatesBefore = layer.updateCalls;
-    c.setShotLabelsVisible(false);
-    // Collision re-ran via a flags-only upload — NOT a buffer rebuild.
-    expect(layer.flagsCalls).toBeGreaterThan(before);
+    c.setReferenceShotsVisible(false);
+    expect(layer.revealCalls).toBeGreaterThan(revealBefore);
     expect(layer.updateCalls).toBe(updatesBefore);
   });
 });

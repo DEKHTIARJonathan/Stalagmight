@@ -20,17 +20,20 @@
  * move-comment palette tint are reproduced from the flags + `commentColor`
  * resolver already threaded through the tessellator.
  *
- * SCOPE (Phase 4): the build is now VIEWPORT-SCOPED with screen-space COLLISION.
+ * SCOPE: the build is VIEWPORT-SCOPED with a per-label REVEAL ZOOM
+ * (`labelReveal.ts`) that folds the screen-space declutter AND the zoom-band
+ * decimation into one float per label — the min live zoom at which it draws.
  * Only anchors inside the padded viewport build; below the label-build zoom
  * (13.5/13 hysteresis) only the cheap section names build (down to their own
- * minzoom 10), below 10 nothing. A greedy grid declutters the on-screen set
- * (`labelCollide.ts`), baking `LABEL_FLAG.HIDE` into the fresh buffer. The build
- * runs synchronously on every `sync()` (edits stay immediate — the whole point of
- * this project) AND on camera settle via a controller-owned moveend/zoomend
- * listener, coalesced to one rebuild per settle and never fired mid-animation.
- * A per-kind toggle stays a pure uniform flip (no rebuild) as in Phase 3; its
- * effect on the collision candidate set lands at the next build (camera settle /
- * edit) rather than immediately — see the note on {@link setKindVisible}.
+ * minzoom 10), below 10 nothing. The reveal pass runs synchronously on every
+ * `sync()` (edits stay immediate — the whole point of this project); labels are
+ * emitted up to `buildZoom + EMIT_SLACK` so a modest zoom-in needs no rebuild at
+ * all (the shader admits more labels per frame as the live zoom rises). A camera
+ * settle only rebuilds when the padded viewport is EXITED (pan / zoom-out) or the
+ * live zoom passes `buildZoom + EMIT_SLACK/2` (deep zoom-in) — zoom-in otherwise
+ * needs no rebuild, which is the core latency fix. A per-kind / reference toggle
+ * stays off the render loop: it flips the uniform and reruns the reveal pass
+ * (cheap reveal-only re-upload), never a buffer rebuild.
  *
  * FONT READINESS: the SDF atlas needs the bundled font loaded (async). If a sync
  * arrives before the font resolves, it is remembered and built once the font is
@@ -50,11 +53,12 @@ import {
   shapeDescriptors,
   buildLabelBuffersFromShaped,
   buildLabelFlags,
+  buildLabelRevealZooms,
   type LabelDescriptor,
   type ViewportRel,
 } from './labelTessellate';
-import { shapedExtent, type ExtentEm, type ShapedLabel } from './labelLayout';
-import { collideLabels } from './labelCollide';
+import { shapedExtent, ShapeCache, type ExtentEm, type ShapedLabel } from './labelLayout';
+import { computeRevealZooms, REVEAL_NEVER, EMIT_SLACK } from './labelReveal';
 import { labelColorContextFrom } from './labelText';
 import { LABEL_KIND, LABEL_KIND_COUNT, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { LABEL_KIND_STYLE } from './labelStyle';
@@ -90,6 +94,19 @@ function defaultScheduleRestore(fn: () => void): void {
   else setTimeout(fn, 0);
 }
 
+/** Whether `inner` is fully contained by `outer` (both anchor-relative mercator
+ *  rects). The camera-exit test: the current on-screen bounds must stay inside
+ *  the padded viewport the last build scoped to, else labels near an edge are
+ *  missing and a rebuild is due. */
+function rectContains(outer: ViewportRel, inner: ViewportRel): boolean {
+  return (
+    inner.minX >= outer.minX &&
+    inner.maxX <= outer.maxX &&
+    inner.minY >= outer.minY &&
+    inner.maxY <= outer.maxY
+  );
+}
+
 // ─── Phase 4: viewport scoping + camera-triggered rebuild ─────────────────────
 
 /** Zoom hysteresis for the EXPENSIVE label kinds (shot/station labels + comments),
@@ -107,6 +124,10 @@ const SECTION_NAME_MIN_ZOOM = LABEL_KIND_STYLE[LABEL_KIND.SECTION_NAME].minzoom;
  *  all round). Generous enough that a modest pan does not reach blank areas
  *  before the next camera-settle rebuild; tunable. */
 const VIEWPORT_PADDING = 0.5;
+/** Live zoom above `buildZoom + this` triggers a coalesced rebuild while zooming
+ *  IN, extending the emitted slack window (EMIT_SLACK/2 = one band of headroom
+ *  before the emitted set runs out). Only deep zoom-ins pay a rebuild. */
+const ZOOM_IN_SLACK_REBUILD = EMIT_SLACK / 2;
 
 /** Below the expensive band but at/above section minzoom: only section names. */
 const SECTION_ONLY_KINDS: ReadonlySet<LabelKind> = new Set([LABEL_KIND.SECTION_NAME]);
@@ -126,14 +147,17 @@ const EMPTY_DIM: CustomDimState = {
  *  ({@link CustomRenderExclusion}); dragged features' labels hide. */
 const EMPTY_EXCLUSION: CustomRenderExclusion = {};
 
-/** The padded viewport rect (anchor-relative mercator) + a projector from
- *  anchor-relative mercator to CSS screen px — both derived from ONE
- *  `map.getBounds()` read. `null` when the map cannot supply bounds / a canvas
- *  (unit-test fakes), in which case the build skips viewport scoping + collision
- *  (whole-survey, Phase-3 behavior). */
+/** The padded viewport rect (anchor-relative mercator) used for the build set,
+ *  the UNPADDED viewport rect (anchor-relative mercator) used for the "did the
+ *  camera exit coverage?" test, and the world-pixel scale (CSS px per unit
+ *  anchor-relative mercator at the current zoom) the reveal pass needs — all
+ *  derived from ONE `map.getBounds()` read. `null` when the map cannot supply
+ *  bounds / a canvas (unit-test fakes), in which case the build skips viewport
+ *  scoping + reveal (whole-survey, every label visible). */
 interface ViewportContext {
   viewport: ViewportRel;
-  project: (relX: number, relY: number) => readonly [number, number];
+  bounds: ViewportRel;
+  worldPixelScale: number;
 }
 
 export interface LabelSyncParams {
@@ -205,17 +229,26 @@ export class SurveyLabelController {
   private dimState: CustomDimState = EMPTY_DIM;
   /** Drag-exclusion set (setDragHide); dragged features' labels hide. */
   private hideState: CustomRenderExclusion = EMPTY_EXCLUSION;
-  /** Cached build products backing the flags-only refresh + collision rerun: the
-   *  last descriptor set + its shaped labels / em extents, the last projector +
-   *  zoom (collision rerun), and the last collision-loser index set. Rewritten on
-   *  every {@link build}. */
+  /** Cached build products backing the flags-only refresh + reveal rerun: the
+   *  EMITTED (post-slack-filter) descriptor set + its shaped labels / em extents,
+   *  the reveal-pass inputs (build zoom + world-pixel scale), and the last reveal
+   *  zooms. Rewritten on every {@link build}. */
   private lastDescriptors: LabelDescriptor[] | null = null;
   private lastShaped: ShapedLabel[] | null = null;
   private lastExtents: (ExtentEm | null)[] | null = null;
-  private lastProject: ((relX: number, relY: number) => readonly [number, number]) | null = null;
-  private lastZoom: number | undefined = undefined;
-  /** Descriptor indices the last collision run hid (COLLIDE_HIDE). */
-  private lastCollideHidden: ReadonlySet<number> = new Set();
+  private lastBuildZoom: number | undefined = undefined;
+  private lastWorldPixelScale: number | undefined = undefined;
+  /** The padded viewport rect (anchor-relative mercator) the last build scoped to
+   *  + the anchor it was relative to, for the camera-exit rebuild test. */
+  private builtViewport: ViewportRel | null = null;
+  private lastAnchorX = 0;
+  private lastAnchorY = 0;
+  /** Whether the last build materialized the expensive kinds (hysteresis latch
+   *  snapshot), so a settle can detect a band crossing that changes the set. */
+  private lastBuiltWantFull = false;
+  /** Shape cache shared across builds: a camera-driven re-scope re-projects +
+   *  re-collides, never re-shapes unchanged (kind, text) labels. */
+  private readonly shapeCache = new ShapeCache();
 
   /** Per-kind desired visibility (the setShow* toggles + comment-tool override),
    *  indexed by {@link LabelKind}. Held so a re-enable / stock restore reproduces
@@ -303,13 +336,13 @@ export class SurveyLabelController {
     this.kindVisible[kind] = visible;
     // The toggle itself is a pure uniform flip (the shader shows/hides the kind
     // with no rebuild). It also changes the collision CANDIDATE set, so re-run
-    // collision + refresh the flags (Phase 5) — cheap now that updateFlags exists
-    // — so a toggled-off kind stops occupying declutter space and a toggled-on
-    // kind is decluttered against immediately. rerunCollision no-ops without a
-    // projector (unit-test fakes / below-gate), leaving the pure-uniform flip.
+    // the reveal pass + re-upload the reveal buffer — a toggled-off kind stops
+    // occupying declutter space and a toggled-on kind is decluttered against
+    // immediately. rerunReveal no-ops without a world-pixel scale (unit-test
+    // fakes / below-gate), leaving the pure-uniform flip.
     if (this.active) {
       this.pushStyle();
-      this.rerunCollision();
+      this.rerunReveal();
     }
   }
 
@@ -319,7 +352,7 @@ export class SurveyLabelController {
     this.referenceShotsVisible = visible;
     if (this.active) {
       this.pushStyle();
-      this.rerunCollision();
+      this.rerunReveal();
     }
   }
 
@@ -337,11 +370,13 @@ export class SurveyLabelController {
   }
 
   /**
-   * Build the GPU-ready label buffers from SoA, VIEWPORT-SCOPED with COLLISION
-   * baked in (§4/§5). Below the expensive-kinds zoom band only section names
-   * build; below their minzoom nothing does. In a unit-test fake with no
-   * `getZoom` the zoom gate + viewport + collision are all skipped (whole-survey,
-   * all kinds — the Phase-3 behavior those tests lock).
+   * Build the GPU-ready label buffers from SoA, VIEWPORT-SCOPED with the REVEAL
+   * ZOOM baked in. Below the expensive-kinds zoom band only section names build;
+   * below their minzoom nothing does. Labels are shaped (through the shape cache),
+   * their reveal zooms computed once (`labelReveal.ts`), then EMITTED up to
+   * `buildZoom + EMIT_SLACK` so a modest zoom-in needs no rebuild. In a unit-test
+   * fake with no `getZoom` the zoom gate + viewport + reveal are all skipped
+   * (whole-survey, all kinds, every label visible from any zoom).
    */
   private build(params: LabelSyncParams): LabelRenderData {
     const t0 = performance.now();
@@ -361,45 +396,77 @@ export class SurveyLabelController {
     const kinds = zoom === undefined ? undefined : this.kindsToBuild(zoom, hasData);
     const vpCtx = zoom === undefined ? null : this.computeViewportContext(anchorX, anchorY);
 
-    const descriptors = buildLabelDescriptors(
+    const tDesc0 = performance.now();
+    let descriptors = buildLabelDescriptors(
       surveyData, gpsOrigin, anchorX, anchorY,
       { colorCtx, precision: params.precision, commentColor },
       kinds, vpCtx?.viewport,
     );
-    const shaped = shapeDescriptors(descriptors, this.atlas!);
-    const extents = shaped.map(shapedExtent);
+    const tShape0 = performance.now();
+    let shaped = shapeDescriptors(descriptors, this.atlas!, this.shapeCache);
+    let extents = shaped.map(shapedExtent);
 
-    // Collision (§5). Only runs when the map can project (a fake without
-    // bounds/canvas keeps every label, no collision). The loser set is retained
-    // (not baked into desc.flags) so a later flags-only refresh — dim / drag /
-    // collision rerun — can recombine it with the current DIM / DRAG bits.
-    let collideHidden: ReadonlySet<number> = new Set();
+    // Reveal pass: fold declutter + decimation into one per-label reveal zoom,
+    // then keep only labels within the emit horizon (buildZoom + slack). Only
+    // runs when the map can supply bounds (a fake without bounds keeps every
+    // label at reveal 0 = always visible). Retained (aligned with the EMITTED
+    // subset) so the cheap reveal-only rerun on toggle stays index-consistent.
+    const tReveal0 = performance.now();
+    let reveal: Float32Array;
     if (vpCtx !== null && zoom !== undefined) {
-      collideHidden = new Set(collideLabels(descriptors, extents, {
-        zoom,
-        project: vpCtx.project,
+      const full = computeRevealZooms(descriptors, extents, {
+        buildZoom: zoom,
+        worldPixelScale: vpCtx.worldPixelScale,
         kindVisible: this.kindVisible,
         hideReference: !this.referenceShotsVisible,
-      }));
+      });
+      // Emit only labels that clear within the horizon (finite reveal).
+      const keptDesc: LabelDescriptor[] = [];
+      const keptShaped: ShapedLabel[] = [];
+      const keptExtents: (ExtentEm | null)[] = [];
+      const keptReveal: number[] = [];
+      for (let i = 0; i < descriptors.length; i++) {
+        if (full[i]! === REVEAL_NEVER) continue;
+        keptDesc.push(descriptors[i]!);
+        keptShaped.push(shaped[i]!);
+        keptExtents.push(extents[i]!);
+        keptReveal.push(full[i]!);
+      }
+      descriptors = keptDesc;
+      shaped = keptShaped;
+      extents = keptExtents;
+      reveal = Float32Array.from(keptReveal);
+    } else {
+      reveal = new Float32Array(descriptors.length); // all 0 → visible from any zoom
     }
+    const tReveal1 = performance.now();
 
-    // Retain the build products for the cheap flag paths + collision rerun.
+    // Retain build products for the cheap flag paths + reveal rerun, and the
+    // viewport coverage the settle-rebuild test compares against.
     this.lastDescriptors = descriptors;
     this.lastShaped = shaped;
     this.lastExtents = extents;
-    this.lastProject = vpCtx?.project ?? null;
-    this.lastZoom = zoom;
-    this.lastCollideHidden = collideHidden;
+    this.lastBuildZoom = zoom;
+    this.lastWorldPixelScale = vpCtx?.worldPixelScale;
+    this.builtViewport = vpCtx?.viewport ?? null;
+    this.lastAnchorX = anchorX;
+    this.lastAnchorY = anchorY;
+    this.lastBuiltWantFull = this.fullLabelsBuilt;
 
-    const buffers = buildLabelBuffersFromShaped(descriptors, shaped, (i) =>
-      this.labelFlagByte(descriptors[i]!, collideHidden.has(i)),
+    const buffers = buildLabelBuffersFromShaped(
+      descriptors, shaped,
+      (i) => this.labelFlagByte(descriptors[i]!),
+      (i) => reveal[i]!,
     );
     debugLog('[customRender] label build', {
       ms: +(performance.now() - t0).toFixed(1),
+      descMs: +(tShape0 - tDesc0).toFixed(1),
+      shapeMs: +(tReveal0 - tShape0).toFixed(1),
+      revealMs: +(tReveal1 - tReveal0).toFixed(1),
       zoom: zoom === undefined ? null : +zoom.toFixed(2),
       labels: descriptors.length,
-      hidden: collideHidden.size,
       glyphs: buffers.glyphCount,
+      shapeCache: this.shapeCache.size,
       mb: +(buffers.byteLength / 1048576).toFixed(2),
     });
     this.lastData = { anchorX, anchorY, buffers, atlas: this.atlas! };
@@ -408,14 +475,15 @@ export class SurveyLabelController {
 
   /**
    * The full per-label flag byte = STATIC bits (FIRST_IN_SECTION / REFERENCE /
-   * ALL_REFERENCE, from the descriptor) OR the dynamic interaction bits:
-   * COLLIDE_HIDE (this label lost collision), DIM (anchored / immovable), and
-   * DRAG_HIDE (a move tool is dragging its feature). One place both the build
-   * emit and the flags-only refresh compute the byte, so they never diverge.
+   * ALL_REFERENCE, from the descriptor) OR the dynamic interaction bits: DIM
+   * (anchored / immovable) and DRAG_HIDE (a move tool is dragging its feature).
+   * Decluttering is NOT a flag anymore — it lives in the per-label reveal zoom —
+   * so a flags-only refresh (dim / drag) never disturbs the declutter and vice
+   * versa. One place both the build emit and the flags-only refresh compute the
+   * byte, so they never diverge.
    */
-  private labelFlagByte(desc: LabelDescriptor, collideHidden: boolean): number {
+  private labelFlagByte(desc: LabelDescriptor): number {
     let f = desc.flags;
-    if (collideHidden) f |= LABEL_FLAG.COLLIDE_HIDE;
     if (this.dimBitFor(desc)) f |= LABEL_FLAG.DIM;
     if (this.dragBitFor(desc)) f |= LABEL_FLAG.DRAG_HIDE;
     return f;
@@ -493,34 +561,52 @@ export class SurveyLabelController {
   private refreshFlags(): void {
     if (!this.active || !this.layer || !this.lastDescriptors || !this.lastShaped) return;
     const descriptors = this.lastDescriptors;
-    const collideHidden = this.lastCollideHidden;
-    const flags = buildLabelFlags(this.lastShaped, (i) =>
-      this.labelFlagByte(descriptors[i]!, collideHidden.has(i)),
-    );
+    const flags = buildLabelFlags(this.lastShaped, (i) => this.labelFlagByte(descriptors[i]!));
     this.layer.updateFlags(flags);
     this.map.triggerRepaint?.();
   }
 
   /**
-   * Re-run collision over the retained viewport set with the CURRENT candidate
-   * inputs (kind toggles, reference-hide) and refresh the flags. Cheap (the set
-   * is viewport-bounded) and used when a toggle changes the candidate set so the
-   * declutter updates immediately rather than at the next build (Phase 4's
-   * deferred approximation, now cheap that updateFlags exists). No-op without a
-   * projector (unit-test fakes / below-gate builds) — the toggle stays a pure
-   * uniform flip there.
+   * Re-run the reveal pass over the retained (emitted) viewport set with the
+   * CURRENT candidate inputs (kind toggles, reference-hide) and re-upload just
+   * the reveal-zoom buffer — no reshape / reproject / recolor / rebuild. Used
+   * when a toggle changes the collision candidate set so the declutter updates
+   * off the render loop (a toggled-off kind frees space; a toggled-on kind is
+   * decluttered against immediately). No-op without a world-pixel scale
+   * (unit-test fakes / below-gate builds) — the toggle stays a pure uniform flip
+   * there. Note: labels that were NOT emitted (reveal past the horizon at build
+   * time) can only reappear at the next settle / edit rebuild — an accepted deep
+   * approximation, since freed space beyond the emit slack is rare and a camera
+   * nudge rebuilds.
    */
-  private rerunCollision(): void {
-    if (!this.active || !this.lastDescriptors || !this.lastExtents || this.lastProject === null || this.lastZoom === undefined) {
+  private rerunReveal(): void {
+    if (
+      !this.active ||
+      !this.layer ||
+      !this.lastDescriptors ||
+      !this.lastExtents ||
+      !this.lastShaped ||
+      this.lastWorldPixelScale === undefined ||
+      this.lastBuildZoom === undefined
+    ) {
       return;
     }
-    this.lastCollideHidden = new Set(collideLabels(this.lastDescriptors, this.lastExtents, {
-      zoom: this.lastZoom,
-      project: this.lastProject,
+    const reveal = computeRevealZooms(this.lastDescriptors, this.lastExtents, {
+      buildZoom: this.lastBuildZoom,
+      worldPixelScale: this.lastWorldPixelScale,
       kindVisible: this.kindVisible,
       hideReference: !this.referenceShotsVisible,
-    }));
-    this.refreshFlags();
+    });
+    // The retained set is already the emitted subset; a rerun only lowers /
+    // raises finite reveals within it (removing / re-adding competitors), so
+    // clamp any REVEAL_NEVER back to the emit horizon to keep the emitted label
+    // drawable at (or just past) the top of the window rather than vanishing.
+    const horizon = this.lastBuildZoom + EMIT_SLACK;
+    for (let i = 0; i < reveal.length; i++) {
+      if (reveal[i]! === REVEAL_NEVER) reveal[i] = horizon;
+    }
+    this.layer.updateReveal(buildLabelRevealZooms(this.lastShaped, (i) => reveal[i]!));
+    this.map.triggerRepaint?.();
   }
 
   /**
@@ -561,11 +647,14 @@ export class SurveyLabelController {
   }
 
   /**
-   * The padded viewport rect (anchor-relative mercator) + a mercator→CSS-px
-   * projector, both from one `map.getBounds()`. Rotation + pitch are disabled
-   * app-wide (north-up, 0° pitch), so mercator→screen is an exact axis-aligned
-   * affine — no per-label `map.project`. `null` when the map cannot supply
-   * bounds / a canvas (unit-test fakes → no viewport scoping, no collision).
+   * The padded viewport rect (build set), the UNPADDED viewport rect (exit test)
+   * — both anchor-relative mercator — and the world-pixel scale (CSS px per unit
+   * anchor-relative mercator at the current zoom), all from one
+   * `map.getBounds()`. Rotation + pitch are disabled app-wide (north-up, 0°
+   * pitch) and mercator is isotropic, so the reveal pass scales the world-pixel
+   * scale by `2^Δzoom` for other ladder zooms — no per-label `map.project`.
+   * `null` when the map cannot supply bounds / a canvas (unit-test fakes → no
+   * viewport scoping, no reveal).
    */
   private computeViewportContext(anchorX: number, anchorY: number): ViewportContext | null {
     const bounds = this.map.getBounds?.();
@@ -588,19 +677,22 @@ export class SurveyLabelController {
       minY: minY - padY - anchorY,
       maxY: maxY + padY - anchorY,
     };
-    const sx = width / spanX;
-    const sy = height / spanY;
-    const project = (relX: number, relY: number): readonly [number, number] => [
-      (relX + anchorX - minX) * sx,
-      (relY + anchorY - minY) * sy,
-    ];
-    return { viewport, project };
+    const boundsRel: ViewportRel = {
+      minX: minX - anchorX,
+      maxX: maxX - anchorX,
+      minY: minY - anchorY,
+      maxY: maxY - anchorY,
+    };
+    return { viewport, bounds: boundsRel, worldPixelScale: width / spanX };
   }
 
   /**
    * A camera gesture ended (moveend/zoomend). Coalesce a burst into ONE deferred
-   * viewport rebuild (never per frame, §4); the deferred callback skips if the
-   * camera is still animating (a chained ease) and waits for the next settle.
+   * rebuild EVALUATION (never per frame); the deferred callback skips if the
+   * camera is still animating (a chained ease) and otherwise rebuilds only when
+   * {@link needsRebuild} says the emitted set no longer covers the view. A plain
+   * zoom-in (superset already emitted) does nothing — the shader admits more
+   * labels per frame from their reveal zooms — which is the core latency fix.
    */
   private onCameraSettle(): void {
     if (!this.active || this.viewportRebuildScheduled) return;
@@ -608,9 +700,35 @@ export class SurveyLabelController {
     this.scheduleRebuild(() => {
       this.viewportRebuildScheduled = false;
       if (!this.active) return;
-      if (this.map.isMoving?.()) return; // still animating — the next settle rebuilds
-      this.rebuildViewport();
+      if (this.map.isMoving?.()) return; // still animating — the next settle re-evaluates
+      if (this.needsRebuild()) this.rebuildViewport();
     });
+  }
+
+  /**
+   * Whether the emitted label set no longer covers the current camera, so a
+   * rebuild is warranted. True when: the padded built viewport was EXITED (a pan
+   * or a zoom-OUT grows the on-screen bounds past it); OR the live zoom rose past
+   * `buildZoom + EMIT_SLACK/2` (a deep zoom-IN would soon run out of the emitted
+   * slack); OR the expensive-kinds hysteresis band was crossed (the set of kinds
+   * to build changed). A plain zoom-in within the slack returns false — no
+   * rebuild, the reveal-zoom shader handles admission. Rebuilds defensively when
+   * it cannot read the camera (no bounds / zoom).
+   */
+  private needsRebuild(): boolean {
+    const zoom = this.map.getZoom?.();
+    if (zoom === undefined) return true;
+    const vpCtx = this.computeViewportContext(this.lastAnchorX, this.lastAnchorY);
+    if (!vpCtx || this.builtViewport === null) return true;
+    // 1. Camera exited the padded built viewport (pan / zoom-out).
+    if (!rectContains(this.builtViewport, vpCtx.bounds)) return true;
+    // 2. Zoom-in past the emitted slack window.
+    if (this.lastBuildZoom !== undefined && zoom > this.lastBuildZoom + ZOOM_IN_SLACK_REBUILD) return true;
+    // 3. Expensive-kinds hysteresis band crossing (section-only ⇆ full).
+    const hasData = (this.pendingParams?.surveyData.stationCount ?? 0) > 0;
+    const wantFull = this.fullLabelsBuilt ? zoom >= LABEL_DROP_ZOOM : zoom >= LABEL_BUILD_ZOOM;
+    if ((wantFull && hasData) !== this.lastBuiltWantFull) return true;
+    return false;
   }
 
   /** Re-scope + re-collide from the last sync params (geometry unchanged on a
