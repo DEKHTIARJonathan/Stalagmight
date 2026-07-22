@@ -31,7 +31,6 @@ import {
 } from './surveyLayer/features';
 import { SurveyGeometryIndex } from './surveyLayer/geometryIndex';
 import {
-  buildDragPreviewFeatureCollection,
   offsetOverlayPoint,
   offsetOverlayShot,
   type DragPreviewFeature,
@@ -39,21 +38,18 @@ import {
   type MovingEnd,
   type Projector,
 } from './surveyLayer/dragPreviewSource';
-import {
-  DRAG_PREVIEW_SOURCE,
-  createDragPreviewLayers,
-  removeDragPreviewLayers,
-  setDragPreviewTranslate,
-  type DragPreviewLayerCtx,
-} from './surveyLayer/dragPreviewLayers';
-import { GhostFollow } from './surveyLayer/dragGhostFollow';
+import { DRAG_PREVIEW_SOURCE, type DragPreviewLayerCtx } from './surveyLayer/dragPreviewLayers';
+import { DragGhostController } from './surveyLayer/dragGhostController';
+import { buildGhostBuffers } from './surveyLayer/customRender/ghostTessellate';
+import type { GhostRenderData } from './surveyLayer/customRender/surveyGhostLayer';
+import { packCssColor } from './surveyLayer/customRender/colorPack';
 import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
 import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
 import { dimmedZoomOpacity } from './surveyLayer/opacityExpressions';
 import { decideLabelBuild, skippedBuildForCamera } from './surveyLayer/labelBuildDecision';
 import { SurveyCustomController, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
-import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
+import { makeOverlayColor, overlayInputFrom } from './surveyLayer/customRender/overlayColor';
 import type { SurveyData } from '../../types/survey-data';
 import type { ProjectWarning } from '../../types/commands';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
@@ -309,33 +305,23 @@ export default class SurveyLayer {
   // `*-translate`) so the tiler clips moved geometry — no background wedges at
   // large offsets (BUG A); one setData so stations/shots can't skew apart (BUG B).
   // Attached text is not previewed (it is hidden from the stock text layers).
-  // Layer specs + IDs live in surveyLayer/dragPreviewLayers.ts (DRAG_PREVIEW_SOURCE
-  // is imported for the per-frame setData); the layers are created/removed there.
+  // The moving ghost is owned by {@link DragGhostController}; DRAG_PREVIEW_SOURCE
+  // is imported only for setDragExclusionWhenPreviewReady's stock-preview load gate.
   /** Captured moving geometry for the active drag (originals + movingEnd). */
   private dragPreviewSet: DragPreviewSet | null = null;
   /** rAF coalescer for the per-frame interact-overlay follow: MapCanvas may push
    *  several offsets per frame (pointermove + the map-'move' re-apply), but the
    *  overlay only needs the latest — one small setData per frame. (The GHOST is
-   *  now driven single-flight by {@link ghostFollow}, decoupled from this rAF.) */
+   *  driven synchronously by {@link DragGhostController}, decoupled from this rAF.) */
   private dragUpdateRaf: number | null = null;
   private pendingDragOffset: { dx: number; dy: number } | null = null;
-  /** Ghost-follow (#mem drag latency): the preview `setData` round-trips through
-   *  the MapLibre worker, so a bake lands SEVERAL frames after the pointermove. A
-   *  synchronous, viewport-anchored `*-translate` keeps the ghost glued to the
-   *  cursor between bakes, while the periodic re-`setData` re-clips the real
-   *  geometry (avoids large-offset wedges / shot-station skew). The state machine
-   *  bakes SINGLE-FLIGHT (at most one setData pending, its position recorded), so
-   *  the displayed geometry always equals the last LANDED bake and the translate
-   *  is always `live - landed` — no elastic overshoot regardless of land timing.
-   *  See {@link GhostFollow}. Null while no drag is active. */
-  private ghostFollow: GhostFollow | null = null;
-  /** Persistent `sourcedata` listener that confirms the ONE in-flight ghost bake
-   *  has landed (registered for the drag's lifetime; removed in endDragPreview /
-   *  destroy). Single-flight + `isSourceLoaded` makes the event unambiguous. */
-  private ghostLandListener: ((e: maplibregl.MapSourceDataEvent) => void) | null = null;
-  /** Fallback timer that force-lands the in-flight ghost bake if the sourcedata
-   *  confirmation is missed, so the single-flight queue cannot stall. */
-  private ghostBakeTimeout: ReturnType<typeof setTimeout> | null = null;
+  /** Drag ghost (#mem drag latency): owns the moving-geometry preview and drives
+   *  it from a live screen-px offset. The CUSTOM path renders a WebGL layer whose
+   *  drag delta is a single vertex-shader uniform (no worker, no re-bake, so no
+   *  overshoot); the STOCK fallback is the historical GeoJSON preview +
+   *  single-flight {@link GhostFollow} bake / `line-translate` machine. See
+   *  {@link DragGhostController}. Constructed once, reused across drags. */
+  private dragGhost!: DragGhostController;
   /** Interact-overlay follow (#C): a hover/selected highlight on a moving
    *  station/shot is re-emitted at the drag offset each frame so it tracks the
    *  cursor. Stationary overlay features (snap ring, highlightedStationIds,
@@ -447,10 +433,6 @@ export default class SurveyLayer {
   // thrashing if the user zooms across the threshold rapidly.
   private static readonly LABEL_BUILD_ZOOM = 13.5;
   private static readonly LABEL_DROP_ZOOM = 13;
-  /** Fallback deadline (ms) after which an unconfirmed in-flight ghost bake is
-   *  force-landed so the single-flight queue cannot stall (the real sourcedata
-   *  land normally beats this comfortably). See bakeGhostPreview. */
-  private static readonly GHOST_BAKE_TIMEOUT_MS = 250;
   /** Whether label features are currently materialized in the sources.
    *  Starts false — nothing is built yet — so the FIRST build uses the
    *  BUILD threshold (13.5), not the drop threshold. With the old `true`
@@ -602,6 +584,15 @@ export default class SurveyLayer {
     this.customLabels = new SurveyLabelController(map, undefined, {
       resync: () => this.resyncCustomRenderFromStore(),
       onActiveChange: (active) => this.onCustomLabelsActiveChange(active),
+    });
+    this.dragGhost = new DragGhostController(map, {
+      customActive: () => this.customBulkSuppressed,
+      ghostData: (set) => this.dragGhostData(set),
+      layerCtx: () => this.dragPreviewLayerCtx(),
+      projector: () => this.dragProjector(),
+      dpr: () => (typeof window !== 'undefined' && window.devicePixelRatio) || 1,
+      scheduleRestore: (fn) =>
+        typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(fn, 0),
     });
   }
 
@@ -3893,43 +3884,65 @@ export default class SurveyLayer {
     };
   }
 
-  /** Install the captured drag preview geometry (shots / stations / closures)
-   *  into the per-frame setData source. Attached text is not previewed - it is
-   *  hidden from the stock text layers for the drag duration by the begin
-   *  methods. Shared by the segment and station/shot begins. */
-  private installDragPreview(features: DragPreviewFeature[]): void {
+  /** Install the captured drag preview geometry (shots / stations / closures) as
+   *  the moving ghost, and hide the moving originals. Attached text is not
+   *  previewed - it is hidden from the stock text layers for the drag duration by
+   *  the begin methods. Shared by the segment and station/shot begins.
+   *
+   *  The ghost is a custom WebGL layer whose live drag delta is a single
+   *  vertex-shader uniform (no worker, no re-bake -> no overshoot). It draws
+   *  synchronously on the next frame, so the moving originals are hidden NOW (they
+   *  overlap the ghost at offset 0). If the custom ghost is not the active path
+   *  (bulk geometry stock, or the ghost layer failed / self-disabled), the STOCK
+   *  GeoJSON preview stands in and its async setData means the hide waits for the
+   *  first source load (START-flash fix). See {@link DragGhostController}. */
+  private installDragPreview(features: DragPreviewFeature[], exclusion: CustomRenderExclusion): void {
     // New drag generation: invalidates any still-pending deferred drag-hide from
     // a superseded drag (guards the sourcedata callback in
     // setDragExclusionWhenPreviewReady).
     this.dragGeneration += 1;
     this.dragPreviewSet = { features };
-    createDragPreviewLayers(this.map, this.dragPreviewLayerCtx());
     this.dragPreviewActive = true;
-    // Ghost-follow: arm the land confirmation, then start the single-flight
-    // machine (issues the first bake at offset 0, translate 0 — byte-identical
-    // to before at rest). The interact overlay follows separately at offset 0.
-    this.armGhostLand();
-    this.ghostFollow = new GhostFollow({
-      bake: (pos) => this.bakeGhostPreview(pos.dx, pos.dy),
-      translate: (t) => setDragPreviewTranslate(this.map, [t.dx, t.dy]),
-    });
-    this.ghostFollow.start();
+    if (this.dragGhost.begin(this.dragPreviewSet) === 'custom') this.setDragExclusion(exclusion);
+    else this.setDragExclusionWhenPreviewReady(exclusion);
     this.renderOverlayFollow(0, 0);
   }
 
-  /** Re-project the captured moving set at `[dx, dy]` and push it in ONE setData
-   *  (the ghost BAKE). Projecting from originals every time (never accumulating)
-   *  keeps the preview correct across a mid-drag zoom. Single-flight: the caller
-   *  ({@link GhostFollow}) guarantees at most one bake is outstanding, and a
-   *  fallback timer force-lands it if the sourcedata confirmation is missed so the
-   *  queue cannot stall. */
-  private bakeGhostPreview(dx: number, dy: number): void {
-    if (!this.dragPreviewActive || !this.dragPreviewSet) return;
-    const fc = buildDragPreviewFeatureCollection(this.dragPreviewSet, this.dragProjector(), dx, dy);
-    const src = this.map.getSource(DRAG_PREVIEW_SOURCE);
-    if (src && 'setData' in src) (src as maplibregl.GeoJSONSource).setData(fc);
-    if (this.ghostBakeTimeout !== null) clearTimeout(this.ghostBakeTimeout);
-    this.ghostBakeTimeout = setTimeout(() => this.onGhostBakeLanded(), SurveyLayer.GHOST_BAKE_TIMEOUT_MS);
+  /** Build the custom-ghost render data (buffers + device-px sizes) for a captured
+   *  set: colors resolved at capture time the same way the bulk geometry shows
+   *  them (base / severity / depth from the feature's own `color`, or the
+   *  analytical overlay ramp), the preview's 0.85 line/fill opacity baked into
+   *  alpha. Sizes mirror {@link dragPreviewLayerCtx} (selection width/radius,
+   *  2.5px stroke) scaled to device px, matching the custom bulk layer's dpr. */
+  private dragGhostData(set: DragPreviewSet): GhostRenderData {
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    const overlay = overlayInputFrom(
+      this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState,
+    );
+    const ramp = overlay ? makeOverlayColor(overlay, this.themeColors.grayLine) : null;
+    const shotWidth = this.getShotSelectionWidth();
+    const { anchorX, anchorY, line, circle } = buildGhostBuffers(set, {
+      fillAlpha: 0.85,
+      strokeColor: packCssColor(this.themeColors.selectHighlight),
+      widthMulFor: (f) => (f.properties.kind === 'closure' ? 3 / shotWidth : 1),
+      colorFor: (f) => {
+        // Closures always use their error color (the stock ghost closure layer
+        // reads `['get','color']`, not the overlay ramp).
+        if (ramp && overlay && f.properties.kind !== 'closure') {
+          const key = overlay.mode === 'distance' ? 'dist' : 'gasReach';
+          const v = f.properties[key];
+          return ramp(typeof v === 'number' ? v : -1);
+        }
+        return packCssColor(String(f.properties.color ?? '#ffffff'));
+      },
+    });
+    return {
+      anchorX, anchorY, line, circle,
+      lineHalfWidthPx: (shotWidth / 2) * dpr,
+      circleRadiusPx: this.getStationSelectionRadius() * dpr,
+      circleStrokePx: 2.5 * dpr,
+      aaPx: dpr,
+    };
   }
 
   /** Re-emit any hover/selected highlight on a moving feature at the drag offset
@@ -3941,48 +3954,6 @@ export default class SurveyLayer {
     if (!this.dragPreviewActive) return;
     this.dragOverlayOffset = { dx, dy };
     this.refreshInteractOverlay();
-  }
-
-  /** The one in-flight ghost bake landed (sourcedata-confirmed or timeout). Clear
-   *  the fallback timer and advance the state machine (which re-derives the
-   *  translate from the live cursor and chains the next bake if warranted). */
-  private onGhostBakeLanded(): void {
-    if (this.ghostBakeTimeout !== null) {
-      clearTimeout(this.ghostBakeTimeout);
-      this.ghostBakeTimeout = null;
-    }
-    this.ghostFollow?.land();
-  }
-
-  /** Arm the persistent `sourcedata` land confirmation for the active drag. With
-   *  single-flight baking, `isSourceLoaded` true while a bake is in flight means
-   *  THAT bake's tiles are the ones now drawn — an unambiguous land signal. */
-  private armGhostLand(): void {
-    if (this.ghostLandListener) return;
-    const listener = (e: maplibregl.MapSourceDataEvent): void => {
-      if (e.sourceId !== DRAG_PREVIEW_SOURCE) return;
-      if (!this.dragPreviewActive) return;
-      if (!this.ghostFollow?.hasBakeInFlight()) return;
-      if (!this.map.isSourceLoaded(DRAG_PREVIEW_SOURCE)) return;
-      this.onGhostBakeLanded();
-    };
-    this.ghostLandListener = listener;
-    this.map.on('sourcedata', listener);
-  }
-
-  /** Tear down the ghost-follow machine, its land listener + fallback timer, and
-   *  zero the preview translate (called on drag end, before the layers go). */
-  private disarmGhostFollow(): void {
-    if (this.ghostLandListener) {
-      this.map.off('sourcedata', this.ghostLandListener);
-      this.ghostLandListener = null;
-    }
-    if (this.ghostBakeTimeout !== null) {
-      clearTimeout(this.ghostBakeTimeout);
-      this.ghostBakeTimeout = null;
-    }
-    setDragPreviewTranslate(this.map, [0, 0]);
-    this.ghostFollow = null;
   }
 
   /** The map-backed projector used for the preview + overlay offset transforms. */
@@ -4144,11 +4115,9 @@ export default class SurveyLayer {
       });
     }
 
-    this.installDragPreview(features);
     // Segment drag hides whole connected sections (shots + stations) in the
     // custom layer, mirroring the sectionId exclusion applied to the stock layers.
-    // Deferred until the preview has drawn (START-flash fix).
-    this.setDragExclusionWhenPreviewReady({ sectionIds: new Set(idsArray) });
+    this.installDragPreview(features, { sectionIds: new Set(idsArray) });
   }
 
   /**
@@ -4410,11 +4379,10 @@ export default class SurveyLayer {
       this.map.setFilter(this.loopClosuresLayerId, composedClosure);
     }
 
-    this.installDragPreview(features);
-    // Deferred until the preview has drawn (START-flash fix): hide the moving
-    // originals from the custom layer only once the async preview source is up,
-    // so there is never a frame with the geometry in neither place.
-    this.setDragExclusionWhenPreviewReady({
+    // Hide the moving originals from the custom layer. installDragPreview applies
+    // this now for the custom ghost (draws next frame) or defers it behind the
+    // async stock preview's first load (START-flash fix).
+    this.installDragPreview(features, {
       stationGlobalIndices: excludedStationGlobals,
       shotGlobalIndices: excludedShotGlobals,
       affectedSectionIds,
@@ -4490,12 +4458,13 @@ export default class SurveyLayer {
     if (this.dragPreviewActive) this.setDragExclusion(pending.exclusion);
   }
 
-  /** Drive both followers from a pointermove offset. The GHOST is handed to the
-   *  single-flight machine SYNCHRONOUSLY (applies the screen-space translate this
-   *  frame with no worker, and bakes at most one setData in flight). The interact
-   *  overlay follow stays rAF-coalesced (one small setData per frame). */
+  /** Drive both followers from a pointermove offset. The GHOST is driven
+   *  SYNCHRONOUSLY by the controller (custom path: one shader-uniform write +
+   *  triggerRepaint, no worker; stock fallback: the single-flight bake / translate
+   *  machine). The interact overlay follow stays rAF-coalesced (one small setData
+   *  per frame). */
   private scheduleDragRender(dx: number, dy: number): void {
-    this.ghostFollow?.move(dx, dy);
+    this.dragGhost.move(dx, dy);
     this.pendingDragOffset = { dx, dy };
     if (this.dragUpdateRaf !== null) return;
     this.dragUpdateRaf = requestAnimationFrame(() => {
@@ -4574,14 +4543,13 @@ export default class SurveyLayer {
     if (!this.dragPreviewActive) return;
 
     this.cancelDragRender();
-    // Tear down the ghost-follow machine + listener/timer + zero the preview
-    // translate before the layers are removed.
-    this.disarmGhostFollow();
-    // Drop any deferred drag-hide that never fired (drag ended before the preview
-    // loaded). removeDragPreviewLayers below is the single removal point for the
-    // preview now that commitDragPreview keeps it alive across the IPC window.
+    // Tear down the ghost (custom layer or stock follow machine + preview layers).
+    // This is the single removal point for the preview now that commitDragPreview
+    // keeps it alive across the IPC window.
+    this.dragGhost.end();
+    // Drop any deferred drag-hide that never fired (drag ended before the stock
+    // preview loaded).
     this.clearPendingDragHide();
-    removeDragPreviewLayers(this.map);
     // Restore geometry filters immediately, but hold the moved sections' TEXT
     // (label + comment) filters until the label tiles reload with post-move
     // coordinates. The geometry is custom-rendered (its exclusion is dropped
@@ -5654,16 +5622,9 @@ export default class SurveyLayer {
     }
     this.pendingHoverEvent = null;
     this.cancelDragRender();
-    // Drop the ghost-follow land listener + fallback timer so neither fires on a
-    // torn-down map (listener-only; the preview layers are removed with the map).
-    if (this.ghostLandListener) {
-      this.map.off('sourcedata', this.ghostLandListener);
-      this.ghostLandListener = null;
-    }
-    if (this.ghostBakeTimeout !== null) {
-      clearTimeout(this.ghostBakeTimeout);
-      this.ghostBakeTimeout = null;
-    }
+    // Tear down the ghost (custom layer / stock follow listener + timer) so
+    // nothing fires on a torn-down map.
+    this.dragGhost.end();
 
     // Clean up touch long-press timer
     if (this.touchLongPressTimer) {
