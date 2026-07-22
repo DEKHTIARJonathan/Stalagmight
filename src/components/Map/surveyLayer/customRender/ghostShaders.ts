@@ -114,20 +114,29 @@ in vec2 a_corner;
 in float a_move;
 in vec4 a_fill;
 in vec4 a_stroke;
+in float a_size_mul;
+in float a_stroke_mul;
 out vec4 v_fill;
 out vec4 v_stroke;
 out vec2 v_offset;
+out float v_size_mul;
+out float v_stroke_mul;
 void main() {
   vec4 c = u_matrix * vec4(a_center, 0.0, 1.0);
   vec2 sc = c.xy / c.w + vec2(1.0, -1.0) * (a_move * u_offset_px) / u_viewport * 2.0;
   vec4 base = vec4(sc * c.w, c.z, c.w);
-  float ext = (u_radius + u_stroke_width) + u_aa;
+  // Per-vertex radius / stroke multipliers let the on-top highlight pass draw a
+  // larger disc + ring (hover/selection) than the base moving stations, which
+  // stay at size 1 (the ghost's selection styling).
+  float ext = (u_radius * a_size_mul + u_stroke_width * a_stroke_mul) + u_aa;
   vec2 offsetPx = a_corner * ext;
   vec2 offsetClip = offsetPx / u_viewport * 2.0 * base.w;
   gl_Position = vec4(base.xy + offsetClip, base.z, base.w);
   v_fill = a_fill;
   v_stroke = a_stroke;
   v_offset = offsetPx;
+  v_size_mul = a_size_mul;
+  v_stroke_mul = a_stroke_mul;
 }`;
 
 export const GHOST_CIRCLE_FRAGMENT_SRC = `#version 300 es
@@ -138,12 +147,16 @@ uniform float u_aa;
 in vec4 v_fill;
 in vec4 v_stroke;
 in vec2 v_offset;
+in float v_size_mul;
+in float v_stroke_mul;
 out vec4 fragColor;
 void main() {
+  float rad = u_radius * v_size_mul;
+  float sw = u_stroke_width * v_stroke_mul;
   float d = length(v_offset);
-  float outer = u_radius + u_stroke_width;
+  float outer = rad + sw;
   float outerAlpha = clamp((outer - d) / u_aa + 0.5, 0.0, 1.0);
-  float fillT = clamp((u_radius - d) / u_aa + 0.5, 0.0, 1.0);
+  float fillT = clamp((rad - d) / u_aa + 0.5, 0.0, 1.0);
   vec4 col = mix(v_stroke, v_fill, fillT);
   float a = col.a * outerAlpha;
   fragColor = vec4(col.rgb * a, a);

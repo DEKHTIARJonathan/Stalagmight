@@ -13,14 +13,21 @@
  * trick); the per-frame drag delta is a SHADER uniform, so these buffers are
  * built once and never touched again during the drag.
  *
+ * A trailing HIGHLIGHT pass re-emits the grabbed feature (the hovered/selected
+ * station/shot that picked up the drag) at the interact-overlay highlight style
+ * (larger disc / wider capsule, hover or selection stroke), drawn ON TOP of the
+ * base moving copy so it shares `u_offset_px` and tracks the cursor exactly in
+ * tandem with the ghost. That replaces the async per-frame overlay `setData`
+ * that lagged the synchronous ghost.
+ *
  * Colors are resolved to packed RGBA8 at CAPTURE time by the caller (base /
  * severity / depth color from the feature's own `color`, or the analytical
  * overlay ramp), matching whatever the bulk geometry currently shows. The
  * preview's translucency (line / fill 0.85, per `dragPreviewLayers.ts`) is baked
- * into the alpha channel; the station stroke keeps full alpha.
+ * into the alpha channel; the base station stroke keeps full alpha.
  */
 import { lngLatToMercator } from '../vectorTileData';
-import { movesVertex, type DragPreviewFeature, type DragPreviewSet } from '../dragPreviewSource';
+import { movesVertex, type DragPreviewFeature, type DragPreviewSet, type MovingEnd } from '../dragPreviewSource';
 import { LINE_EP, LINE_SIDE, CIRCLE_CX, CIRCLE_CY } from './tessellate';
 import type { Rgba8 } from './colorPack';
 
@@ -41,7 +48,8 @@ export interface GhostLineBuffers {
   moveB: Float32Array;
   /** Flat per-vertex RGBA8, alpha pre-baked to the preview line opacity. */
   color: Uint8Array;
-  /** Per-vertex width multiplier over `u_half_width` (shots 1, wider closures). */
+  /** Per-vertex width multiplier over `u_half_width` (shots 1, wider closures /
+   *  the highlight pass). */
   widthMul: Float32Array;
   /** Two triangles per segment, `segmentCount*6`, UNSIGNED_INT. */
   indices: Uint32Array;
@@ -58,9 +66,14 @@ export interface GhostCircleBuffers {
   corner: Float32Array;
   /** Whether the station tracks the offset uniform (all captured stations do). */
   move: Float32Array;
-  /** Per-vertex fill RGBA8 (alpha pre-baked) and stroke RGBA8 (full alpha). */
+  /** Per-vertex fill RGBA8 (alpha pre-baked) and stroke RGBA8. */
   fill: Uint8Array;
   stroke: Uint8Array;
+  /** Per-vertex radius / stroke-width multipliers (base 1; the highlight pass
+   *  enlarges the grabbed station's disc + ring to the overlay hover/selection
+   *  size). */
+  sizeMul: Float32Array;
+  strokeMul: Float32Array;
   /** Two triangles per station, `stationCount*6`, UNSIGNED_INT. */
   indices: Uint32Array;
   byteLength: number;
@@ -71,12 +84,42 @@ export interface GhostCircleBuffers {
 export interface GhostBuildInputs {
   /** Resolved base RGB for a feature (alpha ignored; `fillAlpha` is applied). */
   colorFor: (f: DragPreviewFeature) => Rgba8;
-  /** Station stroke color (kept at full alpha). */
+  /** Base station stroke color (kept at full alpha). */
   strokeColor: Rgba8;
   /** Preview translucency (0..1) baked into line / fill alpha. */
   fillAlpha: number;
   /** Line width multiplier over the shot base width (closures render wider). */
   widthMulFor: (f: DragPreviewFeature) => number;
+}
+
+/** The grabbed station's highlight, re-drawn on top at overlay style. */
+export interface GhostStationHighlight {
+  coord: [number, number];
+  movingEnd: MovingEnd;
+  /** Fill + stroke RGB (alpha applied from `opacity`). */
+  fill: Rgba8;
+  stroke: Rgba8;
+  /** Overlay opacity (0..1) baked into fill + stroke alpha. */
+  opacity: number;
+  /** Radius / stroke-width multipliers over the ghost base (hover/selection). */
+  sizeMul: number;
+  strokeMul: number;
+}
+
+/** The grabbed shot's highlight, re-drawn on top at overlay style. */
+export interface GhostShotHighlight {
+  a: [number, number];
+  b: [number, number];
+  movingEnd: MovingEnd;
+  color: Rgba8;
+  opacity: number;
+  /** Width multiplier over the ghost base half-width (hover/selection). */
+  widthMul: number;
+}
+
+export interface GhostHighlights {
+  stations: GhostStationHighlight[];
+  shots: GhostShotHighlight[];
 }
 
 /** Built ghost buffers + the shared anchor for `composeAnchorMatrix`. */
@@ -87,6 +130,29 @@ export interface GhostBuffers {
   circle: GhostCircleBuffers;
 }
 
+/** Internal unified line vertex source (base capsule + highlight capsule). */
+interface LinePrim {
+  a: [number, number];
+  b: [number, number];
+  moveA: number;
+  moveB: number;
+  color: Rgba8;
+  alpha: number;
+  widthMul: number;
+}
+
+/** Internal unified circle vertex source (base disc + highlight disc). */
+interface CirclePrim {
+  center: [number, number];
+  move: number;
+  fill: Rgba8;
+  stroke: Rgba8;
+  fillAlpha: number;
+  strokeAlpha: number;
+  sizeMul: number;
+  strokeMul: number;
+}
+
 function isLine(f: DragPreviewFeature): boolean {
   return f.emit === 'line' && f.coords.length >= 2;
 }
@@ -95,50 +161,106 @@ function isPoint(f: DragPreviewFeature): boolean {
   return f.emit === 'point' && f.coords.length >= 1;
 }
 
-/** Mercator centroid (bbox midpoint) of every captured coord — the anchor that
- *  keeps anchor-relative float32 positions tiny. `[0.5, 0.5]` for an empty set. */
-function computeGhostAnchor(set: DragPreviewSet): [number, number] {
+function byteClamp(a: number): number {
+  return Math.max(0, Math.min(255, Math.round(a * 255)));
+}
+
+/** Mercator centroid (bbox midpoint) of every prim coord — the anchor that keeps
+ *  anchor-relative float32 positions tiny. `[0.5, 0.5]` for an empty set. */
+function computeAnchor(lines: LinePrim[], circles: CirclePrim[]): [number, number] {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
   let any = false;
-  for (const f of set.features) {
-    if (!isLine(f) && !isPoint(f)) continue;
-    for (const [lng, lat] of f.coords) {
-      const [mx, my] = lngLatToMercator(lng, lat);
-      if (mx < minX) minX = mx;
-      if (my < minY) minY = my;
-      if (mx > maxX) maxX = mx;
-      if (my > maxY) maxY = my;
-      any = true;
-    }
+  const acc = (lng: number, lat: number): void => {
+    const [mx, my] = lngLatToMercator(lng, lat);
+    if (mx < minX) minX = mx;
+    if (my < minY) minY = my;
+    if (mx > maxX) maxX = mx;
+    if (my > maxY) maxY = my;
+    any = true;
+  };
+  for (const l of lines) {
+    acc(l.a[0], l.a[1]);
+    acc(l.b[0], l.b[1]);
   }
+  for (const c of circles) acc(c.center[0], c.center[1]);
   if (!any) return [0.5, 0.5];
   return [(minX + maxX) / 2, (minY + maxY) / 2];
 }
 
-/** Tessellate a captured drag set into ghost line + circle buffers. */
-export function buildGhostBuffers(set: DragPreviewSet, inputs: GhostBuildInputs): GhostBuffers {
-  const [anchorX, anchorY] = computeGhostAnchor(set);
-  const alpha = Math.max(0, Math.min(255, Math.round(inputs.fillAlpha * 255)));
+/** Tessellate a captured drag set (+ optional grabbed-feature highlights) into
+ *  ghost line + circle buffers. Highlights are appended so they draw on top. */
+export function buildGhostBuffers(
+  set: DragPreviewSet,
+  inputs: GhostBuildInputs,
+  highlights?: GhostHighlights,
+): GhostBuffers {
+  const baseAlpha = byteClamp(inputs.fillAlpha);
 
-  const lineFeatures = set.features.filter(isLine);
-  const pointFeatures = set.features.filter(isPoint);
+  const lines: LinePrim[] = [];
+  const circles: CirclePrim[] = [];
+  for (const f of set.features) {
+    if (isLine(f)) {
+      const a = f.coords[0]!;
+      const b = f.coords[f.coords.length - 1]!;
+      lines.push({
+        a, b,
+        moveA: movesVertex(f.movingEnd, 0, 2) ? 1 : 0,
+        moveB: movesVertex(f.movingEnd, 1, 2) ? 1 : 0,
+        color: inputs.colorFor(f),
+        alpha: baseAlpha,
+        widthMul: inputs.widthMulFor(f),
+      });
+    } else if (isPoint(f)) {
+      circles.push({
+        center: f.coords[0]!,
+        move: movesVertex(f.movingEnd, 0, 1) ? 1 : 0,
+        fill: inputs.colorFor(f),
+        stroke: inputs.strokeColor,
+        fillAlpha: baseAlpha,
+        strokeAlpha: 255,
+        sizeMul: 1,
+        strokeMul: 1,
+      });
+    }
+  }
 
-  const line = buildLine(lineFeatures, inputs, anchorX, anchorY, alpha);
-  const circle = buildCircle(pointFeatures, inputs, anchorX, anchorY, alpha);
-  return { anchorX, anchorY, line, circle };
+  // Highlight pass LAST -> drawn on top of the base moving copy.
+  for (const s of highlights?.shots ?? []) {
+    lines.push({
+      a: s.a, b: s.b,
+      moveA: movesVertex(s.movingEnd, 0, 2) ? 1 : 0,
+      moveB: movesVertex(s.movingEnd, 1, 2) ? 1 : 0,
+      color: s.color,
+      alpha: byteClamp(s.opacity),
+      widthMul: s.widthMul,
+    });
+  }
+  for (const st of highlights?.stations ?? []) {
+    circles.push({
+      center: st.coord,
+      move: movesVertex(st.movingEnd, 0, 1) ? 1 : 0,
+      fill: st.fill,
+      stroke: st.stroke,
+      fillAlpha: byteClamp(st.opacity),
+      strokeAlpha: byteClamp(st.opacity),
+      sizeMul: st.sizeMul,
+      strokeMul: st.strokeMul,
+    });
+  }
+
+  const [anchorX, anchorY] = computeAnchor(lines, circles);
+  return {
+    anchorX, anchorY,
+    line: buildLine(lines, anchorX, anchorY),
+    circle: buildCircle(circles, anchorX, anchorY),
+  };
 }
 
-function buildLine(
-  features: DragPreviewFeature[],
-  inputs: GhostBuildInputs,
-  anchorX: number,
-  anchorY: number,
-  alpha: number,
-): GhostLineBuffers {
-  const segmentCount = features.length;
+function buildLine(prims: LinePrim[], anchorX: number, anchorY: number): GhostLineBuffers {
+  const segmentCount = prims.length;
   const vertexCount = segmentCount * 4;
   const posA = new Float32Array(vertexCount * 2);
   const posB = new Float32Array(vertexCount * 2);
@@ -151,15 +273,10 @@ function buildLine(
   const indices = new Uint32Array(segmentCount * 6);
 
   for (let seg = 0; seg < segmentCount; seg++) {
-    const f = features[seg]!;
-    const a = f.coords[0]!;
-    const b = f.coords[f.coords.length - 1]!;
-    const [ax, ay] = lngLatToMercator(a[0], a[1]);
-    const [bx, by] = lngLatToMercator(b[0], b[1]);
-    const mvA = movesVertex(f.movingEnd, 0, 2) ? 1 : 0;
-    const mvB = movesVertex(f.movingEnd, 1, 2) ? 1 : 0;
-    const [cr, cg, cb] = inputs.colorFor(f);
-    const wm = inputs.widthMulFor(f);
+    const p = prims[seg]!;
+    const [ax, ay] = lngLatToMercator(p.a[0], p.a[1]);
+    const [bx, by] = lngLatToMercator(p.b[0], p.b[1]);
+    const [cr, cg, cb] = p.color;
     const base = seg * 4;
     for (let c = 0; c < 4; c++) {
       const v = base + c;
@@ -169,13 +286,13 @@ function buildLine(
       posB[v * 2 + 1] = by - anchorY;
       endpoint[v] = LINE_EP[c]!;
       side[v] = LINE_SIDE[c]!;
-      moveA[v] = mvA;
-      moveB[v] = mvB;
+      moveA[v] = p.moveA;
+      moveB[v] = p.moveB;
       color[v * 4] = cr;
       color[v * 4 + 1] = cg;
       color[v * 4 + 2] = cb;
-      color[v * 4 + 3] = alpha;
-      widthMul[v] = wm;
+      color[v * 4 + 3] = p.alpha;
+      widthMul[v] = p.widthMul;
     }
     const io = seg * 6;
     indices[io] = base;
@@ -196,29 +313,23 @@ function buildLine(
   };
 }
 
-function buildCircle(
-  features: DragPreviewFeature[],
-  inputs: GhostBuildInputs,
-  anchorX: number,
-  anchorY: number,
-  alpha: number,
-): GhostCircleBuffers {
-  const stationCount = features.length;
+function buildCircle(prims: CirclePrim[], anchorX: number, anchorY: number): GhostCircleBuffers {
+  const stationCount = prims.length;
   const vertexCount = stationCount * 4;
   const center = new Float32Array(vertexCount * 2);
   const corner = new Float32Array(vertexCount * 2);
   const move = new Float32Array(vertexCount);
   const fill = new Uint8Array(vertexCount * 4);
   const stroke = new Uint8Array(vertexCount * 4);
+  const sizeMul = new Float32Array(vertexCount);
+  const strokeMul = new Float32Array(vertexCount);
   const indices = new Uint32Array(stationCount * 6);
-  const [sr, sg, sb, saByte] = inputs.strokeColor;
 
   for (let st = 0; st < stationCount; st++) {
-    const f = features[st]!;
-    const p = f.coords[0]!;
-    const [mx, my] = lngLatToMercator(p[0], p[1]);
-    const mv = movesVertex(f.movingEnd, 0, 1) ? 1 : 0;
-    const [fr, fg, fb] = inputs.colorFor(f);
+    const p = prims[st]!;
+    const [mx, my] = lngLatToMercator(p.center[0], p.center[1]);
+    const [fr, fg, fb] = p.fill;
+    const [sr, sg, sb] = p.stroke;
     const base = st * 4;
     for (let c = 0; c < 4; c++) {
       const v = base + c;
@@ -226,15 +337,17 @@ function buildCircle(
       center[v * 2 + 1] = my - anchorY;
       corner[v * 2] = CIRCLE_CX[c]!;
       corner[v * 2 + 1] = CIRCLE_CY[c]!;
-      move[v] = mv;
+      move[v] = p.move;
       fill[v * 4] = fr;
       fill[v * 4 + 1] = fg;
       fill[v * 4 + 2] = fb;
-      fill[v * 4 + 3] = alpha;
+      fill[v * 4 + 3] = p.fillAlpha;
       stroke[v * 4] = sr;
       stroke[v * 4 + 1] = sg;
       stroke[v * 4 + 2] = sb;
-      stroke[v * 4 + 3] = saByte;
+      stroke[v * 4 + 3] = p.strokeAlpha;
+      sizeMul[v] = p.sizeMul;
+      strokeMul[v] = p.strokeMul;
     }
     const io = st * 6;
     indices[io] = base;
@@ -247,6 +360,6 @@ function buildCircle(
 
   const byteLength =
     center.byteLength + corner.byteLength + move.byteLength + fill.byteLength +
-    stroke.byteLength + indices.byteLength;
-  return { stationCount, vertexCount, center, corner, move, fill, stroke, indices, byteLength };
+    stroke.byteLength + sizeMul.byteLength + strokeMul.byteLength + indices.byteLength;
+  return { stationCount, vertexCount, center, corner, move, fill, stroke, sizeMul, strokeMul, indices, byteLength };
 }

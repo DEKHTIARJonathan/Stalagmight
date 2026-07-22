@@ -62,6 +62,8 @@ interface CircleGpu {
   move: WebGLBuffer;
   fill: WebGLBuffer;
   stroke: WebGLBuffer;
+  sizeMul: WebGLBuffer;
+  strokeMul: WebGLBuffer;
   index: WebGLBuffer;
   count: number;
 }
@@ -191,6 +193,8 @@ export class SurveyGhostLayer implements CustomLayerInterface {
       move: makeBuffer(gl, gl.ARRAY_BUFFER, c.move),
       fill: makeBuffer(gl, gl.ARRAY_BUFFER, c.fill),
       stroke: makeBuffer(gl, gl.ARRAY_BUFFER, c.stroke),
+      sizeMul: makeBuffer(gl, gl.ARRAY_BUFFER, c.sizeMul),
+      strokeMul: makeBuffer(gl, gl.ARRAY_BUFFER, c.strokeMul),
       index: makeBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, c.indices),
       count: c.indices.length,
     };
@@ -277,6 +281,8 @@ export class SurveyGhostLayer implements CustomLayerInterface {
     this.bindFloat(gl, prog, 'a_move', g.move);
     this.bindColor(gl, prog, 'a_fill', g.fill);
     this.bindColor(gl, prog, 'a_stroke', g.stroke);
+    this.bindFloat(gl, prog, 'a_size_mul', g.sizeMul);
+    this.bindFloat(gl, prog, 'a_stroke_mul', g.strokeMul);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);
   }
