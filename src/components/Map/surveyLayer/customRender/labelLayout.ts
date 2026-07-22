@@ -95,6 +95,36 @@ export interface ShapedLabel {
   glyphs: ShapedGlyph[];
 }
 
+/** Axis-aligned em extent of a shaped label, anchor-relative, +x right / +y UP
+ *  (the shader convention): the tight bounding box over every glyph quad corner.
+ *  Consumed by collision (`labelCollide.ts`) to size a label's screen AABB —
+ *  `extent * text-size-px (+ halo)` is the placed box. `null` for an empty /
+ *  whitespace-only label (no ink → no box → never a collision candidate). */
+export interface ExtentEm {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+/** Tight em bounding box over a shaped label's glyph corners (see {@link ExtentEm}).
+ *  Returns `null` when the label produced no glyph quads. */
+export function shapedExtent(shaped: ShapedLabel): ExtentEm | null {
+  const { glyphs } = shaped;
+  if (glyphs.length === 0) return null;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const g of glyphs) {
+    if (g.xL < minX) minX = g.xL;
+    if (g.xR > maxX) maxX = g.xR;
+    if (g.yBot < minY) minY = g.yBot;
+    if (g.yTop > maxY) maxY = g.yTop;
+  }
+  return { minX, maxX, minY, maxY };
+}
+
 /** Split text into wrapped lines. Non-wrapping kinds return a single line; the
  *  wrapping (comment) kinds greedily break on whitespace runs at `maxWidthEm`,
  *  measuring each word by its glyph-advance sum. A word wider than the max gets

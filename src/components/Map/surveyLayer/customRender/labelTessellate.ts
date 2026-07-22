@@ -34,6 +34,21 @@ import { buildStationLookup, computeStationAllReference, projectStationsRel } fr
 import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { shapeLabel, type ShapedLabel } from './labelLayout';
 import type { GlyphAtlas } from './glyphAtlas';
+
+/**
+ * Padded viewport rectangle in ANCHOR-RELATIVE mercator (`mercator - anchor`),
+ * the same space descriptor anchors live in (§4 of the design). When passed to
+ * {@link buildLabelDescriptors}, a label whose anchor falls outside is not
+ * emitted at all — the viewport-scoped build that bounds the live glyph set to
+ * what is near the screen. Absent = whole-survey (every anchor kept), preserving
+ * the pre-Phase-4 behavior for callers / tests that pass no viewport.
+ */
+export interface ViewportRel {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
 import {
   formatShotLabel,
   formatStationLabel,
@@ -142,11 +157,19 @@ export function buildLabelDescriptors(
   anchorY: number,
   ctx: LabelBuildContext,
   kinds?: ReadonlySet<LabelKind>,
+  viewport?: ViewportRel,
 ): LabelDescriptor[] {
   const descriptors: LabelDescriptor[] = [];
   // Kind filter (Phase 2 builds station labels only; Phase 3 drops the arg to
   // build all five). Absent = every kind, so existing callers are unchanged.
   const wants = (k: LabelKind): boolean => kinds === undefined || kinds.has(k);
+  // Viewport filter (§4): keep only anchors inside the padded viewport. Absent =
+  // whole-survey. Note the ORDINAL loops still run in full below (a shot's global
+  // running index / a station's global ordinal must stay stable regardless of
+  // what is on screen, so decimation parity holds) — only the `push` is gated.
+  const inView = (x: number, y: number): boolean =>
+    viewport === undefined ||
+    (x >= viewport.minX && x <= viewport.maxX && y >= viewport.minY && y <= viewport.maxY);
   const lookup = buildStationLookup(data);
   // allRef[g] === 1 <=> every shot touching station g is a reference shot (or it
   // has none). Equivalently allRef[g] === 0 <=> g has a non-reference shot — the
@@ -181,7 +204,8 @@ export function buildLabelDescriptors(
       const azimuthIn = data.shotAzimuthIn[shotGlobalIdx]!;
       const length = data.shotLength[shotGlobalIdx]!;
       const [ax, ay] = projectMeters((fx + tx) / 2, (fy + ty) / 2, gpsOrigin, anchorX, anchorY);
-      if (wantShotLabel) descriptors.push({
+      const shotInView = inView(ax, ay);
+      if (wantShotLabel && shotInView) descriptors.push({
         kind: LABEL_KIND.SHOT_LABEL,
         text: formatShotLabel(azimuthIn, length, labelDepth, ctx.precision),
         anchorX: ax,
@@ -190,7 +214,7 @@ export function buildLabelDescriptors(
         ordinal: globalShotOrdinal,
         flags: isRef ? LABEL_FLAG.REFERENCE : 0,
       });
-      const shotComment = wantShotComment ? data.shotComments.get(shotGlobalIdx) : undefined;
+      const shotComment = wantShotComment && shotInView ? data.shotComments.get(shotGlobalIdx) : undefined;
       if (shotComment !== undefined) {
         descriptors.push({
           kind: LABEL_KIND.SHOT_COMMENT,
@@ -229,7 +253,8 @@ export function buildLabelDescriptors(
       if (allRef[g] === 1) flags |= LABEL_FLAG.ALL_REFERENCE;
       const ax = stationRel[g * 2]!;
       const ay = stationRel[g * 2 + 1]!;
-      if (wantStationLabel) descriptors.push({
+      const stationInView = inView(ax, ay);
+      if (wantStationLabel && stationInView) descriptors.push({
         kind: LABEL_KIND.STATION_LABEL,
         text: formatStationLabel(stationIndex),
         anchorX: ax,
@@ -238,7 +263,7 @@ export function buildLabelDescriptors(
         ordinal: g,
         flags,
       });
-      const stationComment = wantStationComment ? data.stationComments.get(g) : undefined;
+      const stationComment = wantStationComment && stationInView ? data.stationComments.get(g) : undefined;
       if (stationComment !== undefined) {
         descriptors.push({
           kind: LABEL_KIND.STATION_COMMENT,
@@ -277,12 +302,15 @@ export function buildLabelDescriptors(
       }
     }
     if (anchorGlobal === undefined) continue;
+    const secX = stationRel[anchorGlobal * 2]!;
+    const secY = stationRel[anchorGlobal * 2 + 1]!;
+    if (!inView(secX, secY)) continue;
     const allStationsReference = !foundNonRef;
     descriptors.push({
       kind: LABEL_KIND.SECTION_NAME,
       text: formatSectionLabel(section.name),
-      anchorX: stationRel[anchorGlobal * 2]!,
-      anchorY: stationRel[anchorGlobal * 2 + 1]!,
+      anchorX: secX,
+      anchorY: secY,
       color: packCssColor(resolveSectionLabelColor(section.color)),
       ordinal: 0,
       flags: allStationsReference ? LABEL_FLAG.ALL_REFERENCE : 0,
@@ -347,17 +375,41 @@ export function emitLabel(
 }
 
 /**
+ * Shape every descriptor's text once (one {@link ShapedLabel} per descriptor,
+ * index-aligned). Split from {@link buildLabelBuffers} so Phase 4 can shape ONCE
+ * and feed the same shaped set to both collision (which needs each label's em
+ * extent, `labelLayout.ts::shapedExtent`) and the buffer emit
+ * ({@link buildLabelBuffersFromShaped}) — no double shaping.
+ */
+export function shapeDescriptors(descriptors: LabelDescriptor[], atlas: GlyphAtlas): ShapedLabel[] {
+  const shaped: ShapedLabel[] = new Array(descriptors.length);
+  for (let i = 0; i < descriptors.length; i++) {
+    shaped[i] = shapeLabel(descriptors[i]!.text, descriptors[i]!.kind, atlas);
+  }
+  return shaped;
+}
+
+/**
  * Shape every descriptor and build the per-glyph label buffers. Allocates once
  * to the exact total glyph count, then stamps each label via {@link emitLabel}.
  */
 export function buildLabelBuffers(descriptors: LabelDescriptor[], atlas: GlyphAtlas): LabelBuffers {
-  const shaped: ShapedLabel[] = new Array(descriptors.length);
+  return buildLabelBuffersFromShaped(descriptors, shapeDescriptors(descriptors, atlas));
+}
+
+/**
+ * Build the per-glyph label buffers from a PRE-SHAPED label set (index-aligned
+ * with `descriptors`). The single allocation + emit half of {@link buildLabelBuffers}.
+ * Reads each descriptor's `flags` at emit time, so a collision pass that bakes
+ * `LABEL_FLAG.HIDE` into `descriptors[i].flags` BEFORE this call lands in the
+ * fresh buffer with no separate upload (§5 of the design).
+ */
+export function buildLabelBuffersFromShaped(
+  descriptors: LabelDescriptor[],
+  shaped: ShapedLabel[],
+): LabelBuffers {
   let glyphCount = 0;
-  for (let i = 0; i < descriptors.length; i++) {
-    const s = shapeLabel(descriptors[i]!.text, descriptors[i]!.kind, atlas);
-    shaped[i] = s;
-    glyphCount += s.glyphCount;
-  }
+  for (let i = 0; i < shaped.length; i++) glyphCount += shaped[i]!.glyphCount;
 
   const vertexCount = glyphCount * 4;
   const anchor = new Float32Array(vertexCount * 2);

@@ -134,6 +134,37 @@ describe('buildLabelDescriptors', () => {
     expect(section.text).toBe('Alpha');
   });
 
+  it('viewport filter (§4): drops anchors outside the padded rect, keeps ordinals global', () => {
+    const d = fixture();
+    // Stations sit at rel-mercator x ascending with station meters (0/10/20 m on
+    // x). A rect that admits only the left half of the survey should keep fewer
+    // labels than the unfiltered build, but shot ordinals stay 0,1 (global).
+    const all = buildLabelDescriptors(d, null, 0, 0, CTX);
+    const allShots = all.filter((x) => x.kind === LABEL_KIND.SHOT_LABEL);
+    const maxX = Math.max(...allShots.map((s) => s.anchorX));
+    const minX = Math.min(...allShots.map((s) => s.anchorX));
+    // A rect covering everything is a no-op (same count).
+    const full = buildLabelDescriptors(d, null, 0, 0, CTX, undefined, {
+      minX: minX - 1,
+      maxX: maxX + 1,
+      minY: -1,
+      maxY: 1,
+    });
+    expect(full.filter((x) => x.kind === LABEL_KIND.SHOT_LABEL)).toHaveLength(allShots.length);
+    // A rect that only admits x <= the first shot's anchor drops the far shot but
+    // the surviving shot keeps its GLOBAL ordinal (the loop still counts all).
+    const clipped = buildLabelDescriptors(d, null, 0, 0, CTX, undefined, {
+      minX: minX - 1e-9,
+      maxX: minX + 1e-9,
+      minY: -1,
+      maxY: 1,
+    });
+    const clippedShots = clipped.filter((x) => x.kind === LABEL_KIND.SHOT_LABEL);
+    expect(clippedShots.length).toBeLessThan(allShots.length);
+    // Every surviving ordinal is one of the original global ordinals (0 or 1).
+    for (const s of clippedShots) expect([0, 1]).toContain(s.ordinal);
+  });
+
   it('routes comment colors through the injected resolver with owner keys (move_comment tint parity)', () => {
     const d = fixture();
     const keys: string[] = [];

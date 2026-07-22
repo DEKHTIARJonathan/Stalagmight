@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   shapeLabel,
+  shapedExtent,
   lineWidthEm,
   LABEL_KIND_LAYOUT,
   LINE_HEIGHT_EM,
@@ -148,6 +149,32 @@ describe('shapeLabel comment wrapping (12 em)', () => {
     const s = shapeLabel(wide, LABEL_KIND.SHOT_LABEL, atlas);
     const lines = new Set(s.glyphs.map((g) => Math.round(g.yBot * 1000)));
     expect(lines.size).toBe(1);
+  });
+});
+
+describe('shapedExtent', () => {
+  it('is the tight em box over every glyph corner (+y up)', () => {
+    const atlas = makeAtlas();
+    const s = shapeLabel('AB', LABEL_KIND.SHOT_LABEL, atlas);
+    const ext = shapedExtent(s)!;
+    expect(ext).not.toBeNull();
+    // Matches the min/max of the shaped glyph corners exactly.
+    const minX = Math.min(...s.glyphs.map((g) => g.xL));
+    const maxX = Math.max(...s.glyphs.map((g) => g.xR));
+    const minY = Math.min(...s.glyphs.map((g) => g.yBot));
+    const maxY = Math.max(...s.glyphs.map((g) => g.yTop));
+    expect(ext.minX).toBeCloseTo(minX, 9);
+    expect(ext.maxX).toBeCloseTo(maxX, 9);
+    expect(ext.minY).toBeCloseTo(minY, 9);
+    expect(ext.maxY).toBeCloseTo(maxY, 9);
+    expect(ext.maxX).toBeGreaterThan(ext.minX);
+    expect(ext.maxY).toBeGreaterThan(ext.minY);
+  });
+
+  it('returns null for an empty / whitespace-only label (no ink → no box)', () => {
+    const atlas = makeAtlas();
+    expect(shapedExtent(shapeLabel('', LABEL_KIND.SHOT_LABEL, atlas))).toBeNull();
+    expect(shapedExtent(shapeLabel('   ', LABEL_KIND.SHOT_LABEL, atlas))).toBeNull();
   });
 });
 
