@@ -1,0 +1,100 @@
+/**
+ * The single source of truth for label TEXT + label COLOR (#customRender labels,
+ * Phase 1).
+ *
+ * `features.ts` (the stock vector-tile feature builder) and the custom label
+ * tessellator both need the exact same strings ("312° 4.2m 1.8m", a station
+ * index, a section name, a comment) and the exact same per-label color (depth
+ * ramp vs `labelColor`, section color, comment palette). Reimplementing either
+ * on the custom path would risk a subtle A/B mismatch (precision, the
+ * depth-vs-flat fallback), so both paths call THESE helpers — parity by
+ * construction, the same pattern `colorResolvers.ts` uses for shot/station
+ * fills. `features.ts` imports this module (never the reverse), so there is no
+ * import cycle.
+ *
+ * PURE: no DOM, no GL. Depends only on the i18n number formatter (locale-aware,
+ * exactly as the stock builder formats) and the depth ramp.
+ */
+import type { DecimalPrecision } from '../../../../types/config';
+import { formatFixed } from '../../../../i18n/format';
+import { getDepthColor } from '../../../../utils/colors';
+
+/**
+ * Shot-label text: azimuth (°), length (m), depth (m), each at its configured
+ * decimal precision. Byte-for-byte the string `features.ts` builds for the
+ * `survey-shot-labels` layer. Defaults (azimuth 0, length 1, depth 1) match the
+ * stock builder. `depth` is the shot's MIDPOINT depth (`(depth_in + depth_out) /
+ * 2`), computed by the caller.
+ */
+export function formatShotLabel(
+  azimuthIn: number,
+  length: number,
+  depth: number,
+  precision?: DecimalPrecision,
+): string {
+  return `${formatFixed(azimuthIn, undefined, precision?.azimuth ?? 0)}° ${formatFixed(length, undefined, precision?.length ?? 1)}m ${formatFixed(depth, undefined, precision?.depth ?? 1)}m`;
+}
+
+/** Station-label text: the station's index, as the stock builder emits it. */
+export function formatStationLabel(stationIndex: number): string {
+  return String(stationIndex);
+}
+
+/** Section-name text. `name` is nullable (a section may be unnamed); the stock
+ *  `['get','name']` text-field renders empty for null, so this returns `''`. */
+export function formatSectionLabel(name: string | null): string {
+  return name ?? '';
+}
+
+/** Comment text (shot / station). Identity today, but funnelled through here so
+ *  any future normalization (trimming, unit suffixing) stays shared. */
+export function formatCommentLabel(comment: string): string {
+  return comment;
+}
+
+/**
+ * Inputs that decide a label's color: the depth-gradient toggle + ramp endpoints
+ * + range, and the flat fallback `labelColor`. A small, self-contained context
+ * (NOT `features.ts`'s `DisplayColorContext`, to avoid an import cycle) built
+ * once per build from the theme colors + depth range.
+ */
+export interface LabelColorContext {
+  showDepthGradient: boolean;
+  depthShallow: string;
+  depthDeep: string;
+  depthMin: number;
+  depthMax: number;
+  /** Flat label color (theme `--cc-depth-text`) used when depth mode is off or
+   *  the ramp declines the value. */
+  labelColor: string;
+}
+
+/**
+ * Shot-label color: the depth ramp at the shot's average depth in depth mode,
+ * else the flat `labelColor`. Mirrors `features.ts` exactly (`getDepthColor(...)
+ * ?? labelColor`, gated on `showDepthGradient`). `avgDepth` is the shot's
+ * midpoint depth the caller already computed for the fill.
+ */
+export function resolveShotLabelColor(avgDepth: number, ctx: LabelColorContext): string {
+  const depthColor = ctx.showDepthGradient
+    ? getDepthColor(avgDepth, ctx.depthShallow, ctx.depthDeep, ctx.depthMin, ctx.depthMax)
+    : null;
+  return depthColor ?? ctx.labelColor;
+}
+
+/**
+ * Station-label color: the depth ramp at the station's z in depth mode, else the
+ * flat `labelColor`. Mirrors `features.ts` (`getDepthColor(z, ...) ?? labelColor`).
+ */
+export function resolveStationLabelColor(z: number, ctx: LabelColorContext): string {
+  const depthColor = ctx.showDepthGradient
+    ? getDepthColor(z, ctx.depthShallow, ctx.depthDeep, ctx.depthMin, ctx.depthMax)
+    : null;
+  return depthColor ?? ctx.labelColor;
+}
+
+/** Section-name color: the section's own color (never depth-ramped), matching
+ *  the stock `survey-labels` `['get','color']` = `section.color`. */
+export function resolveSectionLabelColor(sectionColor: string): string {
+  return sectionColor;
+}

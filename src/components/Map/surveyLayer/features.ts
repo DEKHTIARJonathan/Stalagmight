@@ -8,9 +8,15 @@ import {
 } from '../../../types/survey-data';
 import { getDepthColor, getErrorColor, COMMENT_PALETTE } from '../../../utils/colors';
 import { metersToMapCoords } from '../../../utils/coordinates';
-import { formatFixed } from '../../../i18n/format';
 import type { MapThemeColors } from '../../../utils/themeColors';
 import { encodeFeatureId } from '../../../utils/ids';
+import {
+  formatShotLabel,
+  formatStationLabel,
+  resolveShotLabelColor,
+  resolveStationLabelColor,
+  type LabelColorContext,
+} from './customRender/labelText';
 
 export type DepthRange = { min: number; max: number };
 
@@ -437,6 +443,16 @@ export function buildSurveyFeatures(
   const depthDeep = themeColors.depthDeep;
   const labelColor = themeColors.labelColor;
   const sectionDefault = themeColors.stationDefault;
+  // Shared label color inputs (labelText.ts). The custom label path builds the
+  // same context, so shot/station label colors can never drift between paths.
+  const labelColorCtx: LabelColorContext = {
+    showDepthGradient,
+    depthShallow,
+    depthDeep,
+    depthMin: depthRange.min,
+    depthMax: depthRange.max,
+    labelColor,
+  };
   const shotFeatures: GeoJSON.Feature[] = [];
   const shotGradientFeatures: GeoJSON.Feature[] = [];
   const shotLabelFeatures: GeoJSON.Feature[] = [];
@@ -663,12 +679,9 @@ export function buildSurveyFeatures(
         const midY = (fromXYZ.y + toXYZ.y) / 2;
         const labelDepth = (fromXYZ.z + toXYZ.z) / 2;
 
-        const label = `${formatFixed(azimuth_in, undefined, precision?.azimuth ?? 0)}° ${formatFixed(length, undefined, precision?.length ?? 1)}m ${formatFixed(labelDepth, undefined, precision?.depth ?? 1)}m`;
+        const label = formatShotLabel(azimuth_in, length, labelDepth, precision);
 
-        const shotLabelDepthColor = showDepthGradient
-          ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
-          : null;
-        const shotLabelColor = shotLabelDepthColor ?? labelColor;
+        const shotLabelColor = resolveShotLabelColor(avgDepth, labelColorCtx);
 
         const shotLabelProps: Record<string, unknown> = {
           label,
@@ -882,13 +895,10 @@ export function buildSurveyFeatures(
       const isFirstInSection = stationIndex === sectionMinIndices.get(sectionId);
       const xyz = stationXYZ(g);
 
-      const stationLabelDepthColor = showDepthGradient
-        ? getDepthColor(xyz.z, depthShallow, depthDeep, depthRange.min, depthRange.max)
-        : null;
-      const stationLabelColor = stationLabelDepthColor ?? labelColor;
+      const stationLabelColor = resolveStationLabelColor(xyz.z, labelColorCtx);
 
       const stationLabelProps: Record<string, unknown> = {
-        label: String(stationIndex),
+        label: formatStationLabel(stationIndex),
         stationIndex,
         sectionId,
         globalOrdinal: g,
