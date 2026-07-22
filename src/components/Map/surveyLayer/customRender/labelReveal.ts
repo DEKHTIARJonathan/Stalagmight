@@ -60,8 +60,47 @@ export const REVEAL_LADDER_STEP = 0.5;
 /** Emit slack in zoom levels: labels are computed / emitted up to
  *  `buildZoom + EMIT_SLACK`, so a modest zoom-in needs no rebuild. ~2 keeps the
  *  emitted vertex count bounded on huge surveys while covering a full band of
- *  headroom above the current zoom. */
+ *  headroom above the current zoom. This is the BOUNDED horizon, used only when
+ *  the viewport-scoped candidate set is too large to emit in full (see
+ *  {@link emitSlackFor} / {@link ADAPTIVE_EMIT_MAX}). */
 export const EMIT_SLACK = 2;
+
+/** The app's maximum zoom (`config.map.zoom_max`, default 22) — the top of the
+ *  ADAPTIVE-EMIT ladder. When the viewport candidate set is small enough to emit
+ *  in full (at/below {@link ADAPTIVE_EMIT_MAX}), the reveal ladder runs all the
+ *  way to here so EVERY label that ever clears within reachable zoom is emitted
+ *  with its true reveal. A zoom-in then needs NO rebuild — admission is a
+ *  per-frame shader compare — which fixes the "newly-revealed labels appear late
+ *  when zooming in at high zoom" report (the batch reveals at the z16 / z18
+ *  decimation band edges used to fall past the old bounded horizon and only
+ *  reappear after a coalesced settle rebuild). Overshooting the real max (build
+ *  zoom already near/above the ceiling) is harmless: a reveal beyond the app max
+ *  is never reached. */
+export const REVEAL_CEILING = 22;
+
+/** Adaptive-emit candidate threshold. At/below this many viewport-scoped
+ *  candidates a build emits the FULL set (ladder to {@link REVEAL_CEILING}) so
+ *  zoom-in is rebuild-free; above it the bounded {@link EMIT_SLACK} horizon caps
+ *  the emitted vertex count (the 100k-candidate low-zoom case). Chosen from the
+ *  reveal-pass benchmark: at high zoom the viewport scopes candidates far below
+ *  this (adaptive path, sub-10ms rebuild), while a crowded low-zoom viewport
+ *  (tens of thousands) stays on the bounded path (emitted count strictly capped,
+ *  rebuilt lazily on settle). */
+export const ADAPTIVE_EMIT_MAX = 2500;
+
+/** The emit-horizon slack for a build of `candidateCount` viewport-scoped
+ *  candidates at `buildZoom`: the bounded {@link EMIT_SLACK} when the set is too
+ *  large to emit in full, else the ADAPTIVE slack running the ladder to
+ *  {@link REVEAL_CEILING} (never below EMIT_SLACK). `maxCandidates` is
+ *  overridable so a test can force either branch on a small fixture. */
+export function emitSlackFor(
+  candidateCount: number,
+  buildZoom: number,
+  maxCandidates: number = ADAPTIVE_EMIT_MAX,
+): number {
+  if (candidateCount > maxCandidates) return EMIT_SLACK;
+  return Math.max(EMIT_SLACK, REVEAL_CEILING - buildZoom);
+}
 
 /** Default grid cell (CSS px): a touch larger than the tallest label so a label
  *  spans only a couple of cells vertically. Perf-only; overlap results do not

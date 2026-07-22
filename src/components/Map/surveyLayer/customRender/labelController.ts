@@ -31,7 +31,11 @@
  * all (the shader admits more labels per frame as the live zoom rises). A camera
  * settle only rebuilds when the padded viewport is EXITED (pan / zoom-out) or the
  * live zoom passes `buildZoom + EMIT_SLACK/2` (deep zoom-in) — zoom-in otherwise
- * needs no rebuild, which is the core latency fix. A per-kind / reference toggle
+ * needs no rebuild, which is the core latency fix. ADAPTIVE EMIT sharpens this at
+ * high zoom: when the viewport-scoped candidate set is small (`ADAPTIVE_EMIT_MAX`)
+ * the build emits it IN FULL (reveal ladder to the app max zoom) so a zoom-in is
+ * ENTIRELY rebuild-free — the emitted slack window only bounds vertices in the
+ * crowded low-zoom case. A per-kind / reference toggle
  * stays off the render loop: it flips the uniform and reruns the reveal pass
  * (cheap reveal-only re-upload), never a buffer rebuild.
  *
@@ -58,7 +62,7 @@ import {
   type ViewportRel,
 } from './labelTessellate';
 import { shapedExtent, ShapeCache, type ExtentEm, type ShapedLabel } from './labelLayout';
-import { computeRevealZooms, REVEAL_NEVER, EMIT_SLACK } from './labelReveal';
+import { computeRevealZooms, REVEAL_NEVER, EMIT_SLACK, ADAPTIVE_EMIT_MAX, emitSlackFor } from './labelReveal';
 import { labelColorContextFrom } from './labelText';
 import { LABEL_KIND, LABEL_KIND_COUNT, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { LABEL_KIND_STYLE } from './labelStyle';
@@ -188,6 +192,10 @@ export interface SurveyLabelControllerOptions {
   ensureFont?: () => Promise<boolean>;
   /** Rasterizer factory (default {@link createTinySdfRasterizer}). */
   makeRasterizer?: () => GlyphRasterizer | null;
+  /** Viewport-scoped candidate count at/below which a build emits the FULL set
+   *  (adaptive emit; default {@link ADAPTIVE_EMIT_MAX}). Tests override it to a
+   *  tiny value to force the bounded-slack path on a small fixture. */
+  adaptiveEmitMax?: number;
   /** Active-state transition callback (mirrors the geometry controller). Fires
    *  only on a real change so SurveyLayer can drop / re-publish the stock label
    *  VT groups in lockstep with the custom label layer taking over. */
@@ -238,6 +246,16 @@ export class SurveyLabelController {
   private lastExtents: (ExtentEm | null)[] | null = null;
   private lastBuildZoom: number | undefined = undefined;
   private lastWorldPixelScale: number | undefined = undefined;
+  /** Emit-horizon slack the last build used (adaptive to the ceiling, or the
+   *  bounded EMIT_SLACK). Reused by the reveal-only rerun so a toggle re-clamps to
+   *  the same horizon the build emitted to. */
+  private lastEmitSlack = EMIT_SLACK;
+  /** Whether the last build was BOUNDED (candidate set too large to emit in
+   *  full). Only a bounded build can run out of emitted slack on a zoom-in, so
+   *  the zoom-in slack rebuild ({@link needsRebuild} clause 2) is gated on this —
+   *  an adaptive (emit-all) build never schedules a pointless zoom-in rebuild.
+   *  Defaults true (defensive before the first build). */
+  private lastEmitBounded = true;
   /** The padded viewport rect (anchor-relative mercator) the last build scoped to
    *  + the anchor it was relative to, for the camera-exit rebuild test. */
   private builtViewport: ViewportRel | null = null;
@@ -258,6 +276,8 @@ export class SurveyLabelController {
   private kindVisible: boolean[] = [false, false, true, false, false];
   /** setShowReferenceShots state (false → collapse reference / all-reference). */
   private referenceShotsVisible = true;
+  /** Adaptive-emit candidate threshold (see the option). */
+  private readonly adaptiveEmitMax: number;
 
   constructor(map: MaplibreMap, layerId = 'survey-custom-labels', opts: SurveyLabelControllerOptions = {}) {
     this.map = map;
@@ -266,6 +286,7 @@ export class SurveyLabelController {
     this.scheduleRebuild = opts.scheduleRebuild ?? defaultScheduleRestore;
     this.resync = opts.resync;
     this.onActiveChange = opts.onActiveChange;
+    this.adaptiveEmitMax = opts.adaptiveEmitMax ?? ADAPTIVE_EMIT_MAX;
     this.installHook();
     // Camera-settle viewport rebuild (§4): re-scope + re-collide once the camera
     // stops. Coalesced, never per frame, never mid-animation. Both events route
@@ -413,12 +434,22 @@ export class SurveyLabelController {
     // subset) so the cheap reveal-only rerun on toggle stays index-consistent.
     const tReveal0 = performance.now();
     let reveal: Float32Array;
+    // Adaptive emit: a small viewport-scoped set is emitted IN FULL (ladder to
+    // the app max zoom) so a zoom-in never needs a rebuild; a large set keeps the
+    // bounded slack horizon to cap the emitted vertex count. `descriptors.length`
+    // is the viewport-scoped candidate count (pre reveal-filter) — the upper
+    // bound on emitted labels, so thresholding it directly bounds the vertices.
+    let emitBounded = false;
+    let emitSlack = EMIT_SLACK;
     if (vpCtx !== null && zoom !== undefined) {
+      emitBounded = descriptors.length > this.adaptiveEmitMax;
+      emitSlack = emitSlackFor(descriptors.length, zoom, this.adaptiveEmitMax);
       const full = computeRevealZooms(descriptors, extents, {
         buildZoom: zoom,
         worldPixelScale: vpCtx.worldPixelScale,
         kindVisible: this.kindVisible,
         hideReference: !this.referenceShotsVisible,
+        slack: emitSlack,
       });
       // Emit only labels that clear within the horizon (finite reveal).
       const keptDesc: LabelDescriptor[] = [];
@@ -448,6 +479,8 @@ export class SurveyLabelController {
     this.lastExtents = extents;
     this.lastBuildZoom = zoom;
     this.lastWorldPixelScale = vpCtx?.worldPixelScale;
+    this.lastEmitSlack = emitSlack;
+    this.lastEmitBounded = emitBounded;
     this.builtViewport = vpCtx?.viewport ?? null;
     this.lastAnchorX = anchorX;
     this.lastAnchorY = anchorY;
@@ -464,6 +497,7 @@ export class SurveyLabelController {
       shapeMs: +(tReveal0 - tShape0).toFixed(1),
       revealMs: +(tReveal1 - tReveal0).toFixed(1),
       zoom: zoom === undefined ? null : +zoom.toFixed(2),
+      emit: emitBounded ? `bounded+${emitSlack}` : `all->${(zoom ?? 0) + emitSlack}`,
       labels: descriptors.length,
       glyphs: buffers.glyphCount,
       shapeCache: this.shapeCache.size,
@@ -596,12 +630,14 @@ export class SurveyLabelController {
       worldPixelScale: this.lastWorldPixelScale,
       kindVisible: this.kindVisible,
       hideReference: !this.referenceShotsVisible,
+      slack: this.lastEmitSlack,
     });
     // The retained set is already the emitted subset; a rerun only lowers /
     // raises finite reveals within it (removing / re-adding competitors), so
-    // clamp any REVEAL_NEVER back to the emit horizon to keep the emitted label
-    // drawable at (or just past) the top of the window rather than vanishing.
-    const horizon = this.lastBuildZoom + EMIT_SLACK;
+    // clamp any REVEAL_NEVER back to the emit horizon (the SAME slack the build
+    // emitted to) to keep the emitted label drawable at (or just past) the top of
+    // the window rather than vanishing.
+    const horizon = this.lastBuildZoom + this.lastEmitSlack;
     for (let i = 0; i < reveal.length; i++) {
       if (reveal[i]! === REVEAL_NEVER) reveal[i] = horizon;
     }
@@ -708,10 +744,12 @@ export class SurveyLabelController {
   /**
    * Whether the emitted label set no longer covers the current camera, so a
    * rebuild is warranted. True when: the padded built viewport was EXITED (a pan
-   * or a zoom-OUT grows the on-screen bounds past it); OR the live zoom rose past
-   * `buildZoom + EMIT_SLACK/2` (a deep zoom-IN would soon run out of the emitted
-   * slack); OR the expensive-kinds hysteresis band was crossed (the set of kinds
-   * to build changed). A plain zoom-in within the slack returns false — no
+   * or a zoom-OUT grows the on-screen bounds past it); OR the last build was
+   * BOUNDED and the live zoom rose past `buildZoom + EMIT_SLACK/2` (a deep
+   * zoom-IN would soon run out of the emitted slack — moot for an adaptive
+   * emit-all build, which reached the ceiling); OR the expensive-kinds hysteresis
+   * band was crossed (the set of kinds to build changed). A plain zoom-in within
+   * the slack (or any zoom-in after an adaptive build) returns false — no
    * rebuild, the reveal-zoom shader handles admission. Rebuilds defensively when
    * it cannot read the camera (no bounds / zoom).
    */
@@ -722,8 +760,16 @@ export class SurveyLabelController {
     if (!vpCtx || this.builtViewport === null) return true;
     // 1. Camera exited the padded built viewport (pan / zoom-out).
     if (!rectContains(this.builtViewport, vpCtx.bounds)) return true;
-    // 2. Zoom-in past the emitted slack window.
-    if (this.lastBuildZoom !== undefined && zoom > this.lastBuildZoom + ZOOM_IN_SLACK_REBUILD) return true;
+    // 2. Zoom-in past the emitted slack window — ONLY for a bounded build. An
+    //    adaptive (emit-all) build already emitted every reachable label to the
+    //    ceiling, so a zoom-in has nothing more to gain and never rebuilds here.
+    if (
+      this.lastEmitBounded &&
+      this.lastBuildZoom !== undefined &&
+      zoom > this.lastBuildZoom + ZOOM_IN_SLACK_REBUILD
+    ) {
+      return true;
+    }
     // 3. Expensive-kinds hysteresis band crossing (section-only ⇆ full).
     const hasData = (this.pendingParams?.surveyData.stationCount ?? 0) > 0;
     const wantFull = this.fullLabelsBuilt ? zoom >= LABEL_DROP_ZOOM : zoom >= LABEL_BUILD_ZOOM;
