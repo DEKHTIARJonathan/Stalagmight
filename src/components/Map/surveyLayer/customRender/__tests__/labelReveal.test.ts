@@ -3,7 +3,11 @@ import {
   computeRevealZooms,
   revealScreenBox,
   labelPriority,
+  emitSlackFor,
   REVEAL_NEVER,
+  EMIT_SLACK,
+  REVEAL_CEILING,
+  ADAPTIVE_EMIT_MAX,
   type RevealInput,
   type ScreenBox,
 } from '../labelReveal';
@@ -158,6 +162,41 @@ describe('computeRevealZooms candidate filter (matches the shader gates)', () =>
   it('an empty (whitespace) label never reveals — no ink, never emitted', () => {
     const descs = [desc(LABEL_KIND.SECTION_NAME)];
     expect(computeRevealZooms(descs, [null], input())[0]).toBe(REVEAL_NEVER);
+  });
+});
+
+describe('emitSlackFor (adaptive emit horizon)', () => {
+  it('returns the bounded EMIT_SLACK when the candidate set exceeds the threshold', () => {
+    expect(emitSlackFor(ADAPTIVE_EMIT_MAX + 1, 15)).toBe(EMIT_SLACK);
+  });
+
+  it('runs the ladder to the ceiling when the set is at/below the threshold', () => {
+    expect(emitSlackFor(ADAPTIVE_EMIT_MAX, 15)).toBe(REVEAL_CEILING - 15);
+    expect(emitSlackFor(10, 17)).toBe(REVEAL_CEILING - 17);
+  });
+
+  it('never returns below EMIT_SLACK, even at/above the ceiling zoom', () => {
+    expect(emitSlackFor(10, REVEAL_CEILING)).toBe(EMIT_SLACK);
+    expect(emitSlackFor(10, REVEAL_CEILING + 3)).toBe(EMIT_SLACK);
+  });
+
+  it('threshold override forces either branch (used by the controller tests)', () => {
+    expect(emitSlackFor(5, 15, 0)).toBe(EMIT_SLACK); // 5 > 0 → bounded
+    expect(emitSlackFor(5, 15, 10)).toBe(REVEAL_CEILING - 15); // 5 <= 10 → adaptive
+  });
+});
+
+describe('computeRevealZooms adaptive ceiling emits high-reveal labels', () => {
+  it('a band-edge label past the bounded horizon is emitted when the ladder runs to the ceiling', () => {
+    // Built at z15. An isolated odd (tier 2) shot admits at z18 — past the bounded
+    // horizon 17 (15 + EMIT_SLACK) but within the adaptive ladder. Bounded →
+    // REVEAL_NEVER (dropped, appears only after a rebuild); adaptive → reveal 18
+    // (emitted, admitted per-frame by the shader as the live zoom reaches 18).
+    const descs = [desc(LABEL_KIND.SHOT_LABEL, { ordinal: 1, anchorX: 0 })];
+    const bounded = computeRevealZooms(descs, [UNIT_EXT], input({ buildZoom: 15, slack: EMIT_SLACK }));
+    expect(bounded[0]).toBe(REVEAL_NEVER);
+    const adaptive = computeRevealZooms(descs, [UNIT_EXT], input({ buildZoom: 15, slack: emitSlackFor(1, 15) }));
+    expect(adaptive[0]).toBe(18);
   });
 });
 

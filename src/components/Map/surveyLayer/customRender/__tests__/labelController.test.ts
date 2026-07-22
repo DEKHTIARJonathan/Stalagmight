@@ -734,23 +734,39 @@ describe('SurveyLabelController NO rebuild on zoom-in (reveal-zoom admission)', 
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('a modest zoom-in within the emit slack does NOT rebuild (the core latency fix)', () => {
+  it('a modest zoom-in does NOT rebuild (the shader admits labels per frame)', () => {
     const cam = makeCameraMap(18);
     const c = cameraController(cam.map, { scheduleRebuild: (fn: () => void) => fn() });
     c.sync(makeParams());
     const layer = h.layerState.last!;
     const before = layer.updateCalls;
     // Zoom in half a level: the viewport shrinks (still inside the built padded
-    // box) and 18.5 <= buildZoom(18) + EMIT_SLACK/2 (19). The shader admits more
-    // labels per frame from their reveal zooms — no rebuild.
+    // box). The shader admits more labels per frame from their reveal zooms — no
+    // rebuild (true on either emit path for a modest step).
     cam.state.zoom = 18.5;
     cam.fire('zoomend');
     expect(layer.updateCalls).toBe(before);
   });
 
-  it('a deep zoom-in past buildZoom + EMIT_SLACK/2 rebuilds once (extends the slack)', () => {
+  it('a deep zoom-in after an ADAPTIVE (emit-all) build does NOT rebuild', () => {
+    // Default (high) adaptiveEmitMax → the small fixture emits IN FULL to the
+    // ceiling, so even a deep zoom-in has nothing more to admit: no rebuild. This
+    // is the reported latency fix at high zoom.
     const cam = makeCameraMap(18);
     const c = cameraController(cam.map, { scheduleRebuild: (fn: () => void) => fn() });
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    const before = layer.updateCalls;
+    cam.state.zoom = 19.5; // > 18 + 1, but the emitted set already reaches the ceiling
+    cam.fire('zoomend');
+    expect(layer.updateCalls).toBe(before);
+  });
+
+  it('a deep zoom-in past buildZoom + EMIT_SLACK/2 rebuilds once when the build was BOUNDED', () => {
+    // Force the bounded-slack path (adaptiveEmitMax 0 = never emit-all) so the
+    // emitted set has a finite horizon a deep zoom-in runs past → one rebuild.
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map, { scheduleRebuild: (fn: () => void) => fn(), adaptiveEmitMax: 0 });
     c.sync(makeParams());
     const layer = h.layerState.last!;
     const before = layer.updateCalls;
@@ -771,21 +787,37 @@ describe('SurveyLabelController emit slack (vertex-load bound)', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('emits FEWER glyphs at a low build zoom than a high one (labels past the horizon are dropped)', () => {
-    // At z14 the fixture (10 m spacing) is densely packed on screen → heavy
-    // collision → many labels reveal past buildZoom + slack (16) and are NOT
-    // emitted. At z18 the same survey is spread out → less collision, higher
-    // horizon (20) → strictly more glyphs emitted. Correctness is never wrong:
-    // the missing low-zoom labels appear after a settle/zoom-in rebuild.
-    const low = cameraController(makeCameraMap(14).map);
+  it('a BOUNDED build emits fewer glyphs at a low zoom than a high one (labels past the horizon dropped)', () => {
+    // Force the bounded-slack path (adaptiveEmitMax 0) so the vertex-load cap is
+    // exercised on the small fixture. At z14 the fixture (10 m spacing) is densely
+    // packed on screen → many labels reveal past buildZoom + slack (16) and are
+    // NOT emitted. At z18 the same survey is spread out → higher horizon (20) →
+    // strictly more glyphs. Correctness is never wrong: the missing low-zoom
+    // labels appear after a settle/zoom-in rebuild.
+    const low = cameraController(makeCameraMap(14).map, { adaptiveEmitMax: 0 });
     low.sync(makeParams());
     const lowGlyphs = (h.layerState.last!.data as LabelRenderData).buffers.glyphCount;
 
-    const high = cameraController(makeCameraMap(18).map);
+    const high = cameraController(makeCameraMap(18).map, { adaptiveEmitMax: 0 });
     high.sync(makeParams());
     const highGlyphs = (h.layerState.last!.data as LabelRenderData).buffers.glyphCount;
 
     expect(highGlyphs).toBeGreaterThan(lowGlyphs);
+  });
+
+  it('an ADAPTIVE build emits MORE than the bounded build at the same zoom (recovers dropped labels)', () => {
+    // The reported fix: at a zoom where the bounded horizon drops dense-cluster /
+    // band-edge labels, adaptive emit (default threshold) emits them all instead —
+    // so a zoom-in reveals them with NO rebuild.
+    const bounded = cameraController(makeCameraMap(14).map, { adaptiveEmitMax: 0 });
+    bounded.sync(makeParams());
+    const boundedGlyphs = (h.layerState.last!.data as LabelRenderData).buffers.glyphCount;
+
+    const adaptive = cameraController(makeCameraMap(14).map); // default → emit-all
+    adaptive.sync(makeParams());
+    const adaptiveGlyphs = (h.layerState.last!.data as LabelRenderData).buffers.glyphCount;
+
+    expect(adaptiveGlyphs).toBeGreaterThan(boundedGlyphs);
   });
 });
 
