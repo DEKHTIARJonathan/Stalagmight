@@ -3529,14 +3529,29 @@ export default class SurveyLayer {
     this.syncCustomDimming();
   }
 
-  /** Push the current anchored + immovable dim set to the custom-render layer so
-   *  it dims the same features the stock paint expressions do (#customRender). */
+  /** Push the current anchored + immovable dim set to the custom-render layers so
+   *  they dim the same features the stock paint expressions do (#customRender).
+   *  Both geometry AND labels take the same {@link CustomDimState}; the label
+   *  controller reproduces the stock LABEL dim rules (anchored dims shot/station/
+   *  section labels, immovable dims individual shot/station labels; comments and
+   *  section-name immovable are left bright, matching stock). */
   private syncCustomDimming(): void {
-    this.customRender?.setDimming({
+    const dim = {
       anchoredSectionIds: this.anchoredSectionIds,
       immovableStationFeatureIds: this.immovableStationFeatureIds,
       immovableShotFeatureIds: this.immovableShotFeatureIds,
-    });
+    };
+    this.customRender?.setDimming(dim);
+    this.customLabels?.setDimming(dim);
+  }
+
+  /** True while the custom LABEL layer is drawing (stock text layers suppressed).
+   *  When set, the stock `labelRestore.ts` setFilter/settle/defer machinery is
+   *  skipped: it exists only to hide the async label-tile reload flash, which the
+   *  synchronous custom label layer does not have (its labels converge in the same
+   *  flush as the geometry). Gate-off keeps every labelRestore call byte-identical. */
+  private labelsCustomActive(): boolean {
+    return this.customLabels?.isActive() === true;
   }
 
   // Set text-opacity on label layers: 0.25 for features in anchored sections, normal otherwise
@@ -4282,6 +4297,12 @@ export default class SurveyLayer {
    *  flag (no buffer rebuild). No-op unless the custom render gate is on. */
   private setDragExclusion(exclusion: CustomRenderExclusion | null): void {
     this.customRender?.setDragHide(exclusion);
+    // Labels mirror the SAME exclusion: the dragged features' labels collapse via
+    // the DRAG_HIDE flag (synchronous GPU upload), replacing the stock text-layer
+    // filter drop. On drag commit the synchronous sync() rebuild reflows them at
+    // the new positions and setDragExclusion(null) clears the flag — labels never
+    // lag the geometry (the anti-flicker payoff).
+    this.customLabels?.setDragHide(exclusion);
   }
 
   /**
@@ -4438,7 +4459,9 @@ export default class SurveyLayer {
     // On a real commit that reloaded label tiles, defer the text restore behind
     // them (else the moved labels flash at the old position); a direct
     // endDragPreview (Escape / rejected move / no-op) passes null -> restore now.
-    this.labelRestore.deferRestore(text, this.pendingDragCommitLabelReloads);
+    // Skip the stock text-restore defer when the custom label layer draws — its
+    // labels already reflowed to post-move coords in the synchronous commit sync().
+    if (!this.labelsCustomActive()) this.labelRestore.deferRestore(text, this.pendingDragCommitLabelReloads);
     this.clearDragOverlayFollow();
 
     this.dragPreviewSet = null;
@@ -4859,7 +4882,10 @@ export default class SurveyLayer {
         // Keep the removed sections' labels excluded until they are re-added (undo)
         // - a persistent, tile-timing-independent hide derived from this flush's
         // removals + the surviving sections; no-op until a first removal.
-        this.labelRestore.applyRemovedExclusion(removedSectionIds, sections, surveyData);
+        // Skipped under the custom label layer: it rebuilds the (viewport) label
+        // set synchronously from the post-delete SoA in syncCustomRender above, so
+        // there is no async label tile lag to paper over.
+        if (!this.labelsCustomActive()) this.labelRestore.applyRemovedExclusion(removedSectionIds, sections, surveyData);
         // Rebuild the interact overlay against the new geometry so a selected /
         // hovered / snapped feature this flush removed (a deleted shot / station /
         // section member) is dropped now instead of lingering until the async
@@ -5321,7 +5347,8 @@ export default class SurveyLayer {
     }
     // Drop any transient per-feature (single shot/station delete) label hide once
     // this flush's label tiles have reloaded truthfully (labelRestore.ts).
-    this.labelRestore.settleFeatureExclusion(this.labelReloadsThisFlush);
+    // Skipped under the custom label layer (nothing was armed to settle).
+    if (!this.labelsCustomActive()) this.labelRestore.settleFeatureExclusion(this.labelReloadsThisFlush);
   }
 
   /**
