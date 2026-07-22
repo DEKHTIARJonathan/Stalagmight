@@ -13,6 +13,7 @@ import {
   SHOT_FLAG_IS_REFERENCE,
   type SurveyData,
 } from '../../../../../types/survey-data';
+import { commentColorForKey } from '../../features';
 
 /**
  * Label descriptor extraction + per-glyph buffer emission (#customRender labels,
@@ -131,6 +132,28 @@ describe('buildLabelDescriptors', () => {
     const section = descs.find((x) => x.kind === LABEL_KIND.SECTION_NAME)!;
     expect(section.color).toEqual(packCssColor('#4ecdc4'));
     expect(section.text).toBe('Alpha');
+  });
+
+  it('routes comment colors through the injected resolver with owner keys (move_comment tint parity)', () => {
+    const d = fixture();
+    const keys: string[] = [];
+    // The controller passes exactly this resolver when move_comment is active.
+    const ctx: LabelBuildContext = {
+      ...CTX,
+      commentColor: (key: string) => {
+        keys.push(key);
+        return packCssColor(commentColorForKey(key));
+      },
+    };
+    const descs = buildLabelDescriptors(d, null, 0, 0, ctx);
+    // Shot comment on shot id 0 in section 1; station comment on station index 2.
+    expect(keys.sort()).toEqual(['1:s0', '1:st2']);
+    const shotComment = descs.find((x) => x.kind === LABEL_KIND.SHOT_COMMENT)!;
+    expect(shotComment.color).toEqual(packCssColor(commentColorForKey('1:s0')));
+    const stationComment = descs.find((x) => x.kind === LABEL_KIND.STATION_COMMENT)!;
+    expect(stationComment.color).toEqual(packCssColor(commentColorForKey('1:st2')));
+    // The palette tint is distinct from the flat labelColor (real parity, not a no-op).
+    expect(shotComment.color).not.toEqual(packCssColor('#e0e0e0'));
   });
 });
 

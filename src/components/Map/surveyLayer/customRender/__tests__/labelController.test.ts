@@ -74,6 +74,14 @@ vi.mock('../labelsGate', async (orig) => {
 
 const STOCK_LABEL = 'survey-station-labels';
 const CUSTOM_ID = 'survey-custom-labels';
+/** All five stock text layers, with the kind each maps to (SurveyLayer ids). */
+const STOCK_LAYERS: Record<number, string> = {
+  [LABEL_KIND.SHOT_LABEL]: 'survey-shot-labels',
+  [LABEL_KIND.STATION_LABEL]: 'survey-station-labels',
+  [LABEL_KIND.SECTION_NAME]: 'survey-labels',
+  [LABEL_KIND.STATION_COMMENT]: 'survey-station-comments',
+  [LABEL_KIND.SHOT_COMMENT]: 'survey-shot-comments',
+};
 
 interface FakeMap {
   map: MaplibreMap;
@@ -82,8 +90,11 @@ interface FakeMap {
 }
 
 function makeFakeMap(): FakeMap {
-  const existing = new Set<string>([STOCK_LABEL]);
-  const visibility: Record<string, string> = { [STOCK_LABEL]: 'visible' };
+  const existing = new Set<string>(Object.values(STOCK_LAYERS));
+  // All five stock text layers start 'visible' in the fake (the controller sets
+  // the real desired state); tests assert transitions from there.
+  const visibility: Record<string, string> = {};
+  for (const id of Object.values(STOCK_LAYERS)) visibility[id] = 'visible';
   const removed: string[] = [];
   const map = {
     getStyle: () => ({}),
@@ -287,6 +298,64 @@ describe('SurveyLabelController style wiring', () => {
     expect(layer.lastStyle?.hideReference).toBe(false);
     c.setReferenceShotsVisible(false);
     expect(layer.lastStyle?.hideReference).toBe(true);
+  });
+});
+
+describe('SurveyLabelController all-kinds suppression + toggle routing', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.render = true;
+    h.gate.labels = true;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('suppresses all five stock text layers on enable', () => {
+    const { map, visibility } = makeFakeMap();
+    const c = makeController(map);
+    c.sync(makeParams());
+    for (const id of Object.values(STOCK_LAYERS)) expect(visibility[id]).toBe('none');
+  });
+
+  it('restores each stock layer to its kind default on gate-off (section names visible, rest hidden)', () => {
+    const { map, visibility } = makeFakeMap();
+    const c = makeController(map);
+    c.sync(makeParams());
+    h.gate.labels = false;
+    c.sync(makeParams());
+    expect(visibility[STOCK_LAYERS[LABEL_KIND.SECTION_NAME]!]).toBe('visible'); // default on
+    expect(visibility[STOCK_LAYERS[LABEL_KIND.SHOT_LABEL]!]).toBe('none');
+    expect(visibility[STOCK_LAYERS[LABEL_KIND.STATION_LABEL]!]).toBe('none');
+    expect(visibility[STOCK_LAYERS[LABEL_KIND.STATION_COMMENT]!]).toBe('none');
+    expect(visibility[STOCK_LAYERS[LABEL_KIND.SHOT_COMMENT]!]).toBe('none');
+  });
+
+  it('routes every setShow* toggle to its kind uniform without a rebuild', () => {
+    const { map } = makeFakeMap();
+    const c = makeController(map);
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    const updatesBefore = layer.updateCalls;
+
+    c.setShotLabelsVisible(true);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.SHOT_LABEL]).toBe(true);
+    c.setSectionNamesVisible(false);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.SECTION_NAME]).toBe(false);
+    c.setStationCommentsVisible(true);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.STATION_COMMENT]).toBe(true);
+    c.setShotCommentsVisible(true);
+    expect(layer.lastStyle?.kindEnabled[LABEL_KIND.SHOT_COMMENT]).toBe(true);
+    // Uniform flips, never a buffer rebuild.
+    expect(layer.updateCalls).toBe(updatesBefore);
+  });
+
+  it('a commentTint sync builds without error (palette-tint parity locked in labelTessellate)', () => {
+    const { map } = makeFakeMap();
+    const c = makeController(map);
+    c.sync({ ...makeParams(), commentTint: true });
+    expect(c.isActive()).toBe(true);
   });
 });
 

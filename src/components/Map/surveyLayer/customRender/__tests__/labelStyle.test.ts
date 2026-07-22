@@ -108,3 +108,43 @@ describe('computeLabelUniforms', () => {
     expect(computeLabelUniforms(16, inputs({ hideReference: true })).hideReference).toBe(1);
   });
 });
+
+describe('computeLabelUniforms — all five kinds (stock parity)', () => {
+  const SHOT = LABEL_KIND.SHOT_LABEL;
+  const STC = LABEL_KIND.STATION_COMMENT;
+  const SHC = LABEL_KIND.SHOT_COMMENT;
+
+  it('shot labels: size 14→9 / 18→12, opacity 14→0.7 / 18→1, halo 2, minzoom 14', () => {
+    expect(computeLabelUniforms(14, inputs()).textSizePx[SHOT]).toBeCloseTo(9, 6);
+    expect(computeLabelUniforms(18, inputs()).textSizePx[SHOT]).toBeCloseTo(12, 6);
+    expect(computeLabelUniforms(14, inputs()).opacity[SHOT]).toBeCloseTo(0.7, 6);
+    expect(computeLabelUniforms(18, inputs()).opacity[SHOT]).toBeCloseTo(1, 6);
+    expect(LABEL_KIND_STYLE[SHOT].haloWidth).toBe(2);
+    expect(computeLabelUniforms(13.9, inputs()).kindVisible[SHOT]).toBe(0);
+    expect(computeLabelUniforms(14, inputs()).kindVisible[SHOT]).toBe(1);
+    // Shot labels decimate on the same zoom bands as station labels.
+    expect(computeLabelUniforms(15, inputs()).decimMod[SHOT]).toBe(5);
+    expect(computeLabelUniforms(19, inputs()).decimMod[SHOT]).toBe(1);
+  });
+
+  it('section names: size 12→11 / 18→14, opacity 1, halo 1.5, minzoom 10, never decimate', () => {
+    expect(computeLabelUniforms(12, inputs()).textSizePx[SEC]).toBeCloseTo(11, 6);
+    expect(computeLabelUniforms(18, inputs()).textSizePx[SEC]).toBeCloseTo(14, 6);
+    expect(computeLabelUniforms(15, inputs()).opacity[SEC]).toBeCloseTo(1, 6);
+    expect(LABEL_KIND_STYLE[SEC].haloWidth).toBe(1.5);
+    expect(computeLabelUniforms(15, inputs()).decimMod[SEC]).toBe(1);
+  });
+
+  it('comments: size 14→8 / 18→10, opacity 0.85 constant, halo 1.5, minzoom 14, never decimate', () => {
+    for (const K of [STC, SHC]) {
+      expect(computeLabelUniforms(14, inputs()).textSizePx[K]).toBeCloseTo(8, 6);
+      expect(computeLabelUniforms(18, inputs()).textSizePx[K]).toBeCloseTo(10, 6);
+      expect(computeLabelUniforms(14, inputs()).opacity[K]).toBeCloseTo(0.85, 6);
+      expect(computeLabelUniforms(18, inputs()).opacity[K]).toBeCloseTo(0.85, 6);
+      expect(LABEL_KIND_STYLE[K].haloWidth).toBe(1.5);
+      expect(computeLabelUniforms(13.9, inputs()).kindVisible[K]).toBe(0);
+      expect(computeLabelUniforms(14, inputs()).kindVisible[K]).toBe(1);
+      expect(computeLabelUniforms(15, inputs()).decimMod[K]).toBe(1);
+    }
+  });
+});
