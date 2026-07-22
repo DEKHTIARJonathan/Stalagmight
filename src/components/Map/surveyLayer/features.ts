@@ -15,6 +15,7 @@ import {
   formatStationLabel,
   resolveShotLabelColor,
   resolveStationLabelColor,
+  labelColorContextFrom,
   type LabelColorContext,
 } from './customRender/labelText';
 
@@ -441,18 +442,11 @@ export function buildSurveyFeatures(
   // Theme colors (resolved from CSS variables by the caller)
   const depthShallow = themeColors.depthShallow;
   const depthDeep = themeColors.depthDeep;
-  const labelColor = themeColors.labelColor;
   const sectionDefault = themeColors.stationDefault;
   // Shared label color inputs (labelText.ts). The custom label path builds the
-  // same context, so shot/station label colors can never drift between paths.
-  const labelColorCtx: LabelColorContext = {
-    showDepthGradient,
-    depthShallow,
-    depthDeep,
-    depthMin: depthRange.min,
-    depthMax: depthRange.max,
-    labelColor,
-  };
+  // same context via the SAME helper, so shot/station label colors can never
+  // drift between paths.
+  const labelColorCtx: LabelColorContext = labelColorContextFrom(showDepthGradient, depthRange, themeColors);
   const shotFeatures: GeoJSON.Feature[] = [];
   const shotGradientFeatures: GeoJSON.Feature[] = [];
   const shotLabelFeatures: GeoJSON.Feature[] = [];

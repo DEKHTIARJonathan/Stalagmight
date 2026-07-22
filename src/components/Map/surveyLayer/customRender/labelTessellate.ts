@@ -69,7 +69,7 @@ export interface LabelDescriptor {
  *  label color context + the number-format precision. */
 export interface LabelBuildContext {
   colorCtx: LabelColorContext;
-  precision?: DecimalPrecision;
+  precision?: DecimalPrecision | undefined;
 }
 
 /**
@@ -130,8 +130,12 @@ export function buildLabelDescriptors(
   anchorX: number,
   anchorY: number,
   ctx: LabelBuildContext,
+  kinds?: ReadonlySet<LabelKind>,
 ): LabelDescriptor[] {
   const descriptors: LabelDescriptor[] = [];
+  // Kind filter (Phase 2 builds station labels only; Phase 3 drops the arg to
+  // build all five). Absent = every kind, so existing callers are unchanged.
+  const wants = (k: LabelKind): boolean => kinds === undefined || kinds.has(k);
   const lookup = buildStationLookup(data);
   // allRef[g] === 1 <=> every shot touching station g is a reference shot (or it
   // has none). Equivalently allRef[g] === 0 <=> g has a non-reference shot — the
@@ -141,8 +145,10 @@ export function buildLabelDescriptors(
   const { colorCtx } = ctx;
 
   // ─── Shot labels (+ shot comments) ─────────────────────────────
+  const wantShotLabel = wants(LABEL_KIND.SHOT_LABEL);
+  const wantShotComment = wants(LABEL_KIND.SHOT_COMMENT);
   let globalShotOrdinal = 0;
-  for (const section of data.sections) {
+  if (wantShotLabel || wantShotComment) for (const section of data.sections) {
     const inner = lookup.get(section.id);
     if (!inner) continue;
     for (let i = 0; i < section.shotCount; i++) {
@@ -164,7 +170,7 @@ export function buildLabelDescriptors(
       const azimuthIn = data.shotAzimuthIn[shotGlobalIdx]!;
       const length = data.shotLength[shotGlobalIdx]!;
       const [ax, ay] = projectMeters((fx + tx) / 2, (fy + ty) / 2, gpsOrigin, anchorX, anchorY);
-      descriptors.push({
+      if (wantShotLabel) descriptors.push({
         kind: LABEL_KIND.SHOT_LABEL,
         text: formatShotLabel(azimuthIn, length, labelDepth, ctx.precision),
         anchorX: ax,
@@ -173,7 +179,7 @@ export function buildLabelDescriptors(
         ordinal: globalShotOrdinal,
         flags: isRef ? LABEL_FLAG.REFERENCE : 0,
       });
-      const shotComment = data.shotComments.get(shotGlobalIdx);
+      const shotComment = wantShotComment ? data.shotComments.get(shotGlobalIdx) : undefined;
       if (shotComment !== undefined) {
         descriptors.push({
           kind: LABEL_KIND.SHOT_COMMENT,
@@ -190,48 +196,52 @@ export function buildLabelDescriptors(
   }
 
   // ─── Station labels (+ station comments) ───────────────────────
-  // Per-section min station index == the "first in section" predicate.
-  const sectionMinIndex = new Map<number, number>();
-  for (let g = 0; g < data.stationCount; g++) {
-    const sid = data.stationSectionIds[g]!;
-    const idx = data.stationIndices[g]!;
-    const cur = sectionMinIndex.get(sid);
-    if (cur === undefined || idx < cur) sectionMinIndex.set(sid, idx);
-  }
-  for (let g = 0; g < data.stationCount; g++) {
-    const sid = data.stationSectionIds[g]!;
-    const stationIndex = data.stationIndices[g]!;
-    const z = data.stationCoords[g * 3 + 2]!;
-    let flags = 0;
-    if (stationIndex === sectionMinIndex.get(sid)) flags |= LABEL_FLAG.FIRST_IN_SECTION;
-    if (allRef[g] === 1) flags |= LABEL_FLAG.ALL_REFERENCE;
-    const ax = stationRel[g * 2]!;
-    const ay = stationRel[g * 2 + 1]!;
-    descriptors.push({
-      kind: LABEL_KIND.STATION_LABEL,
-      text: formatStationLabel(stationIndex),
-      anchorX: ax,
-      anchorY: ay,
-      color: packCssColor(resolveStationLabelColor(z, colorCtx)),
-      ordinal: g,
-      flags,
-    });
-    const stationComment = data.stationComments.get(g);
-    if (stationComment !== undefined) {
-      descriptors.push({
-        kind: LABEL_KIND.STATION_COMMENT,
-        text: formatCommentLabel(stationComment),
+  const wantStationLabel = wants(LABEL_KIND.STATION_LABEL);
+  const wantStationComment = wants(LABEL_KIND.STATION_COMMENT);
+  if (wantStationLabel || wantStationComment) {
+    // Per-section min station index == the "first in section" predicate.
+    const sectionMinIndex = new Map<number, number>();
+    for (let g = 0; g < data.stationCount; g++) {
+      const sid = data.stationSectionIds[g]!;
+      const idx = data.stationIndices[g]!;
+      const cur = sectionMinIndex.get(sid);
+      if (cur === undefined || idx < cur) sectionMinIndex.set(sid, idx);
+    }
+    for (let g = 0; g < data.stationCount; g++) {
+      const sid = data.stationSectionIds[g]!;
+      const stationIndex = data.stationIndices[g]!;
+      const z = data.stationCoords[g * 3 + 2]!;
+      let flags = 0;
+      if (stationIndex === sectionMinIndex.get(sid)) flags |= LABEL_FLAG.FIRST_IN_SECTION;
+      if (allRef[g] === 1) flags |= LABEL_FLAG.ALL_REFERENCE;
+      const ax = stationRel[g * 2]!;
+      const ay = stationRel[g * 2 + 1]!;
+      if (wantStationLabel) descriptors.push({
+        kind: LABEL_KIND.STATION_LABEL,
+        text: formatStationLabel(stationIndex),
         anchorX: ax,
         anchorY: ay,
-        color: packCssColor(colorCtx.labelColor),
-        ordinal: 0,
-        flags: 0,
+        color: packCssColor(resolveStationLabelColor(z, colorCtx)),
+        ordinal: g,
+        flags,
       });
+      const stationComment = wantStationComment ? data.stationComments.get(g) : undefined;
+      if (stationComment !== undefined) {
+        descriptors.push({
+          kind: LABEL_KIND.STATION_COMMENT,
+          text: formatCommentLabel(stationComment),
+          anchorX: ax,
+          anchorY: ay,
+          color: packCssColor(colorCtx.labelColor),
+          ordinal: 0,
+          flags: 0,
+        });
+      }
     }
   }
 
   // ─── Section names ─────────────────────────────────────────────
-  for (const section of data.sections) {
+  if (wants(LABEL_KIND.SECTION_NAME)) for (const section of data.sections) {
     const inner = lookup.get(section.id);
     if (!inner || inner.size === 0) continue;
     // Prefer the first NON-reference station (so the name doesn't float when

@@ -50,6 +50,7 @@ import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity
 import { dimmedZoomOpacity } from './surveyLayer/opacityExpressions';
 import { decideLabelBuild, skippedBuildForCamera } from './surveyLayer/labelBuildDecision';
 import { SurveyCustomController, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
+import { SurveyLabelController } from './surveyLayer/customRender/labelController';
 import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
 import type { SurveyData } from '../../types/survey-data';
 import type { ProjectWarning } from '../../types/commands';
@@ -470,6 +471,10 @@ export default class SurveyLayer {
   // Flag-gated custom WebGL render prototype (#customRender). No-op unless the
   // `stalagmight_custom_render` gate is on; see surveyLayer/customRender/.
   private customRender: SurveyCustomController | null = null;
+  // Flag-gated custom WebGL LABEL layer (#customRender labels). No-op unless BOTH
+  // the render gate AND `stalagmight_custom_labels` are on. Station labels only
+  // this phase; drives the stock `survey-station-labels` layer's suppression.
+  private customLabels: SurveyLabelController | null = null;
 
   /**
    * True while the custom WebGL layer is drawing and has taken over the bulk
@@ -547,6 +552,10 @@ export default class SurveyLayer {
     this.customRender = new SurveyCustomController(map, undefined, {
       resync: () => this.resyncCustomRenderFromStore(),
       onActiveChange: (active) => this.onCustomActiveChange(active),
+    });
+    // resyncCustomRenderFromStore syncs BOTH controllers, so one hook covers both.
+    this.customLabels = new SurveyLabelController(map, undefined, {
+      resync: () => this.resyncCustomRenderFromStore(),
     });
   }
 
@@ -3129,8 +3138,13 @@ export default class SurveyLayer {
     );
   }
 
-  // Control station index labels visibility
+  // Control station index labels visibility. When the custom label layer is
+  // active it owns station labels: drive its shader uniform and leave the stock
+  // layer suppressed (setting stock 'visible' would double the labels). Off / not
+  // active: the stock visibility toggle as before (byte-identical gate-OFF path).
   setShowStationLabels(show: boolean) {
+    this.customLabels?.setStationLabelsVisible(show);
+    if (this.customLabels?.isActive()) return;
     this.map.setLayoutProperty(
       this.stationLabelsLayerId,
       'visibility',
@@ -3219,6 +3233,7 @@ export default class SurveyLayer {
     if (!this.map) return;
     this.showReferenceShotsCached = visible;
     this.customRender?.setReferenceShotsVisible(visible);
+    this.customLabels?.setReferenceShotsVisible(visible);
     const notReference: maplibregl.FilterSpecification = ['!=', ['get', 'isReference'], true];
     const notAllReference: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsReference'], true];
     if (visible) {
@@ -4569,6 +4584,16 @@ export default class SurveyLayer {
       stationRadiusPx: this.getStationRadius(),
       stationStrokePx: 1,
     });
+    // Custom LABEL layer (#customRender labels). Shares surveyData + theme; its
+    // own composed gate no-ops when off. Station labels only this phase.
+    this.customLabels?.sync({
+      surveyData,
+      gpsOrigin: this.gpsOrigin,
+      themeColors: this.themeColors,
+      showDepthGradient: this.showDepthGradient,
+      depthRange: this.depthRange,
+      precision: this.cachedPrecision,
+    });
   }
 
   /**
@@ -5376,6 +5401,8 @@ export default class SurveyLayer {
     // layer visibility, and unregisters the runtime sync hook) (#customRender).
     this.customRender?.destroy();
     this.customRender = null;
+    this.customLabels?.destroy();
+    this.customLabels = null;
 
     // Zero memory-probe feature counts for our sources so the debug panel
     // stops showing stale counts from the last setData call.
