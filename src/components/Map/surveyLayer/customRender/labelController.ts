@@ -39,6 +39,7 @@ import type { GpsOrigin, DecimalPrecision } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
 import type { MapThemeColors } from '../../../../utils/themeColors';
 import { debugLog } from '../../../../utils/debugLog';
+import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
 import { commentColorForKey } from '../features';
 import { lngLatToMercator } from '../vectorTileData';
 import { computeMercatorAnchor } from './mercator';
@@ -46,14 +47,18 @@ import {
   buildLabelDescriptors,
   shapeDescriptors,
   buildLabelBuffersFromShaped,
+  buildLabelFlags,
+  type LabelDescriptor,
   type ViewportRel,
 } from './labelTessellate';
-import { shapedExtent } from './labelLayout';
+import { shapedExtent, type ExtentEm, type ShapedLabel } from './labelLayout';
 import { collideLabels } from './labelCollide';
 import { labelColorContextFrom } from './labelText';
 import { LABEL_KIND, LABEL_KIND_COUNT, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { LABEL_KIND_STYLE } from './labelStyle';
 import { packCssColor, type Rgba8 } from './colorPack';
+import type { CustomDimState } from './controller';
+import type { CustomRenderExclusion } from './tessellate';
 import {
   GlyphAtlas,
   ensureLabelFont,
@@ -106,6 +111,19 @@ const VIEWPORT_PADDING = 0.5;
 const SECTION_ONLY_KINDS: ReadonlySet<LabelKind> = new Set([LABEL_KIND.SECTION_NAME]);
 /** Below section minzoom: nothing builds. */
 const NO_KINDS: ReadonlySet<LabelKind> = new Set();
+
+// ─── Phase 5: dim + drag-hide interaction state ──────────────────────────────
+
+/** Anchored / immovable dim set — the SAME shape the geometry controller takes
+ *  ({@link CustomDimState}), so SurveyLayer pushes one state to both. */
+const EMPTY_DIM: CustomDimState = {
+  anchoredSectionIds: new Set<number>(),
+  immovableStationFeatureIds: new Set<number>(),
+  immovableShotFeatureIds: new Set<number>(),
+};
+/** Drag-exclusion set — the SAME shape the geometry controller takes
+ *  ({@link CustomRenderExclusion}); dragged features' labels hide. */
+const EMPTY_EXCLUSION: CustomRenderExclusion = {};
 
 /** The padded viewport rect (anchor-relative mercator) + a projector from
  *  anchor-relative mercator to CSS screen px — both derived from ONE
@@ -173,6 +191,24 @@ export class SurveyLabelController {
   private viewportRebuildScheduled = false;
   /** Bound moveend/zoomend handler, kept for `off()` in destroy. */
   private boundCameraSettle: (() => void) | null = null;
+
+  // ── Phase 5 interaction state (mirrors the geometry controller) ──
+  /** Anchored / immovable dim set (setDimming); applied to every build + the
+   *  cheap flags-only refresh; survives re-enable. */
+  private dimState: CustomDimState = EMPTY_DIM;
+  /** Drag-exclusion set (setDragHide); dragged features' labels hide. */
+  private hideState: CustomRenderExclusion = EMPTY_EXCLUSION;
+  /** Cached build products backing the flags-only refresh + collision rerun: the
+   *  last descriptor set + its shaped labels / em extents, the last projector +
+   *  zoom (collision rerun), and the last collision-loser index set. Rewritten on
+   *  every {@link build}. */
+  private lastDescriptors: LabelDescriptor[] | null = null;
+  private lastShaped: ShapedLabel[] | null = null;
+  private lastExtents: (ExtentEm | null)[] | null = null;
+  private lastProject: ((relX: number, relY: number) => readonly [number, number]) | null = null;
+  private lastZoom: number | undefined = undefined;
+  /** Descriptor indices the last collision run hid (COLLIDE_HIDE). */
+  private lastCollideHidden: ReadonlySet<number> = new Set();
 
   /** Per-kind desired visibility (the setShow* toggles + comment-tool override),
    *  indexed by {@link LabelKind}. Held so a re-enable / stock restore reproduces
@@ -257,21 +293,26 @@ export class SurveyLabelController {
 
   private setKindVisible(kind: LabelKind, visible: boolean): void {
     this.kindVisible[kind] = visible;
-    // A toggle is a pure uniform flip (§7): the shader hides/shows the kind with
-    // no buffer rebuild. Collision was baked at the last build with the previous
-    // candidate set, so a toggled-off kind still occupies collision space (and a
-    // toggled-on kind is not yet re-decluttered against) until the next build
-    // (camera settle / edit) re-runs collision with the current `kindVisible`.
-    // The design permits this approximation (§5, "or accept the approximation");
-    // Phase 5's flags-only re-upload path can rerun collision on toggle if the
-    // residual staleness proves visible.
-    if (this.active) this.pushStyle();
+    // The toggle itself is a pure uniform flip (the shader shows/hides the kind
+    // with no rebuild). It also changes the collision CANDIDATE set, so re-run
+    // collision + refresh the flags (Phase 5) — cheap now that updateFlags exists
+    // — so a toggled-off kind stops occupying declutter space and a toggled-on
+    // kind is decluttered against immediately. rerunCollision no-ops without a
+    // projector (unit-test fakes / below-gate), leaving the pure-uniform flip.
+    if (this.active) {
+      this.pushStyle();
+      this.rerunCollision();
+    }
   }
 
-  /** Mirror setShowReferenceShots (label half): flip the shader uniform. */
+  /** Mirror setShowReferenceShots (label half): flip the shader uniform, then
+   *  re-declutter (reference-hide changes the collision candidate set). */
   setReferenceShotsVisible(visible: boolean): void {
     this.referenceShotsVisible = visible;
-    if (this.active) this.pushStyle();
+    if (this.active) {
+      this.pushStyle();
+      this.rerunCollision();
+    }
   }
 
   /** Build the current NON-zoom style inputs (DPR, per-kind toggle, halo colors,
@@ -318,34 +359,182 @@ export class SurveyLabelController {
       kinds, vpCtx?.viewport,
     );
     const shaped = shapeDescriptors(descriptors, this.atlas!);
+    const extents = shaped.map(shapedExtent);
 
-    // Collision (§5): bake HIDE into the fresh flags BEFORE emit, so the loser
-    // set rides the same buffer with no separate upload. Only runs when the map
-    // can project (a fake without bounds/canvas keeps every label, no collision).
-    let hiddenCount = 0;
+    // Collision (§5). Only runs when the map can project (a fake without
+    // bounds/canvas keeps every label, no collision). The loser set is retained
+    // (not baked into desc.flags) so a later flags-only refresh — dim / drag /
+    // collision rerun — can recombine it with the current DIM / DRAG bits.
+    let collideHidden: ReadonlySet<number> = new Set();
     if (vpCtx !== null && zoom !== undefined) {
-      const extents = shaped.map(shapedExtent);
-      const hidden = collideLabels(descriptors, extents, {
+      collideHidden = new Set(collideLabels(descriptors, extents, {
         zoom,
         project: vpCtx.project,
         kindVisible: this.kindVisible,
         hideReference: !this.referenceShotsVisible,
-      });
-      for (const i of hidden) descriptors[i]!.flags |= LABEL_FLAG.HIDE;
-      hiddenCount = hidden.length;
+      }));
     }
 
-    const buffers = buildLabelBuffersFromShaped(descriptors, shaped);
+    // Retain the build products for the cheap flag paths + collision rerun.
+    this.lastDescriptors = descriptors;
+    this.lastShaped = shaped;
+    this.lastExtents = extents;
+    this.lastProject = vpCtx?.project ?? null;
+    this.lastZoom = zoom;
+    this.lastCollideHidden = collideHidden;
+
+    const buffers = buildLabelBuffersFromShaped(descriptors, shaped, (i) =>
+      this.labelFlagByte(descriptors[i]!, collideHidden.has(i)),
+    );
     debugLog('[customRender] label build', {
       ms: +(performance.now() - t0).toFixed(1),
       zoom: zoom === undefined ? null : +zoom.toFixed(2),
       labels: descriptors.length,
-      hidden: hiddenCount,
+      hidden: collideHidden.size,
       glyphs: buffers.glyphCount,
       mb: +(buffers.byteLength / 1048576).toFixed(2),
     });
     this.lastData = { anchorX, anchorY, buffers, atlas: this.atlas! };
     return this.lastData;
+  }
+
+  /**
+   * The full per-label flag byte = STATIC bits (FIRST_IN_SECTION / REFERENCE /
+   * ALL_REFERENCE, from the descriptor) OR the dynamic interaction bits:
+   * COLLIDE_HIDE (this label lost collision), DIM (anchored / immovable), and
+   * DRAG_HIDE (a move tool is dragging its feature). One place both the build
+   * emit and the flags-only refresh compute the byte, so they never diverge.
+   */
+  private labelFlagByte(desc: LabelDescriptor, collideHidden: boolean): number {
+    let f = desc.flags;
+    if (collideHidden) f |= LABEL_FLAG.COLLIDE_HIDE;
+    if (this.dimBitFor(desc)) f |= LABEL_FLAG.DIM;
+    if (this.dragBitFor(desc)) f |= LABEL_FLAG.DRAG_HIDE;
+    return f;
+  }
+
+  /**
+   * Whether a label dims (0.25), keyed on the SAME state the stock label paint
+   * expressions use (updateLabelAnchoredOpacity / updateImmovableLabelOpacity):
+   *  - shot label:    anchored(section) OR immovable-shot(section·STRIDE+shotId)
+   *  - station label: anchored(section) OR immovable-station(section·STRIDE+idx)
+   *  - section name:  anchored(section) only (never immovable-dimmed)
+   *  - comments:      never (stock never dims comment layers).
+   */
+  private dimBitFor(desc: LabelDescriptor): boolean {
+    const { anchoredSectionIds, immovableStationFeatureIds, immovableShotFeatureIds } = this.dimState;
+    const sid = desc.sectionId;
+    if (sid === undefined) return false;
+    const anchored = anchoredSectionIds.has(sid);
+    switch (desc.kind) {
+      case LABEL_KIND.SHOT_LABEL:
+        return (
+          anchored ||
+          (immovableShotFeatureIds.size > 0 &&
+            desc.shotId !== undefined &&
+            immovableShotFeatureIds.has(sid * FEATURE_ID_STRIDE + desc.shotId))
+        );
+      case LABEL_KIND.STATION_LABEL:
+        return (
+          anchored ||
+          (immovableStationFeatureIds.size > 0 &&
+            desc.stationIndex !== undefined &&
+            immovableStationFeatureIds.has(sid * FEATURE_ID_STRIDE + desc.stationIndex))
+        );
+      case LABEL_KIND.SECTION_NAME:
+        return anchored;
+      default:
+        return false; // comments: stock leaves them at full opacity
+    }
+  }
+
+  /**
+   * Whether a label is drag-hidden, keyed on the SAME drag exclusion the geometry
+   * controller + the stock drag filters use (excludedStationGlobals /
+   * excludedShotGlobals / whole-section drag): station-owned labels + comments
+   * follow the station set, shot-owned follow the shot set, and either follows a
+   * whole-section exclusion. Section names are NOT drag-hidden (stock leaves
+   * `survey-labels` out of the drag hide-layers).
+   */
+  private dragBitFor(desc: LabelDescriptor): boolean {
+    const { sectionIds, stationGlobalIndices, shotGlobalIndices } = this.hideState;
+    const sid = desc.sectionId;
+    if (sid === undefined) return false;
+    if (sectionIds?.has(sid) === true) {
+      return desc.kind !== LABEL_KIND.SECTION_NAME;
+    }
+    switch (desc.kind) {
+      case LABEL_KIND.STATION_LABEL:
+      case LABEL_KIND.STATION_COMMENT:
+        return desc.stationGlobal !== undefined && stationGlobalIndices?.has(desc.stationGlobal) === true;
+      case LABEL_KIND.SHOT_LABEL:
+      case LABEL_KIND.SHOT_COMMENT:
+        return desc.shotGlobal !== undefined && shotGlobalIndices?.has(desc.shotGlobal) === true;
+      default:
+        return false; // section names never drag-hide
+    }
+  }
+
+  /**
+   * Re-stamp ONLY the per-vertex flags buffer from the retained build products +
+   * the current dim / drag / collision state, and re-upload it (no reshape /
+   * reproject / recolor). The cheap path behind setDimming / setDragHide /
+   * collision rerun. No-op until a build has run (state is still stored, so the
+   * next build reproduces it).
+   */
+  private refreshFlags(): void {
+    if (!this.active || !this.layer || !this.lastDescriptors || !this.lastShaped) return;
+    const descriptors = this.lastDescriptors;
+    const collideHidden = this.lastCollideHidden;
+    const flags = buildLabelFlags(this.lastShaped, (i) =>
+      this.labelFlagByte(descriptors[i]!, collideHidden.has(i)),
+    );
+    this.layer.updateFlags(flags);
+    this.map.triggerRepaint?.();
+  }
+
+  /**
+   * Re-run collision over the retained viewport set with the CURRENT candidate
+   * inputs (kind toggles, reference-hide) and refresh the flags. Cheap (the set
+   * is viewport-bounded) and used when a toggle changes the candidate set so the
+   * declutter updates immediately rather than at the next build (Phase 4's
+   * deferred approximation, now cheap that updateFlags exists). No-op without a
+   * projector (unit-test fakes / below-gate builds) — the toggle stays a pure
+   * uniform flip there.
+   */
+  private rerunCollision(): void {
+    if (!this.active || !this.lastDescriptors || !this.lastExtents || this.lastProject === null || this.lastZoom === undefined) {
+      return;
+    }
+    this.lastCollideHidden = new Set(collideLabels(this.lastDescriptors, this.lastExtents, {
+      zoom: this.lastZoom,
+      project: this.lastProject,
+      kindVisible: this.kindVisible,
+      hideReference: !this.referenceShotsVisible,
+    }));
+    this.refreshFlags();
+  }
+
+  /**
+   * Update the anchored / immovable dim set (SurveyLayer.syncCustomDimming). Cheap
+   * flags-only refresh; state stored regardless so the next build reproduces it.
+   * Mirrors the geometry controller's {@link CustomDimState} setDimming.
+   */
+  setDimming(state: CustomDimState): void {
+    this.dimState = state;
+    if (this.active) this.refreshFlags();
+  }
+
+  /**
+   * Point the label layer at (or off, with null) the active drag's hidden feature
+   * set (SurveyLayer.setDragExclusion). Cheap flags-only refresh; state stored so
+   * a mid-drag build / re-enable reproduces it. The dragged features' labels
+   * collapse via DRAG_HIDE — the synchronous GPU flag that makes the stock
+   * LabelRestoreController deferral unnecessary under the gate (§8).
+   */
+  setDragHide(exclusion: CustomRenderExclusion | null): void {
+    this.hideState = exclusion ?? EMPTY_EXCLUSION;
+    if (this.active) this.refreshFlags();
   }
 
   /**

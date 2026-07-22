@@ -3,7 +3,8 @@ import type { Map as MaplibreMap } from 'maplibre-gl';
 import { emptySurveyData, STATION_FLAG_IS_ZERO_DATUM, type SurveyData } from '../../../../../types/survey-data';
 import type { MapThemeColors } from '../../../../../utils/themeColors';
 import { GlyphAtlas, SDF_BUFFER, type GlyphRasterizer, type RasterizedGlyph } from '../glyphAtlas';
-import { LABEL_KIND } from '../labelShaders';
+import { LABEL_KIND, LABEL_FLAG } from '../labelShaders';
+import { FEATURE_ID_STRIDE } from '../../../../../utils/ids';
 import type { LabelRenderData } from '../surveyCustomLabelLayer';
 import { SurveyLabelController, type LabelSyncParams } from '../labelController';
 
@@ -50,9 +51,17 @@ const h = vi.hoisted(() => {
     getDisabledReason(): string | null {
       return this.reason;
     }
+    flagsCalls = 0;
+    lastFlags: Uint8Array | null = null;
     update(data: unknown): void {
       this.data = data;
       this.updateCalls++;
+    }
+    updateFlags(flags: Uint8Array): void {
+      this.lastFlags = flags;
+      const d = this.data as { buffers?: { flags: Uint8Array } } | null;
+      if (d?.buffers) d.buffers.flags = flags;
+      this.flagsCalls++;
     }
     setStyleInputs(style: { kindEnabled: boolean[]; haloColors: unknown[]; hideReference: boolean }): void {
       this.lastStyle = style;
@@ -638,5 +647,279 @@ describe('SurveyLabelController camera-settle rebuild', () => {
     const after = layer.updateCalls;
     expect(() => cam.fire('moveend')).not.toThrow();
     expect(layer.updateCalls).toBe(after);
+  });
+});
+
+// ─── Phase 5: dim + drag-hide flags, collision rerun, synchronous placement ──
+
+/** Per-vertex (kind, ordinal, flag byte) from the layer's current buffers — after
+ *  a build OR a flags-only refresh (updateFlags keeps data.buffers.flags coherent). */
+function vfl(layer: FakeLabelLayer): { kind: Uint8Array; ordinal: Float32Array; flags: Uint8Array } {
+  const d = layer.data as LabelRenderData;
+  return { kind: d.buffers.kind, ordinal: d.buffers.ordinal, flags: d.buffers.flags };
+}
+
+/** Does ANY vertex of `kind` have `bit` set? */
+function anyKindHasBit(layer: FakeLabelLayer, kind: number, bit: number): boolean {
+  const { kind: k, flags } = vfl(layer);
+  for (let v = 0; v < k.length; v++) if (k[v] === kind && (flags[v]! & bit) !== 0) return true;
+  return false;
+}
+
+/** Does EVERY vertex of `kind` have `bit` set (false if the kind is absent)? */
+function allKindHaveBit(layer: FakeLabelLayer, kind: number, bit: number): boolean {
+  const { kind: k, flags } = vfl(layer);
+  let seen = false;
+  for (let v = 0; v < k.length; v++) {
+    if (k[v] !== kind) continue;
+    seen = true;
+    if ((flags[v]! & bit) === 0) return false;
+  }
+  return seen;
+}
+
+/** Flag byte for the station label with global ordinal `g` (0 if absent). */
+function stationLabelFlag(layer: FakeLabelLayer, g: number): number {
+  const { kind, ordinal, flags } = vfl(layer);
+  for (let v = 0; v < kind.length; v++) {
+    if (kind[v] === LABEL_KIND.STATION_LABEL && ordinal[v] === g) return flags[v]!;
+  }
+  return 0;
+}
+
+const EMPTY_DIM = {
+  anchoredSectionIds: new Set<number>(),
+  immovableStationFeatureIds: new Set<number>(),
+  immovableShotFeatureIds: new Set<number>(),
+};
+
+/** Fixture + a station comment on g0 (section 1) and a shot comment on shot 0. */
+function commentParams(): LabelSyncParams {
+  const p = makeParams();
+  p.surveyData.stationComments = new Map([[0, 'stn']]);
+  p.surveyData.shotComments = new Map([[0, 'sht']]);
+  return p;
+}
+
+describe('SurveyLabelController dim parity (DIM flag)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.render = true;
+    h.gate.labels = true;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('anchored dim: shot/station/section labels dim, comments do NOT (stock parity)', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    // Anchor BOTH sections so every label of a dimmable kind is covered.
+    c.setDimming({ ...EMPTY_DIM, anchoredSectionIds: new Set([1, 2]) });
+    expect(layer.flagsCalls).toBeGreaterThan(0); // cheap flags-only refresh, no rebuild
+    expect(allKindHaveBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DIM)).toBe(true);
+    expect(allKindHaveBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.DIM)).toBe(true);
+    expect(allKindHaveBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DIM)).toBe(true);
+    // Comments are never dimmed by stock label expressions.
+    expect(anyKindHasBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.DIM)).toBe(false);
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.DIM)).toBe(false);
+  });
+
+  it('immovable dim: only the immovable station label dims; section names never do', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    // Immovable station g0 == section 1, station index 0.
+    c.setDimming({
+      ...EMPTY_DIM,
+      immovableStationFeatureIds: new Set([1 * FEATURE_ID_STRIDE + 0]),
+    });
+    expect(stationLabelFlag(layer, 0) & LABEL_FLAG.DIM).toBe(LABEL_FLAG.DIM); // g0 dims
+    expect(stationLabelFlag(layer, 1) & LABEL_FLAG.DIM).toBe(0); // g1 does not
+    // Section names are not immovable-dimmed.
+    expect(anyKindHasBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DIM)).toBe(false);
+  });
+
+  it('clearing the dim set removes DIM (flags-only)', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setDimming({ ...EMPTY_DIM, anchoredSectionIds: new Set([1, 2]) });
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DIM)).toBe(true);
+    c.setDimming(EMPTY_DIM);
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DIM)).toBe(false);
+  });
+});
+
+describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.render = true;
+    h.gate.labels = true;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('hides the dragged station label + its comment, not other stations or section names', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setDragHide({ stationGlobalIndices: new Set([0]) }); // drag station g0
+    expect(layer.flagsCalls).toBeGreaterThan(0);
+    expect(stationLabelFlag(layer, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(stationLabelFlag(layer, 1) & LABEL_FLAG.DRAG_HIDE).toBe(0);
+    // The station comment (only g0 has one) hides with its station.
+    expect(anyKindHasBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.DRAG_HIDE)).toBe(true);
+    // Section names never drag-hide (stock keeps survey-labels out of hide layers).
+    expect(anyKindHasBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DRAG_HIDE)).toBe(false);
+  });
+
+  it('hides the dragged shot label + its comment', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setDragHide({ shotGlobalIndices: new Set([0]) }); // drag shot global 0
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DRAG_HIDE)).toBe(true);
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.DRAG_HIDE)).toBe(true);
+  });
+
+  it('a whole-section drag hides that section labels but not section names', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setDragHide({ sectionIds: new Set([1]) });
+    expect(anyKindHasBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.DRAG_HIDE)).toBe(true);
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DRAG_HIDE)).toBe(true);
+    expect(anyKindHasBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DRAG_HIDE)).toBe(false);
+  });
+
+  it('setDragHide(null) clears every DRAG_HIDE (drag end)', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setDragHide({ stationGlobalIndices: new Set([0]) });
+    expect(stationLabelFlag(layer, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    c.setDragHide(null);
+    expect(anyKindHasBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.DRAG_HIDE)).toBe(false);
+  });
+
+  it('DIM and DRAG_HIDE compose without disturbing each other', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setDimming({ ...EMPTY_DIM, anchoredSectionIds: new Set([1]) });
+    c.setDragHide({ stationGlobalIndices: new Set([0]) });
+    // g0 has both bits; the dim persists through the drag flag upload.
+    const f0 = stationLabelFlag(layer, 0);
+    expect(f0 & LABEL_FLAG.DIM).toBe(LABEL_FLAG.DIM);
+    expect(f0 & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    // g1 (section 1, not dragged) keeps DIM but not DRAG_HIDE.
+    const f1 = stationLabelFlag(layer, 1);
+    expect(f1 & LABEL_FLAG.DIM).toBe(LABEL_FLAG.DIM);
+    expect(f1 & LABEL_FLAG.DRAG_HIDE).toBe(0);
+  });
+
+  it('re-applies drag-hide on a mid-drag rebuild (state survives build)', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setDragHide({ stationGlobalIndices: new Set([0]) });
+    // A mid-drag geometry flush re-syncs; the fresh build must re-bake DRAG_HIDE.
+    c.sync(commentParams());
+    expect(stationLabelFlag(layer, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+  });
+});
+
+describe('SurveyLabelController synchronous placement (undo/redo)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.render = true;
+    h.gate.labels = true;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('a sync with moved coordinates places labels at the new anchor in the SAME call', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    const before = (layer.data as LabelRenderData).anchorX;
+
+    // Move every station 5 m in x (an undo/redo of a move re-flushes new SoA).
+    const moved = makeParams();
+    for (let g = 0; g < moved.surveyData.stationCount; g++) {
+      moved.surveyData.stationCoords[g * 3] = moved.surveyData.stationCoords[g * 3]! + 5;
+    }
+    c.sync(moved);
+    // The build ran synchronously in this call (new data on the layer) and the
+    // survey anchor shifted with the moved coordinates — no deferred convergence.
+    expect(layer.updateCalls).toBeGreaterThan(0);
+    expect((layer.data as LabelRenderData).anchorX).not.toBeCloseTo(before, 12);
+  });
+});
+
+describe('SurveyLabelController collision rerun on toggle', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.render = true;
+    h.gate.labels = true;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('a kind toggle reruns collision (flags-only) when a projector exists', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    const before = layer.flagsCalls;
+    const updatesBefore = layer.updateCalls;
+    c.setShotLabelsVisible(false);
+    // Collision re-ran via a flags-only upload — NOT a buffer rebuild.
+    expect(layer.flagsCalls).toBeGreaterThan(before);
+    expect(layer.updateCalls).toBe(updatesBefore);
+  });
+});
+
+describe('SurveyLabelController labelRestore-guard contract (isActive gates the guard)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.render = true;
+    h.gate.labels = true;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  // SurveyLayer guards every stock labelRestore call with `!customLabels.isActive()`.
+  // Lock the controller side of that predicate across the gate transitions.
+  it('isActive() is true only while both gates are on and a build has landed', () => {
+    const cam = makeCameraMap(18);
+    const c = cameraController(cam.map);
+    expect(c.isActive()).toBe(false); // nothing synced yet → guard runs stock restore
+    c.sync(makeParams());
+    expect(c.isActive()).toBe(true); // active → guard SKIPS stock restore
+    h.gate.labels = false;
+    c.sync(makeParams());
+    expect(c.isActive()).toBe(false); // gate off → guard runs stock restore again
   });
 });
