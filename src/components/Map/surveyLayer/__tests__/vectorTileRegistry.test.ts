@@ -202,6 +202,71 @@ describe('vector tile registry', () => {
     expect(setTiles).toHaveBeenCalledWith(['stalx://drain-live-fail-test/{z}/{x}/{y}?v=2']);
   });
 
+  it('swallows a still-resident tile\'s "should not be trying to reload" rejection (worker uid gone)', async () => {
+    // The residency check is main-thread-only: a tile can still sit in the pyramid
+    // while its WORKER-side uid was already dropped, so the drain's re-issued
+    // reload throws "Should not be trying to reload...". That message must gate the
+    // swallow - settle the wrapped promise clean (no ErrorEvent), NO stale-URL
+    // setTiles fallback - and the trailing reconcile still converges the tile.
+    vi.useFakeTimers();
+    const key = 'drain-uid-gone-test';
+    setVtLayerData(key, vtPointsFromFeatures(pointsAt([[1, 1]])));
+    const queued = { resolve: vi.fn(), reject: vi.fn() };
+    const tile: {
+      state: string;
+      abortController?: { abort: ReturnType<typeof vi.fn> };
+      reloadPromise?: { resolve: () => void; reject: (error?: unknown) => void } | null;
+      tileID: { canonical: { z: number; x: number; y: number } };
+    } = {
+      state: 'loaded',
+      abortController: { abort: vi.fn() },
+      reloadPromise: queued,
+      tileID: { canonical: { z: 2, x: 0, y: 0 } },
+    };
+    const reloadTile = vi.fn(() => Promise.resolve());
+    const setTiles = vi.fn();
+    const manager = {
+      _outOfViewCache: { reset: vi.fn(), filter: vi.fn() },
+      getIds: vi.fn(() => ['t']),
+      getTileByID: vi.fn(() => tile), // stays resident on the main thread throughout
+      _reloadTile: reloadTile,
+    };
+    const source = {
+      map: { style: { tileManagers: { [key]: manager } }, triggerRepaint: vi.fn() },
+      tiles: [`stalx://${key}/{z}/{x}/{y}?v=1`],
+      setTiles,
+    };
+    try {
+      const replacement = reloadVtSource(source as unknown as VectorTileSource, key, 2);
+      // Publish runs synchronously up to its await, wrapping the tile's reloadPromise.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(tile.reloadPromise).not.toBe(queued);
+      expect(reloadTile).not.toHaveBeenCalled();
+
+      // The worker rejects the drain's re-issued reload for the dropped uid; the
+      // tile then finishes loading fresh data (uid re-reserved) before the reconcile.
+      tile.reloadPromise!.reject(
+        new Error('Should not be trying to reload a tile that was never loaded or has been removed'),
+      );
+      delete tile.abortController;
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(replacement).resolves.toBe(true);
+      // Swallowed: the wrapped MapLibre promise resolved (never rejected -> no
+      // ErrorEvent), and no wasteful stale-URL refetch fired.
+      expect(queued.resolve).toHaveBeenCalledOnce();
+      expect(queued.reject).not.toHaveBeenCalled();
+      expect(setTiles).not.toHaveBeenCalled();
+
+      // The trailing reconcile still converges the (now loaded) resident tile.
+      await vi.advanceTimersByTimeAsync(300);
+      expect(reloadTile).toHaveBeenCalledWith('t', 'expired');
+    } finally {
+      vi.useRealTimers();
+      clearVtLayerData(key);
+    }
+  });
+
   it('restarts an initial source load before any geometry is resident', () => {
     const setTiles = vi.fn();
     const source = {
@@ -250,8 +315,57 @@ describe('vector tile registry', () => {
     expect(reloadPromise.resolve).toHaveBeenCalledOnce();
   });
 
-  it('updates the current viewport when source metadata lands before tile IDs exist', async () => {
+  it('skips a bare reload on a loading tile with no queued reload (no un-wrapped reloadPromise, no rejection escape)', async () => {
+    // A tile mid-load with NO reloadPromise: a bare `_reloadTile` would make
+    // MapLibre mint its own reloadPromise the app never wraps, whose later drain
+    // re-issues an "RT" for a dropped uid and surfaces a source ErrorEvent.
+    // reloadTileGuarded must skip it instead - the tile is already loading the
+    // current payload through the protocol, and the trailing reconcile re-cuts it.
     const tile = { state: 'loading' };
+    const reloadTile = vi.fn(() => Promise.resolve());
+    const setTiles = vi.fn();
+    const manager = {
+      getIds: vi.fn(() => ['tile-1']),
+      getTileByID: vi.fn(() => tile),
+      _reloadTile: reloadTile,
+    };
+    const source = {
+      map: {
+        style: { tileManagers: { 'loading-no-promise-test': manager } },
+        triggerRepaint: vi.fn(),
+      },
+      tiles: ['stalx://loading-no-promise-test/{z}/{x}/{y}?v=1'],
+      _options: { type: 'vector' as const, tiles: ['stalx://loading-no-promise-test/{z}/{x}/{y}?v=1'] },
+      setTiles,
+    };
+
+    const rejections: unknown[] = [];
+    const onRejection = (e: PromiseRejectionEvent): void => {
+      e.preventDefault();
+      rejections.push(e.reason);
+    };
+    globalThis.addEventListener?.('unhandledrejection', onRejection);
+    try {
+      const replacement = reloadVtSource(source as unknown as VectorTileSource, 'loading-no-promise-test', 2);
+      await expect(replacement).resolves.toBe(true);
+      // No bare `_reloadTile` was issued, and no un-wrapped MapLibre reloadPromise
+      // was minted on the tile (which would leak an un-awaited drain).
+      expect(reloadTile).not.toHaveBeenCalled();
+      expect(tile).not.toHaveProperty('reloadPromise');
+      // No stale-URL fallback and no rejection escaped to the unhandled queue.
+      expect(setTiles).not.toHaveBeenCalled();
+      await Promise.resolve();
+      expect(rejections).toEqual([]);
+    } finally {
+      globalThis.removeEventListener?.('unhandledrejection', onRejection);
+    }
+  });
+
+  it('updates the current viewport when source metadata lands before tile IDs exist', async () => {
+    // A resident tile update() surfaces: it re-cuts in place. (A tile still mid-
+    // load with no queued reload is skipped by reloadTileGuarded - covered by the
+    // "skips a bare reload on a loading tile with no queued reload" test below.)
+    const tile = { state: 'loaded' };
     let ids: string[] = [];
     let finishTileReload: (() => void) | undefined;
     const manager = {

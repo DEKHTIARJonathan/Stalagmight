@@ -379,6 +379,24 @@ type ReloadTile = {
 } & object;
 
 /**
+ * MapLibre's worker throws this exact message when a reload targets a tile whose
+ * worker-side `loaded[uid]` was already dropped - zoom churn, a structural full
+ * reload, or an out-of-view-cache reset removed the tile between the reload being
+ * queued and MapLibre's drain re-issuing the "RT" worker message. Under the
+ * in-place reload design this is benign: the tile's next load reserves fresh
+ * worker data and the trailing reconcile re-cuts it. The main-thread residency
+ * check cannot observe it (the tile can still sit in the pyramid while its worker
+ * uid is gone), so match the message and settle such a rejection as a no-op
+ * rather than firing a source ErrorEvent or the wasteful stale-URL `setTiles`
+ * refetch.
+ */
+const RELOAD_REMOVED_MESSAGE = /Should not be trying to reload/;
+function isReloadRemovedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return RELOAD_REMOVED_MESSAGE.test(message);
+}
+
+/**
  * Queue this publication behind the tile's active worker request instead of
  * reloading now. VectorTileSource drains `reloadPromise` after its active load
  * and starts one more load itself, so chaining onto it (rather than aborting or
@@ -421,14 +439,18 @@ function queueAfterActiveLoad(
         resolve();
       },
       reject: (error) => {
-        if (tileStillResident()) {
+        // Propagate ONLY a genuine failure of a tile that is still resident AND
+        // whose worker uid survives. A "should not be trying to reload" rejection
+        // means the worker uid was already dropped - a residual race the
+        // main-thread residency check cannot see - so treat it, like a dead or
+        // superseded tile, as a benign no-op: settle the wrapped MapLibre promise
+        // cleanly (no ErrorEvent) and skip the stale-URL setTiles fallback. The
+        // trailing reconcile converges the tile.
+        if (tileStillResident() && !isReloadRemovedError(error)) {
           queued?.reject(error);
           reject(error);
           return;
         }
-        // Dead or superseded tile: the drain's reload hit a worker entry that no
-        // longer exists. Settle the wrapped promise cleanly (no ErrorEvent) and
-        // treat our publication as a no-op for this tile (no setTiles fallback).
         queued?.resolve();
         resolve();
       },
@@ -443,8 +465,11 @@ function queueAfterActiveLoad(
  * snapshot and the actual reload cannot make us reload a dropped or mid-load
  * uid, which MapLibre's worker rejects with "Should not be trying to reload a
  * tile that was never loaded or has been removed". A stale generation or an
- * evicted tile is skipped; an active load (abortController) or a still-loading
- * tile with a queued reload is routed through `queueAfterActiveLoad` instead.
+ * evicted tile is skipped, as is a still-loading tile with no queued reload (a
+ * bare reload would leave an un-wrapped MapLibre reloadPromise whose drain can
+ * fire a spurious source ErrorEvent); an active load (abortController) or a
+ * still-loading tile with a queued reload is routed through
+ * `queueAfterActiveLoad` instead.
  */
 function reloadTileGuarded(
   manager: VtTileManager,
@@ -459,9 +484,17 @@ function reloadTileGuarded(
   if (!tile) return Promise.resolve();
   if (tile.abortController) return queueAfterActiveLoad(tile, manager, source, state, generation, id);
   if (tile.state === 'loading') {
+    // A mid-load tile WITH a queued reload: chain behind it so the newer payload
+    // rides the load in flight. WITHOUT one, a bare `_reloadTile` makes MapLibre
+    // mint its own reloadPromise we never wrap; its later drain can re-issue an
+    // "RT" worker message for a uid the worker already dropped, which throws and
+    // surfaces as a source ErrorEvent (the console burst). Skip it instead - the
+    // tile is already loading the current payload through the protocol, and the
+    // trailing reconcile sweep re-cuts it once it settles (its skipped-tiles
+    // retry loop re-arms for loading tiles).
     return tile.reloadPromise
       ? queueAfterActiveLoad(tile, manager, source, state, generation, id)
-      : Promise.resolve(manager._reloadTile(id, 'expired'));
+      : Promise.resolve();
   }
   return Promise.resolve(manager._reloadTile(id, 'expired'));
 }
