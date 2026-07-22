@@ -6,8 +6,9 @@
  * viewport-scoped {@link LabelDescriptor} set + each label's shaped em
  * {@link ExtentEm} + the current zoom + a `project(relMercator) -> screenPx`
  * function, it decides which labels to HIDE so nothing piles up. The controller
- * bakes the returned indices into the fresh buffer as `LABEL_FLAG.HIDE` (§5 of
- * the design), so collision costs one flag per loser and no separate upload.
+ * bakes the returned indices into the fresh buffer as `LABEL_FLAG.COLLIDE_HIDE`
+ * (§5 of the design), so collision costs one flag per loser and no separate
+ * upload.
  *
  * ALGORITHM (design §5): a greedy screen-space uniform-grid sweep over the
  * candidate set, in an explicit priority order (place-first wins):
@@ -176,8 +177,8 @@ export function placeGreedy(candidates: Candidate[], cellSize: number): number[]
 /**
  * Decide which labels to HIDE for a viewport-scoped build. `extents[i]` is the
  * shaped em extent of `descriptors[i]` (or `null` for an empty / whitespace-only
- * label, which never participates). Returns the indices to OR `LABEL_FLAG.HIDE`
- * into. Deterministic: the same inputs always yield the same set.
+ * label, which never participates). Returns the indices to mark
+ * `LABEL_FLAG.COLLIDE_HIDE`. Deterministic: the same inputs always yield the same set.
  */
 export function collideLabels(
   descriptors: LabelDescriptor[],

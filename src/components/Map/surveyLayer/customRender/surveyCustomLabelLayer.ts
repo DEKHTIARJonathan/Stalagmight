@@ -179,6 +179,23 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
     }
   }
 
+  /**
+   * Re-upload ONLY the per-vertex flags buffer — the cheap DIM / drag-hide flip +
+   * collision-rerun path (Phase 5). `flags.length` must equal the currently
+   * uploaded glyph buffer's vertex count (the controller recomputes it from the
+   * SAME shaped set via `buildLabelFlags`, so it always matches). `bufferSubData`
+   * overwrites in place; positions / uv / color / indices are untouched. The
+   * cached `data.buffers.flags` is kept coherent so a context-restore re-upload
+   * carries the latest bits.
+   */
+  updateFlags(flags: Uint8Array): void {
+    const gl = this.gl;
+    if (!gl || this.disabled || !this.gpu) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.gpu.flags);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, flags);
+    if (this.data) this.data.buffers.flags = flags;
+  }
+
   private uploadBuffers(b: LabelBuffers): void {
     const gl = this.gl;
     if (!gl) return;

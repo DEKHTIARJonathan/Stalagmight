@@ -60,14 +60,20 @@ export const LABEL_KIND_COUNT = 5;
  *  - ALL_REFERENCE: station label / all-reference section name -> collapsed with
  *    reference shots (mirrors `allShotsReference` / `allStationsReference`).
  *  - DIM: anchored / immovable label -> drawn at 0.25 opacity (move tools).
- *  - HIDE: drag-excluded or collision-loser -> collapsed (draws nothing).
+ *  - COLLIDE_HIDE: collision loser (declutter) -> collapsed (draws nothing).
+ *  - DRAG_HIDE: drag-excluded (a move tool is dragging this feature) -> collapsed.
+ *    Split from COLLIDE_HIDE (Phase 5) so the two can be re-uploaded independently:
+ *    a drag flip (flags-only upload) must not disturb the frozen collision result,
+ *    and a collision rerun must not disturb the active drag. The shader collapses
+ *    on EITHER bit, so their meaning to the fragment stage is identical.
  */
 export const LABEL_FLAG = {
   FIRST_IN_SECTION: 1 << 0,
   REFERENCE: 1 << 1,
   ALL_REFERENCE: 1 << 2,
   DIM: 1 << 3,
-  HIDE: 1 << 4,
+  COLLIDE_HIDE: 1 << 4,
+  DRAG_HIDE: 1 << 5,
 } as const;
 
 /** Normalized SDF value at the glyph edge (= `1 - cutoff`, cutoff 0.25). See the
@@ -112,7 +118,8 @@ const FLAG_DEFINES = `
 #define FLAG_REFERENCE ${LABEL_FLAG.REFERENCE}u
 #define FLAG_ALL_REFERENCE ${LABEL_FLAG.ALL_REFERENCE}u
 #define FLAG_DIM ${LABEL_FLAG.DIM}u
-#define FLAG_HIDE ${LABEL_FLAG.HIDE}u
+#define FLAG_COLLIDE_HIDE ${LABEL_FLAG.COLLIDE_HIDE}u
+#define FLAG_DRAG_HIDE ${LABEL_FLAG.DRAG_HIDE}u
 #define KIND_COUNT ${LABEL_KIND_COUNT}`;
 
 /**
@@ -120,8 +127,8 @@ const FLAG_DEFINES = `
  * offset scaled by the per-kind rendered text size (em -> screen px), and
  * COLLAPSES the whole glyph quad to a clipped point (`vec4(2,2,2,1)`, the
  * geometry layer's degenerate-vertex idiom) whenever the label should not draw:
- * kind toggled off / below its minzoom (`u_kind_visible`), the HIDE flag
- * (drag / collision), reference-hidden, or thinned out by the decimation band
+ * kind toggled off / below its minzoom (`u_kind_visible`), a hide flag
+ * (COLLIDE_HIDE or DRAG_HIDE), reference-hidden, or thinned out by the decimation band
  * (`mod(a_ordinal, N)`) unless it is first-in-section. All four verts of a glyph
  * share `a_anchor`/`a_kind`/`a_ordinal`/`a_flags`, so both triangles degenerate
  * together — same guarantee the line/circle collapses rely on.
@@ -161,8 +168,8 @@ void main() {
   int kind = int(a_kind);
   // Per-kind on/off (setShow* toggles + minzoom gate baked into the uniform).
   if (u_kind_visible[kind] < 0.5) { collapse(); return; }
-  // Drag exclusion / collision loser.
-  if ((a_flags & FLAG_HIDE) != 0u) { collapse(); return; }
+  // Collision loser OR drag-excluded: either collapses the glyph.
+  if ((a_flags & (FLAG_COLLIDE_HIDE | FLAG_DRAG_HIDE)) != 0u) { collapse(); return; }
   // Reference-shots hidden: collapse reference shot labels and all-reference
   // station labels / section names (mirrors the stock setFilter parity).
   if (u_hide_reference > 0.5 && (a_flags & (FLAG_REFERENCE | FLAG_ALL_REFERENCE)) != 0u) {

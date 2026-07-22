@@ -76,8 +76,25 @@ export interface LabelDescriptor {
   /** Decimation key: shot running index (shot labels) / station global ordinal
    *  (station labels); 0 for kinds without decimation. */
   ordinal: number;
-  /** {@link LABEL_FLAG} bitfield. */
+  /** STATIC {@link LABEL_FLAG} bits only (FIRST_IN_SECTION / REFERENCE /
+   *  ALL_REFERENCE). Interaction bits (DIM / COLLIDE_HIDE / DRAG_HIDE) are NOT
+   *  stored here — they are computed per build / per flag-refresh from the
+   *  controller's dim/hide/collision state so a cheap flags-only re-upload can
+   *  flip them without disturbing the others (Phase 5). */
   flags: number;
+  /** Owning section id — keys anchored-dim + drag-section-hide for every kind. */
+  sectionId?: number;
+  /** Global station index (station label + station comment) — keys station
+   *  drag-hide + (with {@link stationIndex}) immovable-station dim. */
+  stationGlobal?: number;
+  /** Station index within its section (station label + station comment) — the
+   *  immovable feature id is `sectionId * FEATURE_ID_STRIDE + stationIndex`. */
+  stationIndex?: number;
+  /** Global shot index (shot label + shot comment) — keys shot drag-hide. */
+  shotGlobal?: number;
+  /** Shot id within its section (shot label + shot comment) — the immovable
+   *  feature id is `sectionId * FEATURE_ID_STRIDE + shotId`. */
+  shotId?: number;
 }
 
 /** Inputs `buildLabelDescriptors` needs beyond the survey geometry: the shared
@@ -205,6 +222,7 @@ export function buildLabelDescriptors(
       const length = data.shotLength[shotGlobalIdx]!;
       const [ax, ay] = projectMeters((fx + tx) / 2, (fy + ty) / 2, gpsOrigin, anchorX, anchorY);
       const shotInView = inView(ax, ay);
+      const shotId = data.shotIds[shotGlobalIdx]!;
       if (wantShotLabel && shotInView) descriptors.push({
         kind: LABEL_KIND.SHOT_LABEL,
         text: formatShotLabel(azimuthIn, length, labelDepth, ctx.precision),
@@ -213,6 +231,9 @@ export function buildLabelDescriptors(
         color: packCssColor(resolveShotLabelColor(avgDepth, colorCtx)),
         ordinal: globalShotOrdinal,
         flags: isRef ? LABEL_FLAG.REFERENCE : 0,
+        sectionId: section.id,
+        shotGlobal: shotGlobalIdx,
+        shotId,
       });
       const shotComment = wantShotComment && shotInView ? data.shotComments.get(shotGlobalIdx) : undefined;
       if (shotComment !== undefined) {
@@ -222,10 +243,13 @@ export function buildLabelDescriptors(
           anchorX: ax,
           anchorY: ay,
           color: ctx.commentColor
-            ? ctx.commentColor(`${section.id}:s${data.shotIds[shotGlobalIdx]!}`)
+            ? ctx.commentColor(`${section.id}:s${shotId}`)
             : packCssColor(colorCtx.labelColor),
           ordinal: 0,
           flags: 0,
+          sectionId: section.id,
+          shotGlobal: shotGlobalIdx,
+          shotId,
         });
       }
       globalShotOrdinal++;
@@ -262,6 +286,9 @@ export function buildLabelDescriptors(
         color: packCssColor(resolveStationLabelColor(z, colorCtx)),
         ordinal: g,
         flags,
+        sectionId: sid,
+        stationGlobal: g,
+        stationIndex,
       });
       const stationComment = wantStationComment && stationInView ? data.stationComments.get(g) : undefined;
       if (stationComment !== undefined) {
@@ -275,6 +302,9 @@ export function buildLabelDescriptors(
             : packCssColor(colorCtx.labelColor),
           ordinal: 0,
           flags: 0,
+          sectionId: sid,
+          stationGlobal: g,
+          stationIndex,
         });
       }
     }
@@ -314,6 +344,7 @@ export function buildLabelDescriptors(
       color: packCssColor(resolveSectionLabelColor(section.color)),
       ordinal: 0,
       flags: allStationsReference ? LABEL_FLAG.ALL_REFERENCE : 0,
+      sectionId: section.id,
     });
   }
 
@@ -338,6 +369,7 @@ export function emitLabel(
   startGlyph: number,
   shaped: ShapedLabel,
   desc: LabelDescriptor,
+  flagByte: number = desc.flags,
 ): number {
   const { anchor, offsetEm, uv, color, kind, ordinal, flags, indices } = b;
   const [cr, cg, cb, ca] = desc.color;
@@ -360,7 +392,7 @@ export function emitLabel(
       color[v * 4 + 3] = ca;
       kind[v] = desc.kind;
       ordinal[v] = desc.ordinal;
-      flags[v] = desc.flags;
+      flags[v] = flagByte;
     }
     const io = glyph * 6;
     indices[io] = base;
@@ -400,13 +432,16 @@ export function buildLabelBuffers(descriptors: LabelDescriptor[], atlas: GlyphAt
 /**
  * Build the per-glyph label buffers from a PRE-SHAPED label set (index-aligned
  * with `descriptors`). The single allocation + emit half of {@link buildLabelBuffers}.
- * Reads each descriptor's `flags` at emit time, so a collision pass that bakes
- * `LABEL_FLAG.HIDE` into `descriptors[i].flags` BEFORE this call lands in the
- * fresh buffer with no separate upload (§5 of the design).
+ * `flagFor(i)` supplies the per-label flag byte (default: the descriptor's static
+ * `flags`); the controller passes a resolver that folds in the dynamic DIM /
+ * COLLIDE_HIDE / DRAG_HIDE bits so they land in the fresh buffer with no separate
+ * upload — the same bytes {@link buildLabelFlags} would produce for a later
+ * flags-only refresh.
  */
 export function buildLabelBuffersFromShaped(
   descriptors: LabelDescriptor[],
   shaped: ShapedLabel[],
+  flagFor?: (index: number) => number,
 ): LabelBuffers {
   let glyphCount = 0;
   for (let i = 0; i < shaped.length; i++) glyphCount += shaped[i]!.glyphCount;
@@ -445,7 +480,31 @@ export function buildLabelBuffersFromShaped(
 
   let cursor = 0;
   for (let i = 0; i < descriptors.length; i++) {
-    cursor = emitLabel(b, cursor, shaped[i]!, descriptors[i]!);
+    const flagByte = flagFor ? flagFor(i) : descriptors[i]!.flags;
+    cursor = emitLabel(b, cursor, shaped[i]!, descriptors[i]!, flagByte);
   }
   return b;
+}
+
+/**
+ * Build ONLY the per-vertex flags array (length `vertexCount`) from a pre-shaped
+ * label set, stamping `flagFor(i)` across every vertex of descriptor `i`. The
+ * cheap flags-only refresh path (Phase 5): the controller recomputes DIM /
+ * COLLIDE_HIDE / DRAG_HIDE from its interaction + collision state and re-uploads
+ * just this array (`SurveyCustomLabelLayer.updateFlags`) — no reshape, reproject,
+ * or re-emit of positions / uv / color. `flagFor` is indexed the same as the
+ * shaped array (== the descriptor array), so a byte written here lands on exactly
+ * the vertices `buildLabelBuffersFromShaped` would have stamped for that label.
+ */
+export function buildLabelFlags(shaped: ShapedLabel[], flagFor: (index: number) => number): Uint8Array {
+  let vertexCount = 0;
+  for (let i = 0; i < shaped.length; i++) vertexCount += shaped[i]!.glyphCount * 4;
+  const flags = new Uint8Array(vertexCount);
+  let v = 0;
+  for (let i = 0; i < shaped.length; i++) {
+    const byte = flagFor(i);
+    const verts = shaped[i]!.glyphCount * 4;
+    for (let k = 0; k < verts; k++) flags[v++] = byte;
+  }
+  return flags;
 }
