@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildGhostBuffers, type GhostBuildInputs } from '../ghostTessellate';
+import { buildGhostBuffers, type GhostBuildInputs, type GhostHighlights } from '../ghostTessellate';
 import { mat4Multiply } from '../mercator';
 import { lngLatToMercator } from '../../vectorTileData';
 import type { DragPreviewFeature, DragPreviewSet } from '../../dragPreviewSource';
@@ -122,6 +122,46 @@ describe('colors: preview opacity baked, stroke opaque, width multiplier', () =>
     // Closure line = #0000ff @ 0.85, width multiplier 2.5.
     expect([line.color[0], line.color[1], line.color[2], line.color[3]]).toEqual([0, 0, 255, ALPHA]);
     expect(line.widthMul[0]).toBe(2.5);
+  });
+});
+
+describe('highlight pass (grabbed feature drawn on top)', () => {
+  it('appends a larger disc / wider capsule after the base, with the given style', () => {
+    const set: DragPreviewSet = { features: [station([0, 0]), shot([0, 0], [1, 0], 'uniform')] };
+    const highlights: GhostHighlights = {
+      stations: [{
+        coord: [0, 0], movingEnd: 'uniform',
+        fill: [1, 2, 3, 255], stroke: [9, 8, 7, 255], opacity: 1, sizeMul: 1.2, strokeMul: 1.6,
+      }],
+      shots: [{ a: [0, 0], b: [1, 0], movingEnd: 'to', color: [4, 5, 6, 255], opacity: 0.5, widthMul: 1.5 }],
+    };
+    const { line, circle } = buildGhostBuffers(set, INPUTS, highlights);
+    // base + highlight for each geometry kind.
+    expect(circle.stationCount).toBe(2);
+    expect(line.segmentCount).toBe(2);
+
+    // Base circle (vertex 0) keeps size 1; the highlight (vertex 4) carries the mults.
+    expect(circle.sizeMul[0]).toBe(1);
+    expect(circle.strokeMul[0]).toBe(1);
+    expect(circle.sizeMul[4]).toBeCloseTo(1.2);
+    expect(circle.strokeMul[4]).toBeCloseTo(1.6);
+    expect([circle.fill[16], circle.fill[17], circle.fill[18], circle.fill[19]]).toEqual([1, 2, 3, 255]);
+    expect([circle.stroke[16], circle.stroke[17], circle.stroke[18]]).toEqual([9, 8, 7]);
+
+    // Highlight shot (seg 1 -> vertex 4): width multiplier, baked opacity, and the
+    // 'to' movingEnd (only endpoint B follows the offset).
+    expect(line.widthMul[4]).toBeCloseTo(1.5);
+    expect(line.color[19]).toBe(Math.round(0.5 * 255));
+    expect(line.moveA[4]).toBe(0);
+    expect(line.moveB[4]).toBe(1);
+  });
+
+  it('is a no-op when no highlights are passed', () => {
+    const set: DragPreviewSet = { features: [station([0, 0]), shot([0, 0], [1, 0], 'uniform')] };
+    const { line, circle } = buildGhostBuffers(set, INPUTS, { stations: [], shots: [] });
+    expect(circle.stationCount).toBe(1);
+    expect(line.segmentCount).toBe(1);
+    expect(circle.sizeMul[0]).toBe(1);
   });
 });
 
