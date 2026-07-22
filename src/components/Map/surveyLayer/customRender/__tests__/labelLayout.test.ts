@@ -3,6 +3,7 @@ import {
   shapeLabel,
   shapedExtent,
   lineWidthEm,
+  ShapeCache,
   LABEL_KIND_LAYOUT,
   LINE_HEIGHT_EM,
   ASCENT_EM,
@@ -189,5 +190,66 @@ describe('LABEL_KIND_LAYOUT parity table', () => {
 
   it('LINE_HEIGHT_EM is the MapLibre default 1.2', () => {
     expect(LINE_HEIGHT_EM).toBe(1.2);
+  });
+});
+
+describe('ShapeCache', () => {
+  it('returns the SAME ShapedLabel object for a repeated (kind, text) — no re-shaping', () => {
+    // A counting rasterizer proves the atlas is only touched on a cache MISS.
+    let rasterCalls = 0;
+    const atlas = new GlyphAtlas({
+      rasterizer: (c: string): RasterizedGlyph => {
+        rasterCalls++;
+        const s = specFor(c);
+        return {
+          data: new Uint8Array(Math.max(0, s.w * s.h)),
+          width: s.w,
+          height: s.h,
+          glyphWidth: Math.max(0, s.w - 2 * SDF_BUFFER),
+          glyphHeight: Math.max(0, s.h - 2 * SDF_BUFFER),
+          glyphTop: s.top - SDF_BUFFER,
+          glyphLeft: s.left + SDF_BUFFER,
+          glyphAdvance: s.advance,
+        };
+      },
+    });
+    const cache = new ShapeCache();
+    const first = cache.get(LABEL_KIND.STATION_LABEL, '12', atlas);
+    const afterFirst = rasterCalls;
+    const second = cache.get(LABEL_KIND.STATION_LABEL, '12', atlas);
+    expect(second).toBe(first); // identical object, reused
+    expect(rasterCalls).toBe(afterFirst); // zero further rasterization on a hit
+    expect(cache.size).toBe(1);
+  });
+
+  it('keys on (kind, text): the same text at a different kind is a distinct entry', () => {
+    const atlas = makeAtlas();
+    const cache = new ShapeCache();
+    const a = cache.get(LABEL_KIND.STATION_LABEL, '7', atlas);
+    const b = cache.get(LABEL_KIND.SHOT_LABEL, '7', atlas);
+    expect(b).not.toBe(a);
+    expect(cache.size).toBe(2);
+  });
+
+  it('bounds the cache to its max, evicting the oldest (LRU)', () => {
+    const atlas = makeAtlas();
+    const cache = new ShapeCache(2);
+    const s0 = cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas);
+    cache.get(LABEL_KIND.SECTION_NAME, 'b', atlas);
+    cache.get(LABEL_KIND.SECTION_NAME, 'c', atlas); // evicts 'a' (oldest)
+    expect(cache.size).toBe(2);
+    // 'a' was evicted → a fresh shape (new object) on the next request.
+    const s0again = cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas);
+    expect(s0again).not.toBe(s0);
+  });
+
+  it('a cache HIT refreshes recency so it survives a later eviction (LRU touch)', () => {
+    const atlas = makeAtlas();
+    const cache = new ShapeCache(2);
+    const a = cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas);
+    cache.get(LABEL_KIND.SECTION_NAME, 'b', atlas);
+    cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas); // touch 'a' → now newest
+    cache.get(LABEL_KIND.SECTION_NAME, 'c', atlas); // evicts 'b' (now oldest), not 'a'
+    expect(cache.get(LABEL_KIND.SECTION_NAME, 'a', atlas)).toBe(a); // 'a' survived
   });
 });

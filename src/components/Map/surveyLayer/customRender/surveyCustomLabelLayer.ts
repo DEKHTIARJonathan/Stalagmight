@@ -12,9 +12,10 @@
  * layers can fail independently" (§8).
  *
  * PER-FRAME UNIFORMS: the layer holds no zoom-dependent state. Each frame it reads
- * the LIVE zoom (`map.getZoom()`) and calls {@link computeLabelUniforms} with the
- * controller's style inputs, so `text-size` / `text-opacity` interpolate
- * continuously and decimation / minzoom gating track zoom with zero buffer
+ * the LIVE zoom (`map.getZoom()`), uploads it as `u_zoom`, and calls
+ * {@link computeLabelUniforms} with the controller's style inputs, so `text-size`
+ * / `text-opacity` interpolate continuously and per-label reveal-zoom admission
+ * (`a_reveal_zoom` vs `u_zoom`) + minzoom gating track zoom with zero buffer
  * rebuild (§0/§3 of the design).
  */
 import type { CustomLayerInterface, CustomRenderMethodInput, Map as MaplibreMap } from 'maplibre-gl';
@@ -47,7 +48,7 @@ interface LabelGpu {
   uv: WebGLBuffer;
   color: WebGLBuffer;
   kind: WebGLBuffer;
-  ordinal: WebGLBuffer;
+  revealZoom: WebGLBuffer;
   flags: WebGLBuffer;
   index: WebGLBuffer;
   count: number;
@@ -196,6 +197,23 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
     if (this.data) this.data.buffers.flags = flags;
   }
 
+  /**
+   * Re-upload ONLY the per-vertex reveal-zoom buffer — the cheap kind / reference
+   * toggle path (rerun the reveal pass off the render loop, re-upload the
+   * thresholds). Sibling of {@link updateFlags}: `revealZoom.length` must equal
+   * the uploaded glyph buffer's vertex count (the controller recomputes it from
+   * the SAME shaped set via `buildLabelRevealZooms`, so it always matches).
+   * Positions / uv / color / flags / indices are untouched; the cached
+   * `data.buffers.revealZoom` is kept coherent for a context-restore re-upload.
+   */
+  updateReveal(revealZoom: Float32Array): void {
+    const gl = this.gl;
+    if (!gl || this.disabled || !this.gpu) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.gpu.revealZoom);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, revealZoom);
+    if (this.data) this.data.buffers.revealZoom = revealZoom;
+  }
+
   private uploadBuffers(b: LabelBuffers): void {
     const gl = this.gl;
     if (!gl) return;
@@ -210,7 +228,7 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
       uv: makeBuffer(gl, gl.ARRAY_BUFFER, b.uv),
       color: makeBuffer(gl, gl.ARRAY_BUFFER, b.color),
       kind: makeBuffer(gl, gl.ARRAY_BUFFER, b.kind),
-      ordinal: makeBuffer(gl, gl.ARRAY_BUFFER, b.ordinal),
+      revealZoom: makeBuffer(gl, gl.ARRAY_BUFFER, b.revealZoom),
       flags: makeBuffer(gl, gl.ARRAY_BUFFER, b.flags),
       index: makeBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, b.indices),
       count: b.indices.length,
@@ -280,9 +298,9 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
     gl.uniform2f(gl.getUniformLocation(prog, 'u_atlas_size'), this.texWidth, this.texHeight);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_font_size'), SDF_FONT_SIZE);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_sdf_radius'), SDF_RADIUS);
+    gl.uniform1f(gl.getUniformLocation(prog, 'u_zoom'), zoom);
     gl.uniform1fv(gl.getUniformLocation(prog, 'u_text_size_px'), u.textSizePx);
     gl.uniform1fv(gl.getUniformLocation(prog, 'u_opacity'), u.opacity);
-    gl.uniform1fv(gl.getUniformLocation(prog, 'u_decim_mod'), u.decimMod);
     gl.uniform1fv(gl.getUniformLocation(prog, 'u_kind_visible'), u.kindVisible);
     gl.uniform4fv(gl.getUniformLocation(prog, 'u_halo_color'), u.haloColor);
     gl.uniform1fv(gl.getUniformLocation(prog, 'u_halo_width_px'), u.haloWidthPx);
@@ -297,7 +315,7 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
     this.bindVec2(gl, prog, 'a_uv', g.uv);
     this.bindColor(gl, prog, 'a_color', g.color);
     this.bindIntU8(gl, prog, 'a_kind', g.kind);
-    this.bindFloat(gl, prog, 'a_ordinal', g.ordinal);
+    this.bindFloat(gl, prog, 'a_reveal_zoom', g.revealZoom);
     this.bindIntU8(gl, prog, 'a_flags', g.flags);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.index);
     gl.drawElements(gl.TRIANGLES, g.count, gl.UNSIGNED_INT, 0);

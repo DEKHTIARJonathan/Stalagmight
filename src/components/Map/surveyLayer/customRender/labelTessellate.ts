@@ -32,7 +32,7 @@ import { lngLatToMercator } from '../vectorTileData';
 import { packCssColor, type Rgba8 } from './colorPack';
 import { buildStationLookup, computeStationAllReference, projectStationsRel } from './tessellate';
 import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
-import { shapeLabel, type ShapedLabel } from './labelLayout';
+import { shapeLabel, type ShapedLabel, type ShapeCache } from './labelLayout';
 import type { GlyphAtlas } from './glyphAtlas';
 
 /**
@@ -77,10 +77,10 @@ export interface LabelDescriptor {
    *  (station labels); 0 for kinds without decimation. */
   ordinal: number;
   /** STATIC {@link LABEL_FLAG} bits only (FIRST_IN_SECTION / REFERENCE /
-   *  ALL_REFERENCE). Interaction bits (DIM / COLLIDE_HIDE / DRAG_HIDE) are NOT
-   *  stored here — they are computed per build / per flag-refresh from the
-   *  controller's dim/hide/collision state so a cheap flags-only re-upload can
-   *  flip them without disturbing the others (Phase 5). */
+   *  ALL_REFERENCE). Interaction bits (DIM / DRAG_HIDE) are NOT stored here —
+   *  they are computed per build / per flag-refresh from the controller's
+   *  dim/hide state so a cheap flags-only re-upload can flip them without
+   *  disturbing the reveal zoom (which the reveal-only path owns). */
   flags: number;
   /** Owning section id — keys anchored-dim + drag-section-hide for every kind. */
   sectionId?: number;
@@ -117,10 +117,10 @@ export interface LabelBuildContext {
 
 /**
  * Per-glyph-vertex label buffers (§3 of the design). One label's glyphs share
- * `anchor` / `color` / `kind` / `ordinal` / `flags`; `offsetEm` (em, +y up) and
- * `uv` (atlas px) vary per glyph corner. `kind` / `flags` are integer attributes
- * (bind with `vertexAttribIPointer`, UNSIGNED_BYTE); the rest are FLOAT except
- * `color` (UNSIGNED_BYTE, normalized).
+ * `anchor` / `color` / `kind` / `revealZoom` / `flags`; `offsetEm` (em, +y up)
+ * and `uv` (atlas px) vary per glyph corner. `kind` / `flags` are integer
+ * attributes (bind with `vertexAttribIPointer`, UNSIGNED_BYTE); the rest are
+ * FLOAT except `color` (UNSIGNED_BYTE, normalized).
  */
 export interface LabelBuffers {
   glyphCount: number;
@@ -135,8 +135,10 @@ export interface LabelBuffers {
   color: Uint8Array;
   /** Per-vertex label kind (0..4), `vertexCount`. */
   kind: Uint8Array;
-  /** Per-vertex decimation ordinal, `vertexCount`. */
-  ordinal: Float32Array;
+  /** Per-vertex reveal zoom — the min live zoom at which the label draws
+   *  (`labelReveal.ts`); the shader shows it iff `u_zoom >= revealZoom`. Folds in
+   *  both collision declutter and decimation. `vertexCount`. */
+  revealZoom: Float32Array;
   /** Per-vertex {@link LABEL_FLAG} bitfield, `vertexCount`. */
   flags: Uint8Array;
   /** Two triangles per glyph, `glyphCount*6`, `UNSIGNED_INT`. */
@@ -360,9 +362,10 @@ const CORNER_USE_B = [0, 0, 1, 1];
  * Stamp one shaped label's glyph quads into `b` starting at glyph `startGlyph`,
  * returning the next free glyph index. The single writer (mirrors
  * `emitLineSection` / `emitStation`): all 4 verts of a glyph share the label's
- * anchor / color / kind / ordinal / flags; `offsetEm` + `uv` come from the
- * shaped glyph corners. Two-triangle winding `0,1,2, 2,1,3` matches the geometry
- * layer.
+ * anchor / color / kind / revealZoom / flags; `offsetEm` + `uv` come from the
+ * shaped glyph corners. `revealZoom` (min live zoom at which the label draws)
+ * defaults to 0 (visible from any zoom — the whole-survey / no-projector
+ * fallback). Two-triangle winding `0,1,2, 2,1,3` matches the geometry layer.
  */
 export function emitLabel(
   b: LabelBuffers,
@@ -370,8 +373,9 @@ export function emitLabel(
   shaped: ShapedLabel,
   desc: LabelDescriptor,
   flagByte: number = desc.flags,
+  revealZoom = 0,
 ): number {
-  const { anchor, offsetEm, uv, color, kind, ordinal, flags, indices } = b;
+  const { anchor, offsetEm, uv, color, kind, revealZoom: reveal, flags, indices } = b;
   const [cr, cg, cb, ca] = desc.color;
   let glyph = startGlyph;
   for (const g of shaped.glyphs) {
@@ -391,7 +395,7 @@ export function emitLabel(
       color[v * 4 + 2] = cb;
       color[v * 4 + 3] = ca;
       kind[v] = desc.kind;
-      ordinal[v] = desc.ordinal;
+      reveal[v] = revealZoom;
       flags[v] = flagByte;
     }
     const io = glyph * 6;
@@ -413,10 +417,15 @@ export function emitLabel(
  * extent, `labelLayout.ts::shapedExtent`) and the buffer emit
  * ({@link buildLabelBuffersFromShaped}) — no double shaping.
  */
-export function shapeDescriptors(descriptors: LabelDescriptor[], atlas: GlyphAtlas): ShapedLabel[] {
+export function shapeDescriptors(
+  descriptors: LabelDescriptor[],
+  atlas: GlyphAtlas,
+  cache?: ShapeCache,
+): ShapedLabel[] {
   const shaped: ShapedLabel[] = new Array(descriptors.length);
   for (let i = 0; i < descriptors.length; i++) {
-    shaped[i] = shapeLabel(descriptors[i]!.text, descriptors[i]!.kind, atlas);
+    const d = descriptors[i]!;
+    shaped[i] = cache ? cache.get(d.kind, d.text, atlas) : shapeLabel(d.text, d.kind, atlas);
   }
   return shaped;
 }
@@ -434,14 +443,16 @@ export function buildLabelBuffers(descriptors: LabelDescriptor[], atlas: GlyphAt
  * with `descriptors`). The single allocation + emit half of {@link buildLabelBuffers}.
  * `flagFor(i)` supplies the per-label flag byte (default: the descriptor's static
  * `flags`); the controller passes a resolver that folds in the dynamic DIM /
- * COLLIDE_HIDE / DRAG_HIDE bits so they land in the fresh buffer with no separate
- * upload — the same bytes {@link buildLabelFlags} would produce for a later
- * flags-only refresh.
+ * DRAG_HIDE bits so they land in the fresh buffer with no separate upload — the
+ * same bytes {@link buildLabelFlags} would produce for a later flags-only
+ * refresh. `revealFor(i)` supplies the per-label reveal zoom (default 0 = visible
+ * from any zoom), the same values {@link buildLabelRevealZooms} would produce.
  */
 export function buildLabelBuffersFromShaped(
   descriptors: LabelDescriptor[],
   shaped: ShapedLabel[],
   flagFor?: (index: number) => number,
+  revealFor?: (index: number) => number,
 ): LabelBuffers {
   let glyphCount = 0;
   for (let i = 0; i < shaped.length; i++) glyphCount += shaped[i]!.glyphCount;
@@ -452,7 +463,7 @@ export function buildLabelBuffersFromShaped(
   const uv = new Float32Array(vertexCount * 2);
   const color = new Uint8Array(vertexCount * 4);
   const kind = new Uint8Array(vertexCount);
-  const ordinal = new Float32Array(vertexCount);
+  const revealZoom = new Float32Array(vertexCount);
   const flags = new Uint8Array(vertexCount);
   const indices = new Uint32Array(glyphCount * 6);
   const byteLength =
@@ -461,7 +472,7 @@ export function buildLabelBuffersFromShaped(
     uv.byteLength +
     color.byteLength +
     kind.byteLength +
-    ordinal.byteLength +
+    revealZoom.byteLength +
     flags.byteLength +
     indices.byteLength;
   const b: LabelBuffers = {
@@ -472,7 +483,7 @@ export function buildLabelBuffersFromShaped(
     uv,
     color,
     kind,
-    ordinal,
+    revealZoom,
     flags,
     indices,
     byteLength,
@@ -481,7 +492,8 @@ export function buildLabelBuffersFromShaped(
   let cursor = 0;
   for (let i = 0; i < descriptors.length; i++) {
     const flagByte = flagFor ? flagFor(i) : descriptors[i]!.flags;
-    cursor = emitLabel(b, cursor, shaped[i]!, descriptors[i]!, flagByte);
+    const reveal = revealFor ? revealFor(i) : 0;
+    cursor = emitLabel(b, cursor, shaped[i]!, descriptors[i]!, flagByte, reveal);
   }
   return b;
 }
@@ -489,12 +501,12 @@ export function buildLabelBuffersFromShaped(
 /**
  * Build ONLY the per-vertex flags array (length `vertexCount`) from a pre-shaped
  * label set, stamping `flagFor(i)` across every vertex of descriptor `i`. The
- * cheap flags-only refresh path (Phase 5): the controller recomputes DIM /
- * COLLIDE_HIDE / DRAG_HIDE from its interaction + collision state and re-uploads
- * just this array (`SurveyCustomLabelLayer.updateFlags`) — no reshape, reproject,
- * or re-emit of positions / uv / color. `flagFor` is indexed the same as the
- * shaped array (== the descriptor array), so a byte written here lands on exactly
- * the vertices `buildLabelBuffersFromShaped` would have stamped for that label.
+ * cheap flags-only refresh path: the controller recomputes DIM / DRAG_HIDE from
+ * its interaction state and re-uploads just this array
+ * (`SurveyCustomLabelLayer.updateFlags`) — no reshape, reproject, or re-emit of
+ * positions / uv / color. `flagFor` is indexed the same as the shaped array (==
+ * the descriptor array), so a byte written here lands on exactly the vertices
+ * `buildLabelBuffersFromShaped` would have stamped for that label.
  */
 export function buildLabelFlags(shaped: ShapedLabel[], flagFor: (index: number) => number): Uint8Array {
   let vertexCount = 0;
@@ -507,4 +519,27 @@ export function buildLabelFlags(shaped: ShapedLabel[], flagFor: (index: number) 
     for (let k = 0; k < verts; k++) flags[v++] = byte;
   }
   return flags;
+}
+
+/**
+ * Build ONLY the per-vertex reveal-zoom array (length `vertexCount`) from a
+ * pre-shaped label set, stamping `revealFor(i)` across every vertex of
+ * descriptor `i`. The cheap reveal-only refresh path (sibling of
+ * {@link buildLabelFlags}): a kind / reference toggle reruns the reveal pass off
+ * the render loop and re-uploads just this array
+ * (`SurveyCustomLabelLayer.updateReveal`) — no reshape, reproject, or re-emit —
+ * so decluttering updates immediately without a buffer rebuild. Index-aligned
+ * with the shaped array exactly like {@link buildLabelFlags}.
+ */
+export function buildLabelRevealZooms(shaped: ShapedLabel[], revealFor: (index: number) => number): Float32Array {
+  let vertexCount = 0;
+  for (let i = 0; i < shaped.length; i++) vertexCount += shaped[i]!.glyphCount * 4;
+  const reveal = new Float32Array(vertexCount);
+  let v = 0;
+  for (let i = 0; i < shaped.length; i++) {
+    const value = revealFor(i);
+    const verts = shaped[i]!.glyphCount * 4;
+    for (let k = 0; k < verts; k++) reveal[v++] = value;
+  }
+  return reveal;
 }

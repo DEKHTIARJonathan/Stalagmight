@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   buildLabelDescriptors,
   buildLabelBuffers,
+  buildLabelBuffersFromShaped,
+  buildLabelRevealZooms,
+  shapeDescriptors,
   type LabelBuildContext,
   type LabelDescriptor,
 } from '../labelTessellate';
@@ -204,24 +207,26 @@ describe('buildLabelBuffers output shape', () => {
     expect(b.uv).toHaveLength(24);
     expect(b.color).toHaveLength(48);
     expect(b.kind).toHaveLength(12);
-    expect(b.ordinal).toHaveLength(12);
+    expect(b.revealZoom).toHaveLength(12);
     expect(b.flags).toHaveLength(12);
     expect(b.byteLength).toBeGreaterThan(0);
   });
 
-  it('shares anchor/color/kind/ordinal/flags across a label glyphs; indices are per-glyph quads', () => {
+  it('shares anchor/color/kind/revealZoom/flags across a label glyphs; indices are per-glyph quads', () => {
     const atlas = fakeAtlas();
     const descs: LabelDescriptor[] = [
       { kind: LABEL_KIND.STATION_LABEL, text: 'A', anchorX: 0.1, anchorY: 0.2, color: [10, 20, 30, 200], ordinal: 5, flags: LABEL_FLAG.ALL_REFERENCE },
     ];
     const b = buildLabelBuffers(descs, atlas);
-    // All 4 verts of the single glyph share the label attributes.
+    // All 4 verts of the single glyph share the label attributes. buildLabelBuffers
+    // takes no reveal resolver, so the reveal zoom defaults to 0 (visible from any
+    // zoom — the whole-survey / no-projector fallback).
     for (let v = 0; v < 4; v++) {
       expect(b.anchor[v * 2]).toBeCloseTo(0.1, 6);
       expect(b.anchor[v * 2 + 1]).toBeCloseTo(0.2, 6);
       expect(Array.from(b.color.slice(v * 4, v * 4 + 4))).toEqual([10, 20, 30, 200]);
       expect(b.kind[v]).toBe(LABEL_KIND.STATION_LABEL);
-      expect(b.ordinal[v]).toBe(5);
+      expect(b.revealZoom[v]).toBe(0);
       expect(b.flags[v]).toBe(LABEL_FLAG.ALL_REFERENCE);
     }
     // Two triangles, winding 0,1,2, 2,1,3 over the glyph's 4 verts.
@@ -248,5 +253,32 @@ describe('buildLabelBuffers output shape', () => {
     expect(b.glyphCount).toBe(0);
     expect(b.vertexCount).toBe(0);
     expect(b.indices).toHaveLength(0);
+  });
+});
+
+describe('per-label reveal zoom emission', () => {
+  const descs: LabelDescriptor[] = [
+    { kind: LABEL_KIND.SHOT_LABEL, text: 'AB', anchorX: 0, anchorY: 0, color: [0, 0, 0, 255], ordinal: 0, flags: 0 }, // 2 glyphs
+    { kind: LABEL_KIND.STATION_LABEL, text: 'C', anchorX: 0, anchorY: 0, color: [0, 0, 0, 255], ordinal: 1, flags: 0 }, // 1 glyph
+  ];
+
+  it('buildLabelBuffersFromShaped stamps revealFor(i) across every vertex of label i', () => {
+    const atlas = fakeAtlas();
+    const shaped = shapeDescriptors(descs, atlas);
+    const reveal = [16.5, 18];
+    const b = buildLabelBuffersFromShaped(descs, shaped, undefined, (i) => reveal[i]!);
+    // Label 0 (2 glyphs → 8 verts) all read 16.5; label 1 (1 glyph → 4 verts) all read 18.
+    for (let v = 0; v < 8; v++) expect(b.revealZoom[v]).toBe(16.5);
+    for (let v = 8; v < 12; v++) expect(b.revealZoom[v]).toBe(18);
+  });
+
+  it('buildLabelRevealZooms produces the SAME per-vertex layout as the full emit (reveal-only refresh parity)', () => {
+    const atlas = fakeAtlas();
+    const shaped = shapeDescriptors(descs, atlas);
+    const reveal = [14, 20];
+    const full = buildLabelBuffersFromShaped(descs, shaped, undefined, (i) => reveal[i]!);
+    const only = buildLabelRevealZooms(shaped, (i) => reveal[i]!);
+    expect(only).toHaveLength(full.revealZoom.length);
+    expect(Array.from(only)).toEqual(Array.from(full.revealZoom));
   });
 });

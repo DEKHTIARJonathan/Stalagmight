@@ -228,3 +228,53 @@ export function shapeLabel(text: string, kind: LabelKind, atlas: GlyphAtlas): Sh
   }
   return { glyphCount: glyphs.length, glyphs };
 }
+
+/**
+ * Bounded LRU cache of {@link ShapedLabel} keyed by `(kind, text)`, shared across
+ * camera-driven rebuilds so a pan / zoom-out re-scope only RE-PROJECTS + RE-COLLIDES
+ * unchanged labels, never re-shapes them (shaping = wrap + per-glyph pen advance,
+ * the dominant CPU cost of a build on a large survey). Safe to share a
+ * {@link ShapedLabel} across builds: it is immutable and stores ATLAS PIXEL rects,
+ * whose origins never move (the atlas grows by doubling height, so a glyph's
+ * `(ax, ay)` is stable — see `glyphAtlas.ts`). Insertion-ordered {@link Map} gives
+ * O(1) LRU: a hit re-inserts (moves to newest); an overflow evicts the oldest key.
+ */
+export class ShapeCache {
+  private readonly entries = new Map<string, ShapedLabel>();
+  private readonly max: number;
+
+  /** @param max Cap on cached labels; the survey label charset is tiny so a few
+   *  thousand distinct `(kind, text)` pairs covers a large survey's viewport. */
+  constructor(max = 20000) {
+    this.max = Math.max(1, max);
+  }
+
+  /** Shaped label for `(kind, text)` — cached across builds, shaping on a miss. */
+  get(kind: LabelKind, text: string, atlas: GlyphAtlas): ShapedLabel {
+    const key = `${kind} ${text}`;
+    const hit = this.entries.get(key);
+    if (hit !== undefined) {
+      // LRU touch: re-insert so it becomes the newest (Map keeps insertion order).
+      this.entries.delete(key);
+      this.entries.set(key, hit);
+      return hit;
+    }
+    const shaped = shapeLabel(text, kind, atlas);
+    this.entries.set(key, shaped);
+    if (this.entries.size > this.max) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest !== undefined) this.entries.delete(oldest);
+    }
+    return shaped;
+  }
+
+  /** Drop all cached shapes (e.g. after an atlas reset). */
+  clear(): void {
+    this.entries.clear();
+  }
+
+  /** Current cached entry count (for tests / diagnostics). */
+  get size(): number {
+    return this.entries.size;
+  }
+}
