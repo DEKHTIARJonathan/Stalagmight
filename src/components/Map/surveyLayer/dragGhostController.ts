@@ -48,8 +48,6 @@ const GHOST_BAKE_TIMEOUT_MS = 250;
 
 /** Everything the controller needs from SurveyLayer without importing it. */
 export interface DragGhostOptions {
-  /** True while the custom bulk geometry layer is drawing (its ghost is custom). */
-  customActive: () => boolean;
   /** Build the custom ghost render data (buffers + device-px sizes) for a set. */
   ghostData: (set: DragPreviewSet) => GhostRenderData;
   /** Stock-layer spec context (colors / widths / highlight). */
@@ -91,12 +89,19 @@ export class DragGhostController {
 
   /** Begin a drag: build + show the ghost, returning which path went live so the
    *  host can time the drag-exclusion (custom draws next frame -> hide now; stock
-   *  is async -> hide on the preview's first load). */
+   *  is async -> hide on the preview's first load).
+   *
+   *  The custom WebGL ghost is the DEFAULT for every drag regardless of the bulk
+   *  geometry render mode - it is architecturally independent (its vertices are
+   *  the captured moving copy, not the survey layer), so it fixes the overshoot on
+   *  the default profile (custom labels + STOCK geometry) too. The stock GeoJSON
+   *  ghost is the fail-safe only: the custom layer cannot initialize here, or it
+   *  self-disables mid-drag on a GL error. */
   begin(set: DragPreviewSet): GhostMode {
     this.end();
     this.set = set;
     this.offset = { dx: 0, dy: 0 };
-    if (this.opts.customActive() && this.startCustom(set)) {
+    if (this.startCustom(set)) {
       this.mode = 'custom';
       return 'custom';
     }

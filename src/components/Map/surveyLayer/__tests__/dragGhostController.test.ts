@@ -104,7 +104,6 @@ const STUB_DATA = { anchorX: 0, anchorY: 0 } as unknown as GhostRenderData;
 
 function makeOptions(over: Partial<DragGhostOptions> = {}): DragGhostOptions {
   return {
-    customActive: () => true,
     ghostData: () => STUB_DATA,
     layerCtx: () => ({ colorExpr: ['get', 'color'], shotWidth: 3, stationRadius: 5, selectHighlight: '#fff' }),
     projector: () => ({ project: ([lng, lat]) => ({ x: lng, y: lat }), unproject: ([x, y]) => ({ lng: x, lat: y }) }),
@@ -120,6 +119,20 @@ beforeEach(() => {
   h.layerState.last = null;
 });
 afterEach(() => vi.clearAllMocks());
+
+describe('custom path is the default for every drag (bulk render mode agnostic)', () => {
+  it('goes custom whenever the layer can init - the controller has no bulk-mode gate', () => {
+    // There is no customActive input: custom is chosen for every drag that can
+    // initialize, so the default profile (custom labels + STOCK geometry) gets
+    // the overshoot-free custom ghost too. Only init failure / self-disable
+    // (below) fall back to the stock GeoJSON ghost.
+    const fake = makeFakeMap();
+    const ctrl = new DragGhostController(fake.map, makeOptions());
+    expect(ctrl.begin(SET)).toBe('custom');
+    expect(fake.layers.has(GHOST_ID)).toBe(true);
+    expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(false);
+  });
+});
 
 describe('custom path: synchronous, no GeoJSON source / worker', () => {
   it('begins custom, drives the offset by uniform, and never touches the stock preview', () => {
@@ -164,16 +177,6 @@ describe('per-drag fallback: custom layer fails to initialize', () => {
     expect(fake.translateCount).toBeGreaterThan(0);
     ctrl.end();
     expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(false);
-  });
-});
-
-describe('stock path chosen when bulk geometry is not custom-rendered', () => {
-  it('never adds the custom layer', () => {
-    const fake = makeFakeMap();
-    const ctrl = new DragGhostController(fake.map, makeOptions({ customActive: () => false }));
-    expect(ctrl.begin(SET)).toBe('stock');
-    expect(fake.layers.has(GHOST_ID)).toBe(false);
-    expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(true);
   });
 });
 

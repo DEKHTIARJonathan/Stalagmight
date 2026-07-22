@@ -586,7 +586,6 @@ export default class SurveyLayer {
       onActiveChange: (active) => this.onCustomLabelsActiveChange(active),
     });
     this.dragGhost = new DragGhostController(map, {
-      customActive: () => this.customBulkSuppressed,
       ghostData: (set) => this.dragGhostData(set),
       layerCtx: () => this.dragPreviewLayerCtx(),
       projector: () => this.dragProjector(),
