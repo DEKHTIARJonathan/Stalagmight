@@ -6,9 +6,11 @@
  * independently"). SurveyLayer constructs one of these alongside the geometry
  * controller and calls `sync(...)` after each flush.
  *
- * GATE COMPOSITION: labels ride the custom pipeline, so this activates only when
- * BOTH the geometry gate (`readCustomRenderGate`) AND the labels gate
- * (`readCustomLabelsGate`) are on. With either off the stock label layers stay
+ * GATE (standalone): this activates on the labels gate (`readCustomLabelsGate`)
+ * ALONE — the custom label layer is an independent sibling of the geometry layer
+ * (labels anchor from `SurveyData`, not the geometry buffers), so custom labels
+ * over stock geometry is a valid, supported combination. The gate is now default
+ * ON in the real app; with it explicitly disabled the stock label layers stay
  * live and this is a no-op — the gate-OFF path is byte-identical to before.
  *
  * SCOPE (Phase 3): ALL FIVE kinds — shot labels, station labels, section names,
@@ -69,7 +71,6 @@ import {
 import { resolveHaloColors, type LabelStyleInputs } from './labelStyle';
 import { SurveyCustomLabelLayer, type LabelRenderData } from './surveyCustomLabelLayer';
 import { readCustomLabelsGate, CUSTOM_LABELS_SYNC_HOOK } from './labelsGate';
-import { readCustomRenderGate } from './gate';
 
 /** The stock text layer each kind replaces — suppressed while the custom label
  *  layer is active, restored (to the kind's desired toggle) when it goes away. */
@@ -163,6 +164,10 @@ export interface SurveyLabelControllerOptions {
   ensureFont?: () => Promise<boolean>;
   /** Rasterizer factory (default {@link createTinySdfRasterizer}). */
   makeRasterizer?: () => GlyphRasterizer | null;
+  /** Active-state transition callback (mirrors the geometry controller). Fires
+   *  only on a real change so SurveyLayer can drop / re-publish the stock label
+   *  VT groups in lockstep with the custom label layer taking over. */
+  onActiveChange?: (active: boolean) => void;
 }
 
 export class SurveyLabelController {
@@ -182,6 +187,8 @@ export class SurveyLabelController {
   private readonly scheduleRestore: (fn: () => void) => void;
   private readonly scheduleRebuild: (fn: () => void) => void;
   private readonly resync: (() => void) | undefined;
+  /** Active-state transition callback; see {@link SurveyLabelControllerOptions.onActiveChange}. */
+  private readonly onActiveChange: ((active: boolean) => void) | undefined;
 
   /** Hysteresis latch for the expensive kinds (§4): true once past LABEL_BUILD_ZOOM,
    *  stays true until below LABEL_DROP_ZOOM. Drives {@link kindsToBuild}. */
@@ -225,6 +232,7 @@ export class SurveyLabelController {
     this.scheduleRestore = opts.scheduleRestore ?? defaultScheduleRestore;
     this.scheduleRebuild = opts.scheduleRebuild ?? defaultScheduleRestore;
     this.resync = opts.resync;
+    this.onActiveChange = opts.onActiveChange;
     this.installHook();
     // Camera-settle viewport rebuild (§4): re-scope + re-collide once the camera
     // stops. Coalesced, never per frame, never mid-animation. Both events route
@@ -258,7 +266,7 @@ export class SurveyLabelController {
    *  layer (all five kinds). */
   sync(params: LabelSyncParams): void {
     this.pendingParams = params;
-    const enabled = readCustomRenderGate() && readCustomLabelsGate();
+    const enabled = readCustomLabelsGate();
     if (!enabled) {
       if (this.active) this.disable();
       return;
@@ -631,12 +639,12 @@ export class SurveyLabelController {
       if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
       this.setStockLabelVisibility('restore');
       this.layer = null;
-      this.active = false;
+      this.setActive(false);
       return;
     }
     this.layer = layer;
     this.setStockLabelVisibility('suppress');
-    this.active = true;
+    this.setActive(true);
     console.info('[customRender] label layer enabled; stock label layers hidden', {
       glyphs: data.buffers.glyphCount,
     });
@@ -654,8 +662,16 @@ export class SurveyLabelController {
     if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
     this.layer = null;
     this.setStockLabelVisibility('restore');
-    this.active = false;
+    this.setActive(false);
     this.map.triggerRepaint();
+  }
+
+  /** Set the active flag, firing {@link onActiveChange} only on a real change so
+   *  SurveyLayer drops / re-publishes the stock label VT groups in lockstep. */
+  private setActive(v: boolean): void {
+    if (this.active === v) return;
+    this.active = v;
+    this.onActiveChange?.(v);
   }
 
   /**

@@ -172,7 +172,7 @@ describe('SurveyLabelController gate composition', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('activates and hides the stock station-labels layer when BOTH gates are on', () => {
+  it('activates and hides the stock station-labels layer when the labels gate is on', () => {
     const { map, visibility } = makeFakeMap();
     const c = makeController(map);
     c.sync(makeParams());
@@ -180,7 +180,7 @@ describe('SurveyLabelController gate composition', () => {
     expect(visibility[STOCK_LABEL]).toBe('none');
   });
 
-  it('stays inactive when only the geometry gate is on (labels gate off)', () => {
+  it('stays inactive when the labels gate is off', () => {
     h.gate.labels = false;
     const { map, visibility } = makeFakeMap();
     const c = makeController(map);
@@ -189,13 +189,13 @@ describe('SurveyLabelController gate composition', () => {
     expect(visibility[STOCK_LABEL]).toBe('visible');
   });
 
-  it('stays inactive when only the labels gate is on (geometry gate off)', () => {
-    h.gate.render = false;
+  it('activates on the labels gate ALONE, regardless of the geometry gate (standalone)', () => {
+    h.gate.render = false; // geometry stock; labels gate still on
     const { map, visibility } = makeFakeMap();
     const c = makeController(map);
     c.sync(makeParams());
-    expect(c.isActive()).toBe(false);
-    expect(visibility[STOCK_LABEL]).toBe('visible');
+    expect(c.isActive()).toBe(true);
+    expect(visibility[STOCK_LABEL]).toBe('none');
   });
 
   it('restores the stock station-labels layer to the desired toggle state when a gate flips off', () => {
@@ -208,6 +208,26 @@ describe('SurveyLabelController gate composition', () => {
     c.sync(makeParams());
     expect(c.isActive()).toBe(false);
     expect(visibility[STOCK_LABEL]).toBe('visible'); // restored to desired
+  });
+
+  it('fires onActiveChange(true) on enable and (false) on gate-off disable', () => {
+    const changes: boolean[] = [];
+    const { map } = makeFakeMap();
+    const c = makeController(map, { onActiveChange: (a: boolean) => changes.push(a) });
+    c.sync(makeParams());
+    expect(changes).toEqual([true]); // enabled → drop stock label VT
+    h.gate.labels = false;
+    c.sync(makeParams());
+    expect(changes).toEqual([true, false]); // opted out → restore stock label VT
+  });
+
+  it('does not fire onActiveChange when it never activates (gate off)', () => {
+    h.gate.labels = false;
+    const changes: boolean[] = [];
+    const { map } = makeFakeMap();
+    const c = makeController(map, { onActiveChange: (a: boolean) => changes.push(a) });
+    c.sync(makeParams());
+    expect(changes).toEqual([]);
   });
 });
 
