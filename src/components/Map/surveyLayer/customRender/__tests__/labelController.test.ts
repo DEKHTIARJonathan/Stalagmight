@@ -900,6 +900,20 @@ function stationLabelFlag(layer: FakeLabelLayer, params: LabelSyncParams, g: num
   return 0;
 }
 
+/** Flag byte of the SECTION NAME anchored at the section's first station
+ *  `firstStationG` (names anchor at the first non-reference station); 0 if
+ *  absent. Lets a test target one section's name among several. */
+function sectionNameFlag(layer: FakeLabelLayer, params: LabelSyncParams, firstStationG: number): number {
+  const [ax, ay] = stationAnchor(params, firstStationG);
+  const d = layer.data as LabelRenderData;
+  const { kind, flags, anchor } = d.buffers;
+  for (let v = 0; v < kind.length; v++) {
+    if (kind[v] !== LABEL_KIND.SECTION_NAME) continue;
+    if (Math.abs(anchor[v * 2]! - ax) < 1e-9 && Math.abs(anchor[v * 2 + 1]! - ay) < 1e-9) return flags[v]!;
+  }
+  return 0;
+}
+
 const EMPTY_DIM = {
   anchoredSectionIds: new Set<number>(),
   immovableStationFeatureIds: new Set<number>(),
@@ -981,20 +995,40 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('hides the dragged station label + its comment, not other stations or section names', () => {
+  // PARITY BREAK (deliberate): stock left `survey-labels` out of the drag hide
+  // layers, so a section name stayed pinned at its old anchor while the geometry
+  // moved (reads as stuck). The custom label layer now DRAG_HIDEs the name of
+  // every AFFECTED section — the whole-section drag via `sectionIds`, a partial
+  // station / shot drag via the `affectedSectionIds` set SurveyLayer threads in.
+  it('hides the dragged station label + its comment + its section name; leaves other stations and unaffected section names', () => {
     const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     const p = commentParams();
     c.sync(p);
     const layer = h.layerState.last!;
-    c.setDragHide({ stationGlobalIndices: new Set([0]) }); // drag station g0
+    // Drag station g0 (section 1); SurveyLayer marks section 1 as affected.
+    c.setDragHide({ stationGlobalIndices: new Set([0]), affectedSectionIds: new Set([1]) });
     expect(layer.flagsCalls).toBeGreaterThan(0);
     expect(stationLabelFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
     expect(stationLabelFlag(layer, p, 1) & LABEL_FLAG.DRAG_HIDE).toBe(0);
     // The station comment (only g0 has one) hides with its station.
     expect(anyKindHasBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.DRAG_HIDE)).toBe(true);
-    // Section names never drag-hide (stock keeps survey-labels out of hide layers).
-    expect(anyKindHasBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DRAG_HIDE)).toBe(false);
+    // Section 1's name (first station g0) hides; section 2's name (g3) does not.
+    expect(sectionNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(sectionNameFlag(layer, p, 3) & LABEL_FLAG.DRAG_HIDE).toBe(0);
+  });
+
+  it('does NOT hide a section name whose section is not in affectedSectionIds', () => {
+    const cam = zoomOnlyMap(18);
+    const c = cameraController(cam.map);
+    const p = commentParams();
+    c.sync(p);
+    const layer = h.layerState.last!;
+    // Drag station g0 but omit the affected-section set (station-only exclusion):
+    // the station label hides, its section name does NOT.
+    c.setDragHide({ stationGlobalIndices: new Set([0]) });
+    expect(stationLabelFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(sectionNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(0);
   });
 
   it('hides the dragged shot label + its comment', () => {
@@ -1007,27 +1041,32 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
     expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.DRAG_HIDE)).toBe(true);
   });
 
-  it('a whole-section drag hides that section labels but not section names', () => {
-    const cam = zoomOnlyMap(18);
-    const c = cameraController(cam.map);
-    c.sync(commentParams());
-    const layer = h.layerState.last!;
-    c.setDragHide({ sectionIds: new Set([1]) });
-    expect(anyKindHasBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.DRAG_HIDE)).toBe(true);
-    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DRAG_HIDE)).toBe(true);
-    expect(anyKindHasBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DRAG_HIDE)).toBe(false);
-  });
-
-  it('setDragHide(null) clears every DRAG_HIDE (drag end)', () => {
+  it('a whole-section drag hides that section labels AND its section name', () => {
     const cam = zoomOnlyMap(18);
     const c = cameraController(cam.map);
     const p = commentParams();
     c.sync(p);
     const layer = h.layerState.last!;
-    c.setDragHide({ stationGlobalIndices: new Set([0]) });
+    c.setDragHide({ sectionIds: new Set([1]) });
+    expect(anyKindHasBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.DRAG_HIDE)).toBe(true);
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.DRAG_HIDE)).toBe(true);
+    // Section 1's name hides with the whole section; section 2's stays visible.
+    expect(sectionNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(sectionNameFlag(layer, p, 3) & LABEL_FLAG.DRAG_HIDE).toBe(0);
+  });
+
+  it('setDragHide(null) clears every DRAG_HIDE incl section names (drag end)', () => {
+    const cam = zoomOnlyMap(18);
+    const c = cameraController(cam.map);
+    const p = commentParams();
+    c.sync(p);
+    const layer = h.layerState.last!;
+    c.setDragHide({ stationGlobalIndices: new Set([0]), affectedSectionIds: new Set([1]) });
     expect(stationLabelFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(sectionNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
     c.setDragHide(null);
     expect(anyKindHasBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.DRAG_HIDE)).toBe(false);
+    expect(anyKindHasBit(layer, LABEL_KIND.SECTION_NAME, LABEL_FLAG.DRAG_HIDE)).toBe(false);
   });
 
   it('DIM and DRAG_HIDE compose without disturbing each other', () => {
@@ -1054,10 +1093,12 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
     const p = commentParams();
     c.sync(p);
     const layer = h.layerState.last!;
-    c.setDragHide({ stationGlobalIndices: new Set([0]) });
-    // A mid-drag geometry flush re-syncs; the fresh build must re-bake DRAG_HIDE.
+    c.setDragHide({ stationGlobalIndices: new Set([0]), affectedSectionIds: new Set([1]) });
+    // A mid-drag geometry flush re-syncs; the fresh build must re-bake DRAG_HIDE
+    // for both the dragged station label AND its affected section name.
     c.sync(commentParams());
     expect(stationLabelFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
+    expect(sectionNameFlag(layer, p, 0) & LABEL_FLAG.DRAG_HIDE).toBe(LABEL_FLAG.DRAG_HIDE);
   });
 });
 

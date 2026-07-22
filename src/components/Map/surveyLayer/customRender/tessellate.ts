@@ -172,6 +172,13 @@ export interface CustomRenderExclusion {
   sectionIds?: ReadonlySet<number>;
   stationGlobalIndices?: ReadonlySet<number>;
   shotGlobalIndices?: ReadonlySet<number>;
+  /** Sections whose NAME label additionally DRAG_HIDEs during a PARTIAL station /
+   *  shot drag (SurveyLayer maps the moved globals back to their sections). The
+   *  geometry hide + the shot / station label hide still key off the specific
+   *  globals above; this drives ONLY the section-name DRAG_HIDE in the LABEL
+   *  controller and is IGNORED by the geometry controller (a whole-section drag
+   *  already carries its name via `sectionIds`, so it need not be listed here). */
+  affectedSectionIds?: ReadonlySet<number>;
 }
 
 /** (sectionId, stationIndex) -> global station index. Mirrors vtSurveyBuild. */

@@ -563,16 +563,24 @@ export class SurveyLabelController {
    * controller + the stock drag filters use (excludedStationGlobals /
    * excludedShotGlobals / whole-section drag): station-owned labels + comments
    * follow the station set, shot-owned follow the shot set, and either follows a
-   * whole-section exclusion. Section names are NOT drag-hidden (stock leaves
-   * `survey-labels` out of the drag hide-layers).
+   * whole-section exclusion.
+   *
+   * SECTION NAMES now drag-hide too, for every AFFECTED section — a DELIBERATE
+   * break from stock parity (stock left `survey-labels` out of the drag
+   * hide-layers, so a section name stayed pinned at the OLD anchor while the
+   * geometry moved, reading as stuck). A whole-section (segment) drag hides the
+   * name via `sectionIds`; a partial station / shot drag hides it via the
+   * `affectedSectionIds` set SurveyLayer threads in (the moved globals mapped
+   * back to their sections). The name reappears at the new anchor on the
+   * synchronous commit / cancel rebuild.
    */
   private dragBitFor(desc: LabelDescriptor): boolean {
-    const { sectionIds, stationGlobalIndices, shotGlobalIndices } = this.hideState;
+    const { sectionIds, stationGlobalIndices, shotGlobalIndices, affectedSectionIds } = this.hideState;
     const sid = desc.sectionId;
     if (sid === undefined) return false;
-    if (sectionIds?.has(sid) === true) {
-      return desc.kind !== LABEL_KIND.SECTION_NAME;
-    }
+    // Whole-section (segment) drag: the entire section translates, so every label
+    // of the section hides — section name included.
+    if (sectionIds?.has(sid) === true) return true;
     switch (desc.kind) {
       case LABEL_KIND.STATION_LABEL:
       case LABEL_KIND.STATION_COMMENT:
@@ -580,8 +588,11 @@ export class SurveyLabelController {
       case LABEL_KIND.SHOT_LABEL:
       case LABEL_KIND.SHOT_COMMENT:
         return desc.shotGlobal !== undefined && shotGlobalIndices?.has(desc.shotGlobal) === true;
+      case LABEL_KIND.SECTION_NAME:
+        // Partial station / shot drag: hide the name of every affected section.
+        return affectedSectionIds?.has(sid) === true;
       default:
-        return false; // section names never drag-hide
+        return false;
     }
   }
 

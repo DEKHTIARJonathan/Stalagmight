@@ -4177,6 +4177,11 @@ export default class SurveyLayer {
     // stations + shots, keyed by global SoA index for O(1) skip in tessellate.
     const excludedStationGlobals = new Set<number>();
     const excludedShotGlobals = new Set<number>();
+    // Sections owning any moved station / shot: their NAME label drag-hides too
+    // (custom label layer), so it does not sit pinned at the old anchor while the
+    // partial geometry moves. Whole-section segment drags carry the name via
+    // `sectionIds` instead (see beginDragPreview).
+    const affectedSectionIds = new Set<number>();
 
     // Hide the moving stations from the bulk station + station-label (+ station-
     // comment, when shown) layers; the labels / comments are dropped for the drag.
@@ -4200,6 +4205,7 @@ export default class SurveyLayer {
       const section = this.geoIndex.section(ref.section_id);
       const g = this.geoIndex.stationGlobalIndex(ref);
       if (g !== null) excludedStationGlobals.add(g);
+      affectedSectionIds.add(ref.section_id);
       const color = g === null
         ? stationDefault
         : resolveStationDisplayColor(this.cachedSurveyData, section?.color ?? stationDefault, g, ctx);
@@ -4243,6 +4249,7 @@ export default class SurveyLayer {
         const toCoord = metersToMapCoords(toSt.coordinates.x, toSt.coordinates.y, this.gpsOrigin) as [number, number];
         const geo = this.geoIndex.shotGeometry(section.id, shot.id);
         if (geo) excludedShotGlobals.add(geo.globalIdx);
+        affectedSectionIds.add(section.id);
         const color = geo
           ? resolveShotDisplayColor(this.cachedSurveyData, section.color ?? stationDefault, geo.globalIdx, ctx)
           : (section.color ?? stationDefault);
@@ -4323,6 +4330,7 @@ export default class SurveyLayer {
     this.setDragExclusionWhenPreviewReady({
       stationGlobalIndices: excludedStationGlobals,
       shotGlobalIndices: excludedShotGlobals,
+      affectedSectionIds,
     });
     return movingStations.map(s => s.station_ref);
   }
