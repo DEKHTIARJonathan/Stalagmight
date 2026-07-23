@@ -155,6 +155,14 @@ describe('sameSurveyLayout', () => {
     remapped.stationSectionIds = Int32Array.from(remapped.stationSectionIds);
     remapped.stationSectionIds[remapped.stationCount - 1] = 99;
     expect(sameSurveyLayout(a, remapped)).toBe(false);
+
+    // A shotId that changed slot under an otherwise-stable layout must force a
+    // full rebuild: the incremental path skips the dim/hide/highlight buffers,
+    // which the immovable-feature predicates key on shotIds.
+    const shotRekeyed = cloneSurvey(a);
+    shotRekeyed.shotIds = Int32Array.from(shotRekeyed.shotIds);
+    shotRekeyed.shotIds[shotRekeyed.shotCount - 1] = 987654;
+    expect(sameSurveyLayout(a, shotRekeyed)).toBe(false);
   });
 });
 
@@ -405,8 +413,13 @@ describe('SurveyCustomController incremental apply', () => {
       c.destroy();
       ref.destroy();
     }
-    // The pinned fixture keeps the anchor fixed, so every move takes the fast path.
-    expect(incrementalRuns).toBeGreaterThan(0);
+    // Pin the exact fast-path count for this seed (37/40), not `> 0`: a
+    // regression that silently fell back to full-rebuild would still pass `> 0`
+    // while the byte-identity oracle held on the rebuild path, leaving the
+    // incremental path effectively dead. The 3 non-incremental iterations are the
+    // legitimate `dirty.size > sections/2` fallback (a 3-move iteration dirtying
+    // all three interior sections of the 4-section fixture).
+    expect(incrementalRuns).toBe(37);
   });
 
   it('depth-mode recolor via a z-move stays byte-identical', () => {

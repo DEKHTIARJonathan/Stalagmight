@@ -58,6 +58,16 @@ export function sameSurveyLayout(prev: SurveyData, next: SurveyData): boolean {
     const b = next.sections[i]!;
     if (a.id !== b.id || a.shotOffset !== b.shotOffset || a.shotCount !== b.shotCount) return false;
   }
+  // shotIds must be slot-stable too: the incremental path re-emits a dirty
+  // section's positions/colors but NOT its dim/hide/highlight buffers, which the
+  // immovable-feature predicates key on `shotIds` (controller.ts dimPredicates).
+  // A shotId that changed slot under an otherwise-stable layout would leave a
+  // stale dim/highlight on that vertex, so force a full rebuild instead.
+  const pShotIds = prev.shotIds;
+  const nShotIds = next.shotIds;
+  for (let gi = 0; gi < next.shotCount; gi++) {
+    if (pShotIds[gi] !== nShotIds[gi]) return false;
+  }
   const pS = prev.stationSectionIds;
   const nS = next.stationSectionIds;
   const pI = prev.stationIndices;
