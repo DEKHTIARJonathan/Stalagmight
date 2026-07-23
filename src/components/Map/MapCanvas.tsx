@@ -2467,8 +2467,14 @@ function MapCanvas() {
     }
   }, [resolvedTheme, mapLoaded]);
 
-  // Sync selection state with SurveyLayer for visual feedback
-  useEffect(() => {
+  // Sync selection state with SurveyLayer for visual feedback.
+  // useLayoutEffect (not useEffect) so it clears before paint, in the same commit
+  // as the geometry-apply layout effect above. On a project switch the geometry
+  // rebuild runs first and re-applies the controller's stored highlight; because
+  // section ids are per-project sequential (they collide across projects), a
+  // regular useEffect would let the colliding section flash highlighted for one
+  // frame before this cleared it.
+  useLayoutEffect(() => {
     if (!surveyLayerRef.current) return;
 
     if (selection?.type === 'station' && selection.stationRef) {
