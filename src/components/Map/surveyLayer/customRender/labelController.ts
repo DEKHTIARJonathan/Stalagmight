@@ -213,6 +213,11 @@ export class SurveyLabelController {
   private lastThemeColors: MapThemeColors | null = null;
   /** The most recent sync params, replayed on font-resolve / the runtime hook. */
   private pendingParams: LabelSyncParams | null = null;
+  /** Set once `destroy()` runs. The async font-resolve callback (and any other
+   *  deferred path) checks this so it never builds a `GlyphAtlas` or re-adds the
+   *  layer on a torn-down controller -- previously this was prevented only
+   *  incidentally by `pendingParams === null`. */
+  private destroyed = false;
 
   private hookInstalled = false;
   private selfDisableScheduled = false;
@@ -301,6 +306,7 @@ export class SurveyLabelController {
       const ensure = opts.ensureFont ?? ensureLabelFont;
       const makeRast = opts.makeRasterizer ?? createTinySdfRasterizer;
       void ensure().then((ready) => {
+        if (this.destroyed) return; // torn down while the font was resolving.
         const rasterizer = ready && canRasterize() ? makeRast() : null;
         this.atlas = new GlyphAtlas({ rasterizer });
         // A sync that arrived before the font resolved builds now (design §7).
@@ -319,6 +325,7 @@ export class SurveyLabelController {
   /** Re-evaluate the composed gate and apply / refresh / tear down the label
    *  layer (all five kinds). */
   sync(params: LabelSyncParams): void {
+    if (this.destroyed) return;
     this.pendingParams = params;
     const enabled = readCustomLabelsGate();
     if (!enabled) {
@@ -895,6 +902,7 @@ export class SurveyLabelController {
   }
 
   destroy(): void {
+    this.destroyed = true;
     if (this.active) this.disable();
     if (this.boundCameraSettle) {
       this.map.off?.('moveend', this.boundCameraSettle);

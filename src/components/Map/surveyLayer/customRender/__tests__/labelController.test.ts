@@ -291,6 +291,44 @@ describe('SurveyLabelController fail-safe', () => {
     expect(removed).toEqual([CUSTOM_ID]);
     expect(c.isActive()).toBe(false);
   });
+
+  it('stays inert after destroy: a stray late sync does not resurrect the layer', () => {
+    const { map, visibility, removed } = makeFakeMap();
+    const c = makeController(map);
+    c.setStationLabelsVisible(true); // desired visible so destroy restores stock to visible
+    c.sync(makeParams());
+    expect(c.isActive()).toBe(true);
+    expect(visibility[STOCK_LABEL]).toBe('none'); // suppressed while active
+    c.destroy();
+    expect(c.isActive()).toBe(false);
+    expect(visibility[STOCK_LABEL]).toBe('visible'); // stock restored on teardown
+    const removedCount = removed.length;
+    // A deferred callback (camera-settle / font-resolve) firing after teardown
+    // must not re-add the layer or re-suppress the stock labels.
+    c.sync(makeParams());
+    expect(c.isActive()).toBe(false);
+    expect(visibility[STOCK_LABEL]).toBe('visible');
+    expect(removed.length).toBe(removedCount);
+  });
+
+  it('ignores a font-resolve that lands after destroy (no build, no activate)', async () => {
+    const { map } = makeFakeMap();
+    let resolveFont!: (ready: boolean) => void;
+    const fontPromise = new Promise<boolean>((r) => {
+      resolveFont = r;
+    });
+    const c = new SurveyLabelController(map, undefined, {
+      ensureFont: () => fontPromise,
+      makeRasterizer: () => null as never,
+    });
+    c.sync(makeParams());
+    expect(c.isActive()).toBe(false); // atlas not resolved yet
+    c.destroy();
+    resolveFont(true); // font resolves on a torn-down controller
+    await fontPromise;
+    await Promise.resolve(); // flush the .then microtask
+    expect(c.isActive()).toBe(false);
+  });
 });
 
 describe('SurveyLabelController style wiring', () => {
