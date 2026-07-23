@@ -17,6 +17,13 @@ impl AppState {
     /// Update config
     pub fn update_config(&self, mut config: Config) -> Result<()> {
         tracing::info!(purpose = "apply user settings", "Updating configuration");
+        // Preserve backend-only fields the frontend never receives. `webkit_memory`
+        // is `#[serde(skip_serializing)]` + `#[ts(skip)]`, so a settings-save payload
+        // always carries the serde default; without this, saving any setting would
+        // silently reset a user's hand-tuned `[webkit_memory]` in `config.toml`.
+        if let Ok(existing) = self.config.lock() {
+            config.webkit_memory = existing.webkit_memory.clone();
+        }
         // Check if cache setting changed before saving
         let old_cache_enabled = self
             .config

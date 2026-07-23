@@ -28,9 +28,14 @@ pub struct Config {
     pub cache: CacheConfig,
     #[serde(default)]
     pub debug: DebugConfig,
-    /// Linux-only WebKit memory-pressure tuning. Backend-only; `#[ts(skip)]`
-    /// keeps it out of the generated frontend types.
-    #[serde(default)]
+    /// Linux-only WebKit memory-pressure tuning. Backend-only: `#[ts(skip)]`
+    /// keeps it out of the generated frontend types, and `#[serde(skip_serializing)]`
+    /// keeps it out of both `get_config`'s payload and the generated
+    /// `defaultConfig.ts` (which is typed as the frontend `Config`, so an emitted
+    /// `webkit_memory` block would fail `tsc`). Loaded from `config.toml` only;
+    /// `AppState::update_config` preserves the in-memory value so saving any
+    /// setting can never reset a hand-tuned knob to defaults.
+    #[serde(default, skip_serializing)]
     #[ts(skip)]
     pub webkit_memory: WebkitMemoryConfig,
     #[serde(default)]
@@ -1814,6 +1819,7 @@ impl Config {
         self.placement_suggestion.normalize();
         self.syntactic_highlighting.normalize();
         self.gas.normalize();
+        self.webkit_memory.normalize();
         self.units.decimal_precision.normalize();
         if self.general.locale.trim().is_empty() {
             self.general.locale = default_locale();

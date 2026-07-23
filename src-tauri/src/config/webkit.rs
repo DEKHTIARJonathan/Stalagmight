@@ -65,6 +65,41 @@ impl Default for WebkitMemoryConfig {
     }
 }
 
+impl WebkitMemoryConfig {
+    /// Clamp thresholds to finite, sane ranges so a corrupt or hand-edited
+    /// `config.toml` can't feed garbage into the wry env vars. Every threshold is
+    /// a fraction of the memory limit and lives in `[0, 1]`; a non-finite or
+    /// out-of-range value falls back to its default. Called from
+    /// `Config::normalize()` on load.
+    pub fn normalize(&mut self) {
+        clamp_fraction(
+            &mut self.conservative_threshold,
+            default_webkit_mem_conservative(),
+        );
+        clamp_fraction(&mut self.strict_threshold, default_webkit_mem_strict());
+        // kill_threshold defaults to 0.0 (never kill); still bound it to [0, 1].
+        if !self.kill_threshold.is_finite() || !(0.0..=1.0).contains(&self.kill_threshold) {
+            self.kill_threshold = 0.0;
+        }
+        if !self.poll_interval_seconds.is_finite() || self.poll_interval_seconds <= 0.0 {
+            self.poll_interval_seconds = default_webkit_mem_poll();
+        }
+        // Keep the pressure ladder monotonic: conservative release before strict.
+        // An inverted pair is meaningless, so reset both to their defaults.
+        if self.conservative_threshold > self.strict_threshold {
+            self.conservative_threshold = default_webkit_mem_conservative();
+            self.strict_threshold = default_webkit_mem_strict();
+        }
+    }
+}
+
+/// Reset `value` to `fallback` unless it is a finite fraction in `[0, 1]`.
+fn clamp_fraction(value: &mut f64, fallback: f64) {
+    if !value.is_finite() || !(0.0..=1.0).contains(value) {
+        *value = fallback;
+    }
+}
+
 /// Serde default for `enabled` (module-local copy, same idiom as `gas.rs` -
 /// `types.rs`'s `default_true` is private to that module).
 fn default_true() -> bool {

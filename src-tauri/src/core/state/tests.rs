@@ -4959,6 +4959,70 @@ fn test_get_config() {
 }
 
 #[test]
+fn test_update_config_preserves_backend_only_webkit_memory() {
+    // Regression: `webkit_memory` is `#[ts(skip)]` + `#[serde(skip_serializing)]`,
+    // so the frontend never receives it and a settings-save payload always carries
+    // the serde default. `update_config` must preserve the hand-tuned in-memory
+    // value; otherwise saving any setting silently resets a user's
+    // `[webkit_memory]` `config.toml` knobs to defaults.
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().unwrap();
+
+        // Seed a non-default value, as if loaded from a hand-edited config.toml.
+        {
+            let mut cfg = state.config.lock().unwrap();
+            cfg.webkit_memory.memory_limit_mb = 1234;
+            cfg.webkit_memory.jsc_force_ram_size_mb = 4096;
+        }
+
+        // Simulate the frontend saving an unrelated setting: its payload carries a
+        // default webkit_memory because it never saw the real one.
+        let mut payload = state.get_config();
+        payload.webkit_memory = crate::config::WebkitMemoryConfig::default();
+        payload.general.auto_save = !payload.general.auto_save;
+        let expected_auto_save = payload.general.auto_save;
+        state.update_config(payload).expect("update config");
+
+        let after = state.get_config();
+        assert_eq!(
+            after.webkit_memory.memory_limit_mb, 1234,
+            "hand-tuned webkit_memory.memory_limit_mb must survive a settings save"
+        );
+        assert_eq!(
+            after.webkit_memory.jsc_force_ram_size_mb, 4096,
+            "hand-tuned webkit_memory.jsc_force_ram_size_mb must survive a settings save"
+        );
+        // The unrelated setting the "frontend" changed still applies.
+        assert_eq!(after.general.auto_save, expected_auto_save);
+    });
+}
+
+#[test]
+fn test_webkit_memory_normalize_clamps_corrupt_thresholds() {
+    // A hand-edited config.toml can carry non-finite / out-of-range thresholds;
+    // Config::normalize() (run on load) must clamp them before they reach the wry
+    // env vars.
+    let mut cfg = crate::config::WebkitMemoryConfig {
+        conservative_threshold: f64::NAN,
+        strict_threshold: 5.0,
+        kill_threshold: -1.0,
+        poll_interval_seconds: 0.0,
+        ..Default::default()
+    };
+    cfg.normalize();
+    assert!(
+        cfg.conservative_threshold.is_finite() && (0.0..=1.0).contains(&cfg.conservative_threshold)
+    );
+    assert!((0.0..=1.0).contains(&cfg.strict_threshold));
+    assert_eq!(cfg.kill_threshold, 0.0);
+    assert!(cfg.poll_interval_seconds > 0.0);
+    assert!(
+        cfg.conservative_threshold <= cfg.strict_threshold,
+        "pressure ladder must stay monotonic after normalize"
+    );
+}
+
+#[test]
 fn test_display_settings_cache() {
     let state = AppState::new().unwrap();
 
