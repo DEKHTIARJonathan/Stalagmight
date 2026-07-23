@@ -109,8 +109,11 @@ export function buildGhostHighlights(host: GhostHighlightHost): GhostHighlights 
   }
   const sShotMe = sShot ? host.movingEndForShot(sShot) : undefined;
   if (host.shotsVisible && sShot && sShotMe) {
-    const p = shotPrim(host, sShot, host.selShotWidth, sShotMe);
-    if (p) shots.push(p);
+    const fid = host.parseFid(sShot);
+    if (fid === null || (!host.isAnchored(fid) && !host.isShotImmovable(fid))) {
+      const p = shotPrim(host, sShot, host.selShotWidth, sShotMe);
+      if (p) shots.push(p);
+    }
   }
 
   const hSt = host.hoveredStationId;
@@ -123,8 +126,11 @@ export function buildGhostHighlights(host: GhostHighlightHost): GhostHighlights 
     }
   }
   if (host.stationsVisible && sSt && host.isMovingStation(sSt)) {
-    const p = stationPrim(host, sSt, 'selected');
-    if (p) stations.push(p);
+    const fid = host.parseFid(sSt);
+    if (fid === null || (!host.isAnchored(fid) && !host.isStationImmovable(fid))) {
+      const p = stationPrim(host, sSt, 'selected');
+      if (p) stations.push(p);
+    }
   }
 
   return { stations, shots };
