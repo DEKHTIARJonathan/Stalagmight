@@ -487,6 +487,10 @@ fn lrud_meters(raw: f64, length_to_m: f64) -> Option<f64> {
 /// Corrected azimuth (grid, 0..360), slope length (m), inclination (deg, +up),
 /// and elevation gain (m, +up) for a shot.
 fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
+    // A missing or non-finite bearing collapses to 0.0 (due north); the shot
+    // keeps its finite length and still participates in the closure solve as a
+    // due-north leg rather than being dropped. The corruption is surfaced to the
+    // user by the pass-1 per-shot warning (#275).
     let mut azimuth = if angle_missing(shot.azimuth) {
         0.0
     } else {

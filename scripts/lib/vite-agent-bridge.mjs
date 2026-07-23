@@ -126,6 +126,11 @@ export function agentBridge() {
         }
 
         // Guard 1: Host header (blocks DNS-rebinding to another hostname).
+        // NOTE: the Host header is client-controlled, so this is NOT a
+        // network-origin control -- a non-browser client (curl) can spoof it.
+        // The real containment is that Vite binds localhost only (no server.host
+        // in vite.config.ts), so the bridge is never reachable off-box. Keep that
+        // localhost bind; do not add server.host without re-auditing this bridge.
         const host = req.headers.host || '';
         if (!ALLOWED_HOSTS.has(host)) {
           sendText(res, 403, 'forbidden');
