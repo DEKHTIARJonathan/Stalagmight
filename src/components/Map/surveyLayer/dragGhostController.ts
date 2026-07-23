@@ -70,6 +70,11 @@ export class DragGhostController {
   private layer: SurveyGhostLayer | null = null;
   /** Guards the self-disable handler against re-entrancy while a restore pends. */
   private selfDisableScheduled = false;
+  /** Bumped on every `end()` (and thus every `begin()`). A deferred self-disable
+   *  restore pins the generation it was scheduled in and no-ops if a newer drag
+   *  has since started, so drag N's stale callback can't tear down drag N+1's
+   *  healthy custom ghost. */
+  private dragGeneration = 0;
 
   // Stock path.
   private ghostFollow: GhostFollow | null = null;
@@ -126,6 +131,10 @@ export class DragGhostController {
 
   /** Tear down both paths and remove the ghost (on drag end / cancel / destroy). */
   end(): void {
+    // Invalidate any pending self-disable restore and clear the coalescing guard
+    // so a stale drag's deferred callback can't fire against the next drag.
+    this.dragGeneration++;
+    this.selfDisableScheduled = false;
     this.disarmStock();
     removeDragPreviewLayers(this.map);
     if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
@@ -170,8 +179,10 @@ export class DragGhostController {
   private handleSelfDisable(reason: string): void {
     if (this.mode !== 'custom' || this.selfDisableScheduled) return;
     this.selfDisableScheduled = true;
+    const gen = this.dragGeneration; // pin this drag; a later begin/end invalidates it
     console.warn(`[dragGhost] custom ghost self-disabled (${reason}); falling back to stock drag preview`);
     this.opts.scheduleRestore(() => {
+      if (gen !== this.dragGeneration) return; // superseded by a newer drag / teardown
       this.selfDisableScheduled = false;
       if (this.mode !== 'custom' || !this.set) return;
       if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);

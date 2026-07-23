@@ -198,3 +198,50 @@ describe('mid-drag self-disable falls back to stock at the live offset', () => {
     ctrl.end();
   });
 });
+
+describe('a deferred self-disable restore is scoped to the drag that scheduled it', () => {
+  it('a stale drag-1 restore does not tear down drag-2 healthy custom ghost', () => {
+    const holder: { fn: (() => void) | null } = { fn: null };
+    const fake = makeFakeMap();
+    const ctrl = new DragGhostController(
+      fake.map,
+      makeOptions({ scheduleRestore: (fn) => { holder.fn = fn; } }),
+    );
+    // Drag 1: custom, then a mid-drag self-disable schedules a restore (deferred).
+    expect(ctrl.begin(SET)).toBe('custom');
+    h.layerState.last!.onSelfDisable!('gl-error-0x505');
+    expect(holder.fn).not.toBeNull();
+
+    // Drag 1 ends; drag 2 begins fresh and healthy on the custom path.
+    ctrl.end();
+    expect(ctrl.begin(SET)).toBe('custom');
+    expect(fake.layers.has(GHOST_ID)).toBe(true);
+
+    // The stale drag-1 restore fires late: it must no-op (generation mismatch),
+    // leaving drag 2 on its custom ghost with no stock fallback spun up.
+    holder.fn!();
+    expect(ctrl.isCustom()).toBe(true);
+    expect(fake.layers.has(GHOST_ID)).toBe(true);
+    expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(false);
+    ctrl.end();
+  });
+
+  it("drag-2's own self-disable still fires after a prior drag self-disabled", () => {
+    const holder: { fns: Array<() => void> } = { fns: [] };
+    const fake = makeFakeMap();
+    const ctrl = new DragGhostController(
+      fake.map,
+      makeOptions({ scheduleRestore: (fn) => { holder.fns.push(fn); } }),
+    );
+    expect(ctrl.begin(SET)).toBe('custom');
+    h.layerState.last!.onSelfDisable!('gl-error-1'); // drag 1 self-disable scheduled
+    ctrl.end(); // clears the coalescing guard so drag 2 isn't blocked by a stale flag
+
+    expect(ctrl.begin(SET)).toBe('custom');
+    h.layerState.last!.onSelfDisable!('gl-error-2'); // drag 2's own self-disable
+    holder.fns[holder.fns.length - 1]!(); // run drag 2's restore
+    expect(ctrl.isCustom()).toBe(false);
+    expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(true);
+    ctrl.end();
+  });
+});
