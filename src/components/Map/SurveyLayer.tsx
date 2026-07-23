@@ -521,6 +521,31 @@ export default class SurveyLayer {
     'shotLabelFeatures',
     'stationLabelFeatures',
   ];
+  /** The label groups whose VT sources the stock comment layers ride (see the
+   *  comment-layer `source:` bindings). The double-draw guarantee requires each to
+   *  be dropped by BULK_LABEL_GROUPS when custom labels take over. */
+  private static readonly COMMENT_SOURCE_GROUPS: readonly SurveyFeatureGroupKey[] = [
+    'stationLabelFeatures',
+    'shotLabelFeatures',
+  ];
+  private static commentCouplingChecked = false;
+  /** Dev tripwire: prove every stock comment source is among the label sources
+   *  BULK_LABEL_GROUPS drops, so comments can't double-draw once the custom label
+   *  layer takes over. Runs once; a future change that breaks the coupling (a new
+   *  comment source not in the drop set) throws loudly in dev. */
+  private static assertCommentSourcesCovered(): void {
+    if (SurveyLayer.commentCouplingChecked || !import.meta.env.DEV) return;
+    SurveyLayer.commentCouplingChecked = true;
+    const dropped = new Set(SurveyLayer.BULK_LABEL_GROUPS);
+    for (const group of SurveyLayer.COMMENT_SOURCE_GROUPS) {
+      if (!dropped.has(group)) {
+        throw new Error(
+          `[SurveyLayer] comment source group "${group}" is not in BULK_LABEL_GROUPS; ` +
+            'comments would double-draw under custom labels.',
+        );
+      }
+    }
+  }
   /** Monotonic tile-URL version for force-emptying a dropped bulk source. Kept
    *  far above any registry version so a bump never collides with a live one. */
   private bulkDropSeq = 1_000_000_000;
@@ -1345,10 +1370,13 @@ export default class SurveyLayer {
 
     // Station comments layer - shows comment text near each station
     // Uses the same source as station labels, filtered to only show stations with comments
+    SurveyLayer.assertCommentSourcesCovered();
     this.map.addLayer({
       id: this.stationCommentsLayerId,
       type: 'symbol',
-      source: this.sourceId + '-station-labels',
+      // Ride the station-label VT source (derived from GROUP_SOURCE, the same map
+      // BULK_LABEL_GROUPS drops) so custom labels empty this too -> no double-draw.
+      source: this.sourceId + SurveyLayer.GROUP_SOURCE.stationLabelFeatures.suffix,
       'source-layer': VT_SOURCE_LAYER,
       minzoom: 14,
       layout: {
@@ -1381,7 +1409,8 @@ export default class SurveyLayer {
     this.map.addLayer({
       id: this.shotCommentsLayerId,
       type: 'symbol',
-      source: this.sourceId + '-shot-labels',
+      // Ride the shot-label VT source (see the station-comments note above).
+      source: this.sourceId + SurveyLayer.GROUP_SOURCE.shotLabelFeatures.suffix,
       'source-layer': VT_SOURCE_LAYER,
       minzoom: 14,
       layout: {
