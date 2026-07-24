@@ -159,6 +159,14 @@ export class SurveyCustomController {
   private readonly onActiveChange: ((active: boolean) => void) | undefined;
   /** Guards handleSelfDisable against re-entrancy while a restore is pending. */
   private selfDisableScheduled = false;
+  /** True only for the duration of {@link teardown}. The teardown republishes
+   *  the stock bulk sources synchronously (so the survey never blanks between
+   *  the custom layer going away and the stock geometry coming back), and that
+   *  republish mirrors back into {@link syncCustomRender} -> {@link sync}. While
+   *  the gate is still ON (a fail-safe self-disable, not a gate opt-out) an
+   *  unguarded re-entrant sync() would see `!active` and RE-ENABLE the very
+   *  layer we are removing. This flag makes that re-entrant sync() a no-op. */
+  private tearingDown = false;
   /** Display toggles mirroring the stock layers' setShowShots /
    *  setShowStations / setShowReferenceShots. Held on the controller so they
    *  survive a layer re-create (enable re-applies them to the fresh layer). */
@@ -209,6 +217,13 @@ export class SurveyCustomController {
 
   /** Re-evaluate the gate and apply/refresh or tear down the custom layer. */
   sync(params: CustomSyncParams): void {
+    // Re-entrancy guard: teardown() republishes stock synchronously, which
+    // mirrors back here. Record the params (so a later real sync diffs against
+    // the latest inputs) but do nothing else, or we would re-enable mid-teardown.
+    if (this.tearingDown) {
+      this.lastParams = params;
+      return;
+    }
     const prevParams = this.lastParams;
     this.lastParams = params;
     const enabled = readCustomRenderGate();
@@ -309,12 +324,25 @@ export class SurveyCustomController {
   }
 
   /** Remove the custom layer and un-hide the stock layers. No logging (callers
-   *  log with their own context). Safe when already inactive. */
+   *  log with their own context). Safe when already inactive.
+   *
+   *  Ordering matters: un-hide the stock layers and let `setActive(false)` drive
+   *  their SYNCHRONOUS republish from cache (see SurveyLayer.onCustomActiveChange)
+   *  BEFORE removing the custom layer. Otherwise there is a frame where the
+   *  custom layer is gone and the stock geometry has not come back yet (the stock
+   *  bulk sources were emptied at enable time), so the whole survey blanks until
+   *  an async worker build lands. The {@link tearingDown} guard keeps the
+   *  republish's mirror-back into {@link sync} from re-enabling this layer. */
   private teardown(): void {
-    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
-    this.layer = null;
-    this.setStockVisibility('visible');
-    this.setActive(false);
+    this.tearingDown = true;
+    try {
+      this.setStockVisibility('visible');
+      this.setActive(false);
+      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      this.layer = null;
+    } finally {
+      this.tearingDown = false;
+    }
     this.map.triggerRepaint();
   }
 

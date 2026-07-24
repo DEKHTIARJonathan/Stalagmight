@@ -382,6 +382,33 @@ describe('SurveyCustomController onActiveChange (stock-suppression signal)', () 
     c.destroy();
     expect(calls).toEqual([true, false]);
   });
+
+  it('a re-entrant sync() during a fail-safe self-disable teardown does NOT re-enable', () => {
+    // Mirrors production: the OFF signal drives a synchronous stock republish
+    // that syncs the custom controller again. The gate is still ON here (a
+    // GL-fault self-disable, NOT a gate opt-out), so without the tearingDown
+    // guard this re-entrant sync() would see `!active` and re-enable the layer
+    // that is being torn down (a flip-flop / infinite re-enable).
+    const holder: { fn: (() => void) | null } = { fn: null };
+    const calls: boolean[] = [];
+    const { map } = makeFakeMap();
+    let c!: SurveyCustomController;
+    c = new SurveyCustomController(map, undefined, {
+      onActiveChange: (a) => {
+        calls.push(a);
+        if (a === false) c.sync(makeParams()); // re-entrant mirror-back
+      },
+      scheduleRestore: (fn) => { holder.fn = fn; },
+    });
+    c.sync(makeParams());
+    expect(calls).toEqual([true]);
+    h.layerState.last?.onSelfDisable?.('gl-error-0x502');
+    holder.fn?.(); // run the deferred teardown; onActiveChange(false) re-enters sync()
+    // Gate is still on, yet the re-entrant sync must be a no-op: exactly
+    // [true, false], never [true, false, true].
+    expect(h.gate.enabled).toBe(true);
+    expect(calls).toEqual([true, false]);
+  });
 });
 
 describe('SurveyCustomController color-only fast path', () => {

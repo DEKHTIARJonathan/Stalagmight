@@ -4846,7 +4846,10 @@ export default class SurveyLayer {
         if (this.shouldDropBulkSource(group)) this.dropBulkSource(group);
       }
     } else {
-      this.rebuildFromCacheIfIdle();
+      // Synchronous: the controller removes the custom layer right after this
+      // returns, so stock geometry must be back in the same frame or the survey
+      // blanks. See controller.teardown / rebuildFromCacheIfIdle.
+      this.rebuildFromCacheIfIdle(true);
     }
   }
 
@@ -4868,23 +4871,45 @@ export default class SurveyLayer {
         if (this.shouldDropBulkSource(group)) this.dropBulkSource(group);
       }
     } else {
-      this.rebuildFromCacheIfIdle();
+      // Synchronous for the same reason as onCustomActiveChange: the label
+      // controller removes its custom layer right after this, so the stock label
+      // sources must be republished in the same frame to avoid a blank.
+      this.rebuildFromCacheIfIdle(true);
     }
   }
 
   /** Re-publish every source from cached geometry once no full build is already
    *  in flight / scheduled (a flush calls syncCustomRender first, so its own
    *  applyFeatureChunk re-consults the now-cleared suppression). Shared by both
-   *  custom-render restore paths (geometry + labels). */
-  private rebuildFromCacheIfIdle(): void {
+   *  custom-render restore paths (geometry + labels).
+   *
+   *  `sync`: republish in the SAME frame (via flushUpdateSync) instead of the
+   *  async worker path. The custom-render disable path passes this so the stock
+   *  geometry is back before the controller removes the custom layer, leaving no
+   *  blank frame. Disable is rare (gate opt-out / fail-safe self-disable), so the
+   *  one-time synchronous build is an acceptable cost there. When a build is
+   *  already in flight the async one will republish, so this is a no-op then. */
+  private rebuildFromCacheIfIdle(sync = false): void {
     if (
       !this.updateScheduled &&
       this.pendingUpdateArgs === null &&
       this.fullUpdateInFlightCount === 0 &&
       (this.cachedSections.length > 0 || this.cachedStations.length > 0)
     ) {
-      this.rebuildFromCache();
+      if (sync) this.rebuildFromCacheSync();
+      else this.rebuildFromCache();
     }
+  }
+
+  /** Synchronous sibling of {@link rebuildFromCache}: republishes every source
+   *  in the current frame. Only the custom-render disable path uses it (see
+   *  {@link rebuildFromCacheIfIdle}); the hot edit path stays on the worker. */
+  private rebuildFromCacheSync(): void {
+    this.flushUpdateSync(
+      this.cachedSections, this.cachedStations, this.cachedLoopClosures, this.gpsOrigin,
+      this.showDepthGradient, this.depthRange, this.cachedPrecision, this.showIssueSeverity,
+      this.cachedWarnings,
+    );
   }
 
   /** Re-run a full `update()` from the cached inputs. Shared by theme change,
