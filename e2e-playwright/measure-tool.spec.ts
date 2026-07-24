@@ -130,7 +130,6 @@ test.describe('Measure tool — dual distance + tint (#26)', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Ruler Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);

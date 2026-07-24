@@ -118,7 +118,6 @@ test.describe('Dive-plan persistence (#244)', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Dive Plan Test');
     await seedProjectWithSections(page, sectionSeeds);
     await page.evaluate(() => (window as unknown as E2EWindow).__MOCK_RESET_DIVE_PLANS__?.());

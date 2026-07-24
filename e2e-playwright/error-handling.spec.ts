@@ -716,7 +716,6 @@ test.describe('Error Handling', () => {
       // Use standard mocks - we'll test with slow operations
       await setupTauriMocks(page);
       await page.goto('/');
-      await page.waitForLoadState('networkidle');
 
       await createProject(page, 'Timeout Test');
 
@@ -749,7 +748,6 @@ test.describe('Error Handling', () => {
     test('should display validation errors in forms @smoke', async ({ page }) => {
       await setupTauriMocks(page);
       await page.goto('/');
-      await page.waitForLoadState('networkidle');
 
       // Test New Project dialog validation
       const newProjectBtn = page

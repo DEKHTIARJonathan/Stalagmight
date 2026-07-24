@@ -171,7 +171,6 @@ test.describe('Theme Switching - Default Dark Theme', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     // Assert on GlobalView (app-ready signal) without creating a project.
     // This tests theme state truly "on app load" before any view transition.
     await expect(
@@ -207,7 +206,6 @@ test.describe('Theme Switching - Via Settings UI', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Theme Settings Test');
   });
 

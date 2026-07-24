@@ -73,7 +73,7 @@ test.describe('Back Button Navigation', () => {
     // Set up Tauri mocks and navigate to app
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="global-view"]');
   });
 
   test.afterEach(async ({ page }) => {

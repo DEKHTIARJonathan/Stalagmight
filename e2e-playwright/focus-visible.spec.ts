@@ -11,7 +11,6 @@ test.describe('Focus ring (keyboard-only)', () => {
   test('input modality gates the ring: click = none, keyboard = ring', async ({ page }) => {
     await setupMockedPage(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Focus Test');
     await seedProjectWithSections(page, [
       { name: 'Main Line', direction: 'in', shots: [{ azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: -2, depth_out: -3, left: 1, right: 1, up: 1, down: 1 }] },
@@ -54,7 +53,6 @@ test.describe('Focus ring (keyboard-only)', () => {
   test('buttons show no soft focus glow on click, but do on keyboard focus', async ({ page }) => {
     await setupMockedPage(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Focus Test');
     await seedProjectWithSections(page, [
       { name: 'Main Line', direction: 'in', shots: [{ azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: -2, depth_out: -3, left: 1, right: 1, up: 1, down: 1 }] },

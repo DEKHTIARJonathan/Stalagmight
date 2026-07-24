@@ -86,7 +86,6 @@ test.describe('Depth Gradient', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Depth Gradient Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapLoaded(page);
@@ -509,7 +508,6 @@ test.describe('Depth Gradient with Menu Interactions', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Depth Gradient Menu Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapLoaded(page);

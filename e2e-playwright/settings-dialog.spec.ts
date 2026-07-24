@@ -54,7 +54,6 @@ test.describe('Settings Dialog - Keyboard Shortcuts to Open', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Settings Keyboard Test');
     // Stay in project view - keyboard shortcuts only work in SingleSystemView
   });
@@ -109,7 +108,7 @@ test.describe('Settings Dialog - Sidebar Navigation', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="global-view"]');
     // Don't create a project - test from GlobalView directly
   });
 
@@ -278,7 +277,6 @@ test.describe('Settings Dialog - Dirty State', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Dirty State Test');
   });
 
@@ -341,7 +339,6 @@ test.describe('Settings Dialog - Unsaved Changes Confirmation', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Unsaved Changes Test');
   });
 
@@ -466,7 +463,6 @@ test.describe('Settings Dialog - Backdrop and Escape', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Backdrop Test');
   });
 
@@ -550,7 +546,6 @@ test.describe('Settings Dialog - Reset to Defaults', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Reset Defaults Test');
   });
 
@@ -629,7 +624,6 @@ test.describe('Settings Dialog - Error Indicators', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Error Indicator Test');
   });
 
@@ -669,7 +663,7 @@ test.describe('Settings Dialog - Fixed Dimensions', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="global-view"]');
     // Open from GlobalView directly — no project needed
   });
 
@@ -790,7 +784,6 @@ test.describe('Settings Dialog - All panels have testids', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Panel TestID Test');
   });
 

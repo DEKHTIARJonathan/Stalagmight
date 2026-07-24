@@ -189,7 +189,6 @@ test.describe('Gas planning', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Gas Planning Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapLoaded(page);
