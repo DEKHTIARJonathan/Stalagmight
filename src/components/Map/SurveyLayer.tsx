@@ -17,13 +17,11 @@ import { useUIStore } from '../../store/uiStore';
 import { selectActiveSurveyData } from '../../store/geometrySelectors';
 import { surveyDataFromLegacy } from '../../types/survey-data';
 import { hasLiveStyle } from './mapUtils';
+import { buildGhostFeatures } from './surveyLayer/ghostFeatures';
 import {
-  buildGhostFeatures,
   normalizeDepthRange,
   resolveShotDisplayColor,
   resolveStationDisplayColor,
-} from './surveyLayer/features';
-import {
   type DepthRange,
   type DisplayColorContext,
   type GhostSectionData,
@@ -75,8 +73,8 @@ import { trackNav } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
 import { clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
-import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/vectorTileRegistry';
-import { diffRemovedSectionIds } from './surveyLayer/labelRestore';
+import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/mapErrors';
+import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
 import {
   InteractOverlayHideController,
   overlayTouchesRemovedSections,

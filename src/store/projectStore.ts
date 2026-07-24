@@ -1120,20 +1120,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   closeProject: async (opts) => {
-    // Terminate the feature-build worker on close so its JSC heap (and any
-    // bmalloc slabs it committed during the last load) goes back to the OS.
-    // The worker is a singleton lazily recreated on the next project open;
-    // start-up cost is small (~50 ms) compared to keeping ~1 GB of committed
-    // slabs alive across the global view. The terminate() helper rejects
-    // any pending build promises with a clear error.
-    try {
-      const { terminateFeaturesWorker } = await import('../components/Map/surveyLayer/featuresWorkerClient');
-      terminateFeaturesWorker();
-    } catch {
-      // Best-effort; the worker module might not have been loaded if the
-      // user never opened a project (unlikely path but harmless).
-    }
-
     // Guard against concurrent close operations (rapid Back clicks or double Discard)
     if (get().isClosing) {
       debugLog('[projectStore] closeProject ignored - already closing');

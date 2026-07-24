@@ -8,8 +8,9 @@
  * resolvers.
  */
 
-import { COMMENT_PALETTE } from '../../../utils/colors';
+import { COMMENT_PALETTE, getDepthColor } from '../../../utils/colors';
 import type { MapThemeColors } from '../../../utils/themeColors';
+import { type SurveyData, STATION_FLAG_IS_ZERO_DATUM } from '../../../types/survey-data';
 
 export type DepthRange = { min: number; max: number };
 
@@ -99,4 +100,124 @@ export interface OverlayColorInput {
   stations: ReadonlyMap<number, number>;
   /** Interpolate scale far end (distance: max reachable; gas: turn budget). */
   max: number;
+}
+
+export function normalizeDepthRange(depthRange: DepthRange): DepthRange {
+  const minD = Number.isFinite(depthRange.min) ? depthRange.min : 0;
+  const maxD = Number.isFinite(depthRange.max) ? depthRange.max : 50;
+  return {
+    min: Math.min(minD, maxD),
+    max: Math.max(minD, maxD),
+  };
+}
+
+/** Severity → color (2=error, 1=warning, else clear). */
+export function severityColor(themeColors: MapThemeColors, s: number | undefined): string {
+  return s === 2
+    ? themeColors.severityError
+    : s === 1
+      ? themeColors.severityWarning
+      : themeColors.severityClear;
+}
+
+/** The shot's base display color: severity > depth ramp > section color. */
+export function resolveShotDisplayColor(
+  data: SurveyData,
+  sectionColor: string,
+  shotGlobalIdx: number,
+  ctx: DisplayColorContext,
+): string {
+  if (ctx.showIssueSeverity && ctx.issueSeverity) {
+    return severityColor(ctx.themeColors, ctx.issueSeverity.shotSeverity[shotGlobalIdx]);
+  }
+  if (ctx.showDepthGradient) {
+    const avgDepth = (data.shotDepthIn[shotGlobalIdx]! + data.shotDepthOut[shotGlobalIdx]!) / 2;
+    return (
+      getDepthColor(
+        avgDepth,
+        ctx.themeColors.depthShallow,
+        ctx.themeColors.depthDeep,
+        ctx.depthRange.min,
+        ctx.depthRange.max,
+      ) ?? sectionColor
+    );
+  }
+  return sectionColor;
+}
+
+/**
+ * A shot's per-endpoint display colors `[fromColor, toColor]`, used to drive a
+ * GPU-interpolated depth gradient along the shot (the custom-render equivalent
+ * of the stock `survey-shot-gradients` layer). In depth mode the from-endpoint
+ * takes the shot's `depth_in` color and the to-endpoint its `depth_out` color -
+ * the exact endpoints the stock gradient ramps between - so the two endpoints
+ * are pixel-identical to the stock gradient (the interior differs only in that
+ * the GPU lerps in RGB where the stock layer resamples the HSL ramp per
+ * sub-segment). Outside depth mode (severity / section color) both endpoints
+ * are the flat `resolveShotDisplayColor`, so a caller can always request
+ * endpoints without special-casing the mode.
+ */
+export function resolveShotEndpointColors(
+  data: SurveyData,
+  sectionColor: string,
+  shotGlobalIdx: number,
+  ctx: DisplayColorContext,
+): [string, string] {
+  const base = resolveShotDisplayColor(data, sectionColor, shotGlobalIdx, ctx);
+  // Severity fill is a single flat color per shot (mirrors the stock shots
+  // layer in severity mode); the gradient sub-layer is depth-only.
+  if (ctx.showIssueSeverity && ctx.issueSeverity) return [base, base];
+  if (ctx.showDepthGradient) {
+    const from =
+      getDepthColor(
+        data.shotDepthIn[shotGlobalIdx]!,
+        ctx.themeColors.depthShallow,
+        ctx.themeColors.depthDeep,
+        ctx.depthRange.min,
+        ctx.depthRange.max,
+      ) ?? base;
+    const to =
+      getDepthColor(
+        data.shotDepthOut[shotGlobalIdx]!,
+        ctx.themeColors.depthShallow,
+        ctx.themeColors.depthDeep,
+        ctx.depthRange.min,
+        ctx.depthRange.max,
+      ) ?? base;
+    return [from, to];
+  }
+  return [base, base];
+}
+
+/** The station's fill color: severity > depth ramp > zero-datum > section color. */
+export function resolveStationDisplayColor(
+  data: SurveyData,
+  sectionColor: string,
+  stationGlobalIdx: number,
+  ctx: DisplayColorContext,
+): string {
+  if (ctx.showIssueSeverity && ctx.issueSeverity) {
+    return severityColor(ctx.themeColors, ctx.issueSeverity.stationSeverity[stationGlobalIdx]);
+  }
+  const isZeroDatum = (data.stationFlags[stationGlobalIdx]! & STATION_FLAG_IS_ZERO_DATUM) !== 0;
+  if (ctx.showDepthGradient) {
+    const z = data.stationCoords[stationGlobalIdx * 3 + 2]!;
+    return (
+      getDepthColor(
+        z,
+        ctx.themeColors.depthShallow,
+        ctx.themeColors.depthDeep,
+        ctx.depthRange.min,
+        ctx.depthRange.max,
+      ) ?? sectionColor
+    );
+  }
+  return isZeroDatum ? ctx.themeColors.zeroDatum : sectionColor;
+}
+
+/** The station's stroke color (zero-datum ring in depth mode, else theme stroke). */
+export function resolveStationStrokeColor(isZeroDatum: boolean, ctx: DisplayColorContext): string {
+  return ctx.showDepthGradient && isZeroDatum
+    ? ctx.themeColors.zeroDatum
+    : ctx.themeColors.strokeColor;
 }

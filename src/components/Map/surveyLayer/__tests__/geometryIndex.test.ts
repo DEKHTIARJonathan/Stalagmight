@@ -10,16 +10,13 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap, MapMouseEvent, MapGeoJSONFeature } from 'maplibre-gl';
-import { buildSurveyFeatures } from '../features';
 import { resolveNearestShot, resolveNearestStation } from '../hitTest';
 import { SurveyGeometryIndex } from '../geometryIndex';
 import { padProbeBox } from '../hitProbe';
 import { surveyDataFromLegacy } from '../../../../types/survey-data';
-import { getMapThemeColors } from '../../../../utils/themeColors';
+import { metersToMapCoords } from '../../../../utils/coordinates';
 import type { Section } from '../../../../types/ipc/Section';
 import type { Station } from '../../../../types/ipc/Station';
-
-const theme = getMapThemeColors();
 
 /** Deterministic screen projection for tests: 1 degree = 100000 px, y down. */
 const SCALE = 100000;
@@ -83,14 +80,74 @@ function fixture(): { sections: Section[]; stations: Station[] } {
   return { sections, stations };
 }
 
+/**
+ * Build the per-feature station Points + shot LineStrings the equivalence oracle
+ * compares against, directly from the SoA. This mirrors the (deleted) stock
+ * non-merged feature builder for exactly the fields these tests read: geometry
+ * (via the same `metersToMapCoords` transform `SurveyGeometryIndex` uses) plus
+ * `sectionId` / `stationIndex` / `shotId`, in the same emit order (stations in
+ * global-index order; shots in section -> shot-offset order; reference shots
+ * included). It is an INDEPENDENT oracle - it does not call the index under test.
+ */
+function buildRefFeatures(data: ReturnType<typeof surveyDataFromLegacy>): {
+  stationFeatures: GeoJSON.Feature[];
+  shotFeatures: GeoJSON.Feature[];
+} {
+  // (sectionId, stationIndex) -> global station index.
+  const stationLookup = new Map<number, Map<number, number>>();
+  for (let g = 0; g < data.stationCount; g++) {
+    const sid = data.stationSectionIds[g]!;
+    const stIdx = data.stationIndices[g]!;
+    let inner = stationLookup.get(sid);
+    if (!inner) {
+      inner = new Map();
+      stationLookup.set(sid, inner);
+    }
+    inner.set(stIdx, g);
+  }
+  const stationFeatures: GeoJSON.Feature[] = [];
+  for (let g = 0; g < data.stationCount; g++) {
+    const base = g * 3;
+    stationFeatures.push({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: metersToMapCoords(data.stationCoords[base]!, data.stationCoords[base + 1]!, null),
+      },
+      properties: { sectionId: data.stationSectionIds[g], stationIndex: data.stationIndices[g] },
+    });
+  }
+  const shotFeatures: GeoJSON.Feature[] = [];
+  for (const section of data.sections) {
+    const inner = stationLookup.get(section.id);
+    if (!inner) continue;
+    for (let i = 0; i < section.shotCount; i++) {
+      const fromGlobal = inner.get(i);
+      const toGlobal = inner.get(i + 1);
+      if (fromGlobal === undefined || toGlobal === undefined) continue;
+      const shotId = data.shotIds[section.shotOffset + i]!;
+      const f = fromGlobal * 3;
+      const t = toGlobal * 3;
+      shotFeatures.push({
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: [
+            metersToMapCoords(data.stationCoords[f]!, data.stationCoords[f + 1]!, null),
+            metersToMapCoords(data.stationCoords[t]!, data.stationCoords[t + 1]!, null),
+          ],
+        },
+        properties: { sectionId: section.id, shotId },
+      });
+    }
+  }
+  return { stationFeatures, shotFeatures };
+}
+
 function buildPerFeature() {
   const { sections, stations } = fixture();
   const data = surveyDataFromLegacy(sections, stations);
-  const sets = buildSurveyFeatures(
-    data, undefined, null, false, { min: 0, max: 10 }, theme, undefined,
-    { mergeFeatures: false, buildLabels: false },
-  );
-  return { data, sets };
+  return { data, sets: buildRefFeatures(data) };
 }
 
 /** Wrap a built GeoJSON feature as the minimal MapGeoJSONFeature shape the
