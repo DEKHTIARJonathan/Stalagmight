@@ -1788,8 +1788,11 @@ export default class SurveyLayer {
       this.measurePath.clear();
       return;
     }
+    // The tint must not float over hidden geometry: measured shots follow the
+    // shots toggle, measured stations follow the stations toggle (setShowShots /
+    // setShowStations re-run this so a live toggle updates the path).
     const segments: MeasureSegment[] = [];
-    if (this.measuredPathIds) {
+    if (this.measuredPathIds && this.shotsVisible) {
       // Resolve by RE-DERIVING each shot's canonical feature id rather than
       // decoding the fid: the scoped id folded into a shot fid is the GLOBAL shot
       // id (>= FEATURE_ID_STRIDE for section >= 1), so a floor(fid / STRIDE) split
@@ -1803,7 +1806,7 @@ export default class SurveyLayer {
       }
     }
     const points: MeasurePoint[] = [];
-    if (this.measuredPathStationIds) {
+    if (this.measuredPathStationIds && this.stationsVisible) {
       for (const fid of this.measuredPathStationIds) {
         const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
         const stationIndex = fid - sectionId * FEATURE_ID_STRIDE;
@@ -2195,6 +2198,8 @@ export default class SurveyLayer {
     this.map.setLayoutProperty(this.interactStationsLayerId, 'visibility', visibility);
     // Note: stationsHighlightLayerId intentionally NOT hidden - it shows only
     // snapped/origin stations even when the main stations layer is hidden.
+    // Drop/restore the measured-path station discs with the stations toggle.
+    this.syncCustomMeasurePath();
   }
 
   // Control shots visibility. The custom renderer carries the real shots
@@ -2213,6 +2218,8 @@ export default class SurveyLayer {
     this.map.setLayoutProperty(this.interactShotsMeasuredLayerId, 'visibility', visibility);
     // Keep the interact overlay's colors + features in step.
     this.applyOverlayPaint();
+    // Drop/restore the measured-path shot lines with the shots toggle.
+    this.syncCustomMeasurePath();
   }
 
   // Control reference shots visibility. The custom renderer + custom label layer
