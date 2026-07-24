@@ -1785,6 +1785,12 @@ function MapCanvas() {
       // the pending-update microtask in SurveyLayer.flushUpdate guarding
       // against `hasLiveStyle === false` so it bails harmlessly after
       // map.remove() runs.
+      // Still release the module-level VT registry (the flat geometry arrays
+      // MapLibre doesn't own) — that piece survives map.remove() and is keyed
+      // by a fixed source id shared across projects, so skipping it leaks this
+      // project's arrays until the next project publishes (#mem). Cheap: JS-map
+      // clears only, no map/worker work, so it doesn't reintroduce the freeze.
+      surveyLayerRef.current?.releaseVtRegistry();
       surveyLayerRef.current = null;
       const tA = performance.now();
       map.current?.remove();
@@ -2597,14 +2603,22 @@ function MapCanvas() {
     surveyLayerRef.current.setShowReferenceShots(getEffectiveShowReferenceShots(showShots, showReferenceShots));
   }, [showReferenceShots, showShots, mapLoaded]);
 
-  // Sync anchored section IDs with SurveyLayer for fading
-  useEffect(() => {
+  // Sync anchored section IDs with SurveyLayer for fading.
+  // useLayoutEffect (not useEffect) for the same reason as the selection sync
+  // above: the controller retains its dim state across a project switch, and
+  // section/feature ids collide across projects. A post-paint useEffect would
+  // let the pre-paint geometry rebuild re-apply the previous project's dim to
+  // the new project's colliding ids for one frame before this cleared it.
+  useLayoutEffect(() => {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setAnchoredSections(anchoredSectionIds);
   }, [anchoredSectionIds, mapLoaded]);
 
-  // Sync immovable feature IDs with SurveyLayer for disabled visual
-  useEffect(() => {
+  // Sync immovable feature IDs with SurveyLayer for disabled visual.
+  // useLayoutEffect for the same cross-project-flash reason as above; immovable
+  // ids are non-empty for the entire duration of a move tool, so this is the
+  // more reachable trigger of the stale-dim flash.
+  useLayoutEffect(() => {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setImmovableFeatures(
       immovableFeatureIds.stationIds,

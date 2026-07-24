@@ -69,7 +69,6 @@ import { getErrorColor } from '../../utils/colors';
 import { trackNav } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
-import { distanceToLineSegment } from './surveyLayer/hitTest';
 import { recordFeatureCount, clearFeatureCountsForPrefix, recordPerfTiming } from '../../utils/memoryProbe';
 import { buildSurveyFeaturesStreamed, buildGranularitySwapStreamed } from './surveyLayer/featuresWorkerClient';
 import { ensureVtProtocol, setVtLayerData, vtTileUrl, clearVtLayerData, reloadVtSource, shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/vectorTileRegistry';
@@ -2022,7 +2021,17 @@ export default class SurveyLayer {
     const cv = this.map.getCanvas();
     const bearing = this.map.getBearing();
     const pitch = this.map.getPitch();
-    const key = `${this.map.getZoom()}|${c.lng}|${c.lat}|${bearing}|${pitch}|${cv.width}|${cv.height}`;
+    const zoom = this.map.getZoom();
+    // Quantize the center to ~pixel resolution so sub-pixel inertial-pan drift
+    // does not invalidate the projected-AABB cache on every probe. `degPerPx` is
+    // the Web-Mercator degrees-per-pixel at this zoom (512px tiles); a center
+    // shift below one pixel cannot move any geometry by a pixel, and the cached
+    // AABB is only tested against a hit radius of a few px. Zoom stays
+    // full-precision (a zoom change genuinely rescales every projection).
+    const degPerPx = 360 / (512 * 2 ** zoom);
+    const qx = Math.round(c.lng / degPerPx);
+    const qy = Math.round(c.lat / degPerPx);
+    const key = `${zoom}|${qx}|${qy}|${bearing}|${pitch}|${cv.width}|${cv.height}`;
     return { key, axisAligned: bearing === 0 && pitch === 0 };
   }
 
@@ -2089,58 +2098,25 @@ export default class SurveyLayer {
   private handleEmptyClick(e: MapMouseEvent): void {
     const HIDDEN_CLICK_THRESHOLD_PX = 15;
 
-    // Check for clicks on hidden stations (stations take priority)
-    if (!this.stationsVisible && this.callbacks.onHiddenStationClick) {
-      const sourceFeatures = this.map.querySourceFeatures(this.sourceId + '-stations', { sourceLayer: VT_SOURCE_LAYER });
-      for (const feature of sourceFeatures) {
-        // Merged sources hold MultiPoints; per-feature content holds Points (#mem).
-        const geom = feature.geometry;
-        const points: [number, number][] =
-          geom.type === 'Point'
-            ? [geom.coordinates as [number, number]]
-            : geom.type === 'MultiPoint'
-              ? (geom.coordinates as [number, number][])
-              : [];
-        for (const coords of points) {
-          const projected = this.map.project(coords);
-          const dx = projected.x - e.point.x;
-          const dy = projected.y - e.point.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-          if (distance < HIDDEN_CLICK_THRESHOLD_PX) {
-            this.callbacks.onHiddenStationClick();
-            return;
-          }
-        }
+    // Probe hidden features through the SoA geometry index, not
+    // querySourceFeatures: when the custom geometry layer is active the stock
+    // `-stations` / `-shots` VT sources are dropped and serve empty tiles, so a
+    // source query returns nothing and the "clicked near a hidden feature" toast
+    // is silently lost. `geoIndex` holds every station/shot regardless of the
+    // display toggle. Stations take priority over shots (matches prior behavior).
+    const allSections = this.geoIndex ? new Set(this.cachedSections.map((s) => s.id)) : null;
+
+    if (allSections && !this.stationsVisible && this.callbacks.onHiddenStationClick) {
+      if (this.resolveStationAt(e.point.x, e.point.y, allSections, HIDDEN_CLICK_THRESHOLD_PX)) {
+        this.callbacks.onHiddenStationClick();
+        return;
       }
     }
 
-    // Check for clicks on hidden shots
-    if (!this.shotsVisible && this.callbacks.onHiddenShotClick) {
-      const sourceFeatures = this.map.querySourceFeatures(this.sourceId + '-shots', { sourceLayer: VT_SOURCE_LAYER });
-      for (const feature of sourceFeatures) {
-        // Merged sources hold MultiLineStrings; per-feature content holds
-        // LineStrings (#mem). Each line is one shot's 2-point segment.
-        const geom = feature.geometry;
-        const lines: [number, number][][] =
-          geom.type === 'LineString'
-            ? [geom.coordinates as [number, number][]]
-            : geom.type === 'MultiLineString'
-              ? (geom.coordinates as [number, number][][])
-              : [];
-        for (const lineCoords of lines) {
-          for (let i = 0; i < lineCoords.length - 1; i++) {
-            const coord1 = lineCoords[i];
-            const coord2 = lineCoords[i + 1];
-            if (!coord1 || !coord2) continue;
-            const p1 = this.map.project(coord1);
-            const p2 = this.map.project(coord2);
-            const dist = distanceToLineSegment(e.point.x, e.point.y, p1.x, p1.y, p2.x, p2.y);
-            if (dist < HIDDEN_CLICK_THRESHOLD_PX) {
-              this.callbacks.onHiddenShotClick();
-              return;
-            }
-          }
-        }
+    if (allSections && !this.shotsVisible && this.callbacks.onHiddenShotClick) {
+      if (this.resolveShotAt(e.point.x, e.point.y, allSections, HIDDEN_CLICK_THRESHOLD_PX)) {
+        this.callbacks.onHiddenShotClick();
+        return;
       }
     }
 
@@ -5614,6 +5590,21 @@ export default class SurveyLayer {
     }
   }
 
+  /** Drop the module-level vector-tile registry entries (the flat geometry
+   *  arrays MapLibre does not own) and zero the memory-probe counts, WITHOUT
+   *  the rest of destroy()'s teardown. Cheap: only clears JS maps, touching
+   *  neither the map nor the worker, so it is safe on unmount right before
+   *  map.remove(). The registry is keyed by a fixed source id shared across
+   *  projects, so a project -> Global-View switch (which skips destroy() for
+   *  unmount speed) would otherwise leave this project's ~MBs of arrays resident
+   *  until the next project's first publish overwrites the slot (#mem). */
+  releaseVtRegistry(): void {
+    clearFeatureCountsForPrefix('survey-');
+    for (const suffix of SurveyLayer.VT_SOURCE_SUFFIXES) {
+      clearVtLayerData(this.sourceId + suffix);
+    }
+  }
+
   destroy() {
     // Cancel any pending coalesced update so its microtask doesn't fire on a
     // destroyed map (would throw in setData).
@@ -5635,16 +5626,8 @@ export default class SurveyLayer {
     this.customLabels?.destroy();
     this.customLabels = null;
 
-    // Zero memory-probe feature counts for our sources so the debug panel
-    // stops showing stale counts from the last setData call.
-    clearFeatureCountsForPrefix('survey-');
-
-    // Drop the vector-tile registry entries so the flat geometry arrays
-    // don't outlive the layer (#mem). The map's sources/tiles die with
-    // map.remove(); the registry is the piece MapLibre doesn't know about.
-    for (const suffix of SurveyLayer.VT_SOURCE_SUFFIXES) {
-      clearVtLayerData(this.sourceId + suffix);
-    }
+    // Drop the module-level VT registry entries + zero the memory-probe counts.
+    this.releaseVtRegistry();
 
     // Cancel any pending hover RAF
     if (this.hoverRafId !== null) {

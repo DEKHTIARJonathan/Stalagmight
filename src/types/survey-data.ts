@@ -275,7 +275,8 @@ export function findStationGlobalIndex(
  * ~89 k-object array that duplicates `stationCoords` / `stationSectionIds`
  * / `stationIndices` (the eager `Station[]` the binary loader used to
  * build). The proxy is read-only — the app never mutates the store
- * `stations` array — so no write/mutate traps are provided.
+ * `stations` array — and its `set` / `deleteProperty` traps throw so an
+ * accidental write surfaces immediately instead of silently no-opping.
  */
 export function lazyStationArray(data: SurveyData): Station[] {
   // Empty target: holds no slots, so no per-station memory. `length` and
@@ -311,6 +312,22 @@ export function lazyStationArray(data: SurveyData): Station[] {
         if (idx !== null) return idx < data.stationCount;
       }
       return Reflect.has(t, prop);
+    },
+    // This is a read-only lazy VIEW over `SurveyData`; the backing target is
+    // empty, so a write (`stations[i] = x`, `.push(...)`, `.sort()`) would
+    // silently no-op and desync from the SoA. Throw instead of swallowing it so
+    // an accidental mutation surfaces at the call site rather than as a
+    // mysteriously-empty array later. Rebuild SurveyData to change stations.
+    set(_t, prop) {
+      throw new TypeError(
+        `lazyStationArray is a read-only view over SurveyData; cannot set "${String(prop)}". ` +
+          'Rebuild SurveyData instead of mutating the station array.',
+      );
+    },
+    deleteProperty(_t, prop) {
+      throw new TypeError(
+        `lazyStationArray is a read-only view over SurveyData; cannot delete "${String(prop)}".`,
+      );
     },
   };
 
