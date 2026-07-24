@@ -309,13 +309,19 @@ export class GlobalCustomController {
    * null unless the custom layer is active + visible, and honors the reference
    * shots visibility, so hidden features stay non-interactive.
    */
-  pick(project: ProjectFn, x: number, y: number): GlobalHit | null {
+  pick(project: ProjectFn, x: number, y: number, cameraKey: string | null = null): GlobalHit | null {
     if (!this.active || !this.visible || !this.hitIndex) return null;
-    return this.hitIndex.pick(project, x, y, {
-      includeReference: this.referenceVisible,
-      stationReach: STATION_REACH,
-      shotReach: SHOT_REACH,
-    });
+    return this.hitIndex.pick(
+      project,
+      x,
+      y,
+      {
+        includeReference: this.referenceVisible,
+        stationReach: STATION_REACH,
+        shotReach: SHOT_REACH,
+      },
+      cameraKey,
+    );
   }
 
   destroy(): void {

@@ -49,6 +49,18 @@ interface SystemEntry {
   minLat: number;
   maxLng: number;
   maxLat: number;
+  // Screen-space projections, rebuilt only when the camera key changes (see
+  // GlobalHitIndex.pick). Parallel to `stations` / `shots`; the AABB is the
+  // projected diagonal corners. `projValid` is false until first projected, and
+  // stays false for a degenerate (no-shot / infinite-AABB) system that is never
+  // projected — those are skipped in the scan, as before.
+  projStations: Float64Array;
+  projShots: Float64Array;
+  projMinX: number;
+  projMinY: number;
+  projMaxX: number;
+  projMaxY: number;
+  projValid: boolean;
 }
 
 /** Build the per-system station/shot arrays + world AABB once. */
@@ -85,21 +97,32 @@ function buildEntry(system: SystemGeometry): SystemEntry {
     stations[i * 2 + 1] = stationTriples[i]![1];
     stationAllRef[i] = stationTriples[i]![2] ? 1 : 0;
   }
+  const shots = new Float64Array(shotList);
   return {
     systemId: system.metadata.file_path,
     stations,
     stationAllRef,
-    shots: new Float64Array(shotList),
+    shots,
     shotRef: new Uint8Array(refList),
     minLng,
     minLat,
     maxLng,
     maxLat,
+    projStations: new Float64Array(stations.length),
+    projShots: new Float64Array(shots.length),
+    projMinX: 0,
+    projMinY: 0,
+    projMaxX: 0,
+    projMaxY: 0,
+    projValid: false,
   };
 }
 
 export class GlobalHitIndex {
   private readonly entries: SystemEntry[];
+  /** Camera key the cached screen projections were built for; null forces a
+   *  reproject on the next pick (initial state, and the uncached test path). */
+  private cachedCameraKey: string | null = null;
 
   constructor(systems: SystemGeometry[]) {
     this.entries = systems.map(buildEntry);
@@ -111,54 +134,110 @@ export class GlobalHitIndex {
   }
 
   /**
-   * The system under the screen point, station-first then shot, or null. A
-   * system whose projected world-AABB (expanded by the larger reach) does not
-   * contain the point is skipped before any per-feature math.
+   * Project every system's stations + shot endpoints + world-AABB corners into
+   * screen space, once. Skips a degenerate (no-shot / infinite-AABB) system:
+   * projecting its +/-Infinity bounds hands MapLibre an invalid lng/lat and
+   * throws for the WHOLE global map.
    */
-  pick(project: ProjectFn, px: number, py: number, opts: GlobalHitOptions): GlobalHit | null {
-    const pad = Math.max(opts.stationReach, opts.shotReach);
-    let bestStation: { systemId: string; dist: number } | null = null;
-    let bestShot: { systemId: string; dist: number } | null = null;
-
+  private reproject(project: ProjectFn): void {
     for (const e of this.entries) {
-      // A system with no shots keeps its initial +/-Infinity bounds; projecting
-      // those hands MapLibre an invalid lng/lat and throws for the WHOLE global
-      // map on every mousemove/click. Skip it before any projection.
       if (
         !Number.isFinite(e.minLng) ||
         !Number.isFinite(e.minLat) ||
         !Number.isFinite(e.maxLng) ||
         !Number.isFinite(e.maxLat)
       ) {
+        e.projValid = false;
         continue;
       }
-      // Conservative AABB prefilter: project the two diagonal corners (the app's
-      // global map has no bearing/pitch, so axis order is preserved) and reject
-      // systems whose padded screen box misses the point.
+      for (let s = 0; s < e.stationAllRef.length; s++) {
+        const p = project([e.stations[s * 2]!, e.stations[s * 2 + 1]!]);
+        e.projStations[s * 2] = p.x;
+        e.projStations[s * 2 + 1] = p.y;
+      }
+      for (let i = 0; i < e.shotRef.length; i++) {
+        const a = project([e.shots[i * 4]!, e.shots[i * 4 + 1]!]);
+        const b = project([e.shots[i * 4 + 2]!, e.shots[i * 4 + 3]!]);
+        e.projShots[i * 4] = a.x;
+        e.projShots[i * 4 + 1] = a.y;
+        e.projShots[i * 4 + 2] = b.x;
+        e.projShots[i * 4 + 3] = b.y;
+      }
+      // Diagonal corners (the app's global map has no bearing/pitch, so axis
+      // order is preserved) give the screen AABB.
       const p1 = project([e.minLng, e.minLat]);
       const p2 = project([e.maxLng, e.maxLat]);
-      const bMinX = Math.min(p1.x, p2.x) - pad;
-      const bMaxX = Math.max(p1.x, p2.x) + pad;
-      const bMinY = Math.min(p1.y, p2.y) - pad;
-      const bMaxY = Math.max(p1.y, p2.y) + pad;
-      if (px < bMinX || px > bMaxX || py < bMinY || py > bMaxY) continue;
+      e.projMinX = Math.min(p1.x, p2.x);
+      e.projMaxX = Math.max(p1.x, p2.x);
+      e.projMinY = Math.min(p1.y, p2.y);
+      e.projMaxY = Math.max(p1.y, p2.y);
+      e.projValid = true;
+    }
+  }
 
-      // Stations (priority).
+  /**
+   * The system under the screen point, station-first then shot, or null. A
+   * system whose projected world-AABB (expanded by the larger reach) does not
+   * contain the point is skipped before any per-feature math.
+   *
+   * Projections are cached per `cameraKey`: during hover the camera is static,
+   * so all but the first pick at a given camera reuse the cached screen coords
+   * and never call `project` — otherwise a single large system under the cursor
+   * would re-project all of its (up to ~150k) endpoints on every mousemove. Pass
+   * a stable key that changes iff the projection changes (zoom / center /
+   * bearing / pitch / viewport); pass `null` to reproject every call (the
+   * uncached path, used by tests).
+   */
+  pick(
+    project: ProjectFn,
+    px: number,
+    py: number,
+    opts: GlobalHitOptions,
+    cameraKey: string | null = null,
+  ): GlobalHit | null {
+    if (cameraKey === null || cameraKey !== this.cachedCameraKey) {
+      this.reproject(project);
+      this.cachedCameraKey = cameraKey;
+    }
+
+    const pad = Math.max(opts.stationReach, opts.shotReach);
+    let bestStation: { systemId: string; dist: number } | null = null;
+    let bestShot: { systemId: string; dist: number } | null = null;
+
+    for (const e of this.entries) {
+      if (!e.projValid) continue;
+      // Padded screen-AABB prefilter (cached corners).
+      if (
+        px < e.projMinX - pad ||
+        px > e.projMaxX + pad ||
+        py < e.projMinY - pad ||
+        py > e.projMaxY + pad
+      ) {
+        continue;
+      }
+
+      // Stations (priority) — cached screen coords, no projection.
       for (let s = 0; s < e.stationAllRef.length; s++) {
         if (!opts.includeReference && e.stationAllRef[s] === 1) continue;
-        const p = project([e.stations[s * 2]!, e.stations[s * 2 + 1]!]);
-        const dist = Math.hypot(p.x - px, p.y - py);
+        const dx = e.projStations[s * 2]! - px;
+        const dy = e.projStations[s * 2 + 1]! - py;
+        const dist = Math.hypot(dx, dy);
         if (dist <= opts.stationReach && (!bestStation || dist < bestStation.dist)) {
           bestStation = { systemId: e.systemId, dist };
         }
       }
 
-      // Shots.
+      // Shots — cached screen coords, no projection.
       for (let i = 0; i < e.shotRef.length; i++) {
         if (!opts.includeReference && e.shotRef[i] === 1) continue;
-        const a = project([e.shots[i * 4]!, e.shots[i * 4 + 1]!]);
-        const b = project([e.shots[i * 4 + 2]!, e.shots[i * 4 + 3]!]);
-        const dist = distanceToLineSegment(px, py, a.x, a.y, b.x, b.y);
+        const dist = distanceToLineSegment(
+          px,
+          py,
+          e.projShots[i * 4]!,
+          e.projShots[i * 4 + 1]!,
+          e.projShots[i * 4 + 2]!,
+          e.projShots[i * 4 + 3]!,
+        );
         if (dist <= opts.shotReach && (!bestShot || dist < bestShot.dist)) {
           bestShot = { systemId: e.systemId, dist };
         }

@@ -102,3 +102,52 @@ describe('GlobalHitIndex.pick', () => {
     expect(index.pick(project, 50, 4, OPTS)?.kind).toBe('shot');
   });
 });
+
+/**
+ * Camera-keyed projection cache (#customRender P1): during hover the camera is
+ * static, so all but the first pick at a given camera must reuse cached screen
+ * coords and never re-project — otherwise a single large system under the cursor
+ * re-projects all its endpoints on every mousemove.
+ */
+describe('GlobalHitIndex.pick projection cache', () => {
+  function counting(): { fn: ProjectFn; calls: () => number } {
+    let n = 0;
+    return { fn: ([lng, lat]) => ((n += 1), { x: lng, y: lat }), calls: () => n };
+  }
+
+  it('reprojects once per camera key, not per pick', () => {
+    const idx = new GlobalHitIndex([systemA, systemB]);
+    const { fn, calls } = counting();
+    idx.pick(fn, 100, 0, OPTS, 'cam-1');
+    const afterFirst = calls();
+    expect(afterFirst).toBeGreaterThan(0);
+    idx.pick(fn, 50, 0, OPTS, 'cam-1');
+    idx.pick(fn, 9999, 9999, OPTS, 'cam-1');
+    expect(calls()).toBe(afterFirst); // no re-projection at the same camera
+  });
+
+  it('reprojects when the camera key changes', () => {
+    const idx = new GlobalHitIndex([systemA]);
+    const { fn, calls } = counting();
+    idx.pick(fn, 100, 0, OPTS, 'cam-1');
+    const afterFirst = calls();
+    idx.pick(fn, 100, 0, OPTS, 'cam-2');
+    expect(calls()).toBeGreaterThan(afterFirst);
+  });
+
+  it('a null camera key reprojects every call (uncached path)', () => {
+    const idx = new GlobalHitIndex([systemA]);
+    const { fn, calls } = counting();
+    idx.pick(fn, 100, 0, OPTS, null);
+    const after1 = calls();
+    idx.pick(fn, 100, 0, OPTS, null);
+    expect(calls()).toBeGreaterThan(after1);
+  });
+
+  it('cached path resolves identically to the uncached path', () => {
+    const idx = new GlobalHitIndex([systemA, systemB]);
+    expect(idx.pick(project, 100, 0, OPTS, 'cam-1')).toEqual({ systemId: 'a.tml', kind: 'station' });
+    expect(idx.pick(project, 50, 0, OPTS, 'cam-1')).toEqual({ systemId: 'a.tml', kind: 'shot' });
+    expect(idx.pick(project, 50, 6, OPTS, 'cam-1')).toBeNull();
+  });
+});

@@ -153,7 +153,13 @@ export default class GlobalSurveyLayer {
   private pickSystemAt(point: maplibregl.PointLike): { systemId: string; properties: TooltipProps } | null {
     if (!this.customRender) return null;
     const xy = pointLikeToXY(point);
-    const hit = this.customRender.pick((c) => this.map.project(c), xy.x, xy.y);
+    // Camera key so the hit index reprojects only when the camera moved, not on
+    // every hover (a single large system would otherwise re-project all of its
+    // endpoints per mousemove). Mirrors SurveyLayer.cameraSnapshot's key.
+    const c = this.map.getCenter();
+    const cv = this.map.getCanvas();
+    const cameraKey = `${this.map.getZoom()}|${c.lng}|${c.lat}|${this.map.getBearing()}|${this.map.getPitch()}|${cv.width}|${cv.height}`;
+    const hit = this.customRender.pick((c2) => this.map.project(c2), xy.x, xy.y, cameraKey);
     if (!hit) return null;
     const meta = this.customRender.getSystemMetadata(hit.systemId);
     return {
