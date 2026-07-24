@@ -7,6 +7,7 @@ import {
   distance,
   horizontalDistance,
   getBounds,
+  getBoundsFromStationCoords,
   calculateAzimuth,
   calculatePosition,
   formatCoordinate,
@@ -194,6 +195,22 @@ describe('getBounds', () => {
     expect(b.maxY).toBe(5);
     expect(b.minZ).toBe(-1);
     expect(b.maxZ).toBe(3);
+  });
+});
+
+describe('getBoundsFromStationCoords', () => {
+  it('returns zeros for an empty buffer (matches getBounds([]))', () => {
+    expect(getBoundsFromStationCoords(new Float64Array(0))).toEqual(getBounds([]));
+  });
+
+  it('matches getBounds over the same coordinates without materializing objects', () => {
+    const pts = [coord(-10, 5, 0), coord(20, -15, 3), coord(0, 0, -1)];
+    const flat = new Float64Array(pts.flatMap((p) => [p.x, p.y, p.z]));
+    expect(getBoundsFromStationCoords(flat)).toEqual(getBounds(pts));
+  });
+
+  it('handles a single station', () => {
+    expect(getBoundsFromStationCoords(new Float64Array([5, -3, 2]))).toEqual(getBounds([coord(5, -3, 2)]));
   });
 });
 

@@ -238,6 +238,45 @@ export function getBounds(coords: Coordinates[]): {
 }
 
 /**
+ * Bounds over an interleaved `[x,y,z, x,y,z, …]` station-coordinate buffer (the
+ * SoA `SurveyData.stationCoords`) — equivalent to `getBounds` but WITHOUT
+ * materializing a `Coordinates[]`. The initial-view sizing used to
+ * `stations.map((s) => s.coordinates)` the lazy `Station[]` proxy, which rebuilt
+ * the whole ~89k-object graph on load just to read coordinates (#mem). Empty
+ * buffer -> zeros, matching `getBounds([])`.
+ */
+export function getBoundsFromStationCoords(stationCoords: Float64Array): {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+} {
+  if (stationCoords.length === 0) {
+    return { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 };
+  }
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (let i = 0; i + 3 <= stationCoords.length; i += 3) {
+    const x = stationCoords[i]!;
+    const y = stationCoords[i + 1]!;
+    const z = stationCoords[i + 2]!;
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+    minZ = Math.min(minZ, z);
+    maxZ = Math.max(maxZ, z);
+  }
+  return { minX, maxX, minY, maxY, minZ, maxZ };
+}
+
+/**
  * Calculate azimuth from point A to point B (degrees, 0-360)
  */
 export function calculateAzimuth(from: Coordinates, to: Coordinates): number {

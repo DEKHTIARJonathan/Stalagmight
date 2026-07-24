@@ -21,7 +21,8 @@ import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import { buildDistanceFeatureState, overlayApplyAction } from '../../utils/distanceGradient';
 import { buildGasReachFeatureState } from '../../utils/gasReach';
 import { buildMeasuredPathIds, buildMeasuredStationIds, MEASURE_TINT } from '../../utils/measurePath';
-import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
+import { computeImmovableStationKeys } from '../../utils/immovableStations';
+import { getBounds, getBoundsFromStationCoords, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
 import { getTileConfig } from '../../utils/tileConfig';
 import { useMapTools } from '../../hooks/useMapTools';
@@ -522,35 +523,14 @@ function MapCanvas() {
 
   // Compute immovable station keys for move_station and move_shot tools.
   // A station is immovable if it is zero-datum, or transitively reachable from a
-  // zero-datum station via merged_with and aligned closures_with links.
+  // zero-datum station via merged_with and aligned closures_with links. Reads the
+  // SoA directly (computeImmovableStationKeys) rather than the lazy Station[]
+  // proxy, which would rebuild + RETAIN the whole ~89k-object graph here (#mem).
   const immovableStationKeys = useMemo(() => {
     if (activeTool !== 'move_station' && activeTool !== 'move_shot') return new Set<string>();
-    const stationByKey = new Map(
-      stations.map(s => [`${s.station_ref.section_id}:${s.station_ref.station_index}`, s])
-    );
-    const immovable = new Set<string>();
-    const queue: string[] = [];
-    for (const s of stations) {
-      if (s.is_zero_datum) {
-        queue.push(`${s.station_ref.section_id}:${s.station_ref.station_index}`);
-      }
-    }
-    while (queue.length > 0) {
-      const key = queue.pop()!;
-      if (immovable.has(key)) continue;
-      immovable.add(key);
-      const st = stationByKey.get(key);
-      if (!st) continue;
-      for (const ref of st.merged_with) {
-        queue.push(`${ref.section_id}:${ref.station_index}`);
-      }
-      for (const cr of st.closures_with ?? []) {
-        if (!alignedClosureIds.has(cr.closure_id)) continue;
-        queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
-      }
-    }
-    return immovable;
-  }, [activeTool, stations, alignedClosureIds]);
+    if (!surveyData) return new Set<string>();
+    return computeImmovableStationKeys(surveyData, alignedClosureIds);
+  }, [activeTool, surveyData, alignedClosureIds]);
 
   useEffect(() => {
     if (!logMapInteractions) return;
@@ -1668,9 +1648,10 @@ function MapCanvas() {
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
-    // Calculate initial center from stations (in meters)
-    const coords = stations.map((s) => s.coordinates);
-    const bounds = getBounds(coords);
+    // Calculate initial center from stations (in meters). Read the SoA coord
+    // buffer directly so load does not materialize the whole ~89k Station graph
+    // through the lazy proxy just to size the initial view (#mem).
+    const bounds = getBoundsFromStationCoords(surveyData?.stationCoords ?? new Float64Array(0));
     const centerX = (bounds.minX + bounds.maxX) / 2;
     const centerY = (bounds.minY + bounds.maxY) / 2;
     // Transform to map coordinates
