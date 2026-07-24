@@ -116,7 +116,6 @@ export default class SurveyLayer {
   // Stable ids kept only as z-order fallback anchors for the custom measure-path
   // layer's beforeId (the stock layers themselves are gone).
   private stationsLayerId = 'survey-stations';
-  private measurePathLayerId = 'survey-measure-path';
   private loopClosuresLayerId = 'survey-loop-closures';
   private ghostShotsLayerId = 'survey-ghost-shots';
   private ghostStationsLayerId = 'survey-ghost-stations';
@@ -219,10 +218,6 @@ export default class SurveyLayer {
   private updateScheduled = false;
   /** Coalesced-call counter, surfaced to memory probe for instrumentation. */
   private coalescedUpdateCallsSinceLastFlush = 0;
-  /** Monotonic id incremented on every update() flush start. Async worker
-   *  builds compare against this on resolve to bail if a newer update
-   *  invalidated them mid-flight. */
-  private lastUpdateToken = 0;
   // Unified drag-preview source (#mem drag fixes): ONE GeoJSON source holding
   // every moving GEOMETRY feature for the active drag — stations (points), shots
   // (lines), loop-closure indicator lines — rebuilt from captured originals each
@@ -1823,11 +1818,13 @@ export default class SurveyLayer {
       return;
     }
     this.measurePath.setPath(this.buildMeasurePathRenderData(segments, points), [
-      // Beneath the hover/selection tint (which is above the stock tint), with
-      // stable fallbacks for stage 2b when the stock layer is gone.
+      // ABOVE the custom survey geometry (which anchors before survey-interact-shots)
+      // so the measured shot lines tint OVER the base geometry rather than being
+      // covered by it; still below the interact hover/selection overlay. Added
+      // after the geometry layer, so `before survey-interact-shots` lands it just
+      // above the geometry. Fallback keeps it placed if that layer is absent.
+      this.interactShotsLayerId,
       this.interactShotsMeasuredLayerId,
-      this.stationsLayerId,
-      this.measurePathLayerId,
     ]);
   }
 
@@ -3225,14 +3222,6 @@ export default class SurveyLayer {
     // Cancel any pending coalesced flush so we don't re-run with stale args.
     this.updateScheduled = false;
     this.pendingUpdateArgs = null;
-    // Bump the token so any in-flight `flushUpdateViaWorker` (started by
-    // an earlier update before this sync flush kicked in) discards its
-    // result via the `myToken !== this.lastUpdateToken` guard.  Without
-    // this the older worker could land its stale features on top of the
-    // freshly-applied sync data — most visibly during a drag commit
-    // that arrives between the user's last zoom rebuild and the worker
-    // finishing.
-    this.lastUpdateToken += 1;
     this.flushUpdate(
       sections,
       stations,

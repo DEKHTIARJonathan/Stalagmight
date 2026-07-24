@@ -8,14 +8,12 @@
  * visibility — lives here.
  *
  * The custom layer is the SOLE survey renderer: `sync()` always builds/enables
- * it (no gate), adds it before `survey-shots` (above basemap/ghosts, below
- * labels/overlays), and hides the stock shots / shot-gradient / stations layers.
- * Labels, interact overlay, drag-preview stay stock. There is NO stock fallback:
- * an unrecoverable GL failure (no WebGL2, program link failure, or a render-time
- * `gl.getError` self-disable) removes the dead layer and calls `onFatal(reason)`
- * so the app can surface an error state — it does NOT restore stock. The
- * `setStockVisibility` restore path survives only for the non-fatal `destroy()`
- * teardown (a later stage deletes the stock layers entirely).
+ * it (no gate), adding it before `survey-interact-shots` (above basemap/ghosts,
+ * below the interact hover/selection overlay + labels). The stock survey renderer
+ * has been deleted, so there is NO fallback: an unrecoverable GL failure (no
+ * WebGL2, program link failure, or a render-time `gl.getError` self-disable)
+ * removes the dead layer and calls `onFatal(reason)` so the app surfaces an error
+ * state (a toast) rather than falling back to stock.
  *
  * Hit-testing does NOT depend on the stock layers: candidate-section discovery
  * runs against the SoA geometry index (SurveyLayer.hitCandidateSections ->
