@@ -72,6 +72,7 @@ import { getErrorColor } from '../../utils/colors';
 import { trackNav } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
+import { watchDevicePixelRatio } from '../../utils/dprWatcher';
 import { clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
 import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/mapErrors';
 import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
@@ -364,6 +365,8 @@ export default class SurveyLayer {
   // the stock feature-state tint this stage (identical pixels), so stage 2b can
   // delete the stock path.
   private measurePath: MeasurePathController | null = null;
+  /** Dispose for the device-pixel-ratio watcher (custom layers bake dpr). */
+  private dprWatcherDispose: (() => void) | undefined;
 
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
@@ -397,6 +400,20 @@ export default class SurveyLayer {
     this.measurePath = new MeasurePathController(map, {
       onFatal: (reason) => this.handleRenderFatal(reason),
     });
+    // The custom layers bake devicePixelRatio into their device-pixel sizes, so a
+    // DPR change (window dragged to a different-scale monitor) must rebuild them.
+    this.dprWatcherDispose = watchDevicePixelRatio(() => this.handleDprChange());
+  }
+
+  /**
+   * A device-pixel-ratio change invalidated the baked device-pixel sizes of the
+   * custom geometry, label, and measure-path layers; rebuild them from the store
+   * (which re-reads the live dpr). The interact overlay is stock MapLibre and
+   * scales with dpr on its own, so it needs no rebuild here.
+   */
+  private handleDprChange(): void {
+    this.resyncCustomRenderFromStore(); // geometry + labels
+    this.syncCustomMeasurePath(); // measure-path tint
   }
 
   setCallbacks(callbacks: SurveyLayerCallbacks) {
@@ -3456,6 +3473,8 @@ export default class SurveyLayer {
     // Remove the dedicated custom measure-path layer (#26, stage 2a).
     this.measurePath?.destroy();
     this.measurePath = null;
+    this.dprWatcherDispose?.();
+    this.dprWatcherDispose = undefined;
 
     // Drop the module-level VT registry entries + zero the memory-probe counts.
     this.releaseVtRegistry();

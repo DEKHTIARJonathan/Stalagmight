@@ -3,6 +3,7 @@ import type maplibregl from 'maplibre-gl';
 import { GlobalCustomController } from './customRender/globalController';
 import { generateSystemColor, type SystemGeometry } from './systemColor';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
+import { watchDevicePixelRatio } from '../../utils/dprWatcher';
 import { useUIStore } from '../../store/uiStore';
 import { hasLiveStyle } from '../Map/mapUtils';
 import i18n from '../../i18n';
@@ -94,6 +95,8 @@ export default class GlobalSurveyLayer {
   // draws the whole global survey from typed-array buffers and resolves
   // interaction hits from its geometry index.
   private customRender: GlobalCustomController | null = null;
+  /** Dispose for the device-pixel-ratio watcher (custom layer bakes dpr). */
+  private dprWatcherDispose: (() => void) | undefined;
 
   // Bound event handlers for cleanup
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
@@ -117,6 +120,9 @@ export default class GlobalSurveyLayer {
     this.customRender = new GlobalCustomController(map, undefined, {
       onFatal: (reason) => this.handleRenderFatal(reason),
     });
+    // Rebuild the custom global layer when the DPR changes (window moved to a
+    // different-scale monitor); it bakes dpr into device-pixel sizes.
+    this.dprWatcherDispose = watchDevicePixelRatio(() => this.customRender?.resync());
   }
 
   /**
@@ -535,6 +541,8 @@ export default class GlobalSurveyLayer {
     // (#customRender).
     this.customRender?.destroy();
     this.customRender = null;
+    this.dprWatcherDispose?.();
+    this.dprWatcherDispose = undefined;
 
     // Clean up touch long-press timer
     if (this.touchLongPressTimer) {

@@ -133,6 +133,12 @@ export class GlobalCustomController {
     else this.layer?.update(data);
   }
 
+  /** Rebuild from the held systems — e.g. after a device-pixel-ratio change, which
+   *  invalidates the baked device-pixel sizes. No-op unless already drawing. */
+  resync(): void {
+    if (this.active) this.sync(this.systems);
+  }
+
   private buildData(): GlobalCustomRenderData {
     const build = buildGlobalBuffers(this.systems, {
       searchTerm: this.searchTerm,
