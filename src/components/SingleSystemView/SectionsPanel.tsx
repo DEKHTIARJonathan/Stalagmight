@@ -47,14 +47,17 @@ const SECTION_ROW_ESTIMATED_HEIGHT = 56;
  * and keyboard users could not Tab into the list at its current scroll position.
  * Prefer the selected row when it is inside the mounted window, else the first
  * (lowest-index) mounted row. A focused row keeps the Tab stop via its own
- * `isFocused` path, so this returns `-1` whenever something is focused.
+ * `isFocused` path, so this returns `-1` when a MOUNTED row is focused. But a
+ * focused index whose row scrolled out of the virtual window (unmounting it,
+ * which does not reliably fire `blur`) must NOT suppress the default Tab stop —
+ * otherwise no mounted row is tabbable and keyboard users are trapped out.
  */
 export function rovingDefaultTabIndex(
   focusedIndex: number,
   mountedIndices: readonly number[],
   selectedIndex: number,
 ): number {
-  if (focusedIndex !== -1) return -1;
+  if (focusedIndex !== -1 && mountedIndices.includes(focusedIndex)) return -1;
   if (mountedIndices.length === 0) return -1;
   if (selectedIndex !== -1 && mountedIndices.includes(selectedIndex)) return selectedIndex;
   let first = mountedIndices[0]!;

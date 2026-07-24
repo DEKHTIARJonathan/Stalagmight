@@ -5048,6 +5048,44 @@ fn test_webkit_memory_normalize_resets_inverted_ladder_to_exact_defaults() {
 }
 
 #[test]
+fn test_webkit_memory_normalize_resets_kill_below_strict() {
+    // A nonzero kill threshold below strict would terminate the web process
+    // before the pressure ladder runs; normalize() fails it safe back to 0
+    // (never kill), while a valid kill >= strict and the 0 sentinel are kept.
+    let mut below = crate::config::WebkitMemoryConfig {
+        conservative_threshold: 0.25,
+        strict_threshold: 0.4,
+        kill_threshold: 0.2,
+        ..Default::default()
+    };
+    below.normalize();
+    assert_eq!(
+        below.kill_threshold, 0.0,
+        "kill below strict must fail safe to 0"
+    );
+
+    let mut valid = crate::config::WebkitMemoryConfig {
+        conservative_threshold: 0.25,
+        strict_threshold: 0.4,
+        kill_threshold: 0.9,
+        ..Default::default()
+    };
+    valid.normalize();
+    assert_eq!(valid.kill_threshold, 0.9, "a kill >= strict is preserved");
+
+    let mut disabled = crate::config::WebkitMemoryConfig {
+        strict_threshold: 0.4,
+        kill_threshold: 0.0,
+        ..Default::default()
+    };
+    disabled.normalize();
+    assert_eq!(
+        disabled.kill_threshold, 0.0,
+        "the 0 never-kill sentinel is preserved"
+    );
+}
+
+#[test]
 fn test_display_settings_cache() {
     let state = AppState::new().unwrap();
 

@@ -30,9 +30,17 @@ describe('rovingDefaultTabIndex', () => {
     expect(rovingDefaultTabIndex(-1, mounted, 2)).toBe(5);
   });
 
-  it('yields no default owner while a row is focused (the focused row keeps the stop)', () => {
+  it('yields no default owner while a MOUNTED row is focused (the focused row keeps the stop)', () => {
     const mounted = [5, 6, 7, 8, 9];
     expect(rovingDefaultTabIndex(6, mounted, 7)).toBe(-1);
+  });
+
+  it('regression: a focused row scrolled out of the window still exposes a default stop', () => {
+    // focusedIndex 3 but the window is 5-9 (row 3 unmounted, blur not fired):
+    // must NOT return -1, or every mounted row is tabIndex=-1 and Tab is trapped.
+    const mounted = [5, 6, 7, 8, 9];
+    expect(rovingDefaultTabIndex(3, mounted, -1)).toBe(5);
+    expect(rovingDefaultTabIndex(3, mounted, 7)).toBe(7);
   });
 
   it('yields no owner when nothing is mounted', () => {

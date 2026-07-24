@@ -257,16 +257,20 @@ void main() {
   }
   vec4 c = u_matrix * vec4(a_center, 0.0, 1.0);
   // Section emphasis level carried in a_highlight: 2 = hover, 1 = selection,
-  // 0 = none. Enlarge highlighted stations by the CONFIGURED radius ratios
+  // 0 = none. Enlarge highlighted stations to the CONFIGURED radius ratios
   // (default hover_radius/radius = 6/4 = 1.5x, selection_radius/radius = 5/4 =
   // 1.25x), passed as uniforms so map.station.hover_radius / selection_radius
-  // config drive them (C2). Folded into the size multiplier so radius + stroke grow
-  // together; the fragment recomputes disc/stroke radii from v_size_mul, so no
-  // separate fragment change is needed.
-  float hlMul = (a_highlight > 1.5) ? u_hover_size_mul : ((a_highlight > 0.5) ? u_select_size_mul : 1.0);
-  float sizeMul = a_size_mul * hlMul;
-  // Zero-datum stations render 2x (a_size_mul), so the quad extent must grow to
-  // fit; the fragment recomputes disc/stroke radii with the same multiplier.
+  // config drive them (C2). Highlight takes PRECEDENCE over zero-datum sizing
+  // (a_size_mul = 2): a hovered/selected zero-datum station uses the highlight
+  // size directly, matching the stock precedence (hover 6px / selection 5px, and
+  // the 2x = 8px only when unhighlighted) — NOT a_size_mul * highlight, which
+  // would balloon the entrance station to 12/10px. The fragment recomputes
+  // disc/stroke radii from v_size_mul, so no separate fragment change is needed.
+  float sizeMul = (a_highlight > 1.5) ? u_hover_size_mul
+                : (a_highlight > 0.5) ? u_select_size_mul
+                : a_size_mul;
+  // Zero-datum stations render 2x (a_size_mul) when unhighlighted, so the quad
+  // extent must grow to fit; the fragment recomputes radii with the same mul.
   float ext = (u_radius + u_stroke_width) * sizeMul + u_aa;
   vec2 offsetPx = a_corner * ext;
   vec2 offsetClip = offsetPx / u_viewport * 2.0 * c.w;

@@ -90,6 +90,13 @@ impl WebkitMemoryConfig {
             self.conservative_threshold = default_webkit_mem_conservative();
             self.strict_threshold = default_webkit_mem_strict();
         }
+        // A nonzero kill threshold BELOW strict would terminate the web process
+        // before the pressure ladder ever runs (killing the UI at a fraction of
+        // the limit instead of recovering memory). Zero stays the documented
+        // "never kill" sentinel; a misordered nonzero value fails safe back to 0.
+        if self.kill_threshold != 0.0 && self.kill_threshold < self.strict_threshold {
+            self.kill_threshold = 0.0;
+        }
     }
 }
 
