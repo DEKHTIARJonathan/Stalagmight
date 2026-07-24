@@ -94,6 +94,12 @@ fn escape_xml_text(s: &str) -> String {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&apos;"),
+            // Drop XML-1.0-illegal C0 control chars (0x00-0x08, 0x0B, 0x0C,
+            // 0x0E-0x1F): XML 1.0 cannot represent them at all (not even as
+            // numeric char refs), so a raw control byte in user free-text makes
+            // resvg/svg2pdf reject the whole document (and corrupts a raw .svg).
+            // Tab (0x09), LF (0x0A), and CR (0x0D) are legal and kept.
+            c if (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r' => {}
             _ => out.push(c),
         }
     }
@@ -4111,6 +4117,40 @@ mod tests {
             "shot comment must be XML-escaped: {svg}"
         );
         assert!(parses(&svg), "shot-comment SVG must parse: {svg}");
+
+        // Control chars: XML-1.0-illegal C0 bytes (NUL, 0x01, VT, FF) in user
+        // free-text must be dropped so the document still parses; the legal tab
+        // (0x09) and the surrounding letters survive.
+        let mut p = Project::new("Test".to_string(), None);
+        p.add_section(SectionData {
+            name: Some("Trunk".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![ShotData {
+                comment: Some("a\u{0}b\u{1}c\u{0B}\u{0C}\td".to_string()),
+                ..make_shot(10.0, 90.0, false)
+            }],
+            ..Default::default()
+        });
+        let svg = generate_svg_string(
+            &p,
+            &ExportImageOptions {
+                show_shot_comments: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains('\u{0}')
+                && !svg.contains('\u{1}')
+                && !svg.contains('\u{0B}')
+                && !svg.contains('\u{0C}'),
+            "XML-illegal control chars must be dropped: {svg:?}"
+        );
+        assert!(
+            svg.contains("abc\td"),
+            "legal chars (incl. tab) must survive: {svg:?}"
+        );
+        assert!(parses(&svg), "control-char SVG must parse: {svg}");
     }
 
     #[test]

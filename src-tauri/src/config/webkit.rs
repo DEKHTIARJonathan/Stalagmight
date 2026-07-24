@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Backend-only: the `Config` field is `#[ts(skip)]`, so this never reaches the
 /// frontend. Tune it in `config.toml` or via the environment variables directly.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WebkitMemoryConfig {
     /// Master switch. When `false`, no pressure settings are applied and wry
     /// behaves exactly like upstream.

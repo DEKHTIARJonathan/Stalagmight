@@ -32,9 +32,13 @@ pub struct Config {
     /// keeps it out of the generated frontend types, and `#[serde(skip_serializing)]`
     /// keeps it out of both `get_config`'s payload and the generated
     /// `defaultConfig.ts` (which is typed as the frontend `Config`, so an emitted
-    /// `webkit_memory` block would fail `tsc`). Loaded from `config.toml` only;
-    /// `AppState::update_config` preserves the in-memory value so saving any
-    /// setting can never reset a hand-tuned knob to defaults.
+    /// `webkit_memory` block would fail `tsc`). Because `skip_serializing` also
+    /// drops it from `toml::to_string_pretty`, saving would otherwise wipe the
+    /// `[webkit_memory]` section from disk; `Config::save_to_path` therefore
+    /// re-appends the table (when non-default) after serializing, so a hand-tuned
+    /// knob in `config.toml` survives a save. The re-appended value is the one
+    /// `AppState::update_config` preserves in memory across the session, so saving
+    /// any setting can never reset the knob to defaults.
     #[serde(default, skip_serializing)]
     #[ts(skip)]
     pub webkit_memory: WebkitMemoryConfig,
@@ -1766,7 +1770,30 @@ impl Config {
             std::fs::create_dir_all(parent).context("Failed to create config directory")?;
         }
 
-        let contents = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        let mut contents = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        // `webkit_memory` is `#[serde(skip_serializing)]` (backend-only, kept out
+        // of the frontend types and payload), so `to_string_pretty` above omits
+        // it. Re-append it as a top-level `[webkit_memory]` table whenever it
+        // differs from the default so a hand-tuned knob in `config.toml` survives
+        // a save (which fires on every project open/create/save). A top-level TOML
+        // table appended at the end is order-independent and valid; the value is
+        // exactly what was loaded from disk (preserved across the session by
+        // `AppState::update_config`), so this round-trips it faithfully.
+        if self.webkit_memory != WebkitMemoryConfig::default() {
+            #[derive(serde::Serialize)]
+            struct WebkitMemoryDoc<'a> {
+                webkit_memory: &'a WebkitMemoryConfig,
+            }
+            let section = toml::to_string_pretty(&WebkitMemoryDoc {
+                webkit_memory: &self.webkit_memory,
+            })
+            .context("Failed to serialize webkit_memory config")?;
+            if !contents.ends_with('\n') {
+                contents.push('\n');
+            }
+            contents.push('\n');
+            contents.push_str(&section);
+        }
         std::fs::write(path, contents).context("Failed to write config file")?;
         tracing::info!(config_path = ?path, "Saved config to file");
         Ok(())

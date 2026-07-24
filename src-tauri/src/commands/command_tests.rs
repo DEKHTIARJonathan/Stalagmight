@@ -2227,6 +2227,32 @@ fn test_export_image_fails_when_directory_missing() {
 }
 
 #[test]
+fn test_export_image_refuses_to_overwrite_open_project_file() {
+    // Exporting an image over the open project's own `.stalx` would corrupt the
+    // live database (image export does a raw file write). The guard must reject
+    // that path before any write, leaving the project file intact.
+    let app = app_with_state();
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let dir = TempDir::new().unwrap();
+    let saved_path = save_project_to_temp(&app, &dir);
+
+    let mut options = crate::export::ExportImageOptions::default();
+    options.format = crate::export::ImageFormat::Svg;
+    let result = export::export_image_impl(state(&app).inner(), saved_path.clone(), options);
+    assert!(
+        result.is_err(),
+        "must refuse to export an image over the open project file"
+    );
+    assert!(
+        result.unwrap_err().contains("open project"),
+        "error must explain the clobber guard"
+    );
+    // The project database on disk is untouched (still present, not an SVG).
+    assert!(saved_path.exists());
+}
+
+#[test]
 fn test_export_image_rejects_zero_dpi() {
     let app = app_with_state();
     create_project(&app);

@@ -5023,6 +5023,31 @@ fn test_webkit_memory_normalize_clamps_corrupt_thresholds() {
 }
 
 #[test]
+fn test_webkit_memory_normalize_resets_inverted_ladder_to_exact_defaults() {
+    // A VALID-but-inverted pair (conservative > strict, both finite and in
+    // range) is meaningless, so normalize() resets BOTH to their exact defaults.
+    // test_webkit_memory_normalize_clamps_corrupt_thresholds cannot reach this
+    // branch: its NaN / out-of-range inputs are clamped to defaults (already
+    // monotonic) before the `conservative > strict` check runs.
+    let mut cfg = crate::config::WebkitMemoryConfig {
+        conservative_threshold: 0.6,
+        strict_threshold: 0.3,
+        ..Default::default()
+    };
+    cfg.normalize();
+    assert_eq!(
+        cfg.conservative_threshold,
+        crate::config::default_webkit_mem_conservative(),
+        "inverted ladder must reset conservative_threshold to the exact default"
+    );
+    assert_eq!(
+        cfg.strict_threshold,
+        crate::config::default_webkit_mem_strict(),
+        "inverted ladder must reset strict_threshold to the exact default"
+    );
+}
+
+#[test]
 fn test_display_settings_cache() {
     let state = AppState::new().unwrap();
 
@@ -6236,6 +6261,193 @@ fn test_execute_update_shot_command() {
     assert_eq!(shot.up, Some(3.0));
     assert_eq!(shot.down, Some(0.5));
     assert_eq!(shot.comment, Some("Narrow squeeze".to_string()));
+}
+
+#[test]
+fn test_update_shot_rejects_non_finite_nested_field_atomically() {
+    // ShotUpdates::all_finite must reject a non-finite value hidden in a nested
+    // `Option<Option<f64>>` field (pitch_in), not just the flat `length` case
+    // covered elsewhere. The whole update is rejected atomically: a valid field
+    // set alongside the poisoned one (azimuth_in) must NOT be partially applied.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "T".to_string(),
+        location: None,
+    });
+    let create = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![ShotData {
+            azimuth_in: 10.0,
+            length: 5.0,
+            ..Default::default()
+        }],
+    });
+    let section_id = create.section_id.unwrap();
+    let shot_id = state.get_project_state().unwrap().sections[0].shots[0].id;
+
+    let result = state.execute(Command::UpdateShot {
+        section_id,
+        shot_id,
+        updates: ShotUpdates {
+            azimuth_in: Some(45.0),         // valid -- must NOT be applied
+            pitch_in: Some(Some(f64::NAN)), // poisoned nested field
+            ..Default::default()
+        },
+    });
+    assert!(
+        !result.success,
+        "a non-finite nested field must be rejected"
+    );
+    assert!(result
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("non-finite"));
+
+    let after = state.get_project_state().unwrap();
+    let shot = &after.sections[0].shots[0];
+    assert_eq!(
+        shot.azimuth_in, 10.0,
+        "no partial apply: azimuth_in unchanged"
+    );
+    assert_eq!(shot.pitch_in, None, "poisoned pitch_in must not be written");
+}
+
+#[test]
+fn test_update_shot_rejects_positive_infinity() {
+    // Only NaN was covered before; +inf must be rejected too (`all_finite`
+    // checks `is_finite`, which is false for both).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "T".to_string(),
+        location: None,
+    });
+    let create = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![ShotData {
+            length: 5.0,
+            ..Default::default()
+        }],
+    });
+    let section_id = create.section_id.unwrap();
+    let shot_id = state.get_project_state().unwrap().sections[0].shots[0].id;
+
+    let result = state.execute(Command::UpdateShot {
+        section_id,
+        shot_id,
+        updates: ShotUpdates {
+            left: Some(Some(f64::INFINITY)),
+            ..Default::default()
+        },
+    });
+    assert!(!result.success, "+inf must be rejected");
+    assert!(result
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("non-finite"));
+    assert_eq!(
+        state.get_project_state().unwrap().sections[0].shots[0].left,
+        None,
+        "poisoned left must not be written"
+    );
+}
+
+#[test]
+fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
+    // Batch atomicity: two existing-shot updates where the SECOND carries a
+    // non-finite value (+inf). The import validates every update before any
+    // mutation, so the whole batch is rejected -- NEITHER shot may change, not
+    // even the first (valid) one.
+    use crate::models::ExistingShotUpdate;
+    use crate::models::ImportPlacement;
+    use crate::models::ImportSectionConfig;
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "T".to_string(),
+        location: None,
+    });
+
+    let seed = ImportSectionConfig {
+        section_index: 0,
+        name: Some("Existing".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(5.0), test_shot_data(6.0)],
+        station_comments: Vec::new(),
+        placement: ImportPlacement::Origin,
+    };
+    let r = state.execute_import_sections(vec![seed], Vec::new(), None, Vec::new(), Vec::new());
+    assert!(r.success, "seed import failed: {:?}", r.error);
+    let project = state.get_project_state().unwrap();
+    let section_id = project.sections[0].id;
+    let shot0 = project.sections[0].shots[0].id;
+    let shot1 = project.sections[0].shots[1].id;
+    let len0 = project.sections[0].shots[0].length;
+    let len1 = project.sections[0].shots[1].length;
+
+    let incoming = ImportSectionConfig {
+        section_index: 0,
+        name: Some("Incoming".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(3.0)],
+        station_comments: Vec::new(),
+        placement: ImportPlacement::Origin,
+    };
+    let r = state.execute_import_sections(
+        vec![incoming],
+        Vec::new(),
+        None,
+        Vec::new(),
+        vec![
+            ExistingShotUpdate {
+                section_id,
+                shot_id: shot0,
+                updates: ShotUpdates {
+                    length: Some(9.0), // valid
+                    ..Default::default()
+                },
+            },
+            ExistingShotUpdate {
+                section_id,
+                shot_id: shot1,
+                updates: ShotUpdates {
+                    length: Some(f64::INFINITY), // poisoned
+                    ..Default::default()
+                },
+            },
+        ],
+    );
+    assert!(
+        !r.success,
+        "a batch with one poisoned update must be rejected"
+    );
+
+    let after = state.get_project_state().unwrap();
+    assert_eq!(
+        after.sections[0].shots[0].length, len0,
+        "the first (valid) update must NOT apply when the batch is rejected"
+    );
+    assert_eq!(
+        after.sections[0].shots[1].length, len1,
+        "the second (poisoned) update must NOT apply"
+    );
 }
 
 #[test]
@@ -20464,6 +20676,90 @@ fn set_collab_enabled_for_path_noop_leaves_dirty_bit_and_saved_state_untouched()
     assert!(
         !load_collab().unwrap().enabled,
         "a real disable must persist"
+    );
+}
+
+#[test]
+fn set_collab_enabled_for_path_closed_file_persists_without_touching_open_project() {
+    // The by-path variant's CLOSED-file branch (target path is NOT the open
+    // project): it must still write collab_state to that file's DB, but must NOT
+    // gate on / dirty / in-memory-sync the open project. Both existing by-path
+    // tests exercise only the OPEN-project path, leaving this branch untested.
+    let temp = TempDir::new().unwrap();
+
+    // A separate, CLOSED project on disk (a different file entirely).
+    let closed_path = {
+        let other = AppState::new().unwrap();
+        other.execute(Command::CreateProject {
+            name: "Closed".to_string(),
+            location: None,
+        });
+        other.execute(Command::CreateSection {
+            name: Some("S".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#abcdef".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(1.0)],
+        });
+        let p = temp.path().join("closed.stalx");
+        assert!(other.save_project(Some(p.clone()), false).success);
+        p
+    };
+
+    // The OPEN project is a different file with no collaboration state.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Open".to_string(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("S".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#abcdef".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(1.0)],
+    });
+    let open_path = temp.path().join("open.stalx");
+    assert!(state.save_project(Some(open_path.clone()), false).success);
+    assert!(
+        state.get_project_state().unwrap().collab.is_none(),
+        "precondition: the open project has no collab state"
+    );
+
+    // Enable collaboration on the CLOSED file by path.
+    let result = state.set_collab_enabled_for_path(closed_path.clone(), true);
+    assert!(
+        result.success,
+        "closed-file enable must succeed: {:?}",
+        result.error
+    );
+
+    // The closed file's on-disk collab_state is enabled, sibling derived from stem.
+    let stored = Database::open_existing(&closed_path)
+        .unwrap()
+        .load_project()
+        .unwrap()
+        .collab
+        .expect("closed-file enable must persist collab_state to that file");
+    assert!(stored.enabled);
+    assert_eq!(stored.sibling_tml_relative, "closed.tml");
+
+    // The OPEN project is untouched: no in-memory collab was synced onto it...
+    assert!(
+        state.get_project_state().unwrap().collab.is_none(),
+        "a closed-file toggle must not touch the open project's in-memory collab"
+    );
+    // ...and its own file did not gain collab_state.
+    assert!(
+        Database::open_existing(&open_path)
+            .unwrap()
+            .load_project()
+            .unwrap()
+            .collab
+            .is_none(),
+        "a closed-file toggle must not write collab_state onto the open project's file"
     );
 }
 

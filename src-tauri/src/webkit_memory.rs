@@ -81,10 +81,16 @@ fn config_path() -> Option<std::path::PathBuf> {
 /// missing or unreadable) and export the corresponding environment variables so
 /// the vendored wry can install the pressure settings on the web process.
 ///
+/// Returns the loaded [`WebkitMemoryConfig`] so the caller can log a summary via
+/// [`log_applied_config`] AFTER the logger is initialized. This runs as the very
+/// first statement of `run()` — before `logging::init()` — so emitting a
+/// `tracing` event here would be dropped (no subscriber exists yet); it also
+/// must run there so the `set_var` calls below are genuinely single-threaded.
+///
 /// Any variable already present in the environment is left untouched, so a
 /// caller can force values (e.g. `STALAGMIGHT_WEBKIT_MEM_LIMIT_MB=0` to disable)
 /// without editing `config.toml`.
-pub(crate) fn apply_env_from_config() {
+pub(crate) fn apply_env_from_config() -> WebkitMemoryConfig {
     let cfg = config_path()
         .and_then(|p| Config::load_from_path(&p).ok())
         .unwrap_or_default()
@@ -94,11 +100,22 @@ pub(crate) fn apply_env_from_config() {
         if std::env::var_os(key).is_some() {
             continue;
         }
-        // Sound because this runs single-threaded at the top of `run()`, before
-        // the Tauri builder or any event loop / worker threads exist.
+        // Sound because this is the FIRST statement of `run()`, before
+        // `logging::init()` spawns the `tracing_appender` writer thread or the
+        // Tauri builder starts any event loop / worker thread. The process is
+        // genuinely single-threaded here, so there is no concurrent
+        // getenv/setenv (the POSIX data race this would otherwise be).
         std::env::set_var(key, &value);
     }
 
+    cfg
+}
+
+/// Emit the applied WebKit memory-pressure summary. Split out of
+/// [`apply_env_from_config`] (which runs before any logging subscriber exists)
+/// so the diagnostic is logged right AFTER `logging::init()` instead of being
+/// silently dropped.
+pub(crate) fn log_applied_config(cfg: &WebkitMemoryConfig) {
     tracing::info!(
         enabled = cfg.enabled,
         memory_limit_mb = cfg.memory_limit_mb,
