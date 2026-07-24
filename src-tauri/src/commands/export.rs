@@ -52,6 +52,20 @@ fn export_format_impl(
         "No project open".to_string()
     })?;
 
+    // Never clobber the open project `.stalx` (same guard as the image export):
+    // a text export named to the open DB would overwrite it with CSV/JSON/TML.
+    if let Some(open_path) = project.file_path.as_deref() {
+        if is_open_project_file(&path, open_path) {
+            tracing::warn!(
+                path = ?path,
+                open_project = ?open_path,
+                format = format,
+                "Refused to export over the open project file"
+            );
+            return Err("Cannot export over the open project file".to_string());
+        }
+    }
+
     tracing::info!(
         path = ?path,
         purpose = "export project for sharing",

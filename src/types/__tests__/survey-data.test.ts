@@ -324,6 +324,26 @@ describe('SurveyData', () => {
       expect(emptyLazy.length).toBe(0);
       expect([...emptyLazy]).toEqual([]);
     });
+
+    it('throws on writes/deletes instead of silently no-opping (read-only view)', () => {
+      const { sections, stations } = fixture();
+      const data = soaFromLegacy(sections, stations);
+      const lazy = lazyStationArray(data);
+      // A write against the empty backing target would silently vanish and
+      // desync from the SoA; the traps must surface it as a TypeError.
+      expect(() => {
+        (lazy as unknown as Station[])[0] = getStation(data, 0);
+      }).toThrow(TypeError);
+      expect(() => {
+        (lazy as unknown as Station[]).push(getStation(data, 0));
+      }).toThrow(TypeError);
+      expect(() => {
+        delete (lazy as unknown as Record<number, unknown>)[0];
+      }).toThrow(TypeError);
+      // Reads still work after the failed writes.
+      expect(lazy.length).toBe(data.stationCount);
+      expect(lazy[0]).toEqual(getStation(data, 0));
+    });
   });
 
   describe('findShotGlobalIndex', () => {

@@ -85,6 +85,18 @@ fn sanitize_hex_color(color: &str) -> &str {
 /// produces invalid XML that fails resvg/svg2pdf parsing on the PNG/PDF paths,
 /// or injects sibling markup into the raw `.svg` (which has no parse gate). The
 /// numeric labels (penetration, station index, shot data) need no escaping.
+/// A char that the XML 1.0 `Char` production forbids, so it cannot appear in an
+/// SVG (not even as a numeric char ref) and would make resvg/svg2pdf reject the
+/// whole document (and corrupt a raw `.svg`). For a Rust `char` this is exactly:
+/// the C0 controls `0x00-0x1F` except tab/LF/CR, plus `U+FFFE`/`U+FFFF` (both
+/// excluded from `[#xE000-#xFFFD]`). Surrogates and `> U+10FFFF` cannot occur in
+/// a `char`. Note the Unicode noncharacters `U+FDD0..=U+FDEF` are NOT dropped:
+/// XML 1.0 permits them (they sit inside `[#xE000-#xFFFD]`).
+fn is_xml_illegal_char(c: char) -> bool {
+    let u = c as u32;
+    (u < 0x20 && c != '\t' && c != '\n' && c != '\r') || u == 0xFFFE || u == 0xFFFF
+}
+
 fn escape_xml_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -94,12 +106,7 @@ fn escape_xml_text(s: &str) -> String {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&apos;"),
-            // Drop XML-1.0-illegal C0 control chars (0x00-0x08, 0x0B, 0x0C,
-            // 0x0E-0x1F): XML 1.0 cannot represent them at all (not even as
-            // numeric char refs), so a raw control byte in user free-text makes
-            // resvg/svg2pdf reject the whole document (and corrupts a raw .svg).
-            // Tab (0x09), LF (0x0A), and CR (0x0D) are legal and kept.
-            c if (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r' => {}
+            c if is_xml_illegal_char(c) => {}
             _ => out.push(c),
         }
     }
@@ -4118,15 +4125,16 @@ mod tests {
         );
         assert!(parses(&svg), "shot-comment SVG must parse: {svg}");
 
-        // Control chars: XML-1.0-illegal C0 bytes (NUL, 0x01, VT, FF) in user
-        // free-text must be dropped so the document still parses; the legal tab
-        // (0x09) and the surrounding letters survive.
+        // Control chars: XML-1.0-illegal C0 bytes (NUL, 0x01, VT, FF) plus the
+        // non-C0 illegals U+FFFE / U+FFFF in user free-text must be dropped so the
+        // document still parses; the legal tab (0x09), a Unicode noncharacter that
+        // XML 1.0 DOES permit (U+FDD0), and the surrounding letters survive.
         let mut p = Project::new("Test".to_string(), None);
         p.add_section(SectionData {
             name: Some("Trunk".to_string()),
             color: "#000000".to_string(),
             shots: vec![ShotData {
-                comment: Some("a\u{0}b\u{1}c\u{0B}\u{0C}\td".to_string()),
+                comment: Some("a\u{0}b\u{1}c\u{0B}\u{0C}\u{FFFE}\u{FFFF}\u{FDD0}\td".to_string()),
                 ..make_shot(10.0, 90.0, false)
             }],
             ..Default::default()
@@ -4143,12 +4151,14 @@ mod tests {
             !svg.contains('\u{0}')
                 && !svg.contains('\u{1}')
                 && !svg.contains('\u{0B}')
-                && !svg.contains('\u{0C}'),
-            "XML-illegal control chars must be dropped: {svg:?}"
+                && !svg.contains('\u{0C}')
+                && !svg.contains('\u{FFFE}')
+                && !svg.contains('\u{FFFF}'),
+            "XML-illegal chars (C0 + U+FFFE/U+FFFF) must be dropped: {svg:?}"
         );
         assert!(
-            svg.contains("abc\td"),
-            "legal chars (incl. tab) must survive: {svg:?}"
+            svg.contains("abc\u{FDD0}\td"),
+            "legal chars (tab + the XML-permitted noncharacter U+FDD0) must survive: {svg:?}"
         );
         assert!(parses(&svg), "control-char SVG must parse: {svg}");
     }

@@ -4881,17 +4881,26 @@ export default class SurveyLayer {
     }
   }
 
-  /** Re-publish every source from cached geometry once no full build is already
-   *  in flight / scheduled (a flush calls syncCustomRender first, so its own
-   *  applyFeatureChunk re-consults the now-cleared suppression). Shared by both
-   *  custom-render restore paths (geometry + labels).
+  /** Re-publish every source from cached geometry, but only when no full build
+   *  is already scheduled / in flight. Shared by both custom-render restore paths
+   *  (geometry + labels).
+   *
+   *  The bail condition: a flush STARTED AFTER suppression cleared re-consults it
+   *  (syncCustomRender runs first, then applyFeatureChunk sees the cleared flag),
+   *  so a pending/scheduled update will republish the dropped bulk groups for us.
+   *  CAVEAT: a full build that was ALREADY IN FLIGHT when we bail captured its
+   *  suppressed group set before the clear, so it will NOT republish those groups
+   *  when it lands — the survey stays blank until the next real update(). That is
+   *  a rare, pre-existing edge (a GL self-disable coinciding with an in-flight
+   *  large-project build); not introduced here, and not worth forcing a redundant
+   *  synchronous rebuild for. TODO(#follow-up): schedule a token-bumping republish
+   *  once the in-flight build settles.
    *
    *  `sync`: republish in the SAME frame (via flushUpdateSync) instead of the
-   *  async worker path. The custom-render disable path passes this so the stock
-   *  geometry is back before the controller removes the custom layer, leaving no
-   *  blank frame. Disable is rare (gate opt-out / fail-safe self-disable), so the
-   *  one-time synchronous build is an acceptable cost there. When a build is
-   *  already in flight the async one will republish, so this is a no-op then. */
+   *  async worker path. The disable path passes this so the stock geometry is
+   *  back before the controller removes the custom layer, leaving no blank frame.
+   *  Disable is rare (gate opt-out / fail-safe self-disable), so the one-time
+   *  synchronous build is an acceptable cost. */
   private rebuildFromCacheIfIdle(sync = false): void {
     // Don't republish stale cached geometry when the store has no active project
     // geometry right now (mid-close, or a project switch where the incoming
@@ -4902,6 +4911,11 @@ export default class SurveyLayer {
     // theme / granularity callers use rebuildFromCache directly (store is live
     // there). When the store IS live, the flush prefers it over the cache, so
     // the passed cached args can never be the stale ones that actually render.
+    // INVARIANT: a null here means "no project open", never "open project with
+    // renderable geometry": the loader types result.surveyData as non-null
+    // (loadProjectBinary), and projectStore only nulls surveyData on init/close
+    // (:513/:1153) - a loaded project always has it (real / empty / legacy-built).
+    // So this bail can never wrongly skip a republish for an open project.
     if (selectActiveSurveyData(useProjectStore.getState(), useUIStore.getState().geometryMode) === null) {
       return;
     }
