@@ -26,6 +26,7 @@ import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tilePr
 import { getTileConfig } from '../../utils/tileConfig';
 import { useMapTools } from '../../hooks/useMapTools';
 import SurveyLayer from './SurveyLayer';
+import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
 import { DepthLegend } from './DepthLegend';
@@ -1007,12 +1008,8 @@ function MapCanvas() {
     onHiddenShotClick: () => {
       showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden');
     },
-    onRenderFatal: () => {
-      // The custom WebGL renderer is the sole survey renderer with no stock
-      // fallback; on an unrecoverable GL failure the survey area goes blank.
-      // The reason is console.error'd in SurveyLayer.handleRenderFatal.
-      showToast('Survey rendering unavailable (WebGL2/GPU)', 'render-fatal');
-    },
+    // No stock fallback: surface a subsystem-specific toast (renderFatalMessage).
+    onRenderFatal: (reason: string) => showToast(renderFatalMessage(reason), 'render-fatal'),
   }), [baseToolCallbacks, showToast]);
 
   // Box select handlers

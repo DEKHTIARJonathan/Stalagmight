@@ -160,10 +160,12 @@ describe('MeasurePathController', () => {
     expect(ctrl.isActive()).toBe(false);
   });
 
-  it('removes a layer that disabled itself on add (stock tint remains)', () => {
+  it('removes a layer that disabled itself on add and surfaces onFatal (no stock fallback)', () => {
     const { map, calls } = makeFakeMap([]);
+    const fatals: string[] = [];
     const ctrl = new MeasurePathController(map, {
       makeLayer: (id, d, cb) => new FakeLayer(id, d, cb, true, 'program-link-failed'),
+      onFatal: (r) => fatals.push(r),
     });
 
     ctrl.setPath(renderData(1, 1), []);
@@ -171,6 +173,26 @@ describe('MeasurePathController', () => {
     expect(ctrl.isActive()).toBe(false);
     expect(calls.removed).toContain('survey-measure-path-custom');
     expect(warn).toHaveBeenCalled();
+    // Stock tint is gone, so the init failure must reach the app (subsystem-tagged).
+    expect(fatals).toEqual(['measure-path: program-link-failed']);
+  });
+
+  it('surfaces onFatal on a deferred mid-render self-disable, at most once', () => {
+    const { map } = makeFakeMap([]);
+    const scheduled: (() => void)[] = [];
+    const fatals: string[] = [];
+    let layer: FakeLayer | null = null;
+    const ctrl = new MeasurePathController(map, {
+      makeLayer: (id, d, cb) => (layer = new FakeLayer(id, d, cb)),
+      scheduleRestore: (fn) => scheduled.push(fn),
+      onFatal: (r) => fatals.push(r),
+    });
+
+    ctrl.setPath(renderData(1, 1), []);
+    layer!.onSelfDisable('gl-error-0x502');
+    expect(fatals).toEqual([]); // deferred, not fired inside the render pass
+    scheduled[0]!();
+    expect(fatals).toEqual(['measure-path: gl-error-0x502']);
   });
 
   it('defers removal on a mid-render self-disable, generation-guarded', () => {

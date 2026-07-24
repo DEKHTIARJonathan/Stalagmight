@@ -1,17 +1,17 @@
 /**
  * MapLibre `CustomLayerInterface` for the dedicated MEASURE-PATH tint (#26,
- * stage 2a of #customRender stock deletion). A small sibling of
- * `surveyCustomLayer.ts` / `surveyGhostLayer.ts` that draws the measured
- * along-cave-line path directly from typed-array buffers: the measured shots as
- * round-cap tint lines, the measured stations as filled tint discs, both in ONE
- * tint carried as a `u_color` uniform.
+ * #customRender stock deletion). A small sibling of `surveyCustomLayer.ts` /
+ * `surveyGhostLayer.ts` that draws the measured along-cave-line path directly
+ * from typed-array buffers: the measured shots as round-cap tint lines, the
+ * measured stations as filled tint discs, both in ONE tint carried as a
+ * `u_color` uniform.
  *
  * Same GL discipline as its siblings (WebGL2 / GLSL ES 3.00, premultiplied
  * blend, first-frames `getError()` self-disable). It fails on its own: a
  * compile/link failure at add, or a GL error mid-render, self-disables JUST this
- * layer via `onSelfDisable`. In stage 2a the stock `survey-measure-path` layer
- * still runs in parallel, so a self-disable degrades gracefully to the stock
- * tint; the controller simply drops the dead layer.
+ * layer via `onSelfDisable`. There is no stock `survey-measure-path` fallback
+ * anymore, so the controller drops the dead layer and surfaces the failure
+ * (`onFatal`) rather than degrading silently.
  */
 import type { CustomLayerInterface, CustomRenderMethodInput, Map as MaplibreMap } from 'maplibre-gl';
 import type { MeasureLineBuffers, MeasureCircleBuffers } from './measurePathTessellate';

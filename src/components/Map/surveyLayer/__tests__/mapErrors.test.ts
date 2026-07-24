@@ -4,7 +4,7 @@
  * `vectorTileRegistry.ts`.
  */
 import { describe, expect, it } from 'vitest';
-import { shouldSuppressMapError } from '../mapErrors';
+import { shouldSuppressMapError, renderFatalMessage } from '../mapErrors';
 
 describe('shouldSuppressMapError (boundary filter)', () => {
   const PREFIX = 'survey-data';
@@ -37,5 +37,24 @@ describe('shouldSuppressMapError (boundary filter)', () => {
     expect(shouldSuppressMapError({ error: 42, sourceId: 'survey-data-shots' }, PREFIX)).toBe(false);
     // A non-Error error object whose stringified message matches is still classified.
     expect(shouldSuppressMapError({ error: 'Should not be trying to reload', sourceId: 'survey-data-shots' }, PREFIX)).toBe(true);
+  });
+});
+
+describe('renderFatalMessage', () => {
+  it('maps a font failure to a labels-only message', () => {
+    expect(renderFatalMessage('label-font-unavailable')).toBe(
+      'Map labels unavailable (font failed to load)',
+    );
+  });
+  it('maps a measure-path fault to a ruler-tint message', () => {
+    expect(renderFatalMessage('measure-path: gl-error-0x502')).toBe(
+      'Measured-path highlight unavailable (GPU)',
+    );
+  });
+  it('falls back to the survey-wide GPU message for geometry / unknown reasons', () => {
+    expect(renderFatalMessage('gl-error-0x502')).toBe('Survey rendering unavailable (WebGL2/GPU)');
+    expect(renderFatalMessage('program-link-failed')).toBe(
+      'Survey rendering unavailable (WebGL2/GPU)',
+    );
   });
 });

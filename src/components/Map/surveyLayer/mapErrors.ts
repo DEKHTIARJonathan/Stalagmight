@@ -49,3 +49,18 @@ export function shouldSuppressMapError(
   if (typeof sourceId !== 'string' || !sourceId.startsWith(surveySourcePrefix)) return false;
   return isReloadRemovedError(evt?.error);
 }
+
+/**
+ * User-facing toast copy for a custom-renderer fatal (see
+ * `SurveyLayer.handleRenderFatal`). The `reason` carries the failed subsystem so
+ * the message stays specific: a font failure loses only the labels and a
+ * measure-path fault only the ruler tint, so neither should alarm about the
+ * whole survey being gone or the GPU. Anything else (geometry, or an
+ * unrecognized reason) is the survey-wide WebGL2/GPU message. There is no stock
+ * fallback behind any of these, so surfacing SOMETHING is the point.
+ */
+export function renderFatalMessage(reason: string): string {
+  if (reason.includes('font')) return 'Map labels unavailable (font failed to load)';
+  if (reason.includes('measure')) return 'Measured-path highlight unavailable (GPU)';
+  return 'Survey rendering unavailable (WebGL2/GPU)';
+}

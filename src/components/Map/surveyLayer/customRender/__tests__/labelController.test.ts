@@ -463,24 +463,32 @@ describe('SurveyLabelController font readiness', () => {
     expect(c.isActive()).toBe(true);
   });
 
-  it('keeps stock labels when the bundled font is unavailable (null rasterizer, never activates)', async () => {
-    // Fix: a failed font asset (or a WebView without FontFace / canvas) resolves
-    // ready=false -> null rasterizer. Building an inert atlas would suppress every
-    // stock label layer while drawing zero glyphs, blanking all labels. Instead
-    // the controller must stay inactive so the stock label path keeps publishing.
+  it('surfaces onFatal when the bundled font is unavailable (null rasterizer, never activates)', async () => {
+    // A failed font asset (or a WebView without FontFace / canvas) resolves
+    // ready=false -> null rasterizer. There is no stock label fallback anymore, so
+    // building an inert atlas would blank all labels silently. Instead the
+    // controller must stay inactive (sync() a no-op) AND surface the failure via
+    // onFatal so the app can toast, rather than dropping every label unnoticed.
     const changes: boolean[] = [];
+    const fatals: string[] = [];
     const { map } = makeFakeMap();
     const c = new SurveyLabelController(map, undefined, {
       ensureFont: () => Promise.resolve(false),
       makeRasterizer: () => null,
       onActiveChange: (a: boolean) => changes.push(a),
+      onFatal: (r: string) => fatals.push(r),
     });
     c.sync(makeParams());
     // Flush the ensureFont().then(...) microtask chain.
     await Promise.resolve();
     await Promise.resolve();
     expect(c.isActive()).toBe(false);
-    expect(changes).toEqual([]); // never fired onActiveChange(true)
+    expect(changes).toEqual([]); // never fired onActiveChange(true) -> no stock republish
+    expect(fatals).toEqual(['label-font-unavailable']);
+    // A later sync() stays a no-op (fatal latched); onFatal fires at most once.
+    c.sync(makeParams());
+    expect(c.isActive()).toBe(false);
+    expect(fatals).toEqual(['label-font-unavailable']);
   });
 });
 

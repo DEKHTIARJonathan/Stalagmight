@@ -394,7 +394,9 @@ export default class SurveyLayer {
       scheduleRestore: (fn) =>
         typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(fn, 0),
     });
-    this.measurePath = new MeasurePathController(map);
+    this.measurePath = new MeasurePathController(map, {
+      onFatal: (reason) => this.handleRenderFatal(reason),
+    });
   }
 
   setCallbacks(callbacks: SurveyLayerCallbacks) {
@@ -402,14 +404,15 @@ export default class SurveyLayer {
   }
 
   /**
-   * The custom WebGL renderer (geometry or labels) hit an unrecoverable GL
-   * failure and removed its dead layer. There is no stock fallback, so the
-   * survey area is now blank. Log ungated (diagnosable in a production build) and
-   * notify the app so it can surface a user-facing error. Read at call time, so a
-   * later setCallbacks still routes here.
+   * A custom WebGL renderer subsystem (geometry, labels, or the measure-path
+   * tint) hit an unrecoverable failure and removed its dead layer. There is no
+   * stock fallback, so the affected content is gone until reload. Log ungated
+   * (diagnosable in a production build) and notify the app so it can surface a
+   * user-facing error; the `reason` carries the subsystem so the toast can be
+   * specific. Read at call time, so a later setCallbacks still routes here.
    */
   private handleRenderFatal(reason: string): void {
-    console.error(`[customRender] survey rendering unavailable: ${reason}`);
+    console.error(`[customRender] rendering fault: ${reason}`);
     this.callbacks.onRenderFatal?.(reason);
   }
 

@@ -334,12 +334,15 @@ export class SurveyLabelController {
         if (this.destroyed) return; // torn down while the font was resolving.
         const rasterizer = ready && canRasterize() ? makeRast() : null;
         if (!rasterizer) {
-          // Font asset failed, or a WebView without FontFace / canvas. Building an
-          // INERT atlas here would enable the custom label layer and suppress every
-          // stock label layer while drawing ZERO glyphs -> the map loses all labels.
-          // Leave `this.atlas` null so sync() stays a no-op and the stock label
-          // path keeps publishing.
-          console.warn('[customRender] label font unavailable; keeping stock labels');
+          // Font asset failed, or a WebView without FontFace / canvas. There is no
+          // stock label fallback anymore, so no labels can be drawn this session.
+          // Building an INERT atlas would enable the layer while drawing ZERO
+          // glyphs, so leave `this.atlas` null (sync() stays a no-op), latch fatal
+          // so a later sync() bails, and SURFACE the failure — otherwise every
+          // section / station / shot / comment label silently disappears.
+          console.warn('[customRender] label font unavailable; labels disabled this session');
+          this.fatal = true;
+          this.emitFatal('label-font-unavailable');
           return;
         }
         this.atlas = new GlyphAtlas({ rasterizer });
