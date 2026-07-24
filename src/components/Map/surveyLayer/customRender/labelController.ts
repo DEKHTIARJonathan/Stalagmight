@@ -66,7 +66,7 @@ import {
 import { shapedExtent, ShapeCache, type ExtentEm, type ShapedLabel } from './labelLayout';
 import { computeRevealZooms, REVEAL_NEVER, EMIT_SLACK, ADAPTIVE_EMIT_MAX, emitSlackFor } from './labelReveal';
 import { labelColorContextFrom } from './labelText';
-import { LABEL_KIND, LABEL_KIND_COUNT, LABEL_FLAG, type LabelKind } from './labelShaders';
+import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';
 import { LABEL_KIND_STYLE } from './labelStyle';
 import { packCssColor, type Rgba8 } from './colorPack';
 import type { CustomDimState } from './controller';
@@ -81,16 +81,6 @@ import {
 import { resolveHaloColors, type LabelStyleInputs } from './labelStyle';
 import { SurveyCustomLabelLayer, type LabelRenderData } from './surveyCustomLabelLayer';
 import { CUSTOM_LABELS_SYNC_HOOK } from './labelsGate';
-
-/** The stock text layer each kind replaces — suppressed while the custom label
- *  layer is active, restored (to the kind's desired toggle) when it goes away. */
-const STOCK_LABEL_LAYER_BY_KIND: Record<LabelKind, string> = {
-  [LABEL_KIND.SHOT_LABEL]: 'survey-shot-labels',
-  [LABEL_KIND.STATION_LABEL]: 'survey-station-labels',
-  [LABEL_KIND.SECTION_NAME]: 'survey-labels',
-  [LABEL_KIND.STATION_COMMENT]: 'survey-station-comments',
-  [LABEL_KIND.SHOT_COMMENT]: 'survey-shot-comments',
-};
 
 /** Same off-the-render-stack deferral as the geometry controller. Used both for
  *  the fail-safe restore and to coalesce camera-settle viewport rebuilds. */
@@ -229,14 +219,6 @@ export class SurveyLabelController {
 
   private hookInstalled = false;
   private selfDisableScheduled = false;
-  /** True only for the duration of {@link teardown}. The teardown republishes the
-   *  stock label sources synchronously (SurveyLayer.onCustomLabelsActiveChange),
-   *  and that republish mirrors back into syncCustomRender -> {@link sync}. While
-   *  the gate is still ON (a fail-safe self-disable, not a gate opt-out) an
-   *  unguarded re-entrant sync() would see `!active` and RE-ENABLE the layer we
-   *  are removing (a flip-flop on a persistent GL fault). This flag makes that
-   *  re-entrant sync() a no-op. Mirrors the geometry controller's tearingDown. */
-  private tearingDown = false;
   private readonly scheduleRestore: (fn: () => void) => void;
   private readonly scheduleRebuild: (fn: () => void) => void;
   private readonly resync: (() => void) | undefined;
@@ -362,10 +344,6 @@ export class SurveyLabelController {
     // A destroyed (unmounted) or fatal (dead GL) controller never rebuilds.
     if (this.destroyed || this.fatal) return;
     this.pendingParams = params;
-    // Re-entrancy guard: teardown() drives a synchronous stock republish that
-    // mirrors back here. Record the latest params but do nothing else, or we
-    // would re-enable the layer mid-teardown (see {@link tearingDown}).
-    if (this.tearingDown) return;
     if (!this.atlas) return; // font not resolved yet — build on resolve.
     const data = this.build(params);
     if (!this.active) this.enable(data);
@@ -874,9 +852,8 @@ export class SurveyLabelController {
       return;
     }
     this.layer = layer;
-    this.setStockLabelVisibility('suppress');
     this.setActive(true);
-    console.info('[customRender] label layer enabled; stock label layers hidden', {
+    console.info('[customRender] label layer enabled', {
       glyphs: data.buffers.glyphCount,
     });
     this.map.triggerRepaint();
@@ -884,27 +861,15 @@ export class SurveyLabelController {
 
   private disable(): void {
     this.teardown();
-    console.info('[customRender] label layer disabled; stock label layers restored');
+    console.info('[customRender] label layer disabled');
   }
 
-  /** Remove the custom label layer + restore the stock station-label visibility
-   *  to its desired toggle state. Safe when already inactive.
-   *
-   *  Ordering + guard mirror the geometry controller: restore stock visibility
-   *  and let setActive(false) drive the SYNCHRONOUS stock-label republish BEFORE
-   *  removing the custom layer (so the labels never blank in the gap), with the
-   *  {@link tearingDown} guard stopping the republish's mirror-back from
-   *  re-enabling this layer while the gate is still on. */
+  /** Remove the custom label layer (the sole label renderer — no stock to
+   *  restore). Safe when already inactive. Non-fatal teardown only (destroy). */
   private teardown(): void {
-    this.tearingDown = true;
-    try {
-      this.setStockLabelVisibility('restore');
-      this.setActive(false);
-      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
-      this.layer = null;
-    } finally {
-      this.tearingDown = false;
-    }
+    this.setActive(false);
+    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    this.layer = null;
     this.map.triggerRepaint();
   }
 
@@ -956,23 +921,6 @@ export class SurveyLabelController {
     if (this.fatalEmitted) return;
     this.fatalEmitted = true;
     this.onFatal?.(reason);
-  }
-
-  /** `suppress` → hide all five stock text layers; `restore` → set each back to
-   *  its kind's DESIRED toggle state (not blindly 'visible', unlike geometry —
-   *  labels have meaningful per-kind user toggles). */
-  private setStockLabelVisibility(mode: 'suppress' | 'restore'): void {
-    for (let k = 0; k < LABEL_KIND_COUNT; k++) {
-      const id = STOCK_LABEL_LAYER_BY_KIND[k as LabelKind];
-      const v = mode === 'suppress' ? 'none' : this.kindVisible[k] ? 'visible' : 'none';
-      if (this.map.getLayer?.(id)) {
-        try {
-          this.map.setLayoutProperty(id, 'visibility', v);
-        } catch {
-          // Layer may be mid-teardown; ignore.
-        }
-      }
-    }
   }
 
   private installHook(): void {

@@ -55,9 +55,6 @@ import { planIncrementalUpdate, planColorOnlyUpdate, coalesceVertexRuns } from '
 import { SurveyCustomLayer, type CustomRenderData } from './surveyCustomLayer';
 import { CUSTOM_RENDER_SYNC_HOOK } from './gate';
 
-/** Stock bulk layers hidden while the custom layer is on. */
-const HIDDEN_STOCK_LAYERS = ['survey-shots', 'survey-shot-gradients', 'survey-stations'] as const;
-
 /**
  * Defer a fail-safe restore off MapLibre's render stack. A self-disable fires
  * from inside `render()`, so we must NOT mutate the style synchronously there.
@@ -179,14 +176,6 @@ export class SurveyCustomController {
   private fatalEmitted = false;
   /** Guards handleSelfDisable against re-entrancy while a restore is pending. */
   private selfDisableScheduled = false;
-  /** True only for the duration of {@link teardown}. The teardown republishes
-   *  the stock bulk sources synchronously (so the survey never blanks between
-   *  the custom layer going away and the stock geometry coming back), and that
-   *  republish mirrors back into {@link syncCustomRender} -> {@link sync}. While
-   *  the gate is still ON (a fail-safe self-disable, not a gate opt-out) an
-   *  unguarded re-entrant sync() would see `!active` and RE-ENABLE the very
-   *  layer we are removing. This flag makes that re-entrant sync() a no-op. */
-  private tearingDown = false;
   /** Set once {@link dispose} / {@link destroy} runs. A late runtime-hook fire or
    *  deferred sync bails on it so a torn-down controller never rebuilds. */
   private disposed = false;
@@ -239,17 +228,15 @@ export class SurveyCustomController {
     this.installHook();
   }
 
+  /** Whether the custom layer is currently drawing. */
+  isActive(): boolean {
+    return this.active;
+  }
+
   /** Build/refresh the custom layer (the sole survey renderer — no gate). */
   sync(params: CustomSyncParams): void {
     // A disposed (unmounted) or fatal (dead GL) controller never rebuilds.
     if (this.disposed || this.fatal) return;
-    // Re-entrancy guard: teardown() republishes stock synchronously, which
-    // mirrors back here. Record the params (so a later real sync diffs against
-    // the latest inputs) but do nothing else, or we would re-enable mid-teardown.
-    if (this.tearingDown) {
-      this.lastParams = params;
-      return;
-    }
     const prevParams = this.lastParams;
     this.lastParams = params;
     // Fast paths (active layer + a prior snapshot to diff against): a geometry
@@ -309,7 +296,11 @@ export class SurveyCustomController {
     layer.setShotsVisible(this.shotsVisible);
     layer.setStationsVisible(this.stationsVisible);
     layer.setReferenceShotsVisible(this.referenceShotsVisible);
-    const beforeId = this.map.getLayer('survey-shots') ? 'survey-shots' : undefined;
+    // Insert below the interact overlay (the lowest kept layer above the survey
+    // geometry) so the custom geometry sits above loop closures / ghosts and
+    // beneath every hover/selection overlay + labels. Falls back to the top if
+    // absent (unit-test fakes).
+    const beforeId = this.map.getLayer('survey-interact-shots') ? 'survey-interact-shots' : undefined;
     this.map.addLayer(layer, beforeId);
     if (layer.isDisabled()) {
       // FATAL: the custom layer cannot draw (no WebGL2 / shader link failure).
@@ -329,10 +320,9 @@ export class SurveyCustomController {
       return;
     }
     this.layer = layer;
-    this.setStockVisibility('none');
     this.setActive(true);
-    // Ungated lifecycle log (one-shot): gate state + buffer counts.
-    console.info('[customRender] enabled; stock survey layers hidden', {
+    // Ungated lifecycle log (one-shot): buffer counts.
+    console.info('[customRender] enabled', {
       shotSegments: data.line.segmentCount,
       stations: data.circle.stationCount,
       bytes: data.line.byteLength + data.circle.byteLength,
@@ -342,30 +332,17 @@ export class SurveyCustomController {
 
   private disable(): void {
     this.teardown();
-    // Ungated lifecycle log (one-shot): gate flipped off / controller torn down.
-    console.info('[customRender] disabled; stock survey layers restored');
+    // Ungated lifecycle log (one-shot): controller torn down.
+    console.info('[customRender] disabled');
   }
 
-  /** Remove the custom layer and un-hide the stock layers. No logging (callers
-   *  log with their own context). Safe when already inactive.
-   *
-   *  Ordering matters: un-hide the stock layers and let `setActive(false)` drive
-   *  their SYNCHRONOUS republish from cache (see SurveyLayer.onCustomActiveChange)
-   *  BEFORE removing the custom layer. Otherwise there is a frame where the
-   *  custom layer is gone and the stock geometry has not come back yet (the stock
-   *  bulk sources were emptied at enable time), so the whole survey blanks until
-   *  an async worker build lands. The {@link tearingDown} guard keeps the
-   *  republish's mirror-back into {@link sync} from re-enabling this layer. */
+  /** Remove the custom layer (the sole survey renderer — no stock to restore).
+   *  Safe when already inactive. Non-fatal teardown only (destroy); the fatal
+   *  path uses {@link tearDownFatal}. */
   private teardown(): void {
-    this.tearingDown = true;
-    try {
-      this.setStockVisibility('visible');
-      this.setActive(false);
-      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
-      this.layer = null;
-    } finally {
-      this.tearingDown = false;
-    }
+    this.setActive(false);
+    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    this.layer = null;
     this.map.triggerRepaint();
   }
 
@@ -410,30 +387,6 @@ export class SurveyCustomController {
     if (this.fatalEmitted) return;
     this.fatalEmitted = true;
     this.onFatal?.(reason);
-  }
-
-  /** Suppress (`'none'`) hides all three stock bulk layers unconditionally.
-   *  Restore (`'visible'`) honors the stored display toggles instead of blindly
-   *  showing: a layer the user hid (setShowShots / setShowStations false) must
-   *  stay hidden after the fallback, matching the hit-test which still treats it
-   *  as hidden. */
-  private setStockVisibility(v: 'none' | 'visible'): void {
-    for (const id of HIDDEN_STOCK_LAYERS) {
-      if (!this.map.getLayer?.(id)) continue;
-      const visibility = v === 'none' ? 'none' : this.stockLayerVisible(id) ? 'visible' : 'none';
-      try {
-        this.map.setLayoutProperty(id, 'visibility', visibility);
-      } catch {
-        // Layer may be mid-teardown; ignore.
-      }
-    }
-  }
-
-  /** The restored visibility for a stock bulk layer id from the stored toggles:
-   *  shots + shot-gradients follow {@link shotsVisible}, stations follow
-   *  {@link stationsVisible}. */
-  private stockLayerVisible(id: (typeof HIDDEN_STOCK_LAYERS)[number]): boolean {
-    return id === 'survey-stations' ? this.stationsVisible : this.shotsVisible;
   }
 
   /** DEVICE-pixel style sizes for a params set (mirror the stock visual weights).

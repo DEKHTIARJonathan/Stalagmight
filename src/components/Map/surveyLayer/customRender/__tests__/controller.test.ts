@@ -193,11 +193,11 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it('hides stock layers when the custom layer initializes cleanly', () => {
-    const { map, visibility, removed } = makeFakeMap();
+  it('enables the custom layer on a clean init (sole renderer, no stock to hide)', () => {
+    const { map, removed } = makeFakeMap();
     const c = new SurveyCustomController(map);
     c.sync(makeParams());
-    for (const id of STOCK) expect(visibility[id]).toBe('none');
+    expect(c.isActive()).toBe(true);
     expect(removed).not.toContain(CUSTOM_ID);
     expect(warn).not.toHaveBeenCalled();
   });
@@ -224,12 +224,12 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
     expect(fatals).toEqual(['webgl2-unavailable']); // onFatal fires at most once
   });
 
-  it('render-error self-disable fires onFatal (deferred), removes the layer, keeps stock hidden', () => {
+  it('render-error self-disable fires onFatal (deferred), removes the layer', () => {
     // Object holder (not a bare `let`) so TS control-flow doesn't narrow away
     // the deferred assignment; also lets us count how often it was scheduled.
     const holder: { fn: (() => void) | null; scheduled: number } = { fn: null, scheduled: 0 };
     const fatals: string[] = [];
-    const { map, visibility, removed } = makeFakeMap();
+    const { map, removed } = makeFakeMap();
     const c = new SurveyCustomController(map, undefined, {
       onFatal: (r) => fatals.push(r),
       scheduleRestore: (fn) => {
@@ -238,7 +238,7 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
       },
     });
     c.sync(makeParams());
-    for (const id of STOCK) expect(visibility[id]).toBe('none'); // enabled, stock hidden
+    expect(c.isActive()).toBe(true);
 
     const layer = h.layerState.last;
     expect(layer).not.toBeNull();
@@ -260,7 +260,6 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
     // (stays hidden from the clean enable — no fallback).
     expect(removed).toEqual([CUSTOM_ID]); // torn down exactly once
     expect(fatals).toEqual(['gl-error-0x502']);
-    for (const id of STOCK) expect(visibility[id]).toBe('none');
     // Fatal is latched: a later sync() rebuilds nothing.
     c.sync(makeParams());
     expect(removed).toEqual([CUSTOM_ID]);
@@ -313,32 +312,27 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
     expect(layer?.shotsVisible).toBe(true);
   });
 
-  it('is unconditional: stays active + stock hidden across re-syncs (no gate)', () => {
+  it('is unconditional: stays active across re-syncs (no gate)', () => {
     vi.spyOn(console, 'info').mockImplementation(() => {});
-    const { map, visibility } = makeFakeMap();
+    const { map } = makeFakeMap();
     const c = new SurveyCustomController(map);
     c.sync(makeParams());
-    for (const id of STOCK) expect(visibility[id]).toBe('none');
+    expect(c.isActive()).toBe(true);
     // A second sync is a refresh (update()), never a disable — the custom layer
-    // is the sole renderer, so the stock layers stay hidden.
+    // is the sole renderer.
     c.sync(makeParams());
-    for (const id of STOCK) expect(visibility[id]).toBe('none');
+    expect(c.isActive()).toBe(true);
   });
 
-  it('destroy() restores stock to its REQUESTED visibility, not blindly visible', () => {
+  it('destroy() removes the custom layer (no stock to restore)', () => {
     vi.spyOn(console, 'info').mockImplementation(() => {});
-    const { map, visibility } = makeFakeMap();
+    const { map, removed } = makeFakeMap();
     const c = new SurveyCustomController(map);
-    c.setShotsVisible(false); // user hid shots before the custom layer built
     c.sync(makeParams());
-    for (const id of STOCK) expect(visibility[id]).toBe('none'); // suppressed while active
-    // destroy() is the sole non-fatal teardown that still restores stock. Shots
-    // (and their gradients) stay hidden per the stored toggle; stations, never
-    // hidden, come back visible.
+    expect(c.isActive()).toBe(true);
     c.destroy();
-    expect(visibility['survey-shots']).toBe('none');
-    expect(visibility['survey-shot-gradients']).toBe('none'); // follows the shots toggle
-    expect(visibility['survey-stations']).toBe('visible');
+    expect(c.isActive()).toBe(false);
+    expect(removed).toContain(CUSTOM_ID);
   });
 });
 
@@ -361,7 +355,7 @@ describe('SurveyCustomController dispose (unmount-lite hook + cache release)', (
 
   it('dispose() removes the window sync hook and a later sync() is inert', () => {
     const win = (globalThis as unknown as { window: Record<string, unknown> }).window;
-    const { map, visibility } = makeFakeMap();
+    const { map } = makeFakeMap();
     const c = new SurveyCustomController(map);
     c.sync(makeParams());
     const layer = h.layerState.last!;
@@ -370,9 +364,8 @@ describe('SurveyCustomController dispose (unmount-lite hook + cache release)', (
 
     c.dispose();
     expect(win[CUSTOM_RENDER_SYNC_HOOK]).toBeUndefined(); // hook removed
-    // dispose() must NOT touch the map: stock stays suppressed (map.remove()
-    // handles GL teardown), and a later sync() rebuilds nothing.
-    for (const id of STOCK) expect(visibility[id]).toBe('none');
+    // dispose() must NOT touch the map (map.remove() handles GL teardown), and a
+    // later sync() rebuilds nothing.
     c.sync(makeParams());
     expect(layer.updateCalls).toBe(updatesBefore); // inert: disposed guard bails
   });

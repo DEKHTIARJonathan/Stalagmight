@@ -104,7 +104,6 @@ const h = vi.hoisted(() => {
 
 vi.mock('../surveyCustomLabelLayer', () => ({ SurveyCustomLabelLayer: h.FakeLabelLayer }));
 
-const STOCK_LABEL = 'survey-station-labels';
 const CUSTOM_ID = 'survey-custom-labels';
 /** All five stock text layers, with the kind each maps to (SurveyLayer ids). */
 const STOCK_LAYERS: Record<number, string> = {
@@ -193,23 +192,21 @@ describe('SurveyLabelController activation (sole label path, no gate)', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('activates and hides the stock station-labels layer on sync (unconditional)', () => {
-    const { map, visibility } = makeFakeMap();
+    const { map } = makeFakeMap();
     const c = makeController(map);
     c.sync(makeParams());
     expect(c.isActive()).toBe(true);
-    expect(visibility[STOCK_LABEL]).toBe('none');
   });
 
   it('is unconditional: a re-sync stays active + keeps stock hidden, no re-fire', () => {
     const changes: boolean[] = [];
-    const { map, visibility } = makeFakeMap();
+    const { map } = makeFakeMap();
     const c = makeController(map, { onActiveChange: (a: boolean) => changes.push(a) });
     c.sync(makeParams());
     // A second sync is a refresh, never a disable — it stays active and the stock
     // station labels stay hidden.
     c.sync(makeParams());
     expect(c.isActive()).toBe(true);
-    expect(visibility[STOCK_LABEL]).toBe('none');
     expect(changes).toEqual([true]); // true fires once, never re-fires
   });
 
@@ -255,7 +252,7 @@ describe('SurveyLabelController error state (no stock fallback)', () => {
   it('render-error self-disable fires onFatal (deferred), removes the layer, keeps stock hidden', () => {
     const holder: { fn: (() => void) | null; scheduled: number } = { fn: null, scheduled: 0 };
     const fatals: string[] = [];
-    const { map, visibility, removed } = makeFakeMap();
+    const { map, removed } = makeFakeMap();
     const c = makeController(map, {
       onFatal: (r: string) => fatals.push(r),
       scheduleRestore: (fn: () => void) => {
@@ -265,7 +262,6 @@ describe('SurveyLabelController error state (no stock fallback)', () => {
     });
     c.setStationLabelsVisible(true);
     c.sync(makeParams());
-    expect(visibility[STOCK_LABEL]).toBe('none');
 
     const layer = h.layerState.last;
     layer?.onSelfDisable?.('gl-error-0x502');
@@ -281,7 +277,6 @@ describe('SurveyLabelController error state (no stock fallback)', () => {
     // (stays hidden from the clean enable — no fallback).
     expect(removed).toEqual([CUSTOM_ID]);
     expect(fatals).toEqual(['gl-error-0x502']);
-    expect(visibility[STOCK_LABEL]).toBe('none');
     expect(c.isActive()).toBe(false);
   });
 
@@ -313,21 +308,18 @@ describe('SurveyLabelController error state (no stock fallback)', () => {
   });
 
   it('stays inert after destroy: a stray late sync does not resurrect the layer', () => {
-    const { map, visibility, removed } = makeFakeMap();
+    const { map, removed } = makeFakeMap();
     const c = makeController(map);
     c.setStationLabelsVisible(true); // desired visible so destroy restores stock to visible
     c.sync(makeParams());
     expect(c.isActive()).toBe(true);
-    expect(visibility[STOCK_LABEL]).toBe('none'); // suppressed while active
     c.destroy();
     expect(c.isActive()).toBe(false);
-    expect(visibility[STOCK_LABEL]).toBe('visible'); // stock restored on teardown
     const removedCount = removed.length;
     // A deferred callback (camera-settle / font-resolve) firing after teardown
     // must not re-add the layer or re-suppress the stock labels.
     c.sync(makeParams());
     expect(c.isActive()).toBe(false);
-    expect(visibility[STOCK_LABEL]).toBe('visible');
     expect(removed.length).toBe(removedCount);
   });
 
@@ -361,7 +353,7 @@ describe('SurveyLabelController style wiring', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('drives the station-label kind visibility via the style inputs (no rebuild), stock stays suppressed', () => {
-    const { map, visibility } = makeFakeMap();
+    const { map } = makeFakeMap();
     const c = makeController(map);
     c.sync(makeParams());
     const layer = h.layerState.last!;
@@ -374,7 +366,6 @@ describe('SurveyLabelController style wiring', () => {
     // A toggle is a uniform flip, not a buffer rebuild.
     expect(layer.updateCalls).toBe(updatesBefore);
     // Stock station labels never un-hide while active.
-    expect(visibility[STOCK_LABEL]).toBe('none');
   });
 
   it('resolves theme halo colors into the style inputs on build', () => {
@@ -406,25 +397,12 @@ describe('SurveyLabelController all-kinds suppression + toggle routing', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('suppresses all five stock text layers on enable', () => {
-    const { map, visibility } = makeFakeMap();
+  it('enables the custom label layer (sole label renderer, no stock to hide)', () => {
+    const { map, removed } = makeFakeMap();
     const c = makeController(map);
     c.sync(makeParams());
-    for (const id of Object.values(STOCK_LAYERS)) expect(visibility[id]).toBe('none');
-  });
-
-  it('restores each stock layer to its kind default on destroy (section names visible, rest hidden)', () => {
-    const { map, visibility } = makeFakeMap();
-    const c = makeController(map);
-    c.sync(makeParams());
-    // destroy() is the sole non-fatal teardown that restores stock; each stock
-    // layer returns to its kind's DESIRED toggle, not blindly visible.
-    c.destroy();
-    expect(visibility[STOCK_LAYERS[LABEL_KIND.SECTION_NAME]!]).toBe('visible'); // default on
-    expect(visibility[STOCK_LAYERS[LABEL_KIND.SHOT_LABEL]!]).toBe('none');
-    expect(visibility[STOCK_LAYERS[LABEL_KIND.STATION_LABEL]!]).toBe('none');
-    expect(visibility[STOCK_LAYERS[LABEL_KIND.STATION_COMMENT]!]).toBe('none');
-    expect(visibility[STOCK_LAYERS[LABEL_KIND.SHOT_COMMENT]!]).toBe('none');
+    expect(c.isActive()).toBe(true);
+    expect(removed).not.toContain(CUSTOM_ID);
   });
 
   it('routes every setShow* toggle to its kind uniform without a rebuild', () => {
@@ -471,7 +449,7 @@ describe('SurveyLabelController font readiness', () => {
     // neither, so stub OffscreenCanvas to model a canvas-capable runtime and pass
     // a real (truthy) rasterizer -> the resolved atlas is usable and activates.
     (globalThis as unknown as Record<string, unknown>).OffscreenCanvas = class {};
-    const { map, visibility } = makeFakeMap();
+    const { map } = makeFakeMap();
     const c = new SurveyLabelController(map, undefined, {
       ensureFont: () => Promise.resolve(true),
       makeRasterizer: () => trivialRasterizer,
@@ -479,12 +457,10 @@ describe('SurveyLabelController font readiness', () => {
     c.sync(makeParams());
     // Font not resolved yet: nothing built.
     expect(c.isActive()).toBe(false);
-    expect(visibility[STOCK_LABEL]).toBe('visible');
     // Flush the ensureFont().then(...) microtask chain.
     await Promise.resolve();
     await Promise.resolve();
     expect(c.isActive()).toBe(true);
-    expect(visibility[STOCK_LABEL]).toBe('none');
   });
 
   it('keeps stock labels when the bundled font is unavailable (null rasterizer, never activates)', async () => {
@@ -493,7 +469,7 @@ describe('SurveyLabelController font readiness', () => {
     // stock label layer while drawing zero glyphs, blanking all labels. Instead
     // the controller must stay inactive so the stock label path keeps publishing.
     const changes: boolean[] = [];
-    const { map, visibility } = makeFakeMap();
+    const { map } = makeFakeMap();
     const c = new SurveyLabelController(map, undefined, {
       ensureFont: () => Promise.resolve(false),
       makeRasterizer: () => null,
@@ -504,7 +480,6 @@ describe('SurveyLabelController font readiness', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(c.isActive()).toBe(false);
-    expect(visibility[STOCK_LABEL]).toBe('visible');
     expect(changes).toEqual([]); // never fired onActiveChange(true)
   });
 });
@@ -519,14 +494,12 @@ describe('SurveyLabelController teardown', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('destroy() removes the layer and restores the stock label visibility', () => {
-    const { map, visibility, removed } = makeFakeMap();
+    const { map, removed } = makeFakeMap();
     const c = makeController(map);
     c.setStationLabelsVisible(true);
     c.sync(makeParams());
-    expect(visibility[STOCK_LABEL]).toBe('none');
     c.destroy();
     expect(removed).toContain(CUSTOM_ID);
-    expect(visibility[STOCK_LABEL]).toBe('visible');
   });
 });
 
@@ -550,7 +523,7 @@ describe('SurveyLabelController dispose (unmount-lite hook + cache release)', ()
 
   it('dispose() removes the window sync hook and a later sync() is inert (no map touch)', () => {
     const win = (globalThis as unknown as { window: Record<string, unknown> }).window;
-    const { map, visibility } = makeFakeMap();
+    const { map } = makeFakeMap();
     const c = makeController(map);
     c.sync(makeParams());
     expect(c.isActive()).toBe(true);
@@ -562,7 +535,6 @@ describe('SurveyLabelController dispose (unmount-lite hook + cache release)', ()
     expect(win[CUSTOM_LABELS_SYNC_HOOK]).toBeUndefined(); // hook removed
     // dispose() must NOT touch the map: the stock label layer stays suppressed
     // (map.remove() handles GL teardown), and a later sync() rebuilds nothing.
-    expect(visibility[STOCK_LABEL]).toBe('none');
     c.sync(makeParams());
     expect(layer.updateCalls).toBe(updatesBefore); // inert: disposed guard bails
   });
