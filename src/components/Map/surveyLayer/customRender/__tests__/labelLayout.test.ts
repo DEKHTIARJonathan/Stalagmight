@@ -151,6 +151,38 @@ describe('shapeLabel comment wrapping (12 em)', () => {
     const lines = new Set(s.glyphs.map((g) => Math.round(g.yBot * 1000)));
     expect(lines.size).toBe(1);
   });
+
+  it('preserves an explicit newline as a HARD break (short lines that would otherwise share one)', () => {
+    const atlas = makeAtlas();
+    // "A" and "B" (0.5 em each) fit trivially on one 12 em line, so the OLD
+    // split-on-/\s+/ join collapsed "A\nB" to a single line. The hard break must
+    // now render them on two separate lines.
+    const s = shapeLabel('A\nB', LABEL_KIND.STATION_COMMENT, atlas);
+    expect(s.glyphCount).toBe(2);
+    const lines = new Set(s.glyphs.map((g) => Math.round(g.yBot * 1000)));
+    expect(lines.size).toBe(2);
+  });
+
+  it('width-wraps within each hard line independently', () => {
+    const atlas = makeAtlas();
+    // Line 1 is one short word (1 line); line 2 has 12 four-char words that wrap
+    // to several visual lines, so the whole block is at least 3 visual lines.
+    const line2 = Array.from({ length: 12 }, () => 'WXYZ').join(' ');
+    const s = shapeLabel('hi\n' + line2, LABEL_KIND.SHOT_COMMENT, atlas);
+    const lines = new Set(s.glyphs.map((g) => Math.round(g.yBot * 1000)));
+    expect(lines.size).toBeGreaterThanOrEqual(3);
+    // Every rendered line still respects the max width.
+    for (const line of ['WXYZ WXYZ WXYZ WXYZ WXYZ']) {
+      expect(lineWidthEm(line, atlas)).toBeLessThanOrEqual(COMMENT_MAX_WIDTH_EM);
+    }
+  });
+
+  it('single-line comment text is unchanged (one line)', () => {
+    const atlas = makeAtlas();
+    const s = shapeLabel('hello', LABEL_KIND.STATION_COMMENT, atlas);
+    const lines = new Set(s.glyphs.map((g) => Math.round(g.yBot * 1000)));
+    expect(lines.size).toBe(1);
+  });
 });
 
 describe('shapedExtent', () => {

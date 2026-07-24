@@ -248,7 +248,11 @@ export function buildLabelDescriptors(
             ? ctx.commentColor(`${section.id}:s${shotId}`)
             : packCssColor(colorCtx.labelColor),
           ordinal: 0,
-          flags: 0,
+          // Mirror the shot label: a reference-shot comment carries REFERENCE so
+          // the shader's hide-reference uniform collapses it with its geometry.
+          // Without it the comment orphans (stays visible) when reference shots
+          // are hidden, since flags:0 never matches the hide mask.
+          flags: isRef ? LABEL_FLAG.REFERENCE : 0,
           sectionId: section.id,
           shotGlobal: shotGlobalIdx,
           shotId,
@@ -303,7 +307,11 @@ export function buildLabelDescriptors(
             ? ctx.commentColor(`${sid}:st${stationIndex}`)
             : packCssColor(colorCtx.labelColor),
           ordinal: 0,
-          flags: 0,
+          // Mirror the station label: an all-reference station's comment carries
+          // ALL_REFERENCE so the hide-reference uniform collapses it with its
+          // geometry (the station comment shows below the station label). Without
+          // it the comment orphans when reference shots are hidden.
+          flags: allRef[g] === 1 ? LABEL_FLAG.ALL_REFERENCE : 0,
           sectionId: sid,
           stationGlobal: g,
           stationIndex,

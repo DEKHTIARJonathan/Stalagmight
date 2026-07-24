@@ -126,15 +126,26 @@ export function shapedExtent(shaped: ShapedLabel): ExtentEm | null {
 }
 
 /** Split text into wrapped lines. Non-wrapping kinds return a single line; the
- *  wrapping (comment) kinds greedily break on whitespace runs at `maxWidthEm`,
- *  measuring each word by its glyph-advance sum. A word wider than the max gets
+ *  wrapping (comment) kinds honor authored `\n` as HARD line breaks (comments are
+ *  edited in textareas), then greedily width-wrap each hard line independently at
+ *  `maxWidthEm`, so a multi-line comment renders on separate lines like the stock
+ *  MapLibre label instead of collapsing to one. Within a hard line, words break on
+ *  whitespace runs, measured by glyph-advance sum; a word wider than the max gets
  *  its own line (no mid-word break). */
 function wrapIntoLines(text: string, maxWidthEm: number, atlas: GlyphAtlas): string[] {
   if (!Number.isFinite(maxWidthEm)) return [text];
-  const words = text.split(/\s+/).filter((w) => w.length > 0);
-  if (words.length === 0) return [];
-  const spaceEm = advanceEm(' ', atlas);
   const lines: string[] = [];
+  for (const hardLine of text.split('\n')) wrapHardLine(hardLine, maxWidthEm, atlas, lines);
+  return lines;
+}
+
+/** Greedily width-wrap ONE hard line (no embedded `\n`), appending each visual
+ *  line to `out`. A blank / whitespace-only hard line contributes nothing (it has
+ *  no ink), matching the pre-hard-break behavior for empty input. */
+function wrapHardLine(text: string, maxWidthEm: number, atlas: GlyphAtlas, out: string[]): void {
+  const words = text.split(/\s+/).filter((w) => w.length > 0);
+  if (words.length === 0) return;
+  const spaceEm = advanceEm(' ', atlas);
   let current = words[0]!;
   let currentWidth = lineWidthEm(current, atlas);
   for (let i = 1; i < words.length; i++) {
@@ -144,13 +155,12 @@ function wrapIntoLines(text: string, maxWidthEm: number, atlas: GlyphAtlas): str
       current += ' ' + word;
       currentWidth += spaceEm + wordWidth;
     } else {
-      lines.push(current);
+      out.push(current);
       current = word;
       currentWidth = wordWidth;
     }
   }
-  lines.push(current);
-  return lines;
+  out.push(current);
 }
 
 /** Em advance of a single character (its glyph advance / raster em). */

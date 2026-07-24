@@ -2014,24 +2014,19 @@ export default class SurveyLayer {
   }
 
   /** Cheap camera snapshot keying the geometry index's projected-AABB cache.
-   *  The key changes iff `map.project` would move a lng/lat to a new pixel;
-   *  axisAligned (no bearing/pitch) enables the 2-corner reprojection fast path. */
+   *  Keyed by the EXACT center (plus zoom / bearing / pitch / canvas size), so
+   *  the key changes on ANY camera move; axisAligned (no bearing/pitch) enables
+   *  the 2-corner reprojection fast path. The center must stay full-precision:
+   *  quantizing it to pixel bins let two centers in one bin differ by ~1px (Web
+   *  Mercator amplifies the latitude error away from the equator), exceeding the
+   *  probe's 0.5px margin, so a feature near the hit-radius boundary then missed
+   *  hover/click/box-select until the camera crossed a bin. */
   private cameraSnapshot(): { key: string; axisAligned: boolean } {
     const c = this.map.getCenter();
     const cv = this.map.getCanvas();
     const bearing = this.map.getBearing();
     const pitch = this.map.getPitch();
-    const zoom = this.map.getZoom();
-    // Quantize the center to ~pixel resolution so sub-pixel inertial-pan drift
-    // does not invalidate the projected-AABB cache on every probe. `degPerPx` is
-    // the Web-Mercator degrees-per-pixel at this zoom (512px tiles); a center
-    // shift below one pixel cannot move any geometry by a pixel, and the cached
-    // AABB is only tested against a hit radius of a few px. Zoom stays
-    // full-precision (a zoom change genuinely rescales every projection).
-    const degPerPx = 360 / (512 * 2 ** zoom);
-    const qx = Math.round(c.lng / degPerPx);
-    const qy = Math.round(c.lat / degPerPx);
-    const key = `${zoom}|${qx}|${qy}|${bearing}|${pitch}|${cv.width}|${cv.height}`;
+    const key = `${this.map.getZoom()}|${c.lng}|${c.lat}|${bearing}|${pitch}|${cv.width}|${cv.height}`;
     return { key, axisAligned: bearing === 0 && pitch === 0 };
   }
 

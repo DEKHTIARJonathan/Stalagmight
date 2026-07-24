@@ -127,6 +127,29 @@ describe('buildLabelDescriptors', () => {
     expect(byOrdinal.get(2)!.flags & LABEL_FLAG.ALL_REFERENCE).toBe(LABEL_FLAG.ALL_REFERENCE);
   });
 
+  it('sets REFERENCE on a reference-shot comment and ALL_REFERENCE on an all-reference station comment (hide-with-geometry parity)', () => {
+    // Comment on BOTH shots (shot 1 is the reference shot) and on stations g0
+    // (touches a non-reference shot) and g2 (all-reference).
+    const d = fixture();
+    d.shotComments = new Map([[0, 'non-ref note'], [1, 'ref note']]);
+    d.stationComments = new Map([[0, 'g0 note'], [2, 'g2 note']]);
+    const descs = buildLabelDescriptors(d, null, 0, 0, CTX);
+
+    const shotComments = descs.filter((x) => x.kind === LABEL_KIND.SHOT_COMMENT);
+    const byShot = new Map(shotComments.map((x) => [x.shotGlobal, x]));
+    // Reference shot's comment carries REFERENCE so the hide-reference uniform
+    // collapses it with its geometry; the non-reference shot's does not.
+    expect(byShot.get(1)!.flags & LABEL_FLAG.REFERENCE).toBe(LABEL_FLAG.REFERENCE);
+    expect(byShot.get(0)!.flags & LABEL_FLAG.REFERENCE).toBe(0);
+
+    const stationComments = descs.filter((x) => x.kind === LABEL_KIND.STATION_COMMENT);
+    const byStation = new Map(stationComments.map((x) => [x.stationGlobal, x]));
+    // All-reference station's comment carries ALL_REFERENCE; the mixed station's
+    // does not.
+    expect(byStation.get(2)!.flags & LABEL_FLAG.ALL_REFERENCE).toBe(LABEL_FLAG.ALL_REFERENCE);
+    expect(byStation.get(0)!.flags & LABEL_FLAG.ALL_REFERENCE).toBe(0);
+  });
+
   it('colors comments with labelColor and section names with the section color', () => {
     const d = fixture();
     const descs = buildLabelDescriptors(d, null, 0, 0, CTX);

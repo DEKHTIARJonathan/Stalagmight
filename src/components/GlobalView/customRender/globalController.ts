@@ -225,14 +225,21 @@ export class GlobalCustomController {
     this.onActiveChange?.(v);
   }
 
+  /** Suppress (`'none'`) hides every stock survey + hitbox layer unconditionally.
+   *  Restore (`'visible'`) honors the stored markers-only toggle instead of
+   *  blindly showing: in markers-only mode (`setVisible(false)`) the survey
+   *  geometry + hitboxes must stay hidden after a fallback, matching `pick()`
+   *  which returns no hits while `!visible`; otherwise hidden geometry reappears
+   *  over the markers view and becomes interactive again. Mirrors the survey
+   *  controller's restore direction. */
   private setStockVisibility(v: 'none' | 'visible'): void {
     for (const id of HIDDEN_STOCK_LAYERS) {
-      if (this.map.getLayer?.(id)) {
-        try {
-          this.map.setLayoutProperty(id, 'visibility', v);
-        } catch {
-          // Layer may be mid-teardown; ignore.
-        }
+      if (!this.map.getLayer?.(id)) continue;
+      const visibility = v === 'none' ? 'none' : this.visible ? 'visible' : 'none';
+      try {
+        this.map.setLayoutProperty(id, 'visibility', visibility);
+      } catch {
+        // Layer may be mid-teardown; ignore.
       }
     }
   }

@@ -874,6 +874,38 @@ describe('SurveyLabelController camera-settle rebuild (conditional)', () => {
     expect(() => cam.fire('moveend')).not.toThrow();
     expect(layer.updateCalls).toBe(after);
   });
+
+  it('rebuilds when a settle crosses the section-name minzoom (below 10 → into [10, band)) so section names appear', () => {
+    // A build below SECTION_NAME_MIN_ZOOM (10) emits NO section names (empty
+    // set). Zooming into [10, 13.5) stays inside the larger low-zoom padded
+    // viewport, and wantFull is false on both sides of 10, so checks 1-3 all
+    // miss it; without the minzoom-crossing check the settle would NOT rebuild
+    // and section names would stay absent until 13.5 / an edit / a big pan.
+    const cam = makeCameraMap(8);
+    const c = cameraController(cam.map, { scheduleRebuild: (fn: () => void) => fn() });
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    expect((layer.data as LabelRenderData).buffers.glyphCount).toBe(0); // nothing below 10
+    expect(builtKinds(layer).has(LABEL_KIND.SECTION_NAME)).toBe(false);
+    const before = layer.updateCalls;
+    cam.state.zoom = 11; // into [10, band): still inside the padded z8 viewport
+    cam.fire('zoomend');
+    expect(layer.updateCalls).toBe(before + 1); // the crossing forced a rebuild
+    expect(builtKinds(layer).has(LABEL_KIND.SECTION_NAME)).toBe(true); // names now present
+  });
+
+  it('does NOT rebuild on a settle that stays below the section-name minzoom', () => {
+    // Both builds are below 10 (same band) → no crossing, and the smaller z9
+    // viewport is still inside the padded z8 box → no rebuild.
+    const cam = makeCameraMap(8);
+    const c = cameraController(cam.map, { scheduleRebuild: (fn: () => void) => fn() });
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    const before = layer.updateCalls;
+    cam.state.zoom = 9;
+    cam.fire('zoomend');
+    expect(layer.updateCalls).toBe(before);
+  });
 });
 
 describe('SurveyLabelController NO rebuild on zoom-in (reveal-zoom admission)', () => {

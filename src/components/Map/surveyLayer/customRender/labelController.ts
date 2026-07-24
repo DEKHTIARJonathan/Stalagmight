@@ -813,6 +813,19 @@ export class SurveyLabelController {
     const hasData = (this.pendingParams?.surveyData.stationCount ?? 0) > 0;
     const wantFull = this.fullLabelsBuilt ? zoom >= LABEL_DROP_ZOOM : zoom >= LABEL_BUILD_ZOOM;
     if ((wantFull && hasData) !== this.lastBuiltWantFull) return true;
+    // 4. Section-name minzoom crossing (nothing ⇆ section-only). A build below 10
+    //    emits NO section names (empty set); the padded low-zoom viewport still
+    //    covers a zoom-in into [10, band), and wantFull is false on both sides of
+    //    10, so checks 1-3 all miss it. Without this, section names stay absent
+    //    until 13.5 / an edit / a large pan. Compare the last build's zoom band
+    //    against the live one (last build's zoom is undefined only before any
+    //    build, handled by the earlier guards).
+    if (
+      this.lastBuildZoom !== undefined &&
+      zoom >= SECTION_NAME_MIN_ZOOM !== this.lastBuildZoom >= SECTION_NAME_MIN_ZOOM
+    ) {
+      return true;
+    }
     return false;
   }
 

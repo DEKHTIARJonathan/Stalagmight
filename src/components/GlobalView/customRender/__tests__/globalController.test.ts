@@ -223,6 +223,44 @@ describe('GlobalCustomController', () => {
     expect(active).toEqual([true]);
   });
 
+  it('markers-only (setVisible false) restores stock layers to HIDDEN on gate-off, not blindly visible', () => {
+    const { map, visibility } = makeFakeMap();
+    const c = new GlobalCustomController(map);
+    c.sync(makeSystems());
+    for (const id of STOCK) expect(visibility[id]).toBe('none');
+    // User switches to markers-only: the survey geometry is stored hidden.
+    c.setVisible(false);
+    // Gate flips off -> fallback restore. Hidden survey geometry must stay hidden
+    // (matching pick() which returns no hits while !visible); otherwise it
+    // reappears over the markers view and becomes interactive again.
+    h.gate.enabled = false;
+    c.sync(makeSystems());
+    for (const id of STOCK) expect(visibility[id]).toBe('none');
+    expect(c.isActive()).toBe(false);
+  });
+
+  it('self-disable in markers-only mode restores stock layers to HIDDEN', () => {
+    const holder: { fn: (() => void) | null } = { fn: null };
+    const { map, visibility } = makeFakeMap();
+    const c = new GlobalCustomController(map, undefined, { scheduleRestore: (fn) => (holder.fn = fn) });
+    c.sync(makeSystems());
+    c.setVisible(false);
+    h.layerState.last!.onSelfDisable?.('gl-error-0x505');
+    holder.fn?.();
+    for (const id of STOCK) expect(visibility[id]).toBe('none');
+    expect(c.isActive()).toBe(false);
+  });
+
+  it('normal restore (visible survey) still un-hides the stock layers', () => {
+    const { map, visibility } = makeFakeMap();
+    const c = new GlobalCustomController(map);
+    c.sync(makeSystems());
+    for (const id of STOCK) expect(visibility[id]).toBe('none');
+    h.gate.enabled = false;
+    c.sync(makeSystems());
+    for (const id of STOCK) expect(visibility[id]).toBe('visible');
+  });
+
   it('setHover maps a system id to its baked index (or -1)', () => {
     const { map } = makeFakeMap();
     const c = new GlobalCustomController(map);
