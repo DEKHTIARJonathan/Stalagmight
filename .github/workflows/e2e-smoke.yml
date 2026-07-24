@@ -55,7 +55,45 @@ jobs:
       - name: Install Playwright system deps (browser restored from cache)
         if: steps.pw-cache.outputs.cache-hit == 'true'
         run: pnpm exec playwright install-deps chromium
-      - run: pnpm test:ui:smoke
+      # TEMPORARY INSTRUMENTATION (remove once the @smoke pare-down lands).
+      # CI gives no per-test timing: the `github` reporter prints a line only for
+      # tests that failed or flaked, so a green run tells us the suite took ~6.5
+      # min but not which tests spent it. `--reporter=github,json` adds a
+      # machine-readable per-test report; per the nightly's note, passing
+      # --reporter on the CLI overrides the config reporter WITHOUT touching the
+      # shared playwright.config.ts and WITHOUT wrapping the command, so the exit
+      # code (the merge gate) is untouched. Costs ~1s.
+      # NB: `pnpm exec playwright test`, NOT `pnpm test:ui:smoke -- …` - pnpm
+      # forwards the `--` literally and playwright reads it as a positional test
+      # filter ("No tests found"). Keep the --grep in sync with test:ui:smoke.
+      - name: Run Playwright (@smoke)
+        run: pnpm exec playwright test --grep @smoke --reporter=github,json
         env:
           # CI=true already gives 2 retries via playwright.config.ts.
-          PW_REPORTER: github
+          PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-report/results.json
+      # Ranked cost table on the run summary page. Unlike the nightly (which keeps
+      # its report only on failure/flake), timing is wanted on GREEN runs - that
+      # is the normal case - so this always runs and writes to the run page,
+      # making the data readable with no artifact download. Defensive: always(),
+      # cannot fail the job.
+      - name: Smoke timing summary (run page)
+        if: always()
+        run: |
+          f="playwright-report/results.json"
+          if [ ! -f "$f" ]; then
+            echo "⏱️ **Smoke timing** - results file not found (see job log)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node scripts/pw-timing-summary.mjs "$f" --top 40 \
+            || echo "⏱️ **Smoke timing** - could not parse results (see job log)." >> "$GITHUB_STEP_SUMMARY"
+      # Machine-readable backup so the full per-test report can be scraped across
+      # several runs (`gh run download <id> -n smoke-timing`). Short retention:
+      # this is transient pare-down data, not a durable debugging artifact.
+      - name: Upload smoke timing report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-timing
+          path: playwright-report/results.json
+          retention-days: 7
+          if-no-files-found: ignore
