@@ -292,6 +292,34 @@ describe('SurveyLabelController fail-safe', () => {
     expect(c.isActive()).toBe(false);
   });
 
+  it('a re-entrant sync() during a fail-safe self-disable teardown does NOT re-enable', () => {
+    // Mirrors production: the OFF signal drives a synchronous stock-label
+    // republish that syncs this controller again. The labels gate is still ON
+    // here (a GL-fault self-disable, not a gate opt-out), so without the
+    // tearingDown guard the re-entrant sync() would see `!active` and re-create
+    // the layer being torn down (a flip-flop on a persistent fault).
+    const holder: { fn: (() => void) | null } = { fn: null };
+    const calls: boolean[] = [];
+    const { map } = makeFakeMap();
+    let c!: SurveyLabelController;
+    c = makeController(map, {
+      onActiveChange: (a: boolean) => {
+        calls.push(a);
+        if (a === false) c.sync(makeParams()); // re-entrant mirror-back
+      },
+      scheduleRestore: (fn: () => void) => { holder.fn = fn; },
+    });
+    c.sync(makeParams());
+    expect(calls).toEqual([true]);
+    h.layerState.last?.onSelfDisable?.('gl-error-0x502');
+    holder.fn?.(); // deferred teardown; onActiveChange(false) re-enters sync()
+    // Gate still on, yet the re-entrant sync must be a no-op: exactly
+    // [true, false], never [true, false, true].
+    expect(h.gate.labels).toBe(true);
+    expect(calls).toEqual([true, false]);
+    expect(c.isActive()).toBe(false);
+  });
+
   it('stays inert after destroy: a stray late sync does not resurrect the layer', () => {
     const { map, visibility, removed } = makeFakeMap();
     const c = makeController(map);

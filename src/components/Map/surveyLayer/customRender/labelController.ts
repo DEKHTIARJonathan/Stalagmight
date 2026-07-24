@@ -221,6 +221,14 @@ export class SurveyLabelController {
 
   private hookInstalled = false;
   private selfDisableScheduled = false;
+  /** True only for the duration of {@link teardown}. The teardown republishes the
+   *  stock label sources synchronously (SurveyLayer.onCustomLabelsActiveChange),
+   *  and that republish mirrors back into syncCustomRender -> {@link sync}. While
+   *  the gate is still ON (a fail-safe self-disable, not a gate opt-out) an
+   *  unguarded re-entrant sync() would see `!active` and RE-ENABLE the layer we
+   *  are removing (a flip-flop on a persistent GL fault). This flag makes that
+   *  re-entrant sync() a no-op. Mirrors the geometry controller's tearingDown. */
+  private tearingDown = false;
   private readonly scheduleRestore: (fn: () => void) => void;
   private readonly scheduleRebuild: (fn: () => void) => void;
   private readonly resync: (() => void) | undefined;
@@ -327,6 +335,10 @@ export class SurveyLabelController {
   sync(params: LabelSyncParams): void {
     if (this.destroyed) return;
     this.pendingParams = params;
+    // Re-entrancy guard: teardown() drives a synchronous stock republish that
+    // mirrors back here. Record the latest params but do nothing else, or we
+    // would re-enable the layer mid-teardown (see {@link tearingDown}).
+    if (this.tearingDown) return;
     const enabled = readCustomLabelsGate();
     if (!enabled) {
       if (this.active) this.disable();
@@ -839,12 +851,23 @@ export class SurveyLabelController {
   }
 
   /** Remove the custom label layer + restore the stock station-label visibility
-   *  to its desired toggle state. Safe when already inactive. */
+   *  to its desired toggle state. Safe when already inactive.
+   *
+   *  Ordering + guard mirror the geometry controller: restore stock visibility
+   *  and let setActive(false) drive the SYNCHRONOUS stock-label republish BEFORE
+   *  removing the custom layer (so the labels never blank in the gap), with the
+   *  {@link tearingDown} guard stopping the republish's mirror-back from
+   *  re-enabling this layer while the gate is still on. */
   private teardown(): void {
-    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
-    this.layer = null;
-    this.setStockLabelVisibility('restore');
-    this.setActive(false);
+    this.tearingDown = true;
+    try {
+      this.setStockLabelVisibility('restore');
+      this.setActive(false);
+      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      this.layer = null;
+    } finally {
+      this.tearingDown = false;
+    }
     this.map.triggerRepaint();
   }
 

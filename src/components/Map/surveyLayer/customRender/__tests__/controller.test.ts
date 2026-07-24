@@ -393,10 +393,18 @@ describe('SurveyCustomController onActiveChange (stock-suppression signal)', () 
     const calls: boolean[] = [];
     const { map } = makeFakeMap();
     let c!: SurveyCustomController;
+    let layerPresentDuringOff: boolean | null = null;
     c = new SurveyCustomController(map, undefined, {
       onActiveChange: (a) => {
         calls.push(a);
-        if (a === false) c.sync(makeParams()); // re-entrant mirror-back
+        if (a === false) {
+          // TEARDOWN ORDER: the OFF signal (stock republish) must fire while the
+          // custom layer still exists, i.e. BEFORE removeLayer — otherwise the
+          // survey blanks for a frame. Reverting the teardown to remove-first
+          // flips this to false.
+          layerPresentDuringOff = !!map.getLayer('survey-custom-render');
+          c.sync(makeParams()); // re-entrant mirror-back
+        }
       },
       scheduleRestore: (fn) => { holder.fn = fn; },
     });
@@ -408,6 +416,8 @@ describe('SurveyCustomController onActiveChange (stock-suppression signal)', () 
     // [true, false], never [true, false, true].
     expect(h.gate.enabled).toBe(true);
     expect(calls).toEqual([true, false]);
+    // Reorder guard: stock came back before the custom layer was removed.
+    expect(layerPresentDuringOff).toBe(true);
   });
 });
 
