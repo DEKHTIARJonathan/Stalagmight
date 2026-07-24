@@ -15,6 +15,7 @@ import { SurveyGeometryIndex } from '../geometryIndex';
 import { padProbeBox } from '../hitProbe';
 import { surveyDataFromLegacy } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
+import { encodeFeatureId } from '../../../../utils/ids';
 import type { Section } from '../../../../types/ipc/Section';
 import type { Station } from '../../../../types/ipc/Station';
 
@@ -295,6 +296,75 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
     expect(ref[0]).toBeCloseTo(55 / 111320, 9);
     expect(index.stationCoords({ section_id: 9, station_index: 0 })).toBeNull();
     expect(index.isZeroDatum({ section_id: 1, station_index: 0 })).toBe(false);
+  });
+});
+
+/**
+ * Measured-path shot resolver (#26). The measured along-line tint feeds the
+ * custom measure-path layer through `measuredShotSegments`, which must resolve
+ * a shot from its canonical feature id WITHOUT decoding it. Shot ids are
+ * globally encoded (`sectionId * FEATURE_ID_STRIDE + local`), so a
+ * `floor(fid / STRIDE)` split (the old code) mis-attributes every shot in
+ * section >= 1 and drops its tint (stations, whose scoped id is a small local
+ * index, decoded fine — the reported "stations tint, shots don't" bug). This
+ * fixture reproduces the production id scheme so the regression is pinned.
+ */
+describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
+  const mkShot = (id: number, is_reference = false): Section['shots'][number] => ({
+    id, azimuth_in: 0, azimuth_out: 0, length: 10, depth_in: 0, depth_out: 0,
+    pitch_in: null, pitch_out: null, left: null, right: null, up: null, down: null,
+    comment: null, is_reference, marker_index: null, temperature: null,
+  });
+  // Section 0 shot ids are local-sized (< STRIDE); section 1 shot ids are the
+  // production global form (100000, 100001), which is where the old decode broke.
+  const sections: Section[] = [
+    {
+      id: 0, name: 'A', surveyor: null, date: null, color: '#f00',
+      direction: 'in', quality: 1, next_shot_id: 2, shots: [mkShot(0), mkShot(1)],
+    },
+    {
+      id: 1, name: 'B', surveyor: null, date: null, color: '#0f0',
+      direction: 'in', quality: 1, next_shot_id: 100002,
+      shots: [mkShot(100000), mkShot(100001, true)],
+    },
+  ];
+  const st = (section_id: number, station_index: number, x: number, y: number): Station => ({
+    station_ref: { section_id, station_index },
+    coordinates: { x, y, z: 0 },
+    is_zero_datum: false, gps_coordinates: null, merged_with: [], closures_with: [],
+  });
+  const stations: Station[] = [
+    st(0, 0, 0, 0), st(0, 1, 10, 0), st(0, 2, 10, 10),
+    st(1, 0, 100, 0), st(1, 1, 110, 0), st(1, 2, 110, 10),
+  ];
+  const index = new SurveyGeometryIndex(surveyDataFromLegacy(sections, stations), null);
+  const mc = (m: number) => m / 111320;
+
+  it('resolves a section >= 1 shot by its globally-encoded feature id', () => {
+    // encodeFeatureId(1, 100000) = 200000; the old floor(200000/STRIDE)=2 split
+    // looked up a nonexistent section 2 and returned nothing.
+    const segs = index.measuredShotSegments(new Set([encodeFeatureId(1, 100000)]), true);
+    expect(segs).toHaveLength(1);
+    expect(segs[0]!.from[0]).toBeCloseTo(mc(100), 9);
+    expect(segs[0]!.to[0]).toBeCloseTo(mc(110), 9);
+  });
+
+  it('resolves shots across sections in one pass', () => {
+    const segs = index.measuredShotSegments(
+      new Set([encodeFeatureId(0, 0), encodeFeatureId(1, 100000)]),
+      true,
+    );
+    expect(segs).toHaveLength(2);
+  });
+
+  it('drops a hidden reference leg unless reference shots are shown', () => {
+    const fid = new Set([encodeFeatureId(1, 100001)]);
+    expect(index.measuredShotSegments(fid, false)).toHaveLength(0);
+    expect(index.measuredShotSegments(fid, true)).toHaveLength(1);
+  });
+
+  it('returns nothing for an empty id set', () => {
+    expect(index.measuredShotSegments(new Set(), true)).toHaveLength(0);
   });
 });
 

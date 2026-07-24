@@ -33,6 +33,7 @@ import {
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../../../types/survey-data';
 import { metersToMapCoords } from '../../../utils/coordinates';
+import { encodeFeatureId } from '../../../utils/ids';
 import { distanceToLineSegment, projectParamOnSegment } from './hitTest';
 
 /** Screen projection: [lng, lat] -> pixel coords. Wraps `map.project`. */
@@ -463,6 +464,45 @@ export class SurveyGeometryIndex {
       };
     }
     return null;
+  }
+
+  /**
+   * Endpoints of every shot whose canonical feature id
+   * (`encodeFeatureId(sectionId, shotId)`) is in `fids`. The measured along-line
+   * path's shot tint (#26) resolves its segments through here.
+   *
+   * Membership is tested by RE-DERIVING each shot's fid the same way every
+   * producer does (`colorResolvers` / distance + gas overlays / the interact
+   * overlay), NOT by decoding the fid back to `(section, shot)`. Decoding is lossy
+   * for shots: the scoped id folded into the fid is the GLOBAL shot id (already
+   * `sectionId * FEATURE_ID_STRIDE + local`), so a `floor(fid / STRIDE)` split
+   * mis-attributes every shot in section >= 1 to the wrong section and shot id,
+   * dropping its tint. Re-deriving is exact regardless of the shot-id range.
+   *
+   * `includeReference` mirrors the reference-shots toggle: hidden reference legs
+   * are skipped, matching the interact overlay / stock measure-path filter.
+   */
+  measuredShotSegments(
+    fids: ReadonlySet<number>,
+    includeReference: boolean,
+  ): Array<{ from: [number, number]; to: [number, number] }> {
+    this.ensureBuilt();
+    const out: Array<{ from: [number, number]; to: [number, number] }> = [];
+    if (fids.size === 0) return out;
+    for (const section of this.data.sections) {
+      const lookup = this.stationLookup.get(section.id);
+      if (!lookup) continue;
+      for (let i = 0; i < section.shotCount; i++) {
+        const gi = section.shotOffset + i;
+        if (!fids.has(encodeFeatureId(section.id, this.data.shotIds[gi]!))) continue;
+        if (!includeReference && (this.data.shotFlags[gi]! & SHOT_FLAG_IS_REFERENCE) !== 0) continue;
+        const fromGlobal = lookup.get(i);
+        const toGlobal = lookup.get(i + 1);
+        if (fromGlobal === undefined || toGlobal === undefined) continue;
+        out.push({ from: this.stationLngLat(fromGlobal), to: this.stationLngLat(toGlobal) });
+      }
+    }
+    return out;
   }
 
   /** Whether every shot touching the station is a reference shot (the

@@ -1790,14 +1790,16 @@ export default class SurveyLayer {
     }
     const segments: MeasureSegment[] = [];
     if (this.measuredPathIds) {
-      for (const fid of this.measuredPathIds) {
-        const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
-        const shotId = fid - sectionId * FEATURE_ID_STRIDE;
-        const geo = this.geoIndex.shotGeometry(sectionId, shotId);
-        if (!geo) continue;
-        // Hidden reference legs are excluded from the stock tint too (measurePathFilter).
-        if (geo.isReference && !this.showReferenceShotsCached) continue;
-        segments.push({ a: geo.from, b: geo.to });
+      // Resolve by RE-DERIVING each shot's canonical feature id rather than
+      // decoding the fid: the scoped id folded into a shot fid is the GLOBAL shot
+      // id (>= FEATURE_ID_STRIDE for section >= 1), so a floor(fid / STRIDE) split
+      // mis-attributes every such shot and drops its tint (#26). Hidden reference
+      // legs are excluded to match the interact overlay / stock filter.
+      for (const { from, to } of this.geoIndex.measuredShotSegments(
+        this.measuredPathIds,
+        this.showReferenceShotsCached,
+      )) {
+        segments.push({ a: from, b: to });
       }
     }
     const points: MeasurePoint[] = [];
