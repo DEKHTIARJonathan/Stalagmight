@@ -62,6 +62,29 @@ fn env_pairs(cfg: &WebkitMemoryConfig) -> Vec<(&'static str, String)> {
     pairs
 }
 
+/// The env pairs to export, honoring an ENV master-disable override.
+///
+/// `env_limit` is the current value of `STALAGMIGHT_WEBKIT_MEM_LIMIT_MB` in the
+/// environment (if any). The documented way to disable the feature without
+/// editing `config.toml` is to force that variable to `0`. But `env_pairs` only
+/// sees the CONFIG, so on its own the override would leave `JSC_forceRAMSize`
+/// (derived from `jsc_force_ram_size_mb`) still exported — and JavaScriptCore
+/// reads it directly, independent of the wry pressure handler that `LIMIT_MB=0`
+/// disables. The result would be "pressure off, but JSC still sizes itself as a
+/// 700 MB machine", i.e. the advertised override does NOT restore upstream
+/// behavior. So when the env forces the limit off we emit only the `LIMIT_MB=0`
+/// sentinel and suppress JSC tuning (and the other pressure pairs) too.
+fn resolve_env_pairs(
+    cfg: &WebkitMemoryConfig,
+    env_limit: Option<&str>,
+) -> Vec<(&'static str, String)> {
+    let env_forces_off = env_limit.and_then(|v| v.trim().parse::<u64>().ok()) == Some(0);
+    if env_forces_off {
+        return vec![(LIMIT_MB, "0".to_string())];
+    }
+    env_pairs(cfg)
+}
+
 /// Resolve the config path the way Tauri does on Linux:
 /// `<XDG config base>/<bundle identifier>/config.toml`.
 ///
@@ -96,7 +119,8 @@ pub(crate) fn apply_env_from_config() -> WebkitMemoryConfig {
         .unwrap_or_default()
         .webkit_memory;
 
-    for (key, value) in env_pairs(&cfg) {
+    let env_limit = std::env::var(LIMIT_MB).ok();
+    for (key, value) in resolve_env_pairs(&cfg, env_limit.as_deref()) {
         if std::env::var_os(key).is_some() {
             continue;
         }
@@ -210,5 +234,39 @@ mod tests {
         };
         // Master switch off: only the LIMIT_MB=0 sentinel, no JSC_forceRAMSize.
         assert_eq!(env_pairs(&cfg), vec![(LIMIT_MB, "0".to_string())]);
+    }
+
+    #[test]
+    fn env_limit_zero_override_suppresses_jsc_even_when_config_enables_it() {
+        // Config would export the full pressure set incl. JSC, but the documented
+        // env master-disable (LIMIT_MB=0) must restore upstream behavior fully:
+        // only the sentinel, no JSC_forceRAMSize sizing JavaScriptCore.
+        let cfg = WebkitMemoryConfig::default();
+        assert!(env_pairs(&cfg)
+            .iter()
+            .any(|(k, _)| *k == JSC_FORCE_RAM_SIZE));
+        assert_eq!(
+            resolve_env_pairs(&cfg, Some("0")),
+            vec![(LIMIT_MB, "0".to_string())]
+        );
+        // Whitespace tolerated (env values can carry stray spacing).
+        assert_eq!(
+            resolve_env_pairs(&cfg, Some(" 0 ")),
+            vec![(LIMIT_MB, "0".to_string())]
+        );
+    }
+
+    #[test]
+    fn no_env_override_keeps_config_derived_pairs() {
+        let cfg = WebkitMemoryConfig::default();
+        assert_eq!(resolve_env_pairs(&cfg, None), env_pairs(&cfg));
+    }
+
+    #[test]
+    fn nonzero_env_override_keeps_config_derived_pairs() {
+        // A non-zero override tweaks the limit (handled by the per-key skip in
+        // apply_env_from_config) but is NOT a master-disable, so JSC stays.
+        let cfg = WebkitMemoryConfig::default();
+        assert_eq!(resolve_env_pairs(&cfg, Some("500")), env_pairs(&cfg));
     }
 }
