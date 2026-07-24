@@ -79,6 +79,21 @@ describe('GlobalHitIndex.pick', () => {
     expect(included?.systemId).toBe('r.tml');
   });
 
+  it('skips a system with no shots (Infinity bounds) without projecting it', () => {
+    // A shot-less system keeps its initial +/-Infinity AABB; projecting those
+    // corners would hand map.project an invalid lng/lat and throw for the whole
+    // global map. The pick loop must skip it before any projection.
+    const empty = makeSystem('empty.tml', []);
+    const idx = new GlobalHitIndex([empty, systemA]);
+    const guarded: ProjectFn = ([lng, lat]) => {
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) throw new Error('non-finite projected');
+      return { x: lng, y: lat };
+    };
+    expect(() => idx.pick(guarded, 100, 0, OPTS)).not.toThrow();
+    // The real system still resolves through the same call.
+    expect(idx.pick(guarded, 100, 0, OPTS)?.systemId).toBe('a.tml');
+  });
+
   it('honors the reach radius (miss just outside)', () => {
     // 6px above the line: within station reach of no station (nearest station at
     // (0,0) is >10px away) and just outside the 5px shot reach.

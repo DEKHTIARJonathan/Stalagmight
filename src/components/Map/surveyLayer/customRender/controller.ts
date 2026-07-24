@@ -167,6 +167,9 @@ export class SurveyCustomController {
    *  unguarded re-entrant sync() would see `!active` and RE-ENABLE the very
    *  layer we are removing. This flag makes that re-entrant sync() a no-op. */
   private tearingDown = false;
+  /** Set once {@link dispose} / {@link destroy} runs. A late runtime-hook fire or
+   *  deferred sync bails on it so a torn-down controller never rebuilds. */
+  private disposed = false;
   /** Display toggles mirroring the stock layers' setShowShots /
    *  setShowStations / setShowReferenceShots. Held on the controller so they
    *  survive a layer re-create (enable re-applies them to the fresh layer). */
@@ -217,6 +220,7 @@ export class SurveyCustomController {
 
   /** Re-evaluate the gate and apply/refresh or tear down the custom layer. */
   sync(params: CustomSyncParams): void {
+    if (this.disposed) return;
     // Re-entrancy guard: teardown() republishes stock synchronously, which
     // mirrors back here. Record the params (so a later real sync diffs against
     // the latest inputs) but do nothing else, or we would re-enable mid-teardown.
@@ -364,16 +368,28 @@ export class SurveyCustomController {
     });
   }
 
+  /** Suppress (`'none'`) hides all three stock bulk layers unconditionally.
+   *  Restore (`'visible'`) honors the stored display toggles instead of blindly
+   *  showing: a layer the user hid (setShowShots / setShowStations false) must
+   *  stay hidden after the fallback, matching the hit-test which still treats it
+   *  as hidden. */
   private setStockVisibility(v: 'none' | 'visible'): void {
     for (const id of HIDDEN_STOCK_LAYERS) {
-      if (this.map.getLayer?.(id)) {
-        try {
-          this.map.setLayoutProperty(id, 'visibility', v);
-        } catch {
-          // Layer may be mid-teardown; ignore.
-        }
+      if (!this.map.getLayer?.(id)) continue;
+      const visibility = v === 'none' ? 'none' : this.stockLayerVisible(id) ? 'visible' : 'none';
+      try {
+        this.map.setLayoutProperty(id, 'visibility', visibility);
+      } catch {
+        // Layer may be mid-teardown; ignore.
       }
     }
+  }
+
+  /** The restored visibility for a stock bulk layer id from the stored toggles:
+   *  shots + shot-gradients follow {@link shotsVisible}, stations follow
+   *  {@link stationsVisible}. */
+  private stockLayerVisible(id: (typeof HIDDEN_STOCK_LAYERS)[number]): boolean {
+    return id === 'survey-stations' ? this.stationsVisible : this.shotsVisible;
   }
 
   /** DEVICE-pixel style sizes for a params set (mirror the stock visual weights).
@@ -799,16 +815,40 @@ export class SurveyCustomController {
    * fall back to the snapshot only when no resync was wired (unit tests).
    */
   private runSyncHook(): void {
+    if (this.disposed) return;
     if (this.resync) this.resync();
     else if (this.lastParams) this.sync(this.lastParams);
   }
 
-  destroy(): void {
-    if (this.active) this.disable();
+  /**
+   * Lightweight release WITHOUT touching the map (no removeLayer, no stock
+   * republish). Called on MapCanvas unmount via SurveyLayer.releaseVtRegistry(),
+   * which deliberately skips the full {@link destroy} for unmount speed. Without
+   * this the window sync hook would pin this controller (and its cached
+   * SurveyData + GL buffers) alive until the next SurveyLayer overwrites the
+   * global -> hundreds of MB retained on large projects (#mem). Uninstalls the
+   * hook, sets the {@link disposed} guard so a late hook fire / sync bails, and
+   * nulls the heavy caches. `map.remove()` handles the layer's GL teardown, so a
+   * republish here would be wasted work. Idempotent.
+   */
+  dispose(): void {
+    this.disposed = true;
     if (this.hookInstalled && typeof window !== 'undefined') {
       delete (window as unknown as Record<string, unknown>)[CUSTOM_RENDER_SYNC_HOOK];
       this.hookInstalled = false;
     }
     this.lastParams = null;
+    this.lastData = null;
+    this.lastLookup = null;
+    this.lastSurveyData = null;
+    this.lastStationRel = null;
+    this.lastAllReference = null;
+  }
+
+  destroy(): void {
+    if (this.active) this.disable();
+    // Reuse dispose() for the hook removal + cache clearing (DRY); the active-layer
+    // teardown above is destroy()'s addition over the unmount-lite dispose() path.
+    this.dispose();
   }
 }

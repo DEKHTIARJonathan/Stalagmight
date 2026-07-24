@@ -7,8 +7,28 @@ import { LABEL_KIND, LABEL_FLAG } from '../labelShaders';
 import { FEATURE_ID_STRIDE } from '../../../../../utils/ids';
 import type { LabelRenderData } from '../surveyCustomLabelLayer';
 import { SurveyLabelController, type LabelSyncParams } from '../labelController';
+import { CUSTOM_LABELS_SYNC_HOOK } from '../labelsGate';
 import { computeMercatorAnchor } from '../mercator';
 import { projectStationsRel } from '../tessellate';
+
+/** A minimal truthy rasterizer (one 10x18 quad per non-space char) so the
+ *  font-readiness happy path resolves a USABLE atlas in the node env, where the
+ *  production canRasterize() would otherwise report no canvas. */
+const trivialRasterizer: GlyphRasterizer = (ch: string): RasterizedGlyph => {
+  const empty = ch === ' ';
+  const w = empty ? 0 : 10;
+  const ht = empty ? 0 : 18;
+  return {
+    data: new Uint8Array(Math.max(0, w * ht)),
+    width: w,
+    height: ht,
+    glyphWidth: Math.max(0, w - 2 * SDF_BUFFER),
+    glyphHeight: Math.max(0, ht - 2 * SDF_BUFFER),
+    glyphTop: 15,
+    glyphLeft: 1,
+    glyphAdvance: empty ? 6 : 12,
+  };
+};
 
 /**
  * Label controller (#customRender labels, Phase 2). Same fake-GL idiom as
@@ -474,14 +494,20 @@ describe('SurveyLabelController font readiness', () => {
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (globalThis as unknown as Record<string, unknown>).OffscreenCanvas;
+  });
 
-  it('defers the first build until the font resolves, then builds + activates', async () => {
+  it('defers the first build until the font resolves (usable rasterizer), then builds + activates', async () => {
+    // canRasterize() gates on OffscreenCanvas/document; the node test env has
+    // neither, so stub OffscreenCanvas to model a canvas-capable runtime and pass
+    // a real (truthy) rasterizer -> the resolved atlas is usable and activates.
+    (globalThis as unknown as Record<string, unknown>).OffscreenCanvas = class {};
     const { map, visibility } = makeFakeMap();
-    // No injected atlas: the async font path runs (resolves false -> inert atlas).
     const c = new SurveyLabelController(map, undefined, {
-      ensureFont: () => Promise.resolve(false),
-      makeRasterizer: () => null,
+      ensureFont: () => Promise.resolve(true),
+      makeRasterizer: () => trivialRasterizer,
     });
     c.sync(makeParams());
     // Font not resolved yet: nothing built.
@@ -492,6 +518,27 @@ describe('SurveyLabelController font readiness', () => {
     await Promise.resolve();
     expect(c.isActive()).toBe(true);
     expect(visibility[STOCK_LABEL]).toBe('none');
+  });
+
+  it('keeps stock labels when the bundled font is unavailable (null rasterizer, never activates)', async () => {
+    // Fix: a failed font asset (or a WebView without FontFace / canvas) resolves
+    // ready=false -> null rasterizer. Building an inert atlas would suppress every
+    // stock label layer while drawing zero glyphs, blanking all labels. Instead
+    // the controller must stay inactive so the stock label path keeps publishing.
+    const changes: boolean[] = [];
+    const { map, visibility } = makeFakeMap();
+    const c = new SurveyLabelController(map, undefined, {
+      ensureFont: () => Promise.resolve(false),
+      makeRasterizer: () => null,
+      onActiveChange: (a: boolean) => changes.push(a),
+    });
+    c.sync(makeParams());
+    // Flush the ensureFont().then(...) microtask chain.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(c.isActive()).toBe(false);
+    expect(visibility[STOCK_LABEL]).toBe('visible');
+    expect(changes).toEqual([]); // never fired onActiveChange(true)
   });
 });
 
@@ -515,6 +562,46 @@ describe('SurveyLabelController teardown', () => {
     c.destroy();
     expect(removed).toContain(CUSTOM_ID);
     expect(visibility[STOCK_LABEL]).toBe('visible');
+  });
+});
+
+describe('SurveyLabelController dispose (unmount-lite hook + cache release)', () => {
+  // The controller installs its window sync hook only when `window` is defined;
+  // the node test env has none, so stub a bare window for the lifetime of each
+  // test and restore it afterwards.
+  const realWindow = (globalThis as unknown as { window?: unknown }).window;
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.render = true;
+    h.gate.labels = true;
+    (globalThis as unknown as { window: unknown }).window = {};
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (realWindow === undefined) delete (globalThis as unknown as { window?: unknown }).window;
+    else (globalThis as unknown as { window: unknown }).window = realWindow;
+  });
+
+  it('dispose() removes the window sync hook and a later sync() is inert (no map touch)', () => {
+    const win = (globalThis as unknown as { window: Record<string, unknown> }).window;
+    const { map, visibility } = makeFakeMap();
+    const c = makeController(map);
+    c.sync(makeParams());
+    expect(c.isActive()).toBe(true);
+    expect(typeof win[CUSTOM_LABELS_SYNC_HOOK]).toBe('function'); // hook installed
+    const layer = h.layerState.last!;
+    const updatesBefore = layer.updateCalls;
+
+    c.dispose();
+    expect(win[CUSTOM_LABELS_SYNC_HOOK]).toBeUndefined(); // hook removed
+    // dispose() must NOT touch the map: the stock label layer stays suppressed
+    // (map.remove() handles GL teardown), and a later sync() rebuilds nothing.
+    expect(visibility[STOCK_LABEL]).toBe('none');
+    c.sync(makeParams());
+    expect(layer.updateCalls).toBe(updatesBefore); // inert: disposed guard bails
   });
 });
 

@@ -5661,8 +5661,17 @@ export default class SurveyLayer {
    *  map.remove(). The registry is keyed by a fixed source id shared across
    *  projects, so a project -> Global-View switch (which skips destroy() for
    *  unmount speed) would otherwise leave this project's ~MBs of arrays resident
-   *  until the next project's first publish overwrites the slot (#mem). */
+   *  until the next project's first publish overwrites the slot (#mem).
+   *
+   *  Also disposes the custom-render controllers, releasing their window sync
+   *  hooks so they no longer pin this controller's cached SurveyData + glyph
+   *  atlas + GL buffers alive until the next SurveyLayer overwrites the globals.
+   *  dispose() is the map-free counterpart of destroy() (no removeLayer, no stock
+   *  republish); it is idempotent, so the destroy() path (which nulls both refs
+   *  before calling this) is unaffected. */
   releaseVtRegistry(): void {
+    this.customRender?.dispose();
+    this.customLabels?.dispose();
     clearFeatureCountsForPrefix('survey-');
     for (const suffix of SurveyLayer.VT_SOURCE_SUFFIXES) {
       clearVtLayerData(this.sourceId + suffix);

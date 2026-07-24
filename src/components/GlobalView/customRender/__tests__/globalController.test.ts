@@ -210,6 +210,19 @@ describe('GlobalCustomController', () => {
     expect(c.pick(project, 0, 0)).toBeNull();
   });
 
+  it('destroy() while active tears down silently (no onActiveChange(false) / republish)', () => {
+    const { map } = makeFakeMap();
+    const active: boolean[] = [];
+    const c = new GlobalCustomController(map, undefined, { onActiveChange: (a) => active.push(a) });
+    c.sync(makeSystems());
+    expect(active).toEqual([true]);
+    c.destroy();
+    expect(c.isActive()).toBe(false);
+    // No trailing false: GlobalSurveyLayer clears the registry + removes the map
+    // right after, so a stock republish on exit would be wasted work.
+    expect(active).toEqual([true]);
+  });
+
   it('setHover maps a system id to its baked index (or -1)', () => {
     const { map } = makeFakeMap();
     const c = new GlobalCustomController(map);

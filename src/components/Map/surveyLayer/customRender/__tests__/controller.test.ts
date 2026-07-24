@@ -6,6 +6,7 @@ import {
   type SurveyData,
 } from '../../../../../types/survey-data';
 import { SurveyCustomController, type CustomSyncParams } from '../controller';
+import { CUSTOM_RENDER_SYNC_HOOK } from '../gate';
 
 /**
  * Controller fail-safe tests (#customRender). The GL layer is replaced with a
@@ -317,6 +318,59 @@ describe('SurveyCustomController fail-safe visibility', () => {
     c.sync(makeParams());
     for (const id of STOCK) expect(visibility[id]).toBe('visible');
     expect(info.mock.calls.some((cl) => String(cl[0]).includes('disabled'))).toBe(true);
+  });
+
+  it('restores stock layers to their REQUESTED visibility, not blindly visible', () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const { map, visibility } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.setShotsVisible(false); // user hid shots before the custom layer built
+    c.sync(makeParams());
+    for (const id of STOCK) expect(visibility[id]).toBe('none'); // suppressed while active
+    // Gate off -> teardown restores. Shots (and their gradients) must stay hidden
+    // per the stored toggle; stations, never hidden, come back visible.
+    h.gate.enabled = false;
+    c.sync(makeParams());
+    expect(visibility['survey-shots']).toBe('none');
+    expect(visibility['survey-shot-gradients']).toBe('none'); // follows the shots toggle
+    expect(visibility['survey-stations']).toBe('visible');
+  });
+});
+
+describe('SurveyCustomController dispose (unmount-lite hook + cache release)', () => {
+  // The controller installs its window sync hook only when `window` is defined;
+  // the node test env has none, so stub a bare window per test and restore it.
+  const realWindow = (globalThis as unknown as { window?: unknown }).window;
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    h.gate.enabled = true;
+    (globalThis as unknown as { window: unknown }).window = {};
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (realWindow === undefined) delete (globalThis as unknown as { window?: unknown }).window;
+    else (globalThis as unknown as { window: unknown }).window = realWindow;
+  });
+
+  it('dispose() removes the window sync hook and a later sync() is inert', () => {
+    const win = (globalThis as unknown as { window: Record<string, unknown> }).window;
+    const { map, visibility } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.sync(makeParams());
+    const layer = h.layerState.last!;
+    expect(typeof win[CUSTOM_RENDER_SYNC_HOOK]).toBe('function'); // hook installed
+    const updatesBefore = layer.updateCalls;
+
+    c.dispose();
+    expect(win[CUSTOM_RENDER_SYNC_HOOK]).toBeUndefined(); // hook removed
+    // dispose() must NOT touch the map: stock stays suppressed (map.remove()
+    // handles GL teardown), and a later sync() rebuilds nothing.
+    for (const id of STOCK) expect(visibility[id]).toBe('none');
+    c.sync(makeParams());
+    expect(layer.updateCalls).toBe(updatesBefore); // inert: disposed guard bails
   });
 });
 

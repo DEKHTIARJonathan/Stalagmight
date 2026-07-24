@@ -316,6 +316,15 @@ export class SurveyLabelController {
       void ensure().then((ready) => {
         if (this.destroyed) return; // torn down while the font was resolving.
         const rasterizer = ready && canRasterize() ? makeRast() : null;
+        if (!rasterizer) {
+          // Font asset failed, or a WebView without FontFace / canvas. Building an
+          // INERT atlas here would enable the custom label layer and suppress every
+          // stock label layer while drawing ZERO glyphs -> the map loses all labels.
+          // Leave `this.atlas` null so sync() stays a no-op and the stock label
+          // path keeps publishing.
+          console.warn('[customRender] label font unavailable; keeping stock labels');
+          return;
+        }
         this.atlas = new GlyphAtlas({ rasterizer });
         // A sync that arrived before the font resolved builds now (design §7).
         if (this.pendingParams) this.sync(this.pendingParams);
@@ -924,6 +933,28 @@ export class SurveyLabelController {
     else if (this.pendingParams) this.sync(this.pendingParams);
   }
 
+  /**
+   * Lightweight release WITHOUT touching the map (no removeLayer, no stock
+   * republish). Called on MapCanvas unmount via SurveyLayer.releaseVtRegistry(),
+   * which deliberately skips the full {@link destroy} for unmount speed. Without
+   * this the window sync hook would pin this controller (and its cached
+   * SurveyData + glyph atlas + GL buffers) alive until the next SurveyLayer
+   * overwrites the global -> hundreds of MB retained on large projects (#mem).
+   * Uninstalls the hook, sets the {@link destroyed} guard so a late async
+   * callback / sync bails, and nulls the heavy caches. `map.remove()` handles the
+   * layer's GL teardown, so a republish here would be wasted work. Idempotent.
+   */
+  dispose(): void {
+    this.destroyed = true;
+    if (this.hookInstalled && typeof window !== 'undefined') {
+      delete (window as unknown as Record<string, unknown>)[CUSTOM_LABELS_SYNC_HOOK];
+      this.hookInstalled = false;
+    }
+    this.pendingParams = null;
+    this.lastData = null;
+    this.atlas = null;
+  }
+
   destroy(): void {
     this.destroyed = true;
     if (this.active) this.disable();
@@ -932,10 +963,8 @@ export class SurveyLabelController {
       this.map.off?.('zoomend', this.boundCameraSettle);
       this.boundCameraSettle = null;
     }
-    if (this.hookInstalled && typeof window !== 'undefined') {
-      delete (window as unknown as Record<string, unknown>)[CUSTOM_LABELS_SYNC_HOOK];
-      this.hookInstalled = false;
-    }
-    this.pendingParams = null;
+    // Reuse dispose() for the hook removal + cache clearing (DRY); the active-layer
+    // teardown above is destroy()'s addition over the unmount-lite dispose() path.
+    this.dispose();
   }
 }

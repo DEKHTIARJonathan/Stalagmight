@@ -121,6 +121,17 @@ export class GlobalHitIndex {
     let bestShot: { systemId: string; dist: number } | null = null;
 
     for (const e of this.entries) {
+      // A system with no shots keeps its initial +/-Infinity bounds; projecting
+      // those hands MapLibre an invalid lng/lat and throws for the WHOLE global
+      // map on every mousemove/click. Skip it before any projection.
+      if (
+        !Number.isFinite(e.minLng) ||
+        !Number.isFinite(e.minLat) ||
+        !Number.isFinite(e.maxLng) ||
+        !Number.isFinite(e.maxLat)
+      ) {
+        continue;
+      }
       // Conservative AABB prefilter: project the two diagonal corners (the app's
       // global map has no bearing/pitch, so axis order is preserved) and reject
       // systems whose padded screen box misses the point.

@@ -192,11 +192,18 @@ export class GlobalCustomController {
     console.info('[globalCustomRender] disabled; stock global-survey layers restored');
   }
 
-  private teardown(): void {
+  /** Remove the custom layer + restore the stock layers. `fireRepublish` true
+   *  (gate-off / self-disable) drives the stock vector-tile republish through
+   *  {@link setActive}; false (destroy) sets `active` directly so onActiveChange
+   *  never fires — GlobalSurveyLayer is about to clear the registry + remove the
+   *  map, so that republish would be wasted work (and can freeze dense
+   *  multi-system views on exit). */
+  private teardown(fireRepublish = true): void {
     if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
     this.layer = null;
     this.setStockVisibility('visible');
-    this.setActive(false);
+    if (fireRepublish) this.setActive(false);
+    else this.active = false;
     this.map.triggerRepaint();
   }
 
@@ -309,7 +316,9 @@ export class GlobalCustomController {
   }
 
   destroy(): void {
-    if (this.active) this.disable();
+    // Silent teardown: no onActiveChange(false) -> no stock republish, since
+    // GlobalSurveyLayer clears the registry + removes the map right after.
+    if (this.active) this.teardown(false);
     this.systems = [];
     this.metadataById = new Map();
     this.hitIndex = null;
