@@ -1,9 +1,10 @@
 /**
- * Controller tests for the global view's custom render (#customRender). The GL
- * layer is a scriptable fake so the gating, fail-safe restore, active-state
- * callback (bulk-publish suppression signal), and geometry-based pick can be
- * exercised without a real WebGL context. The pure buffer build + hit index run
- * for real.
+ * Controller tests for the global view's custom render (#customRender). The
+ * custom layer is the SOLE global-survey renderer (no gate, no stock fallback).
+ * The GL layer is a scriptable fake so the unconditional activation, error-state
+ * routing (onFatal), active-state callback (bulk-publish suppression signal), and
+ * geometry-based pick can be exercised without a real WebGL context. The pure
+ * buffer build + hit index run for real.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
@@ -19,7 +20,6 @@ const h = vi.hoisted(() => {
     disabledReason: 'program-link-failed' as string,
     last: null as FakeLayer | null,
   };
-  const gate = { enabled: true };
 
   class FakeLayer {
     readonly id: string;
@@ -61,14 +61,10 @@ const h = vi.hoisted(() => {
     }
   }
 
-  return { layerState, gate, FakeLayer };
+  return { layerState, FakeLayer };
 });
 
 vi.mock('../globalCustomLayer', () => ({ GlobalCustomLayer: h.FakeLayer }));
-vi.mock('../../../Map/surveyLayer/customRender/gate', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../Map/surveyLayer/customRender/gate')>();
-  return { ...actual, readCustomRenderGate: () => h.gate.enabled };
-});
 
 const STOCK = [
   'global-survey-shots-layer',
@@ -132,13 +128,12 @@ describe('GlobalCustomController', () => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.disabledReason = 'program-link-failed';
     h.layerState.last = null;
-    h.gate.enabled = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('gate on: hides stock layers, fires onActiveChange(true), becomes active', () => {
+  it('hides stock layers, fires onActiveChange(true), becomes active', () => {
     const { map, visibility, removed } = makeFakeMap();
     const active: boolean[] = [];
     const c = new GlobalCustomController(map, undefined, { onActiveChange: (a) => active.push(a) });
@@ -149,52 +144,63 @@ describe('GlobalCustomController', () => {
     expect(active).toEqual([true]);
   });
 
-  it('gate off: never activates, stock layers stay visible', () => {
-    h.gate.enabled = false;
-    const { map, visibility } = makeFakeMap();
-    const c = new GlobalCustomController(map);
-    c.sync(makeSystems());
-    for (const id of STOCK) expect(visibility[id]).toBe('visible');
-    expect(c.isActive()).toBe(false);
-  });
-
-  it('gate flip off after active: disables + fires onActiveChange(false), restores stock', () => {
+  it('is unconditional: a re-sync stays active + keeps stock hidden, no re-fire', () => {
     const { map, visibility } = makeFakeMap();
     const active: boolean[] = [];
     const c = new GlobalCustomController(map, undefined, { onActiveChange: (a) => active.push(a) });
     c.sync(makeSystems());
-    h.gate.enabled = false;
+    // A second sync is a refresh (update()), never a disable — the custom layer
+    // is the sole renderer, so it stays active and the stock layers stay hidden.
     c.sync(makeSystems());
-    for (const id of STOCK) expect(visibility[id]).toBe('visible');
-    expect(c.isActive()).toBe(false);
-    expect(active).toEqual([true, false]);
+    for (const id of STOCK) expect(visibility[id]).toBe('none');
+    expect(c.isActive()).toBe(true);
+    expect(active).toEqual([true]); // true fires once, never re-fires
   });
 
-  it('onAdd-disabled: keeps stock layers visible, removes the dead layer, stays inactive', () => {
+  it('onAdd-disabled: fires onFatal, removes the dead layer, stays inactive, no stock restore', () => {
     h.layerState.disabledAfterAdd = true;
     h.layerState.disabledReason = 'webgl2-unavailable';
-    const { map, visibility, removed } = makeFakeMap();
+    const { map, removed } = makeFakeMap();
     const active: boolean[] = [];
-    const c = new GlobalCustomController(map, undefined, { onActiveChange: (a) => active.push(a) });
+    const fatals: string[] = [];
+    const c = new GlobalCustomController(map, undefined, {
+      onActiveChange: (a) => active.push(a),
+      onFatal: (r) => fatals.push(r),
+    });
     c.sync(makeSystems());
-    for (const id of STOCK) expect(visibility[id]).toBe('visible');
     expect(removed).toContain(CUSTOM_ID);
     expect(c.isActive()).toBe(false);
     expect(active).toEqual([]); // never fired true
+    expect(fatals).toEqual(['webgl2-unavailable']);
+    // Fatal latch: a later sync() is inert.
+    c.sync(makeSystems());
+    expect(removed.filter((id) => id === CUSTOM_ID).length).toBe(1);
+    expect(fatals).toEqual(['webgl2-unavailable']); // at most once
   });
 
-  it('self-disable restores stock visibility, deferred off the render stack', () => {
+  it('self-disable fires onFatal (deferred), removes the layer, does NOT restore stock', () => {
     const holder: { fn: (() => void) | null } = { fn: null };
-    const { map, visibility } = makeFakeMap();
-    const c = new GlobalCustomController(map, undefined, { scheduleRestore: (fn) => (holder.fn = fn) });
+    const { map, visibility, removed } = makeFakeMap();
+    const active: boolean[] = [];
+    const fatals: string[] = [];
+    const c = new GlobalCustomController(map, undefined, {
+      scheduleRestore: (fn) => (holder.fn = fn),
+      onActiveChange: (a) => active.push(a),
+      onFatal: (r) => fatals.push(r),
+    });
     c.sync(makeSystems());
     for (const id of STOCK) expect(visibility[id]).toBe('none');
     // Simulate a GL error mid-render.
     h.layerState.last!.onSelfDisable?.('gl-error-0x505');
-    // Deferred: stock still hidden until the scheduled restore runs.
-    for (const id of STOCK) expect(visibility[id]).toBe('none');
+    // Deferred: nothing torn down until the scheduled callback runs.
+    expect(removed).not.toContain(CUSTOM_ID);
     holder.fn?.();
-    for (const id of STOCK) expect(visibility[id]).toBe('visible');
+    // Error state: dead layer removed, onFatal fired, stock NOT restored (stays
+    // hidden from the clean enable — no fallback), onActiveChange NOT re-fired.
+    expect(removed).toContain(CUSTOM_ID);
+    expect(fatals).toEqual(['gl-error-0x505']);
+    for (const id of STOCK) expect(visibility[id]).toBe('none');
+    expect(active).toEqual([true]); // no false → no stock republish
     expect(c.isActive()).toBe(false);
   });
 
@@ -223,41 +229,44 @@ describe('GlobalCustomController', () => {
     expect(active).toEqual([true]);
   });
 
-  it('markers-only (setVisible false) restores stock layers to HIDDEN on gate-off, not blindly visible', () => {
+  it('destroy() in markers-only mode restores stock layers to HIDDEN, not blindly visible', () => {
     const { map, visibility } = makeFakeMap();
     const c = new GlobalCustomController(map);
     c.sync(makeSystems());
     for (const id of STOCK) expect(visibility[id]).toBe('none');
     // User switches to markers-only: the survey geometry is stored hidden.
     c.setVisible(false);
-    // Gate flips off -> fallback restore. Hidden survey geometry must stay hidden
-    // (matching pick() which returns no hits while !visible); otherwise it
-    // reappears over the markers view and becomes interactive again.
-    h.gate.enabled = false;
-    c.sync(makeSystems());
+    // destroy() is the sole non-fatal teardown that still restores stock. Hidden
+    // survey geometry must stay hidden (matching pick(), which returns no hits
+    // while !visible); otherwise it reappears over the markers view.
+    c.destroy();
     for (const id of STOCK) expect(visibility[id]).toBe('none');
     expect(c.isActive()).toBe(false);
   });
 
-  it('self-disable in markers-only mode restores stock layers to HIDDEN', () => {
+  it('a fatal self-disable in markers-only mode leaves stock HIDDEN (untouched)', () => {
     const holder: { fn: (() => void) | null } = { fn: null };
     const { map, visibility } = makeFakeMap();
-    const c = new GlobalCustomController(map, undefined, { scheduleRestore: (fn) => (holder.fn = fn) });
+    const fatals: string[] = [];
+    const c = new GlobalCustomController(map, undefined, {
+      scheduleRestore: (fn) => (holder.fn = fn),
+      onFatal: (r) => fatals.push(r),
+    });
     c.sync(makeSystems());
     c.setVisible(false);
     h.layerState.last!.onSelfDisable?.('gl-error-0x505');
     holder.fn?.();
     for (const id of STOCK) expect(visibility[id]).toBe('none');
+    expect(fatals).toEqual(['gl-error-0x505']);
     expect(c.isActive()).toBe(false);
   });
 
-  it('normal restore (visible survey) still un-hides the stock layers', () => {
+  it('destroy() with a visible survey un-hides the stock layers', () => {
     const { map, visibility } = makeFakeMap();
     const c = new GlobalCustomController(map);
     c.sync(makeSystems());
     for (const id of STOCK) expect(visibility[id]).toBe('none');
-    h.gate.enabled = false;
-    c.sync(makeSystems());
+    c.destroy();
     for (const id of STOCK) expect(visibility[id]).toBe('visible');
   });
 

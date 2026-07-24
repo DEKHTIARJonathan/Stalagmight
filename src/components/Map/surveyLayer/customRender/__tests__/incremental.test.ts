@@ -276,7 +276,6 @@ describe('planIncrementalUpdate', () => {
 // ─── Controller incremental apply (byte-identity + fallbacks) ──────────────
 
 const h = vi.hoisted(() => {
-  const gate = { enabled: true };
   const state = { lineUploads: 0, circleUploads: 0, fullUpdates: 0 };
   class FakeLayer {
     readonly id: string;
@@ -309,16 +308,12 @@ const h = vi.hoisted(() => {
       state.circleUploads++;
     }
   }
-  return { gate, state, FakeLayer };
+  return { state, FakeLayer };
 });
 
 vi.mock('../surveyCustomLayer', () => ({ SurveyCustomLayer: h.FakeLayer }));
-vi.mock('../gate', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../gate')>();
-  return { ...actual, readCustomRenderGate: () => h.gate.enabled };
-});
 
-// vi.mock is hoisted, so this static import already binds to the fake layer + gate.
+// vi.mock is hoisted, so this static import already binds to the fake layer.
 import { SurveyCustomController, type CustomSyncParams } from '../controller';
 import type { CustomRenderData } from '../surveyCustomLayer';
 type Ctrl = InstanceType<typeof SurveyCustomController>;
@@ -370,7 +365,6 @@ function rng(seed: number): () => number {
 
 describe('SurveyCustomController incremental apply', () => {
   beforeEach(() => {
-    h.gate.enabled = true;
     h.state.lineUploads = 0;
     h.state.circleUploads = 0;
     h.state.fullUpdates = 0;

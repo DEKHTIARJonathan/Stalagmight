@@ -31,14 +31,14 @@ const trivialRasterizer: GlyphRasterizer = (ch: string): RasterizedGlyph => {
 };
 
 /**
- * Label controller (#customRender labels, Phase 2). Same fake-GL idiom as
- * `controller.test.ts`: the label GL layer + both gate modules are mocked, and a
- * real (inert) `GlyphAtlas` is injected so the pure build runs with no font /
- * canvas. Covers the composed gate, fail-safe stock-label restore, and the
+ * Label controller (#customRender labels). Same fake-GL idiom as
+ * `controller.test.ts`: the label GL layer is mocked and a real (inert)
+ * `GlyphAtlas` is injected so the pure build runs with no font / canvas. The
+ * custom label layer is the SOLE label path (no gate, no stock fallback), so this
+ * covers unconditional activation, the error-state routing (onFatal), and the
  * station-toggle / theme / reference wiring into the shader-uniform inputs.
  */
 const h = vi.hoisted(() => {
-  const gate = { render: true, labels: true };
   const layerState = {
     disabledAfterAdd: false,
     disabledReason: 'program-link-failed' as string,
@@ -99,18 +99,10 @@ const h = vi.hoisted(() => {
     }
   }
 
-  return { gate, layerState, FakeLabelLayer };
+  return { layerState, FakeLabelLayer };
 });
 
 vi.mock('../surveyCustomLabelLayer', () => ({ SurveyCustomLabelLayer: h.FakeLabelLayer }));
-vi.mock('../gate', async (orig) => {
-  const actual = await orig<typeof import('../gate')>();
-  return { ...actual, readCustomRenderGate: () => h.gate.render };
-});
-vi.mock('../labelsGate', async (orig) => {
-  const actual = await orig<typeof import('../labelsGate')>();
-  return { ...actual, readCustomLabelsGate: () => h.gate.labels };
-});
 
 const STOCK_LABEL = 'survey-station-labels';
 const CUSTOM_ID = 'survey-custom-labels';
@@ -191,18 +183,16 @@ function makeController(map: MaplibreMap, opts: Record<string, unknown> = {}): S
   return new SurveyLabelController(map, undefined, { atlas: new GlyphAtlas(), ...opts });
 }
 
-describe('SurveyLabelController gate composition', () => {
+describe('SurveyLabelController activation (sole label path, no gate)', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('activates and hides the stock station-labels layer when the labels gate is on', () => {
+  it('activates and hides the stock station-labels layer on sync (unconditional)', () => {
     const { map, visibility } = makeFakeMap();
     const c = makeController(map);
     c.sync(makeParams());
@@ -210,85 +200,64 @@ describe('SurveyLabelController gate composition', () => {
     expect(visibility[STOCK_LABEL]).toBe('none');
   });
 
-  it('stays inactive when the labels gate is off', () => {
-    h.gate.labels = false;
+  it('is unconditional: a re-sync stays active + keeps stock hidden, no re-fire', () => {
+    const changes: boolean[] = [];
     const { map, visibility } = makeFakeMap();
-    const c = makeController(map);
+    const c = makeController(map, { onActiveChange: (a: boolean) => changes.push(a) });
     c.sync(makeParams());
-    expect(c.isActive()).toBe(false);
-    expect(visibility[STOCK_LABEL]).toBe('visible');
-  });
-
-  it('activates on the labels gate ALONE, regardless of the geometry gate (standalone)', () => {
-    h.gate.render = false; // geometry stock; labels gate still on
-    const { map, visibility } = makeFakeMap();
-    const c = makeController(map);
+    // A second sync is a refresh, never a disable — it stays active and the stock
+    // station labels stay hidden.
     c.sync(makeParams());
     expect(c.isActive()).toBe(true);
     expect(visibility[STOCK_LABEL]).toBe('none');
+    expect(changes).toEqual([true]); // true fires once, never re-fires
   });
 
-  it('restores the stock station-labels layer to the desired toggle state when a gate flips off', () => {
-    const { map, visibility } = makeFakeMap();
-    const c = makeController(map);
-    c.setStationLabelsVisible(true); // desired: visible
-    c.sync(makeParams());
-    expect(visibility[STOCK_LABEL]).toBe('none'); // suppressed while active
-    h.gate.labels = false;
-    c.sync(makeParams());
-    expect(c.isActive()).toBe(false);
-    expect(visibility[STOCK_LABEL]).toBe('visible'); // restored to desired
-  });
-
-  it('fires onActiveChange(true) on enable and (false) on gate-off disable', () => {
+  it('fires onActiveChange(true) on enable and (false) on destroy (non-fatal teardown)', () => {
     const changes: boolean[] = [];
     const { map } = makeFakeMap();
     const c = makeController(map, { onActiveChange: (a: boolean) => changes.push(a) });
     c.sync(makeParams());
     expect(changes).toEqual([true]); // enabled → drop stock label VT
-    h.gate.labels = false;
-    c.sync(makeParams());
-    expect(changes).toEqual([true, false]); // opted out → restore stock label VT
-  });
-
-  it('does not fire onActiveChange when it never activates (gate off)', () => {
-    h.gate.labels = false;
-    const changes: boolean[] = [];
-    const { map } = makeFakeMap();
-    const c = makeController(map, { onActiveChange: (a: boolean) => changes.push(a) });
-    c.sync(makeParams());
-    expect(changes).toEqual([]);
+    // destroy() is the sole non-fatal teardown that restores/republishes stock.
+    c.destroy();
+    expect(changes).toEqual([true, false]); // torn down → restore stock label VT
   });
 });
 
-describe('SurveyLabelController fail-safe', () => {
+describe('SurveyLabelController error state (no stock fallback)', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.disabledReason = 'program-link-failed';
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('onAdd-disabled: keeps stock labels at the desired state and removes the dead layer', () => {
+  it('onAdd-disabled: fires onFatal, removes the dead layer, does NOT restore stock', () => {
     h.layerState.disabledAfterAdd = true;
     h.layerState.disabledReason = 'webgl2-unavailable';
-    const { map, visibility, removed } = makeFakeMap();
-    const c = makeController(map);
-    c.setStationLabelsVisible(true); // desired visible so restore keeps them on
+    const fatals: string[] = [];
+    const { map, removed } = makeFakeMap();
+    const c = makeController(map, { onFatal: (r: string) => fatals.push(r) });
+    c.setStationLabelsVisible(true);
     c.sync(makeParams());
     expect(c.isActive()).toBe(false);
-    expect(visibility[STOCK_LABEL]).toBe('visible');
     expect(removed).toContain(CUSTOM_ID);
+    expect(fatals).toEqual(['webgl2-unavailable']);
+    // Fatal latch: a later sync() is inert (labels stay absent — no fallback).
+    c.sync(makeParams());
+    expect(removed.filter((id) => id === CUSTOM_ID).length).toBe(1);
+    expect(fatals).toEqual(['webgl2-unavailable']); // at most once
   });
 
-  it('render-error self-disable restores stock labels, deferred off the render stack', () => {
+  it('render-error self-disable fires onFatal (deferred), removes the layer, keeps stock hidden', () => {
     const holder: { fn: (() => void) | null; scheduled: number } = { fn: null, scheduled: 0 };
+    const fatals: string[] = [];
     const { map, visibility, removed } = makeFakeMap();
     const c = makeController(map, {
+      onFatal: (r: string) => fatals.push(r),
       scheduleRestore: (fn: () => void) => {
         holder.fn = fn;
         holder.scheduled += 1;
@@ -300,43 +269,46 @@ describe('SurveyLabelController fail-safe', () => {
 
     const layer = h.layerState.last;
     layer?.onSelfDisable?.('gl-error-0x502');
-    // Deferred: not restored yet (must not mutate style mid-render).
-    expect(visibility[STOCK_LABEL]).toBe('none');
+    // Deferred: nothing torn down yet (must not mutate style mid-render).
+    expect(removed).not.toContain(CUSTOM_ID);
+    expect(fatals).toEqual([]);
     // A second self-disable before the restore runs is coalesced.
     layer?.onSelfDisable?.('gl-error-0x502');
     expect(holder.scheduled).toBe(1);
 
     holder.fn?.();
-    expect(visibility[STOCK_LABEL]).toBe('visible');
+    // Error state: dead layer removed, onFatal fired once, stock NOT restored
+    // (stays hidden from the clean enable — no fallback).
     expect(removed).toEqual([CUSTOM_ID]);
+    expect(fatals).toEqual(['gl-error-0x502']);
+    expect(visibility[STOCK_LABEL]).toBe('none');
     expect(c.isActive()).toBe(false);
   });
 
-  it('a re-entrant sync() during a fail-safe self-disable teardown does NOT re-enable', () => {
-    // Mirrors production: the OFF signal drives a synchronous stock-label
-    // republish that syncs this controller again. The labels gate is still ON
-    // here (a GL-fault self-disable, not a gate opt-out), so without the
-    // tearingDown guard the re-entrant sync() would see `!active` and re-create
-    // the layer being torn down (a flip-flop on a persistent fault).
+  it('a fatal self-disable latches + does NOT republish stock (no onActiveChange(false))', () => {
+    // The fatal path removes the layer WITHOUT firing onActiveChange(false):
+    // firing it would drive SurveyLayer to republish the stock label VT groups,
+    // exactly the fallback this stage removes. And the fatal latch makes any later
+    // sync() a no-op rather than a flip-flop that re-creates the failed layer.
     const holder: { fn: (() => void) | null } = { fn: null };
     const calls: boolean[] = [];
-    const { map } = makeFakeMap();
-    let c!: SurveyLabelController;
-    c = makeController(map, {
-      onActiveChange: (a: boolean) => {
-        calls.push(a);
-        if (a === false) c.sync(makeParams()); // re-entrant mirror-back
-      },
+    const fatals: string[] = [];
+    const { map, removed } = makeFakeMap();
+    const c = makeController(map, {
+      onActiveChange: (a: boolean) => calls.push(a),
+      onFatal: (r: string) => fatals.push(r),
       scheduleRestore: (fn: () => void) => { holder.fn = fn; },
     });
     c.sync(makeParams());
     expect(calls).toEqual([true]);
     h.layerState.last?.onSelfDisable?.('gl-error-0x502');
-    holder.fn?.(); // deferred teardown; onActiveChange(false) re-enters sync()
-    // Gate still on, yet the re-entrant sync must be a no-op: exactly
-    // [true, false], never [true, false, true].
-    expect(h.gate.labels).toBe(true);
-    expect(calls).toEqual([true, false]);
+    holder.fn?.(); // deferred fatal teardown
+    expect(fatals).toEqual(['gl-error-0x502']);
+    expect(calls).toEqual([true]); // no false → no stock republish
+    expect(removed).toEqual([CUSTOM_ID]);
+    // Later sync is inert (fatal latch), never re-enabling.
+    c.sync(makeParams());
+    expect(removed).toEqual([CUSTOM_ID]);
     expect(c.isActive()).toBe(false);
   });
 
@@ -383,8 +355,6 @@ describe('SurveyLabelController style wiring', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -431,8 +401,6 @@ describe('SurveyLabelController all-kinds suppression + toggle routing', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -445,12 +413,13 @@ describe('SurveyLabelController all-kinds suppression + toggle routing', () => {
     for (const id of Object.values(STOCK_LAYERS)) expect(visibility[id]).toBe('none');
   });
 
-  it('restores each stock layer to its kind default on gate-off (section names visible, rest hidden)', () => {
+  it('restores each stock layer to its kind default on destroy (section names visible, rest hidden)', () => {
     const { map, visibility } = makeFakeMap();
     const c = makeController(map);
     c.sync(makeParams());
-    h.gate.labels = false;
-    c.sync(makeParams());
+    // destroy() is the sole non-fatal teardown that restores stock; each stock
+    // layer returns to its kind's DESIRED toggle, not blindly visible.
+    c.destroy();
     expect(visibility[STOCK_LAYERS[LABEL_KIND.SECTION_NAME]!]).toBe('visible'); // default on
     expect(visibility[STOCK_LAYERS[LABEL_KIND.SHOT_LABEL]!]).toBe('none');
     expect(visibility[STOCK_LAYERS[LABEL_KIND.STATION_LABEL]!]).toBe('none');
@@ -489,8 +458,6 @@ describe('SurveyLabelController font readiness', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -546,8 +513,6 @@ describe('SurveyLabelController teardown', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -573,8 +538,6 @@ describe('SurveyLabelController dispose (unmount-lite hook + cache release)', ()
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     (globalThis as unknown as { window: unknown }).window = {};
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -725,8 +688,6 @@ describe('SurveyLabelController zoom gate (viewport build set)', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -777,8 +738,6 @@ describe('SurveyLabelController camera-settle rebuild (conditional)', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -912,8 +871,6 @@ describe('SurveyLabelController NO rebuild on zoom-in (reveal-zoom admission)', 
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -965,8 +922,6 @@ describe('SurveyLabelController emit slack (vertex-load bound)', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -1010,8 +965,6 @@ describe('SurveyLabelController shape cache reuse', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -1117,8 +1070,6 @@ describe('SurveyLabelController dim parity (DIM flag)', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -1173,8 +1124,6 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -1291,8 +1240,6 @@ describe('SurveyLabelController synchronous placement (undo/redo)', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -1322,8 +1269,6 @@ describe('SurveyLabelController reveal rerun on toggle', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
@@ -1359,23 +1304,20 @@ describe('SurveyLabelController labelRestore-guard contract (isActive gates the 
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;
     h.layerState.last = null;
-    h.gate.render = true;
-    h.gate.labels = true;
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
   afterEach(() => vi.restoreAllMocks());
 
   // SurveyLayer guards every stock labelRestore call with `!customLabels.isActive()`.
-  // Lock the controller side of that predicate across the gate transitions.
-  it('isActive() is true only while both gates are on and a build has landed', () => {
+  // Lock the controller side of that predicate across enable + teardown.
+  it('isActive() is true only after a build has landed, false again after destroy', () => {
     const cam = makeCameraMap(18);
     const c = cameraController(cam.map);
     expect(c.isActive()).toBe(false); // nothing synced yet → guard runs stock restore
     c.sync(makeParams());
     expect(c.isActive()).toBe(true); // active → guard SKIPS stock restore
-    h.gate.labels = false;
-    c.sync(makeParams());
-    expect(c.isActive()).toBe(false); // gate off → guard runs stock restore again
+    c.destroy();
+    expect(c.isActive()).toBe(false); // torn down → guard runs stock restore again
   });
 });

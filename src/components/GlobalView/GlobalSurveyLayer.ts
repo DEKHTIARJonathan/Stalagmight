@@ -4,6 +4,7 @@ import { extractSystemStations } from './customRender/globalTessellate';
 import { GlobalCustomController } from './customRender/globalController';
 import { generateSystemColor, type SystemGeometry } from './systemColor';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
+import { useUIStore } from '../../store/uiStore';
 import { recordFeatureCount, clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
 import {
   ensureVtProtocol,
@@ -221,6 +222,7 @@ export default class GlobalSurveyLayer {
     this.initializeTooltip();
     this.customRender = new GlobalCustomController(map, undefined, {
       onActiveChange: (active) => this.onCustomActiveChange(active),
+      onFatal: (reason) => this.handleRenderFatal(reason),
     });
   }
 
@@ -229,6 +231,17 @@ export default class GlobalSurveyLayer {
    */
   setCallbacks(callbacks: GlobalSurveyLayerCallbacks): void {
     this.callbacks = callbacks;
+  }
+
+  /**
+   * The custom WebGL renderer hit an unrecoverable GL failure and removed its
+   * dead layer. There is no stock fallback, so the global-survey geometry is now
+   * blank. Log ungated and surface a user-facing toast (the store is read at call
+   * time, so this works from a non-React class).
+   */
+  private handleRenderFatal(reason: string): void {
+    console.error(`[globalCustomRender] survey rendering unavailable: ${reason}`);
+    useUIStore.getState().showToast('Survey rendering unavailable (WebGL2/GPU)', 'render-fatal');
   }
 
   /**

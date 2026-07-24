@@ -140,6 +140,10 @@ export interface SurveyLayerCallbacks {
   onHiddenStationClick?: () => void;
   /** Called when user clicks near a hidden shot (for toast feedback) */
   onHiddenShotClick?: () => void;
+  /** Called when the custom WebGL renderer hits an unrecoverable GL failure
+   *  (WebGL2/GPU). The custom layer is the sole survey renderer with no stock
+   *  fallback, so the survey area is now blank — surface a user-facing error. */
+  onRenderFatal?: (reason: string) => void;
 }
 
 /**
@@ -604,11 +608,13 @@ export default class SurveyLayer {
     this.customRender = new SurveyCustomController(map, undefined, {
       resync: () => this.resyncCustomRenderFromStore(),
       onActiveChange: (active) => this.onCustomActiveChange(active),
+      onFatal: (reason) => this.handleRenderFatal(reason),
     });
     // resyncCustomRenderFromStore syncs BOTH controllers, so one hook covers both.
     this.customLabels = new SurveyLabelController(map, undefined, {
       resync: () => this.resyncCustomRenderFromStore(),
       onActiveChange: (active) => this.onCustomLabelsActiveChange(active),
+      onFatal: (reason) => this.handleRenderFatal(reason),
     });
     this.dragGhost = new DragGhostController(map, {
       ghostData: (set) => this.dragGhostData(set),
@@ -622,6 +628,18 @@ export default class SurveyLayer {
 
   setCallbacks(callbacks: SurveyLayerCallbacks) {
     this.callbacks = callbacks;
+  }
+
+  /**
+   * The custom WebGL renderer (geometry or labels) hit an unrecoverable GL
+   * failure and removed its dead layer. There is no stock fallback, so the
+   * survey area is now blank. Log ungated (diagnosable in a production build) and
+   * notify the app so it can surface a user-facing error. Read at call time, so a
+   * later setCallbacks still routes here.
+   */
+  private handleRenderFatal(reason: string): void {
+    console.error(`[customRender] survey rendering unavailable: ${reason}`);
+    this.callbacks.onRenderFatal?.(reason);
   }
 
   // Config setter - triggers layer updates when config changes

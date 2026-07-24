@@ -3,14 +3,19 @@
  *
  * Keeps SurveyLayer.tsx to a few integration lines: SurveyLayer constructs one
  * of these, calls `sync(...)` after each geometry flush, and `destroy()` on
- * teardown. Everything else — reading the gate, building buffers from SoA,
- * resolving colors, adding/removing the custom layer, and toggling the stock
- * bulk layers' visibility — lives here.
+ * teardown. Everything else — building buffers from SoA, resolving colors,
+ * adding/removing the custom layer, and toggling the stock bulk layers'
+ * visibility — lives here.
  *
- * Flag ON  : add the custom layer before `survey-shots` (above basemap/ghosts,
- *            below labels/overlays) and hide the stock shots / shot-gradient /
- *            stations layers. Labels, interact overlay, drag-preview stay stock.
- * Flag OFF : remove the custom layer, restore the stock layers' visibility.
+ * The custom layer is the SOLE survey renderer: `sync()` always builds/enables
+ * it (no gate), adds it before `survey-shots` (above basemap/ghosts, below
+ * labels/overlays), and hides the stock shots / shot-gradient / stations layers.
+ * Labels, interact overlay, drag-preview stay stock. There is NO stock fallback:
+ * an unrecoverable GL failure (no WebGL2, program link failure, or a render-time
+ * `gl.getError` self-disable) removes the dead layer and calls `onFatal(reason)`
+ * so the app can surface an error state — it does NOT restore stock. The
+ * `setStockVisibility` restore path survives only for the non-fatal `destroy()`
+ * teardown (a later stage deletes the stock layers entirely).
  *
  * Hit-testing does NOT depend on the stock layers: candidate-section discovery
  * runs against the SoA geometry index (SurveyLayer.hitCandidateSections ->
@@ -48,10 +53,7 @@ import {
 import { makeColorResolvers } from './colorResolvers';
 import { planIncrementalUpdate, planColorOnlyUpdate, coalesceVertexRuns } from './incremental';
 import { SurveyCustomLayer, type CustomRenderData } from './surveyCustomLayer';
-import {
-  readCustomRenderGate,
-  CUSTOM_RENDER_SYNC_HOOK,
-} from './gate';
+import { CUSTOM_RENDER_SYNC_HOOK } from './gate';
 
 /** Stock bulk layers hidden while the custom layer is on. */
 const HIDDEN_STOCK_LAYERS = ['survey-shots', 'survey-shot-gradients', 'survey-stations'] as const;
@@ -94,6 +96,15 @@ export interface SurveyCustomControllerOptions {
    * pipeline must stay published).
    */
   onActiveChange?: (active: boolean) => void;
+  /**
+   * Called ONCE when the custom layer hits an UNRECOVERABLE GL failure (no
+   * WebGL2, program link failure, or a render-time `gl.getError` self-disable).
+   * There is no stock fallback, so the controller removes its own dead layer and
+   * invokes this so the app can surface a user-facing error state (the survey
+   * area is now blank). `reason` is the layer's disabled reason (e.g.
+   * `webgl2-unavailable`, `program-link-failed`, `gl-error-0x502`).
+   */
+  onFatal?: (reason: string) => void;
 }
 
 export interface CustomSyncParams {
@@ -157,6 +168,15 @@ export class SurveyCustomController {
   private readonly resync: (() => void) | undefined;
   /** Active-state transition callback; see options.onActiveChange. */
   private readonly onActiveChange: ((active: boolean) => void) | undefined;
+  /** Unrecoverable-GL-failure callback; see options.onFatal. */
+  private readonly onFatal: ((reason: string) => void) | undefined;
+  /** Latched once an unrecoverable GL failure removes the layer. A fatal
+   *  controller is dead: every later `sync()` bails, so the survey stays blank
+   *  (error state) instead of flip-flopping on a re-enable that would fail
+   *  again. There is no stock to fall back to. */
+  private fatal = false;
+  /** Guards {@link emitFatal} so {@link onFatal} fires at most once. */
+  private fatalEmitted = false;
   /** Guards handleSelfDisable against re-entrancy while a restore is pending. */
   private selfDisableScheduled = false;
   /** True only for the duration of {@link teardown}. The teardown republishes
@@ -215,12 +235,14 @@ export class SurveyCustomController {
     this.scheduleRestore = opts.scheduleRestore ?? defaultScheduleRestore;
     this.resync = opts.resync;
     this.onActiveChange = opts.onActiveChange;
+    this.onFatal = opts.onFatal;
     this.installHook();
   }
 
-  /** Re-evaluate the gate and apply/refresh or tear down the custom layer. */
+  /** Build/refresh the custom layer (the sole survey renderer — no gate). */
   sync(params: CustomSyncParams): void {
-    if (this.disposed) return;
+    // A disposed (unmounted) or fatal (dead GL) controller never rebuilds.
+    if (this.disposed || this.fatal) return;
     // Re-entrancy guard: teardown() republishes stock synchronously, which
     // mirrors back here. Record the params (so a later real sync diffs against
     // the latest inputs) but do nothing else, or we would re-enable mid-teardown.
@@ -230,11 +252,6 @@ export class SurveyCustomController {
     }
     const prevParams = this.lastParams;
     this.lastParams = params;
-    const enabled = readCustomRenderGate();
-    if (!enabled) {
-      if (this.active) this.disable();
-      return;
-    }
     // Fast paths (active layer + a prior snapshot to diff against): a geometry
     // edit that left the SoA layout unchanged re-emits just the changed sections;
     // a pure global recolor (overlay / theme / depth-mode toggle) with unchanged
@@ -295,18 +312,20 @@ export class SurveyCustomController {
     const beforeId = this.map.getLayer('survey-shots') ? 'survey-shots' : undefined;
     this.map.addLayer(layer, beforeId);
     if (layer.isDisabled()) {
-      // FAIL-SAFE: never hide the stock layers behind a layer that can't draw.
-      // Remove the dead layer, ensure the stock survey stays visible, and warn
-      // ungated so the failure is diagnosable in a production build.
+      // FATAL: the custom layer cannot draw (no WebGL2 / shader link failure).
+      // Custom render is the sole renderer — there is NO stock fallback — so
+      // remove the dead layer and route to the error state instead of restoring
+      // stock. Warn ungated so the failure is diagnosable in a production build.
       const reason = layer.getDisabledReason() ?? 'unknown';
       console.warn(
         `[customRender] custom layer failed to initialize (${reason}); ` +
-          'keeping stock survey layers visible',
+          'survey rendering unavailable',
       );
       if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
-      this.setStockVisibility('visible');
       this.layer = null;
-      this.setActive(false);
+      this.fatal = true;
+      this.setActive(false); // active was never true here, so this does not fire.
+      this.emitFatal(reason);
       return;
     }
     this.layer = layer;
@@ -353,19 +372,44 @@ export class SurveyCustomController {
   /**
    * The custom layer hit a GL error mid-render and disabled itself. This fires
    * INSIDE MapLibre's frame (from the layer's render()), so mutating the style
-   * now is unsafe. Warn ungated with the error code and DEFER the stock-layer
-   * restore off the render stack. Idempotent + re-entrancy-safe.
+   * now is unsafe. Warn ungated with the error code and DEFER the FATAL teardown
+   * off the render stack. Idempotent + re-entrancy-safe. There is no stock
+   * fallback: the deferred handler routes to {@link tearDownFatal} (error state),
+   * not the stock-restoring {@link teardown}.
    */
   private handleSelfDisable(reason: string): void {
     if (!this.active || this.selfDisableScheduled) return;
     this.selfDisableScheduled = true;
     console.warn(
-      `[customRender] custom layer self-disabled (${reason}); restoring stock survey layers`,
+      `[customRender] custom layer self-disabled (${reason}); survey rendering unavailable`,
     );
     this.scheduleRestore(() => {
       this.selfDisableScheduled = false;
-      if (this.active) this.teardown();
+      if (this.active) this.tearDownFatal(reason);
     });
+  }
+
+  /**
+   * FATAL teardown: remove the dead layer WITHOUT restoring or republishing the
+   * stock layers, latch {@link fatal} so a later sync() bails, and surface the
+   * error via {@link onFatal}. Deliberately does NOT fire `onActiveChange(false)`
+   * — that would drive SurveyLayer to republish the stock bulk sources, exactly
+   * the fallback this stage removes. The survey area stays blank (error state).
+   */
+  private tearDownFatal(reason: string): void {
+    this.fatal = true;
+    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    this.layer = null;
+    this.active = false; // set directly: onActiveChange must NOT fire (no republish).
+    this.map.triggerRepaint();
+    this.emitFatal(reason);
+  }
+
+  /** Fire {@link onFatal} at most once. */
+  private emitFatal(reason: string): void {
+    if (this.fatalEmitted) return;
+    this.fatalEmitted = true;
+    this.onFatal?.(reason);
   }
 
   /** Suppress (`'none'`) hides all three stock bulk layers unconditionally.

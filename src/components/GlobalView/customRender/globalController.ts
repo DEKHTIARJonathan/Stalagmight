@@ -6,19 +6,18 @@
  * hover/select/search/reference/visibility/theme setters here, and asks `pick()`
  * to resolve interaction hits (replacing queryRenderedFeatures).
  *
- * Flag ON  : add the custom layer below the stock global-survey layers, hide the
- *            stock shots/stations (+ hitbox) layers, and drive everything from
- *            typed-array buffers + the geometry hit index.
- * Flag OFF : remove the custom layer, restore the stock layers' visibility.
- *
- * The gate is the SAME `stalagmight_custom_render` flag the single-system view
- * reads. A fail-safe (self-disable on a GL error) defers a stock-layer restore
- * off MapLibre's render stack, so the survey never ends up blank.
+ * The custom layer is the SOLE global-survey renderer (no gate): `sync()` always
+ * adds it below the stock global-survey layers, hides the stock shots/stations
+ * (+ hitbox) layers, and drives everything from typed-array buffers + the
+ * geometry hit index. There is NO stock fallback: an unrecoverable GL failure
+ * (no WebGL2, program link failure, or a render-time `gl.getError` self-disable)
+ * removes the dead layer and calls `onFatal(reason)` (error state) instead of
+ * restoring stock. The `setStockVisibility` restore path survives only for the
+ * non-fatal `destroy()` teardown (a later stage deletes the stock layers).
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import type { ProjectMetadata } from '../../../types/project';
 import type { SystemGeometry } from '../systemColor';
-import { readCustomRenderGate } from '../../Map/surveyLayer/customRender/gate';
 import { packCssColor } from '../../Map/surveyLayer/customRender/colorPack';
 import {
   buildGlobalBuffers,
@@ -68,6 +67,11 @@ export interface GlobalCustomControllerOptions {
    * stock vector-tile publish in lockstep (mirrors the single-system view).
    */
   onActiveChange?: (active: boolean) => void;
+  /** Called ONCE on an UNRECOVERABLE GL failure (no WebGL2, program link
+   *  failure, or a render-time `gl.getError` self-disable). There is no stock
+   *  fallback: the controller removes its dead layer and invokes this so the app
+   *  can surface an error state. Mirrors the single-system controllers. */
+  onFatal?: (reason: string) => void;
 }
 
 function packStroke(css: string): Rgba01 {
@@ -80,10 +84,16 @@ export class GlobalCustomController {
   private readonly layerId: string;
   private readonly scheduleRestore: (fn: () => void) => void;
   private readonly onActiveChange: ((active: boolean) => void) | undefined;
+  private readonly onFatal: ((reason: string) => void) | undefined;
 
   private layer: GlobalCustomLayer | null = null;
   private active = false;
   private selfDisableScheduled = false;
+  /** Latched once an unrecoverable GL failure removes the layer: a fatal
+   *  controller is dead and every later `sync()` bails (no stock fallback). */
+  private fatal = false;
+  /** Guards {@link emitFatal} so {@link onFatal} fires at most once. */
+  private fatalEmitted = false;
 
   // Current systems + derived state, held so a (re)enable rebuilds correctly.
   private systems: SystemGeometry[] = [];
@@ -103,6 +113,7 @@ export class GlobalCustomController {
     this.layerId = layerId;
     this.scheduleRestore = opts.scheduleRestore ?? defaultScheduleRestore;
     this.onActiveChange = opts.onActiveChange;
+    this.onFatal = opts.onFatal;
   }
 
   /** Whether the custom layer is drawing (stock layers hidden). */
@@ -115,17 +126,14 @@ export class GlobalCustomController {
     return this.metadataById.get(systemId);
   }
 
-  /** Re-evaluate the gate and apply/refresh or tear down the custom layer. */
+  /** Build/refresh the custom layer (the sole global-survey renderer — no gate). */
   sync(systems: SystemGeometry[]): void {
+    // A fatal (dead GL) controller never rebuilds; the survey stays blank.
+    if (this.fatal) return;
     this.systems = systems;
     this.metadataById = new Map(systems.map((s) => [s.metadata.file_path, s.metadata]));
     this.hitIndex = new GlobalHitIndex(systems);
 
-    const enabled = readCustomRenderGate();
-    if (!enabled) {
-      if (this.active) this.disable();
-      return;
-    }
     const data = this.buildData();
     if (!this.active) this.enable(data);
     else this.layer?.update(data);
@@ -165,15 +173,18 @@ export class GlobalCustomController {
       : undefined;
     this.map.addLayer(layer, beforeId);
     if (layer.isDisabled()) {
+      // FATAL: the custom layer cannot draw. There is NO stock fallback — remove
+      // the dead layer and route to the error state instead of restoring stock.
       const reason = layer.getDisabledReason() ?? 'unknown';
       console.warn(
         `[globalCustomRender] custom layer failed to initialize (${reason}); ` +
-          'keeping stock global-survey layers visible',
+          'survey rendering unavailable',
       );
       if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
-      this.setStockVisibility('visible');
       this.layer = null;
-      this.setActive(false);
+      this.fatal = true;
+      this.setActive(false); // active was never true here, so this does not fire.
+      this.emitFatal(reason);
       return;
     }
     this.layer = layer;
@@ -187,17 +198,13 @@ export class GlobalCustomController {
     this.map.triggerRepaint();
   }
 
-  private disable(): void {
-    this.teardown();
-    console.info('[globalCustomRender] disabled; stock global-survey layers restored');
-  }
-
   /** Remove the custom layer + restore the stock layers. `fireRepublish` true
-   *  (gate-off / self-disable) drives the stock vector-tile republish through
-   *  {@link setActive}; false (destroy) sets `active` directly so onActiveChange
-   *  never fires — GlobalSurveyLayer is about to clear the registry + remove the
-   *  map, so that republish would be wasted work (and can freeze dense
-   *  multi-system views on exit). */
+   *  drives the stock vector-tile republish through {@link setActive}; false
+   *  (destroy) sets `active` directly so onActiveChange never fires —
+   *  GlobalSurveyLayer is about to clear the registry + remove the map, so that
+   *  republish would be wasted work (and can freeze dense multi-system views on
+   *  exit). Non-fatal teardown only (destroy); the fatal path uses
+   *  {@link tearDownFatal}, which never restores stock. */
   private teardown(fireRepublish = true): void {
     if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
     this.layer = null;
@@ -211,12 +218,35 @@ export class GlobalCustomController {
     if (!this.active || this.selfDisableScheduled) return;
     this.selfDisableScheduled = true;
     console.warn(
-      `[globalCustomRender] custom layer self-disabled (${reason}); restoring stock layers`,
+      `[globalCustomRender] custom layer self-disabled (${reason}); survey rendering unavailable`,
     );
     this.scheduleRestore(() => {
       this.selfDisableScheduled = false;
-      if (this.active) this.teardown();
+      if (this.active) this.tearDownFatal(reason);
     });
+  }
+
+  /**
+   * FATAL teardown: remove the dead layer WITHOUT restoring or republishing the
+   * stock layers, latch {@link fatal} so a later sync() bails, and surface the
+   * error via {@link onFatal}. Deliberately does NOT fire `onActiveChange(false)`
+   * — that would drive GlobalSurveyLayer to republish the stock bulk sources,
+   * exactly the fallback this stage removes.
+   */
+  private tearDownFatal(reason: string): void {
+    this.fatal = true;
+    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    this.layer = null;
+    this.active = false; // set directly: onActiveChange must NOT fire (no republish).
+    this.map.triggerRepaint();
+    this.emitFatal(reason);
+  }
+
+  /** Fire {@link onFatal} at most once. */
+  private emitFatal(reason: string): void {
+    if (this.fatalEmitted) return;
+    this.fatalEmitted = true;
+    this.onFatal?.(reason);
   }
 
   private setActive(v: boolean): void {

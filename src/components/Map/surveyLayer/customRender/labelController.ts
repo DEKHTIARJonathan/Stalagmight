@@ -6,12 +6,14 @@
  * independently"). SurveyLayer constructs one of these alongside the geometry
  * controller and calls `sync(...)` after each flush.
  *
- * GATE (standalone): this activates on the labels gate (`readCustomLabelsGate`)
- * ALONE — the custom label layer is an independent sibling of the geometry layer
- * (labels anchor from `SurveyData`, not the geometry buffers), so custom labels
- * over stock geometry is a valid, supported combination. The gate is now default
- * ON in the real app; with it explicitly disabled the stock label layers stay
- * live and this is a no-op — the gate-OFF path is byte-identical to before.
+ * SOLE renderer (no gate): the custom label layer is now the only label path —
+ * `sync()` always builds/enables it and hides the five stock text layers. It is
+ * an independent sibling of the geometry layer (labels anchor from `SurveyData`,
+ * not the geometry buffers), so it enables / fails / rebuilds on its own. There
+ * is NO stock fallback: an unrecoverable GL failure removes the dead layer and
+ * calls `onFatal(reason)` (error state) instead of restoring stock. The
+ * `setStockLabelVisibility` restore path survives only for the non-fatal
+ * `destroy()` teardown (a later stage deletes the stock label layers).
  *
  * SCOPE (Phase 3): ALL FIVE kinds — shot labels, station labels, section names,
  * station comments, shot comments. It builds every kind's descriptors, hides the
@@ -78,7 +80,7 @@ import {
 } from './glyphAtlas';
 import { resolveHaloColors, type LabelStyleInputs } from './labelStyle';
 import { SurveyCustomLabelLayer, type LabelRenderData } from './surveyCustomLabelLayer';
-import { readCustomLabelsGate, CUSTOM_LABELS_SYNC_HOOK } from './labelsGate';
+import { CUSTOM_LABELS_SYNC_HOOK } from './labelsGate';
 
 /** The stock text layer each kind replaces — suppressed while the custom label
  *  layer is active, restored (to the kind's desired toggle) when it goes away. */
@@ -200,6 +202,12 @@ export interface SurveyLabelControllerOptions {
    *  only on a real change so SurveyLayer can drop / re-publish the stock label
    *  VT groups in lockstep with the custom label layer taking over. */
   onActiveChange?: (active: boolean) => void;
+  /** Called ONCE on an UNRECOVERABLE GL failure (no WebGL2, program link
+   *  failure, or a render-time `gl.getError` self-disable). There is no stock
+   *  fallback: the controller removes its dead layer and invokes this so the app
+   *  can surface an error state (labels are now absent). Mirrors the geometry
+   *  controller's onFatal. */
+  onFatal?: (reason: string) => void;
 }
 
 export class SurveyLabelController {
@@ -234,6 +242,14 @@ export class SurveyLabelController {
   private readonly resync: (() => void) | undefined;
   /** Active-state transition callback; see {@link SurveyLabelControllerOptions.onActiveChange}. */
   private readonly onActiveChange: ((active: boolean) => void) | undefined;
+  /** Unrecoverable-GL-failure callback; see {@link SurveyLabelControllerOptions.onFatal}. */
+  private readonly onFatal: ((reason: string) => void) | undefined;
+  /** Latched once an unrecoverable GL failure removes the layer: a fatal
+   *  controller is dead and every later `sync()` bails (no stock to fall back
+   *  to). Mirrors the geometry controller. */
+  private fatal = false;
+  /** Guards {@link emitFatal} so {@link onFatal} fires at most once. */
+  private fatalEmitted = false;
 
   /** Hysteresis latch for the expensive kinds (§4): true once past LABEL_BUILD_ZOOM,
    *  stays true until below LABEL_DROP_ZOOM. Drives {@link kindsToBuild}. */
@@ -299,6 +315,7 @@ export class SurveyLabelController {
     this.scheduleRebuild = opts.scheduleRebuild ?? defaultScheduleRestore;
     this.resync = opts.resync;
     this.onActiveChange = opts.onActiveChange;
+    this.onFatal = opts.onFatal;
     this.adaptiveEmitMax = opts.adaptiveEmitMax ?? ADAPTIVE_EMIT_MAX;
     this.installHook();
     // Camera-settle viewport rebuild (§4): re-scope + re-collide once the camera
@@ -339,20 +356,16 @@ export class SurveyLabelController {
     return this.active;
   }
 
-  /** Re-evaluate the composed gate and apply / refresh / tear down the label
-   *  layer (all five kinds). */
+  /** Build/refresh the label layer, all five kinds (the sole label path — no
+   *  gate). */
   sync(params: LabelSyncParams): void {
-    if (this.destroyed) return;
+    // A destroyed (unmounted) or fatal (dead GL) controller never rebuilds.
+    if (this.destroyed || this.fatal) return;
     this.pendingParams = params;
     // Re-entrancy guard: teardown() drives a synchronous stock republish that
     // mirrors back here. Record the latest params but do nothing else, or we
     // would re-enable the layer mid-teardown (see {@link tearingDown}).
     if (this.tearingDown) return;
-    const enabled = readCustomLabelsGate();
-    if (!enabled) {
-      if (this.active) this.disable();
-      return;
-    }
     if (!this.atlas) return; // font not resolved yet — build on resolve.
     const data = this.build(params);
     if (!this.active) this.enable(data);
@@ -845,17 +858,19 @@ export class SurveyLabelController {
     // No beforeId: the label layer draws on top (labels above geometry + overlays).
     this.map.addLayer(layer);
     if (layer.isDisabled()) {
-      // FAIL-SAFE: never hide the stock station labels behind a layer that can't
-      // draw. Remove the dead layer and restore the stock label visibility.
+      // FATAL: the custom label layer cannot draw (no WebGL2 / shader link
+      // failure). There is NO stock fallback — remove the dead layer and route
+      // to the error state instead of restoring stock labels.
       const reason = layer.getDisabledReason() ?? 'unknown';
       console.warn(
         `[customRender] custom label layer failed to initialize (${reason}); ` +
-          'keeping stock label layers visible',
+          'survey labels unavailable',
       );
       if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
-      this.setStockLabelVisibility('restore');
       this.layer = null;
-      this.setActive(false);
+      this.fatal = true;
+      this.setActive(false); // active was never true here, so this does not fire.
+      this.emitFatal(reason);
       return;
     }
     this.layer = layer;
@@ -903,19 +918,44 @@ export class SurveyLabelController {
 
   /**
    * The custom label layer hit a GL error mid-render and disabled itself. Fires
-   * INSIDE MapLibre's frame, so defer the stock-label restore off the render
-   * stack. Idempotent + re-entrancy-safe (mirrors the geometry controller).
+   * INSIDE MapLibre's frame, so defer the FATAL teardown off the render stack.
+   * Idempotent + re-entrancy-safe (mirrors the geometry controller). No stock
+   * fallback: the deferred handler routes to {@link tearDownFatal} (error state),
+   * not the stock-restoring {@link teardown}.
    */
   private handleSelfDisable(reason: string): void {
     if (!this.active || this.selfDisableScheduled) return;
     this.selfDisableScheduled = true;
     console.warn(
-      `[customRender] custom label layer self-disabled (${reason}); restoring stock label layers`,
+      `[customRender] custom label layer self-disabled (${reason}); survey labels unavailable`,
     );
     this.scheduleRestore(() => {
       this.selfDisableScheduled = false;
-      if (this.active) this.teardown();
+      if (this.active) this.tearDownFatal(reason);
     });
+  }
+
+  /**
+   * FATAL teardown: remove the dead label layer WITHOUT restoring or
+   * republishing the stock label layers, latch {@link fatal} so a later sync()
+   * bails, and surface the error via {@link onFatal}. Deliberately does NOT fire
+   * `onActiveChange(false)` — that would drive SurveyLayer to republish the stock
+   * label VT groups, exactly the fallback this stage removes.
+   */
+  private tearDownFatal(reason: string): void {
+    this.fatal = true;
+    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    this.layer = null;
+    this.active = false; // set directly: onActiveChange must NOT fire (no republish).
+    this.map.triggerRepaint();
+    this.emitFatal(reason);
+  }
+
+  /** Fire {@link onFatal} at most once. */
+  private emitFatal(reason: string): void {
+    if (this.fatalEmitted) return;
+    this.fatalEmitted = true;
+    this.onFatal?.(reason);
   }
 
   /** `suppress` → hide all five stock text layers; `restore` → set each back to

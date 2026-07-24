@@ -1001,6 +1001,12 @@ function MapCanvas() {
     onHiddenShotClick: () => {
       showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden');
     },
+    onRenderFatal: () => {
+      // The custom WebGL renderer is the sole survey renderer with no stock
+      // fallback; on an unrecoverable GL failure the survey area goes blank.
+      // The reason is console.error'd in SurveyLayer.handleRenderFatal.
+      showToast('Survey rendering unavailable (WebGL2/GPU)', 'render-fatal');
+    },
   }), [baseToolCallbacks, showToast]);
 
   // Box select handlers
