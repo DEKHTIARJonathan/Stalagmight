@@ -3451,6 +3451,13 @@ export default class SurveyLayer {
   releaseVtRegistry(): void {
     this.customRender?.dispose();
     this.customLabels?.dispose();
+    // The DPR watcher's matchMedia listener is a JS resource that survives
+    // map.remove() and would otherwise retain this whole SurveyLayer (cached
+    // survey data + geometry index). MapCanvas's lightweight unmount calls this
+    // method but NOT destroy(), so the disposal must live here to run on both
+    // paths — else repeated project opens accumulate stale layers (#customRender).
+    this.dprWatcherDispose?.();
+    this.dprWatcherDispose = undefined;
     clearFeatureCountsForPrefix('survey-');
   }
 
@@ -3473,10 +3480,10 @@ export default class SurveyLayer {
     // Remove the dedicated custom measure-path layer (#26, stage 2a).
     this.measurePath?.destroy();
     this.measurePath = null;
-    this.dprWatcherDispose?.();
-    this.dprWatcherDispose = undefined;
 
     // Drop the module-level VT registry entries + zero the memory-probe counts.
+    // (releaseVtRegistry also disposes the DPR watcher, covering both this path
+    // and MapCanvas's lightweight unmount.)
     this.releaseVtRegistry();
 
     // Cancel any pending hover RAF
