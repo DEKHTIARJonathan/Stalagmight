@@ -51,6 +51,14 @@ import { decideLabelBuild, skippedBuildForCamera } from './surveyLayer/labelBuil
 import { SurveyCustomController, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
 import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
+import { MeasurePathController } from './surveyLayer/customRender/measurePathController';
+import type { MeasurePathRenderData } from './surveyLayer/customRender/surveyMeasurePathLayer';
+import {
+  buildMeasurePathBuffers,
+  type MeasureSegment,
+  type MeasurePoint,
+} from './surveyLayer/customRender/measurePathTessellate';
+import { packCssColor } from './surveyLayer/customRender/colorPack';
 import type { SurveyData } from '../../types/survey-data';
 import type { ProjectWarning } from '../../types/commands';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
@@ -488,6 +496,14 @@ export default class SurveyLayer {
   // layers while active.
   private customLabels: SurveyLabelController | null = null;
 
+  // Dedicated custom WebGL layer for the measured along-line ruler tint (#26,
+  // stage 2a of the stock deletion). Draws the measured shots + stations in
+  // MEASURE_TINT independently of the stock `survey-measure-path` layer / the
+  // `-shots`/`-stations` VT sources. Driven by setMeasuredPath; runs alongside
+  // the stock feature-state tint this stage (identical pixels), so stage 2b can
+  // delete the stock path.
+  private measurePath: MeasurePathController | null = null;
+
   /**
    * True while the custom WebGL layer is drawing and has taken over the bulk
    * shots / stations / shot-gradients (#customRender / #mem). When set, those
@@ -624,6 +640,7 @@ export default class SurveyLayer {
       scheduleRestore: (fn) =>
         typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(fn, 0),
     });
+    this.measurePath = new MeasurePathController(map);
   }
 
   setCallbacks(callbacks: SurveyLayerCallbacks) {
@@ -2868,6 +2885,10 @@ export default class SurveyLayer {
       this.map.setFilter(this.measurePathLayerId, this.measurePathFilter());
     }
     this.applyMeasuredPathFeatureState();
+    // Drive the dedicated custom measure-path layer alongside the stock tint
+    // (stage 2a): it renders the same MEASURE_TINT from the same id sets, so
+    // stage 2b can delete the stock feature-state path above.
+    this.syncCustomMeasurePath();
   }
 
   /**
@@ -2903,6 +2924,95 @@ export default class SurveyLayer {
         this.map.setFeatureState({ source: stationsSource, sourceLayer: VT_SOURCE_LAYER, id }, { measured: true });
       }
     }
+  }
+
+  /**
+   * (Re)build the dedicated custom measure-path layer (#26, stage 2a) from the
+   * current measured id sets and geometry index, or clear it when no path is
+   * set. Called from setMeasuredPath and after each geometry rebuild (endApply-
+   * Features re-applies the tint), mirroring applyMeasuredPathFeatureState so a
+   * mid-measurement edit keeps the custom tint in sync with moved coords.
+   *
+   * The measured id sets are the encoded feature ids setMeasuredPath received
+   * (`sectionId * FEATURE_ID_STRIDE + scopedId`); they are decoded back and
+   * projected via the SoA geometry index (`shotGeometry` / `stationCoords`), the
+   * same source the interact overlay uses. Reference-hidden features are skipped
+   * to match the stock `measurePathFilter` / interact-overlay guards.
+   *
+   * z-order: inserted beneath `survey-interact-shots-measured` (the hover/
+   * selection tint), which sits above the stock `survey-measure-path`. Both the
+   * custom and stock tints therefore draw between the survey geometry and the
+   * hover overlay in identical MEASURE_TINT — the pixels match this stage.
+   */
+  private syncCustomMeasurePath(): void {
+    if (!this.measurePath) return;
+    if (!this.map || !hasLiveStyle(this.map) || !this.geoIndex) {
+      this.measurePath.clear();
+      return;
+    }
+    if (this.measuredPathIds === null && this.measuredPathStationIds === null) {
+      this.measurePath.clear();
+      return;
+    }
+    const segments: MeasureSegment[] = [];
+    if (this.measuredPathIds) {
+      for (const fid of this.measuredPathIds) {
+        const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
+        const shotId = fid - sectionId * FEATURE_ID_STRIDE;
+        const geo = this.geoIndex.shotGeometry(sectionId, shotId);
+        if (!geo) continue;
+        // Hidden reference legs are excluded from the stock tint too (measurePathFilter).
+        if (geo.isReference && !this.showReferenceShotsCached) continue;
+        segments.push({ a: geo.from, b: geo.to });
+      }
+    }
+    const points: MeasurePoint[] = [];
+    if (this.measuredPathStationIds) {
+      for (const fid of this.measuredPathStationIds) {
+        const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
+        const stationIndex = fid - sectionId * FEATURE_ID_STRIDE;
+        const ref = { section_id: sectionId, station_index: stationIndex };
+        // Match the interact-overlay guard: a station hidden by the reference
+        // toggle must not surface.
+        if (!this.showReferenceShotsCached && this.geoIndex.isAllReferenceStation(ref)) continue;
+        const coords = this.geoIndex.stationCoords(ref);
+        if (coords) points.push({ center: coords });
+      }
+    }
+    if (segments.length === 0 && points.length === 0) {
+      this.measurePath.clear();
+      return;
+    }
+    this.measurePath.setPath(this.buildMeasurePathRenderData(segments, points), [
+      // Beneath the hover/selection tint (which is above the stock tint), with
+      // stable fallbacks for stage 2b when the stock layer is gone.
+      this.interactShotsMeasuredLayerId,
+      this.stationsLayerId,
+      this.measurePathLayerId,
+    ]);
+  }
+
+  /** Tessellate the measured path + resolve its device-px sizes and tint color
+   *  for the custom measure-path layer. */
+  private buildMeasurePathRenderData(
+    segments: MeasureSegment[],
+    points: MeasurePoint[],
+  ): MeasurePathRenderData {
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    const [r, g, b, a] = packCssColor(this.measureTintColor);
+    const { anchorX, anchorY, line, circle } = buildMeasurePathBuffers(segments, points);
+    return {
+      anchorX,
+      anchorY,
+      line,
+      circle,
+      // Match the stock tint's line width (baseWidth = getShotWidth) and the
+      // station disc radius (getStationRadius); half-width for the capsule.
+      lineHalfWidthPx: (this.getShotWidth() / 2) * dpr,
+      circleRadiusPx: this.getStationRadius() * dpr,
+      aaPx: dpr,
+      color: [r / 255, g / 255, b / 255, a / 255],
+    };
   }
 
   // Update ghost hitbox layer sizes from config. The main shots/stations hit
@@ -5610,9 +5720,12 @@ export default class SurveyLayer {
     if (this.gasReachMode) {
       this.applyGasReachFeatureState();
     }
-    // Likewise re-apply the measured along-line path tint (#26).
+    // Likewise re-apply the measured along-line path tint (#26): the stock
+    // feature-state AND the dedicated custom layer (stage 2a), so a rebuild that
+    // moved coords keeps both tints in sync.
     if (this.measuredPathIds || this.measuredPathStationIds) {
       this.applyMeasuredPathFeatureState();
+      this.syncCustomMeasurePath();
     }
     // Gas route highlight (#233): re-push the route LineStrings (coords come from cachedStations,
     // which a rebuild may have refreshed).
@@ -5762,6 +5875,9 @@ export default class SurveyLayer {
     this.customRender = null;
     this.customLabels?.destroy();
     this.customLabels = null;
+    // Remove the dedicated custom measure-path layer (#26, stage 2a).
+    this.measurePath?.destroy();
+    this.measurePath = null;
 
     // Drop the module-level VT registry entries + zero the memory-probe counts.
     this.releaseVtRegistry();
