@@ -39,6 +39,19 @@ export interface VtLayerPublication {
 const registry = new Map<string, { data: VtLayerData; version: number }>();
 
 /**
+ * Keys cleared while their MapLibre source stayed RESIDENT (a custom-layer
+ * drop -> reactivate via dropBulkSource), not yet re-published. Distinguishes
+ * that case from a genuine first publication or a full teardown (destroy /
+ * project close), where nothing is resident and the cheap bounded reload is
+ * correct. On the resident case the source still holds its out-of-view tile
+ * cache, so a bounded reload would leave pre-drop tiles outside the new bounds
+ * un-evicted (they can reappear on a later pan); such a re-publish must force a
+ * full reload instead. Only {@link clearVtLayerData} with `sourceStaysResident`
+ * marks a key here.
+ */
+const residentClearedKeys = new Set<string>();
+
+/**
  * Per-source convergence watermarks (#customRender label-stale fix).
  *
  * `target` counts payload CONTENT changes published for the source (every
@@ -263,11 +276,19 @@ export function setVtLayerData(key: string, data: VtLayerData): VtLayerPublicati
   const entry = registry.get(key);
   const version = (entry?.version ?? 0) + 1;
   const previous = entry?.data;
+  const wasResidentCleared = residentClearedKeys.delete(key);
   registry.set(key, { data, version });
-  // First publication: no previous payload to diff. The bootstrap reload turns a
-  // rectangle here into a plain setTiles (nothing is resident yet), so a full
-  // reload would be wasted; report the layer's extent (or null when empty).
-  if (!previous) return { version, dirtyBounds: vtLayerBounds(data) };
+  // First publication (no previous payload to diff), two cases:
+  //  - never cleared: the bootstrap reload turns a rectangle here into a plain
+  //    setTiles (nothing is resident yet), so report the layer's extent (or null
+  //    when empty) and take the cheap path.
+  //  - re-published after a resident drop (dropBulkSource on custom-layer
+  //    activate): the source + its out-of-view tile cache are still resident, so
+  //    a bounded rectangle would leave pre-drop tiles outside the new bounds
+  //    un-evicted (they can reappear on a later pan). Force a full reload.
+  if (!previous) {
+    return { version, dirtyBounds: wasResidentCleared ? undefined : vtLayerBounds(data) };
+  }
   // Structural edit (group added/removed/reordered, or the undo of one): answer
   // with a full in-place reload (undefined) so no tile that lost its geometry is
   // left un-recut. Same-structure geometry edits keep the cheap rectangle diff;
@@ -277,8 +298,15 @@ export function setVtLayerData(key: string, data: VtLayerData): VtLayerPublicati
 }
 
 /** Drop a layer's data (project close / layer teardown). Serving falls back
- *  to empty tiles until the next `setVtLayerData`. */
-export function clearVtLayerData(key: string): void {
+ *  to empty tiles until the next `setVtLayerData`.
+ *
+ *  Pass `sourceStaysResident: true` when the MapLibre source is NOT being torn
+ *  down (a custom-layer drop that only empties the registry, keeping the source
+ *  and its tile cache alive) so a later re-publish forces a full reload instead
+ *  of a bounded one. Omit it for a real teardown (destroy / project close). */
+export function clearVtLayerData(key: string, opts?: { sourceStaysResident?: boolean }): void {
+  if (opts?.sourceStaysResident && registry.has(key)) residentClearedKeys.add(key);
+  else residentClearedKeys.delete(key);
   registry.delete(key);
   convergence.delete(key);
   reconcileRetries.delete(key);

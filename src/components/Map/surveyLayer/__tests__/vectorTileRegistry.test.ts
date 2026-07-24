@@ -878,6 +878,23 @@ describe('vector tile registry', () => {
       expect(removed.dirtyBounds).toBeUndefined();
     });
 
+    // A resident drop (dropBulkSource: registry emptied but the MapLibre source +
+    // its out-of-view tile cache stay alive) followed by a reactivation must force
+    // a full reload so pre-drop tiles outside the new bounds are evicted; a plain
+    // clear (teardown / project close) leaves nothing resident and keeps the cheap
+    // bounded first-publication path.
+    it('forces a full reload after a resident drop, not after a plain clear', () => {
+      setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[1, 1], [2, 2]])));
+      clearVtLayerData('diff-test', { sourceStaysResident: true });
+      const reactivated = setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[1, 1], [2, 2]])));
+      expect(reactivated.dirtyBounds).toBeUndefined();
+
+      clearVtLayerData('diff-test');
+      const fresh = setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[1, 1], [2, 2]])));
+      expect(fresh.dirtyBounds).not.toBeUndefined();
+      expect(fresh.dirtyBounds).not.toBeNull();
+    });
+
     it('reports undefined (full reload) when a group is added', () => {
       setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[1, 1]])));
       const added = setVtLayerData('diff-test', vtPointsFromFeatures(pointsAt([[1, 1], [2, 2]])));

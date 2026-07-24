@@ -4817,7 +4817,10 @@ export default class SurveyLayer {
   private dropBulkSource(group: SurveyFeatureGroupKey): void {
     const { suffix, kind } = SurveyLayer.GROUP_SOURCE[group];
     const sourceId = this.sourceId + suffix;
-    clearVtLayerData(sourceId);
+    // The source stays resident (only its registry payload + tiles are emptied),
+    // so a later reactivation must force a full reload to evict pre-drop
+    // out-of-view tiles rather than a bounded one. See vectorTileRegistry.
+    clearVtLayerData(sourceId, { sourceStaysResident: true });
     recordFeatureCount(kind, 0);
     const source = this.map.getSource(sourceId) as VectorTileSource | undefined;
     if (source && source.tiles?.[0] && source.tiles[0] !== vtTileUrl(sourceId, 0)) {
@@ -4890,6 +4893,18 @@ export default class SurveyLayer {
    *  one-time synchronous build is an acceptable cost there. When a build is
    *  already in flight the async one will republish, so this is a no-op then. */
   private rebuildFromCacheIfIdle(sync = false): void {
+    // Don't republish stale cached geometry when the store has no active project
+    // geometry right now (mid-close, or a project switch where the incoming
+    // project has not landed yet): the legacy-cache fallback inside flushUpdate
+    // (`selectActiveSurveyData(store) ?? surveyDataFromLegacy(cached)`) would
+    // paint the PREVIOUS project's geometry into the new context for a frame.
+    // The next real flush republishes the current project. Restore-path only;
+    // theme / granularity callers use rebuildFromCache directly (store is live
+    // there). When the store IS live, the flush prefers it over the cache, so
+    // the passed cached args can never be the stale ones that actually render.
+    if (selectActiveSurveyData(useProjectStore.getState(), useUIStore.getState().geometryMode) === null) {
+      return;
+    }
     if (
       !this.updateScheduled &&
       this.pendingUpdateArgs === null &&
@@ -5056,7 +5071,17 @@ export default class SurveyLayer {
       this.requestedPerFeature = perFeature;
       this.cachedSurveyData = surveyData;
       this.cachedIssueSeverity = issueSeverity;
+      // INVARIANT: geoIndex is re-created (never mutated in place) on every
+      // flush. SurveyGeometryIndex holds per-instance lazy caches (projected
+      // AABBs, non-reference station sets) that it never invalidates, so their
+      // correctness rests entirely on a fresh instance per geometry change. A
+      // future "reuse the index across an in-place SoA edit" optimization would
+      // silently strand those caches — keep this a fresh `new` per flush.
       this.geoIndex = new SurveyGeometryIndex(surveyData, this.gpsOrigin);
+      // Pass the flush's freshly-derived `surveyData` (which prefers the live
+      // store over the cached args, so it is never a stale project's geometry).
+      // Do NOT switch this to `this.cachedSurveyData` or the raw args or the
+      // custom layer could paint stale geometry after an undo / project switch.
       this.syncCustomRender(surveyData);
       // Custom-render delete straggler: the custom layer just dropped the removed
       // geometry, but the async worker build below only refreshes the label sources
