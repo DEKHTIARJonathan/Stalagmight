@@ -13,13 +13,12 @@ import type { SurveyData, SectionMetadata } from '../../../../types/survey-data'
 import { STATION_FLAG_IS_ZERO_DATUM } from '../../../../types/survey-data';
 import { encodeFeatureId } from '../../../../utils/ids';
 import {
-  commentColorForKey,
   resolveShotDisplayColor,
   resolveShotEndpointColors,
   resolveStationDisplayColor,
   resolveStationStrokeColor,
-  type DisplayColorContext,
 } from '../features';
+import { commentColorForKey, type DisplayColorContext } from '../displayColor';
 import { packCssColor, type Rgba8 } from './colorPack';
 import { makeOverlayColor } from './overlayColor';
 

@@ -20,7 +20,8 @@
  * we also assert.
  */
 import { describe, expect, it } from 'vitest';
-import { buildSurveyFeatures, type DisplayColorContext } from '../features';
+import { buildSurveyFeatures } from '../features';
+import type { DisplayColorContext } from '../displayColor';
 import { vtLinesFromFeatures, vtPointsFromFeatures, type VtLayerData } from '../vectorTileData';
 import { buildShotStationVt, makeVtPalette } from '../vtSurveyBuild';
 import { surveyDataFromLegacy, type SurveyData } from '../../../../types/survey-data';

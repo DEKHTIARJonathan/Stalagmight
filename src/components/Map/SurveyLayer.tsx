@@ -24,11 +24,13 @@ import {
   resolveShotDisplayColor,
   resolveStationDisplayColor,
   SURVEY_FEATURE_GROUP_ORDER,
+  type SurveyFeatureGroupKey,
+} from './surveyLayer/features';
+import {
   type DepthRange,
   type DisplayColorContext,
   type GhostSectionData,
-  type SurveyFeatureGroupKey,
-} from './surveyLayer/features';
+} from './surveyLayer/displayColor';
 import { SurveyGeometryIndex } from './surveyLayer/geometryIndex';
 import {
   offsetOverlayPoint,
@@ -147,7 +149,7 @@ export interface SurveyLayerCallbacks {
  * For better performance with large datasets, this could be
  * replaced with deck.gl layers.
  */
-export type { GhostSectionData } from './surveyLayer/features';
+export type { GhostSectionData } from './surveyLayer/displayColor';
 
 export default class SurveyLayer {
   private map: MaplibreMap;

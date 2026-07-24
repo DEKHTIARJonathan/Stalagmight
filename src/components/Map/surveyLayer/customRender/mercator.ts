@@ -21,7 +21,7 @@
 import type { GpsOrigin } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
-import { lngLatToMercator } from '../vectorTileData';
+import { lngLatToMercator } from '../mercatorCoords';
 
 /** A 4x4 matrix in OpenGL column-major order (16 elements). */
 export type Mat4 = ArrayLike<number>;

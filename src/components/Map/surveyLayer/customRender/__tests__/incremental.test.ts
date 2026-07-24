@@ -6,7 +6,7 @@ import {
   STATION_FLAG_IS_ZERO_DATUM,
   type SurveyData,
 } from '../../../../../types/survey-data';
-import type { DisplayColorContext } from '../../features';
+import type { DisplayColorContext } from '../../displayColor';
 import { computeMercatorAnchor } from '../mercator';
 import {
   sameGpsOrigin,

@@ -31,7 +31,7 @@ import {
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
-import { lngLatToMercator } from '../vectorTileData';
+import { lngLatToMercator } from '../mercatorCoords';
 import type { Rgba8 } from './colorPack';
 
 /** Anchor-relative float32 station positions, interleaved `[x0,y0,x1,y1,...]`

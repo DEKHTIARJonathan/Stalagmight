@@ -28,7 +28,7 @@
 import type { GpsOrigin, DecimalPrecision } from '../../../../types/config';
 import { type SurveyData, SHOT_FLAG_IS_REFERENCE } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
-import { lngLatToMercator } from '../vectorTileData';
+import { lngLatToMercator } from '../mercatorCoords';
 import { packCssColor, type Rgba8 } from './colorPack';
 import { buildStationLookup, computeStationAllReference, projectStationsRel } from './tessellate';
 import { LABEL_KIND, LABEL_FLAG, type LabelKind } from './labelShaders';

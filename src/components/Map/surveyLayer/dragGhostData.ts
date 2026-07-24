@@ -6,7 +6,7 @@
 // SurveyLayer (which only assembles the context) to hold its size budget.
 
 import type { MovingEnd, DragPreviewSet } from './dragPreviewSource';
-import type { OverlayColorInput } from './features';
+import type { OverlayColorInput } from './displayColor';
 import { makeOverlayColor } from './customRender/overlayColor';
 import { packCssColor, type Rgba8 } from './customRender/colorPack';
 import { buildGhostBuffers } from './customRender/ghostTessellate';

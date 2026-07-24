@@ -49,8 +49,8 @@ import type { SurveyData } from '../../../../types/survey-data';
 import type { MapThemeColors } from '../../../../utils/themeColors';
 import { debugLog } from '../../../../utils/debugLog';
 import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
-import { commentColorForKey } from '../features';
-import { lngLatToMercator } from '../vectorTileData';
+import { commentColorForKey } from '../displayColor';
+import { lngLatToMercator } from '../mercatorCoords';
 import { computeMercatorAnchor } from './mercator';
 import {
   buildLabelDescriptors,

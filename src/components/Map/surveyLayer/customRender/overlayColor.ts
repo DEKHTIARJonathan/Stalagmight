@@ -16,7 +16,7 @@ import { DISTANCE_NEAR, DISTANCE_FAR } from '../../../../utils/distanceGradient'
 import { GAS_NEAR, GAS_FAR } from '../../../../utils/gasReach';
 import type { DistanceFeatureState } from '../../../../utils/distanceGradient';
 import type { GasReachFeatureState } from '../../../../utils/gasReach';
-import type { OverlayColorInput } from '../features';
+import type { OverlayColorInput } from '../displayColor';
 import { packCssColor, type Rgba8 } from './colorPack';
 
 /** `Math.floor` + clamp to 0..255, mirroring MapLibre's `packUint8ToFloat`

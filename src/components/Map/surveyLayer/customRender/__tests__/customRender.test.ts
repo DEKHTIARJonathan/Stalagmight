@@ -15,7 +15,7 @@ import {
   recomputeCircleColors,
 } from '../tessellate';
 import { planColorOnlyUpdate } from '../incremental';
-import type { DisplayColorContext } from '../../features';
+import type { DisplayColorContext } from '../../displayColor';
 import {
   LINE_VERTEX_SRC,
   LINE_FRAGMENT_SRC,
@@ -29,7 +29,7 @@ import {
   STATION_FLAG_IS_ZERO_DATUM,
   type SurveyData,
 } from '../../../../../types/survey-data';
-import { lngLatToMercator } from '../../vectorTileData';
+import { lngLatToMercator } from '../../mercatorCoords';
 import { metersToMapCoords } from '../../../../../utils/coordinates';
 
 /**

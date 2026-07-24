@@ -9,7 +9,8 @@ import {
   resolveSectionLabelColor,
   type LabelColorContext,
 } from '../labelText';
-import { buildSurveyFeatures, type DepthRange } from '../../features';
+import { buildSurveyFeatures } from '../../features';
+import type { DepthRange } from '../../displayColor';
 import { emptySurveyData, type SurveyData } from '../../../../../types/survey-data';
 import type { MapThemeColors } from '../../../../../utils/themeColors';
 

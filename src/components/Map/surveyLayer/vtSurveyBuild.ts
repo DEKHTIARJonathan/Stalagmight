@@ -39,9 +39,10 @@ import {
   resolveShotDisplayColor,
   resolveStationDisplayColor,
   resolveStationStrokeColor,
-  type DisplayColorContext,
 } from './features';
-import { lngLatToMercator, type VtLayerData, type VtPropValue } from './vectorTileData';
+import type { DisplayColorContext } from './displayColor';
+import { lngLatToMercator } from './mercatorCoords';
+import { type VtLayerData, type VtPropValue } from './vectorTileData';
 
 /**
  * Append-only color interner mirroring `buildSurveyFeatures`' `paletteIndex`:

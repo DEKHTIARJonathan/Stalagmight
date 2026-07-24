@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildGhostBuffers, type GhostBuildInputs, type GhostHighlights } from '../ghostTessellate';
 import { mat4Multiply } from '../mercator';
-import { lngLatToMercator } from '../../vectorTileData';
+import { lngLatToMercator } from '../../mercatorCoords';
 import type { DragPreviewFeature, DragPreviewSet } from '../../dragPreviewSource';
 import type { Rgba8 } from '../colorPack';
 

@@ -24,8 +24,8 @@ import type { SurveyData } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { debugLog } from '../../../../utils/debugLog';
 import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
-import type { DisplayColorContext } from '../features';
-import { lngLatToMercator } from '../vectorTileData';
+import type { DisplayColorContext } from '../displayColor';
+import { lngLatToMercator } from '../mercatorCoords';
 import { computeMercatorAnchor } from './mercator';
 import {
   buildStationLookup,

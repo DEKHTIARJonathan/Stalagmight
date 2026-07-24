@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeColorResolvers } from '../colorResolvers';
 import { packCssColor } from '../colorPack';
-import { commentColorForKey, type DisplayColorContext } from '../../features';
+import { commentColorForKey, type DisplayColorContext } from '../../displayColor';
 import { emptySurveyData, type SurveyData } from '../../../../../types/survey-data';
 
 /**

@@ -11,11 +11,11 @@ import {
   vtTransferables,
   cutTile,
   isStructuralChange,
-  lngLatToMercator,
   VT_EXTENT,
   VT_SOURCE_LAYER,
   type VtLayerData,
 } from '../vectorTileData';
+import { lngLatToMercator } from '../mercatorCoords';
 
 // ─── Minimal MVT decoder (independent of the encoder) ─────────────────────
 

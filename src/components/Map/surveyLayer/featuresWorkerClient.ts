@@ -17,10 +17,9 @@ import {
   buildSurveyFeatures,
   SURVEY_FEATURE_GROUP_ORDER,
   type BuildSurveyFeaturesOptions,
-  type DepthRange,
-  type DisplayColorContext,
   type SurveyFeatureGroupKey,
 } from './features';
+import type { DepthRange, DisplayColorContext } from './displayColor';
 import { buildShotStationVt, makeVtPalette } from './vtSurveyBuild';
 import type { LoopClosure } from '../../../types/project';
 import type { SurveyData } from '../../../types/survey-data';

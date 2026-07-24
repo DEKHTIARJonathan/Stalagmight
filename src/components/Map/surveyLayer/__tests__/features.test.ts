@@ -12,13 +12,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSurveyFeatures,
-  commentColorForKey,
   resolveShotDisplayColor,
   resolveShotEndpointColors,
   SURVEY_FEATURE_GROUP_ORDER,
-  type DisplayColorContext,
   type SurveyFeatureGroupKey,
 } from '../features';
+import { commentColorForKey, type DisplayColorContext } from '../displayColor';
 import { surveyDataFromLegacy } from '../../../../types/survey-data';
 import { getMapThemeColors } from '../../../../utils/themeColors';
 import { COMMENT_PALETTE, getDepthColor } from '../../../../utils/colors';

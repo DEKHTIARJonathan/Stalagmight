@@ -26,7 +26,7 @@
  * preview's translucency (line / fill 0.85, per `dragPreviewLayers.ts`) is baked
  * into the alpha channel; the base station stroke keeps full alpha.
  */
-import { lngLatToMercator } from '../vectorTileData';
+import { lngLatToMercator } from '../mercatorCoords';
 import { movesVertex, type DragPreviewFeature, type DragPreviewSet, type MovingEnd } from '../dragPreviewSource';
 import { LINE_EP, LINE_SIDE, CIRCLE_CX, CIRCLE_CY } from './tessellate';
 import type { Rgba8 } from './colorPack';

@@ -11,10 +11,9 @@
 import {
   buildSurveyFeatures,
   type BuildSurveyFeaturesOptions,
-  type DepthRange,
-  type DisplayColorContext,
   type SurveyFeatureGroupKey,
 } from './features';
+import type { DepthRange, DisplayColorContext } from './displayColor';
 import type { LoopClosure } from '../../../types/project';
 import type { SurveyData } from '../../../types/survey-data';
 import type { GpsOrigin, DecimalPrecision } from '../../../types/config';

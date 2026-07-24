@@ -16,7 +16,7 @@ import {
   SHOT_FLAG_IS_REFERENCE,
   type SurveyData,
 } from '../../../../../types/survey-data';
-import { commentColorForKey } from '../../features';
+import { commentColorForKey } from '../../displayColor';
 
 /**
  * Label descriptor extraction + per-glyph buffer emission (#customRender labels,

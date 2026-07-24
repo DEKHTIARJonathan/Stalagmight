@@ -3,7 +3,7 @@ import { emptySurveyData, type SurveyData } from '../../../../../types/survey-da
 import { DISTANCE_NEAR, DISTANCE_FAR } from '../../../../../utils/distanceGradient';
 import { GAS_NEAR, GAS_FAR } from '../../../../../utils/gasReach';
 import { encodeFeatureId } from '../../../../../utils/ids';
-import type { DisplayColorContext, OverlayColorInput } from '../../features';
+import type { DisplayColorContext, OverlayColorInput } from '../../displayColor';
 import { packCssColor, type Rgba8 } from '../colorPack';
 import { makeOverlayColor, packRampColor, overlayInputFrom } from '../overlayColor';
 import { makeColorResolvers } from '../colorResolvers';

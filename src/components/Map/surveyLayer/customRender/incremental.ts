@@ -22,7 +22,7 @@
  */
 import type { GpsOrigin } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
-import type { DisplayColorContext, OverlayColorInput } from '../features';
+import type { DisplayColorContext, OverlayColorInput } from '../displayColor';
 import { computeMercatorAnchor } from './mercator';
 
 /** What the incremental apply step must recompute. Section indices are into

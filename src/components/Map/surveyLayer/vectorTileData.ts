@@ -22,6 +22,8 @@
  * protocol handler lives in `vectorTileRegistry.ts`.
  */
 
+import { lngLatToMercator } from './mercatorCoords';
+
 export type VtPropValue = string | number | boolean;
 
 /** A mercator [minX,minY,maxX,maxY] rectangle in [0,1] world space, used to
@@ -261,15 +263,6 @@ export const VT_EXTENT = 4096;
 const VT_BUFFER = 512;
 /** Source-layer name inside every generated tile. */
 export const VT_SOURCE_LAYER = 'g';
-
-/** Mercator-project a lng/lat to [0,1] world space. */
-export function lngLatToMercator(lng: number, lat: number): [number, number] {
-  const x = lng / 360 + 0.5;
-  const s = Math.sin((lat * Math.PI) / 180);
-  const clamped = Math.min(Math.max(s, -0.9999), 0.9999);
-  const y = 0.5 - (0.25 * Math.log((1 + clamped) / (1 - clamped))) / Math.PI;
-  return [x, y];
-}
 
 function idOf(f: GeoJSON.Feature): number {
   const fid = f.properties?.featureId;

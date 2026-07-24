@@ -24,7 +24,7 @@
  *  - `reference`: 1 for reference shots (lines) / all-reference stations (circles).
  */
 import type { GeometryShot } from '../../../types/survey';
-import { lngLatToMercator } from '../../Map/surveyLayer/vectorTileData';
+import { lngLatToMercator } from '../../Map/surveyLayer/mercatorCoords';
 import { packCssColor } from '../../Map/surveyLayer/customRender/colorPack';
 import { generateSystemColor, type SystemGeometry } from '../systemColor';
 

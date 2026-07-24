@@ -22,8 +22,8 @@ import {
   resolveShotDisplayColor,
   resolveStationDisplayColor,
   resolveStationStrokeColor,
-  type DisplayColorContext,
 } from '../features';
+import type { DisplayColorContext } from '../displayColor';
 import { surveyDataFromLegacy, SHOT_FLAG_IS_REFERENCE } from '../../../../types/survey-data';
 import { getMapThemeColors } from '../../../../utils/themeColors';
 import type { Section } from '../../../../types/ipc/Section';
