@@ -2233,31 +2233,32 @@ export default class SurveyLayer {
   }
 
   /**
-   * Hide/show the source comment marker during move_comment pickup. Stored for
-   * the custom label layer to honor.
-   *
-   * FLAG (custom-only): the stock comment layers that this filter drove are gone,
-   * and the custom label layer does not yet expose a hidden-comment API, so the
-   * picked-up source comment is no longer visually hidden during move_comment
-   * pickup. Minor visual gap; the state is stored for a follow-up wiring.
+   * Hide/show the source comment label during move_comment pickup (C3). Threads
+   * the picked-up comment's identity into the custom label layer, which collapses
+   * that one comment's label (LABEL_FLAG.COMMENT_HIDE) so only the cursor-following
+   * tag shows — matching the deleted stock hidden-comment filter. `null` clears it.
    */
-  setHiddenComment(_hidden: { type: 'station' | 'shot'; sectionId: number; id: number } | null): void {
-    // No-op under the custom label renderer (see FLAG above); stored state removed.
+  setHiddenComment(hidden: { type: 'station' | 'shot'; sectionId: number; id: number } | null): void {
+    this.customLabels?.setHiddenComment(hidden);
   }
 
-  /** Force both comment kinds visible (comment/move_comment tool); the custom
-   *  label uniforms mirror the forced-visible override. */
+  /** Force both comment kinds visible + overlap-exempt (comment/move_comment
+   *  tool): the custom label uniforms mirror the forced-visible override and the
+   *  reveal pass stops culling comments so ALL stay visible/selectable (C1). */
   private _enableCommentToolOverride(): void {
     this.commentToolActive = true;
     this.customLabels?.setStationCommentsVisible(true);
     this.customLabels?.setShotCommentsVisible(true);
+    this.customLabels?.setCommentOverlapExempt(true);
   }
 
-  /** Restore comment visibility from cached display settings (custom uniforms). */
+  /** Restore comment visibility from cached display settings + re-enable comment
+   *  collision (custom uniforms + reveal pass). */
   private _disableCommentToolOverride(): void {
     this.commentToolActive = false;
     this.customLabels?.setStationCommentsVisible(this.cachedShowStationComments);
     this.customLabels?.setShotCommentsVisible(this.cachedShowShotComments);
+    this.customLabels?.setCommentOverlapExempt(false);
   }
 
   // Set highlighted stations by their string IDs (format: "sectionId:stationIndex")
@@ -3168,6 +3169,12 @@ export default class SurveyLayer {
       shotWidthPx: this.getShotWidth(),
       stationRadiusPx: this.getStationRadius(),
       stationStrokePx: 1,
+      // Configured highlight bumps (C2): the custom survey shader derives the
+      // hover / selection width + radius from these instead of baking 2x/1.5x.
+      shotHoverWidthPx: this.getShotHoverWidth(),
+      shotSelectionWidthPx: this.getShotSelectionWidth(),
+      stationHoverRadiusPx: this.getStationHoverRadius(),
+      stationSelectionRadiusPx: this.getStationSelectionRadius(),
     });
     // Custom LABEL layer (#customRender labels). Shares surveyData + theme; its
     // own composed gate no-ops when off. Builds all five kinds, viewport-scoped

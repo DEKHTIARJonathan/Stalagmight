@@ -40,6 +40,36 @@
  * give those shots butt caps.
  */
 
+/**
+ * Historical BAKED highlight multipliers (the stock feature-state size bumps the
+ * deleted layers used): shot line hover 4/2 = 2x, selection 3/2 = 1.5x; station
+ * radius hover 6/4 = 1.5x, selection 5/4 = 1.25x. Now the FALLBACK when the config
+ * sizes are unavailable (base width/radius non-positive, or the emphasized size
+ * unset) — see {@link highlightSizeMul}. The live uniforms (`u_hover_width_mul`
+ * etc.) let independent `map.shot.hover_width` / `selection_width` +
+ * `map.station.hover_radius` / `selection_radius` config drive the widths (C2).
+ */
+export const DEFAULT_SHOT_HOVER_WIDTH_MUL = 2;
+export const DEFAULT_SHOT_SELECT_WIDTH_MUL = 1.5;
+export const DEFAULT_STATION_HOVER_SIZE_MUL = 1.5;
+export const DEFAULT_STATION_SELECT_SIZE_MUL = 1.25;
+
+/**
+ * Resolve a highlight size multiplier from configured ABSOLUTE px: the emphasized
+ * size (hover / selection width or radius) over the base, so the shader keeps its
+ * `size * mul` structure while honoring independent config values. Falls back to
+ * the historical baked ratio when the base is non-positive or the emphasized px is
+ * unset / non-positive (config missing), so behavior is unchanged without config.
+ */
+export function highlightSizeMul(
+  basePx: number,
+  emphasizedPx: number | undefined,
+  fallback: number,
+): number {
+  if (!(basePx > 0) || emphasizedPx === undefined || !(emphasizedPx > 0)) return fallback;
+  return emphasizedPx / basePx;
+}
+
 /** All px sizes are DEVICE pixels; `u_viewport` is `[drawingBufferWidth,
  *  drawingBufferHeight]`. `u_matrix` maps anchor-relative mercator -> clip; it
  *  is composed from MapLibre's `defaultProjectionData.mainMatrix` (the mercator
@@ -51,6 +81,8 @@ uniform vec2 u_viewport;
 uniform float u_half_width;
 uniform float u_aa;
 uniform float u_hide_reference;
+uniform float u_hover_width_mul;
+uniform float u_select_width_mul;
 in vec2 a_pos_a;
 in vec2 a_pos_b;
 in float a_endpoint;
@@ -111,14 +143,15 @@ void main() {
   vec2 normal = vec2(-dir.y, dir.x);
   vec4 base = (a_endpoint < 0.5) ? pa : pb;
   // Section emphasis level carried in a_highlight: 2 = hover, 1 = selection,
-  // 0 = none. Widen highlighted shots, mirroring the stock feature-state width
-  // bumps (hover_width/width = 4/2 = 2x, selection_width/width = 3/2 = 1.5x).
+  // 0 = none. Widen highlighted shots by the CONFIGURED width ratios (default
+  // hover_width/width = 4/2 = 2x, selection_width/width = 3/2 = 1.5x), passed as
+  // uniforms so map.shot.hover_width / selection_width config drive them (C2).
   // Segment-hover (Move Segment), single-section hover, and panel-row hover all
   // resolve to level 2; section selection to level 1. When a section is both
   // hovered and selected the controller merges to level 2 (hover wins), matching
   // the stock paint case order (hover before selected). The fragment recomputes
   // its outset from the same multiplier so the AA feather scales with the line.
-  float widthMul = (a_highlight > 1.5) ? 2.0 : ((a_highlight > 0.5) ? 1.5 : 1.0);
+  float widthMul = (a_highlight > 1.5) ? u_hover_width_mul : ((a_highlight > 0.5) ? u_select_width_mul : 1.0);
   float outset = u_half_width * widthMul + u_aa;
   // Round caps: extrude by outset ALONG the segment past each endpoint (A verts
   // backward, B verts forward) in addition to the perpendicular width offset, so
@@ -182,6 +215,8 @@ uniform float u_radius;
 uniform float u_stroke_width;
 uniform float u_aa;
 uniform float u_hide_reference;
+uniform float u_hover_size_mul;
+uniform float u_select_size_mul;
 in vec2 a_center;
 in vec2 a_corner;
 in vec4 a_fill;
@@ -222,12 +257,13 @@ void main() {
   }
   vec4 c = u_matrix * vec4(a_center, 0.0, 1.0);
   // Section emphasis level carried in a_highlight: 2 = hover, 1 = selection,
-  // 0 = none. Enlarge highlighted stations, mirroring the stock feature-state
-  // radius bumps (hover_radius/radius = 6/4 = 1.5x, selection_radius/radius =
-  // 5/4 = 1.25x). Folded into the size multiplier so radius + stroke grow
+  // 0 = none. Enlarge highlighted stations by the CONFIGURED radius ratios
+  // (default hover_radius/radius = 6/4 = 1.5x, selection_radius/radius = 5/4 =
+  // 1.25x), passed as uniforms so map.station.hover_radius / selection_radius
+  // config drive them (C2). Folded into the size multiplier so radius + stroke grow
   // together; the fragment recomputes disc/stroke radii from v_size_mul, so no
   // separate fragment change is needed.
-  float hlMul = (a_highlight > 1.5) ? 1.5 : ((a_highlight > 0.5) ? 1.25 : 1.0);
+  float hlMul = (a_highlight > 1.5) ? u_hover_size_mul : ((a_highlight > 0.5) ? u_select_size_mul : 1.0);
   float sizeMul = a_size_mul * hlMul;
   // Zero-datum stations render 2x (a_size_mul), so the quad extent must grow to
   // fit; the fragment recomputes disc/stroke radii with the same multiplier.

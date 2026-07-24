@@ -76,6 +76,10 @@ export const LABEL_KIND_COUNT = 5;
  *    A flags-only upload flips it without disturbing the per-label reveal zoom
  *    (which the reveal-only upload path owns), so an active drag and a reveal
  *    rerun never clobber each other.
+ *  - COMMENT_HIDE: the single comment picked up during `move_comment` -> collapsed
+ *    so only the cursor-following tag shows (parity with the deleted stock
+ *    hidden-comment filter). A flags-only bit like DRAG_HIDE; only ever set on the
+ *    one shot / station comment being moved (C3).
  *
  * The old `COLLIDE_HIDE` bit is GONE: collision decluttering is no longer a
  * boolean baked per zoom (which flashed stale bits on band crossings and evicted
@@ -88,6 +92,7 @@ export const LABEL_FLAG = {
   ALL_REFERENCE: 1 << 2,
   DIM: 1 << 3,
   DRAG_HIDE: 1 << 4,
+  COMMENT_HIDE: 1 << 5,
 } as const;
 
 /** Normalized SDF value at the glyph edge (= `1 - cutoff`, cutoff 0.25). See the
@@ -132,6 +137,7 @@ const FLAG_DEFINES = `
 #define FLAG_ALL_REFERENCE ${LABEL_FLAG.ALL_REFERENCE}u
 #define FLAG_DIM ${LABEL_FLAG.DIM}u
 #define FLAG_DRAG_HIDE ${LABEL_FLAG.DRAG_HIDE}u
+#define FLAG_COMMENT_HIDE ${LABEL_FLAG.COMMENT_HIDE}u
 #define KIND_COUNT ${LABEL_KIND_COUNT}`;
 
 /**
@@ -185,6 +191,9 @@ void main() {
   if (u_kind_visible[kind] < 0.5) { collapse(); return; }
   // Drag-excluded: a move tool is dragging this feature.
   if ((a_flags & FLAG_DRAG_HIDE) != 0u) { collapse(); return; }
+  // The one comment picked up during move_comment: hidden so only the
+  // cursor-following tag shows (C3).
+  if ((a_flags & FLAG_COMMENT_HIDE) != 0u) { collapse(); return; }
   // Reference-shots hidden: collapse reference shot labels and all-reference
   // station labels / section names (mirrors the stock setFilter parity).
   if (u_hide_reference > 0.5 && (a_flags & (FLAG_REFERENCE | FLAG_ALL_REFERENCE)) != 0u) {

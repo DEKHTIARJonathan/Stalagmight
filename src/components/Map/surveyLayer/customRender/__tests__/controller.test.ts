@@ -6,6 +6,7 @@ import {
   type SurveyData,
 } from '../../../../../types/survey-data';
 import { SurveyCustomController, type CustomSyncParams } from '../controller';
+import type { CustomRenderData } from '../surveyCustomLayer';
 import { CUSTOM_RENDER_SYNC_HOOK } from '../gate';
 
 /**
@@ -525,5 +526,47 @@ describe('SurveyCustomController color-only fast path', () => {
     expect(layer.updateColorsCalls).toBe(0);
     expect(layer.uploadCalls).toBe(0);
     expect(layer.updateCalls).toBe(1); // full rebuild via update()
+  });
+});
+
+describe('SurveyCustomController highlight width/radius resolution (C2)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const dataOf = (): CustomRenderData => h.layerState.last!.data as CustomRenderData;
+
+  it('falls back to the baked stock ratios when no config sizes are passed', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.sync(makeParams()); // shotWidthPx 2, stationRadiusPx 3, no hover/selection px
+    const d = dataOf();
+    expect(d.lineHoverWidthMul).toBe(2); // default 4/2
+    expect(d.lineSelectWidthMul).toBe(1.5); // default 3/2
+    expect(d.circleHoverSizeMul).toBe(1.5); // default 6/4
+    expect(d.circleSelectSizeMul).toBe(1.25); // default 5/4
+  });
+
+  it('derives the ratios from configured absolute px (independent of base)', () => {
+    const { map } = makeFakeMap();
+    const c = new SurveyCustomController(map);
+    c.sync({
+      ...makeParams(),
+      shotWidthPx: 2,
+      shotHoverWidthPx: 5, // 5/2 = 2.5x
+      shotSelectionWidthPx: 3, // 3/2 = 1.5x
+      stationRadiusPx: 4,
+      stationHoverRadiusPx: 10, // 10/4 = 2.5x
+      stationSelectionRadiusPx: 6, // 6/4 = 1.5x
+    });
+    const d = dataOf();
+    expect(d.lineHoverWidthMul).toBeCloseTo(2.5);
+    expect(d.lineSelectWidthMul).toBeCloseTo(1.5);
+    expect(d.circleHoverSizeMul).toBeCloseTo(2.5);
+    expect(d.circleSelectSizeMul).toBeCloseTo(1.5);
   });
 });

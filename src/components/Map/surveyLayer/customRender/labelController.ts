@@ -143,6 +143,17 @@ const EMPTY_DIM: CustomDimState = {
  *  ({@link CustomRenderExclusion}); dragged features' labels hide. */
 const EMPTY_EXCLUSION: CustomRenderExclusion = {};
 
+/** The single comment picked up during `move_comment` (C3). `type` selects the
+ *  comment kind; `id` is the station index (station comment) or shot id (shot
+ *  comment) within `sectionId` — the exact identity SurveyLayer.setHiddenComment
+ *  receives. That one comment's label is collapsed (LABEL_FLAG.COMMENT_HIDE) so
+ *  only the cursor-following tag shows during pickup. */
+export interface HiddenComment {
+  type: 'station' | 'shot';
+  sectionId: number;
+  id: number;
+}
+
 /** The padded viewport rect (anchor-relative mercator) used for the build set,
  *  the UNPADDED viewport rect (anchor-relative mercator) used for the "did the
  *  camera exit coverage?" test, and the world-pixel scale (CSS px per unit
@@ -248,6 +259,13 @@ export class SurveyLabelController {
   private dimState: CustomDimState = EMPTY_DIM;
   /** Drag-exclusion set (setDragHide); dragged features' labels hide. */
   private hideState: CustomRenderExclusion = EMPTY_EXCLUSION;
+  /** The single comment picked up during move_comment (setHiddenComment); its
+   *  label collapses via LABEL_FLAG.COMMENT_HIDE. Flags-only, like the drag set. (C3) */
+  private hiddenComment: HiddenComment | null = null;
+  /** A comment tool (comment / move_comment) is active (setCommentOverlapExempt):
+   *  the two comment kinds become overlap-exempt in the reveal pass so every
+   *  comment stays visible / selectable. Drives the reveal-only re-upload. (C1) */
+  private commentOverlapExempt = false;
   /** Cached build products backing the flags-only refresh + reveal rerun: the
    *  EMITTED (post-slack-filter) descriptor set + its shaped labels / em extents,
    *  the reveal-pass inputs (build zoom + world-pixel scale), and the last reveal
@@ -468,6 +486,7 @@ export class SurveyLabelController {
         worldPixelScale: vpCtx.worldPixelScale,
         kindVisible: this.kindVisible,
         hideReference: !this.referenceShotsVisible,
+        commentOverlapExempt: this.commentOverlapExempt,
         slack: emitSlack,
       });
       // Emit only labels that clear within the horizon (finite reveal).
@@ -539,7 +558,24 @@ export class SurveyLabelController {
     let f = desc.flags;
     if (this.dimBitFor(desc)) f |= LABEL_FLAG.DIM;
     if (this.dragBitFor(desc)) f |= LABEL_FLAG.DRAG_HIDE;
+    if (this.commentHideBitFor(desc)) f |= LABEL_FLAG.COMMENT_HIDE;
     return f;
+  }
+
+  /**
+   * Whether a label is the ONE comment picked up during move_comment
+   * (setHiddenComment), keyed on the SAME identity the deleted stock
+   * hidden-comment filter used: a station comment matches by `sectionId` +
+   * `stationIndex`, a shot comment by `sectionId` + `shotId`. Only comment kinds
+   * can match, so a station/shot LABEL sharing the anchor never hides. (C3)
+   */
+  private commentHideBitFor(desc: LabelDescriptor): boolean {
+    const hidden = this.hiddenComment;
+    if (hidden === null || desc.sectionId !== hidden.sectionId) return false;
+    if (hidden.type === 'station') {
+      return desc.kind === LABEL_KIND.STATION_COMMENT && desc.stationIndex === hidden.id;
+    }
+    return desc.kind === LABEL_KIND.SHOT_COMMENT && desc.shotId === hidden.id;
   }
 
   /**
@@ -660,6 +696,7 @@ export class SurveyLabelController {
       worldPixelScale: this.lastWorldPixelScale,
       kindVisible: this.kindVisible,
       hideReference: !this.referenceShotsVisible,
+      commentOverlapExempt: this.commentOverlapExempt,
       slack: this.lastEmitSlack,
     });
     // The retained set is already the emitted subset; a rerun only lowers /
@@ -695,6 +732,31 @@ export class SurveyLabelController {
   setDragHide(exclusion: CustomRenderExclusion | null): void {
     this.hideState = exclusion ?? EMPTY_EXCLUSION;
     if (this.active) this.refreshFlags();
+  }
+
+  /**
+   * Hide (or clear, with null) the single comment picked up during move_comment
+   * (SurveyLayer.setHiddenComment). Cheap flags-only refresh — the one matching
+   * comment label collapses via LABEL_FLAG.COMMENT_HIDE so only the
+   * cursor-following tag shows; state stored so a mid-pickup build / re-enable
+   * reproduces it. Mirrors {@link setDragHide}. (C3)
+   */
+  setHiddenComment(hidden: HiddenComment | null): void {
+    this.hiddenComment = hidden;
+    if (this.active) this.refreshFlags();
+  }
+
+  /**
+   * Mark the two comment kinds overlap-exempt (or not) while a comment tool is
+   * active (SurveyLayer comment-tool override). Reruns the reveal pass + re-uploads
+   * just the reveal buffer (like a kind toggle): exempt comments skip the collision
+   * cull and stay revealed at their minzoom, so every comment is visible /
+   * selectable for editing. State stored so a build / re-enable reproduces it. (C1)
+   */
+  setCommentOverlapExempt(exempt: boolean): void {
+    if (this.commentOverlapExempt === exempt) return;
+    this.commentOverlapExempt = exempt;
+    if (this.active) this.rerunReveal();
   }
 
   /**

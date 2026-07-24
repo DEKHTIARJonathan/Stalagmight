@@ -132,6 +132,12 @@ export interface RevealInput {
   /** setShowReferenceShots(false) → reference / all-reference labels are not
    *  collision candidates. */
   hideReference: boolean;
+  /** A comment tool (comment / move_comment) is active → the two comment kinds
+   *  are OVERLAP-EXEMPT: they skip the collision contest and are revealed
+   *  uncontested at their decimation floor (their `minzoom`), so ALL comments
+   *  stay visible / selectable while editing (parity with the deleted stock
+   *  `text-allow-overlap`). Non-comment kinds are unaffected. (C1) */
+  commentOverlapExempt?: boolean;
   /** Emit horizon slack in zoom levels (default {@link EMIT_SLACK}). */
   slack?: number;
   /** Ladder step (default {@link REVEAL_LADDER_STEP}). */
@@ -213,6 +219,16 @@ function overlaps(a: ScreenBox, b: ScreenBox): boolean {
 function isCandidate(desc: LabelDescriptor, input: RevealInput): boolean {
   if (!input.kindVisible[desc.kind]) return false;
   if (input.hideReference && (desc.flags & (LABEL_FLAG.REFERENCE | LABEL_FLAG.ALL_REFERENCE)) !== 0) {
+    return false;
+  }
+  // Comment tool active (C1): comment kinds are overlap-exempt. Treated as
+  // non-candidates so they neither get culled nor occupy collision space — the
+  // same uncontested-emit path a toggled-off kind takes, giving `reveal =
+  // admitZoom` (their minzoom). Non-comment kinds fall through unchanged.
+  if (
+    input.commentOverlapExempt === true &&
+    (desc.kind === LABEL_KIND.STATION_COMMENT || desc.kind === LABEL_KIND.SHOT_COMMENT)
+  ) {
     return false;
   }
   return true;

@@ -165,6 +165,42 @@ describe('computeRevealZooms candidate filter (matches the shader gates)', () =>
   });
 });
 
+describe('computeRevealZooms comment overlap-exempt (C1)', () => {
+  it('exempt comment kinds reveal uncontested at their minzoom, blocking nobody', () => {
+    // A shot comment coincident (0 separation) with a section name is normally
+    // culled — lowest priority, always overlapping. Overlap-exempt: it reveals at
+    // its floor (comment minzoom 14) and the section is unaffected.
+    const descs = [desc(LABEL_KIND.SECTION_NAME), desc(LABEL_KIND.SHOT_COMMENT)];
+    const culled = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input());
+    expect(culled[1]).toBe(REVEAL_NEVER); // normally culled by the coincident section
+    const exempt = computeRevealZooms(
+      descs, [UNIT_EXT, UNIT_EXT], input({ commentOverlapExempt: true }),
+    );
+    expect(exempt[0]).toBe(10); // section unchanged (its minzoom)
+    expect(exempt[1]).toBe(14); // comment now revealed uncontested at its floor
+  });
+
+  it('exempts ONLY comment kinds — a coincident non-comment label still collides', () => {
+    // A shot LABEL coincident with a section name stays culled even with the
+    // exemption on: the flag must not touch non-comment kinds.
+    const descs = [desc(LABEL_KIND.SECTION_NAME), desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 })];
+    const reveal = computeRevealZooms(
+      descs, [UNIT_EXT, UNIT_EXT], input({ commentOverlapExempt: true }),
+    );
+    expect(reveal[0]).toBe(10);
+    expect(reveal[1]).toBe(REVEAL_NEVER); // non-comment: unchanged, still culled
+  });
+
+  it('both comment kinds reveal even when coincident with each other', () => {
+    const descs = [desc(LABEL_KIND.STATION_COMMENT), desc(LABEL_KIND.SHOT_COMMENT)];
+    const reveal = computeRevealZooms(
+      descs, [UNIT_EXT, UNIT_EXT], input({ commentOverlapExempt: true }),
+    );
+    expect(reveal[0]).toBe(14);
+    expect(reveal[1]).toBe(14);
+  });
+});
+
 describe('emitSlackFor (adaptive emit horizon)', () => {
   it('returns the bounded EMIT_SLACK when the candidate set exceeds the threshold', () => {
     expect(emitSlackFor(ADAPTIVE_EMIT_MAX + 1, 15)).toBe(EMIT_SLACK);

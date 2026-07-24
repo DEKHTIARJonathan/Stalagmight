@@ -51,22 +51,32 @@ export type OverlayApplyAction = 'ramp' | 'off' | 'hold';
  *   - `'ramp'`: the field is ready → install / refresh the ramp.
  *   - `'off'` : the mode is genuinely off (disabled, superseded by severity, or
  *               no geometry) → restore base colors immediately (deactivation
- *               must NOT be held).
+ *               must NOT be held). ALSO the clear-on-failure path (see `failed`).
  *   - `'hold'`: the mode is on and geometry is present but the field is
- *               transiently absent (recompute in flight) → keep the CURRENT
- *               colors (the old ramp), no layer call, until the new field lands.
+ *               transiently absent (a SUCCESSFUL recompute in flight) → keep the
+ *               CURRENT colors (the old ramp), no layer call, until the new field
+ *               lands.
  *
  * A genuinely EMPTY result (no reachable features) is still a NON-null field
  * object, so the caller passes `hasField = true` and it maps to `'ramp'` (the
  * all-grey ramp) — never `'hold'` on stale colors.
+ *
+ * CLEAR ON FAILURE (`failed`): a recompute that REJECTED (the IPC threw) leaves
+ * no new field, so `hasField` is false. Without a signal that the compute failed
+ * (rather than merely being in flight) the effect would `'hold'` the old ramp
+ * against the NEW inputs indefinitely. When the caller sets `failed`, the transient
+ * `'hold'` collapses to `'off'` so the stale colors are cleared. The SUCCESS path
+ * (`failed` stays false) keeps the blink-guard `'hold'` unchanged.
  */
 export function overlayApplyAction(
   modeOn: boolean,
   hasField: boolean,
   hasSurvey: boolean,
+  failed = false,
 ): OverlayApplyAction {
   if (!modeOn || !hasSurvey) return 'off';
-  return hasField ? 'ramp' : 'hold';
+  if (hasField) return 'ramp';
+  return failed ? 'off' : 'hold';
 }
 
 /**

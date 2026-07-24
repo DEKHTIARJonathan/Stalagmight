@@ -53,6 +53,13 @@ import {
 import { makeColorResolvers } from './colorResolvers';
 import { planIncrementalUpdate, planColorOnlyUpdate, coalesceVertexRuns } from './incremental';
 import { SurveyCustomLayer, type CustomRenderData } from './surveyCustomLayer';
+import {
+  highlightSizeMul,
+  DEFAULT_SHOT_HOVER_WIDTH_MUL,
+  DEFAULT_SHOT_SELECT_WIDTH_MUL,
+  DEFAULT_STATION_HOVER_SIZE_MUL,
+  DEFAULT_STATION_SELECT_SIZE_MUL,
+} from './shaders';
 import { CUSTOM_RENDER_SYNC_HOOK } from './gate';
 
 /**
@@ -112,6 +119,15 @@ export interface CustomSyncParams {
   shotWidthPx: number;
   stationRadiusPx: number;
   stationStrokePx: number;
+  /** Configured highlight sizes (C2), absolute CSS px. When present they drive
+   *  the shot line + station radius bump for a hovered / selected section via
+   *  ratios over the base size; absent = the historical 2x/1.5x (shot) and
+   *  1.5x/1.25x (station) defaults. Independent config keys `map.shot.hover_width`
+   *  / `selection_width` + `map.station.hover_radius` / `selection_radius`. */
+  shotHoverWidthPx?: number | undefined;
+  shotSelectionWidthPx?: number | undefined;
+  stationHoverRadiusPx?: number | undefined;
+  stationSelectionRadiusPx?: number | undefined;
   /** Features to omit from the buffers, mirroring the stock bulk layers'
    *  move-drag setFilter exclusions. Absent / undefined = draw everything. */
   exclude?: CustomRenderExclusion | undefined;
@@ -394,7 +410,14 @@ export class SurveyCustomController {
    *  edit) still reaches the shader uniforms. */
   private sizeFields(params: CustomSyncParams): Pick<
     CustomRenderData,
-    'lineHalfWidthPx' | 'circleRadiusPx' | 'circleStrokePx' | 'aaPx'
+    | 'lineHalfWidthPx'
+    | 'circleRadiusPx'
+    | 'circleStrokePx'
+    | 'aaPx'
+    | 'lineHoverWidthMul'
+    | 'lineSelectWidthMul'
+    | 'circleHoverSizeMul'
+    | 'circleSelectSizeMul'
   > {
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     return {
@@ -402,6 +425,21 @@ export class SurveyCustomController {
       circleRadiusPx: params.stationRadiusPx * dpr,
       circleStrokePx: params.stationStrokePx * dpr,
       aaPx: dpr,
+      // Highlight bump ratios (C2), dimensionless (dpr cancels) so they apply to
+      // the device-px base sizes above. Absent config falls back to the baked
+      // stock ratios so behavior is unchanged without config.
+      lineHoverWidthMul: highlightSizeMul(
+        params.shotWidthPx, params.shotHoverWidthPx, DEFAULT_SHOT_HOVER_WIDTH_MUL,
+      ),
+      lineSelectWidthMul: highlightSizeMul(
+        params.shotWidthPx, params.shotSelectionWidthPx, DEFAULT_SHOT_SELECT_WIDTH_MUL,
+      ),
+      circleHoverSizeMul: highlightSizeMul(
+        params.stationRadiusPx, params.stationHoverRadiusPx, DEFAULT_STATION_HOVER_SIZE_MUL,
+      ),
+      circleSelectSizeMul: highlightSizeMul(
+        params.stationRadiusPx, params.stationSelectionRadiusPx, DEFAULT_STATION_SELECT_SIZE_MUL,
+      ),
     };
   }
 

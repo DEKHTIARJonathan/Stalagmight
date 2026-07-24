@@ -249,6 +249,12 @@ function MapCanvas() {
   // Whether anchored section IDs have been loaded for the current move_segment activation
   // Blocks segment drag until the set is populated to prevent moving anchored segments
   const [anchoredIdsLoaded, setAnchoredIdsLoaded] = useState(false);
+  // Clear-on-failure flags for the analytical overlays (#34 distance / #38 gas):
+  // set when a field recompute REJECTS so the apply effect drops the stale ramp
+  // (base colors) instead of `overlayApplyAction` holding it against the new
+  // inputs indefinitely. Reset on the next successful field (see the fetch effects).
+  const [distanceFieldFailed, setDistanceFieldFailed] = useState(false);
+  const [gasFieldFailed, setGasFieldFailed] = useState(false);
   // Token to invalidate stale getConnectedSectionIds results (incremented on each drag start,
   // checked in .then()/.catch() to discard late async results after mouseup)
   const segmentDragTokenRef = useRef(0);
@@ -1924,8 +1930,15 @@ function MapCanvas() {
       { from: distanceGradientOrigin ?? null },
       { purpose: 'distance gradient field', fields: { origin: distanceGradientOrigin ?? 'entrance' } }
     )
-      .then((field) => { if (!cancelled) setDistanceField(field); })
-      .catch((e) => console.warn('[distance-gradient] field fetch failed', e));
+      .then((field) => { if (!cancelled) { setDistanceField(field); setDistanceFieldFailed(false); } })
+      .catch((e) => {
+        console.warn('[distance-gradient] field fetch failed', e);
+        // Clear on failure (#34): drop any stale field + flag the failure so the
+        // apply effect restores base colors instead of holding the old ramp
+        // against the new origin/geometry. Guard on the cancel token so a
+        // superseded fetch never clears a newer in-flight one.
+        if (!cancelled) { setDistanceField(null); setDistanceFieldFailed(true); }
+      });
     return () => { cancelled = true; };
   }, [showDistanceGradient, distanceGradientOrigin, project?.modified_at, setDistanceField]);
 
@@ -1953,8 +1966,14 @@ function MapCanvas() {
       },
       { purpose: 'gas reachable-frontier field', fields: { origin: gasOrigin ?? 'entrance' } }
     )
-      .then((field) => { if (!cancelled) setGasReachField(field); })
-      .catch((e) => console.warn('[gas-plan] field fetch failed', e));
+      .then((field) => { if (!cancelled) { setGasReachField(field); setGasFieldFailed(false); } })
+      .catch((e) => {
+        console.warn('[gas-plan] field fetch failed', e);
+        // Clear on failure (#38): mirror the distance overlay — drop the stale
+        // field + flag the failure so the apply effect restores base colors
+        // rather than holding the old ramp against the new gas inputs.
+        if (!cancelled) { setGasReachField(null); setGasFieldFailed(true); }
+      });
     return () => { cancelled = true; };
   }, [showGasPlan, gasOrigin, gasEndpoint, gasDiver, gasCylinders, gasPlanConfig, gasStageDropOverrides, project?.modified_at, setGasReachField]);
 
@@ -1967,13 +1986,14 @@ function MapCanvas() {
       // section metadata + shot ids — never the lazy `section.shots` objects.
       const state = buildDistanceFeatureState(surveyData, distanceField);
       surveyLayerRef.current.setDistanceGradient(true, state);
-    } else if (overlayApplyAction(showDistanceGradient && !effectiveIssueSeverity, distanceField != null, surveyData != null) === 'off') {
-      // Real off (mode disabled, severity coloring wins, or no geometry) -> base
-      // now. NOT while the origin is recomputing (field transiently null, mode
-      // still on): 'hold' keeps the old ramp so a re-root never blinks base (#customRender).
+    } else if (overlayApplyAction(showDistanceGradient && !effectiveIssueSeverity, distanceField != null, surveyData != null, distanceFieldFailed) === 'off') {
+      // Real off (mode disabled, severity coloring wins, no geometry, or a FAILED
+      // recompute) -> base now. NOT while the origin is recomputing successfully
+      // (field transiently null, mode still on, no failure): 'hold' keeps the old
+      // ramp so a re-root never blinks base (#customRender).
       surveyLayerRef.current.setDistanceGradient(false, null);
     }
-  }, [showDistanceGradient, effectiveIssueSeverity, distanceField, surveyData, mapLoaded, surveyLayerRef]);
+  }, [showDistanceGradient, effectiveIssueSeverity, distanceField, surveyData, mapLoaded, surveyLayerRef, distanceFieldFailed]);
 
   // Apply the gas field to the layer (feature-state + paint swap). Separate from
   // the fetch so re-rooting / re-computing never triggers a feature rebuild.
@@ -1984,12 +2004,13 @@ function MapCanvas() {
       // typed arrays, never the lazy `section.shots` objects.
       const state = buildGasReachFeatureState(surveyData, gasReachField);
       surveyLayerRef.current.setGasReach(true, state);
-    } else if (overlayApplyAction(showGasPlan, gasReachField != null, surveyData != null) === 'off') {
-      // 'hold' during a gas param/origin recompute (field transiently null) keeps
-      // the old ramp; only a real off restores base (mirrors the distance guard).
+    } else if (overlayApplyAction(showGasPlan, gasReachField != null, surveyData != null, gasFieldFailed) === 'off') {
+      // 'hold' during a SUCCESSFUL gas param/origin recompute (field transiently
+      // null) keeps the old ramp; a real off OR a failed recompute restores base
+      // (mirrors the distance guard).
       surveyLayerRef.current.setGasReach(false, null);
     }
-  }, [showGasPlan, gasReachField, surveyData, mapLoaded, surveyLayerRef]);
+  }, [showGasPlan, gasReachField, surveyData, mapLoaded, surveyLayerRef, gasFieldFailed]);
 
   // Highlight the picked route over the survey (#233): full-opacity swum legs + faded jumps (#243).
   useEffect(() => {

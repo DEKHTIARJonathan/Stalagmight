@@ -114,4 +114,23 @@ describe('overlayApplyAction (origin-change blink guard)', () => {
     // renders the all-grey ramp instead of holding stale colors.
     expect(overlayApplyAction(true, true, true)).toBe('ramp');
   });
+
+  it('CLEARS (off) on a failed recompute instead of holding stale colors', () => {
+    // A rejected field fetch leaves no field (hasField=false) with the mode still
+    // on + geometry present; the `failed` flag collapses the transient 'hold' to
+    // 'off' so the old ramp is dropped (base colors) against the new inputs (#34/#38).
+    expect(overlayApplyAction(true, false, true, true)).toBe('off');
+  });
+
+  it('still HOLDS when a recompute is merely in flight (not failed)', () => {
+    // Default failed=false keeps the blink-guard: a successful recompute in flight
+    // holds the old ramp until the new field lands.
+    expect(overlayApplyAction(true, false, true, false)).toBe('hold');
+    expect(overlayApplyAction(true, false, true)).toBe('hold');
+  });
+
+  it('ramps on a fresh field even if a prior fetch had failed', () => {
+    // hasField wins over `failed`: once a new field lands the ramp installs.
+    expect(overlayApplyAction(true, true, true, true)).toBe('ramp');
+  });
 });

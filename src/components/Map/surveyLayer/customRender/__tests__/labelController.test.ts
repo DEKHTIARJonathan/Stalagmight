@@ -1208,6 +1208,73 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
   });
 });
 
+// The fixture puts a station comment on station g0 (section 1, station index 0)
+// and a shot comment on shot global 0 (section 1, shot id 0), so the hidden-comment
+// identity is {sectionId:1, id:0} for both kinds.
+describe('SurveyLabelController hidden-comment parity (COMMENT_HIDE flag, C3)', () => {
+  beforeEach(() => {
+    h.layerState.disabledAfterAdd = false;
+    h.layerState.last = null;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('hides ONLY the picked-up shot comment; leaves the station comment + all labels', () => {
+    const cam = zoomOnlyMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setHiddenComment({ type: 'shot', sectionId: 1, id: 0 });
+    expect(layer.flagsCalls).toBeGreaterThan(0); // cheap flags-only refresh, no rebuild
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(true);
+    // A station/shot LABEL sharing the anchor, and the OTHER comment kind, never hide.
+    expect(anyKindHasBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(false);
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_LABEL, LABEL_FLAG.COMMENT_HIDE)).toBe(false);
+    expect(anyKindHasBit(layer, LABEL_KIND.STATION_LABEL, LABEL_FLAG.COMMENT_HIDE)).toBe(false);
+  });
+
+  it('hides ONLY the picked-up station comment', () => {
+    const cam = zoomOnlyMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setHiddenComment({ type: 'station', sectionId: 1, id: 0 });
+    expect(anyKindHasBit(layer, LABEL_KIND.STATION_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(true);
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(false);
+  });
+
+  it('does not match a comment in a different section (id/section keyed)', () => {
+    const cam = zoomOnlyMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setHiddenComment({ type: 'shot', sectionId: 2, id: 0 }); // section 2 has no comment here
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(false);
+  });
+
+  it('setHiddenComment(null) clears COMMENT_HIDE (drop / cancel)', () => {
+    const cam = zoomOnlyMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setHiddenComment({ type: 'shot', sectionId: 1, id: 0 });
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(true);
+    c.setHiddenComment(null);
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(false);
+  });
+
+  it('re-applies COMMENT_HIDE on a mid-pickup rebuild (state survives build)', () => {
+    const cam = zoomOnlyMap(18);
+    const c = cameraController(cam.map);
+    c.sync(commentParams());
+    const layer = h.layerState.last!;
+    c.setHiddenComment({ type: 'shot', sectionId: 1, id: 0 });
+    c.sync(commentParams()); // a geometry flush during pickup
+    expect(anyKindHasBit(layer, LABEL_KIND.SHOT_COMMENT, LABEL_FLAG.COMMENT_HIDE)).toBe(true);
+  });
+});
+
 describe('SurveyLabelController synchronous placement (undo/redo)', () => {
   beforeEach(() => {
     h.layerState.disabledAfterAdd = false;

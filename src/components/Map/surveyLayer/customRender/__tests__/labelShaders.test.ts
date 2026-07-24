@@ -17,8 +17,9 @@ describe('LABEL_FLAG bit contract', () => {
       expect(acc & v).toBe(0); // no two share a bit
       acc |= v;
     }
-    // FIRST_IN_SECTION / REFERENCE / ALL_REFERENCE / DIM / DRAG_HIDE (no COLLIDE_HIDE).
-    expect(Object.keys(LABEL_FLAG)).toHaveLength(5);
+    // FIRST_IN_SECTION / REFERENCE / ALL_REFERENCE / DIM / DRAG_HIDE / COMMENT_HIDE
+    // (no COLLIDE_HIDE).
+    expect(Object.keys(LABEL_FLAG)).toHaveLength(6);
   });
 
   it('no longer defines a COLLIDE_HIDE bit (declutter moved to a_reveal_zoom)', () => {
@@ -38,5 +39,9 @@ describe('LABEL_VERTEX_SRC reveal-zoom + hide contract', () => {
     expect(LABEL_VERTEX_SRC).toContain('a_flags & FLAG_DRAG_HIDE');
     expect(LABEL_VERTEX_SRC).not.toContain('u_decim_mod');
     expect(LABEL_VERTEX_SRC).not.toContain('mod(a_ordinal');
+  });
+
+  it('collapses the picked-up comment (COMMENT_HIDE) parallel to DRAG_HIDE (C3)', () => {
+    expect(LABEL_VERTEX_SRC).toContain('a_flags & FLAG_COMMENT_HIDE');
   });
 });

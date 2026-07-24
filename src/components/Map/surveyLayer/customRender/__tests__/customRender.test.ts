@@ -715,17 +715,25 @@ describe('segment highlight flag (Move Segment whole-segment hover)', () => {
     expect(Array.from(computeCircleDim(d, hlStation))).toEqual(Array.from(circle.highlight));
   });
 
-  it('the shaders widen highlighted features by graded level (hover 2, selection 1)', () => {
-    // Line: level 2 (hover) -> 2x width (stock hover_width/width), level 1
-    // (selection) -> 1.5x (stock selection_width/width), else 1x. The fragment
-    // recomputes its outset from the same varying so the AA stays correct.
+  it('the shaders widen highlighted features by graded level via configured uniforms (C2)', () => {
+    // Line: level 2 (hover) / level 1 (selection) pick the configured width-ratio
+    // uniforms (default 2x / 1.5x), else 1x. The fragment recomputes its outset
+    // from the same varying so the AA stays correct.
     expect(LINE_VERTEX_SRC).toContain('in float a_highlight;');
     expect(LINE_VERTEX_SRC).toContain('u_half_width * widthMul');
-    expect(LINE_VERTEX_SRC).toContain('(a_highlight > 1.5) ? 2.0 : ((a_highlight > 0.5) ? 1.5 : 1.0)');
-    // Circle: level 2 -> 1.5x, level 1 -> 1.25x (stock hover_radius / selection_radius
-    // over radius), folded into the size multiplier (radius + stroke grow together).
+    expect(LINE_VERTEX_SRC).toContain('uniform float u_hover_width_mul;');
+    expect(LINE_VERTEX_SRC).toContain('uniform float u_select_width_mul;');
+    expect(LINE_VERTEX_SRC).toContain(
+      '(a_highlight > 1.5) ? u_hover_width_mul : ((a_highlight > 0.5) ? u_select_width_mul : 1.0)',
+    );
+    // Circle: level 2 / level 1 pick the configured radius-ratio uniforms (default
+    // 1.5x / 1.25x), folded into the size multiplier (radius + stroke grow together).
     expect(CIRCLE_VERTEX_SRC).toContain('in float a_highlight;');
-    expect(CIRCLE_VERTEX_SRC).toContain('(a_highlight > 1.5) ? 1.5 : ((a_highlight > 0.5) ? 1.25 : 1.0)');
+    expect(CIRCLE_VERTEX_SRC).toContain('uniform float u_hover_size_mul;');
+    expect(CIRCLE_VERTEX_SRC).toContain('uniform float u_select_size_mul;');
+    expect(CIRCLE_VERTEX_SRC).toContain(
+      '(a_highlight > 1.5) ? u_hover_size_mul : ((a_highlight > 0.5) ? u_select_size_mul : 1.0)',
+    );
   });
 
   it('build/compute carry graded emphasis levels (selection 1, hover 2)', () => {

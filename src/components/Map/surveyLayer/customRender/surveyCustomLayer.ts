@@ -50,6 +50,15 @@ export interface CustomRenderData {
   circleRadiusPx: number;
   circleStrokePx: number;
   aaPx: number;
+  /** Configured highlight size multipliers (C2): shot line width bump for a
+   *  hovered / selected section and station radius bump likewise, resolved from
+   *  the independent `map.shot.hover_width` / `selection_width` +
+   *  `map.station.hover_radius` / `selection_radius` config (or the historical
+   *  2x/1.5x, 1.5x/1.25x defaults). Fed to the shaders' `u_*_mul` uniforms. */
+  lineHoverWidthMul: number;
+  lineSelectWidthMul: number;
+  circleHoverSizeMul: number;
+  circleSelectSizeMul: number;
 }
 
 interface LineGpu {
@@ -472,6 +481,8 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     gl.uniform1f(gl.getUniformLocation(prog, 'u_half_width'), data.lineHalfWidthPx);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_aa'), data.aaPx);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_reference'), this.hideReference ? 1 : 0);
+    gl.uniform1f(gl.getUniformLocation(prog, 'u_hover_width_mul'), data.lineHoverWidthMul);
+    gl.uniform1f(gl.getUniformLocation(prog, 'u_select_width_mul'), data.lineSelectWidthMul);
     this.bindVec2(gl, prog, 'a_pos_a', g.posA);
     this.bindVec2(gl, prog, 'a_pos_b', g.posB);
     this.bindFloat(gl, prog, 'a_endpoint', g.endpoint);
@@ -501,6 +512,8 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     gl.uniform1f(gl.getUniformLocation(prog, 'u_stroke_width'), data.circleStrokePx);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_aa'), data.aaPx);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_reference'), this.hideReference ? 1 : 0);
+    gl.uniform1f(gl.getUniformLocation(prog, 'u_hover_size_mul'), data.circleHoverSizeMul);
+    gl.uniform1f(gl.getUniformLocation(prog, 'u_select_size_mul'), data.circleSelectSizeMul);
     this.bindVec2(gl, prog, 'a_center', g.center);
     this.bindVec2(gl, prog, 'a_corner', g.corner);
     this.bindColor(gl, prog, 'a_fill', g.fill);
