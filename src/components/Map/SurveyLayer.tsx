@@ -3247,6 +3247,40 @@ export default class SurveyLayer {
     );
   }
 
+  /**
+   * Effective visibility of a stock BASE bulk layer (survey-shots / survey-stations)
+   * given the user's toggle. While the custom geometry controller owns that
+   * geometry ({@link customBulkSuppressed}) the stock base layer stays hidden
+   * regardless of the toggle: the custom layer carries the real visibility, and the
+   * measured/measure path republishes the `-shots` / `-stations` sources (they are
+   * NOT dropped while a measured path is set, see {@link shouldDropBulkSource}), so
+   * a `visible` stock base layer would double the geometry UNDER the custom layer.
+   * Hit-testing still works off the SoA geometry index gated by the user flags
+   * ({@link hitCandidateSections}), not this raw layer visibility, so hiding the
+   * base layer leaves the survey fully interactive.
+   */
+  private stockBaseVisibility(userVisible: boolean): 'visible' | 'none' {
+    if (this.customBulkSuppressed) return 'none';
+    return userVisible ? 'visible' : 'none';
+  }
+
+  /**
+   * Re-apply both stock BASE bulk layers' visibility from the cached user toggles,
+   * honoring the {@link customBulkSuppressed} gate. Called on a suppression
+   * transition (custom geometry take-over / gate opt-out / fail-safe self-disable)
+   * so the base layers hide the instant the controller takes over and reappear the
+   * instant it releases, even though no `setShow*` call re-runs across that flip.
+   */
+  private reapplyStockBulkVisibility(): void {
+    if (!this.map) return;
+    if (this.map.getLayer(this.shotsLayerId)) {
+      this.map.setLayoutProperty(this.shotsLayerId, 'visibility', this.stockBaseVisibility(this.shotsVisible));
+    }
+    if (this.map.getLayer(this.stationsLayerId)) {
+      this.map.setLayoutProperty(this.stationsLayerId, 'visibility', this.stockBaseVisibility(this.stationsVisible));
+    }
+  }
+
   // Control stations visibility (also hides loop closures). Hiding the visible
   // survey-stations layer also removes it as a hit-test candidate (the gate
   // queries that layer now), so hidden stations stay non-interactive.
@@ -3261,7 +3295,10 @@ export default class SurveyLayer {
     if (!visible) {
       this.clearStationHover();
     }
-    this.map.setLayoutProperty(this.stationsLayerId, 'visibility', visibility);
+    // Stock base layer: suppressed while the custom controller owns the geometry
+    // (see stockBaseVisibility). The auxiliary loop-closures / interact layers
+    // below keep following the user's toggle.
+    this.map.setLayoutProperty(this.stationsLayerId, 'visibility', this.stockBaseVisibility(visible));
     this.customRender?.setStationsVisible(visible);
     this.map.setLayoutProperty(this.loopClosuresLayerId, 'visibility', visibility);
     // Interact overlay tracks the stations layer: a hover/selection highlight
@@ -3283,7 +3320,10 @@ export default class SurveyLayer {
     if (!visible) {
       this.clearShotHover();
     }
-    this.map.setLayoutProperty(this.shotsLayerId, 'visibility', visibility);
+    // Stock base layer: suppressed while the custom controller owns the geometry
+    // (see stockBaseVisibility). The auxiliary measure-path / interact layers
+    // below keep following the user's toggle.
+    this.map.setLayoutProperty(this.shotsLayerId, 'visibility', this.stockBaseVisibility(visible));
     this.customRender?.setShotsVisible(visible);
     this.map.setLayoutProperty(this.measurePathLayerId, 'visibility', visibility);
     // Interact overlay tracks the shots layers (#mem).
@@ -4843,7 +4883,16 @@ export default class SurveyLayer {
       for (const group of SurveyLayer.BULK_GEOMETRY_GROUPS) {
         if (this.shouldDropBulkSource(group)) this.dropBulkSource(group);
       }
+      // Hide the stock base shots/stations layers now that the custom layer owns
+      // the geometry: a later measured-path republish of their sources must not
+      // surface them under the custom geometry (see stockBaseVisibility). No
+      // setShow* call re-runs across this flip, so reconcile here.
+      this.reapplyStockBulkVisibility();
     } else {
+      // Restore the stock base layers to the user's toggles BEFORE the controller
+      // removes the custom layer, so gate opt-out / fail-safe self-disable does not
+      // leave them stuck hidden (they were forced 'none' while suppressed).
+      this.reapplyStockBulkVisibility();
       // Synchronous: the controller removes the custom layer right after this
       // returns, so stock geometry must be back in the same frame or the survey
       // blanks. See controller.teardown / rebuildFromCacheIfIdle.

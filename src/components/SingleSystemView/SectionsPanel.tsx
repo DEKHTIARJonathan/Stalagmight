@@ -38,6 +38,30 @@ const HOVER_SCROLL_DEBOUNCE_MS = 120;
 // in step with the warnings list estimate in DetailPanel.
 const SECTION_ROW_ESTIMATED_HEIGHT = 56;
 
+/**
+ * Which section-list index owns the list's default keyboard Tab stop while no row
+ * is focused (`-1` = none: a row is focused, or nothing is mounted). The list is
+ * virtualized, so the Tab stop MUST land on a currently MOUNTED row -- otherwise,
+ * once an external selection / hover reveal / manual scroll moves the virtual
+ * window past index 0 (unmounting it), every mounted row would be `tabIndex={-1}`
+ * and keyboard users could not Tab into the list at its current scroll position.
+ * Prefer the selected row when it is inside the mounted window, else the first
+ * (lowest-index) mounted row. A focused row keeps the Tab stop via its own
+ * `isFocused` path, so this returns `-1` whenever something is focused.
+ */
+export function rovingDefaultTabIndex(
+  focusedIndex: number,
+  mountedIndices: readonly number[],
+  selectedIndex: number,
+): number {
+  if (focusedIndex !== -1) return -1;
+  if (mountedIndices.length === 0) return -1;
+  if (selectedIndex !== -1 && mountedIndices.includes(selectedIndex)) return selectedIndex;
+  let first = mountedIndices[0]!;
+  for (const i of mountedIndices) if (i < first) first = i;
+  return first;
+}
+
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
@@ -491,7 +515,17 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                 Kept inside the `py-1` <ul> so the list's top/bottom breathing
                 room is unchanged. */}
             <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: 'relative' }}>
-              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              {(() => {
+                const virtualItems = rowVirtualizer.getVirtualItems();
+                // Roving-tabindex owner: a MOUNTED row keeps the default Tab stop
+                // so the list stays keyboard-reachable at its current scroll
+                // position (index 0 is often unmounted after a reveal / scroll).
+                const defaultTabIndex = rovingDefaultTabIndex(
+                  focusedIndex,
+                  virtualItems.map((v) => v.index),
+                  selectedSectionId !== null ? (sectionIndexById.get(selectedSectionId) ?? -1) : -1,
+                );
+                return virtualItems.map((virtualRow) => {
                 const index = virtualRow.index;
                 const section = sections[index]!;
                 return (
@@ -504,7 +538,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                     isSelected={selectedSectionId === section.id}
                     isHovered={effectiveHoveredSectionId === section.id}
                     isFocused={focusedIndex === index}
-                    isDefaultFocus={focusedIndex === -1 && index === 0}
+                    isDefaultFocus={index === defaultTabIndex}
                     precision={precision.length}
                     virtualStart={virtualRow.start}
                     measureElement={rowVirtualizer.measureElement}
@@ -523,7 +557,8 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                     optionRefs={optionRefs}
                   />
                 );
-              })}
+                });
+              })()}
             </div>
           </ul>
         )}

@@ -131,11 +131,25 @@ export function shapedExtent(shaped: ShapedLabel): ExtentEm | null {
  *  `maxWidthEm`, so a multi-line comment renders on separate lines like the stock
  *  MapLibre label instead of collapsing to one. Within a hard line, words break on
  *  whitespace runs, measured by glyph-advance sum; a word wider than the max gets
- *  its own line (no mid-word break). */
-function wrapIntoLines(text: string, maxWidthEm: number, atlas: GlyphAtlas): string[] {
+ *  its own line (no mid-word break).
+ *
+ *  An INTERIOR blank hard line (an authored empty line, e.g. `heading\n\nbody`)
+ *  contributes one empty visual line, preserving the paragraph break's height the
+ *  way stock MapLibre does. The exception is a WHOLLY empty / whitespace-only
+ *  comment (a single blank hard line): it produces no lines at all, matching the
+ *  empty-label contract (`shapeLabel` -> zero glyphs, `shapedExtent` -> null). */
+export function wrapIntoLines(text: string, maxWidthEm: number, atlas: GlyphAtlas): string[] {
   if (!Number.isFinite(maxWidthEm)) return [text];
+  const hardLines = text.split('\n');
   const lines: string[] = [];
-  for (const hardLine of text.split('\n')) wrapHardLine(hardLine, maxWidthEm, atlas, lines);
+  for (const hardLine of hardLines) {
+    const before = lines.length;
+    wrapHardLine(hardLine, maxWidthEm, atlas, lines);
+    // A hard line that emitted nothing is an authored blank line. Keep it as one
+    // empty visual line so the blank row's height survives -- UNLESS the entire
+    // comment is that single blank line, which must stay ink-free (no lines).
+    if (lines.length === before && hardLines.length > 1) lines.push('');
+  }
   return lines;
 }
 

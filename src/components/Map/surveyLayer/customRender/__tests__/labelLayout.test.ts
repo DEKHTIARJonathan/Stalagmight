@@ -3,6 +3,7 @@ import {
   shapeLabel,
   shapedExtent,
   lineWidthEm,
+  wrapIntoLines,
   ShapeCache,
   LABEL_KIND_LAYOUT,
   LINE_HEIGHT_EM,
@@ -182,6 +183,42 @@ describe('shapeLabel comment wrapping (12 em)', () => {
     const s = shapeLabel('hello', LABEL_KIND.STATION_COMMENT, atlas);
     const lines = new Set(s.glyphs.map((g) => Math.round(g.yBot * 1000)));
     expect(lines.size).toBe(1);
+  });
+});
+
+describe('wrapIntoLines blank-line preservation', () => {
+  it('keeps an interior blank hard line as one empty visual line', () => {
+    const atlas = makeAtlas();
+    // `a\n\nb` -> the empty middle hard line survives as a blank line, so the
+    // paragraph break does not collapse (stock MapLibre preserves it too).
+    expect(wrapIntoLines('a\n\nb', COMMENT_MAX_WIDTH_EM, atlas)).toEqual(['a', '', 'b']);
+  });
+
+  it('yields no lines for a wholly empty comment', () => {
+    const atlas = makeAtlas();
+    expect(wrapIntoLines('', COMMENT_MAX_WIDTH_EM, atlas)).toEqual([]);
+    // A single whitespace-only hard line is ink-free too -> no lines.
+    expect(wrapIntoLines('   ', COMMENT_MAX_WIDTH_EM, atlas)).toEqual([]);
+  });
+
+  it('preserves leading and trailing blank lines sanely', () => {
+    const atlas = makeAtlas();
+    expect(wrapIntoLines('a\n', COMMENT_MAX_WIDTH_EM, atlas)).toEqual(['a', '']);
+    expect(wrapIntoLines('\na', COMMENT_MAX_WIDTH_EM, atlas)).toEqual(['', 'a']);
+    // Two authored blank lines between paragraphs -> two empty visual lines.
+    expect(wrapIntoLines('a\n\n\nb', COMMENT_MAX_WIDTH_EM, atlas)).toEqual(['a', '', '', 'b']);
+  });
+
+  it('shapes `a\\n\\nb` to two glyphs two line-heights apart (empty row occupies height)', () => {
+    const atlas = makeAtlas();
+    const s = shapeLabel('a\n\nb', LABEL_KIND.STATION_COMMENT, atlas);
+    // Only `a` and `b` carry ink; the blank middle line contributes no glyph.
+    expect(s.glyphCount).toBe(2);
+    // `a` is line 0, `b` is line 2, so their baselines are 2 line-heights apart
+    // (a single `a\nb` would be exactly one line-height) -- proving the blank
+    // line reserved its row.
+    const [ga, gb] = s.glyphs;
+    expect(Math.abs(gb!.yBot - ga!.yBot)).toBeCloseTo(2 * LINE_HEIGHT_EM, 9);
   });
 });
 
