@@ -568,11 +568,13 @@ describe('zero-datum sizing (stock circle-radius/-stroke parity)', () => {
   });
 
   it('the circle shaders scale radius + stroke by the size multiplier', () => {
-    // Quad extent, disc radius, and stroke radius all fold in the multiplier so
-    // a 2x station is not clipped and its stroke band doubles. The vertex derives
-    // `sizeMul` from `a_size_mul` (times any highlight bump) and the fragment
-    // recomputes both radii from the `v_size_mul` varying.
-    expect(CIRCLE_VERTEX_SRC).toContain('float sizeMul = a_size_mul *');
+    // Quad extent, disc radius, and stroke radius all fold in `sizeMul` so a 2x
+    // (zero-datum) station is not clipped and its stroke band doubles. Highlight
+    // takes PRECEDENCE over the 2x: a highlighted station uses the configured
+    // hover/select ratio, and only an unhighlighted one falls back to a_size_mul.
+    // The fragment recomputes both radii from the `v_size_mul` varying.
+    expect(CIRCLE_VERTEX_SRC).toContain('float sizeMul = (a_highlight > 1.5) ? u_hover_size_mul');
+    expect(CIRCLE_VERTEX_SRC).toContain(': a_size_mul;');
     expect(CIRCLE_VERTEX_SRC).toContain('(u_radius + u_stroke_width) * sizeMul');
     expect(CIRCLE_FRAGMENT_SRC).toContain('u_radius * v_size_mul');
     expect(CIRCLE_FRAGMENT_SRC).toContain('u_stroke_width * v_size_mul');
@@ -726,14 +728,16 @@ describe('segment highlight flag (Move Segment whole-segment hover)', () => {
     expect(LINE_VERTEX_SRC).toContain(
       '(a_highlight > 1.5) ? u_hover_width_mul : ((a_highlight > 0.5) ? u_select_width_mul : 1.0)',
     );
-    // Circle: level 2 / level 1 pick the configured radius-ratio uniforms (default
-    // 1.5x / 1.25x), folded into the size multiplier (radius + stroke grow together).
+    // Circle: highlight takes PRECEDENCE over zero-datum sizing — level 2 / level 1
+    // pick the configured radius-ratio uniforms (default 1.5x / 1.25x), and only an
+    // unhighlighted station uses a_size_mul (zero-datum 2x). Radius + stroke grow
+    // together via the size multiplier.
     expect(CIRCLE_VERTEX_SRC).toContain('in float a_highlight;');
     expect(CIRCLE_VERTEX_SRC).toContain('uniform float u_hover_size_mul;');
     expect(CIRCLE_VERTEX_SRC).toContain('uniform float u_select_size_mul;');
-    expect(CIRCLE_VERTEX_SRC).toContain(
-      '(a_highlight > 1.5) ? u_hover_size_mul : ((a_highlight > 0.5) ? u_select_size_mul : 1.0)',
-    );
+    expect(CIRCLE_VERTEX_SRC).toContain('(a_highlight > 1.5) ? u_hover_size_mul');
+    expect(CIRCLE_VERTEX_SRC).toContain('(a_highlight > 0.5) ? u_select_size_mul');
+    expect(CIRCLE_VERTEX_SRC).toContain(': a_size_mul;');
   });
 
   it('build/compute carry graded emphasis levels (selection 1, hover 2)', () => {
