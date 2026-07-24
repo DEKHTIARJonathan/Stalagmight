@@ -14,8 +14,8 @@ pub mod telemetry;
 pub mod test_helpers;
 pub mod tile_providers;
 pub mod tilemap_cache;
-/// Linux-only WebKit memory-pressure wiring (see the module docs and
-/// `vendor/wry/MODIFICATIONS.md`).
+/// Linux-only WebKit memory-pressure wiring (see the module docs and the
+/// patched wry fork: <https://github.com/Stalagmight/wry>).
 #[cfg(target_os = "linux")]
 pub mod webkit_memory;
 
@@ -1063,7 +1063,7 @@ pub fn run() {
     // Tauri's setup step (before our own `.setup()` hook), and
     // `memory-pressure-settings` is a construct-only property, so this must happen
     // here at the top of `run()`. No-op unless enabled (default on). See
-    // `webkit_memory` and `vendor/wry/MODIFICATIONS.md`.
+    // `webkit_memory` and the patched wry fork (https://github.com/Stalagmight/wry).
     #[cfg(target_os = "linux")]
     webkit_memory::apply_env_from_config();
 

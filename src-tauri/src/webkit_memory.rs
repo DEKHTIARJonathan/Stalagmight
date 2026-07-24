@@ -11,8 +11,8 @@
 //!
 //! The settings are a construct-only property read when the web process spawns, so
 //! they must be installed before the `WebContext` is built. wry owns that
-//! constructor, so we apply them via a small vendored patch to wry
-//! (`vendor/wry/MODIFICATIONS.md`) that reads the `STALAGMIGHT_WEBKIT_MEM_*`
+//! constructor, so we apply them via a small patched wry fork
+//! (<https://github.com/Stalagmight/wry>) that reads the `STALAGMIGHT_WEBKIT_MEM_*`
 //! environment variables. This module sets those variables from
 //! [`crate::config::WebkitMemoryConfig`] at the very top of `run()`, before the
 //! Tauri builder starts (the config-defined window's WebContext is built inside

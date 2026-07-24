@@ -102,14 +102,17 @@ keyring = { version = "3", default-features = false, features = ["apple-native"]
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
-# Vendored, minimally-patched wry so the Linux WebKit web process returns freed
-# memory to the OS. The patch adds `WebKitMemoryPressureSettings` (read from
+# Minimally-patched wry so the Linux WebKit web process returns freed memory to
+# the OS. The patch adds `WebKitMemoryPressureSettings` (read from
 # `STALAGMIGHT_WEBKIT_MEM_*` env vars set in `lib.rs` `run()`) to the WebContext
 # it constructs; `memory-pressure-settings` is a construct-only property so it
-# cannot be set from application code. See `vendor/wry/MODIFICATIONS.md`. With the
-# env vars unset this copy behaves exactly like upstream wry 0.53.5.
+# cannot be set from application code. The fork is one commit on top of the
+# upstream `wry-v0.53.5` tag (only `src/webkitgtk/web_context.rs` changes; see
+# https://github.com/Stalagmight/wry/blob/v0.53.5-stalagmight1/MODIFICATIONS.md).
+# Pinned by rev for a reproducible build; the `v0.53.5-stalagmight1` tag points at
+# the same commit. With the env vars unset it behaves exactly like upstream 0.53.5.
 [patch.crates-io]
-wry = { path = "vendor/wry" }
+wry = { git = "https://github.com/Stalagmight/wry", rev = "ddb89c5e1a8e3a98ddb263d4eae7c4e9af800303" }
 
 [profile.dev]
 # Backtraces still show file:line; skipping full debug info halves the link step.

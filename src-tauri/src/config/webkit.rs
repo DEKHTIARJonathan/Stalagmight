@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 /// OS without a pressure signal, so its RSS drifts far above live memory. These
 /// settings give the web process a soft memory budget so WebKit's own
 /// `MemoryPressureHandler` reclaims memory (GC-style pauses), with no kernel
-/// cgroup throttling. Applied via the vendored, patched `wry`
-/// (`src-tauri/vendor/wry/MODIFICATIONS.md`), which reads the
+/// cgroup throttling. Applied via the patched `wry` fork
+/// (<https://github.com/Stalagmight/wry>), which reads the
 /// `STALAGMIGHT_WEBKIT_MEM_*` environment variables that `lib.rs` `run()` sets
 /// from this config at startup.
 ///
