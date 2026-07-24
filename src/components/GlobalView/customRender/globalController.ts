@@ -6,14 +6,15 @@
  * hover/select/search/reference/visibility/theme setters here, and asks `pick()`
  * to resolve interaction hits (replacing queryRenderedFeatures).
  *
- * The custom layer is the SOLE global-survey renderer (no gate): `sync()` always
- * adds it below the stock global-survey layers, hides the stock shots/stations
- * (+ hitbox) layers, and drives everything from typed-array buffers + the
- * geometry hit index. There is NO stock fallback: an unrecoverable GL failure
- * (no WebGL2, program link failure, or a render-time `gl.getError` self-disable)
- * removes the dead layer and calls `onFatal(reason)` (error state) instead of
- * restoring stock. The `setStockVisibility` restore path survives only for the
- * non-fatal `destroy()` teardown (a later stage deletes the stock layers).
+ * The custom layer is the SOLE global-survey renderer (no gate, no stock layers):
+ * `sync()` always adds it at the top of the global map (above the satellite
+ * basemap; the system markers are DOM overlays, always above the canvas) and
+ * drives everything from typed-array buffers + the geometry hit index. There is
+ * NO stock fallback: an unrecoverable GL failure (no WebGL2, program link
+ * failure, or a render-time `gl.getError` self-disable) removes the dead layer
+ * and calls `onFatal(reason)` (error state). The stock global-survey layers +
+ * their vector-tile publish were deleted in the stock-deletion stage, so there
+ * is nothing to hide, restore, or republish.
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import type { ProjectMetadata } from '../../../types/project';
@@ -32,20 +33,12 @@ import {
 } from './globalCustomLayer';
 import { GlobalHitIndex, type GlobalHit, type ProjectFn } from './globalHitIndex';
 
-/** Stock global-survey layers hidden while the custom layer is on. */
-const HIDDEN_STOCK_LAYERS = [
-  'global-survey-shots-layer',
-  'global-survey-stations-layer',
-  'global-survey-shots-hitbox',
-  'global-survey-stations-hitbox',
-] as const;
-
-/** Stock base visual weights (CSS px) the custom layer mirrors. */
+/** Base visual weights (CSS px) for the custom global survey geometry. */
 const BASE_SHOT_WIDTH = 2;
 const BASE_STATION_RADIUS = 4;
 const BASE_STATION_STROKE = 1;
 
-/** Stock hitbox reaches: station circle-radius 10, shot line-width 10 -> 5. */
+/** Screen-space hit reaches (CSS px): station disc + shot line half-width. */
 const STATION_REACH = 10;
 const SHOT_REACH = 5;
 
@@ -61,10 +54,11 @@ export interface GlobalCustomControllerOptions {
   /** Override how the fail-safe restore is deferred. Defaults to rAF. */
   scheduleRestore?: (fn: () => void) => void;
   /**
-   * Notified whenever the custom layer's active (drawing) state flips. `true`
-   * once added AND drawing (stock layers hidden); `false` on teardown, gate-off,
-   * or a fail-safe self-disable. GlobalSurveyLayer uses this to stop / resume the
-   * stock vector-tile publish in lockstep (mirrors the single-system view).
+   * Notified whenever the custom layer's active (drawing) state flips: `true`
+   * once added AND drawing, `false` on teardown / fail-safe self-disable.
+   * Retained as a generic lifecycle signal (mirrors the single-system
+   * controller); the stock vector-tile publish it once gated is gone, so
+   * GlobalSurveyLayer no longer subscribes.
    */
   onActiveChange?: (active: boolean) => void;
   /** Called ONCE on an UNRECOVERABLE GL failure (no WebGL2, program link
@@ -167,11 +161,10 @@ export class GlobalCustomController {
     layer.setVisible(this.visible);
     layer.setReferenceShotsVisible(this.referenceVisible);
     layer.setHoverSystem(-1);
-    // Draw below the stock shots layer (above the basemap) if present.
-    const beforeId = this.map.getLayer('global-survey-shots-layer')
-      ? 'global-survey-shots-layer'
-      : undefined;
-    this.map.addLayer(layer, beforeId);
+    // Add at the top of the global map: the only other GL layer is the satellite
+    // basemap (below), and the system markers are DOM overlays that always sit
+    // above the canvas, so no beforeId anchor is needed.
+    this.map.addLayer(layer);
     if (layer.isDisabled()) {
       // FATAL: the custom layer cannot draw. There is NO stock fallback — remove
       // the dead layer and route to the error state instead of restoring stock.
@@ -188,9 +181,8 @@ export class GlobalCustomController {
       return;
     }
     this.layer = layer;
-    this.setStockVisibility('none');
     this.setActive(true);
-    console.info('[globalCustomRender] enabled; stock global-survey layers hidden', {
+    console.info('[globalCustomRender] enabled', {
       systems: this.systems.length,
       shotSegments: data.line.segmentCount,
       stations: data.circle.stationCount,
@@ -198,19 +190,13 @@ export class GlobalCustomController {
     this.map.triggerRepaint();
   }
 
-  /** Remove the custom layer + restore the stock layers. `fireRepublish` true
-   *  drives the stock vector-tile republish through {@link setActive}; false
-   *  (destroy) sets `active` directly so onActiveChange never fires —
-   *  GlobalSurveyLayer is about to clear the registry + remove the map, so that
-   *  republish would be wasted work (and can freeze dense multi-system views on
-   *  exit). Non-fatal teardown only (destroy); the fatal path uses
-   *  {@link tearDownFatal}, which never restores stock. */
-  private teardown(fireRepublish = true): void {
+  /** Remove the custom layer (the sole global-survey renderer — no stock to
+   *  restore or republish). Safe when already inactive. Non-fatal teardown only
+   *  (destroy); the fatal path uses {@link tearDownFatal}. */
+  private teardown(): void {
+    this.setActive(false);
     if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
     this.layer = null;
-    this.setStockVisibility('visible');
-    if (fireRepublish) this.setActive(false);
-    else this.active = false;
     this.map.triggerRepaint();
   }
 
@@ -227,11 +213,10 @@ export class GlobalCustomController {
   }
 
   /**
-   * FATAL teardown: remove the dead layer WITHOUT restoring or republishing the
-   * stock layers, latch {@link fatal} so a later sync() bails, and surface the
-   * error via {@link onFatal}. Deliberately does NOT fire `onActiveChange(false)`
-   * — that would drive GlobalSurveyLayer to republish the stock bulk sources,
-   * exactly the fallback this stage removes.
+   * FATAL teardown: remove the dead layer, latch {@link fatal} so a later sync()
+   * bails, and surface the error via {@link onFatal}. Sets `active` directly
+   * (skipping {@link onActiveChange}) so the fatal path stays a pure error-state
+   * signal; there are no stock layers left to restore or republish.
    */
   private tearDownFatal(reason: string): void {
     this.fatal = true;
@@ -253,25 +238,6 @@ export class GlobalCustomController {
     if (this.active === v) return;
     this.active = v;
     this.onActiveChange?.(v);
-  }
-
-  /** Suppress (`'none'`) hides every stock survey + hitbox layer unconditionally.
-   *  Restore (`'visible'`) honors the stored markers-only toggle instead of
-   *  blindly showing: in markers-only mode (`setVisible(false)`) the survey
-   *  geometry + hitboxes must stay hidden after a fallback, matching `pick()`
-   *  which returns no hits while `!visible`; otherwise hidden geometry reappears
-   *  over the markers view and becomes interactive again. Mirrors the survey
-   *  controller's restore direction. */
-  private setStockVisibility(v: 'none' | 'visible'): void {
-    for (const id of HIDDEN_STOCK_LAYERS) {
-      if (!this.map.getLayer?.(id)) continue;
-      const visibility = v === 'none' ? 'none' : this.visible ? 'visible' : 'none';
-      try {
-        this.map.setLayoutProperty(id, 'visibility', visibility);
-      } catch {
-        // Layer may be mid-teardown; ignore.
-      }
-    }
   }
 
   /** Hovered system (or null). Uniform-only refresh, no buffer re-upload. */
@@ -353,9 +319,7 @@ export class GlobalCustomController {
   }
 
   destroy(): void {
-    // Silent teardown: no onActiveChange(false) -> no stock republish, since
-    // GlobalSurveyLayer clears the registry + removes the map right after.
-    if (this.active) this.teardown(false);
+    if (this.active) this.teardown();
     this.systems = [];
     this.metadataById = new Map();
     this.hitIndex = null;
