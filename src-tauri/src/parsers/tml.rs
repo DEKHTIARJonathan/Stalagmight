@@ -1485,6 +1485,14 @@ pub(crate) fn resolve_tml_depth_in(
 /// no-op. `0` maps to a plain `0.0`, never `-0.0`, so a round-trip through
 /// Ariane does not show up as a phantom edit. Inverse of
 /// `export::tml::pitch_to_inclination`.
+///
+/// Applied to every `.tml` regardless of who wrote it, deliberately: export
+/// writes the same convention, so a file Stalagmight produces re-imports
+/// correctly as though Ariane had written it. A standalone `.tml` from a
+/// pre-#296 build holds raw +down pitch here and so imports inverted, with no
+/// migration to repair it; that is accepted rather than sniffed for, since real
+/// Ariane files carry `Inclination` 0 and the collab sidecar is force-exported
+/// by the v12 migration. See `docs/inclination.md`.
 pub(crate) fn inclination_to_pitch(inclination: f64) -> f64 {
     if inclination == 0.0 {
         0.0

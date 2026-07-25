@@ -436,17 +436,27 @@ impl Database {
     /// the section verdict and stays flagged by validation, which is the whole
     /// point of the cross-check.
     ///
-    /// A section is only flipped when the evidence is lopsided: at least
-    /// `MIN_VOTING_SHOTS` usable shots and a flipped error less than half the
-    /// as-is error. On real DMP data the flipped error is 3-7x smaller, and on
-    /// already-correct Walls/Compass data it is far larger, so the gap is wide.
-    /// Anything in between is left alone rather than guessed at; sections whose
-    /// pitch is entirely zero (Ariane never populates inclination) produce no
-    /// signal at all and are untouched.
-    /// Returns `true` when at least one section was flipped, so the caller can
-    /// invalidate the state that still holds pre-flip pitch (persisted undo
-    /// history, dismissed inclination warnings, the collab sidecar baseline).
-    pub(super) fn migrate_pitch_to_down_convention(conn: &Connection) -> Result<bool> {
+    /// Each usable shot casts ONE vote, and the votes are counted; the angular
+    /// errors are deliberately not summed. Summing let a single shot decide the
+    /// section by sheer magnitude: three correct shallow shots disagreeing by
+    /// 4 degrees each are outweighed by one blunder recorded at -89 against
+    /// +89 implied, which flips all four and launders the blunder, the exact
+    /// opposite of the paragraph above. Counting votes bounds any one shot's
+    /// influence at one vote.
+    ///
+    /// A shot votes only when its own evidence is lopsided (one direction's
+    /// error beats the other by `DECISIVE_RATIO`); otherwise it abstains, which
+    /// is what keeps near-horizontal and very short shots from voting noise. A
+    /// section flips when at least `MIN_VOTING_SHOTS` shots vote to flip and
+    /// the flip votes outnumber the keep votes by `DECISIVE_RATIO`. That margin
+    /// is what lets a real DMP section carry one genuine blunder without being
+    /// held hostage by it, while a section that is mostly correct can never be
+    /// flipped by an outlier. Sections whose pitch is entirely zero (Ariane
+    /// never populates inclination) produce no votes at all and are untouched.
+    /// Returns the ids of the sections that were flipped, so the caller can
+    /// invalidate the state that still holds their pre-flip pitch (persisted
+    /// undo history, dismissed inclination warnings). Empty means nothing moved.
+    pub(super) fn migrate_pitch_to_down_convention(conn: &Connection) -> Result<Vec<i64>> {
         /// Below this a shot's implied angle is mostly depth-gauge quantisation.
         const MIN_LENGTH_M: f64 = 0.05;
         /// Same, for the vertical change.
@@ -474,10 +484,20 @@ impl Database {
             ))
         })?;
 
-        // section_id -> (as-is error, flipped error, usable shot count)
-        let mut tally: HashMap<i64, (f64, f64, usize)> = HashMap::new();
+        // section_id -> (votes to flip, votes to keep). Shots whose own
+        // evidence is not lopsided abstain and appear in neither count.
+        let mut tally: HashMap<i64, (usize, usize)> = HashMap::new();
         for row in rows {
             let (section_id, length, depth_in, depth_out, pitch_in, pitch_out) = row?;
+            // Reject out-of-range legs BEFORE averaging, exactly as
+            // `Validator::validate_shot` does. Testing only the average would
+            // let a shot with one impossible leg vote whenever the other leg
+            // pulls the mean back inside the range.
+            let leg_in_range =
+                |leg: Option<f64>| leg.is_none_or(|v| v.abs() <= MAX_VOTING_PITCH_DEG);
+            if !leg_in_range(pitch_in) || !leg_in_range(pitch_out) {
+                continue;
+            }
             let recorded = match (pitch_in, pitch_out) {
                 (Some(a), Some(b)) => (a + b) / 2.0,
                 (Some(a), None) | (None, Some(a)) => a,
@@ -491,27 +511,26 @@ impl Database {
             if !recorded.is_finite() || !dz.is_finite() || !length.is_finite() {
                 continue;
             }
-            // Out-of-range legs are blunders, not evidence.  Validation skips
-            // the cross-check for them (see `Validator::validate_shot`), so
-            // letting them vote here would let a single 120 degree typo drag a
-            // section's verdict in either direction depending on its sign.
-            if recorded.abs() > MAX_VOTING_PITCH_DEG {
-                continue;
-            }
             let horizontal = (length * length - dz * dz).max(0.0).sqrt();
             let implied = dz.atan2(horizontal).to_degrees();
 
-            let entry = tally.entry(section_id).or_insert((0.0, 0.0, 0));
-            entry.0 += (recorded - implied).abs();
-            entry.1 += (-recorded - implied).abs();
-            entry.2 += 1;
+            let as_is_error = (recorded - implied).abs();
+            let flipped_error = (-recorded - implied).abs();
+
+            let entry = tally.entry(section_id).or_insert((0, 0));
+            if flipped_error * DECISIVE_RATIO < as_is_error {
+                entry.0 += 1;
+            } else if as_is_error * DECISIVE_RATIO < flipped_error {
+                entry.1 += 1;
+            }
         }
         drop(stmt);
 
         let flip: Vec<i64> = tally
             .iter()
-            .filter(|(_, (as_is, flipped, count))| {
-                *count >= MIN_VOTING_SHOTS && *flipped * DECISIVE_RATIO < *as_is
+            .filter(|(_, (flip_votes, keep_votes))| {
+                *flip_votes >= MIN_VOTING_SHOTS
+                    && (*flip_votes as f64) > (*keep_votes as f64) * DECISIVE_RATIO
             })
             .map(|(section_id, _)| *section_id)
             .collect();
@@ -523,8 +542,8 @@ impl Database {
         // them in the log rather than leaving the user to guess.
         let declined: Vec<i64> = tally
             .iter()
-            .filter(|(section_id, (_, _, count))| {
-                *count >= MIN_VOTING_SHOTS && !flip.contains(section_id)
+            .filter(|(section_id, (flip_votes, keep_votes))| {
+                flip_votes + keep_votes >= MIN_VOTING_SHOTS && !flip.contains(section_id)
             })
             .map(|(section_id, _)| *section_id)
             .collect();
@@ -540,7 +559,7 @@ impl Database {
                 sections_examined = tally.len(),
                 "No sections needed pitch-convention normalisation (v11 to v12)"
             );
-            return Ok(false);
+            return Ok(flip);
         }
 
         // No transaction here on purpose: the caller wraps this call and the
@@ -561,7 +580,7 @@ impl Database {
             sections_examined = tally.len(),
             "Normalised stored pitch to the +down convention (v11 to v12)"
         );
-        Ok(true)
+        Ok(flip)
     }
 
     /// Migrate undo/redo tables from TEXT to BLOB columns (schema v2→v3).
@@ -661,30 +680,40 @@ impl Database {
     /// pre-#296 pitch, after `migrate_pitch_to_down_convention` flipped at
     /// least one section (schema v11 to v12).
     ///
-    /// The migration rewrites `shots` only. Three other stores keep pitch, or a
-    /// verdict derived from it, and none of them is versioned, so a stale copy
-    /// would outlive the migration and there is no second pass to catch it:
+    /// The migration rewrites `shots` only. Two other stores hold the pitch of
+    /// the sections it moved, or a verdict derived from it, and neither is
+    /// versioned, so a stale copy would outlive the migration and there is no
+    /// second pass to catch it:
     ///
     /// 1. Persisted undo/redo. Payloads carry absolute pitch values and whole
     ///    project snapshots, so one undo of a pre-upgrade edit writes the +up
-    ///    value straight back into a file already stamped v12.
+    ///    value straight back into a file already stamped v12. Whole-project
+    ///    snapshots are why this is all-or-nothing rather than per section.
     /// 2. Dismissed inclination warnings. `resolved_warnings` is keyed by
     ///    `(section_id, shot_id, warning_code)` with no value component, so a
     ///    mismatch the user dismissed under the old convention would keep
-    ///    suppressing the check now that the number means something else.
-    /// 3. The collab sidecar baseline. The sibling `.tml` on disk was written
-    ///    by a pre-#296 build in the unflipped convention; clearing the hash and
-    ///    the per-shot baseline forces a fresh export before the next reconcile,
-    ///    instead of diffing the new frame against an old-frame file.
-    fn invalidate_pre_pitch_flip_state(&self) -> Result<()> {
+    ///    suppressing the check now that the number means something else. Only
+    ///    the flipped sections are cleared, and only the one warning code whose
+    ///    meaning actually changed: `LENGTH_BELOW_DEPTH_CHANGE` compares length
+    ///    against the depth change and never reads pitch, so its dismissals are
+    ///    still valid.
+    ///
+    /// The collab sidecar baseline is handled separately, by
+    /// [`Self::invalidate_collab_tml_baseline`], because it goes stale whether
+    /// or not any stored shot moved.
+    fn invalidate_pre_pitch_flip_state(&self, flipped_sections: &[i64]) -> Result<()> {
         self.drop_legacy_undo_history()?;
 
         if self.table_exists("resolved_warnings")? {
-            let cleared = self.conn.execute(
-                "DELETE FROM resolved_warnings
-                 WHERE warning_code IN ('INCLINATION_DEPTH_MISMATCH', 'LENGTH_BELOW_DEPTH_CHANGE')",
-                [],
-            )?;
+            let mut cleared = 0usize;
+            for section_id in flipped_sections {
+                cleared += self.conn.execute(
+                    "DELETE FROM resolved_warnings
+                     WHERE warning_code = 'INCLINATION_DEPTH_MISMATCH'
+                       AND section_id = ?1",
+                    [section_id],
+                )?;
+            }
             if cleared > 0 {
                 tracing::info!(
                     cleared,
@@ -693,22 +722,41 @@ impl Database {
             }
         }
 
-        if self.table_exists("collab_state")? {
-            let updated = self.conn.execute(
-                "UPDATE collab_state
-                 SET state_json = json_remove(
-                         json_remove(state_json, '$.last_export_tml_sha256'),
-                         '$.shot_baseline')
-                 WHERE id = 1",
-                [],
-            )?;
-            if updated > 0 {
-                tracing::info!(
-                    "Cleared collab sidecar baseline; the .tml will be re-exported before the next reconcile"
-                );
-            }
-        }
+        Ok(())
+    }
 
+    /// Drop the collab sidecar provenance on the v11 to v12 upgrade.
+    ///
+    /// Unlike the stored-shot flip, this is unconditional for a pre-v12 project.
+    /// The TML sign convention changed on both sides of the boundary at once
+    /// (`parsers::tml::inclination_to_pitch` and
+    /// `export::tml::pitch_to_inclination`), so a sibling `.tml` written by an
+    /// older build is in the old frame no matter whether any stored section was
+    /// in it. A project whose sections were all already +down, so the migration
+    /// flipped nothing, still has a stale sidecar: reconciling against it would
+    /// report a phantom inclination edit on every shot with a non-zero pitch,
+    /// and applying that would reverse the stored value.
+    ///
+    /// Clearing the hash makes `compute_collab` return early, so the next save
+    /// re-exports the sibling in the new frame and reseeds the baseline.
+    fn invalidate_collab_tml_baseline(&self) -> Result<()> {
+        if !self.table_exists("collab_state")? {
+            return Ok(());
+        }
+        let updated = self.conn.execute(
+            "UPDATE collab_state
+             SET state_json = json_remove(
+                     json_remove(state_json, '$.last_export_tml_sha256'),
+                     '$.shot_baseline')
+             WHERE id = 1
+               AND json_extract(state_json, '$.last_export_tml_sha256') IS NOT NULL",
+            [],
+        )?;
+        if updated > 0 {
+            tracing::info!(
+                "Cleared collab sidecar baseline; the .tml will be re-exported before the next reconcile"
+            );
+        }
         Ok(())
     }
 
@@ -819,9 +867,13 @@ impl Database {
             // invalidation runs on this same connection, so its statements join
             // this transaction.
             let tx = self.conn.unchecked_transaction()?;
-            if Self::migrate_pitch_to_down_convention(&tx)? {
-                self.invalidate_pre_pitch_flip_state()?;
+            let flipped = Self::migrate_pitch_to_down_convention(&tx)?;
+            if !flipped.is_empty() {
+                self.invalidate_pre_pitch_flip_state(&flipped)?;
             }
+            // Unconditional: the sidecar goes stale on the convention change
+            // itself, not on any stored shot moving.
+            self.invalidate_collab_tml_baseline()?;
             tx.commit()?;
         }
         self.set_user_version(SCHEMA_VERSION)?;

@@ -4685,7 +4685,9 @@ fn migrate_v12_flip_is_governed_by_the_callers_transaction() {
 
     let tx = db.conn.unchecked_transaction().unwrap();
     assert!(
-        Database::migrate_pitch_to_down_convention(&tx).unwrap(),
+        !Database::migrate_pitch_to_down_convention(&tx)
+            .unwrap()
+            .is_empty(),
         "precondition: this section is the kind the migration flips"
     );
     assert_eq!(
@@ -4834,6 +4836,269 @@ fn migrate_v12_discards_state_that_still_holds_pre_flip_pitch() {
     assert!(
         state_json.contains(r#""enabled":true"#),
         "clearing the baseline must not disable collab: {state_json}"
+    );
+}
+
+/// One in-range blunder must not outvote the section majority.
+///
+/// The verdict counts votes rather than summing angular errors, because summing
+/// let a single shot decide by sheer magnitude. Here three correct shallow
+/// shots disagree by 4 degrees each if flipped (12 total) while one blunder
+/// recorded at -89 against +89 implied geometry contributes 178 to the as-is
+/// score and 0 to the flipped score. Summed, the ratio flips all four, which
+/// corrupts the three correct shots and launders the blunder into agreement
+/// with its own depth change. Counted, it is one vote against three.
+#[test]
+fn migrate_v12_does_not_let_one_blunder_outvote_the_section() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("outvoted.stalx");
+
+    let shallow = |i: usize| ShotData {
+        azimuth_in: 90.0,
+        azimuth_out: 90.0,
+        length: 10.0,
+        depth_in: 0.349 * i as f64,
+        depth_out: 0.349 * (i + 1) as f64,
+        pitch_in: Some(2.0),
+        pitch_out: Some(2.0),
+        ..Default::default()
+    };
+    let mut shots: Vec<ShotData> = (0..3).map(shallow).collect();
+    // Near-vertical descent (implied about +89) recorded as -89: in range, so
+    // it votes, but it is one vote.
+    shots.push(ShotData {
+        azimuth_in: 90.0,
+        azimuth_out: 90.0,
+        length: 10.0,
+        depth_in: 1.047,
+        depth_out: 11.046,
+        pitch_in: Some(-89.0),
+        pitch_out: Some(-89.0),
+        ..Default::default()
+    });
+
+    let mut section = descending_section("FromCompass", 1.0, 1);
+    section.shots = shots;
+    let mut project = Project::new("Outvoted".to_string(), None);
+    project.add_section(section);
+    seed_v11_project(&path, &project);
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(
+        section_pitches(&db, "FromCompass"),
+        vec![Some(2.0), Some(2.0), Some(2.0), Some(-89.0)],
+        "three correct shots must outvote one blunder, and the blunder must stay \
+         wrong so validation keeps flagging it"
+    );
+}
+
+/// The other side of the margin: a real DMP section carrying one genuine
+/// blunder must still be converted. The blunder inherits the section verdict
+/// and stays flagged, which is what the cross-check is for.
+#[test]
+fn migrate_v12_still_flips_a_section_that_contains_one_blunder() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("blunder_in_dmp.stalx");
+
+    // Six shots stored +up (pre-#296 DMP), plus one whose recorded pitch agrees
+    // with its depth change and so votes the other way.
+    let mut section = descending_section("FromDmp", -1.0, 6);
+    section.shots.push(ShotData {
+        azimuth_in: 90.0,
+        azimuth_out: 90.0,
+        length: 10.0,
+        depth_in: 30.0,
+        depth_out: 35.0,
+        pitch_in: Some(30.0),
+        pitch_out: Some(30.0),
+        ..Default::default()
+    });
+    let mut project = Project::new("BlunderInDmp".to_string(), None);
+    project.add_section(section);
+    seed_v11_project(&path, &project);
+
+    let db = Database::open_existing(&path).unwrap();
+    let pitches = section_pitches(&db, "FromDmp");
+    assert_eq!(
+        pitches[..6].to_vec(),
+        vec![Some(30.0); 6],
+        "six votes to flip must carry the section past one dissenter"
+    );
+    assert_eq!(
+        pitches[6],
+        Some(-30.0),
+        "the dissenting shot inherits the section verdict and is left contradicting \
+         its own depth change, so validation still flags it"
+    );
+}
+
+/// A shot with one impossible leg must not vote, even when the other leg drags
+/// the average back inside the range.
+///
+/// The TML sign convention changed on both sides of the boundary at once, so the
+/// vote guard has to reject per leg the way `Validator::validate_shot` does.
+/// Averaging first and testing the mean lets `pitch_in = -91` ride in on a
+/// `pitch_out = 2`.
+#[test]
+fn migrate_v12_rejects_a_shot_with_one_out_of_range_leg() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("half_blunder.stalx");
+
+    // Same shape as the out-of-range test: three shallow, correct +2 shots that
+    // contribute nothing as-is, plus one steep shot whose legs average to a
+    // plausible -44.5 but whose pitch_in is impossible.
+    let shallow = |i: usize| ShotData {
+        azimuth_in: 90.0,
+        azimuth_out: 90.0,
+        length: 10.0,
+        depth_in: 0.349 * i as f64,
+        depth_out: 0.349 * (i + 1) as f64,
+        pitch_in: Some(2.0),
+        pitch_out: Some(2.0),
+        ..Default::default()
+    };
+    let mut shots: Vec<ShotData> = (0..3).map(shallow).collect();
+    shots.push(ShotData {
+        azimuth_in: 90.0,
+        azimuth_out: 90.0,
+        length: 10.0,
+        depth_in: 1.047,
+        depth_out: 11.033,
+        pitch_in: Some(-91.0),
+        pitch_out: Some(2.0),
+        ..Default::default()
+    });
+
+    let mut section = descending_section("FromCompass", 1.0, 1);
+    section.shots = shots;
+    let mut project = Project::new("HalfBlunder".to_string(), None);
+    project.add_section(section);
+    seed_v11_project(&path, &project);
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(
+        section_pitches(&db, "FromCompass"),
+        vec![Some(2.0), Some(2.0), Some(2.0), Some(-91.0)],
+        "a shot with one out-of-range leg must not vote, so the correct shots \
+         around it stay put"
+    );
+}
+
+/// The collab sidecar goes stale on the convention change itself, not on any
+/// stored shot moving, so its provenance must be cleared even when the
+/// migration flips nothing.
+///
+/// A project whose sections were all already +down (Walls/Compass) still has a
+/// sibling `.tml` written by an older build in the old frame. Reconciling
+/// against it would report a phantom inclination edit on every shot.
+#[test]
+fn migrate_v12_clears_the_collab_baseline_even_when_nothing_was_flipped() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("collab_no_flip.stalx");
+
+    let mut project = Project::new("NoFlip".to_string(), None);
+    project.add_section(descending_section("FromCompass", 1.0, 4));
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        db.conn
+            .execute(
+                "INSERT OR REPLACE INTO collab_state (id, state_json) VALUES (1, ?1)",
+                [r#"{"enabled":true,"sibling_tml_relative":"s.tml","last_export_tml_sha256":"deadbeef","shot_baseline":[{"shot_uuid":"u"}]}"#],
+            )
+            .unwrap();
+        db.set_user_version(11).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(
+        section_pitches(&db, "FromCompass"),
+        vec![Some(30.0); 4],
+        "precondition: nothing was flipped"
+    );
+
+    let state_json: String = db
+        .conn
+        .query_row(
+            "SELECT state_json FROM collab_state WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        !state_json.contains("last_export_tml_sha256"),
+        "the sidecar is in the old frame regardless of whether a section moved: {state_json}"
+    );
+    assert!(
+        state_json.contains(r#""enabled":true"#),
+        "clearing the baseline must not disable collab: {state_json}"
+    );
+}
+
+/// Dismissals of a warning the convention change cannot affect must survive.
+///
+/// `LENGTH_BELOW_DEPTH_CHANGE` compares length against the depth change and
+/// never reads pitch, so clearing it would make previously dismissed warnings
+/// reappear for no reason. Dismissals on sections the migration did not flip
+/// must survive too.
+#[test]
+fn migrate_v12_only_clears_dismissals_whose_meaning_changed() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("dismissals.stalx");
+
+    let mut project = Project::new("Dismissals".to_string(), None);
+    project.add_section(descending_section("FromDmp", -1.0, 4));
+    project.add_section(descending_section("FromCompass", 1.0, 4));
+
+    let flipped_id = project.sections[0].id;
+    let untouched_id = project.sections[1].id;
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        let warn = |section_id: u32, code: &str| ResolvedWarning {
+            section_id,
+            shot_id: 0,
+            warning_code: code.to_string(),
+            resolved_at: Utc::now(),
+            resolved_comment: None,
+            shot_uuid: None,
+        };
+        db.save_resolved_warnings_bulk(&[
+            warn(flipped_id, "INCLINATION_DEPTH_MISMATCH"),
+            warn(flipped_id, "LENGTH_BELOW_DEPTH_CHANGE"),
+            warn(untouched_id, "INCLINATION_DEPTH_MISMATCH"),
+        ])
+        .unwrap();
+        db.set_user_version(11).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(
+        section_pitches(&db, "FromDmp"),
+        vec![Some(30.0); 4],
+        "precondition: the DMP section was flipped"
+    );
+
+    let mut remaining: Vec<(u32, String)> = db
+        .load_resolved_warnings()
+        .unwrap()
+        .into_iter()
+        .map(|w| (w.section_id, w.warning_code))
+        .collect();
+    remaining.sort();
+
+    let mut expected = vec![
+        (flipped_id, "LENGTH_BELOW_DEPTH_CHANGE".to_string()),
+        (untouched_id, "INCLINATION_DEPTH_MISMATCH".to_string()),
+    ];
+    expected.sort();
+
+    assert_eq!(
+        remaining, expected,
+        "only the inclination dismissal on the flipped section should go: a \
+         length warning never reads pitch, and an untouched section did not move"
     );
 }
 
