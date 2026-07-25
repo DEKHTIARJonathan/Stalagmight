@@ -193,6 +193,9 @@ export class AppSession {
       const freshness = checkBuildFreshness();
       if (build === 'force' || !freshness.fresh) {
         this.state = 'building';
+        if (build !== 'force' && freshness.reasons.length > 0) {
+          process.stderr.write(`Rebuilding: ${freshness.reasons.join('; ')}\n`);
+        }
         buildApp((line) => process.stderr.write(`${line}\n`));
         buildAction = 'built';
       } else {

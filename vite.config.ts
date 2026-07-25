@@ -84,12 +84,18 @@ export default defineConfig({
     // `pnpm test`. Deliberately .ts-only: the standalone *.test.mjs files in
     // scripts/ are plain node self-test scripts (run via lint:*:test), not
     // vitest suites.
+    // e2e/agent/**/*.test.ts: pure-logic unit tests for agent-harness helpers
+    // (e.g. build freshness). Narrow on purpose - the WDIO specs under
+    // e2e/legacy and the agent's replay specs use mocha/wdio globals and are
+    // NOT vitest suites, so they stay outside these globs.
     include: [
       'src/**/*.{test,spec}.?(c|m)[jt]s?(x)',
       'scripts/**/*.{test,spec}.ts',
+      'e2e/agent/**/*.test.ts',
     ],
     exclude: [
-      '**/e2e/**',
+      '**/e2e/legacy/**',
+      '**/e2e/agent/replays/**',
       '**/e2e-playwright/**',
       '**/node_modules/**',
       '**/dist/**',
