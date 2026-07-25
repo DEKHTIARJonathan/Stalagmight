@@ -271,14 +271,12 @@ impl Validator {
                 ));
             } else {
                 // A recorded inclination must agree with the depth/length geometry
-                // in BOTH magnitude AND direction. The implied inclination uses the
-                // SAME convention shown everywhere in the UI (DetailPanel's
-                // computeInclination): POSITIVE = upward — the shot ASCENDS, depth
-                // DECREASES. That is the negative of the canonical
-                // `pitch_from_components` (which is +down), so we negate it. Recorded
-                // pitch is in this same +up frame, so comparing the signed values
-                // catches a reversed inclination AND matches the sign the user sees
-                // in the Details panel and the resolve flow (issue #57, finding #7).
+                // in BOTH magnitude AND direction. Both sides are +down: positive
+                // means the shot DESCENDS and depth INCREASES, the same frame
+                // `depth_in` / `depth_out` are already in. Every parser normalises
+                // to that frame at its own import boundary, so the two values can
+                // be compared directly and a reversed inclination still shows up as
+                // a large signed difference (issue #57 finding #7, issue #296).
                 // Skip when a leg is out of range (already flagged INVALID_PITCH)
                 // or when no inclination was recorded (nothing to cross-check).
                 let recorded_pitch = match (shot.pitch_in, shot.pitch_out) {
@@ -289,7 +287,7 @@ impl Validator {
                 if let Some(recorded) = recorded_pitch {
                     if leg_in_range(shot.pitch_in) && leg_in_range(shot.pitch_out) {
                         let horizontal = (shot.length * shot.length - dz * dz).max(0.0).sqrt();
-                        let implied = -pitch_from_components(horizontal, dz);
+                        let implied = pitch_from_components(horizontal, dz);
                         if (recorded - implied).abs() > config.inclination_depth_diff_threshold {
                             warnings.push(warn(
                                 "INCLINATION_DEPTH_MISMATCH",
@@ -960,15 +958,87 @@ mod tests {
             .all(|w| w.code != "LENGTH_BELOW_DEPTH_CHANGE"));
     }
 
+    /// Real mNemo shots must survive the cross-check. This is the regression
+    /// for issue #296: the device reports inclination +up, so before the import
+    /// was normalised every non-horizontal DMP shot arrived with a pitch that
+    /// contradicted its own depth change, and validation carried a compensating
+    /// -1x to hide it. Both ends are +down now, and these readings from
+    /// `9_20260522-naharon.dmp`, normalised exactly as the DMP parser does,
+    /// have to come through clean.
+    #[test]
+    fn dmp_shots_do_not_trip_the_inclination_cross_check() {
+        let config = default_config();
+
+        // (length, depth_in, depth_out, device pitch as written by the mNemo)
+        let device_shots = [
+            (12.50, 14.51, 18.15, -16.9),
+            (9.09, 13.55, 14.71, -6.0),
+            (4.81, 16.93, 15.45, 19.2),
+            (10.35, 18.29, 16.92, 10.5),
+            (18.25, 18.96, 17.48, 6.8),
+        ];
+
+        for (length, depth_in, depth_out, device_pitch) in device_shots {
+            // `parse_section` normalises the device's +up reading into the
+            // model's +down frame, so this is the pitch a `DmpShot` carries by
+            // the time anything downstream sees it.
+            let pitch = -device_pitch;
+            let dmp_shot = crate::parsers::dmp::DmpShot {
+                shot_type: crate::parsers::dmp::DmpShotType::Standard,
+                heading_in: 0.0,
+                heading_out: 0.0,
+                length,
+                depth_in,
+                depth_out,
+                pitch_in: pitch,
+                pitch_out: pitch,
+                left: 0.0,
+                right: 0.0,
+                up: 0.0,
+                down: 0.0,
+                temperature: 0.0,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                marker_index: 0,
+                comment: None,
+            };
+
+            let shot_data = dmp_shot.to_shot_data();
+
+            // The property that makes the cross-check pass rather than an
+            // accident of thresholds: descending shots (depth increasing) carry
+            // a positive pitch, ascending shots a negative one.
+            let descending = depth_out > depth_in;
+            let pitch_in = shot_data.pitch_in.expect("pitch_in survives conversion");
+            assert_eq!(
+                pitch_in > 0.0,
+                descending,
+                "pitch {pitch_in}° does not match the {depth_in}m -> {depth_out}m depth change"
+            );
+
+            let warnings = Validator::validate_shot(&shot_data, &config, 0, 0);
+            let mismatch = warnings
+                .iter()
+                .find(|w| w.code == "INCLINATION_DEPTH_MISMATCH");
+            assert!(
+                mismatch.is_none(),
+                "device pitch {device_pitch}° (imported as {pitch}°) over {length}m \
+                 ({depth_in}m -> {depth_out}m) was flagged after import: {:?}",
+                mismatch.map(|w| &w.message)
+            );
+        }
+    }
+
     /// A recorded inclination must agree with the inclination implied by the
     /// length and depth change in BOTH magnitude and DIRECTION. Convention is
-    /// +up (matches DetailPanel.computeInclination): positive = ascending, depth
-    /// decreasing; negative = descending, depth increasing.
+    /// +down (the same frame as `depth_in` / `depth_out`): positive = descending,
+    /// depth increasing; negative = ascending, depth decreasing.
     #[test]
     fn test_inclination_depth_mismatch() {
         let config = default_config(); // inclination_depth_diff_threshold = 10.0
 
-        // length 10, dz +5 (depth INCREASES = going DOWN) → implied -30° (+up).
+        // length 10, dz +5 (depth INCREASES = going DOWN) → implied +30° (+down).
         let down = ShotData {
             azimuth_in: 90.0,
             azimuth_out: 90.0,
@@ -983,31 +1053,31 @@ mod tests {
                 .any(|w| w.code == "INCLINATION_DEPTH_MISMATCH")
         };
 
-        // Recorded -30° (descending) agrees in sign and magnitude with the -30° implied.
+        // Recorded +30° (descending) agrees in sign and magnitude with the +30° implied.
         let consistent = ShotData {
-            pitch_in: Some(-30.0),
-            pitch_out: Some(-30.0),
-            ..down.clone()
-        };
-        assert!(
-            !has_mismatch(&consistent),
-            "-30° matches the -30° implied for a downward shot"
-        );
-
-        // Recorded +30° has the right MAGNITUDE but the WRONG DIRECTION (says the
-        // shot ascends while the depth change says it descends) — flagged (finding #7).
-        let reversed = ShotData {
             pitch_in: Some(30.0),
             pitch_out: Some(30.0),
             ..down.clone()
         };
         assert!(
+            !has_mismatch(&consistent),
+            "+30° matches the +30° implied for a downward shot"
+        );
+
+        // Recorded -30° has the right MAGNITUDE but the WRONG DIRECTION (says the
+        // shot ascends while the depth change says it descends) — flagged (finding #7).
+        let reversed = ShotData {
+            pitch_in: Some(-30.0),
+            pitch_out: Some(-30.0),
+            ..down.clone()
+        };
+        assert!(
             has_mismatch(&reversed),
-            "+30° contradicts the downward depth change and must be flagged"
+            "-30° contradicts the downward depth change and must be flagged"
         );
 
         // Genuine magnitude disagreement is still flagged.
-        for recorded in [10.0_f64, -10.0_f64, -80.0_f64] {
+        for recorded in [-10.0_f64, 10.0_f64, 80.0_f64] {
             let mismatched = ShotData {
                 pitch_in: Some(recorded),
                 pitch_out: Some(recorded),
@@ -1015,50 +1085,50 @@ mod tests {
             };
             assert!(
                 has_mismatch(&mismatched),
-                "recorded {recorded}° disagrees with the -30° implied and must be flagged"
+                "recorded {recorded}° disagrees with the +30° implied and must be flagged"
             );
         }
 
-        // Symmetry: a shot going UP (dz -5) implies +30°; +30° is consistent, -30° reversed.
+        // Symmetry: a shot going UP (dz -5) implies -30°; -30° is consistent, +30° reversed.
         let up = ShotData {
             depth_in: 5.0,
             depth_out: 0.0,
             ..down.clone()
         };
         let up_consistent = ShotData {
-            pitch_in: Some(30.0),
-            pitch_out: Some(30.0),
-            ..up.clone()
-        };
-        assert!(
-            !has_mismatch(&up_consistent),
-            "+30° matches the +30° implied for an upward shot"
-        );
-        let up_reversed = ShotData {
             pitch_in: Some(-30.0),
             pitch_out: Some(-30.0),
             ..up.clone()
         };
         assert!(
+            !has_mismatch(&up_consistent),
+            "-30° matches the -30° implied for an upward shot"
+        );
+        let up_reversed = ShotData {
+            pitch_in: Some(30.0),
+            pitch_out: Some(30.0),
+            ..up.clone()
+        };
+        assert!(
             has_mismatch(&up_reversed),
-            "-30° contradicts the upward depth change and must be flagged"
+            "+30° contradicts the upward depth change and must be flagged"
         );
 
-        // A vertical shot (length == |dz|) implies ∓90°; recording it clears it.
+        // A vertical shot (length == |dz|) implies ±90°; recording it clears it.
         // This is exactly what "set length to depth change" does (it also sets the
-        // pitch to the matching ∓90°), so that fix must not re-raise the warning.
-        // Downward (depth increases) ⇒ -90° in the +up convention.
+        // pitch to the matching ±90°), so that fix must not re-raise the warning.
+        // Downward (depth increases) ⇒ +90° in the +down convention.
         let vertical = ShotData {
             length: 5.0,
             depth_in: 0.0,
             depth_out: 5.0,
-            pitch_in: Some(-90.0),
-            pitch_out: Some(-90.0),
+            pitch_in: Some(90.0),
+            pitch_out: Some(90.0),
             ..down.clone()
         };
         assert!(
             !has_mismatch(&vertical),
-            "a vertical downward shot with -90° pitch is consistent"
+            "a vertical downward shot with +90° pitch is consistent"
         );
 
         // No recorded inclination → nothing to cross-check, not flagged.

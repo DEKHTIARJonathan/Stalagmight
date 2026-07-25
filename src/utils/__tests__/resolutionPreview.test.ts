@@ -8,16 +8,16 @@ import {
 } from '../resolutionPreview';
 
 describe('lengthFixableFromInclination (#57 / Codex)', () => {
-  // dz = depth_out - depth_in. +up convention: descending dz>0 needs pitch<0,
-  // ascending dz<0 needs pitch>0; a positive length only exists when the recorded
+  // dz = depth_out - depth_in. +down convention: descending dz>0 needs pitch>0,
+  // ascending dz<0 needs pitch<0; a positive length only exists when the recorded
   // pitch points the same way as the depth change.
   it('true when the recorded pitch matches the depth direction', () => {
-    expect(lengthFixableFromInclination(5, -30)).toBe(true); // descent, pitch down
-    expect(lengthFixableFromInclination(-5, 30)).toBe(true); // ascent, pitch up
+    expect(lengthFixableFromInclination(5, 30)).toBe(true); // descent, pitch down
+    expect(lengthFixableFromInclination(-5, -30)).toBe(true); // ascent, pitch up
   });
   it('false for a reversed-sign inclination (no positive length can fix it)', () => {
-    expect(lengthFixableFromInclination(5, 30)).toBe(false); // descent recorded as +30
-    expect(lengthFixableFromInclination(-5, -30)).toBe(false); // ascent recorded as -30
+    expect(lengthFixableFromInclination(5, -30)).toBe(false); // descent recorded as -30
+    expect(lengthFixableFromInclination(-5, 30)).toBe(false); // ascent recorded as +30
   });
   it('false for zero depth change and for null/too-shallow pitch', () => {
     expect(lengthFixableFromInclination(0, 30)).toBe(false);

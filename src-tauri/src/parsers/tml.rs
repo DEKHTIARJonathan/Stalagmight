@@ -1471,13 +1471,44 @@ pub(crate) fn resolve_tml_depth_in(
     }
 }
 
+/// Convert Ariane's `<Inclination>` into a model pitch.
+///
+/// Ariane is taken to be +up, like every other survey format we read: Walls and
+/// Compass both store +up in-file, and the mNemo device reports +up. The model
+/// is +down (positive descends, matching `depth_in` / `depth_out`), so the sign
+/// flips here.
+///
+/// This could not be confirmed against data. Across every Ariane file available,
+/// all 5,686 shots carry `Inclination` 0 (these are depth-gauge surveys and
+/// Ariane does not populate the field), so the flip is an inference from the
+/// surrounding ecosystem rather than a measurement, and on real files it is a
+/// no-op. `0` maps to a plain `0.0`, never `-0.0`, so a round-trip through
+/// Ariane does not show up as a phantom edit. Inverse of
+/// `export::tml::pitch_to_inclination`.
+///
+/// Applied to every `.tml` regardless of who wrote it, deliberately: export
+/// writes the same convention, so a file Stalagmight produces re-imports
+/// correctly as though Ariane had written it. A standalone `.tml` from a
+/// pre-#296 build holds raw +down pitch here and so imports inverted, with no
+/// migration to repair it; that is accepted rather than sniffed for, since real
+/// Ariane files carry `Inclination` 0 and the collab sidecar is force-exported
+/// by the v12 migration. See `docs/inclination.md`.
+pub(crate) fn inclination_to_pitch(inclination: f64) -> f64 {
+    if inclination == 0.0 {
+        0.0
+    } else {
+        -inclination
+    }
+}
+
 /// Canonical mapping of a single Ariane TML shot to Stalagmight's `ShotData`.
 ///
-/// This is the SINGLE source of truth for the TML→Stalagmight field mapping
-/// (azimuth `rem_euclid(360)`, depth in/out, inclination→pitch_in, LRUD 0→None,
-/// VIRTUAL→is_reference). Both DMP/TML import and the collaboration reconcile
-/// engine call it, so a clean round-trip never appears as a phantom edit.
-/// `depth_in` must already be resolved via [`resolve_tml_depth_in`].
+/// This is the SINGLE source of truth for the TML to Stalagmight field mapping
+/// (azimuth `rem_euclid(360)`, depth in/out, inclination to `pitch_in`, LRUD 0
+/// to None, VIRTUAL to `is_reference`). Both DMP/TML import and the
+/// collaboration reconcile engine call it, so a clean round-trip never appears
+/// as a phantom edit. `depth_in` must already be resolved via
+/// [`resolve_tml_depth_in`].
 pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     // LRUD: pass through, using None for zero values
     let lrud_opt = |v: f64| {
@@ -1498,7 +1529,7 @@ pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
         length: shot.length,
         depth_in,
         depth_out: shot.depth,
-        pitch_in: Some(shot.inclination),
+        pitch_in: Some(inclination_to_pitch(shot.inclination)),
         pitch_out: None, // No backsight inclination
         left: lrud_opt(shot.left),
         right: lrud_opt(shot.right),

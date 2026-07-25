@@ -27,12 +27,12 @@ function recordedPitch(shot: Shot): number | null {
   if (shot.pitch_in != null && shot.pitch_out != null) return (shot.pitch_in + shot.pitch_out) / 2;
   return shot.pitch_in ?? shot.pitch_out ?? null;
 }
-// Signed implied inclination in the +up display convention (matches the
-// production helper and DetailPanel.computeInclination: positive = ascending,
-// depth decreases) — issue #57, finding #7.
+// Signed implied inclination in the +down convention (matches the production
+// helper and DetailPanel.computeInclination: positive = descending, depth
+// increases), issue #57 finding #7, issue #296.
 function impliedInclination(shot: Shot): number {
   if (!(shot.length > 0)) return 0;
-  const ratio = (shot.depth_in - shot.depth_out) / shot.length;
+  const ratio = (shot.depth_out - shot.depth_in) / shot.length;
   return (Math.asin(Math.max(-1, Math.min(1, ratio))) * 180) / Math.PI;
 }
 
@@ -123,12 +123,12 @@ function oldApplyPatch(
       break;
     }
     case 'length-from-depth': {
-      // Vertical shot: also pins pitch to ∓90° in the +up convention (deeper =>
-      // -90) so it stays consistent (issue #57, finding #2).
+      // Vertical shot: also pins pitch to ±90° in the +down convention (deeper =>
+      // +90) so it stays consistent (issue #57 finding #2, issue #296).
       const dzLfd = shot.depth_out - shot.depth_in;
       patch.length = Math.abs(dzLfd);
-      patch.pitch_in = dzLfd > 0 ? -90 : 90;
-      patch.pitch_out = dzLfd > 0 ? -90 : 90;
+      patch.pitch_in = dzLfd > 0 ? 90 : -90;
+      patch.pitch_out = dzLfd > 0 ? 90 : -90;
       break;
     }
     case 'length-from-incl': {
@@ -445,14 +445,14 @@ describe('strict numeric parsing rejects trailing garbage (#57 #11)', () => {
   });
 });
 
-describe('length-from-depth pins pitch to ∓90 in the +up convention (#57 #2)', () => {
-  it('downward shot (depth increases) → length=|dz|, pitch -90', () => {
+describe('length-from-depth pins pitch to ±90 in the +down convention (#57 #2, #296)', () => {
+  it('downward shot (depth increases) → length=|dz|, pitch +90', () => {
     const shot = makeShot({ length: 1, depth_in: 0, depth_out: 3 });
-    expect(computeProposedRaw('length-from-depth', undefined, shot, {}, [])).toEqual({ length: 3, pitchIn: -90, pitchOut: -90 });
-  });
-  it('upward shot (depth decreases) → length=|dz|, pitch +90', () => {
-    const shot = makeShot({ length: 1, depth_in: 3, depth_out: 0 });
     expect(computeProposedRaw('length-from-depth', undefined, shot, {}, [])).toEqual({ length: 3, pitchIn: 90, pitchOut: 90 });
+  });
+  it('upward shot (depth decreases) → length=|dz|, pitch -90', () => {
+    const shot = makeShot({ length: 1, depth_in: 3, depth_out: 0 });
+    expect(computeProposedRaw('length-from-depth', undefined, shot, {}, [])).toEqual({ length: 3, pitchIn: -90, pitchOut: -90 });
   });
 });
 

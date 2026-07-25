@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use rusqlite::{params, Connection};
 
@@ -416,6 +418,171 @@ impl Database {
         Ok(())
     }
 
+    /// Normalise stored pitch to the +down convention (schema v11→v12, #296).
+    ///
+    /// DMP import used to keep the mNemo's +up reading, so shots from a DMP
+    /// were stored with a pitch that contradicted their own depth change while
+    /// Walls- and Compass-sourced shots were already +down. Nothing on a shot
+    /// or a section records which importer produced it, so the origin cannot be
+    /// looked up, it has to be inferred from the numbers.
+    ///
+    /// Decided per SECTION, never per shot. A single shot is often ambiguous:
+    /// near-horizontal and very short shots carry almost no signal (1 cm depth
+    /// resolution swamps the implied angle), and on real data individual shots
+    /// do score better in the wrong direction. A section is decisive because
+    /// the convention is a property of the file it was imported from, uniform
+    /// across it. Deciding per section also means a genuinely blundered shot
+    /// cannot flip itself into agreement with its own depth change: it inherits
+    /// the section verdict and stays flagged by validation, which is the whole
+    /// point of the cross-check.
+    ///
+    /// Each usable shot casts ONE vote, and the votes are counted; the angular
+    /// errors are deliberately not summed. Summing let a single shot decide the
+    /// section by sheer magnitude: three correct shallow shots disagreeing by
+    /// 4 degrees each are outweighed by one blunder recorded at -89 against
+    /// +89 implied, which flips all four and launders the blunder, the exact
+    /// opposite of the paragraph above. Counting votes bounds any one shot's
+    /// influence at one vote.
+    ///
+    /// A shot votes only when its own evidence is lopsided (one direction's
+    /// error beats the other by `DECISIVE_RATIO`); otherwise it abstains, which
+    /// is what keeps near-horizontal and very short shots from voting noise. A
+    /// section flips when at least `MIN_VOTING_SHOTS` shots vote to flip and
+    /// the flip votes outnumber the keep votes by `DECISIVE_RATIO`. That margin
+    /// is what lets a real DMP section carry one genuine blunder without being
+    /// held hostage by it, while a section that is mostly correct can never be
+    /// flipped by an outlier. Sections whose pitch is entirely zero (Ariane
+    /// never populates inclination) produce no votes at all and are untouched.
+    /// Returns the ids of the sections that were flipped, so the caller can
+    /// invalidate the state that still holds their pre-flip pitch (persisted
+    /// undo history, dismissed inclination warnings). Empty means nothing moved.
+    pub(super) fn migrate_pitch_to_down_convention(conn: &Connection) -> Result<Vec<i64>> {
+        /// Below this a shot's implied angle is mostly depth-gauge quantisation.
+        const MIN_LENGTH_M: f64 = 0.05;
+        /// Same, for the vertical change.
+        const MIN_DZ_M: f64 = 0.05;
+        /// Fewer usable shots than this is not a section-wide verdict.
+        const MIN_VOTING_SHOTS: usize = 3;
+        /// Flipped must beat as-is by this factor to count as decisive.
+        const DECISIVE_RATIO: f64 = 2.0;
+        /// A leg steeper than vertical is a blunder and casts no vote.
+        const MAX_VOTING_PITCH_DEG: f64 = 90.0;
+
+        let mut stmt = conn.prepare(
+            "SELECT section_id, length, depth_in, depth_out, pitch_in, pitch_out
+             FROM shots
+             WHERE pitch_in IS NOT NULL OR pitch_out IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+                row.get::<_, Option<f64>>(4)?,
+                row.get::<_, Option<f64>>(5)?,
+            ))
+        })?;
+
+        // section_id -> (votes to flip, votes to keep). Shots whose own
+        // evidence is not lopsided abstain and appear in neither count.
+        let mut tally: HashMap<i64, (usize, usize)> = HashMap::new();
+        for row in rows {
+            let (section_id, length, depth_in, depth_out, pitch_in, pitch_out) = row?;
+            // Reject out-of-range legs BEFORE averaging, exactly as
+            // `Validator::validate_shot` does. Testing only the average would
+            // let a shot with one impossible leg vote whenever the other leg
+            // pulls the mean back inside the range.
+            let leg_in_range =
+                |leg: Option<f64>| leg.is_none_or(|v| v.abs() <= MAX_VOTING_PITCH_DEG);
+            if !leg_in_range(pitch_in) || !leg_in_range(pitch_out) {
+                continue;
+            }
+            let recorded = match (pitch_in, pitch_out) {
+                (Some(a), Some(b)) => (a + b) / 2.0,
+                (Some(a), None) | (None, Some(a)) => a,
+                (None, None) => continue,
+            };
+            let dz = depth_out - depth_in;
+            // Skip shots the geometry cannot speak to, and impossible ones.
+            if length <= MIN_LENGTH_M || dz.abs() <= MIN_DZ_M || length < dz.abs() {
+                continue;
+            }
+            if !recorded.is_finite() || !dz.is_finite() || !length.is_finite() {
+                continue;
+            }
+            let horizontal = (length * length - dz * dz).max(0.0).sqrt();
+            let implied = dz.atan2(horizontal).to_degrees();
+
+            let as_is_error = (recorded - implied).abs();
+            let flipped_error = (-recorded - implied).abs();
+
+            let entry = tally.entry(section_id).or_insert((0, 0));
+            if flipped_error * DECISIVE_RATIO < as_is_error {
+                entry.0 += 1;
+            } else if as_is_error * DECISIVE_RATIO < flipped_error {
+                entry.1 += 1;
+            }
+        }
+        drop(stmt);
+
+        let flip: Vec<i64> = tally
+            .iter()
+            .filter(|(_, (flip_votes, keep_votes))| {
+                *flip_votes >= MIN_VOTING_SHOTS
+                    && (*flip_votes as f64) > (*keep_votes as f64) * DECISIVE_RATIO
+            })
+            .map(|(section_id, _)| *section_id)
+            .collect();
+
+        // Sections that had usable geometry but were not decisive enough to
+        // flip keep whatever convention they were stored in, and the v12 stamp
+        // means they are never re-examined.  If one of those was in fact a +up
+        // section, validation will now flag every sloped shot in it, so name
+        // them in the log rather than leaving the user to guess.
+        let declined: Vec<i64> = tally
+            .iter()
+            .filter(|(section_id, (flip_votes, keep_votes))| {
+                flip_votes + keep_votes >= MIN_VOTING_SHOTS && !flip.contains(section_id)
+            })
+            .map(|(section_id, _)| *section_id)
+            .collect();
+        if !declined.is_empty() {
+            tracing::warn!(
+                declined_sections = ?declined,
+                "Pitch convention was not decisive for these sections; leaving them as stored (v11 to v12)"
+            );
+        }
+
+        if flip.is_empty() {
+            tracing::info!(
+                sections_examined = tally.len(),
+                "No sections needed pitch-convention normalisation (v11 to v12)"
+            );
+            return Ok(flip);
+        }
+
+        // No transaction here on purpose: the caller wraps this call and the
+        // invalidation that follows it in one, so the two cannot be separated
+        // by a crash.
+        for section_id in &flip {
+            conn.execute(
+                "UPDATE shots
+                 SET pitch_in  = CASE WHEN pitch_in  IS NULL THEN NULL ELSE -pitch_in  END,
+                     pitch_out = CASE WHEN pitch_out IS NULL THEN NULL ELSE -pitch_out END
+                 WHERE section_id = ?1",
+                [section_id],
+            )?;
+        }
+
+        tracing::info!(
+            sections_flipped = flip.len(),
+            sections_examined = tally.len(),
+            "Normalised stored pitch to the +down convention (v11 to v12)"
+        );
+        Ok(flip)
+    }
+
     /// Migrate undo/redo tables from TEXT to BLOB columns (schema v2→v3).
     /// Existing TEXT data is CAST to BLOB; on read, `decompress_json` detects
     /// whether content is gzip-compressed or plain UTF-8, so old entries remain
@@ -505,6 +672,90 @@ impl Database {
                     "Dropped pre-v7 persisted undo history (explicit-null payloads are unsafe to replay)"
                 );
             }
+        }
+        Ok(())
+    }
+
+    /// Discard everything outside the `shots` table that still holds a
+    /// pre-#296 pitch, after `migrate_pitch_to_down_convention` flipped at
+    /// least one section (schema v11 to v12).
+    ///
+    /// The migration rewrites `shots` only. Two other stores hold the pitch of
+    /// the sections it moved, or a verdict derived from it, and neither is
+    /// versioned, so a stale copy would outlive the migration and there is no
+    /// second pass to catch it:
+    ///
+    /// 1. Persisted undo/redo. Payloads carry absolute pitch values and whole
+    ///    project snapshots, so one undo of a pre-upgrade edit writes the +up
+    ///    value straight back into a file already stamped v12. Whole-project
+    ///    snapshots are why this is all-or-nothing rather than per section.
+    /// 2. Dismissed inclination warnings. `resolved_warnings` is keyed by
+    ///    `(section_id, shot_id, warning_code)` with no value component, so a
+    ///    mismatch the user dismissed under the old convention would keep
+    ///    suppressing the check now that the number means something else. Only
+    ///    the flipped sections are cleared, and only the one warning code whose
+    ///    meaning actually changed: `LENGTH_BELOW_DEPTH_CHANGE` compares length
+    ///    against the depth change and never reads pitch, so its dismissals are
+    ///    still valid.
+    ///
+    /// The collab sidecar baseline is handled separately, by
+    /// [`Self::invalidate_collab_tml_baseline`], because it goes stale whether
+    /// or not any stored shot moved.
+    fn invalidate_pre_pitch_flip_state(&self, flipped_sections: &[i64]) -> Result<()> {
+        self.drop_legacy_undo_history()?;
+
+        if self.table_exists("resolved_warnings")? {
+            let mut cleared = 0usize;
+            for section_id in flipped_sections {
+                cleared += self.conn.execute(
+                    "DELETE FROM resolved_warnings
+                     WHERE warning_code = 'INCLINATION_DEPTH_MISMATCH'
+                       AND section_id = ?1",
+                    [section_id],
+                )?;
+            }
+            if cleared > 0 {
+                tracing::info!(
+                    cleared,
+                    "Cleared inclination warning dismissals taken under the pre-#296 convention"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Drop the collab sidecar provenance on the v11 to v12 upgrade.
+    ///
+    /// Unlike the stored-shot flip, this is unconditional for a pre-v12 project.
+    /// The TML sign convention changed on both sides of the boundary at once
+    /// (`parsers::tml::inclination_to_pitch` and
+    /// `export::tml::pitch_to_inclination`), so a sibling `.tml` written by an
+    /// older build is in the old frame no matter whether any stored section was
+    /// in it. A project whose sections were all already +down, so the migration
+    /// flipped nothing, still has a stale sidecar: reconciling against it would
+    /// report a phantom inclination edit on every shot with a non-zero pitch,
+    /// and applying that would reverse the stored value.
+    ///
+    /// Clearing the hash makes `compute_collab` return early, so the next save
+    /// re-exports the sibling in the new frame and reseeds the baseline.
+    fn invalidate_collab_tml_baseline(&self) -> Result<()> {
+        if !self.table_exists("collab_state")? {
+            return Ok(());
+        }
+        let updated = self.conn.execute(
+            "UPDATE collab_state
+             SET state_json = json_remove(
+                     json_remove(state_json, '$.last_export_tml_sha256'),
+                     '$.shot_baseline')
+             WHERE id = 1
+               AND json_extract(state_json, '$.last_export_tml_sha256') IS NOT NULL",
+            [],
+        )?;
+        if updated > 0 {
+            tracing::info!(
+                "Cleared collab sidecar baseline; the .tml will be re-exported before the next reconcile"
+            );
         }
         Ok(())
     }
@@ -605,6 +856,25 @@ impl Database {
         }
         if current < UNDO_FORMAT_SAFE_VERSION {
             self.drop_legacy_undo_history()?;
+        }
+        if current < 12 {
+            // The flip and the invalidation have to land together. The verdict
+            // is re-derived from the rows themselves, so a flip that committed
+            // alone would look already-correct on the next open: the migration
+            // would decline, the invalidation would never run, and v12 would be
+            // stamped over permanently stale undo history, warning dismissals
+            // and collab baseline. One transaction removes that window. The
+            // invalidation runs on this same connection, so its statements join
+            // this transaction.
+            let tx = self.conn.unchecked_transaction()?;
+            let flipped = Self::migrate_pitch_to_down_convention(&tx)?;
+            if !flipped.is_empty() {
+                self.invalidate_pre_pitch_flip_state(&flipped)?;
+            }
+            // Unconditional: the sidecar goes stale on the convention change
+            // itself, not on any stored shot moving.
+            self.invalidate_collab_tml_baseline()?;
+            tx.commit()?;
         }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.
