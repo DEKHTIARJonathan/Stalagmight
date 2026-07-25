@@ -364,7 +364,6 @@ test.describe('Zero Datum Update - Single Undo Entry', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Zero Datum Test');
     await injectZeroDatumFixture(page, 25.0, -80.0);
     await extendMocksWithZeroDatumTracking(page);

@@ -270,7 +270,6 @@ test.describe('Undo/Redo History Dropdown', () => {
     // Use shared mocks, then extend with undo/redo support after page load
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await extendMocksWithUndoRedo(page);
     await createProject(page, 'Dropdown Test Project');
   });
@@ -812,7 +811,6 @@ test.describe('Undo/Redo Dropdown - Empty State', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     // Setup with empty stacks but canUndo/canRedo still true (edge case)
     await extendMocksWithUndoRedo(page, { undoStack: [], redoStack: [] });
     await createProject(page, 'Empty Stack Project');
@@ -835,7 +833,6 @@ test.describe('Undo/Redo Dropdown - Stay Open Behavior', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await extendMocksWithUndoRedo(page);
     await createProject(page, 'Stay Open Test Project');
   });
@@ -1027,7 +1024,6 @@ test.describe('Undo/Redo Dropdown - Close on Empty Stack', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await extendMocksWithUndoRedo(page);
     await createProject(page, 'Empty Stack Close Test');
   });
@@ -1076,7 +1072,6 @@ test.describe('Undo/Redo Dropdown - Error Handling', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await extendMocksWithUndoRedo(page);
     await createProject(page, 'Error Handling Test');
   });
@@ -1119,7 +1114,6 @@ test.describe('Undo/Redo Dropdown - Rapid Click Queuing', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await extendMocksWithUndoRedo(page);
     await createProject(page, 'Rapid Click Test');
   });
@@ -1176,7 +1170,6 @@ test.describe('Undo/Redo Happy Path - Stack Mutation', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     // Start with one entry in undo stack, empty redo stack, mutating mode
     await extendMocksWithUndoRedo(page, {
       undoStack: getMockUndoStack().slice(0, 1),

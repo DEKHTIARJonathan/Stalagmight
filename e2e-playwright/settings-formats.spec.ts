@@ -46,7 +46,6 @@ test.describe('Settings - Number Format', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Number Format Test');
   });
 
@@ -135,7 +134,6 @@ test.describe('Settings - Date Format', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Date Format Test');
   });
 
@@ -204,7 +202,6 @@ test.describe('Settings - Auto-Save Controls', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Auto-Save Settings Test');
   });
 

@@ -132,7 +132,6 @@ test.describe('Display Toggle Visibility', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Display Toggle Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
@@ -236,7 +235,6 @@ test.describe('Label Toggle Click Coverage', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Label Toggle Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
@@ -261,7 +259,6 @@ test.describe('Selection Blocking When Hidden', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Selection Blocking Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
@@ -378,7 +375,6 @@ test.describe('Selection Clearing on Toggle', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Selection Clearing Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
@@ -495,7 +491,6 @@ test.describe('Toast Notifications', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Toast Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
@@ -577,7 +572,6 @@ test.describe('Toggle Relationship Tests', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Toggle Relationship Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
@@ -662,7 +656,6 @@ test.describe('Merge Tool Interaction', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Tool Operation Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
@@ -710,7 +703,6 @@ test.describe('Display Menu State Persistence', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'State Persistence Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
@@ -764,7 +756,6 @@ test.describe('Developer Stats Overlay (memory probe)', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Dev Stats Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);

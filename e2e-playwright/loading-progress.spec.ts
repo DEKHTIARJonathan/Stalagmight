@@ -5,7 +5,6 @@ test.describe('Loading Progress', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     // Wait for GlobalView to load with recent projects
     await page.waitForSelector('[data-testid="global-view"]', { timeout: 10000 });
   });

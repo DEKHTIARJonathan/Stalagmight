@@ -70,7 +70,6 @@ test.describe('Panel reveal (hover/pin)', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Panel Reveal Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);

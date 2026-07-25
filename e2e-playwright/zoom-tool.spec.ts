@@ -87,7 +87,6 @@ test.describe('Zoom Tool', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProjectWithMap(page);
   });
 

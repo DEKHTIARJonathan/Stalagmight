@@ -310,7 +310,7 @@ test.describe('Section Highlighting', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="global-view"]');
   });
 
   test.describe('Panel hover → map highlight', () => {

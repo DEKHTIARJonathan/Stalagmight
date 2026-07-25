@@ -171,12 +171,21 @@ test.describe('Theme Switching - Default Dark Theme', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     // Assert on GlobalView (app-ready signal) without creating a project.
     // This tests theme state truly "on app load" before any view transition.
     await expect(
       page.locator('[data-testid="global-view"]')
     ).toBeVisible({ timeout: 10000 });
+    // GlobalView mounts before loadConfig() resolves, and useTheme() applies the
+    // built-in 'dark' fallback until then. Gate on the config-derived theme so
+    // these tests never observe the pre-config fallback.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => document.documentElement.dataset.theme),
+        { timeout: 10000 }
+      )
+      .toBe('cave');
   });
 
   test('default theme is dark on app load @smoke', async ({ page }) => {
@@ -207,7 +216,6 @@ test.describe('Theme Switching - Via Settings UI', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Theme Settings Test');
   });
 

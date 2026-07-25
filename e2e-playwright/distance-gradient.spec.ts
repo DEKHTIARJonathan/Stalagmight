@@ -122,7 +122,6 @@ test.describe('Distance Gradient', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Distance Gradient Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapLoaded(page);

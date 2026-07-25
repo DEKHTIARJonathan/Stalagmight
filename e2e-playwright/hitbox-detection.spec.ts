@@ -256,7 +256,7 @@ test.describe('Hitbox Detection', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="global-view"]');
   });
 
   test('station click at hitArea-1 hits, hitArea+1 misses with detail panel visible', async ({ page }) => {
@@ -674,7 +674,7 @@ test.describe('Debug Hitbox Visualization', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="global-view"]');
   });
 
   test('hitbox layers exist with correct initial opacity', async ({ page }) => {
@@ -803,7 +803,7 @@ test.describe('Config Reload Effects', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="global-view"]');
   });
 
   test('hitbox layer radius reflects config hit_area value', async ({ page }) => {
@@ -1107,7 +1107,7 @@ test.describe('E2E Test Infrastructure', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('[data-testid="global-view"]');
   });
 
   test('__E2E_TEST__ stores are exposed in dev mode', async ({ page }) => {

@@ -74,3 +74,6 @@ CLAUDE.local.md
 
 # Agent harness per-session artifacts (screenshots, action logs, state snapshots)
 .agent-artifacts/
+
+# LLM agent-harness bridge runtime artifacts (#262) - never commit
+.agent-bridge/

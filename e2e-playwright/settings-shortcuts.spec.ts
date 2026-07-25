@@ -81,7 +81,6 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Shortcuts Test Project');
   });
 
@@ -704,7 +703,6 @@ test.describe('Visual Regression - Shortcuts', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Visual Test Project');
   });
 

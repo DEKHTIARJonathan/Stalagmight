@@ -70,7 +70,6 @@ test.describe('Syntactic Highlighting', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'SH Test');
     await seedProjectWithSections(page, seeds);
     await waitForMapReady(page);

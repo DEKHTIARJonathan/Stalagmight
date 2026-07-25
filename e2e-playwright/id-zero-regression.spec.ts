@@ -124,7 +124,6 @@ test.describe('ID=0 Bug Fixes', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'ID Zero Test');
     await injectId0Fixture(page);
   });
@@ -335,7 +334,6 @@ test.describe('ID=0 Edge Cases', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'ID Zero Edge Cases');
     await injectId0Fixture(page);
   });

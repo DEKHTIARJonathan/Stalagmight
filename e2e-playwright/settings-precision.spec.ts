@@ -48,7 +48,6 @@ test.describe('Settings - Decimal Precision', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
     await createProject(page, 'Precision Settings Test');
   });
 
