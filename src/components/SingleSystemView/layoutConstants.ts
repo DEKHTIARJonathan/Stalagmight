@@ -23,6 +23,31 @@ export const PANEL_SIZE_BOUNDS = {
 } as const satisfies Record<'sections' | 'detail' | 'data-table', { min: number; max: number }>;
 
 /**
+ * Minimum width (px, CSS pixels) the map column must keep (#260).
+ *
+ * The side panels are sized in PIXELS and persist across sessions, but the
+ * viewport shrinks with the native webview UI zoom (getCurrentWebview().setZoom()
+ * - at 250% a 1536-physical-px window is only ~614 CSS px wide). The map is the
+ * flex remainder, so without a floor it absorbs 100% of the shortfall and can be
+ * squeezed to a few dozen pixels. `computeSidePanelLayout` makes the side panels
+ * yield instead, keeping this much map.
+ *
+ * Sized from the map's own absolutely-positioned overlay chrome, which is
+ * anchored to opposite edges and therefore collides first:
+ *   - top row: the fit-to-view / exit-focus button (left: 8, up to ~150 wide with
+ *     its focus label) against the MapLibre NavigationControl (right, ~40) with
+ *     the offline indicator inboard of it at `right-14` (56) - ~300px before they
+ *     touch.
+ *   - bottom row: the depth/distance/gas legend (left: 10, ~120 wide) above the
+ *     MapLibre ScaleControl (maxWidth 100) against the bottom-right attribution
+ *     (~140) - also ~300px.
+ *   - the bottom Data dock's opener tab sits 40px in from the right edge.
+ * 360 clears the widest of those with ~60px of slack so nothing stacks, while
+ * still leaving a map viewport that is small but genuinely usable.
+ */
+export const MAP_MIN_WIDTH = 360;
+
+/**
  * Panel reveal/close timing budget (ms). Centralized so the interacting graces are
  * tuned together (a short transit grace vs a generous post-resize grace - usePanelReveal's
  * scheduleClose has explicit "don't shorten a longer grace" logic precisely because

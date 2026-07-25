@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { PanelOpenerTab, type PanelEdge } from './PanelOpenerTab';
 import { useResizeHandle } from './useResizeHandle';
@@ -8,6 +8,24 @@ import { clamp } from '../../utils/clamp';
 
 /** Width/height of the always-present closed-state opener bar (px). */
 export const BAR = 12;
+
+/**
+ * Clamp an opener-tab inset so the tab box can never leave its container (#260).
+ *
+ * The tab anchors are FIXED insets from one container edge (`right: tabInset` for
+ * the bottom Data tab, `top: tabTop` for the side tabs). Once the container is
+ * smaller than the inset the tab's whole box lands outside it: the Data tab walked
+ * off the left edge of a narrow map column and rendered on top of the Sections
+ * panel, and a side tab drops below its bar when an open Data panel shortens it.
+ *
+ * `container === 0` means "not measured yet" (first paint, or a zero-layout test
+ * environment) and passes the requested inset through unchanged, so a degenerate
+ * measurement can't yank the tab to 0.
+ */
+export function clampTabInset(requested: number, container: number, tab: number): number {
+  if (!(container > 0)) return requested;
+  return clamp(requested, 0, Math.max(0, container - tab));
+}
 
 interface DockProps {
   reveal: PanelReveal;
@@ -92,8 +110,23 @@ function DockComponent({
 }: DockProps) {
   const vertical = edge === 'left' || edge === 'right';
   const clipRef = useRef<HTMLDivElement>(null);
-  const outerRef = useRef<HTMLDivElement>(null);
+  // Nullable ref type (not `useRef<HTMLDivElement>(null)`) because the callback
+  // ref below assigns it - a RefObject initialized with null is read-only.
+  const outerRef = useRef<HTMLDivElement | null>(null);
   const handleRef = useRef<HTMLDivElement>(null);
+  // #260: the tab anchors below are FIXED insets from one container edge, so once
+  // the container is smaller than the inset the tab's box lands outside it
+  // entirely (the bottom Data tab rendered over the Sections panel; a side tab
+  // drops below its bar when an open Data panel shortens it). Measure the
+  // container and the tab so the inset can be clamped to what actually fits.
+  const [outerEl, setOuterEl] = useState<HTMLDivElement | null>(null);
+  const [tabEl, setTabEl] = useState<HTMLDivElement | null>(null);
+  const [outerBox, setOuterBox] = useState({ width: 0, height: 0 });
+  const [tabBox, setTabBox] = useState({ width: 0, height: 0 });
+  const setOuterNode = useCallback((node: HTMLDivElement | null) => {
+    outerRef.current = node;
+    setOuterEl(node);
+  }, []);
   // "active" while hovering the handle or dragging it; both the panel's
   // inner-edge border and the opener tab border tint accent then, identically.
   const [resizeHover, setResizeHover] = useState(false);
@@ -139,6 +172,31 @@ function DockComponent({
   // switch, fullscreen toggle, section-focus collapse): otherwise the parent's
   // sibling-resizing flag would stick true and permanently suspend the sibling
   // panels' open/close easing for the rest of the session.
+  // Measure the overlay wrapper and the tab box so the tab anchors can be clamped
+  // into the container (#260). One observer for both; `border-box` so the tab's
+  // border counts (its box is what must stay inside).
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const read = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { width: r.width, height: r.height };
+    };
+    // Bail on an unchanged box: a resize drag fires this ~60x/s and only one of
+    // the two dimensions feeds the anchor, so a fresh object every tick would add
+    // a re-render of an already-busy Dock for nothing.
+    const keep = (prev: { width: number; height: number }, next: { width: number; height: number }) =>
+      prev.width === next.width && prev.height === next.height ? prev : next;
+    const sync = () => {
+      if (outerEl) setOuterBox((prev) => keep(prev, read(outerEl)));
+      if (tabEl) setTabBox((prev) => keep(prev, read(tabEl)));
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    if (outerEl) ro.observe(outerEl);
+    if (tabEl) ro.observe(tabEl);
+    return () => ro.disconnect();
+  }, [outerEl, tabEl]);
+
   useEffect(() => {
     onResizingChange?.(isResizing);
     return () => {
@@ -225,12 +283,23 @@ function DockComponent({
 
   // Tab anchored flush to the inner edge (rides the wrapper's edge for free).
   // Side tabs sit at `tabTop` so their top aligns with the panel's header divider.
-  const tabAnchor: CSSProperties =
-    edge === 'left'
-      ? { left: '100%', top: tabTop }
-      : edge === 'right'
-        ? { right: '100%', top: tabTop }
-        : { bottom: '100%', right: tabInset };
+  //
+  // #260: the inset is clamped to what the container can actually hold, so the
+  // tab can never leave it. `left/right: 100%` is deliberate (the tab overhangs
+  // the inner edge and that is the design); it's the inset along the OTHER axis
+  // that escapes when the container shrinks - `right: tabInset` walks the bottom
+  // tab off the left edge and over the Sections panel once the map column is
+  // narrower than the inset, and `top: tabTop` pushes a side tab below its bar
+  // once an open Data panel has shortened it. A zero measurement means "not
+  // measured yet", so the requested inset is used unclamped until it is (see
+  // clampTabInset).
+  const tabAnchor: CSSProperties = (() => {
+    if (edge === 'bottom') {
+      return { bottom: '100%', right: clampTabInset(tabInset, outerBox.width, tabBox.width) };
+    }
+    const top = clampTabInset(tabTop, outerBox.height, tabBox.height);
+    return edge === 'left' ? { left: '100%', top } : { right: '100%', top };
+  })();
 
   // Resize handle on the inner edge (only while docked).
   const handleClass =
@@ -242,7 +311,7 @@ function DockComponent({
 
   const overlay = (
     <div
-      ref={outerRef}
+      ref={setOuterNode}
       className={`absolute pointer-events-auto ${fullscreen ? 'z-40' : reveal.isFloatingOpen ? 'z-30' : 'z-20'}`}
       style={{ ...outerStyle, transition: sizeTransition }}
       // The slide-out ends when THIS wrapper's own width/height transition
@@ -329,7 +398,7 @@ function DockComponent({
       )}
 
       {!fullscreen && (
-        <div className="absolute z-[2]" style={tabAnchor}>
+        <div ref={setTabEl} className="absolute z-[2]" style={tabAnchor}>
           <PanelOpenerTab
             reveal={reveal}
             edge={edge}

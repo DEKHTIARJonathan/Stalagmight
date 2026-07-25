@@ -187,10 +187,19 @@ export default function Toolbar({
   //   2. "Import" text   -> yellow import icon only
   //   3. Undo/Redo text  -> undo/redo icons only
   //   4. tighten the padding around the burger / import / undo / redo / eye buttons
+  //   5. the carousel LEAVES absolute positioning and joins the flex flow, as an
+  //      icon-only carousel, in a shrinkable slot (#260)
+  // Stage 5 is the structural backstop: while the carousel is out of flow it can be
+  // positioned on top of a cluster, and stages 1-4 can run out of labels to drop
+  // before the gap is wide enough - which is how "Export" ended up rendering
+  // underneath the select-tool button. As a normal flex item it is laid out BESIDE
+  // the clusters, so overlap stops being expressible in the layout at all; if the
+  // header is narrower still, the shrinkable slot clips the carousel instead of
+  // pushing the tool buttons off-screen.
   // The SpeleoStatusButton's presence widens the left cluster, so its visibility
   // gates re-measurement too.
   const speleoLinkPresent = useSpeleoStore((s) => s.link != null);
-  const CONDENSE_MAX = 4;
+  const CONDENSE_MAX = 5;
   const [condense, setCondense] = useState(0);
   const condenseRef = useRef(0);
   const [headerWidth, setHeaderWidth] = useState(0);
@@ -245,11 +254,17 @@ export default function Toolbar({
   //  2. Otherwise, center the carousel in that free gap so it sits in the empty
   //     space between the clusters rather than window-centered over a wide cluster
   //     (which is how "Export" ended up under the tool buttons).
+  // Once the ladder reaches the in-flow stage there is nothing left to measure:
+  // flexbox owns the position and cannot overlap, so the effect bails out.
   // Runs in a layout effect so every step settles before the browser paints (no
   // flicker). The guard skips the stale render right after a reset, where the
   // committed DOM is still at the old level but the ref has been forced to 0.
   useLayoutEffect(() => {
     if (condense !== condenseRef.current) return;
+    // In-flow stage: flexbox positions the carousel, so there is no `left` to
+    // compute and no overlap to detect. (The reset effect above still drops back
+    // to stage 0 when space returns, so this is not a one-way door.)
+    if (condense >= CONDENSE_MAX) return;
     const header = headerRef.current;
     const left = leftRef.current;
     const right = rightRef.current;
@@ -271,34 +286,48 @@ export default function Toolbar({
     const minCenter = leftEdge + MARGIN + half;
     const maxCenter = rightEdge - MARGIN - half;
     // No such range -> the carousel can't fit the gap; condense one more stage.
-    if (minCenter > maxCenter && condenseRef.current < CONDENSE_MAX) {
+    // The last stage takes it out of absolute positioning entirely, so this loop
+    // always terminates in a NON-overlapping layout - there is no "least, symmetric
+    // overlap" fallback any more, which is what used to render "Export" underneath
+    // the select-tool button (#260).
+    if (minCenter > maxCenter) {
       setCondenseBoth(condenseRef.current + 1);
       return; // re-measure after the condensed render
     }
     // Prefer the window center, but nudge it just enough to stay in the free space
-    // (so a wide right cluster can't overlap "Export"). If it still can't fit even at
-    // max condensation, fall back to the gap center for the least, symmetric overlap.
+    // (so a wide right cluster can't overlap "Export").
     const windowCenter = h.width / 2;
-    const centerX =
-      minCenter <= maxCenter
-        ? Math.max(minCenter, Math.min(maxCenter, windowCenter))
-        : (leftEdge + rightEdge) / 2;
-    setCarouselLeft(centerX);
+    setCarouselLeft(Math.max(minCenter, Math.min(maxCenter, windowCenter)));
   });
 
   const displayCondensed = condense >= 1;
   const importCondensed = condense >= 2;
   const historyCondensed = condense >= 3;
-  // Final stage: squeeze the padding around the icon buttons when even the
-  // all-icons toolbar still can't clear the carousel.
+  // Squeeze the padding around the icon buttons when even the all-icons toolbar
+  // still can't clear the carousel.
   const tight = condense >= 4;
+  // Final stage: the carousel stops being absolutely positioned and becomes a
+  // normal, shrinkable flex item between the two clusters - flexbox then makes
+  // overlap structurally impossible - and degrades to icon-only so it asks for as
+  // little of the remaining width as possible.
+  const centerInFlow = condense >= 5;
+  // Out of flow, the clusters are the only flex items and shrinking them would
+  // squash the tool buttons; in flow they must not steal room from the carousel's
+  // slot either. Pinned in both cases so the carousel's slot is what gives.
+  const clusterCls = 'flex-shrink-0';
+  const centerCls = centerInFlow
+    ? 'min-w-0 shrink overflow-hidden px-2'
+    : 'absolute -translate-x-1/2';
+  const centerStyle: CSSProperties | undefined = centerInFlow
+    ? undefined
+    : { left: carouselLeft ?? '50%' };
 
   return (
     <header ref={headerRef} className="relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
       {/* Left section: hamburger menu, Import, then Undo/Redo */}
       <div
         ref={leftRef}
-        className={`flex items-center ${tight ? 'gap-0.5' : 'gap-2'} transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
+        className={`flex items-center ${clusterCls} ${tight ? 'gap-0.5' : 'gap-2'} transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
         data-testid="toolbar-file-controls"
       >
         {/* Disabled during placement mode so the file/project actions that moved
@@ -409,34 +438,31 @@ export default function Toolbar({
           the right, so the center is free for the mode switch. Fullscreen table mode
           (a survey sub-state) shows the table's title instead. */}
       {dataTableFullScreen ? (
-        /* Absolutely positioned and centered in the free gap between the side
-           clusters (see the measure effect), so it never overlaps them. */
+        /* Centered in the free gap between the side clusters (see the measure
+           effect), so it never overlaps them - or, at the final stage, laid out
+           between them by flexbox. */
         <div
           ref={centerRef}
-          className="absolute -translate-x-1/2 font-medium"
-          style={{ left: carouselLeft ?? '50%' }}
+          className={`${centerCls} font-medium truncate`}
+          style={centerStyle}
           data-testid="toolbar-data-table-title"
         >
           {t('dataTable.title')}
         </div>
       ) : (
-        /* Absolutely positioned and centered in the free gap between the side
-           clusters (see the measure effect): it sits in the empty space instead of
-           window-centered, so a wide right cluster can't overlap "Export". The gap
-           center is independent of the carousel's own width, so cycling modes never
-           drifts it. */
-        <div
-          ref={centerRef}
-          className="absolute -translate-x-1/2"
-          style={{ left: carouselLeft ?? '50%' }}
-        >
-          <ModeCarousel disabled={placementModeActive} />
+        /* Centered in the free gap between the side clusters (see the measure
+           effect): it sits in the empty space instead of window-centered, so a wide
+           right cluster can't overlap "Export". The gap center is independent of the
+           carousel's own width, so cycling modes never drifts it. At the final stage
+           it joins the flex flow instead, where overlap cannot happen at all. */
+        <div ref={centerRef} className={centerCls} style={centerStyle}>
+          <ModeCarousel disabled={placementModeActive} compact={centerInFlow} />
         </div>
       )}
 
       {/* Right section - tools and display menu; while the table is fullscreen,
           just the table picker (the "Back to Map" button lives on the left). */}
-      <div ref={rightRef} className="flex items-center gap-2">
+      <div ref={rightRef} className={`flex items-center gap-2 ${clusterCls}`}>
         {dataTableFullScreen ? (
           /* The "Back to Map" shrink button now lives on the left (in place of
              the project-close button); only the table picker stays on the right. */

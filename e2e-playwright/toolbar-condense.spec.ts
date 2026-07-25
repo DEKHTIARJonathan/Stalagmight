@@ -9,11 +9,14 @@ import { setupMockedPage, createProject, waitForNoDialogs } from './helpers/app'
  *   2. "Import" text   -> yellow import icon only
  *   3. Undo/Redo text  -> undo/redo icons only
  *   4. tighten padding around the icon buttons
+ *   5. the carousel leaves absolute positioning and joins the flex flow (#260)
  *
  * The carousel is position:absolute (no CSS overflow), so this is measured by rects,
  * which jsdom can't do - hence an e2e. We assert the width-independent PRIORITY
  * INVARIANT (a later stage never precedes an earlier) across a width sweep, plus the
- * endpoints.
+ * endpoints, plus the #260 NO-OVERLAP invariant: the ladder used to bottom out on a
+ * "least, symmetric overlap" fallback that rendered "Export" underneath the
+ * select-tool button.
  */
 
 interface CondenseState {
@@ -70,5 +73,33 @@ test.describe('SingleSystemView Toolbar - progressive condensation', () => {
     await expect
       .poll(async () => JSON.stringify(await readState(page)))
       .toBe(JSON.stringify({ displayHidden: false, importHidden: false, historyHidden: false }));
+  });
+
+  // #260: the mode carousel used to be positioned for the "least, symmetric
+  // overlap" once the condense ladder ran out, which rendered "Export" underneath
+  // the select-tool button. The final stage now takes the carousel out of absolute
+  // positioning, so flexbox lays it out BESIDE the clusters and overlap is not
+  // expressible in the layout at any width.
+  test('never overlaps the side clusters, at any width', async ({ page }) => {
+    for (const width of [1600, 1100, 860, 720, 620, 540, 460, 400, 360]) {
+      await page.setViewportSize({ width, height: 800 });
+      // Let the reset-then-step-up fit pass settle at this width.
+      await expect.poll(async () => page.getByTestId('mode-carousel').isVisible()).toBe(true);
+
+      const overlap = await page.evaluate(() => {
+        const box = (sel: string) =>
+          document.querySelector(sel)?.getBoundingClientRect() ?? null;
+        const carousel = box('[data-testid="mode-carousel"]');
+        const left = box('[data-testid="toolbar-file-controls"]');
+        const right = box('[data-testid="toolbar-tools-group"]');
+        if (!carousel || !left || !right) return null;
+        const hits = (a: DOMRect, b: DOMRect) => a.left < b.right && b.left < a.right;
+        return { left: hits(carousel, left), right: hits(carousel, right) };
+      });
+
+      expect(overlap, `w=${width}`).not.toBeNull();
+      expect(overlap?.left, `carousel over the file cluster at w=${width}`).toBe(false);
+      expect(overlap?.right, `carousel over the tools cluster at w=${width}`).toBe(false);
+    }
   });
 });

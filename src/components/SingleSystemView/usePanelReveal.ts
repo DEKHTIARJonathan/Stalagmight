@@ -26,12 +26,22 @@ export interface PanelReveal {
   close: () => void;
 }
 
+export interface PanelRevealOpts {
+  /** Viewport-driven collapse (#260): the window is too narrow to keep this panel
+   *  pinned open AND leave the map its minimum width. Behaves exactly like hover
+   *  mode - the panel un-reflows to its opener bar/tab and can still be floated
+   *  over the map - WITHOUT touching the persisted mode/open, so the user's real
+   *  layout returns untouched as soon as there is room again. */
+  forcedClosed?: boolean;
+}
+
 /**
  * Drives the two-mode (hover/pin) reveal behavior for one in-project panel.
  * Persisted `mode`/`open` live in the UI store; transient hover visibility is
  * local React state with a short close-grace timer. See the panel-reveal plan.
  */
-export function usePanelReveal(panel: PanelId): PanelReveal {
+export function usePanelReveal(panel: PanelId, opts: PanelRevealOpts = {}): PanelReveal {
+  const forcedClosed = opts.forcedClosed ?? false;
   const mode = useUIStore((s) => s[PANEL_FIELDS[panel].mode]);
   const open = useUIStore((s) => s[PANEL_FIELDS[panel].open]);
   const setPanelMode = useUIStore((s) => s.setPanelMode);
@@ -56,12 +66,15 @@ export function usePanelReveal(panel: PanelId): PanelReveal {
   // menu toggles all force mode='pin'). Otherwise a `hovering=true` captured
   // before the pin would survive a later return to hover mode and float the panel
   // open with no pointer over it (e.g. exiting section-focus restores 'hover').
+  // Skipped while force-closed: the panel is behaving as a hover panel there, so
+  // clearing `hovering` on its (still 'pin') persisted mode would snap a panel the
+  // user just floated open shut again.
   useEffect(() => {
-    if (mode === 'pin') {
+    if (mode === 'pin' && !forcedClosed) {
       setHovering(false);
       clearGrace();
     }
-  }, [mode, clearGrace]);
+  }, [mode, forcedClosed, clearGrace]);
 
   // Programmatic reveal (e.g. "jump to this warning" from the data table) is
   // driven by the one panel that needs it (Details) via onRegionEnter +
@@ -93,18 +106,22 @@ export function usePanelReveal(panel: PanelId): PanelReveal {
 
   const onRegionLeave = useCallback(() => scheduleClose(), [scheduleClose]);
 
-  const isPinnedOpen = mode === 'pin' && open;
-  const isFloatingOpen = mode === 'hover' && hovering;
+  // A force-closed panel never reflows the map (that is the whole point), but it
+  // can still be floated over it - so it reads as hover mode for both booleans.
+  const isPinnedOpen = mode === 'pin' && open && !forcedClosed;
+  const isFloatingOpen = (mode === 'hover' || forcedClosed) && hovering;
   const isOpen = isPinnedOpen || isFloatingOpen;
 
   const openClick = useCallback(() => {
-    if (mode === 'pin') {
+    if (mode === 'pin' && !forcedClosed) {
       setPanelOpen(panel, true);
     } else {
+      // Force-closed lands here too: persisted `open` is already true, so writing
+      // it again would be a no-op AND a pointless config write. Float it instead.
       clearGrace();
       setHovering(true);
     }
-  }, [mode, panel, setPanelOpen, clearGrace]);
+  }, [mode, forcedClosed, panel, setPanelOpen, clearGrace]);
 
   const pin = useCallback(() => {
     setPanelMode(panel, 'pin');
