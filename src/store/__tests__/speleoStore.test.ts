@@ -95,6 +95,27 @@ describe('speleoStore', () => {
       expect(s.divergence).toBeNull();
       expect(s.banner).toBeNull();
     });
+
+    it('applyPendingAuth clears the session even when the logout command rejects', async () => {
+      // #270: `speleodb_logout` rejects only to WARN that the credential could not be
+      // removed from this machine - the backend session is gone either way. The store
+      // must mirror that (and still report the warning), never leave the UI claiming a
+      // session the backend dropped.
+      useSpeleoStore
+        .getState()
+        .setSessionFromLogin({ user_email: 'u@x', endpoint: 'https://x/', keychain_backed: true });
+      useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
+      invokeIpcMock.mockRejectedValue({
+        message: 'Logged out, but the stored SpeleoDB credential could not be removed',
+        action: 'Fatal',
+        status: null,
+      });
+
+      const result = await useSpeleoStore.getState().applyPendingAuth('https://x/');
+      expect(result.ok).toBe(false);
+      expect(useSpeleoStore.getState().session).toBeNull();
+      expect(useSpeleoStore.getState().pendingAuth).toBeNull();
+    });
   });
 
   describe('seedFromStatus', () => {

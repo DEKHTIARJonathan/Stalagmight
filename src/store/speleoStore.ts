@@ -332,9 +332,18 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     if (!p) return { ok: true };
     try {
       if (p.kind === 'logout') {
-        await invokeIpc<null>('speleodb_logout');
-        set({ pendingAuth: null, authError: null });
-        get().clearSession();
+        // #270: the backend drops the session and the persisted account email even
+        // when it can't remove the credential from the OS keychain - it rejects only
+        // to WARN that a credential may still be stored on this machine. So mirror
+        // the logout locally in `finally`, then let the rejection propagate to the
+        // catch below so the dialog still surfaces that warning. Clearing only on
+        // success would leave the UI claiming a session the backend no longer has.
+        try {
+          await invokeIpc<null>('speleodb_logout');
+        } finally {
+          set({ pendingAuth: null, authError: null });
+          get().clearSession();
+        }
       } else {
         const r = await invokeIpc<SpeleoLoginResult>('speleodb_login', {
           endpoint: (endpoint ?? '').trim() || undefined,

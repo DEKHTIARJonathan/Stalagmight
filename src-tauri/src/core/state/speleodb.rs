@@ -2,14 +2,29 @@
 //! store, dump handling) to `AppState`, config, and the app cache directory.
 //!
 //! The `commands::speleodb` IPC layer is a thin wrapper over these methods.
-//! Everything here is read-only against the server (login / list / pull); no
-//! lock, push, or persistence - those are later issues (#182 epic).
+//!
+//! What lives here (the whole single-writer hand-off, #182):
+//! - **session**: login / logout / status, the lazy silent rehydration that
+//!   revives a keychain token after a restart, and the centralized 401 auto-drop.
+//! - **pull**: list projects, download + classify a dump, extract the `.stalx`
+//!   into the app cache (see `speleodb_cache` for the replace chokepoint), adopt
+//!   an Ariane-only project.
+//! - **lock + edit gate**: acquire on Start editing (with the reconcile verdict),
+//!   optimistic force-edit without a lock, periodic re-verify, and the
+//!   release paths (Done / logout / close / app-exit / "release all").
+//! - **push**: the BASE-SHA fence, snapshot sanitize, upload, and the
+//!   divergence / unconfirmed outcomes; plus Update (read-only fast-forward),
+//!   Take-remote, and revision view/restore.
+//! - **persistence**: the `speleo_link` row that makes a project remote (and
+//!   `speleodb_unlink`, which makes it plain again).
+//! - **project admin**: metadata PATCH, publish (create-on-SDB), collaborators /
+//!   teams, and project delete.
 
 use std::path::{Path, PathBuf};
 
 use super::speleodb_cache::restore_display_settings;
 use super::{AppState, VirtualShotMode};
-use crate::speleodb::auth::TokenStore;
+use crate::speleodb::auth::{SecretStoreError, TokenStore};
 use crate::speleodb::client;
 // [Track A] #186/D-B2: typed Endpoint + map_status + SpeleoDbError→SpeleoErrorDto
 // conversion. [Integration] map_status/SpeleoDbAction also drive Track C's C5
@@ -326,15 +341,29 @@ impl SpeleoDbSession {
         }
     }
 
-    /// Forget the local token (every tier: keychain + plaintext + in-memory) and
-    /// clear the session. No server-side call - logout is purely local (the DRF
-    /// token is not revoked). [Track C] (#188): also the 401-drop sink (C5).
+    /// Best-effort form of [`Self::forget_reporting`]: the 401-drop sink ([Track C]
+    /// #188, C5). A dead token must leave the session even when the keychain is
+    /// flaky, so a delete failure is logged (inside the token store) and dropped
+    /// here rather than propagated (#270).
     fn forget(&mut self) {
-        if let (Some(endpoint), Some(email)) = (self.endpoint.clone(), self.email.clone()) {
-            self.token_store.clear(&endpoint, &email);
-        }
+        let _ = self.forget_reporting();
+    }
+
+    /// Forget the local token (every tier: keychain + plaintext + in-memory) and
+    /// clear the session, **reporting** a persistent-tier delete failure. No
+    /// server-side call - logout is purely local (the DRF token is not revoked).
+    ///
+    /// The session is dropped unconditionally, including on the error path: the
+    /// user asked to log out, so an `Err` means "logged out, but a credential may
+    /// still be stored on this machine" - never "still logged in" (#270).
+    fn forget_reporting(&mut self) -> Result<(), SecretStoreError> {
+        let cleared = match (self.endpoint.clone(), self.email.clone()) {
+            (Some(endpoint), Some(email)) => self.token_store.clear(&endpoint, &email),
+            _ => Ok(()),
+        };
         self.endpoint = None;
         self.email = None;
+        cleared
     }
 
     /// [Track C] (#188, C4): lazy **silent** startup rehydration, run once on the
@@ -841,12 +870,23 @@ impl AppState {
     /// also risked leaking the `DEV_SPELEODB_URL` dev box. Best-effort; a failure
     /// is logged, not fatal.
     fn speleodb_persist_email(&self, email: &str) {
+        self.speleodb_write_config_email(Some(email.to_owned()));
+    }
+
+    /// Write (or clear, with `None`) the persisted account email. `None` is the
+    /// logout half (#270): the email is the *rehydrate seed* - leaving it behind
+    /// means a keychain entry that outlived a failed logout delete is found again
+    /// by `speleodb_ensure_rehydrated` on the next launch, silently
+    /// re-authenticating a user who asked to log out. The endpoint is deliberately
+    /// left alone (a Settings preference, see above). Best-effort; a failure is
+    /// logged, not fatal.
+    fn speleodb_write_config_email(&self, email: Option<String>) {
         let Ok(mut config) = self.config.lock() else {
             return;
         };
-        config.speleodb.email = Some(email.to_owned());
+        config.speleodb.email = email;
         if let Err(e) = config.save() {
-            tracing::warn!(error = %e, "failed to persist SpeleoDB account email to config");
+            tracing::warn!(error = %e, "failed to persist the SpeleoDB account email to config");
         }
     }
 
@@ -1302,11 +1342,18 @@ impl AppState {
         Ok(())
     }
 
-    /// Forget the local token (keychain + in-memory) and clear the session. The
-    /// DRF token is not revoked server-side, but if we were mid-edit on a remote
-    /// project we best-effort RELEASE the write lock (it needs the token, so before
-    /// `forget`) so it isn't stranded, and drop the transient edit gate - a
-    /// token-less session must not keep mutating a project it can never push.
+    /// Forget the local token (keychain + plaintext + in-memory), clear the session,
+    /// and clear the persisted account email. The DRF token is not revoked
+    /// server-side, but if we were mid-edit on a remote project we best-effort
+    /// RELEASE the write lock (it needs the token, so before `forget`) so it isn't
+    /// stranded, and drop the transient edit gate - a token-less session must not
+    /// keep mutating a project it can never push.
+    ///
+    /// #270: returns `Err` when a *persistent* tier refused to give the credential
+    /// up. The logout still happened (session dropped, email cleared); the error
+    /// means the token may survive in the OS keychain / plaintext store, which the
+    /// FE surfaces so the user can retry. Unlike the 401 auto-drop
+    /// ([`Self::speleodb_forget`]), which stays best-effort by design.
     pub(crate) fn speleodb_logout(&self) -> Result<(), SpeleoErrorDto> {
         // A held write lock exists only on a remote EDIT session (edit_enabled +
         // a remote link); a read-only-open or local project holds none. In that
@@ -1348,8 +1395,20 @@ impl AppState {
                 }
             }
         }
-        self.speleodb_session_lock().map_err(local_dto)?.forget();
-        Ok(())
+        // #270: drop the session AND the persisted rehydrate seed first, then report
+        // a keychain/plaintext delete failure. The logout itself always happens - the
+        // Err is a warning that a credential may still be stored on this machine (so
+        // the FE can offer a retry), not a reason to leave the user logged in.
+        let cleared = self
+            .speleodb_session_lock()
+            .map_err(local_dto)?
+            .forget_reporting();
+        self.speleodb_write_config_email(None);
+        cleared.map_err(|e| {
+            local_dto(SpeleoDbError::Io(format!(
+                "Logged out, but the stored SpeleoDB credential could not be removed from this machine: {e}"
+            )))
+        })
     }
 
     /// Snapshot of what a best-effort lock release needs (endpoint, token, the
@@ -3910,6 +3969,152 @@ mod tests {
         assert!(!status.logged_in);
         assert_eq!(status.user_email, None);
         assert!(session.active_token().is_err());
+    }
+
+    /// A [`SecretStore`] that stores/loads fine but whose DELETE always fails -
+    /// the flaky-keychain seam for the #270 logout paths.
+    struct FailingDeleteStore;
+
+    impl SecretStore for FailingDeleteStore {
+        fn kind(&self) -> &'static str {
+            "failing-delete"
+        }
+        fn store(&self, _: &str, _: &str) -> Result<(), crate::speleodb::auth::SecretStoreError> {
+            Ok(())
+        }
+        fn load(&self, _: &str) -> Result<Option<String>, crate::speleodb::auth::SecretStoreError> {
+            Ok(None)
+        }
+        fn delete(&self, _: &str) -> Result<(), crate::speleodb::auth::SecretStoreError> {
+            Err(crate::speleodb::auth::SecretStoreError::for_test(
+                "keychain unavailable",
+            ))
+        }
+    }
+
+    /// An authed session whose token was written through `keychain`, so a later
+    /// clear really exercises that backend's `delete`.
+    fn authed_session_with(keychain: Box<dyn SecretStore>) -> SpeleoDbSession {
+        let mut token_store = TokenStore::from_stores(keychain, None);
+        token_store.store("https://x/", "u@x", "tok-1", false);
+        SpeleoDbSession {
+            endpoint: Some("https://x/".to_owned()),
+            email: Some("u@x".to_owned()),
+            token_store,
+            rehydrate_attempted: true,
+        }
+    }
+
+    #[test]
+    fn forget_reporting_surfaces_a_failed_delete_but_still_drops_the_session() {
+        // #270: logout's fallible form REPORTS a keychain delete failure - and the
+        // session is gone regardless (the user asked to log out; the Err is a warning
+        // that a credential may survive on this machine).
+        let mut session = authed_session_with(Box::new(FailingDeleteStore));
+        assert!(session.status().logged_in);
+        assert!(
+            session.forget_reporting().is_err(),
+            "a failed credential delete must be reported to the logout caller"
+        );
+        assert!(!session.status().logged_in);
+    }
+
+    #[test]
+    fn forget_stays_best_effort_for_the_401_auto_drop() {
+        // The 401 auto-drop sink must NOT fail closed: a dead token leaves the
+        // session even when the keychain refuses the delete. `forget` returns `()`,
+        // so no error can reach `speleodb_handle_auth`'s callers.
+        let mut session = authed_session_with(Box::new(FailingDeleteStore));
+        session.forget();
+        assert!(!session.status().logged_in);
+        assert!(session.active_token().is_err());
+    }
+
+    #[test]
+    fn auto_drop_path_does_not_propagate_a_keychain_failure() {
+        // End-to-end through the AppState sink: `speleodb_handle_auth` routes the
+        // 401 through `speleodb_forget`, which returns nothing - the original
+        // result is handed back untouched, never replaced by a keychain error.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = AppState::new().expect("state");
+            *state.speleodb.lock().expect("session lock") =
+                authed_session_with(Box::new(FailingDeleteStore));
+
+            let result: Result<(), SpeleoDbError> = Err(SpeleoDbError::Status {
+                status: 401,
+                message: "unauthorized".to_owned(),
+            });
+            let out = state.speleodb_handle_auth(Endpoint::ListProjects, result);
+            assert!(
+                matches!(out, Err(SpeleoDbError::Status { status: 401, .. })),
+                "the caller still sees its own 401, not a keychain error"
+            );
+            assert!(
+                !state
+                    .speleodb
+                    .lock()
+                    .expect("session lock")
+                    .status()
+                    .logged_in,
+                "the dead token is dropped even though the keychain delete failed"
+            );
+        });
+    }
+
+    #[test]
+    fn logout_clears_the_persisted_rehydrate_email() {
+        // #270: the config email is the rehydrate SEED - leaving it behind lets a
+        // surviving keychain entry silently re-authenticate on the next launch.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = AppState::new().expect("state");
+            state.speleodb_persist_email("u@x");
+            *state.speleodb.lock().expect("session lock") =
+                authed_session_with(Box::new(InMemoryStore::new()));
+
+            state.speleodb_logout().expect("a clean logout succeeds");
+            assert_eq!(
+                state.config.lock().expect("config lock").speleodb.email,
+                None,
+                "logout must clear the persisted account email"
+            );
+            // The endpoint is a Settings preference and is deliberately untouched.
+        });
+    }
+
+    #[test]
+    fn logout_reports_a_failed_delete_but_still_logs_out() {
+        // Even when the credential delete fails, logout drops the session AND the
+        // rehydrate seed first, THEN reports - a keychain blip must never leave the
+        // user logged in.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = AppState::new().expect("state");
+            state.speleodb_persist_email("u@x");
+            *state.speleodb.lock().expect("session lock") =
+                authed_session_with(Box::new(FailingDeleteStore));
+
+            let err = state
+                .speleodb_logout()
+                .expect_err("a failed credential delete is surfaced");
+            assert!(
+                err.message.contains("Logged out"),
+                "the message must read as a warning about a leftover credential: {}",
+                err.message
+            );
+            assert_eq!(
+                state.config.lock().expect("config lock").speleodb.email,
+                None,
+                "the rehydrate seed is cleared even on the error path"
+            );
+            assert!(
+                !state
+                    .speleodb
+                    .lock()
+                    .expect("session lock")
+                    .status()
+                    .logged_in,
+                "the session is dropped even on the error path"
+            );
+        });
     }
 
     // ── [Track C] (#188) C4 rehydration + C5 401-drop unit tests ────────────

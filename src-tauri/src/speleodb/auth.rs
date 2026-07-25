@@ -73,6 +73,15 @@ fn normalize_endpoint(endpoint: &str) -> String {
 #[error("secret store error: {0}")]
 pub(crate) struct SecretStoreError(String);
 
+#[cfg(test)]
+impl SecretStoreError {
+    /// Build a store error directly, so test fakes in sibling modules can fail a
+    /// backend op (the inner message is private to this module).
+    pub(crate) fn for_test(message: &str) -> Self {
+        Self(message.to_owned())
+    }
+}
+
 impl From<keyring::Error> for SecretStoreError {
     fn from(e: keyring::Error) -> Self {
         Self(e.to_string())
@@ -464,21 +473,36 @@ impl TokenStore {
         None
     }
 
-    /// Forget the token from **every** tier (keychain + plaintext + memory). The
-    /// single sink the 401 auto-drop handler and logout both call - a 401-drop is
-    /// a full clear (D-188). Each backend delete is best-effort.
-    pub(crate) fn clear(&mut self, endpoint: &str, email: &str) {
+    /// Forget the token from **every** tier (keychain + plaintext + memory),
+    /// **reporting** a persistent-tier delete failure to the caller.
+    ///
+    /// Every tier is attempted even when an earlier one fails, and the in-memory
+    /// token is always dropped - the returned `Err` says "the credential may still
+    /// be on this machine", never "nothing was cleared". Both persistent tiers are
+    /// reported: a surviving plaintext file resurrects a session exactly like a
+    /// surviving keychain entry does ([`Self::load`] falls back to it), and it is
+    /// an on-disk cleartext token besides. The first failure wins as the reported
+    /// error; both are logged.
+    ///
+    /// Logout propagates the `Err` so the user can be warned (#270); the 401
+    /// auto-drop deliberately drops it (`SpeleoDbSession::forget`) - a dead token
+    /// must leave the session even when the keychain is flaky.
+    pub(crate) fn clear(&mut self, endpoint: &str, email: &str) -> Result<(), SecretStoreError> {
         let key = account_key(endpoint, email);
+        let mut failure = None;
         if let Err(e) = self.keychain.delete(&key) {
             tracing::warn!(error = %e, "failed to delete SpeleoDB token from keychain");
+            failure = Some(e);
         }
         if let Some(plaintext) = &self.plaintext {
             if let Err(e) = plaintext.delete(&key) {
                 tracing::warn!(error = %e, "failed to delete SpeleoDB token from plaintext store");
+                failure = failure.or(Some(e));
             }
         }
         self.in_memory = None;
         self.active_tier = None;
+        failure.map_or(Ok(()), Err)
     }
 }
 
@@ -594,7 +618,7 @@ mod tests {
     #[test]
     fn clear_forgets_in_memory_token() {
         let mut store = TokenStore::from_in_memory_token("tok-123");
-        store.clear(EP, EMAIL);
+        store.clear(EP, EMAIL).expect("clear");
         assert_eq!(store.load(EP, EMAIL), None);
     }
 
@@ -780,11 +804,66 @@ mod tests {
         store.in_memory = Some("kc".to_owned());
         store.active_tier = Some(TokenTier::Keychain);
 
-        store.clear(EP, EMAIL);
+        store.clear(EP, EMAIL).expect("clear");
         assert_eq!(store.load(EP, EMAIL), None);
         // Plaintext side is wiped too.
         let probe = PlaintextStore::new(dir.path().to_path_buf());
         assert_eq!(probe.load(&key).unwrap(), None);
+    }
+
+    #[test]
+    fn clear_surfaces_a_failed_keychain_delete() {
+        // #270: a keychain delete that fails must be REPORTED (logout warns the user
+        // that the credential may still live on this machine) - but the in-memory
+        // token is dropped anyway, so the session is gone either way.
+        let mut store = TokenStore::from_stores(Box::new(FailingSecretStore), None);
+        store.in_memory = Some("tok".to_owned());
+        store.active_tier = Some(TokenTier::Keychain);
+
+        assert!(
+            store.clear(EP, EMAIL).is_err(),
+            "a failing keychain delete must be reported, not swallowed"
+        );
+        assert_eq!(
+            store.load(EP, EMAIL),
+            None,
+            "the in-memory token must be forgotten even when the keychain delete failed"
+        );
+        assert!(!store.keychain_backed());
+    }
+
+    #[test]
+    fn clear_surfaces_a_failed_plaintext_delete() {
+        // The plaintext tier is reported the same way: a surviving cleartext file is
+        // itself a resurrectable token (`load` falls back to it).
+        let mut store = TokenStore::from_stores(
+            Box::new(InMemoryStore::new()),
+            Some(Box::new(FailingSecretStore)),
+        );
+        store.in_memory = Some("tok".to_owned());
+        assert!(store.clear(EP, EMAIL).is_err());
+        assert_eq!(store.load(EP, EMAIL), None);
+    }
+
+    #[test]
+    fn clear_deletes_every_tier_despite_an_earlier_failure() {
+        // The keychain delete failing must not skip the plaintext delete - every tier
+        // is attempted, the failure is only *reported* at the end.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let key = account_key(EP, EMAIL);
+        let seeded = PlaintextStore::new(dir.path().to_path_buf());
+        seeded.store(&key, "pt").unwrap();
+
+        let mut store = TokenStore::from_stores(
+            Box::new(FailingSecretStore),
+            Some(Box::new(PlaintextStore::new(dir.path().to_path_buf()))),
+        );
+        assert!(store.clear(EP, EMAIL).is_err());
+        assert_eq!(
+            seeded.load(&key).unwrap(),
+            None,
+            "the plaintext copy must still be deleted after the keychain delete failed"
+        );
     }
 
     #[test]
