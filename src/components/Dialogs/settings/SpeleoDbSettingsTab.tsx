@@ -144,11 +144,12 @@ export function SpeleoDbSettingsTab() {
       }
       // Re-seed the link so any server-side follow-on (e.g. permission) stays fresh.
       void refreshLinkStatus();
-      showToast(t('speleodb.projectSettings.saved'), 'speleodb-project-settings');
+      showToast(t('speleodb.projectSettings.saved'), 'speleodb-project-settings', 'success');
     } catch (e) {
       showToast(
         humanizeSpeleoError(e, t('speleodb.projectSettings.saveFailed')),
         'speleodb-project-settings',
+        'error',
       );
     } finally {
       setSaving(false);
@@ -177,11 +178,12 @@ export function SpeleoDbSettingsTab() {
       // tab's local baseline and toast. It throws on failure.
       await useSpeleoStore.getState().enableRendering();
       setBaseline((prev) => (prev ? { ...prev, exclude_geojson: false } : prev));
-      showToast(t('speleodb.projectSettings.rendering.enabled'), 'speleodb-project-settings');
+      showToast(t('speleodb.projectSettings.rendering.enabled'), 'speleodb-project-settings', 'success');
     } catch (e) {
       showToast(
         humanizeSpeleoError(e, t('speleodb.banner.enableRenderingFailed')),
         'speleodb-project-settings',
+        'error',
       );
     } finally {
       setEnablingRendering(false);

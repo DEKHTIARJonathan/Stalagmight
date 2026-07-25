@@ -179,7 +179,7 @@ export default function GlobalView() {
         const outcome = await openRemote(summary);
         if (outcome.status === 'adopt') setPendingAdopt(summary);
         else if (outcome.status === 'error') {
-          showToast(outcome.message, 'speleodb-open-remote-error');
+          showToast(outcome.message, 'speleodb-open-remote-error', 'error');
         }
       } finally {
         remoteBusyRef.current = false;
@@ -196,7 +196,7 @@ export default function GlobalView() {
     setRemoteBusy(true);
     try {
       const outcome = await adoptRemote(summary);
-      if (outcome.status === 'error') showToast(outcome.message, 'speleodb-open-remote-error');
+      if (outcome.status === 'error') showToast(outcome.message, 'speleodb-open-remote-error', 'error');
     } finally {
       remoteBusyRef.current = false;
       setRemoteBusy(false);

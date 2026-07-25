@@ -233,6 +233,55 @@ export function selectionsEqual(a: Selection, b: Selection): boolean {
   return false;
 }
 
+/**
+ * Toast severity. `info` is the historical neutral look and the default, so the
+ * two-argument `showToast(message, key)` call sites keep rendering exactly as
+ * they did. The other three carry an accent (green / yellow / red) drawn from the
+ * `--cc-success` / `--cc-warning` / `--cc-error` theme tokens.
+ */
+export type ToastKind = 'info' | 'success' | 'warning' | 'error';
+
+/** One entry in the toast stack. Ordered oldest-first in `UIStore.toasts`. */
+export interface ToastItem {
+  /** Process-unique, monotonically increasing. React key and timer identity. */
+  id: number;
+  message: string;
+  /** De-duplication key. At most one non-leaving toast per key is on screen. */
+  key: string;
+  kind: ToastKind;
+  /** Wall-clock time of the last push/refresh (diagnostics + ordering aid). */
+  timestamp: number;
+  /**
+   * Bumped every time the same key refreshes this toast. ToastStack keys its
+   * dwell/fade clock on (id, revision), so a refresh restarts the timer without
+   * remounting the element (which would replay the enter animation).
+   */
+  revision: number;
+  /**
+   * True once the toast is on its way out (evicted by the stack cap, or the user
+   * hit dismiss). Leaving toasts are excluded from de-duplication and from the
+   * visible-count cap, and ToastStack drops them once their exit finishes.
+   */
+  leaving: boolean;
+}
+
+/**
+ * How many toasts stay fully live at once. A push past this evicts the OLDEST
+ * (marks it leaving, so it animates out instead of blinking away).
+ */
+export const MAX_VISIBLE_TOASTS = 4;
+
+/**
+ * Hard ceiling on the array, live + leaving. Exit animations are driven by
+ * ToastStack, so if it is not mounted (unit tests of unrelated components)
+ * nothing would ever reap the leaving entries. Anything past this is dropped
+ * outright rather than allowed to grow without bound.
+ */
+const MAX_TOTAL_TOASTS = MAX_VISIBLE_TOASTS + 4;
+
+/** Source of `ToastItem.id`. Module-scoped so ids never repeat within a session. */
+let nextToastId = 1;
+
 interface UIStore {
   // View state
   view: ViewType;
@@ -458,10 +507,23 @@ interface UIStore {
   setHoveredShot: (shot: { sectionId: SectionId; shotId: ShotId } | null) => void;
   setHoveredSectionId: (sectionId: SectionId | null) => void;
 
-  // Toast state (per-key throttling)
-  toast: { message: string; key: string; timestamp: number } | null;
-  lastToastByKey: Record<string, number>;
-  showToast: (message: string, key: string) => void;
+  // Toast stack (oldest first, newest last - see src/components/common/ToastStack.tsx)
+  toasts: ToastItem[];
+  /**
+   * Push a toast onto the stack. `kind` is optional and defaults to `'info'`, so
+   * every pre-existing two-argument call site keeps the neutral look it had.
+   *
+   * `key` is the de-duplication key: if a toast with the same key is already on
+   * screen (and not already leaving), it is REFRESHED in place - newest wording
+   * and kind win, its timer restarts, and it moves to the newest slot - instead
+   * of stacking a duplicate.
+   */
+  showToast: (message: string, key: string, kind?: ToastKind) => void;
+  /** Begin one toast's exit animation (the per-toast dismiss button). */
+  dismissToast: (id: number) => void;
+  /** Drop one toast outright. ToastStack calls this when a toast's life ends. */
+  removeToast: (id: number) => void;
+  /** Drop every toast immediately (programmatic reset - no exit animation). */
   clearToast: () => void;
 
   // Snap state
@@ -1629,29 +1691,56 @@ export const useUIStore = create<UIStore>((set) => ({
   setHoveredShot: (hoveredShot) => set({ hoveredShot }),
   setHoveredSectionId: (hoveredSectionId) => set({ hoveredSectionId }),
 
-  // Toast state (per-key throttling)
-  toast: null,
-  lastToastByKey: {},
-  showToast: (message, key) => {
-    const now = Date.now();
-    const lastTime = useUIStore.getState().lastToastByKey[key] || 0;
+  // Toast stack. Pure data: no timers live here. The dwell/fade clock (and with
+  // it hover/focus pausing, which only the DOM knows about) belongs to
+  // ToastStack, which calls removeToast when a toast's life ends.
+  toasts: [],
+  showToast: (message, key, kind = 'info') => {
+    const prev = useUIStore.getState().toasts;
 
-    // Throttle: only show if no recent toast for this key (5 second cooldown)
-    if (now - lastTime > 5000) {
-      set({
-        toast: { message, key, timestamp: now },
-        lastToastByKey: { ...useUIStore.getState().lastToastByKey, [key]: now },
-      });
-      // Auto-clear after 3 seconds
-      setTimeout(() => {
-        const t = useUIStore.getState().toast;
-        if (t && t.timestamp === now) {
-          set({ toast: null });
-        }
-      }, 3000);
+    // Same key, still on screen: refresh in place. This replaces the old 5s
+    // per-key throttle - which swallowed the repeat outright, so a *changed*
+    // message under a reused key was lost - with the stacked-world equivalent:
+    // one toast per key, showing the latest wording, with a fresh timer.
+    const existing = prev.find((t) => t.key === key && !t.leaving);
+    if (existing) {
+      const refreshed: ToastItem = {
+        ...existing,
+        message,
+        kind,
+        timestamp: Date.now(),
+        revision: existing.revision + 1,
+      };
+      // Move to the newest slot (end of the array = nearest the bottom edge).
+      set({ toasts: [...prev.filter((t) => t.id !== existing.id), refreshed] });
+      return;
     }
+
+    const pushed: ToastItem = {
+      id: nextToastId++,
+      message,
+      key,
+      kind,
+      timestamp: Date.now(),
+      revision: 0,
+      leaving: false,
+    };
+    const next = [...prev, pushed];
+
+    // Cap the LIVE stack. The overflow is the oldest live toasts; mark them
+    // leaving rather than splicing them out so they animate away.
+    const live = next.filter((t) => !t.leaving);
+    const overflow = live.length - MAX_VISIBLE_TOASTS;
+    const evicted = overflow > 0 ? new Set(live.slice(0, overflow).map((t) => t.id)) : null;
+    const marked = evicted ? next.map((t) => (evicted.has(t.id) ? { ...t, leaving: true } : t)) : next;
+
+    // Safety valve: without a mounted ToastStack nothing reaps `leaving` entries.
+    set({ toasts: marked.slice(-MAX_TOTAL_TOASTS) });
   },
-  clearToast: () => set({ toast: null }),
+  dismissToast: (id) =>
+    set((s) => ({ toasts: s.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) })),
+  removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  clearToast: () => set({ toasts: [] }),
 
   // Snap state
   snappedStation: null,

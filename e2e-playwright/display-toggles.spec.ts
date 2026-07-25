@@ -468,75 +468,66 @@ test.describe('Toast Notifications', () => {
     await waitForMapReady(page);
   });
 
-  test('toast is throttled - same key blocked within 5 seconds', async ({ page }) => {
-    // Show a toast via store
-    await page.evaluate(() => {
-      const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { showToast: (msg: string, key: string) => void } } } }).__E2E_TEST__;
-      stores?.uiStore?.getState()?.showToast('First toast', 'test-key');
-    });
+  /** Push a toast through the store, exactly as a feature call site would. */
+  const showToast = (page: Page, message: string, key: string, kind?: string) =>
+    page.evaluate(([m, k, n]) => {
+      const stores = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: {
+            getState: () => { showToast: (msg: string, key: string, kind?: string) => void };
+          };
+        };
+      }).__E2E_TEST__;
+      stores?.uiStore?.getState()?.showToast(m as string, k as string, n as string | undefined);
+    }, [message, key, kind] as const);
 
-    // Verify first toast was shown
-    await expect.poll(async () => {
-      const toast = await page.evaluate(() => {
-        const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { toast: { message: string } | null } } } }).__E2E_TEST__;
-        return stores?.uiStore?.getState()?.toast?.message ?? null;
-      });
-      return toast;
-    }, { timeout: 1000 }).toBe('First toast');
+  test('same key refreshes the existing toast instead of stacking a duplicate', async ({ page }) => {
+    await showToast(page, 'First toast', 'test-key');
+    await expect(page.getByTestId('toast')).toHaveCount(1);
+    await expect(page.getByTestId('toast')).toContainText('First toast');
 
-    // Record the timestamp
-    const timestamp1 = await page.evaluate(() => {
-      const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { toast: { timestamp: number } | null } } } }).__E2E_TEST__;
-      return stores?.uiStore?.getState()?.toast?.timestamp ?? 0;
-    });
-
-    // Try to show another toast with same key immediately
-    await page.evaluate(() => {
-      const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { showToast: (msg: string, key: string) => void } } } }).__E2E_TEST__;
-      stores?.uiStore?.getState()?.showToast('Second toast', 'test-key');
-    });
-
-    // First toast should still be shown (throttled) - timestamp unchanged
-    const timestamp2 = await page.evaluate(() => {
-      const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { toast: { timestamp: number } | null } } } }).__E2E_TEST__;
-      return stores?.uiStore?.getState()?.toast?.timestamp ?? 0;
-    });
-    expect(timestamp2).toBe(timestamp1);
-
-    const toast2 = await page.evaluate(() => {
-      const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { toast: { message: string } | null } } } }).__E2E_TEST__;
-      return stores?.uiStore?.getState()?.toast?.message ?? null;
-    });
-    expect(toast2).toBe('First toast');
+    // The old behaviour swallowed this outright; the stack shows the newer
+    // wording under the same key, still as a single toast.
+    await showToast(page, 'Second toast', 'test-key');
+    await expect(page.getByTestId('toast')).toHaveCount(1);
+    await expect(page.getByTestId('toast')).toContainText('Second toast');
   });
 
-  test('toast throttle allows different keys immediately', async ({ page }) => {
-    // Show first toast
-    await page.evaluate(() => {
-      const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { showToast: (msg: string, key: string) => void } } } }).__E2E_TEST__;
-      stores?.uiStore?.getState()?.showToast('First toast', 'key-1');
-    });
+  test('different keys stack, newest last', async ({ page }) => {
+    await showToast(page, 'First toast', 'key-1');
+    await showToast(page, 'Different key toast', 'key-2');
 
-    // Verify first toast
-    await expect.poll(async () => {
-      const toast = await page.evaluate(() => {
-        const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { toast: { message: string } | null } } } }).__E2E_TEST__;
-        return stores?.uiStore?.getState()?.toast?.message ?? null;
-      });
-      return toast;
-    }, { timeout: 1000 }).toBe('First toast');
+    await expect(page.getByTestId('toast')).toHaveCount(2);
+    await expect(page.getByTestId('toast').nth(0)).toContainText('First toast');
+    await expect(page.getByTestId('toast').nth(1)).toContainText('Different key toast');
+  });
 
-    // Different key should show immediately
-    await page.evaluate(() => {
-      const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { showToast: (msg: string, key: string) => void } } } }).__E2E_TEST__;
-      stores?.uiStore?.getState()?.showToast('Different key toast', 'key-2');
-    });
+  test('the stack is capped at four live toasts', async ({ page }) => {
+    for (let i = 0; i < 6; i += 1) await showToast(page, `Toast ${i}`, `key-${i}`);
 
-    const toast = await page.evaluate(() => {
-      const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { toast: { message: string } | null } } } }).__E2E_TEST__;
-      return stores?.uiStore?.getState()?.toast?.message ?? null;
-    });
-    expect(toast).toBe('Different key toast');
+    // The two oldest are evicted (they animate out, then go).
+    await expect(page.locator('[data-testid="toast"]:not([data-toast-leaving])')).toHaveCount(4);
+    await expect(page.getByTestId('toast')).toHaveCount(4);
+    await expect(page.getByTestId('toast').nth(0)).toContainText('Toast 2');
+  });
+
+  test('each kind renders with its own accent', async ({ page }) => {
+    await showToast(page, 'It worked', 'k-ok', 'success');
+    await showToast(page, 'It failed', 'k-bad', 'error');
+
+    await expect(page.locator('[data-toast-kind="success"]')).toContainText('It worked');
+    await expect(page.locator('[data-toast-kind="error"]')).toContainText('It failed');
+  });
+
+  test('a toast can be dismissed on its own', async ({ page }) => {
+    await showToast(page, 'Keep me', 'k-keep');
+    await showToast(page, 'Drop me', 'k-drop');
+    await expect(page.getByTestId('toast')).toHaveCount(2);
+
+    await page.locator('[data-toast-key="k-drop"] button').click();
+
+    await expect(page.getByTestId('toast')).toHaveCount(1);
+    await expect(page.getByTestId('toast')).toContainText('Keep me');
   });
 });
 

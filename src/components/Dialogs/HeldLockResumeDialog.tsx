@@ -56,6 +56,7 @@ export default function HeldLockResumeDialog() {
       showToast(
         humanizeSpeleoError(e, t('speleodb.heldLocks.releaseFailed')),
         'speleodb-release-all-error',
+        'error',
       );
     } finally {
       setReleasing(null);
@@ -72,6 +73,7 @@ export default function HeldLockResumeDialog() {
       showToast(
         humanizeSpeleoError(e, t('speleodb.heldLocks.releaseFailed')),
         'speleodb-release-one-error',
+        'error',
       );
     } finally {
       setReleasing(null);

@@ -1438,7 +1438,7 @@ interface UndoHistoryItem {
 - On `undo_to(N)`/`redo_to(N)` failure, execution stops at the failing step; already-completed steps remain applied, and the failing entry is pushed back to its original stack
 - `undo_to`/`redo_to` return an enhanced error message on partial failure: `"Undo failed at step {current} of {total}: {reason}"` (or `"Redo failed at step..."`)
 - A `tracing::error!` is logged whenever a popped entry fails to apply, including command description, undo data variant name, and failure reason (no full snapshot JSON)
-- Frontend shows a toast notification with the failure reason (`result.error ?? 'Unknown error'`) using throttle keys `'undo-failed'` / `'redo-failed'`
+- Frontend shows an error toast with the failure reason (`result.error ?? 'Unknown error'`) using de-duplication keys `'undo-failed'` / `'redo-failed'`
 - Frontend always calls `refreshProjectState()` on both success and failure (via `try/finally`) to sync UI with backend state
 
 ### 8.5 Command Execution

@@ -5,12 +5,20 @@ export default {
     extend: {
       animation: {
         'pulse-shimmer': 'pulse-shimmer 1.5s ease-in-out infinite',
+        // Toast enter: rise into place from just below. Duration mirrors
+        // TRANSITION_MS in src/components/common/ToastStack.tsx, which skips this
+        // class entirely under prefers-reduced-motion.
+        'toast-in': 'toast-in 180ms ease-out',
       },
       keyframes: {
         'pulse-shimmer': {
           '0%': { opacity: '0.5', transform: 'translateX(-100%)' },
           '50%': { opacity: '1' },
           '100%': { opacity: '0.5', transform: 'translateX(100%)' },
+        },
+        'toast-in': {
+          '0%': { opacity: '0', transform: 'translateY(8px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
         },
       },
       colors: {

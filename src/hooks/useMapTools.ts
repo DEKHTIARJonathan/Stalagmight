@@ -356,12 +356,12 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           });
         } else {
           // Not connected and merge blocked (e.g. both sides have zero datums)
-          showToast(result.reason ?? 'Merge not allowed.', 'merge-blocked');
+          showToast(result.reason ?? 'Merge not allowed.', 'merge-blocked', 'warning');
           clearMergeStations();
         }
       } catch (e) {
         if (requestId !== connectivityRequestIdRef.current) return;
-        showToast(getErrorMessage(e), 'merge-error');
+        showToast(getErrorMessage(e), 'merge-error', 'error');
         clearMergeStations();
       } finally {
         if (requestId === connectivityRequestIdRef.current) {
@@ -381,7 +381,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
       // GUARD: Block all station interactions when hidden
       if (!showStations) {
-        showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden');
+        showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden', 'warning');
         return;
       }
 
@@ -500,7 +500,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           if (!moveCommentSource) {
             // First click: pick up source - just record it, don't mutate backend
             if (!mcStation?.comment) {
-              showToast('No comment to move', 'move-comment-empty');
+              showToast('No comment to move', 'move-comment-empty', 'warning');
               break;
             }
             setSelection({ type: 'station', stationRef: ref });
@@ -560,7 +560,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
       // GUARD: Block all shot interactions when hidden
       if (!showShots) {
-        showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden');
+        showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden', 'warning');
         return;
       }
 
@@ -667,7 +667,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           if (!moveCommentSource) {
             // First click: pick up source - just record it, don't mutate backend
             if (!mcShot?.comment) {
-              showToast('No comment to move', 'move-comment-empty');
+              showToast('No comment to move', 'move-comment-empty', 'warning');
               break;
             }
             setSelection({ type: 'shot', sectionId, shotId });
@@ -762,7 +762,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           case 'merge':
             // GUARD: Block merge snap when stations are hidden
             if (!showStations) {
-              showToast("Enable 'Stations' in Display menu to merge", 'stations-hidden');
+              showToast("Enable 'Stations' in Display menu to merge", 'stations-hidden', 'warning');
               return;
             }
             if (isCheckingConnectivity) return;

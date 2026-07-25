@@ -111,7 +111,7 @@ export function ProjectSettingsDialog() {
       const result = await updateProjectSettings(trimmedName, validation);
       if (!result.success) {
         setSaving(false);
-        showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), 'project-settings');
+        showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), 'project-settings', 'error');
         return;
       }
     }
@@ -123,7 +123,7 @@ export function ProjectSettingsDialog() {
       const collabResult = await setCollabEnabled(collabEnabled);
       if (!collabResult.success) {
         setSaving(false);
-        showToast(collabResult.error ?? t('detailPanel.collaboration.toggleFailed'), 'project-settings');
+        showToast(collabResult.error ?? t('detailPanel.collaboration.toggleFailed'), 'project-settings', 'error');
         return;
       }
     }

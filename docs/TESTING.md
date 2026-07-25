@@ -742,7 +742,8 @@ The application uses an ARIA live region to announce selection changes triggered
 **Testing ARIA Live Announcements:**
 
 ```typescript
-// Use the dedicated selection announcer ID (not generic role selector which could match toast)
+// Use the dedicated selection announcer ID (not a generic role selector, which would
+// also match the toast stack's live regions)
 const liveRegion = page.locator('#selection-announcer');
 
 // Verify the live region is attached (it's visually hidden with sr-only)

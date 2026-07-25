@@ -1,5 +1,4 @@
 import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
-import { createPortal } from 'react-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
@@ -20,7 +19,7 @@ import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
 import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoCloseDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
-import { ContextMenu } from './components/common';
+import { ContextMenu, ToastStack } from './components/common';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
 import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
@@ -49,7 +48,6 @@ function App() {
     openDialog,
     initPanels,
     triggerFitToBounds,
-    toast,
     selectionAnnouncement,
   } = useUIStore();
 
@@ -369,7 +367,7 @@ function App() {
         remaining > 0
           ? `Fixed ${fixed} issue${fixed === 1 ? '' : 's'}; ${remaining} need${remaining === 1 ? 's' : ''} manual attention (recompute or remove drifted loop closures, fix non-finite shots). Save to keep the fix.`
           : `Repaired ${fixed} issue${fixed === 1 ? '' : 's'}. Save to keep the fix.`;
-      useUIStore.getState().showToast(message, 'integrity-repair');
+      useUIStore.getState().showToast(message, 'integrity-repair', remaining > 0 ? 'warning' : 'success');
       // Close the dialog only when fully clean. Read the AUTHORITATIVE store state
       // (the same integrityIssues the banner and the dialog render-gate use) rather
       // than the point-in-time `remaining` - a command or undo that interleaved
@@ -384,7 +382,7 @@ function App() {
       // during teardown) rather than reporting a fake no-op success. Surface it and
       // keep the dialog open - integrityIssues is untouched, so the banner/save-block
       // stay correct and the user can retry.
-      useUIStore.getState().showToast('Repair failed - nothing was changed. Please try again.', 'integrity-repair');
+      useUIStore.getState().showToast('Repair failed - nothing was changed. Please try again.', 'integrity-repair', 'error');
     } finally {
       setRepairingIntegrity(false);
     }
@@ -742,21 +740,10 @@ function App() {
           OVER that dialog instead of replacing it, leaving Settings intact. */}
       {heldLockPromptOpen && <HeldLockResumeDialog />}
 
-      {/* Toast notification (via Portal for z-index reliability) */}
-      {toast && createPortal(
-        <div className="fixed inset-0 pointer-events-none z-[99999]">
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
-            <div
-              className="bg-panel text-text-primary px-4 py-2 rounded-lg shadow-lg"
-              role="status"
-              aria-live="polite"
-            >
-              {toast.message}
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      {/* Toast stack (portals itself for z-index reliability). Mounted
+          unconditionally: its screen-reader live regions must exist before their
+          content changes, or the first toast of a run goes unannounced. */}
+      <ToastStack />
 
       {/* ARIA live region for selection announcements (mounted permanently) */}
       <div

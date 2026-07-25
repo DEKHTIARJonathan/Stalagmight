@@ -445,7 +445,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (isReverifyDivergedError(result.error)) {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled');
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled', 'warning');
         }
       }
       return result;
@@ -489,14 +489,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (isReverifyDivergedError(result.error)) {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled');
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled', 'warning');
         } else {
-          useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId);
+          useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
         }
       }
     } catch (e) {
       result = emptyCommandResult(false, String(e));
-      useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId);
+      useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
     } finally {
       await get().refreshProjectState();
       // Undo/redo can change which cross-references resolve - e.g. undoing a
@@ -874,7 +874,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
                   .getState()
                   .showToast(
                     i18n.t('dialogs.collabReview.siblingWarning', { siblingName }),
-                    'collab-sibling-warning'
+                    'collab-sibling-warning',
+                    'warning'
                   );
               }
             })

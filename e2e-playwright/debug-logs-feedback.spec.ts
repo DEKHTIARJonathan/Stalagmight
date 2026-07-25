@@ -3,14 +3,17 @@ import { setupMockedPage, openDebugFromMenu } from './helpers/app';
 
 /**
  * E2E for issue #49 - the Debug Logs window must give transient toast feedback on
- * Refresh and Copy (both were previously silent). The toast renders at the app
- * level via a portal (z above the modal) as role="status", so it's visible over
- * the dialog. Each test uses a fresh page, so the per-key toast throttle never
- * crosses tests.
+ * Refresh and Copy (both were previously silent). The toast stack renders at the
+ * app level via a portal (z above the modal), so it's visible over the dialog.
+ * Each test uses a fresh page, so per-key de-duplication never crosses tests.
  *
- * Assertions use a 2s deadline, comfortably under the toast's own 3s auto-clear
- * (uiStore showToast) so the visibility poll can't race the clear timer - the
- * toast appears within a few ms of the click, leaving a wide margin.
+ * Assertions are scoped to the visible toast (`data-testid="toast"`) rather than
+ * bare text: the stack also mirrors each message into an off-screen live region
+ * for screen readers, so a page-wide text lookup would match twice.
+ *
+ * The 2s deadline sits comfortably inside the toast's own dwell (5s before the
+ * fade even starts), so the visibility poll can't race the lifecycle - the toast
+ * appears within a few ms of the click, leaving a wide margin.
  */
 const TOAST_TIMEOUT = 2000;
 test.describe('Debug Logs - Copy/Refresh feedback (#49)', () => {
@@ -22,7 +25,7 @@ test.describe('Debug Logs - Copy/Refresh feedback (#49)', () => {
 
   test('Refresh shows a "Logs refreshed" toast', async ({ page }) => {
     await page.getByTestId('debug-refresh-button').click();
-    await expect(page.getByText('Logs refreshed')).toBeVisible({ timeout: TOAST_TIMEOUT });
+    await expect(page.getByTestId('toast')).toContainText('Logs refreshed', { timeout: TOAST_TIMEOUT });
   });
 
   test('Copy shows a "Logs copied" toast when the clipboard write succeeds', async ({ page }) => {
@@ -36,7 +39,7 @@ test.describe('Debug Logs - Copy/Refresh feedback (#49)', () => {
     });
 
     await page.getByTestId('debug-copy-button').click();
-    await expect(page.getByText('Logs copied')).toBeVisible({ timeout: TOAST_TIMEOUT });
+    await expect(page.getByTestId('toast')).toContainText('Logs copied', { timeout: TOAST_TIMEOUT });
   });
 
   test('Copy surfaces a failure toast when the clipboard is unavailable', async ({ page }) => {
@@ -52,6 +55,6 @@ test.describe('Debug Logs - Copy/Refresh feedback (#49)', () => {
     });
 
     await page.getByTestId('debug-copy-button').click();
-    await expect(page.getByText('Copy failed')).toBeVisible({ timeout: TOAST_TIMEOUT });
+    await expect(page.getByTestId('toast')).toContainText('Copy failed', { timeout: TOAST_TIMEOUT });
   });
 });

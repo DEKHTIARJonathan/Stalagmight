@@ -3,5 +3,6 @@ export { Panel, ResizablePanel } from './Panel';
 export { default as ContextMenu } from './ContextMenu';
 export { Tooltip } from './Tooltip';
 export { ElidedPath } from './ElidedPath';
+export { ToastStack } from './ToastStack';
 export { EntityBlob } from './EntityBlob';
 export * from './icons';

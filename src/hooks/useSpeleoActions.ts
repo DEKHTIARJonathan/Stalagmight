@@ -101,7 +101,7 @@ export function useSpeleoActions(): SpeleoActions {
       // drop); other errors are transient - surface and let the user retry.
       if (speleoErrorAction(e) === 'ReLogin') clearSession();
       const message = humanizeSpeleoError(e, t(prefixKey));
-      showToast(message, 'speleodb-action-error');
+      showToast(message, 'speleodb-action-error', 'error');
       return message;
     },
     [clearSession, showToast, t],
@@ -114,7 +114,7 @@ export function useSpeleoActions(): SpeleoActions {
       applyStartEditing(result);
       switch (result.kind) {
         case 'editing':
-          showToast(t('speleodb.editBar.toasts.editing'), 'speleodb-editing');
+          showToast(t('speleodb.editBar.toasts.editing'), 'speleodb-editing', 'success');
           break;
         case 'fast_forwarded':
           // Backend swapped the tree; reload so the view matches. loadProject
@@ -137,6 +137,7 @@ export function useSpeleoActions(): SpeleoActions {
               email: result.email ?? t('speleodb.editBar.someone'),
             }),
             'speleodb-locked-by',
+            'warning',
           );
           break;
         case 'divergence_needed':
@@ -161,7 +162,7 @@ export function useSpeleoActions(): SpeleoActions {
       // the read-only badge off and the big-red banner on.
       await invokeIpc<null>('speleodb_force_edit');
       await refreshLinkStatus();
-      showToast(t('speleodb.forceEdit.toasts.active'), 'speleodb-force-edit');
+      showToast(t('speleodb.forceEdit.toasts.active'), 'speleodb-force-edit', 'warning');
       return true;
     } catch (e) {
       // Backend refusal (opt-in off / link lost / already lock-held): surface the
@@ -218,7 +219,7 @@ export function useSpeleoActions(): SpeleoActions {
         const result = await invokeIpc<PushResult>('speleodb_push', { message: message ?? null });
         applyPush(result);
         if (result.kind === 'pushed') {
-          showToast(t('speleodb.editBar.toasts.pushed'), 'speleodb-pushed');
+          showToast(t('speleodb.editBar.toasts.pushed'), 'speleodb-pushed', 'success');
           noteNoAnchorIfNeeded();
           await flushToDiskAfterPush();
         }
@@ -274,6 +275,7 @@ export function useSpeleoActions(): SpeleoActions {
                 ? t('speleodb.editBar.toasts.released')
                 : t('speleodb.editBar.toasts.releasedNothingToUpload'),
               'speleodb-released',
+              'success',
             );
             noteNoAnchorIfNeeded();
             await flushToDiskAfterPush();
@@ -325,7 +327,7 @@ export function useSpeleoActions(): SpeleoActions {
       // the divergence dialog doesn't close over a project the user left.
       const { success } = await loadProject(localPath);
       if (!success) return false;
-      showToast(t('speleodb.editBar.toasts.tookRemote'), 'speleodb-took-remote');
+      showToast(t('speleodb.editBar.toasts.tookRemote'), 'speleodb-took-remote', 'success');
       return true;
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.takeRemoteFailed');

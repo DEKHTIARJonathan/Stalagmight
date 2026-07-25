@@ -61,7 +61,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // #193 b8: a lock held by THIS account at open time = a second same-account
       // session; warn (keyed so repeat opens don't stack duplicate toasts).
       if (result.concurrent_session) {
-        showToast(t('speleodb.browser.concurrentSession'), 'speleodb-concurrent-session');
+        showToast(t('speleodb.browser.concurrentSession'), 'speleodb-concurrent-session', 'warning');
       }
       setLinkOnOpen({ permission });
       onBeforeLoad?.();

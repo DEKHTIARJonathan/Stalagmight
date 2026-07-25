@@ -77,7 +77,7 @@ export function SpeleoProjectAdmin() {
       try {
         setRoster(await op());
       } catch (e) {
-        showToast(humanizeSpeleoError(e, t(failKey)), 'speleodb-collaborators');
+        showToast(humanizeSpeleoError(e, t(failKey)), 'speleodb-collaborators', 'error');
       } finally {
         setBusy(false);
       }
@@ -121,9 +121,9 @@ export function SpeleoProjectAdmin() {
     try {
       await invokeIpc('speleodb_release_current_lock');
       await refreshLinkStatus();
-      showToast(t('speleodb.lock.released'), 'speleodb-lock');
+      showToast(t('speleodb.lock.released'), 'speleodb-lock', 'success');
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), 'speleodb-lock');
+      showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), 'speleodb-lock', 'error');
     } finally {
       setReleasing(false);
     }
@@ -136,10 +136,10 @@ export function SpeleoProjectAdmin() {
       // The server soft-deleted it and the backend already unlinked locally; drop
       // the FE link so the tab collapses to a plain local project, then close.
       clearLink();
-      showToast(t('speleodb.delete.deleted'), 'speleodb-delete');
+      showToast(t('speleodb.delete.deleted'), 'speleodb-delete', 'success');
       closeDialog();
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.delete.deleteFailed')), 'speleodb-delete');
+      showToast(humanizeSpeleoError(e, t('speleodb.delete.deleteFailed')), 'speleodb-delete', 'error');
       setDeleting(false);
     }
   }, [clearLink, closeDialog, showToast, t]);

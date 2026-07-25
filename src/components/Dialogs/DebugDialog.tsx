@@ -119,7 +119,7 @@ export default function DebugDialog() {
   // refresh surfaces feedback. On failure the inline error already reports it, so
   // the success toast is skipped.
   const handleRefresh = useCallback(async () => {
-    if (await fetchLogs()) showToast('Logs refreshed', 'debug-refresh');
+    if (await fetchLogs()) showToast('Logs refreshed', 'debug-refresh', 'success');
   }, [fetchLogs, showToast]);
 
   useEffect(() => {
@@ -146,12 +146,12 @@ export default function DebugDialog() {
   const handleCopy = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(filteredLogs.join('\n'));
-      showToast('Logs copied', 'debug-copy');
+      showToast('Logs copied', 'debug-copy', 'success');
     } catch {
       // Surface the failure rather than swallowing it (e.g. clipboard blocked /
       // unavailable on WebKitGTK). Distinct key so it isn't throttled by a prior
       // successful copy.
-      showToast('Copy failed - clipboard unavailable', 'debug-copy-failed');
+      showToast('Copy failed - clipboard unavailable', 'debug-copy-failed', 'error');
     }
   }, [filteredLogs, showToast]);
 

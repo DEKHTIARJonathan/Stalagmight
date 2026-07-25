@@ -996,13 +996,13 @@ function MapCanvas() {
   const toolCallbacks = useMemo(() => ({
     ...baseToolCallbacks,
     onHiddenStationClick: () => {
-      showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden');
+      showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden', 'warning');
     },
     onHiddenShotClick: () => {
-      showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden');
+      showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden', 'warning');
     },
     // No stock fallback: surface a subsystem-specific toast (renderFatalMessage).
-    onRenderFatal: (reason: string) => showToast(renderFatalMessage(reason), 'render-fatal'),
+    onRenderFatal: (reason: string) => showToast(renderFatalMessage(reason), 'render-fatal', 'error'),
   }), [baseToolCallbacks, showToast]);
 
   // Box select handlers
@@ -1404,11 +1404,11 @@ function MapCanvas() {
             ...extra,
           });
         } else {
-          showToast(result.reason ?? 'Merge not possible.', 'snap-merge-blocked');
+          showToast(result.reason ?? 'Merge not possible.', 'snap-merge-blocked', 'warning');
           moveCallbacks?.onCancel?.();
         }
       } catch (e) {
-        showToast(getErrorMessage(e), 'snap-merge-error');
+        showToast(getErrorMessage(e), 'snap-merge-error', 'error');
         moveCallbacks?.onCancel?.();
       }
     },
@@ -2424,7 +2424,7 @@ function MapCanvas() {
         // leaving the user stuck in a read-only view showing measured geometry.
         if (!ok) {
           setGeometryMode('measured');
-          showToast(t('map.geometry.computeFailed'), 'geometry-compute-failed');
+          showToast(t('map.geometry.computeFailed'), 'geometry-compute-failed', 'error');
         }
       });
     }
@@ -2776,7 +2776,7 @@ function MapCanvas() {
         // Fail closed: keep anchoredIdsLoaded=false so segment drag remains blocked.
         // This prevents moving anchored segments when the IPC fails.
         setAnchoredSectionIds(new Set());
-        showToast('Failed to load anchored segments. Move Segment is temporarily blocked.', 'anchored-ids-error');
+        showToast('Failed to load anchored segments. Move Segment is temporarily blocked.', 'anchored-ids-error', 'error');
       });
     } else {
       setAnchoredSectionIds(new Set());

@@ -1,5 +1,8 @@
 {
   "common": {
+    "toast": {
+      "dismiss": "Dismiss notification: {{message}}"
+    },
     "actions": {
       "add": "Add",
       "apply": "Apply",

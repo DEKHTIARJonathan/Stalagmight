@@ -67,6 +67,9 @@ export function useRestoreRevision() {
           ? t('speleodb.restore.doneToast', { sha: shortSha })
           : t('speleodb.restore.viewToast', { sha: shortSha }),
         'speleodb-restore',
+        // A completed restore rewrote the tree; "now viewing revision X" is just
+        // a statement of where you are.
+        restore ? 'success' : 'info',
       );
     },
     [t, showToast, setView, clearSelection, refreshProjectState, refreshLinkStatus],

@@ -109,13 +109,13 @@ describe('useSpeleoActions - flush to disk after a confirmed push/unlock', () =>
     // is best-effort and isDirty simply stays set (safe: the push already
     // persisted the same edits).
     expect(outcome).toEqual({ kind: 'released' });
-    expect(showToast).not.toHaveBeenCalledWith(expect.anything(), 'speleodb-action-error');
+    expect(showToast).not.toHaveBeenCalledWith(expect.anything(), 'speleodb-action-error', 'error');
   });
 });
 
 /**
- * #260 - a failed push/unlock keeps BOTH surfaces: the immediate toast (which
- * auto-clears after 3 s) and the durable `push_failed` banner carrying the same
+ * #260 - a failed push/unlock keeps BOTH surfaces: the immediate error toast
+ * (which auto-clears) and the durable `push_failed` banner carrying the same
  * humanized line plus the verb/message its Retry replays.
  */
 describe('useSpeleoActions - a failed push/unlock raises the persistent banner (#260)', () => {
@@ -140,7 +140,7 @@ describe('useSpeleoActions - a failed push/unlock raises the persistent banner (
       origin: 'push',
       pushMessage: 'my message',
     });
-    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-action-error');
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-action-error', 'error');
   });
 
   it('done failure raises push_failed with the done origin', async () => {
@@ -241,6 +241,7 @@ describe('useSpeleoActions - the release toast reflects whether anything was upl
     expect(showToast).toHaveBeenCalledWith(
       'Changes uploaded and lock released.',
       'speleodb-released',
+      'success',
     );
   });
 
@@ -255,7 +256,58 @@ describe('useSpeleoActions - the release toast reflects whether anything was upl
       await result.current.done();
     });
 
-    expect(showToast).toHaveBeenCalledWith('Lock released. Nothing to upload.', 'speleodb-released');
+    expect(showToast).toHaveBeenCalledWith(
+      'Lock released. Nothing to upload.',
+      'speleodb-released',
+      'success',
+    );
+  });
+});
+
+/**
+ * The toast KIND is the whole point of the accent rework: before it, a
+ * successful push and a failed one rendered identically, so a landed upload gave
+ * no perceptible confirmation. These pin the semantics at the source.
+ */
+describe('useSpeleoActions - toast kinds', () => {
+  it('a landed push asks for a success toast', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue({ kind: 'pushed' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.push('m');
+    });
+
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-pushed', 'success');
+  });
+
+  it('a released lock asks for a success toast', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done();
+    });
+
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-released', 'success');
+  });
+
+  it('a failed unlock asks for an error toast (and still raises the #260 banner)', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockRejectedValue(new Error('offline'));
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done();
+    });
+
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-action-error', 'error');
+    expect(useSpeleoStore.getState().banner).toMatchObject({ kind: 'push_failed' });
   });
 });
 

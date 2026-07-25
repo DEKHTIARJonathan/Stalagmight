@@ -97,7 +97,7 @@ export function SpeleoRevisionHistory() {
         restore: false,
       });
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.restore.failed')), 'speleodb-restore');
+      showToast(humanizeSpeleoError(e, t('speleodb.restore.failed')), 'speleodb-restore', 'error');
     } finally {
       setPendingId(null);
     }

@@ -149,13 +149,13 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
     try {
       const result = await setProjectNameForPath(singleProject.file_path, next);
       if (!result.success) {
-        showToast(result.error ?? t('globalView.metadata.rename.failed'), 'rename');
+        showToast(result.error ?? t('globalView.metadata.rename.failed'), 'rename', 'error');
       } else {
         setEditingName(false);
         await loadRecentProjects();
       }
     } catch (e) {
-      showToast(String(e), 'rename');
+      showToast(String(e), 'rename', 'error');
     } finally {
       setNameBusy(false);
     }

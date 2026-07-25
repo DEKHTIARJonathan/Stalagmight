@@ -135,6 +135,7 @@ export function SpeleoBanner() {
       showToast(
         humanizeSpeleoError(e, t('speleodb.banner.enableRenderingFailed')),
         'speleodb-enable-rendering-error',
+        'error',
       );
     } finally {
       setEnabling(false);
