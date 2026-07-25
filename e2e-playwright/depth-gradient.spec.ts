@@ -1,6 +1,16 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedProjectWithSections, type SectionSeed } from './helpers/app';
+import {
+  seedProjectWithSections,
+  getShotScreenPositions,
+  getStationScreenPositions,
+  waitForDrawnShots,
+  waitForDrawnStations,
+  readCanvasPixel,
+  type PixelRgba,
+  type SectionSeed,
+  type ShotScreenPos,
+} from './helpers/app';
 
 /**
  * E2E tests for depth gradient functionality.
@@ -82,6 +92,105 @@ async function waitForMapLoaded(page: Page): Promise<void> {
   }, { timeout: 10000 }).toBe(true);
 }
 
+// ---------------------------------------------------------------------------
+// Painted-pixel color probes (custom WebGL renderer)
+// ---------------------------------------------------------------------------
+//
+// The survey is drawn by a custom WebGL layer: every shot's / station's color is
+// resolved at build time and packed into a vertex attribute. There is no
+// `survey-stations` / `survey-shots` layer left to read a `circle-color` /
+// `line-color` paint off, and no per-feature `colorIndex` to resolve through it,
+// so the painted pixel is the color oracle.
+//
+// Depth mode packs PER-ENDPOINT shot colors and lets the GPU interpolate between
+// them along the segment (colorResolvers.ts `useDepthEndpoints`), which is exactly
+// what the deleted `survey-data-shot-gradients` sub-segment source existed to
+// produce. So "the shot's color ramps with depth" is now read as "the pixels near
+// its two ends are painted different colors, with the midpoint in between".
+
+interface MapZoomHandle {
+  getZoom: () => number;
+  setZoom: (z: number) => void;
+}
+
+/**
+ * Zoom in before probing painted pixels. The seeded survey is only a few metres
+ * across, so at the fit-to-bounds zoom the whole thing is ~9 screen px wide and
+ * the station discs cover the shot lines entirely, so a probe there cannot tell a
+ * shot's color from a station's, and two different shots can land on the same
+ * pixel. `setZoom` is a jump (no animation) and the geometry helpers project with
+ * the live map, so positions read after this call already match the new view.
+ *
+ * A fit-to-bounds queued by the seed can still land after `map.loaded()` and take
+ * the zoom back, so hold the target zoom until the drawn shots really are spread
+ * out on screen (`minSpanPx`).
+ */
+async function zoomIn(page: Page, delta = 4, minSpanPx = 40): Promise<void> {
+  const target = await page.evaluate((d) => {
+    const map = (window as unknown as { __stalagmight_map__?: MapZoomHandle }).__stalagmight_map__;
+    if (!map) return 0;
+    const z = map.getZoom() + d;
+    map.setZoom(z);
+    return z;
+  }, delta);
+  await expect.poll(async () => {
+    await page.evaluate((z) => {
+      const map = (window as unknown as { __stalagmight_map__?: MapZoomHandle }).__stalagmight_map__;
+      if (map && map.getZoom() < z - 0.01) map.setZoom(z);
+    }, target);
+    const shots = await getShotScreenPositions(page);
+    return shots.reduce((m, s) => Math.max(m, Math.hypot(s.to.x - s.from.x, s.to.y - s.from.y)), 0);
+  }, { timeout: 10000 }).toBeGreaterThan(minSpanPx);
+}
+
+/** Stable key for a shot's identity (`getShotScreenPositions` order is not). */
+function shotKey(shot: ShotScreenPos): string {
+  return `${shot.sectionId}:${shot.shotId}`;
+}
+
+/**
+ * Painted color a fraction `t` along a drawn shot (0 = from endpoint, 1 = to).
+ * Stay clear of 0 / 1: a station disc paints over the line ends.
+ */
+async function shotPixelAt(page: Page, shot: ShotScreenPos, t: number): Promise<PixelRgba> {
+  return readCanvasPixel(
+    page,
+    shot.from.x + (shot.to.x - shot.from.x) * t,
+    shot.from.y + (shot.to.y - shot.from.y) * t,
+  );
+}
+
+/** True when two painted samples differ by more than `tolerance` on any channel. */
+function differs(a: PixelRgba, b: PixelRgba, tolerance = 8): boolean {
+  return (
+    Math.abs(a[0] - b[0]) > tolerance ||
+    Math.abs(a[1] - b[1]) > tolerance ||
+    Math.abs(a[2] - b[2]) > tolerance
+  );
+}
+
+/**
+ * True when `mid` lies between `a` and `b` on every channel (within `slack`),
+ * i.e. the color really interpolates along the segment rather than stepping.
+ */
+function isBetween(mid: PixelRgba, a: PixelRgba, b: PixelRgba, slack = 6): boolean {
+  for (let c = 0; c < 3; c++) {
+    const lo = Math.min(a[c], b[c]) - slack;
+    const hi = Math.max(a[c], b[c]) + slack;
+    if (mid[c] < lo || mid[c] > hi) return false;
+  }
+  return true;
+}
+
+/** Painted fill of every drawn station, keyed `sectionId:stationIndex`. */
+async function stationFills(page: Page): Promise<Record<string, PixelRgba>> {
+  const out: Record<string, PixelRgba> = {};
+  for (const st of await getStationScreenPositions(page)) {
+    out[`${st.sectionId}:${st.stationIndex}`] = await readCanvasPixel(page, st.x, st.y);
+  }
+  return out;
+}
+
 test.describe('Depth Gradient', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
@@ -105,44 +214,15 @@ test.describe('Depth Gradient', () => {
     });
     expect(depthGradientBefore).toBe(false);
 
-    // Wait for station features to be rendered before capturing colors
-    await expect.poll(async () => {
-      const count = await page.evaluate(() => {
-        const map = (window as unknown as {
-          __stalagmight_map__?: {
-            queryRenderedFeatures: (opts: { layers: string[] }) => Array<unknown>;
-          };
-        }).__stalagmight_map__;
-        if (!map) return 0;
-        try {
-          return map.queryRenderedFeatures({ layers: ['survey-stations'] }).length;
-        } catch {
-          return 0;
-        }
-      });
-      return count;
-    }, { timeout: 5000 }).toBeGreaterThan(0);
+    // Wait for the stations to be drawn, then capture their PAINTED fill before
+    // enabling depth coloring. Zoom in first so a station's disc is wider than
+    // the shot lines crossing it (see zoomIn).
+    await zoomIn(page);
+    await waitForDrawnStations(page, 1);
+    const colorsBefore = await stationFills(page);
 
-    // Get station colors BEFORE enabling depth gradient
-    const colorsBefore = await page.evaluate(() => {
-      const map = (window as unknown as {
-        __stalagmight_map__?: {
-          queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
-            properties: { color?: string };
-          }>;
-        };
-      }).__stalagmight_map__;
-      if (!map) return [];
-      try {
-        const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-        return features.slice(0, 5).map((f) => f.properties?.color ?? 'none');
-      } catch {
-        return [];
-      }
-    });
-
-    // Ensure we have features to compare
-    expect(colorsBefore.length).toBeGreaterThan(0);
+    // Ensure we have stations to compare
+    expect(Object.keys(colorsBefore).length).toBeGreaterThan(0);
 
     // Toggle depth gradient ON
     await toggleDisplayOption(page, 'showDepthGradient');
@@ -160,109 +240,40 @@ test.describe('Depth Gradient', () => {
     // Verify the depth legend is visible (rendering indicator)
     await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
 
-    // Poll for station colors to change after enabling depth gradient
-    // Features are guaranteed to exist from the check above
+    // Poll for the painted station fills to change after enabling depth gradient.
+    // Every station moves off the flat section color onto its depth-ramp color, so
+    // require all of them to repaint (not just one).
     await expect.poll(async () => {
-      const colorsAfter = await page.evaluate(() => {
-        const map = (window as unknown as {
-          __stalagmight_map__?: {
-            queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
-              properties: { color?: string };
-            }>;
-          };
-        }).__stalagmight_map__;
-        if (!map) return [];
-        try {
-          const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-          return features.slice(0, 5).map((f) => f.properties?.color ?? 'none');
-        } catch {
-          return [];
-        }
-      });
-
-      // Keep polling if features not yet available (map still loading)
-      if (colorsAfter.length === 0) return 'waiting';
-      // Check if colors changed from before
-      const colorsChanged = !colorsBefore.every((c, i) => c === colorsAfter[i]);
-      return colorsChanged ? 'changed' : 'waiting';
+      const colorsAfter = await stationFills(page);
+      const keys = Object.keys(colorsBefore);
+      // Keep polling if the geometry is momentarily unavailable (map still loading)
+      if (keys.some((k) => colorsAfter[k] === undefined)) return 'waiting';
+      return keys.every((k) => differs(colorsBefore[k]!, colorsAfter[k]!)) ? 'changed' : 'waiting';
     }, { timeout: 3000 }).toBe('changed');
   });
 
   test('shots use endpoint depth colors for line gradients', async ({ page }) => {
-    // Sanity check: shot lines are actually visible in default (non-depth) mode.
-    await expect.poll(async () => {
-      const count = await page.evaluate(() => {
-        const map = (window as unknown as {
-          __stalagmight_map__?: {
-            queryRenderedFeatures: (opts: { layers: string[] }) => Array<unknown>;
-          };
-        }).__stalagmight_map__;
-        if (!map) return 0;
-        try {
-          return map.queryRenderedFeatures({ layers: ['survey-shots'] }).length;
-        } catch {
-          return 0;
-        }
-      });
-      return count;
-    }, { timeout: 5000 }).toBeGreaterThan(0);
+    // The old oracle for this was the `survey-data-shot-gradients` vector-tile
+    // source: one feature per gradient sub-segment, each with its own colorIndex,
+    // empty outside depth mode. That source is gone. Depth mode now packs the
+    // shot's from/to endpoint colors into its vertices and the fragment shader
+    // interpolates between them, so the observable is the PAINTED PIXEL at points
+    // along the shot: flat before, ramping after.
+    await zoomIn(page);
+    const shots = await waitForDrawnShots(page, 3);
 
-    // Wait for shot source features before reading endpoint color metadata.
-    await expect.poll(async () => {
-      const count = await page.evaluate(() => {
-        const map = (window as unknown as {
-          __stalagmight_map__?: {
-            querySourceFeatures: (sourceId: string) => Array<unknown>;
-          };
-        }).__stalagmight_map__;
-        if (!map) return 0;
-        try {
-          return map.querySourceFeatures('survey-data-shots').length;
-        } catch {
-          return 0;
-        }
-      });
-      return count;
-    }, { timeout: 5000 }).toBeGreaterThan(0);
-
-    const baseline = await page.evaluate(() => {
-      const map = (window as unknown as {
-        __stalagmight_map__?: {
-          getStyle: () => { sources?: Record<string, unknown> };
-          querySourceFeatures: (sourceId: string) => Array<{
-            properties?: {
-              sectionId?: number;
-              shotId?: number;
-              color?: string;
-            };
-          }>;
-        };
-      }).__stalagmight_map__;
-      if (!map) return null;
-
-      const shots = map.querySourceFeatures('survey-data-shots');
-      const gradientSegments = map.querySourceFeatures('survey-data-shot-gradients');
-      // In flat (non-depth) mode every shot carries a single solid
-      // `color` property and the gradient overlay layer is empty.
-      // Per-endpoint colors (fromColor/toColor on individual shots)
-      // were retired when the shot-features payload was slimmed
-      // down — the gradient layer now emits per-segment features
-      // with their own colors, exercised by the
-      // hasPerShotGradientSegments check further down.
-      const flatShotFound = shots.some((feature) => {
-        const color = feature.properties?.color;
-        return typeof color === 'string' && color.length > 0;
-      });
-
-      return {
-        flatShotFound,
-        gradientSegmentCount: gradientSegments.length,
-      };
-    });
-
-    expect(baseline).not.toBeNull();
-    expect(baseline?.flatShotFound).toBe(true);
-    expect(baseline?.gradientSegmentCount).toBe(0);
+    // Sanity check + baseline: in default (non-depth) mode every shot is one solid
+    // color for its whole length. Sample away from the endpoints, because a station disc
+    // paints over the line ends.
+    const flatMid: Record<string, PixelRgba> = {};
+    for (const shot of shots) {
+      const near = await shotPixelAt(page, shot, 0.3);
+      const mid = await shotPixelAt(page, shot, 0.5);
+      const far = await shotPixelAt(page, shot, 0.7);
+      expect(differs(near, far), `shot ${shotKey(shot)} must be flat before depth mode`).toBe(false);
+      expect(differs(near, mid), `shot ${shotKey(shot)} must be flat before depth mode`).toBe(false);
+      flatMid[shotKey(shot)] = mid;
+    }
 
     const depthGradientBefore = await page.evaluate(() => {
       const stores = (window as unknown as {
@@ -296,48 +307,49 @@ test.describe('Depth Gradient', () => {
       return enabled;
     }, { timeout: 2000 }).toBe(true);
 
+    // Wait for the depth build to land on the canvas: every shot repaints away
+    // from its flat section color.
     await expect.poll(async () => {
-      const hasPerShotGradientSegments = await page.evaluate(() => {
-        const map = (window as unknown as {
-          __stalagmight_map__?: {
-            querySourceFeatures: (sourceId: string) => Array<{
-              properties?: {
-                sectionId?: number;
-                shotId?: number;
-                color?: string;
-              };
-            }>;
-          };
-        }).__stalagmight_map__;
-        if (!map) return false;
-        try {
-          const segments = map.querySourceFeatures('survey-data-shot-gradients');
-          if (segments.length === 0) return false;
+      const now = await getShotScreenPositions(page);
+      if (now.length !== shots.length) return false;
+      for (const shot of now) {
+        const mid = await shotPixelAt(page, shot, 0.5);
+        if (!differs(mid, flatMid[shotKey(shot)]!)) return false;
+      }
+      return true;
+    }, { timeout: 4000 }).toBe(true);
 
-          const colorsByShot = new Map<string, Set<string>>();
-          for (const segment of segments) {
-            const sectionId = segment.properties?.sectionId;
-            const shotId = segment.properties?.shotId;
-            const color = segment.properties?.color;
-            if (typeof sectionId !== 'number' || typeof shotId !== 'number' || typeof color !== 'string') {
-              continue;
-            }
-            const key = `${sectionId}:${shotId}`;
-            const colors = colorsByShot.get(key) ?? new Set<string>();
-            colors.add(color);
-            colorsByShot.set(key, colors);
-          }
-
-          for (const colors of colorsByShot.values()) {
-            if (colors.size > 1) return true;
-          }
-          return false;
-        } catch {
-          return false;
-        }
+    // Every seeded shot has a different depth at each end, so the ramp must be
+    // visible ALONG the shot: the two ends are painted different colors and the
+    // midpoint sits between them (this is what the deleted per-segment gradient
+    // source used to produce).
+    const samples: Array<{ shot: string; slot: string; mid: string }> = [];
+    for (const shot of await getShotScreenPositions(page)) {
+      const near = await shotPixelAt(page, shot, 0.3);
+      const mid = await shotPixelAt(page, shot, 0.5);
+      const far = await shotPixelAt(page, shot, 0.7);
+      expect(differs(near, far), `shot ${shotKey(shot)} endpoints must differ in depth mode`).toBe(true);
+      expect(isBetween(mid, near, far), `shot ${shotKey(shot)} midpoint must interpolate`).toBe(true);
+      samples.push({
+        shot: shotKey(shot),
+        slot: `${Math.round(shot.from.x)},${Math.round(shot.from.y)}->${Math.round(shot.to.x)},${Math.round(shot.to.y)}`,
+        mid: mid.slice(0, 3).join(','),
       });
-      return hasPerShotGradientSegments;
-    }, { timeout: 3000 }).toBe(true);
+    }
+
+    // ...and shots at different depths are painted different colors from each other.
+    // Only shots that occupy DISTINCT screen geometry are comparable: the e2e mock
+    // lays every section's stations out on the same synthetic line (`x: i * 10,
+    // y: 0` in mocks/tauri-ipc.ts, azimuth/length ignored), so a second section's
+    // first leg is drawn exactly on top of the first section's and a pixel there
+    // cannot be attributed to either. Deduping by screen slot keeps the real
+    // comparison (the same section's consecutive shots, which sit at different
+    // depths) while dropping the pairs the mock made unobservable.
+    const bySlot = new Map<string, { shot: string; mid: string }>();
+    for (const s of samples) if (!bySlot.has(s.slot)) bySlot.set(s.slot, s);
+    const diag = samples.map((s) => `${s.shot}@${s.slot}=${s.mid}`).join(' ');
+    expect(bySlot.size, diag).toBeGreaterThan(1);
+    expect(new Set([...bySlot.values()].map((s) => s.mid)).size, diag).toBe(bySlot.size);
   });
 
   test('toggle shows depth legend when enabled', async ({ page }) => {

@@ -1,4 +1,4 @@
-import { test, expect, type Page } from './fixtures/coverage';
+import { test, expect, type Page, type Locator } from './fixtures/coverage';
 import { setupMockedPage, createProject, seedProjectWithSections, type SectionSeed } from './helpers/app';
 
 /** Read every section id in project order. */
@@ -50,6 +50,26 @@ async function setSelection(page: Page, selection: unknown): Promise<void> {
     }).__E2E_TEST__;
     stores?.uiStore.getState().setSelection(sel);
   }, selection);
+}
+
+/**
+ * The list is now VIRTUALIZED (@tanstack/react-virtual, a #mem optimization for
+ * 14k-section projects). Its `scrollToIndex` reveal seeds each off-screen row at
+ * an ESTIMATED height, then re-measures the real height over the next few frames
+ * and nudges scrollTop to compensate. Wait until scrollTop stops moving so a
+ * following un-hover restore isn't overwritten by a late re-measure scroll, and
+ * so a captured baseline reflects the settled (measured) layout.
+ */
+async function waitForScrollStable(page: Page, list: Locator, timeout = 3000): Promise<number> {
+  let prev = await list.evaluate((el) => el.scrollTop);
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    await page.waitForTimeout(80);
+    const cur = await list.evaluate((el) => el.scrollTop);
+    if (cur === prev) return cur;
+    prev = cur;
+  }
+  return prev;
 }
 
 /**
@@ -118,8 +138,12 @@ test.describe('Sections panel scrolling', () => {
     // An external hover on the off-screen last section scrolls it into view.
     await setExternalSectionHover(page, lastId);
     await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    // Let the virtualizer's re-measure retries finish before un-hovering, so the
+    // restore isn't clobbered by a late scrollToIndex nudge.
+    await waitForScrollStable(page, list);
 
-    // Clearing the hover (nothing hovered anywhere) restores the pre-hover scroll.
+    // Clearing the hover (nothing hovered anywhere) restores the pre-hover scroll
+    // (the top — captured before the auto-scroll moved the list).
     await setExternalSectionHover(page, null);
     await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBe(0);
   });
@@ -139,12 +163,12 @@ test.describe('Sections panel scrolling', () => {
     const firstId = ids[0]!;
     const lastId = ids[ids.length - 1]!;
 
-    // Manually scroll to the bottom, then back up a little so both directions of
-    // auto-scroll (down to last, up to first) move away from this baseline.
-    const baseline = await list.evaluate((el) => {
+    // Manually scroll to the middle, then let the virtualizer settle so the
+    // baseline reflects measured (not estimated) row heights.
+    await list.evaluate((el) => {
       el.scrollTop = Math.round(el.scrollHeight / 2);
-      return el.scrollTop;
     });
+    const baseline = await waitForScrollStable(page, list);
     expect(baseline).toBeGreaterThan(0);
 
     // Hover the last (below) section, then the first (above) section.
@@ -152,10 +176,19 @@ test.describe('Sections panel scrolling', () => {
     await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(baseline);
     await setExternalSectionHover(page, firstId);
     await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBeLessThan(baseline);
+    // Settle the "hover first" scroll before restoring.
+    await waitForScrollStable(page, list);
 
     // Un-hover restores the original manual position, not either hovered extreme.
+    // Allow a small virtualization drift: the restore lands on the pre-hover
+    // scrollTop, but re-measuring rows around that offset can nudge it a few px —
+    // far smaller than the hundreds-of-px gap to either hovered extreme.
+    const RESTORE_TOLERANCE_PX = 40;
     await setExternalSectionHover(page, null);
-    await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBe(baseline);
+    await expect
+      .poll(async () => list.evaluate((el) => el.scrollTop))
+      .toBeGreaterThan(baseline - RESTORE_TOLERANCE_PX);
+    expect(await list.evaluate((el) => el.scrollTop)).toBeLessThan(baseline + RESTORE_TOLERANCE_PX);
   });
 
   test('selecting a shot scrolls to and selects the owning section row', async ({ page }) => {
@@ -177,12 +210,15 @@ test.describe('Sections panel scrolling', () => {
     const lastId = ids[ids.length - 1]!;
     const lastRow = page.locator(`[data-testid="section-row-${lastId}"]`);
 
-    // Park at top; the owning row starts unselected.
+    // Park at top; the owning row starts unselected. It is off-screen, so the
+    // virtualized list has it UNMOUNTED — assert it is not rendered as selected
+    // (true whether or not virtualization has mounted it), instead of reading an
+    // attribute off a row that may not be in the DOM yet.
     await list.evaluate((el) => {
       el.scrollTop = 0;
     });
     expect(await list.evaluate((el) => el.scrollTop)).toBe(0);
-    await expect(lastRow).toHaveAttribute('aria-selected', 'false');
+    await expect(page.locator(`[data-testid="section-row-${lastId}"][aria-selected="true"]`)).toHaveCount(0);
 
     // Select a shot in the last section, as the map / data table / details would.
     const shotId = await getFirstShotId(page, lastId);
@@ -212,10 +248,13 @@ test.describe('Sections panel scrolling', () => {
     const lastId = ids[ids.length - 1]!;
     const lastRow = page.locator(`[data-testid="section-row-${lastId}"]`);
 
+    // The owning row is off-screen (virtualized out) and un-selected. Assert it
+    // is not rendered as selected, rather than reading an attribute off a row
+    // that isn't mounted yet.
     await list.evaluate((el) => {
       el.scrollTop = 0;
     });
-    await expect(lastRow).toHaveAttribute('aria-selected', 'false');
+    await expect(page.locator(`[data-testid="section-row-${lastId}"][aria-selected="true"]`)).toHaveCount(0);
 
     // Select the section's first station (station_index 0), as the map would.
     await setSelection(page, {

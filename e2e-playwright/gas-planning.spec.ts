@@ -1,6 +1,15 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedProjectWithSections, type SectionSeed } from './helpers/app';
+import {
+  seedProjectWithSections,
+  waitForDrawnStations,
+  getStationScreenPositions,
+  readCanvasPixel,
+  readCanvasPixelBlock,
+  type PixelRgba,
+  type SectionSeed,
+} from './helpers/app';
+import { GAS_NEAR } from '../src/utils/gasReach';
 
 /**
  * E2E for the gas reachable-frontier overlay, now the Plan workspace mode (#38,
@@ -8,11 +17,17 @@ import { seedProjectWithSections, type SectionSeed } from './helpers/app';
  * (not the old toolbar toggle); it forces the read-only closure map, swaps the right
  * Dock for the gas setup sidebar, and the bottom Dock for the tabbed plan tables.
  *
- * Like the sibling distance-gradient overlay, gas colors via
- * `setFeatureState('gasReach')` + a swapped `circle-color`/`line-color` paint — so we
- * assert on the paint expression + feature-state + legend, and that the overlay
- * survives a feature rebuild (the MapLibre setData-wipe risk). The IPC field is mocked
- * (`compute_gas_reach_field`).
+ * The survey is drawn by the custom WebGL renderer, so the old overlay oracle is
+ * gone: there is no `survey-stations` layer whose `circle-color` paint could be
+ * checked for a `gasReach` feature-state interpolate, and no
+ * `survey-data-stations` vector-tile source to read that feature-state from. The
+ * renderer resolves the SAME ramp color per feature at build time
+ * (surveyLayer/customRender/overlayColor.ts, byte-identical to the old
+ * data-driven paint), so the oracle here is the PAINTED STATION PIXEL: "a station
+ * carries a numeric gasReach >= 0" becomes "a station is painted a reachable
+ * gold->purple ramp color, while the over-budget ones are painted grey".
+ * `survey-gas-route` is still a stock layer, so its assertions are unchanged.
+ * The IPC field is mocked (`compute_gas_reach_field`).
  */
 
 async function createProject(page: Page, name: string): Promise<void> {
@@ -42,6 +57,22 @@ const sectionSeeds: SectionSeed[] = [
     })),
   },
 ];
+
+/**
+ * Station indices the pixel probes use, from the mock's synthetic field: it puts
+ * station `i` at `x = i * 10` and charges `|x| * 20` litres against a fixed
+ * 1500 L budget, so stations 0..7 are reachable (7 -> 1400 L, the last one inside
+ * the budget) and 8..10 are over budget and render grey.
+ */
+const LAST_REACHABLE = 7;
+const OVER_BUDGET = 10;
+
+/**
+ * Zoom bump for the pixel probes. +3 spreads the 11 stations to ~37 px apart (so a
+ * 9 px footprint block is one station's) while keeping the whole 100 m survey on
+ * the canvas; +4 pushes the far stations off-screen.
+ */
+const PROBE_ZOOM_DELTA = 3;
 
 async function waitForMapLoaded(page: Page): Promise<void> {
   await expect
@@ -101,40 +132,91 @@ async function activeTool(page: Page): Promise<string> {
   );
 }
 
-/** circle-color paint of the stations layer, JSON-stringified. */
-async function stationColorPaint(page: Page): Promise<string> {
+/** `#rrggbb` -> the `r,g,b,a` key the renderer packs it to (opaque). */
+function colorKey(hex: string): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `${(n >> 16) & 0xff},${(n >> 8) & 0xff},${n & 0xff},255`;
+}
+
+/** The near (gold) end of the reachable ramp: a station at gas cost 0 is painted
+ *  exactly this (MapLibre's `interpolate` short-circuits the 0 stop, and
+ *  `packRampColor` reproduces that). */
+const GAS_NEAR_KEY = colorKey(GAS_NEAR);
+
+/** The theme's gray line, which both the stock ramp and the custom resolver use
+ *  for "unreachable on this gas plan". Read from the live theme so a theme change
+ *  can't silently turn this into a stale literal. */
+async function greyKey(page: Page): Promise<string> {
+  return colorKey(
+    await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue('--cc-gray-line').trim(),
+    ),
+  );
+}
+
+/** Absolute map zoom, so probes can be pinned to one calibrated view. */
+async function mapZoom(page: Page): Promise<number> {
   return page.evaluate(() => {
-    const map = (window as unknown as {
-      __stalagmight_map__?: { getPaintProperty: (l: string, p: string) => unknown };
-    }).__stalagmight_map__;
-    if (!map) return '';
-    try {
-      return JSON.stringify(map.getPaintProperty('survey-stations', 'circle-color'));
-    } catch {
-      return '';
-    }
+    const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number } })
+      .__stalagmight_map__;
+    return map?.getZoom() ?? 0;
   });
 }
 
-/** Whether ANY rendered station carries a numeric `gasReach` feature-state. */
-async function anyStationHasGasReach(page: Page): Promise<boolean> {
-  return page.evaluate(() => {
-    const map = (window as unknown as {
-      __stalagmight_map__?: {
-        queryRenderedFeatures: (o: { layers: string[] }) => Array<{ id?: number }>;
-        getFeatureState: (f: { source: string; id: number }) => { gasReach?: number };
-      };
-    }).__stalagmight_map__;
-    if (!map) return false;
-    return map.queryRenderedFeatures({ layers: ['survey-stations'] }).some((f) => {
-      if (f.id == null) return false;
-      const state = map.getFeatureState({ source: 'survey-data-stations', id: f.id });
-      // >= 0 (not just "is a number"): the UNREACHABLE_GAS sentinel is -1, which is
-      // also a number, so this proves the reachable gold→purple ramp is populated —
-      // not that every station went grey/unreachable.
-      return typeof state?.gasReach === 'number' && state.gasReach >= 0;
-    });
-  });
+/**
+ * Jump the map to an absolute zoom (no animation). Probing painted pixels needs a
+ * zoomed-in view: at the fit-to-bounds zoom the seeded survey is only a few screen
+ * px wide and every station disc overlaps its neighbours. Absolute (not `+= delta`)
+ * so re-pinning after a mode switch or a rebuild can never compound and push the
+ * far stations off the canvas.
+ */
+async function setMapZoom(page: Page, zoom: number): Promise<void> {
+  await page.evaluate((z) => {
+    const map = (window as unknown as { __stalagmight_map__?: { setZoom: (z: number) => void } })
+      .__stalagmight_map__;
+    map?.setZoom(z);
+  }, zoom);
+}
+
+async function stationAt(page: Page, stationIndex: number): Promise<{ x: number; y: number }> {
+  const stations = await getStationScreenPositions(page);
+  const station = stations.find((s) => s.stationIndex === stationIndex);
+  if (!station) throw new Error(`no drawn station ${stationIndex}`);
+  return station;
+}
+
+/**
+ * The 9x9 CSS-px block painted around one station, as a raw RGBA array.
+ *
+ * A block rather than the single center pixel because Plan draws the gas ROUTE
+ * line over the survey, and it covers the center of every station it passes
+ * through; the station's own overlay fill has to be read from the rest of its
+ * disc. Station spacing at the calibrated zoom is ~37 px, so a 9 px block never
+ * reaches a neighbour.
+ */
+async function stationBlock(page: Page, stationIndex: number): Promise<number[]> {
+  const { x, y } = await stationAt(page, stationIndex);
+  return readCanvasPixelBlock(page, x, y, 9);
+}
+
+/** The distinct `r,g,b,a` colors painted inside a station's footprint. */
+async function stationColors(page: Page, stationIndex: number): Promise<Set<string>> {
+  const buf = await stationBlock(page, stationIndex);
+  const out = new Set<string>();
+  for (let i = 0; i < buf.length; i += 4) {
+    out.add(`${buf[i]},${buf[i + 1]},${buf[i + 2]},${buf[i + 3]}`);
+  }
+  return out;
+}
+
+async function stationPaints(page: Page, stationIndex: number, color: string): Promise<boolean> {
+  return (await stationColors(page, stationIndex)).has(color);
+}
+
+/** The station's own fill in Survey mode, where nothing is drawn over it. */
+async function stationCenter(page: Page, stationIndex: number): Promise<PixelRgba> {
+  const { x, y } = await stationAt(page, stationIndex);
+  return readCanvasPixel(page, x, y);
 }
 
 async function enterMode(page: Page, mode: 'survey' | 'plan' | 'export'): Promise<void> {
@@ -194,31 +276,23 @@ test.describe('Gas planning', () => {
     await waitForMapLoaded(page);
   });
 
-  test('Plan mode shows the gas overlay (panel + paint + legend); back to Survey resets @smoke', async ({
+  test('Plan mode shows the gas overlay (panel + painted ramp + legend); back to Survey resets @smoke', async ({
     page,
   }) => {
     expect(await appMode(page)).toBe('survey');
     await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);
 
-    // Wait for stations to render, then capture the baseline paint.
-    await expect
-      .poll(
-        async () =>
-          page.evaluate(() => {
-            const map = (window as unknown as {
-              __stalagmight_map__?: { queryRenderedFeatures: (o: { layers: string[] }) => unknown[] };
-            }).__stalagmight_map__;
-            try {
-              return map?.queryRenderedFeatures({ layers: ['survey-stations'] }).length ?? 0;
-            } catch {
-              return 0;
-            }
-          }),
-        { timeout: 5000 },
-      )
-      .toBeGreaterThan(0);
-    const paintBefore = await stationColorPaint(page);
-    expect(paintBefore).not.toContain('gasReach');
+    // Calibrate one absolute zoom for every probe in this test, and capture the
+    // baseline: in Survey the stations are painted their section color and no part
+    // of the gas ramp is on screen.
+    await waitForDrawnStations(page, 1);
+    const zoom = (await mapZoom(page)) + PROBE_ZOOM_DELTA;
+    await setMapZoom(page, zoom);
+    const grey = await greyKey(page);
+    const sectionKey = (await stationCenter(page, LAST_REACHABLE)).join(',');
+    expect(await stationPaints(page, LAST_REACHABLE, sectionKey)).toBe(true);
+    expect(await stationPaints(page, 0, GAS_NEAR_KEY)).toBe(false);
+    expect(await stationPaints(page, OVER_BUDGET, grey)).toBe(false);
 
     await enterMode(page, 'plan');
     expect(await appMode(page)).toBe('plan');
@@ -230,18 +304,37 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-legend-origin"]')).toContainText('entrance');
     // The symbol key explains the markers (turn/end point always present in Plan).
     await expect(page.locator('[data-testid="gas-legend-key"]')).toContainText('Turn / end point');
-    // Paint swapped to the gas feature-state interpolate.
-    await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).toContain('gasReach');
-    // A station carries a numeric `gasReach` feature-state.
-    await expect.poll(() => anyStationHasGasReach(page), { timeout: 3000 }).toBe(true);
 
-    // Back to Survey → panel + legend gone, gas paint restored (the overlay is
+    // The reachable ramp is populated, not an all-grey field: the origin station sits
+    // at gas cost 0, the exact gold near end of the ramp. Polled (the field is
+    // fetched over IPC, and entering Plan can re-fit the view) with the zoom
+    // re-pinned first so the probe reads the calibrated view.
+    await setMapZoom(page, zoom);
+    await expect.poll(() => stationPaints(page, 0, GAS_NEAR_KEY), { timeout: 3000 }).toBe(true);
+
+    // The last station inside the budget is painted an INTERIOR ramp color: not the
+    // near end, not the unreachable grey, and no longer its section color.
+    const lastReachable = await stationColors(page, LAST_REACHABLE);
+    expect(lastReachable.has(sectionKey)).toBe(false);
+    expect(lastReachable.has(GAS_NEAR_KEY)).toBe(false);
+    expect(lastReachable.has(grey)).toBe(false);
+    // ...and the over-budget station goes grey (the conservative direction).
+    const overBudget = await stationColors(page, OVER_BUDGET);
+    expect(overBudget.has(grey)).toBe(true);
+    expect(overBudget.has(sectionKey)).toBe(false);
+
+    // Back to Survey → panel + legend gone, section colors restored (the overlay is
     // appMode-gated; the gas store itself persists across mode switches, #244).
     await enterMode(page, 'survey');
     expect(await appMode(page)).toBe('survey');
     await expect(page.locator('[data-testid="gas-panel"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="gas-legend"]')).not.toBeVisible();
-    await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).not.toContain('gasReach');
+    await setMapZoom(page, zoom);
+    await expect
+      .poll(() => stationPaints(page, LAST_REACHABLE, sectionKey), { timeout: 3000 })
+      .toBe(true);
+    expect(await stationPaints(page, 0, GAS_NEAR_KEY)).toBe(false);
+    expect(await stationPaints(page, OVER_BUDGET, grey)).toBe(false);
   });
 
   test('Plan gates the staged reserve presets to a stage-carrying rig; readout reads as gas @smoke', async ({
@@ -928,21 +1021,34 @@ test.describe('Gas planning', () => {
     await expect(readout).not.toHaveText('Entrance');
   });
 
-  test('gas feature-state survives a feature rebuild, and a turn marker renders', async ({
-    page,
-  }) => {
+  test('the gas ramp survives a feature rebuild, and a turn marker renders', async ({ page }) => {
+    await waitForDrawnStations(page, 1);
+    const zoom = (await mapZoom(page)) + PROBE_ZOOM_DELTA;
+    await setMapZoom(page, zoom);
+    const grey = await greyKey(page);
+    const sectionKey = (await stationCenter(page, LAST_REACHABLE)).join(',');
+
     await enterMode(page, 'plan');
-    await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).toContain('gasReach');
-    await expect.poll(() => anyStationHasGasReach(page), { timeout: 3000 }).toBe(true);
+    await setMapZoom(page, zoom);
+    await expect.poll(() => stationPaints(page, 0, GAS_NEAR_KEY), { timeout: 3000 }).toBe(true);
+    // The last station inside the budget is painted an interior ramp color, the
+    // over-budget one grey. Snapshot the reachable one's whole footprint so "still
+    // ramp-painted after the rebuild" can be asserted byte-for-byte.
+    const reachableBefore = await stationBlock(page, LAST_REACHABLE);
+    const reachableColors = await stationColors(page, LAST_REACHABLE);
+    expect(reachableColors.has(sectionKey)).toBe(false);
+    expect(reachableColors.has(GAS_NEAR_KEY)).toBe(false);
+    expect(reachableColors.has(grey)).toBe(false);
+    expect(await stationPaints(page, OVER_BUDGET, grey)).toBe(true);
     // The mock's fixed budget leaves the far stations unreachable, so the turn
     // frontier is non-empty → at least one turn marker renders.
     await expect
       .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
       .toBeGreaterThan(0);
 
-    // A survey edit bumps the project: the layer rebuilds features (setData wipes
-    // feature-state) and the field refetches. The overlay must re-apply its
-    // `gasReach` feature-state afterward — the key MapLibre correctness risk.
+    // A survey edit rebuilds every feature (the custom renderer rebuilds its vertex
+    // buffers from scratch; the stock path had setData wipe the feature-state). The
+    // overlay must re-apply its ramp afterward, the key correctness risk.
     await seedProjectWithSections(page, [
       {
         name: 'Gas B',
@@ -950,9 +1056,19 @@ test.describe('Gas planning', () => {
         shots: [{ azimuth_in: 0, azimuth_out: 180, length: 5, depth_in: -3, depth_out: -9 }],
       },
     ]);
+    // The rebuild can re-fit the view, so re-pin the calibrated zoom.
+    await setMapZoom(page, zoom);
+    await waitForDrawnStations(page, 1);
 
-    await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).toContain('gasReach');
-    await expect.poll(() => anyStationHasGasReach(page), { timeout: 3000 }).toBe(true);
+    // The rebuilt stations are painted exactly what they were: the ramp re-applied.
+    // (Probed on the first section's far stations, which the new section does not
+    // overlap: the mock lays every section out along the same axis and never bumps
+    // `modified_at` on create_section, the field's refetch key, so the new section's
+    // stations paint grey where they land on top of the first two of this one.)
+    await expect.poll(() => stationBlock(page, LAST_REACHABLE), { timeout: 3000 }).toEqual(reachableBefore);
+    const overBudget = await stationColors(page, OVER_BUDGET);
+    expect(overBudget.has(grey)).toBe(true);
+    expect(overBudget.has(sectionKey)).toBe(false);
     await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible();
   });
 

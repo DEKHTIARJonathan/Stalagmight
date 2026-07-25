@@ -6,6 +6,35 @@ use crate::core::AppState;
 use crate::export::ExportImageOptions;
 use crate::models::Project;
 
+/// True when `target` resolves to the same file on disk as the open project's
+/// `.stalx` at `existing`. Image export writes raw bytes (`std::fs::write` /
+/// `pixmap.save_png`), so exporting over the live project database would corrupt
+/// it. `existing` always exists (it is the open DB); `target` may not exist yet
+/// (a fresh export destination), so when it can't be canonicalized directly,
+/// compare its canonicalized parent directory + file name against the
+/// canonicalized project path. Errs toward catching the exact open-DB path
+/// rather than rejecting unrelated destinations.
+fn is_open_project_file(target: &Path, existing: &Path) -> bool {
+    let Ok(existing_canon) = std::fs::canonicalize(existing) else {
+        return false;
+    };
+    // Fast path: `target` exists and canonicalizes to the same file.
+    if std::fs::canonicalize(target).is_ok_and(|t| t == existing_canon) {
+        return true;
+    }
+    // `target` may not exist yet: canonicalize its parent (which does) and
+    // rejoin the file name.
+    let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else {
+        return false;
+    };
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    std::fs::canonicalize(parent).is_ok_and(|p| p.join(name) == existing_canon)
+}
+
 /// Generic helper that handles the shared export logic for all text-based formats.
 fn export_format_impl(
     state: &AppState,
@@ -22,6 +51,20 @@ fn export_format_impl(
         );
         "No project open".to_string()
     })?;
+
+    // Never clobber the open project `.stalx` (same guard as the image export):
+    // a text export named to the open DB would overwrite it with CSV/JSON/TML.
+    if let Some(open_path) = project.file_path.as_deref() {
+        if is_open_project_file(&path, open_path) {
+            tracing::warn!(
+                path = ?path,
+                open_project = ?open_path,
+                format = format,
+                "Refused to export over the open project file"
+            );
+            return Err("Cannot export over the open project file".to_string());
+        }
+    }
 
     tracing::info!(
         path = ?path,
@@ -104,6 +147,21 @@ pub async fn export_image(
         );
         "No project open".to_string()
     })?;
+
+    // Never let an image export clobber the open project's own `.stalx`: the
+    // raw file write in `export/image.rs` would overwrite the live database.
+    if let Some(open_path) = project.file_path.as_deref() {
+        if is_open_project_file(&path, open_path) {
+            tracing::warn!(
+                path = ?path,
+                open_project = ?open_path,
+                purpose = "protect the open project database",
+                "Refusing to export an image over the open project file"
+            );
+            return Err("Cannot export over the open project file".to_string());
+        }
+    }
+
     let format = options.format;
     let log_path = path.clone();
 
@@ -197,6 +255,13 @@ pub(crate) fn export_image_impl(
         "No project open".to_string()
     })?;
 
+    // Mirror the live command's guard: never clobber the open project `.stalx`.
+    if let Some(open_path) = project.file_path.as_deref() {
+        if is_open_project_file(&path, open_path) {
+            return Err("Cannot export over the open project file".to_string());
+        }
+    }
+
     tracing::info!(
         path = ?path,
         purpose = "export map image for sharing",
@@ -256,4 +321,33 @@ pub async fn preview_svg_export(
     })
     .await
     .map_err(|e| format!("Preview task panicked: {e}"))?
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn is_open_project_file_matches_same_path_and_rejects_others() {
+        let dir = TempDir::new().unwrap();
+        let project = dir.path().join("cave.stalx");
+        std::fs::write(&project, b"db").unwrap();
+
+        // The exact open-project path (both exist) is caught.
+        assert!(is_open_project_file(&project, &project));
+
+        // A different, not-yet-existing export target in the same dir is allowed.
+        let other = dir.path().join("export.svg");
+        assert!(!is_open_project_file(&other, &project));
+
+        // A not-yet-existing target that still resolves to the project file
+        // (parent canonicalizes, file name matches) is caught via the fallback.
+        std::fs::remove_file(&project).unwrap();
+        let recreated = dir.path().join("cave.stalx");
+        std::fs::write(&recreated, b"db").unwrap();
+        let absent_same = dir.path().join("cave.stalx");
+        assert!(is_open_project_file(&absent_same, &recreated));
+    }
 }

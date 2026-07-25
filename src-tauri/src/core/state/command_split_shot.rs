@@ -1,6 +1,6 @@
 use super::AppState;
 use crate::core::{Command, CommandResult};
-use crate::models::{Project, SectionId, ShotId};
+use crate::models::{SectionId, ShotId};
 
 impl AppState {
     /// Execute an insert-station-mid-shot operation (issue #59) as a single
@@ -51,31 +51,12 @@ impl AppState {
                 return CommandResult::failure("No project open".to_string());
             };
 
-            let Some(section) = project.get_section(section_id) else {
-                return CommandResult::failure(format!("Section {section_id} not found"));
-            };
-            let Some(shot) = section.get_shot(shot_id) else {
-                return CommandResult::failure(format!(
-                    "Shot {shot_id} not found in section {section_id}"
-                ));
-            };
-
-            // Descriptive placeholder for the undo entry (see push_snapshot_undo
-            // below) -- the real mutation runs through split_shot_at_distance,
-            // whose ProjectSnapshotPair is authoritative; these two Command
-            // variants mirror its actual effects (insert the head shot, shrink
-            // the tail) for a human-readable undo label. Computed via the same
-            // pure `Project::compute_split` the mutation itself calls, so the
-            // label and its error messages can never drift from the real split.
-            let (head_data, tail_updates) = match Project::compute_split(shot, distance) {
-                Ok(v) => v,
-                Err(e) => return CommandResult::failure(e),
-            };
-
             // Frozen-geometry guard (mirrors update_shot/delete_shot): refuse to
             // split a shot that is part of an adjusted survey network -- a split
             // changes both children's geometry, which would silently break the
-            // LSQ solution's frozen geometry.
+            // LSQ solution's frozen geometry. Checked before the split mutates.
+            // (`is_shot_frozen_by_id` returns false for a missing section/shot, so
+            // the not-found error still surfaces from the split below.)
             if project.is_shot_frozen_by_id(section_id, shot_id) {
                 return CommandResult::failure(
                     "Cannot edit geometry of a frozen shot. This shot is part of an adjusted survey network."
@@ -83,11 +64,17 @@ impl AppState {
                 );
             }
 
-            let new_shot_id = match project.split_shot_at_distance(section_id, shot_id, distance) {
-                Ok(id) => id,
+            // Perform the split ONCE. `split_shot_at_distance` validates the
+            // distance (identical error messages), mutates in place, and returns
+            // the new head shot's data plus the tail's updates -- the exact pieces
+            // the undo-label Batch below needs, so we never recompute the split
+            // just to describe it. The Command variants are a descriptive
+            // placeholder for the undo entry (see push_snapshot_undo below); the
+            // authoritative mutation is the ProjectSnapshotPair.
+            match project.split_shot_at_distance(section_id, shot_id, distance) {
+                Ok(v) => v,
                 Err(e) => return CommandResult::failure(e),
-            };
-            (new_shot_id, head_data, tail_updates)
+            }
         };
 
         // Custom path bypasses execute()'s reconcile; re-derive offsets here

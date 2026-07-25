@@ -14,6 +14,15 @@
  * site must call BOTH store hooks unconditionally, on separate lines, and
  * only OR the resulting plain booleans - so this hook is the single place
  * that does it correctly (#275).
+ *
+ * Backstop asymmetry: the SpeleoDB term (`selectSpeleoReadOnly`) has a
+ * fail-safe server guard (`AppState::guard_mutation` rejects mutations without
+ * the write lock). The `isMapReadOnly` term (closure-adjusted view, Plan/Export
+ * mode) does NOT: a local project in those views has `edit_enabled == true`
+ * server-side, so read-only there rests entirely on exhaustive UI gating plus
+ * the `check-readonly-gates.mjs` tripwire. A new destructive control in an
+ * adjusted/Plan view must therefore be gated here at every entry point; there
+ * is no server backstop to catch a miss.
  */
 import { useUIStore, isMapReadOnly } from '../store/uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';

@@ -8,6 +8,12 @@ import {
   waitForActiveTool,
   waitForMapIdle,
   waitForNoDialogs,
+  waitForDrawnStations,
+  getShotScreenPositions,
+  readCanvasPixel,
+  readCanvasPixelBlock,
+  type PixelRgba,
+  type ScreenPoint,
   type SectionSeed,
 } from './helpers/app';
 
@@ -45,6 +51,120 @@ async function pressUntilFocused(
     await page.waitForTimeout(25);
   }
   await expect(locator).toBeFocused({ timeout: 2000 });
+}
+
+// ---------------------------------------------------------------------------
+// Painted-fade oracle (custom WebGL renderer)
+// ---------------------------------------------------------------------------
+//
+// The anchored fade used to be a MapLibre `anchored` feature-state on the
+// `survey-data-stations` vector-tile source, which a paint expression turned
+// into opacity 0.25. Both are gone: the survey is drawn by a custom WebGL layer
+// with no sources and no feature-state, and "anchored" is now a per-vertex `dim`
+// attribute (SurveyLayer.setAnchoredSections -> syncCustomDimming ->
+// customRender.setDimming, uploaded by controller.setDimming). The shader turns
+// it into the same alpha multiplier the stock expression used
+// (`dimF = a_dim > 0.5 ? 0.25 : 1.0` in surveyLayer/customRender/shaders.ts), so
+// the only honest observable left is the painted pixel: an anchored feature is
+// blended 3:1 toward the map background.
+
+/** CSS-px block sampled around a station center (comfortably wider than a disc). */
+const STATION_BLOCK = 15;
+
+/**
+ * How much paint a block holds: summed per-pixel distance from the map
+ * background, worst channel. Unlike a thresholded pixel count this is monotone
+ * in the feature's alpha, so a fade to 0.25 shows up as a ~4x drop instead of
+ * depending on whether the faded color still clears an ink tolerance.
+ */
+async function inkMass(
+  page: Page,
+  probes: ScreenPoint[],
+  bg: PixelRgba,
+  block = STATION_BLOCK,
+): Promise<number> {
+  if (probes.length === 0) throw new Error('no probe points');
+  let mass = 0;
+  for (const probe of probes) {
+    const buf = await readCanvasPixelBlock(page, probe.x, probe.y, block);
+    for (let i = 0; i < buf.length; i += 4) {
+      mass += Math.max(
+        Math.abs((buf[i] ?? 0) - bg[0]),
+        Math.abs((buf[i + 1] ?? 0) - bg[1]),
+        Math.abs((buf[i + 2] ?? 0) - bg[2]),
+      );
+    }
+  }
+  return mass;
+}
+
+/**
+ * Ink mass once the paint stops changing between reads. The pixel probe is
+ * deterministic for an unchanged scene, so two equal consecutive reads mean
+ * nothing is still settling (label reveal, tile fade-in).
+ */
+async function settledMass(page: Page, probes: ScreenPoint[], bg: PixelRgba): Promise<number> {
+  let previous = -1;
+  await expect
+    .poll(
+      async () => {
+        const current = await inkMass(page, probes, bg);
+        const stable = current === previous;
+        previous = current;
+        return stable;
+      },
+      { timeout: 10000 },
+    )
+    .toBe(true);
+  return previous;
+}
+
+/** Poll the ink mass until it satisfies `predicate` (the dim re-upload lands a
+ *  frame after the anchored-ids fetch resolves). */
+async function pollMass(
+  page: Page,
+  probes: ScreenPoint[],
+  bg: PixelRgba,
+  predicate: (mass: number) => boolean,
+): Promise<number> {
+  let result = -1;
+  await expect
+    .poll(
+      async () => {
+        result = await inkMass(page, probes, bg);
+        return predicate(result);
+      },
+      { timeout: 10000 },
+    )
+    .toBe(true);
+  return result;
+}
+
+/**
+ * Zoom in on the seeded survey before probing pixels. The mock lays stations out
+ * at `x = index * 10` metres, so at the fit-to-bounds zoom the whole section is a
+ * ~9 px smear with no per-station pixel to read. `jumpTo` is not animated, so
+ * positions read afterwards already match the new view.
+ */
+async function zoomInOnSurvey(page: Page, zoomDelta = 4): Promise<void> {
+  await page.evaluate((dz) => {
+    const w = window as unknown as {
+      __stalagmight_map__?: {
+        jumpTo: (opts: { center: [number, number]; zoom: number }) => void;
+        getZoom: () => number;
+      };
+      __stalagmight_geometry__?: () => { stations: Array<{ lngLat: [number, number] }> } | null;
+    };
+    const map = w.__stalagmight_map__;
+    const geometry = w.__stalagmight_geometry__?.();
+    if (!map || !geometry || geometry.stations.length === 0) {
+      throw new Error('map + drawn geometry must be ready before zooming the probe view');
+    }
+    const count = geometry.stations.length;
+    const lng = geometry.stations.reduce((sum, s) => sum + s.lngLat[0], 0) / count;
+    const lat = geometry.stations.reduce((sum, s) => sum + s.lngLat[1], 0) / count;
+    map.jumpTo({ center: [lng, lat], zoom: map.getZoom() + dz });
+  }, zoomDelta);
 }
 
 test.describe('Toolbar Tool Groups', () => {
@@ -279,39 +399,68 @@ test.describe('Toolbar Tool Groups', () => {
       );
     });
 
+    // Baseline the paint on section 1's own geometry BEFORE the tool is active,
+    // so the fade is a before/after fact about the exact same pixels. Station
+    // index 0 is skipped because it carries the zero datum, whose marker is drawn
+    // on top of the disc. The seeded project has a single section and the datum
+    // anchors all of it, so there is no unanchored section to contrast against
+    // here (the mock lays every section on the same coordinates, so a second one
+    // would only stack on these pixels anyway).
+    await waitForDrawnStations(page, 1);
+    await zoomInOnSurvey(page);
+    await waitForMapIdle(page);
+    const stations = await waitForDrawnStations(page, 3);
+    const shots = await getShotScreenPositions(page);
+    const canvasBox = await page.evaluate(() => {
+      const map = (window as unknown as { __stalagmight_map__?: { getCanvas: () => HTMLCanvasElement } })
+        .__stalagmight_map__;
+      const canvas = map!.getCanvas();
+      return { width: canvas.clientWidth, height: canvas.clientHeight };
+    });
+    // A probe block that hangs off the canvas edge reads back as zeroes, which
+    // against the dark basemap looks like a constant slab of "paint" that never
+    // dims, diluting the ratio below into meaninglessness. At this zoom
+    // the outer stations sit outside the viewport, so keep only blocks that fit.
+    const onCanvas = (p: ScreenPoint): boolean =>
+      p.x - STATION_BLOCK / 2 >= 0 &&
+      p.y - STATION_BLOCK / 2 >= 0 &&
+      p.x + STATION_BLOCK / 2 <= canvasBox.width &&
+      p.y + STATION_BLOCK / 2 <= canvasBox.height;
+    const probes: ScreenPoint[] = [
+      ...stations.filter((s) => s.sectionId === 1 && s.stationIndex > 0).map((s) => ({ x: s.x, y: s.y })),
+      ...shots.filter((s) => s.sectionId === 1).map((s) => s.mid),
+    ].filter(onCanvas);
+    expect(probes.length).toBeGreaterThan(0);
+
+    const bg = await readCanvasPixel(page, 8, 8);
+    const brightMass = await settledMass(page, probes, bg);
+    expect(brightMass).toBeGreaterThan(0);
+
     // Activate move_segment tool
     await page.keyboard.press('v');
     await waitForActiveTool(page, 'move_segment');
 
-    // Wait for anchored section IDs to be fetched and feature-state applied.
-    // Poll until a station feature in section 1 has anchored=true in feature-state.
-    await page.waitForFunction(() => {
-      const map = (window as unknown as { __stalagmight_map__?: {
-        querySourceFeatures: (source: string) => Array<{ id?: number | string; properties?: { sectionId?: number } }>;
-        getFeatureState: (opts: { source: string; id: number }) => { anchored?: boolean };
-      } }).__stalagmight_map__;
-      if (!map) return false;
-
-      try {
-        const features = map.querySourceFeatures('survey-data-stations');
-        for (const f of features) {
-          if (f.properties?.sectionId === 1 && f.id != null) {
-            const featureId = typeof f.id === 'number' ? f.id : parseInt(String(f.id), 10);
-            if (!isNaN(featureId)) {
-              const state = map.getFeatureState({ source: 'survey-data-stations', id: featureId });
-              if (state?.anchored === true) return true;
-            }
-          }
-        }
-      } catch {
-        // Source may not be loaded yet
-      }
-      return false;
-    }, { timeout: 10000 });
+    // The anchored section is really PAINTED faded once the anchored-id fetch
+    // resolves. A dimmed shot body lands on exactly the 0.25 the stock opacity
+    // expression used; a dimmed station disc reads higher (~0.58 measured)
+    // because two translucent round caps and the disc overlap at a junction and
+    // premultiplied blending applies three times, which shaders.ts documents as
+    // accepted (stock's round-capped sublayer behaved the same). Hence a bound
+    // that is unambiguously a fade rather than the exact blend.
+    const fadedMass = await pollMass(page, probes, bg, (mass) => mass < brightMass * 0.5);
+    expect(fadedMass).toBeLessThan(brightMass * 0.5);
 
     // The app should remain functional with the move_segment tool active
     const canvas = page.getByTestId('map-canvas');
     await expect(canvas).toBeVisible();
     await expect(canvas).toHaveAttribute('data-active-tool', 'move_segment');
+
+    // The fade belongs to Move Segment's anchored set, not to some one-way
+    // repaint: leaving the tool empties the set (MapCanvas clears
+    // anchoredSectionIds for every other tool) and the section is painted at full
+    // opacity again, byte-for-byte back to the baseline.
+    await page.keyboard.press('s');
+    await waitForActiveTool(page, 'select');
+    expect(await pollMass(page, probes, bg, (mass) => mass === brightMass)).toBe(brightMass);
   });
 });

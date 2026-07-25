@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 use super::gas::GasConfig;
+use super::speleodb::SpeleoDbConfig;
+use super::webkit::WebkitMemoryConfig;
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -26,6 +28,20 @@ pub struct Config {
     pub cache: CacheConfig,
     #[serde(default)]
     pub debug: DebugConfig,
+    /// Linux-only WebKit memory-pressure tuning. Backend-only: `#[ts(skip)]`
+    /// keeps it out of the generated frontend types, and `#[serde(skip_serializing)]`
+    /// keeps it out of both `get_config`'s payload and the generated
+    /// `defaultConfig.ts` (which is typed as the frontend `Config`, so an emitted
+    /// `webkit_memory` block would fail `tsc`). Because `skip_serializing` also
+    /// drops it from `toml::to_string_pretty`, saving would otherwise wipe the
+    /// `[webkit_memory]` section from disk; `Config::save_to_path` therefore
+    /// re-appends the table (when non-default) after serializing, so a hand-tuned
+    /// knob in `config.toml` survives a save. The re-appended value is the one
+    /// `AppState::update_config` preserves in memory across the session, so saving
+    /// any setting can never reset the knob to defaults.
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
+    pub webkit_memory: WebkitMemoryConfig,
     #[serde(default)]
     pub global_view: GlobalViewConfig,
     #[serde(default)]
@@ -46,114 +62,6 @@ pub struct Config {
     #[serde(default, skip_serializing, alias = "snap")]
     #[ts(skip)]
     pub(super) legacy_snap: Option<LegacySnapConfig>,
-}
-
-/// Opt-in fallback tier for the SpeleoDB token when no OS keychain is available.
-///
-/// [Track C] (#188, D-188): the user-facing surface is **two-valued**
-/// (`SessionOnly` default, `Plaintext`); `Unknown` is the serde `#[serde(other)]`
-/// sentinel (same idiom as [`ThemeMode::Unknown`]), normalized back to
-/// `SessionOnly` so an unrecognized TOML value never blocks loading. `Plaintext`
-/// is the headless-Linux escape hatch; the warned confirmation that *sets* it is
-/// #205 Settings — Track C only honors the persisted preference.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum TokenFallback {
-    /// Token lives in memory only (lost on restart) when the keychain is absent.
-    #[default]
-    SessionOnly,
-    /// Opt-in: write the token to a `0o600` plaintext file when the keychain
-    /// fails this session (the two-gate plaintext write).
-    Plaintext,
-    /// Catch-all for unrecognized values; normalized to `SessionOnly`.
-    #[serde(other, rename = "unknown")]
-    Unknown,
-}
-
-/// SpeleoDB connection settings (#183 read-only spike).
-///
-/// The auth token is **never** stored here — it lives in the OS keychain (or a
-/// plaintext escape hatch / in-memory session fallback); see
-/// `crate::speleodb::auth`. At runtime the `DEV_SPELEODB_URL` env var overrides
-/// `endpoint`. The full Settings-tab UI binding is #205.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct SpeleoDbConfig {
-    /// Persisted endpoint base URL (e.g. `https://www.speleodb.org`). Overridden
-    /// at runtime by `DEV_SPELEODB_URL` when set.
-    #[serde(default)]
-    pub endpoint: Option<String>,
-    /// Last-used account email, for prefilling the login dialog.
-    #[serde(default)]
-    pub email: Option<String>,
-    /// [Track C] (#188, D-188): opt-in plaintext token fallback preference.
-    /// Default `SessionOnly`; only `Plaintext` enables the two-gate plaintext
-    /// write. #205 Settings owns the warned confirmation that flips it.
-    #[serde(default)]
-    pub token_fallback: TokenFallback,
-    /// [Track C] (#187/D-B10/D-B19): allow an `http://` endpoint to a PUBLIC host.
-    /// Off by default. Relaxes ONLY the public-http scheme block in
-    /// `speleodb::tls::enforce` (Track A #187) — NEVER TLS cert verification
-    /// (self-signed / internal CAs stay rejected). Pre-wired for #205 Settings;
-    /// D-B19's scheme reject lives in `tls.rs`, not here.
-    #[serde(default)]
-    pub insecure_http: bool,
-    /// [#213] Opt-in: allow "force-edit" - editing a remote project WITHOUT holding
-    /// the server write lock (surveying offline / when someone else holds it), behind
-    /// a big-red unmergeable-`.stalx` warning. Off by default; #205 Settings owns the
-    /// warned toggle. When off, a remote project stays strictly read-only until the
-    /// lock is acquired (the only escape being "Save a local copy" / detach).
-    #[serde(default)]
-    pub allow_force_edit: bool,
-    /// How often (seconds) the action shell re-checks the linked project's remote
-    /// state (lock holder / remote-ahead / conflict) for its status icon. Default
-    /// 60; **clamped up to `MIN_POLL_INTERVAL_SECONDS` on load** so a hand-edited
-    /// config below the floor can't spam the server.
-    #[serde(default = "default_poll_interval_seconds")]
-    pub poll_interval_seconds: u32,
-}
-
-/// Floor for [`SpeleoDbConfig::poll_interval_seconds`]. Enforced both in the
-/// Settings UI and here on load (a hand-edited sub-floor value is corrected up).
-pub const MIN_POLL_INTERVAL_SECONDS: u32 = 30;
-
-fn default_poll_interval_seconds() -> u32 {
-    60
-}
-
-impl Default for SpeleoDbConfig {
-    fn default() -> Self {
-        Self {
-            endpoint: None,
-            email: None,
-            token_fallback: TokenFallback::default(),
-            insecure_http: false,
-            allow_force_edit: false,
-            poll_interval_seconds: default_poll_interval_seconds(),
-        }
-    }
-}
-
-impl SpeleoDbConfig {
-    /// [Track C] (#188): coerce the `#[serde(other)]` sentinel back to the safe
-    /// default, and clamp the poll interval up to the floor. Mirrors
-    /// [`AppearanceConfig::normalize`]; wired into [`Config::normalize`].
-    pub fn normalize(&mut self) {
-        if self.token_fallback == TokenFallback::Unknown {
-            tracing::warn!(
-                "Unknown token_fallback value in config, normalizing to \"session_only\""
-            );
-            self.token_fallback = TokenFallback::SessionOnly;
-        }
-        if self.poll_interval_seconds < MIN_POLL_INTERVAL_SECONDS {
-            tracing::warn!(
-                requested = self.poll_interval_seconds,
-                floor = MIN_POLL_INTERVAL_SECONDS,
-                "SpeleoDB poll_interval_seconds below floor; clamping up"
-            );
-            self.poll_interval_seconds = MIN_POLL_INTERVAL_SECONDS;
-        }
-    }
 }
 
 /// Legacy snap config for migration from old [snap] section
@@ -1862,7 +1770,30 @@ impl Config {
             std::fs::create_dir_all(parent).context("Failed to create config directory")?;
         }
 
-        let contents = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        let mut contents = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        // `webkit_memory` is `#[serde(skip_serializing)]` (backend-only, kept out
+        // of the frontend types and payload), so `to_string_pretty` above omits
+        // it. Re-append it as a top-level `[webkit_memory]` table whenever it
+        // differs from the default so a hand-tuned knob in `config.toml` survives
+        // a save (which fires on every project open/create/save). A top-level TOML
+        // table appended at the end is order-independent and valid; the value is
+        // exactly what was loaded from disk (preserved across the session by
+        // `AppState::update_config`), so this round-trips it faithfully.
+        if self.webkit_memory != WebkitMemoryConfig::default() {
+            #[derive(serde::Serialize)]
+            struct WebkitMemoryDoc<'a> {
+                webkit_memory: &'a WebkitMemoryConfig,
+            }
+            let section = toml::to_string_pretty(&WebkitMemoryDoc {
+                webkit_memory: &self.webkit_memory,
+            })
+            .context("Failed to serialize webkit_memory config")?;
+            if !contents.ends_with('\n') {
+                contents.push('\n');
+            }
+            contents.push('\n');
+            contents.push_str(&section);
+        }
         std::fs::write(path, contents).context("Failed to write config file")?;
         tracing::info!(config_path = ?path, "Saved config to file");
         Ok(())
@@ -1915,6 +1846,7 @@ impl Config {
         self.placement_suggestion.normalize();
         self.syntactic_highlighting.normalize();
         self.gas.normalize();
+        self.webkit_memory.normalize();
         self.units.decimal_precision.normalize();
         if self.general.locale.trim().is_empty() {
             self.general.locale = default_locale();

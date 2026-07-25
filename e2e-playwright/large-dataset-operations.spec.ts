@@ -97,8 +97,21 @@ test.describe('Large Dataset Operations', () => {
       await e2e.projectStore.getState().refreshProjectState();
     });
 
-    await expect(page.locator('[data-testid^="section-row-"]')).toHaveCount(24);
+    // The sections panel is virtualized (a 14k-section project must not mount a
+    // <li> per section), so only the visible window of rows is in the DOM at
+    // once. Assert the seed loaded all 24 sections via the store, not by DOM
+    // node count, then reveal the last row before interacting with it.
+    const seededSectionCount = await page.evaluate(() =>
+      (window as unknown as {
+        __E2E_TEST__: { projectStore: { getState: () => { project: { sections: unknown[] } | null } } };
+      }).__E2E_TEST__.projectStore.getState().project?.sections.length ?? 0,
+    );
+    expect(seededSectionCount).toBe(24);
 
+    await page.getByTestId('sections-list').evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect(page.getByTestId('section-row-24')).toBeVisible();
     await page.getByTestId('section-row-24').click();
     await page.keyboard.press('Control+3');
     await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 10000 });

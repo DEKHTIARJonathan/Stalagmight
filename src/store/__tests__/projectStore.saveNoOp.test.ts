@@ -1,0 +1,79 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { useProjectStore } from '../projectStore';
+import type { CommandResult } from '../../types/commands';
+
+const invokeIpcMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../../utils/ipc', () => ({
+  invokeIpc: invokeIpcMock,
+}));
+
+/**
+ * #mem flash-free publication, part 1: a successful save always echoes
+ * `saved_path` (Rust `CommandResult::success().with_path(...)`). If saveProject
+ * re-spread the project on every save, an autosave to the SAME path would change
+ * the project object's identity — and MapCanvas's republish `useLayoutEffect`
+ * keys on that identity, so a no-op autosave would trigger a full survey rebuild
+ * + republish that briefly blanks all geometry. saveProject must therefore only
+ * mint a new project object when the path actually changed (first save / Save As).
+ */
+describe('projectStore.saveProject no-op identity (#mem)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Neutralize the post-save side effects that are irrelevant here.
+    useProjectStore.setState({
+      refreshUndoState: vi.fn().mockResolvedValue(undefined),
+      checkProjectIntegrity: vi.fn().mockResolvedValue(undefined),
+      refreshProjectState: vi.fn().mockResolvedValue(undefined),
+    } as Partial<ReturnType<typeof useProjectStore.getState>> as never);
+  });
+
+  afterEach(() => {
+    useProjectStore.setState({ project: null, isDirty: false } as never);
+  });
+
+  it('keeps the same project reference on an autosave to the same path', async () => {
+    const project = { file_path: '/cave.stalx' } as never;
+    useProjectStore.setState({ project, integrityIssues: [] } as never);
+    invokeIpcMock.mockResolvedValue({
+      success: true,
+      saved_path: '/cave.stalx',
+    } as CommandResult);
+
+    await useProjectStore.getState().saveProject('/cave.stalx', true);
+
+    // Identity preserved — no republish trigger for a no-op save.
+    expect(useProjectStore.getState().project).toBe(project);
+  });
+
+  it('mints a new project object with the new path on a Save As', async () => {
+    const project = { file_path: '/cave.stalx' } as never;
+    useProjectStore.setState({ project, integrityIssues: [] } as never);
+    invokeIpcMock.mockResolvedValue({
+      success: true,
+      saved_path: '/cave-copy.stalx',
+    } as CommandResult);
+
+    await useProjectStore.getState().saveProject('/cave-copy.stalx');
+
+    const next = useProjectStore.getState().project as unknown as { file_path: string };
+    expect(next).not.toBe(project);
+    expect(next.file_path).toBe('/cave-copy.stalx');
+  });
+
+  it('mints a new project object on the first save of a deferred (unsaved) project', async () => {
+    const project = { file_path: undefined } as never;
+    useProjectStore.setState({ project, integrityIssues: [] } as never);
+    invokeIpcMock.mockResolvedValue({
+      success: true,
+      saved_path: '/new.stalx',
+    } as CommandResult);
+
+    await useProjectStore.getState().saveProject('/new.stalx');
+
+    const next = useProjectStore.getState().project as unknown as { file_path: string };
+    expect(next).not.toBe(project);
+    expect(next.file_path).toBe('/new.stalx');
+  });
+});

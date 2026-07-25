@@ -21,7 +21,6 @@ import type { CollabState } from '../types/ipc/CollabState';
 import type { ValidationConfig } from '../types/ipc/ValidationConfig';
 import type { Section } from '../types/ipc/Section';
 import type { Shot } from '../types/ipc/Shot';
-import type { Station } from '../types/ipc/Station';
 import type { StationRef } from '../types/ipc/StationRef';
 import type { ClosureRef } from '../types/ipc/ClosureRef';
 import type { GpsCoordinates } from '../types/ipc/GpsCoordinates';
@@ -36,6 +35,8 @@ import type { SurveyDirection } from '../types/ipc/SurveyDirection';
 import {
   type SurveyData,
   type SectionMetadata,
+  lazyStationArray,
+  noteShotMaterialization,
   SHOT_FLAG_IS_REFERENCE,
   SHOT_MARKER_NULL,
   STATION_FLAG_IS_ZERO_DATUM,
@@ -69,8 +70,9 @@ const STATION_FLOAT_FIELDS = 3;
 /** u32 fields per station. */
 const STATION_UINT_FIELDS = 2;
 
-/** Shape of the msgpack-decoded envelope. Mirrors `LoadProjectFullBinaryResult`. */
-interface BinaryEnvelope {
+/** Shape of the msgpack-decoded envelope. Mirrors `LoadProjectFullBinaryResult`.
+ *  Exported for the load-path laziness regression test's fixture builder. */
+export interface BinaryEnvelope {
   version: number;
   loading_id: bigint | number;
   project_header: ProjectHeaderBinary;
@@ -182,7 +184,14 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
   return result;
 }
 
-function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullResultWithSoa {
+/**
+ * Decode a (already msgpack-decoded) binary envelope into the SoA + legacy
+ * result shape. Exported for the load-path laziness regression test, which
+ * drives this exact function so it exercises the real lazy-getter installation
+ * rather than a hand-rolled stand-in. Production callers go through
+ * `loadProjectFullBinary`.
+ */
+export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullResultWithSoa {
   // Build typed-array views over the bulk byte buffers. These views don't
   // copy; they just point into the underlying ArrayBuffers.
   const shotsF32 = bytesToFloat32(env.shots_floats);
@@ -248,7 +257,6 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
       }
       return shots;
     };
-    let shotsCache: Shot[] | null = null;
     // `Object.defineProperty` for `shots` so we can install a getter
     // without breaking the `Section` interface (which declares it as
     // a plain `Shot[]`). Consumers read `section.shots` exactly as
@@ -263,10 +271,25 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
       quality: sh.quality,
       next_shot_id: sh.next_shot_id,
     } as Section;
+    // Define-once lazy getter: on first read it materializes the Shot[] and
+    // *replaces itself* with a plain data property holding that array. This
+    // (a) keeps identity stable (later reads return the same array),
+    // (b) drops the getter/closure overhead after materialization, and
+    // (c) makes the state externally observable for the load-path lazy guard:
+    //     an untouched section's descriptor is an accessor (`get` defined),
+    //     a materialized one is a data property (`value` defined). The
+    //     regression test and the E2E harness classify sections that way.
     Object.defineProperty(section, 'shots', {
       get() {
-        if (shotsCache === null) shotsCache = materializeShots();
-        return shotsCache;
+        const shots = materializeShots();
+        noteShotMaterialization();
+        Object.defineProperty(section, 'shots', {
+          value: shots,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+        return shots;
       },
       enumerable: true,
       configurable: true,
@@ -326,30 +349,6 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
   const commentByIdx = new Map<number, string>();
   for (const [i, c] of env.station_comments) commentByIdx.set(i, c);
 
-  const stations: Station[] = new Array(env.station_count);
-  for (let i = 0; i < env.station_count; i++) {
-    const fBase = i * STATION_FLOAT_FIELDS;
-    const uBase = i * STATION_UINT_FIELDS;
-    const station: Station = {
-      station_ref: {
-        section_id: stationsU32[uBase]!,
-        station_index: stationsU32[uBase + 1]!,
-      },
-      coordinates: {
-        x: stationsF64[fBase]!,
-        y: stationsF64[fBase + 1]!,
-        z: stationsF64[fBase + 2]!,
-      },
-      is_zero_datum: (stationsFlags[i]! & 1) !== 0,
-      gps_coordinates: gpsByIdx.get(i) ?? null,
-      merged_with: mergedByIdx.get(i) ?? [],
-      closures_with: closuresByIdx.get(i) ?? [],
-    };
-    const cmt = commentByIdx.get(i);
-    if (cmt !== undefined) station.comment = cmt;
-    stations[i] = station;
-  }
-
   // Build the new SoA layout. This reuses the same typed-array views we
   // already created above; per-shot/station numeric fields aren't copied,
   // we just expose them under field-named arrays so consumers don't have
@@ -362,10 +361,18 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
   //     it's not in the wire format)
   //   - 1 Uint8Array `shotFlags` mapping the wire's u32 marker_or_max
   //     into the Int32Array `shotMarkerIndex` and bit-packed flags
-  //
-  // Once the legacy Project/Station[] materialization above is removed
-  // (Phase A.6), the memory savings show up.
   const surveyData = buildSurveyData(env, shotsF32, shotsU32, shotsFlags, stationsF64, stationsU32, stationsFlags, shotCommentByIdx, gpsByIdx, mergedByIdx, closuresByIdx, commentByIdx);
+
+  // Stations: a *lazy* `Station[]` view over `surveyData`, not an eager
+  // ~89k-object array. The old eager loop (removed here) materialized one
+  // `Station` (plus nested `station_ref` / `coordinates` objects) per
+  // station and held them for the project's whole lifetime — a pure
+  // duplicate of `surveyData.stationCoords` / `stationSectionIds` /
+  // `stationIndices` / the sparse extras maps. `lazyStationArray`
+  // reconstructs the exact same `Station` shape on index access via
+  // `getStation`, so consumers that still take a `Station[]` are unchanged,
+  // but nothing is retained unless a consumer actually reads an element.
+  const stations = lazyStationArray(surveyData);
 
   // For visibility in the perf panel, also record the wire size.
   recordPerfTiming('binary payload size (KB)', totalBytes / 1024);

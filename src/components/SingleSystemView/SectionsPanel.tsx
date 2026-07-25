@@ -1,10 +1,11 @@
-import { useRef, useEffect, useState, memo, useCallback } from 'react';
+import { useRef, useEffect, useMemo, useState, memo, useCallback } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import { type Section, type SectionId } from '../../types/project';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { SHOT_FLAG_IS_REFERENCE, type SurveyData, type SectionMetadata } from '../../types/survey-data';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
-import { SHOT_FLAG_IS_REFERENCE } from '../../types/survey-data';
 import { useShallow } from 'zustand/react/shallow';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -29,6 +30,40 @@ const SECTION_FOCUS_TABLE_FRACTION = 0.3;
 // pointer crosses many shots/stations in quick succession — it settles on the
 // section the pointer lands on. Un-hover restore stays immediate.
 const HOVER_SCROLL_DEBOUNCE_MS = 120;
+
+// Estimated section-row height (px) seeded into the virtualizer before a row is
+// measured. Rows are a single truncated name line plus a stats line, so their
+// real height is uniform; the estimate only needs to be close (each mounted row
+// is remeasured via measureElement, so scroll math stays pixel-accurate). Kept
+// in step with the warnings list estimate in DetailPanel.
+const SECTION_ROW_ESTIMATED_HEIGHT = 56;
+
+/**
+ * Which section-list index owns the list's default keyboard Tab stop while no row
+ * is focused (`-1` = none: a row is focused, or nothing is mounted). The list is
+ * virtualized, so the Tab stop MUST land on a currently MOUNTED row -- otherwise,
+ * once an external selection / hover reveal / manual scroll moves the virtual
+ * window past index 0 (unmounting it), every mounted row would be `tabIndex={-1}`
+ * and keyboard users could not Tab into the list at its current scroll position.
+ * Prefer the selected row when it is inside the mounted window, else the first
+ * (lowest-index) mounted row. A focused row keeps the Tab stop via its own
+ * `isFocused` path, so this returns `-1` when a MOUNTED row is focused. But a
+ * focused index whose row scrolled out of the virtual window (unmounting it,
+ * which does not reliably fire `blur`) must NOT suppress the default Tab stop —
+ * otherwise no mounted row is tabbable and keyboard users are trapped out.
+ */
+export function rovingDefaultTabIndex(
+  focusedIndex: number,
+  mountedIndices: readonly number[],
+  selectedIndex: number,
+): number {
+  if (focusedIndex !== -1 && mountedIndices.includes(focusedIndex)) return -1;
+  if (mountedIndices.length === 0) return -1;
+  if (selectedIndex !== -1 && mountedIndices.includes(selectedIndex)) return selectedIndex;
+  let first = mountedIndices[0]!;
+  for (const i of mountedIndices) if (i < first) first = i;
+  return first;
+}
 
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { t } = useTranslation();
@@ -101,6 +136,63 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // Keyboard accessibility: track focused index and refs for roving tabindex
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
   const optionRefs = useRef<(HTMLLIElement | null)[]>([]);
+  // Index whose row we want to focus once the virtualizer has mounted it. A
+  // keyboard jump (Home/End, or a fast arrow-step past the overscan window) can
+  // target a row that isn't rendered yet; scrollToIndex mounts it, then the
+  // row's ref callback focuses it. `null` means no focus is pending.
+  const pendingFocusIndexRef = useRef<number | null>(null);
+
+  // Flat survey-data arrays back the per-row stats (length / reference count).
+  // Subscribing here rebuilds the id -> metadata lookup below whenever the data
+  // changes, without any component re-render caused by reading it per row.
+  const surveyData = useProjectStore((s) => s.surveyData);
+
+  // O(1) section-id -> metadata lookup, built once per surveyData change. This
+  // replaces the former per-row `surveyData.sections.find(...)`, which made a
+  // panel open O(n^2) (~2x10^8 comparisons at 14k sections). Each row now reads
+  // its shot range straight from the flat arrays via this map.
+  const sectionMetaById = useMemo(() => {
+    const map = new Map<SectionId, SectionMetadata>();
+    if (surveyData) {
+      for (const meta of surveyData.sections) map.set(meta.id, meta);
+    }
+    return map;
+  }, [surveyData]);
+
+  // section-id -> list index, so the hover / selection reveal effects resolve a
+  // row's virtual index in O(1) instead of scanning `sections` each time.
+  const sectionIndexById = useMemo(() => {
+    const map = new Map<SectionId, number>();
+    sections.forEach((s, i) => map.set(s.id, i));
+    return map;
+  }, [sections]);
+
+  // Virtualize the list: only the visible window (plus overscan) mounts, so a
+  // 14k-section project no longer builds ~14k <li> subtrees on open. Same
+  // scroll idiom as SpreadsheetGrid / DetailPanel's warnings list. The scroll
+  // element is the `sections-list` container, whose scrollTop the hover
+  // save/restore logic and the scroll e2e specs read and write directly.
+  const rowVirtualizer = useVirtualizer({
+    count: sections.length,
+    getScrollElement: () => listContainerRef.current,
+    estimateSize: () => SECTION_ROW_ESTIMATED_HEIGHT,
+    overscan: 8,
+  });
+
+  // Reveal a row by index, then move keyboard focus to it. When the target is
+  // already mounted (adjacent step within the overscan window) it focuses
+  // immediately; otherwise scrollToIndex mounts it and its ref callback focuses
+  // it once attached (see `pendingFocusIndexRef`).
+  const focusRow = useCallback((index: number) => {
+    rowVirtualizer.scrollToIndex(index, { align: 'auto' });
+    const el = optionRefs.current[index];
+    if (el) {
+      pendingFocusIndexRef.current = null;
+      el.focus();
+    } else {
+      pendingFocusIndexRef.current = index;
+    }
+  }, [rowVirtualizer]);
 
   // Clear hoveredSectionId on unmount if it was set by this panel
   useEffect(() => {
@@ -134,7 +226,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       preHoverScrollTopRef.current = null;
       return;
     }
-    const idx = sections.findIndex((s) => s.id === effectiveHoveredSectionId);
+    const idx = sectionIndexById.get(effectiveHoveredSectionId) ?? -1;
     if (idx < 0) return;
     // Panel-internal row hovers (lastHoveredIdRef set) are the user already
     // interacting with the list — don't capture/restore for those.
@@ -162,7 +254,10 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       if (isExternalHover && preHoverScrollTopRef.current === null && container) {
         preHoverScrollTopRef.current = container.scrollTop;
       }
-      optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
+      // scrollToIndex with align:'auto' is a no-op when the row is already
+      // visible (matching the previous scrollIntoView({ block: 'nearest' })),
+      // and reveals off-screen rows that virtualization hasn't mounted.
+      rowVirtualizer.scrollToIndex(idx, { align: 'auto' });
     }, HOVER_SCROLL_DEBOUNCE_MS);
     return () => {
       if (hoverScrollTimerRef.current !== null) {
@@ -172,7 +267,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     };
     // Keyed on hoverKey (the geometry), not effectiveHoveredSectionId, so hovering
     // a different shot/station within the same section also re-arms the debounce.
-  }, [hoverKey, effectiveHoveredSectionId, sections]);
+  }, [hoverKey, effectiveHoveredSectionId, sectionIndexById, rowVirtualizer]);
 
   // Scroll the selected section's row into view when the selection changes (a
   // shot/station/section selected from the map, data table, or details panel).
@@ -189,7 +284,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     const selectionEvent = prevSelectionRef.current !== selection;
     prevSelectionRef.current = selection;
     if (selectedSectionId === null) return;
-    const idx = sections.findIndex((s) => s.id === selectedSectionId);
+    const idx = sectionIndexById.get(selectedSectionId) ?? -1;
     if (idx < 0) return;
     // A selection reveal wins over a pending (debounced) hover scroll — cancel it
     // so it can't snap the list back to the hovered row 50ms later.
@@ -197,7 +292,9 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       clearTimeout(hoverScrollTimerRef.current);
       hoverScrollTimerRef.current = null;
     }
-    optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
+    // Mounts the owning row (if virtualization has it unmounted) and brings it
+    // into view; align:'auto' leaves an already-visible row untouched.
+    rowVirtualizer.scrollToIndex(idx, { align: 'auto' });
     // EVERY selection event re-anchors the panel here — including re-selecting
     // the already-selected section. If it happened during an active external
     // hover (hover a shot, then click to select it), drop the pre-hover restore
@@ -206,7 +303,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     if (selectionEvent) {
       preHoverScrollTopRef.current = null;
     }
-  }, [selection, selectedSectionId, sections]);
+  }, [selection, selectedSectionId, sectionIndexById, rowVirtualizer]);
 
   const handleSectionClick = useCallback((section: Section, e?: React.MouseEvent) => {
     // Only handle left mouse button for mouse events
@@ -245,7 +342,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
         if (currentIndex < sections.length - 1) {
           const nextIndex = currentIndex + 1;
           setFocusedIndex(nextIndex);
-          optionRefs.current[nextIndex]?.focus();
+          focusRow(nextIndex);
         }
         break;
       case 'ArrowUp':
@@ -254,20 +351,20 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
         if (currentIndex > 0) {
           const prevIndex = currentIndex - 1;
           setFocusedIndex(prevIndex);
-          optionRefs.current[prevIndex]?.focus();
+          focusRow(prevIndex);
         }
         break;
       case 'Home':
         e.preventDefault();
         e.stopPropagation();
         setFocusedIndex(0);
-        optionRefs.current[0]?.focus();
+        focusRow(0);
         break;
       case 'End':
         e.preventDefault();
         e.stopPropagation();
         setFocusedIndex(sections.length - 1);
-        optionRefs.current[sections.length - 1]?.focus();
+        focusRow(sections.length - 1);
         break;
       case 'Enter':
         // Enter = activate (keyboard equivalent of double-click): select + zoom
@@ -293,7 +390,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
         clearSelection();
         break;
     }
-  }, [sections, handleSectionClick, triggerZoomToSection, clearSelection]);
+  }, [sections, handleSectionClick, triggerZoomToSection, clearSelection, focusRow]);
 
   const handleContainerBlur = (e: React.FocusEvent<HTMLUListElement>) => {
     // CRITICAL: Only clear when focus leaves the listbox ENTIRELY
@@ -416,30 +513,56 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
             className="py-1"
             onBlur={handleContainerBlur}
           >
-            {sections.map((section, index) => (
-              <SectionRow
-                key={section.id}
-                section={section}
-                index={index}
-                isSelected={selectedSectionId === section.id}
-                isHovered={effectiveHoveredSectionId === section.id}
-                isFocused={focusedIndex === index}
-                isDefaultFocus={focusedIndex === -1 && index === 0}
-                precision={precision.length}
-                onMouseDown={handleSectionClick}
-                onDoubleClick={handleSectionDoubleClick}
-                onContextMenu={handleSectionContextMenu}
-                onMouseEnter={handleSectionMouseEnter}
-                onMouseLeave={handleSectionMouseLeave}
-                onFocus={handleSectionFocus}
-                onKeyDown={handleKeyDown}
-                onEnterFocus={handleEnterFocusClick}
-                onEnterFocusMouseDown={handleFocusButtonMouseDown}
-                onEnterFocusDoubleClick={handleFocusButtonDoubleClick}
-                onLongPress={openSectionContextMenu}
-                optionRefs={optionRefs}
-              />
-            ))}
+            {/* Virtualization sizer: holds the full scroll height while only the
+                visible window of rows is mounted (absolutely positioned within).
+                Kept inside the `py-1` <ul> so the list's top/bottom breathing
+                room is unchanged. */}
+            <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: 'relative' }}>
+              {(() => {
+                const virtualItems = rowVirtualizer.getVirtualItems();
+                // Roving-tabindex owner: a MOUNTED row keeps the default Tab stop
+                // so the list stays keyboard-reachable at its current scroll
+                // position (index 0 is often unmounted after a reveal / scroll).
+                const defaultTabIndex = rovingDefaultTabIndex(
+                  focusedIndex,
+                  virtualItems.map((v) => v.index),
+                  selectedSectionId !== null ? (sectionIndexById.get(selectedSectionId) ?? -1) : -1,
+                );
+                return virtualItems.map((virtualRow) => {
+                const index = virtualRow.index;
+                const section = sections[index]!;
+                return (
+                  <SectionRow
+                    key={section.id}
+                    section={section}
+                    index={index}
+                    meta={sectionMetaById.get(section.id)}
+                    surveyData={surveyData}
+                    isSelected={selectedSectionId === section.id}
+                    isHovered={effectiveHoveredSectionId === section.id}
+                    isFocused={focusedIndex === index}
+                    isDefaultFocus={index === defaultTabIndex}
+                    precision={precision.length}
+                    virtualStart={virtualRow.start}
+                    measureElement={rowVirtualizer.measureElement}
+                    pendingFocusIndexRef={pendingFocusIndexRef}
+                    onMouseDown={handleSectionClick}
+                    onDoubleClick={handleSectionDoubleClick}
+                    onContextMenu={handleSectionContextMenu}
+                    onMouseEnter={handleSectionMouseEnter}
+                    onMouseLeave={handleSectionMouseLeave}
+                    onFocus={handleSectionFocus}
+                    onKeyDown={handleKeyDown}
+                    onEnterFocus={handleEnterFocusClick}
+                    onEnterFocusMouseDown={handleFocusButtonMouseDown}
+                    onEnterFocusDoubleClick={handleFocusButtonDoubleClick}
+                    onLongPress={openSectionContextMenu}
+                    optionRefs={optionRefs}
+                  />
+                );
+                });
+              })()}
+            </div>
           </ul>
         )}
       </div>
@@ -449,36 +572,39 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
 
 /**
  * Compute total length + reference-shot count for the section row.
- * Called once per visible section row by `SectionRow`. With 14k sections
- * this used to iterate `section.shots` 14k times — triggering the lazy
- * Shot materialization for every section on first render, defeating the
- * Phase-A.5 memory optimization.
+ * Called once per *visible* (virtualized) section row by `SectionRow`.
  *
- * Reads from `surveyData.shotLength` / `shotFlags` typed arrays directly
- * when available (the common path post Phase A.5). Falls back to the
- * legacy `section.shots` walk on the unusual path where surveyData
- * isn't populated yet (e.g. legacy JSON refresh in-flight).
+ * `meta` is resolved by the panel from a `Map<sectionId, SectionMetadata>`
+ * built once per surveyData change, replacing the former per-row
+ * `surveyData.sections.find(...)` that made a panel open O(n^2). Given the
+ * metadata, the shot range is read straight from the `shotLength` / `shotFlags`
+ * typed arrays — it never touches `section.shots`, so the lazy Shot
+ * materialization stays cold (the Phase-A.5 memory optimization).
+ *
+ * Falls back to the legacy `section.shots` walk only on the unusual path where
+ * `surveyData` isn't populated yet (e.g. legacy JSON refresh in-flight). That
+ * branch stays cold in the common path because `meta` is present.
  */
-function calculateSectionStats(section: Section): {
+function calculateSectionStats(
+  section: Section,
+  meta: SectionMetadata | undefined,
+  surveyData: SurveyData | null,
+): {
   shotCount: number;
   length: number;
   referenceCount: number;
 } {
-  const surveyData = useProjectStore.getState().surveyData;
-  if (surveyData) {
-    const meta = surveyData.sections.find((s) => s.id === section.id);
-    if (meta) {
-      let length = 0;
-      let referenceCount = 0;
-      const end = meta.shotOffset + meta.shotCount;
-      for (let g = meta.shotOffset; g < end; g++) {
-        length += surveyData.shotLength[g]!;
-        if ((surveyData.shotFlags[g]! & SHOT_FLAG_IS_REFERENCE) !== 0) {
-          referenceCount++;
-        }
+  if (surveyData && meta) {
+    let length = 0;
+    let referenceCount = 0;
+    const end = meta.shotOffset + meta.shotCount;
+    for (let g = meta.shotOffset; g < end; g++) {
+      length += surveyData.shotLength[g]!;
+      if ((surveyData.shotFlags[g]! & SHOT_FLAG_IS_REFERENCE) !== 0) {
+        referenceCount++;
       }
-      return { shotCount: meta.shotCount, length, referenceCount };
     }
+    return { shotCount: meta.shotCount, length, referenceCount };
   }
   // Legacy fallback — only hit during the JSON refresh window where
   // `surveyData` may briefly be a stale legacy-converted copy. Same
@@ -499,11 +625,24 @@ function calculateSectionStats(section: Section): {
 interface SectionRowProps {
   section: Section;
   index: number;
+  /** Flat-array metadata for this section (id -> SectionMetadata), resolved by
+   *  the panel from its memoized map. `undefined` only during the legacy JSON
+   *  refresh window; the stats then fall back to the `section.shots` walk. */
+  meta: SectionMetadata | undefined;
+  surveyData: SurveyData | null;
   isSelected: boolean;
   isHovered: boolean;
   isFocused: boolean;
   isDefaultFocus: boolean;
   precision: number;
+  /** Virtualizer offset (px) of this row from the top of the sizer. */
+  virtualStart: number;
+  /** Virtualizer measure callback; attached to the row so its real height feeds
+   *  back into the scroll math (rows are uniform, but this stays pixel-exact). */
+  measureElement: (node: Element | null) => void;
+  /** Set by keyboard nav to a not-yet-mounted target index; the row focuses
+   *  itself once its ref attaches. */
+  pendingFocusIndexRef: React.MutableRefObject<number | null>;
   onMouseDown: (section: Section, e?: React.MouseEvent) => void;
   onDoubleClick: (section: Section, e: React.MouseEvent) => void;
   onContextMenu: (e: React.MouseEvent, sectionId: number) => void;
@@ -521,11 +660,16 @@ interface SectionRowProps {
 const SectionRow = memo(function SectionRow({
   section,
   index,
+  meta,
+  surveyData,
   isSelected,
   isHovered,
   isFocused,
   isDefaultFocus,
   precision,
+  virtualStart,
+  measureElement,
+  pendingFocusIndexRef,
   onMouseDown,
   onDoubleClick,
   onContextMenu,
@@ -540,7 +684,10 @@ const SectionRow = memo(function SectionRow({
   optionRefs,
 }: SectionRowProps) {
   const { t } = useTranslation();
-  const stats = calculateSectionStats(section);
+  const stats = useMemo(
+    () => calculateSectionStats(section, meta, surveyData),
+    [section, meta, surveyData],
+  );
 
   const handleLongPress = useCallback(
     (pos: { x: number; y: number }) => {
@@ -551,18 +698,28 @@ const SectionRow = memo(function SectionRow({
 
   const longPressHandlers = useLongPress(handleLongPress);
 
+  // One ref serves three roles: the panel's roving-tabindex/optionRefs registry,
+  // the virtualizer's height measurement (needs the `data-index` attribute set
+  // below), and focusing a keyboard target the moment it mounts.
   const refCallback = useCallback((el: HTMLLIElement | null) => {
     optionRefs.current[index] = el;
-  }, [optionRefs, index]);
+    measureElement(el);
+    if (el && pendingFocusIndexRef.current === index) {
+      pendingFocusIndexRef.current = null;
+      el.focus();
+    }
+  }, [optionRefs, index, measureElement, pendingFocusIndexRef]);
 
   return (
     <li
       ref={refCallback}
+      data-index={index}
       role="option"
       aria-selected={isSelected}
       tabIndex={isFocused ? 0 : (isDefaultFocus ? 0 : -1)}
       data-testid={`section-row-${section.id}`}
       title={t('sections.actions.zoom')}
+      style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualStart}px)` }}
       className={`px-3 py-2 border-l-2 border-transparent cursor-pointer group transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset ${
         isSelected
           ? 'bg-accent-20 ring-2 ring-accent ring-inset'

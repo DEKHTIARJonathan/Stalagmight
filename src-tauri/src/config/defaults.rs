@@ -6,6 +6,7 @@ use super::{
     MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
     ProviderCacheConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
     SpeleoDbConfig, StationConfig, SyntacticHighlightingConfig, UnitsConfig, ValidationConfig,
+    WebkitMemoryConfig,
 };
 
 #[expect(clippy::derivable_impls)]
@@ -25,6 +26,7 @@ impl Default for Config {
             panels: PanelsConfig::default(),
             cache: CacheConfig::default(),
             debug: DebugConfig::default(),
+            webkit_memory: WebkitMemoryConfig::default(),
             global_view: GlobalViewConfig::default(),
             appearance: AppearanceConfig::default(),
             import: ImportConfig::default(),

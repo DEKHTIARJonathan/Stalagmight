@@ -109,6 +109,28 @@ export interface SurveyData {
   stationComments: Map<number, string>;
 }
 
+/**
+ * Global counter of lazy `section.shots` materializations.
+ *
+ * The binary loader installs a per-section lazy `shots` getter that
+ * materializes ~250 B `Shot` objects on first read. The whole point of the
+ * SoA layout is that the *load / first-render* path never triggers those
+ * getters for the whole project (75k+ objects). This counter lets a test or
+ * the E2E harness assert that: after a settled load it must stay 0 (a single
+ * section opened by the user afterwards is fine and expected to be nonzero).
+ *
+ * Held in a mutable object so the value can be read live (a primitive export
+ * would snapshot). `main.tsx` exposes it on `window.__shotMaterializations`
+ * in E2E builds.
+ */
+export const shotMaterialization = { count: 0 };
+
+/** Increment the lazy-materialization counter. Called by the binary loader's
+ *  `section.shots` getter on first access. Cheap enough to run unconditionally. */
+export function noteShotMaterialization(): void {
+  shotMaterialization.count++;
+}
+
 /** Sentinel: `Int32Array`'s representation of "the marker_index is null". */
 export const SHOT_MARKER_NULL = -1;
 /** Bit position of the `is_reference` flag in `shotFlags`. */
@@ -236,6 +258,83 @@ export function findStationGlobalIndex(
 }
 
 /**
+ * Build a read-only, lazily-materialized `Station[]` view over a
+ * `SurveyData`.
+ *
+ * Numeric index access (`view[i]`) calls `getStation(data, i)`, `.length`
+ * reports `data.stationCount`, and the standard read-only `Array` methods
+ * (`find`, `filter`, `map`, `some`, `forEach`, `slice`, `for…of`,
+ * `entries`) work because they read `length` and indices back through the
+ * proxy traps. `Array.isArray(view)` is `true` (the proxy target is a real
+ * array), so array-producing methods (`map`/`filter`/`slice`) return real
+ * arrays.
+ *
+ * Memory intent: no `Station` object is retained. Each index access
+ * materializes a fresh object, so a full pass (e.g. fit-to-bounds)
+ * produces garbage-collectable temporaries instead of a persistent
+ * ~89 k-object array that duplicates `stationCoords` / `stationSectionIds`
+ * / `stationIndices` (the eager `Station[]` the binary loader used to
+ * build). The proxy is read-only — the app never mutates the store
+ * `stations` array — and its `set` / `deleteProperty` traps throw so an
+ * accidental write surfaces immediately instead of silently no-opping.
+ */
+export function lazyStationArray(data: SurveyData): Station[] {
+  // Empty target: holds no slots, so no per-station memory. `length` and
+  // indices are served entirely by the traps below.
+  const target: Station[] = [];
+
+  /** Parse a property key as a canonical array index, else null. Mirrors
+   *  the ECMAScript "array index" definition (non-negative integer with
+   *  no leading zeros / other noise), so `'01'`, `'1.0'`, `'-1'`, `'x'`
+   *  fall through to the ordinary property path. */
+  const asIndex = (prop: string): number | null => {
+    const n = Number(prop);
+    if (!Number.isInteger(n) || n < 0) return null;
+    if (String(n) !== prop) return null;
+    return n;
+  };
+
+  const handler: ProxyHandler<Station[]> = {
+    get(t, prop, receiver) {
+      if (prop === 'length') return data.stationCount;
+      if (typeof prop === 'string') {
+        const idx = asIndex(prop);
+        if (idx !== null) {
+          return idx < data.stationCount ? getStation(data, idx) : undefined;
+        }
+      }
+      return Reflect.get(t, prop, receiver);
+    },
+    has(t, prop) {
+      if (prop === 'length') return true;
+      if (typeof prop === 'string') {
+        const idx = asIndex(prop);
+        if (idx !== null) return idx < data.stationCount;
+      }
+      return Reflect.has(t, prop);
+    },
+    // This is a read-only lazy VIEW over `SurveyData`; the backing target is
+    // empty, so a write (`stations[i] = x`, `.push(...)`, `.sort()`) would
+    // silently no-op and desync from the SoA. Throw instead of swallowing it so
+    // an accidental mutation surfaces at the call site rather than as a
+    // mysteriously-empty array later. Rebuild SurveyData to change stations.
+    set(_t, prop) {
+      throw new TypeError(
+        `lazyStationArray is a read-only view over SurveyData; cannot set "${String(prop)}". ` +
+          'Rebuild SurveyData instead of mutating the station array.',
+      );
+    },
+    deleteProperty(_t, prop) {
+      throw new TypeError(
+        `lazyStationArray is a read-only view over SurveyData; cannot delete "${String(prop)}".`,
+      );
+    },
+  };
+
+  return new Proxy(target, handler);
+}
+
+/**
  * Construct `SurveyData` from the legacy `Project.sections[].shots[]` +
  * `Station[]` shape that `refreshProjectState` still returns (it pulls
  * via JSON IPC, not the binary `load_project_full_binary` route).
@@ -349,6 +448,63 @@ export function surveyDataFromLegacy(
   });
 
   return data;
+}
+
+/**
+ * Build a `SurveyData` for the closure-adjusted geometry view by reusing the
+ * measured `base`'s shot columns + section metadata verbatim and rebuilding
+ * only the station columns from `adjustedStations`.
+ *
+ * Closure adjustment moves station *coordinates* only; shot ids, angles,
+ * lengths, section shape and offsets are identical to the measured set. So the
+ * adjusted view can share the base's (large) shot typed-arrays and just swap the
+ * station arrays — an O(stations) pass that never touches the lazy
+ * `section.shots` getters. The previous `surveyDataFromLegacy(project.sections,
+ * adjusted)` walked every section's shots to rebuild shot columns it already had,
+ * force-materializing ~75k `Shot` objects the moment the closure-adjusted mode
+ * was entered (or restored from persisted UI state) on load.
+ */
+export function surveyDataWithAdjustedStations(
+  base: SurveyData,
+  adjustedStations: import('./ipc/Station').Station[],
+): SurveyData {
+  const SN = adjustedStations.length;
+  const stationSectionIds = new Int32Array(SN);
+  const stationIndices = new Uint32Array(SN);
+  const stationCoords = new Float64Array(SN * 3);
+  const stationFlags = new Uint8Array(SN);
+  const stationGps = new Map<number, GpsCoordinates>();
+  const stationMergedWith = new Map<number, StationRef[]>();
+  const stationClosuresWith = new Map<number, ClosureRef[]>();
+  const stationComments = new Map<number, string>();
+
+  adjustedStations.forEach((s, i) => {
+    stationSectionIds[i] = s.station_ref.section_id;
+    stationIndices[i] = s.station_ref.station_index;
+    stationCoords[i * 3] = s.coordinates.x;
+    stationCoords[i * 3 + 1] = s.coordinates.y;
+    stationCoords[i * 3 + 2] = s.coordinates.z;
+    stationFlags[i] = s.is_zero_datum ? STATION_FLAG_IS_ZERO_DATUM : 0;
+    if (s.gps_coordinates) stationGps.set(i, s.gps_coordinates);
+    const mergedWith = s.merged_with;
+    if (mergedWith && mergedWith.length > 0) stationMergedWith.set(i, mergedWith);
+    const closuresWith = s.closures_with;
+    if (closuresWith && closuresWith.length > 0) stationClosuresWith.set(i, closuresWith);
+    if (s.comment) stationComments.set(i, s.comment);
+  });
+
+  return {
+    ...base,
+    stationCount: SN,
+    stationSectionIds,
+    stationIndices,
+    stationCoords,
+    stationFlags,
+    stationGps,
+    stationMergedWith,
+    stationClosuresWith,
+    stationComments,
+  };
 }
 
 /**

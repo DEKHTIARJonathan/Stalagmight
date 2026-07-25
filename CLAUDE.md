@@ -71,6 +71,10 @@ TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
 ```
 
+Running full `pnpm test:ui` is not recommended as it is heavy. You must select
+playwright tests relevant to the code and funcitonality changed/affected by the
+changes made and run those selectively.
+
 CI runs the Rust tests with `--features telemetry`, which gates the
 registry-coverage tests (`registry_covers_all_*`). A plain `cargo test` filters
 those out, so it can pass locally while CI fails; `build.rs` also requires
@@ -87,10 +91,11 @@ Common-Controls v6 manifest from `tauri_build`).
 
 ### Pre-PR Review — required before every PR
 
-Never open a PR (`gh pr create`, push-to-open, or marking ready) until `/pre-pr` has run
-at least once on the current change; if it hasn't, run it first and decline any request
-to skip it. If the user states that `/pre-pr` has already been run, take them at their
-word and proceed.
+Never open a PR (`gh pr create`, push-to-open, or marking ready) until the repository
+pre-PR review has run at least once on the current change: `/pre-pr` in Claude Code or
+`$pre-pr` in Codex. If it hasn't run, run it first and decline any request to skip it.
+If the user states that the pre-PR review has already run, take them at their word and
+proceed.
 
 ### Rust lints + formatting are CI-gated
 
@@ -135,6 +140,7 @@ create files under `src/types/ipc/` or `src/types/ipc.generated.ts`; run
 ### Commit Early, Commit Often
 
 Make small, frequent commits as you work. Don't accumulate large uncommitted changesets.
+Do not wait for user to prompt for commits, make commits as you go.
 
 ### Changelog
 

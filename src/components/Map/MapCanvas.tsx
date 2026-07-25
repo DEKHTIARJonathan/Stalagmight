@@ -18,14 +18,17 @@ import {
   getEffectiveShowShotComments,
 } from '../../store/displaySelectors';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
-import { buildDistanceFeatureState } from '../../utils/distanceGradient';
+import { buildDistanceFeatureState, overlayApplyAction } from '../../utils/distanceGradient';
 import { buildGasReachFeatureState } from '../../utils/gasReach';
 import { buildMeasuredPathIds, buildMeasuredStationIds, MEASURE_TINT } from '../../utils/measurePath';
-import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
+import { computeImmovableStationKeys } from '../../utils/immovableStations';
+import { installMapE2eHooks } from '../../dev/mapE2eHooks';
+import { getBounds, getBoundsFromStationCoords, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
 import { getTileConfig } from '../../utils/tileConfig';
 import { useMapTools } from '../../hooks/useMapTools';
 import SurveyLayer from './SurveyLayer';
+import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
 import { DepthLegend } from './DepthLegend';
@@ -249,6 +252,12 @@ function MapCanvas() {
   // Whether anchored section IDs have been loaded for the current move_segment activation
   // Blocks segment drag until the set is populated to prevent moving anchored segments
   const [anchoredIdsLoaded, setAnchoredIdsLoaded] = useState(false);
+  // Clear-on-failure flags for the analytical overlays (#34 distance / #38 gas):
+  // set when a field recompute REJECTS so the apply effect drops the stale ramp
+  // (base colors) instead of `overlayApplyAction` holding it against the new
+  // inputs indefinitely. Reset on the next successful field (see the fetch effects).
+  const [distanceFieldFailed, setDistanceFieldFailed] = useState(false);
+  const [gasFieldFailed, setGasFieldFailed] = useState(false);
   // Token to invalidate stale getConnectedSectionIds results (incremented on each drag start,
   // checked in .then()/.catch() to discard late async results after mouseup)
   const segmentDragTokenRef = useRef(0);
@@ -515,35 +524,14 @@ function MapCanvas() {
 
   // Compute immovable station keys for move_station and move_shot tools.
   // A station is immovable if it is zero-datum, or transitively reachable from a
-  // zero-datum station via merged_with and aligned closures_with links.
+  // zero-datum station via merged_with and aligned closures_with links. Reads the
+  // SoA directly (computeImmovableStationKeys) rather than the lazy Station[]
+  // proxy, which would rebuild + RETAIN the whole ~89k-object graph here (#mem).
   const immovableStationKeys = useMemo(() => {
     if (activeTool !== 'move_station' && activeTool !== 'move_shot') return new Set<string>();
-    const stationByKey = new Map(
-      stations.map(s => [`${s.station_ref.section_id}:${s.station_ref.station_index}`, s])
-    );
-    const immovable = new Set<string>();
-    const queue: string[] = [];
-    for (const s of stations) {
-      if (s.is_zero_datum) {
-        queue.push(`${s.station_ref.section_id}:${s.station_ref.station_index}`);
-      }
-    }
-    while (queue.length > 0) {
-      const key = queue.pop()!;
-      if (immovable.has(key)) continue;
-      immovable.add(key);
-      const st = stationByKey.get(key);
-      if (!st) continue;
-      for (const ref of st.merged_with) {
-        queue.push(`${ref.section_id}:${ref.station_index}`);
-      }
-      for (const cr of st.closures_with ?? []) {
-        if (!alignedClosureIds.has(cr.closure_id)) continue;
-        queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
-      }
-    }
-    return immovable;
-  }, [activeTool, stations, alignedClosureIds]);
+    if (!surveyData) return new Set<string>();
+    return computeImmovableStationKeys(surveyData, alignedClosureIds);
+  }, [activeTool, surveyData, alignedClosureIds]);
 
   useEffect(() => {
     if (!logMapInteractions) return;
@@ -1001,6 +989,8 @@ function MapCanvas() {
     onHiddenShotClick: () => {
       showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden');
     },
+    // No stock fallback: surface a subsystem-specific toast (renderFatalMessage).
+    onRenderFatal: (reason: string) => showToast(renderFatalMessage(reason), 'render-fatal'),
   }), [baseToolCallbacks, showToast]);
 
   // Box select handlers
@@ -1052,30 +1042,24 @@ function MapCanvas() {
 
     // Only process if box is large enough (not just a click)
     if (maxX - minX > 5 && maxY - minY > 5) {
-      // Query stations in the box using hitbox layer (larger clickable area)
-      const features = map.current.queryRenderedFeatures(
-        [[minX, minY], [maxX, maxY]],
-        { layers: ['survey-stations-hitbox'] }
-      );
+      // Resolve stations in the box via SurveyLayer (#mem): the rendered
+      // hitbox query gates candidate sections and the SoA resolver applies
+      // the same circle-box hit semantics the direct queryRenderedFeatures
+      // call had — per-station identity no longer lives on bulk features.
+      const refs = surveyLayerRef.current?.queryStationsInBox(minX, minY, maxX, maxY) ?? [];
 
-      if (features.length > 0) {
+      if (refs.length > 0) {
         // Clear existing selection if not holding shift
         clearSelection();
         setSource('map');
 
         // Add all stations in box to selection
-        features.forEach((feature) => {
-          if (feature.properties) {
-            const { sectionId, stationIndex } = feature.properties;
-            const sel: Selection = {
-              type: 'station',
-              stationRef: {
-                section_id: sectionId as number,
-                station_index: stationIndex as number,
-              },
-            };
-            addToSelection(sel);
-          }
+        refs.forEach((stationRef) => {
+          const sel: Selection = {
+            type: 'station',
+            stationRef,
+          };
+          addToSelection(sel);
         });
       }
     }
@@ -1491,6 +1475,9 @@ function MapCanvas() {
             surveyLayerRef.current?.onNextUpdate(() => {
               surveyLayerRef.current?.endDragPreview();
             });
+            // Clear the overlay follow-offset synchronously (see the non-snap
+            // segment branch) so the post-merge rebuild never doubles the offset.
+            surveyLayerRef.current?.commitDragPreview();
             dragConnectedSectionIdsRef.current = new Set();
             moveDragLngLatRef.current = null;
             lastCursorClientRef.current = null;
@@ -1618,6 +1605,12 @@ function MapCanvas() {
         surveyLayerRef.current?.onNextUpdate(() => {
           surveyLayerRef.current?.endDragPreview();
         });
+        // Commit preview NOW (mirrors the station/shot branches): removes the
+        // temp layers and clears the overlay follow-offset synchronously so the
+        // post-commit interact-overlay rebuild reads the new coords WITHOUT the
+        // stale drag offset. Without this the highlight briefly renders at
+        // newPosition + dragOffset (a one-frame double-distance flash).
+        surveyLayerRef.current?.commitDragPreview();
         const res = await moveSegment(moveDrag.sectionId, offset);
         // Rejected move (read-only gate): restore now — see the station branch.
         if (!res.success) surveyLayerRef.current?.endDragPreview();
@@ -1656,9 +1649,10 @@ function MapCanvas() {
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
-    // Calculate initial center from stations (in meters)
-    const coords = stations.map((s) => s.coordinates);
-    const bounds = getBounds(coords);
+    // Calculate initial center from stations (in meters). Read the SoA coord
+    // buffer directly so load does not materialize the whole ~89k Station graph
+    // through the lazy proxy just to size the initial view (#mem).
+    const bounds = getBoundsFromStationCoords(surveyData?.stationCoords ?? new Float64Array(0));
     const centerX = (bounds.minX + bounds.maxX) / 2;
     const centerY = (bounds.minY + bounds.maxY) / 2;
     // Transform to map coordinates
@@ -1782,6 +1776,12 @@ function MapCanvas() {
       // the pending-update microtask in SurveyLayer.flushUpdate guarding
       // against `hasLiveStyle === false` so it bails harmlessly after
       // map.remove() runs.
+      // Still release the module-level VT registry (the flat geometry arrays
+      // MapLibre doesn't own) — that piece survives map.remove() and is keyed
+      // by a fixed source id shared across projects, so skipping it leaks this
+      // project's arrays until the next project publishes (#mem). Cheap: JS-map
+      // clears only, no map/worker work, so it doesn't reintroduce the freeze.
+      surveyLayerRef.current?.releaseVtRegistry();
       surveyLayerRef.current = null;
       const tA = performance.now();
       map.current?.remove();
@@ -1813,16 +1813,18 @@ function MapCanvas() {
     };
   }, [mapLoaded]);
 
-  // Expose the active meters transform for E2E commit-offset assertions — lets a test
-  // predict a committed move offset with the SAME mapCoordsToMeters + gpsOrigin the
-  // component uses (the no-GPS linear fallback vs the ENU transform are not equivalent).
-  useEffect(() => {
-    (window as unknown as { __stalagmight_to_meters__?: (lng: number, lat: number) => { x: number; y: number } })
-      .__stalagmight_to_meters__ = (lng, lat) => mapCoordsToMeters(lng, lat, gpsOrigin);
-    return () => {
-      delete (window as unknown as { __stalagmight_to_meters__?: unknown }).__stalagmight_to_meters__;
-    };
-  }, [gpsOrigin]);
+  // Map E2E hooks (drawn geometry, measured-path tint, drag-ghost offset, the
+  // active meters transform). The custom renderer makes MapLibre's feature/paint
+  // queries useless to tests, so these expose what is actually drawn — see
+  // src/dev/mapE2eHooks.ts for the full rationale.
+  useEffect(
+    () =>
+      installMapE2eHooks({
+        surveyLayer: () => surveyLayerRef.current,
+        toMeters: (lng, lat) => mapCoordsToMeters(lng, lat, gpsOrigin),
+      }),
+    [surveyLayerRef, mapLoaded, gpsOrigin],
+  );
 
   // Update survey layer when data changes or map loads.
   // useLayoutEffect ensures setData() runs before the browser paints — critical
@@ -1909,8 +1911,15 @@ function MapCanvas() {
       { from: distanceGradientOrigin ?? null },
       { purpose: 'distance gradient field', fields: { origin: distanceGradientOrigin ?? 'entrance' } }
     )
-      .then((field) => { if (!cancelled) setDistanceField(field); })
-      .catch((e) => console.warn('[distance-gradient] field fetch failed', e));
+      .then((field) => { if (!cancelled) { setDistanceField(field); setDistanceFieldFailed(false); } })
+      .catch((e) => {
+        console.warn('[distance-gradient] field fetch failed', e);
+        // Clear on failure (#34): drop any stale field + flag the failure so the
+        // apply effect restores base colors instead of holding the old ramp
+        // against the new origin/geometry. Guard on the cancel token so a
+        // superseded fetch never clears a newer in-flight one.
+        if (!cancelled) { setDistanceField(null); setDistanceFieldFailed(true); }
+      });
     return () => { cancelled = true; };
   }, [showDistanceGradient, distanceGradientOrigin, project?.modified_at, setDistanceField]);
 
@@ -1938,8 +1947,14 @@ function MapCanvas() {
       },
       { purpose: 'gas reachable-frontier field', fields: { origin: gasOrigin ?? 'entrance' } }
     )
-      .then((field) => { if (!cancelled) setGasReachField(field); })
-      .catch((e) => console.warn('[gas-plan] field fetch failed', e));
+      .then((field) => { if (!cancelled) { setGasReachField(field); setGasFieldFailed(false); } })
+      .catch((e) => {
+        console.warn('[gas-plan] field fetch failed', e);
+        // Clear on failure (#38): mirror the distance overlay — drop the stale
+        // field + flag the failure so the apply effect restores base colors
+        // rather than holding the old ramp against the new gas inputs.
+        if (!cancelled) { setGasReachField(null); setGasFieldFailed(true); }
+      });
     return () => { cancelled = true; };
   }, [showGasPlan, gasOrigin, gasEndpoint, gasDiver, gasCylinders, gasPlanConfig, gasStageDropOverrides, project?.modified_at, setGasReachField]);
 
@@ -1947,26 +1962,36 @@ function MapCanvas() {
   // from the rebuild path so re-rooting never triggers a feature rebuild.
   useEffect(() => {
     if (!surveyLayerRef.current || !mapLoaded) return;
-    if (showDistanceGradient && !effectiveIssueSeverity && distanceField && project) {
-      const state = buildDistanceFeatureState(project.sections, distanceField);
+    if (showDistanceGradient && !effectiveIssueSeverity && distanceField && surveyData) {
+      // Measured SoA: distances use surveyed geometry, and the builder only needs
+      // section metadata + shot ids — never the lazy `section.shots` objects.
+      const state = buildDistanceFeatureState(surveyData, distanceField);
       surveyLayerRef.current.setDistanceGradient(true, state);
-    } else {
-      // Severity coloring (incl. the Warnings-tab auto-highlight) takes precedence.
+    } else if (overlayApplyAction(showDistanceGradient && !effectiveIssueSeverity, distanceField != null, surveyData != null, distanceFieldFailed) === 'off') {
+      // Real off (mode disabled, severity coloring wins, no geometry, or a FAILED
+      // recompute) -> base now. NOT while the origin is recomputing successfully
+      // (field transiently null, mode still on, no failure): 'hold' keeps the old
+      // ramp so a re-root never blinks base (#customRender).
       surveyLayerRef.current.setDistanceGradient(false, null);
     }
-  }, [showDistanceGradient, effectiveIssueSeverity, distanceField, project, mapLoaded, surveyLayerRef]);
+  }, [showDistanceGradient, effectiveIssueSeverity, distanceField, surveyData, mapLoaded, surveyLayerRef, distanceFieldFailed]);
 
   // Apply the gas field to the layer (feature-state + paint swap). Separate from
   // the fetch so re-rooting / re-computing never triggers a feature rebuild.
   useEffect(() => {
     if (!surveyLayerRef.current || !mapLoaded) return;
-    if (showGasPlan && gasReachField && project) {
-      const state = buildGasReachFeatureState(project.sections, gasReachField);
+    if (showGasPlan && gasReachField && surveyData) {
+      // Measured SoA (see distance-gradient effect): builder reads shot ids from
+      // typed arrays, never the lazy `section.shots` objects.
+      const state = buildGasReachFeatureState(surveyData, gasReachField);
       surveyLayerRef.current.setGasReach(true, state);
-    } else {
+    } else if (overlayApplyAction(showGasPlan, gasReachField != null, surveyData != null, gasFieldFailed) === 'off') {
+      // 'hold' during a SUCCESSFUL gas param/origin recompute (field transiently
+      // null) keeps the old ramp; a real off OR a failed recompute restores base
+      // (mirrors the distance guard).
       surveyLayerRef.current.setGasReach(false, null);
     }
-  }, [showGasPlan, gasReachField, project, mapLoaded, surveyLayerRef]);
+  }, [showGasPlan, gasReachField, surveyData, mapLoaded, surveyLayerRef, gasFieldFailed]);
 
   // Highlight the picked route over the survey (#233): full-opacity swum legs + faded jumps (#243).
   useEffect(() => {
@@ -2456,8 +2481,14 @@ function MapCanvas() {
     }
   }, [resolvedTheme, mapLoaded]);
 
-  // Sync selection state with SurveyLayer for visual feedback
-  useEffect(() => {
+  // Sync selection state with SurveyLayer for visual feedback.
+  // useLayoutEffect (not useEffect) so it clears before paint, in the same commit
+  // as the geometry-apply layout effect above. On a project switch the geometry
+  // rebuild runs first and re-applies the controller's stored highlight; because
+  // section ids are per-project sequential (they collide across projects), a
+  // regular useEffect would let the colliding section flash highlighted for one
+  // frame before this cleared it.
+  useLayoutEffect(() => {
     if (!surveyLayerRef.current) return;
 
     if (selection?.type === 'station' && selection.stationRef) {
@@ -2580,14 +2611,22 @@ function MapCanvas() {
     surveyLayerRef.current.setShowReferenceShots(getEffectiveShowReferenceShots(showShots, showReferenceShots));
   }, [showReferenceShots, showShots, mapLoaded]);
 
-  // Sync anchored section IDs with SurveyLayer for fading
-  useEffect(() => {
+  // Sync anchored section IDs with SurveyLayer for fading.
+  // useLayoutEffect (not useEffect) for the same reason as the selection sync
+  // above: the controller retains its dim state across a project switch, and
+  // section/feature ids collide across projects. A post-paint useEffect would
+  // let the pre-paint geometry rebuild re-apply the previous project's dim to
+  // the new project's colliding ids for one frame before this cleared it.
+  useLayoutEffect(() => {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setAnchoredSections(anchoredSectionIds);
   }, [anchoredSectionIds, mapLoaded]);
 
-  // Sync immovable feature IDs with SurveyLayer for disabled visual
-  useEffect(() => {
+  // Sync immovable feature IDs with SurveyLayer for disabled visual.
+  // useLayoutEffect for the same cross-project-flash reason as above; immovable
+  // ids are non-empty for the entire duration of a move tool, so this is the
+  // more reachable trigger of the stale-dim flash.
+  useLayoutEffect(() => {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setImmovableFeatures(
       immovableFeatureIds.stationIds,
@@ -3107,9 +3146,17 @@ function MapCanvas() {
           maxzoom: tileConfig.maxZoom,
         });
 
-        // Add satellite layer below survey layers but above background
-        // 'survey-shots-hitbox' is the first/bottom survey layer (hitbox layers are added first)
-        const firstSurveyLayer = currentMap.getLayer('survey-shots-hitbox') ? 'survey-shots-hitbox' : undefined;
+        // Add satellite layer below survey layers but above background.
+        // The main shots/stations hitbox layers were removed (#mem budget), so
+        // the bottom-most survey layer is now the ghost shot hitbox (added first
+        // in initializeLayers). Fall back through the first visible survey layers
+        // in case ordering changes, so satellite always lands beneath them.
+        const bottomCandidates = [
+          'survey-ghost-shots-hitbox',
+          'survey-ghost-shots',
+          'survey-shots',
+        ];
+        const firstSurveyLayer = bottomCandidates.find((id) => currentMap.getLayer(id));
         currentMap.addLayer({
           id: 'satellite-tiles',
           type: 'raster',
@@ -3170,10 +3217,34 @@ function MapCanvas() {
   // Fit to survey bounds using transformed coordinates
   const fitToBounds = useCallback((options?: { snap?: boolean }) => {
     // Frame the *active* (drawn) geometry — adjusted in the closure-adjusted view.
-    if (!map.current || activeStations.length === 0) return;
+    if (!map.current) return;
 
-    const coords = activeStations.map((s) => s.coordinates);
-    const bounds = getBounds(coords);
+    // Prefer the SoA `stationCoords` typed array (stride-3 [x,y,z,…]) so the
+    // fit computes X/Y bounds without materializing the ~89k-object lazy
+    // `activeStations` view — this callback runs on every load via the
+    // requestFitToBounds effect. Fall back to `activeStations` only when
+    // surveyData isn't available yet (unusual early-init paths).
+    let bounds: { minX: number; maxX: number; minY: number; maxY: number };
+    const coordsArr = activeSurveyData?.stationCoords;
+    if (coordsArr && coordsArr.length > 0) {
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      for (let i = 0; i + 2 < coordsArr.length; i += 3) {
+        const x = coordsArr[i]!;
+        const y = coordsArr[i + 1]!;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+      bounds = { minX, maxX, minY, maxY };
+    } else {
+      if (activeStations.length === 0) return;
+      const coords = activeStations.map((s) => s.coordinates);
+      bounds = getBounds(coords);
+    }
 
     // Transform bounds to map coordinates
     const sw = metersToMapCoords(bounds.minX, bounds.minY, gpsOrigin);
@@ -3197,7 +3268,7 @@ function MapCanvas() {
       maxZoom: 20,
       ...(options?.snap ? { animate: false } : { duration: animationDuration }),
     });
-  }, [activeStations, gpsOrigin, calcPadding, config]);
+  }, [activeStations, activeSurveyData, gpsOrigin, calcPadding, config]);
 
   // Fit to a specific section's bounds
   const fitToSection = useCallback(
@@ -3493,11 +3564,23 @@ function MapCanvas() {
       const snap = requestFitToBounds === 'snap';
       if (snap) {
         fitToBounds({ snap: true });
+        // The load's FIRST feature build can run against the pre-fit camera;
+        // if that transient zoom sat above the label build threshold while
+        // the fitted camera lands inside the hysteresis band, ~165k label
+        // features would persist that a load at the final camera never
+        // builds. Re-evaluate from a clean slate at the fitted camera (#mem).
+        surveyLayerRef.current?.resetLabelZoomHysteresis();
         clearFitToBoundsRequest();
       } else {
         // Small delay to ensure data is rendered
         setTimeout(() => {
           fitToBounds();
+          // Same clean-slate label re-evaluation as the snap path, but the
+          // camera animates here — wait for the map to settle ('idle' also
+          // fires when the fit was a no-op, unlike 'moveend').
+          map.current?.once('idle', () => {
+            surveyLayerRef.current?.resetLabelZoomHysteresis();
+          });
           clearFitToBoundsRequest();
         }, 100);
       }

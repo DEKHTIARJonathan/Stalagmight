@@ -1645,6 +1645,69 @@ fn test_save_to_path_and_load_roundtrip() {
 }
 
 #[test]
+fn test_non_default_webkit_memory_survives_save_load_roundtrip() {
+    // Regression: `webkit_memory` is `#[serde(skip_serializing)]`, so
+    // `toml::to_string_pretty` drops it. `save_to_path` must re-append the
+    // `[webkit_memory]` table when it is non-default, otherwise a hand-tuned knob
+    // is wiped from disk on the next save (which fires on every project
+    // open/create/save). Prove the value survives a write -> load -> save -> load.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    // Write a config.toml carrying a NON-default [webkit_memory].
+    let mut config = Config::default();
+    config.webkit_memory.memory_limit_mb = 1234;
+    config.webkit_memory.jsc_force_ram_size_mb = 4096;
+    config.save_to_path(&path).unwrap();
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        raw.contains("[webkit_memory]"),
+        "a non-default webkit_memory must be re-appended on save: {raw}"
+    );
+
+    // First load: the non-default value made it to disk and back.
+    let loaded = Config::load_from_path(&path).unwrap();
+    assert_eq!(loaded.webkit_memory.memory_limit_mb, 1234);
+    assert_eq!(loaded.webkit_memory.jsc_force_ram_size_mb, 4096);
+
+    // Round-trip again (save the loaded config, reload) to prove a plain save
+    // does not silently reset the knob.
+    loaded.save_to_path(&path).unwrap();
+    let reloaded = Config::load_from_path(&path).unwrap();
+    assert_eq!(
+        reloaded.webkit_memory.memory_limit_mb, 1234,
+        "non-default memory_limit_mb must survive a save/load round-trip"
+    );
+    assert_eq!(reloaded.webkit_memory.jsc_force_ram_size_mb, 4096);
+}
+
+#[test]
+fn test_default_webkit_memory_emits_no_section() {
+    // A DEFAULT webkit_memory must NOT emit a `[webkit_memory]` table (it stays
+    // backend-only, out of the frontend-typed serialization) and still round-trips
+    // to the default.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let config = Config::default();
+    config.save_to_path(&path).unwrap();
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !raw.contains("[webkit_memory]"),
+        "a default webkit_memory must not be serialized: {raw}"
+    );
+
+    let reloaded = Config::load_from_path(&path).unwrap();
+    assert_eq!(
+        reloaded.webkit_memory,
+        WebkitMemoryConfig::default(),
+        "a config with no [webkit_memory] section loads the default"
+    );
+}
+
+#[test]
 fn test_load_from_path_invalid_toml_errors() {
     use tempfile::tempdir;
     let dir = tempdir().unwrap();

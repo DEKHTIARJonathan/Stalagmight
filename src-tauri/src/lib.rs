@@ -14,6 +14,10 @@ pub mod telemetry;
 pub mod test_helpers;
 pub mod tile_providers;
 pub mod tilemap_cache;
+/// Linux-only WebKit memory-pressure wiring (see the module docs and the
+/// patched wry fork: <https://github.com/Stalagmight/wry>).
+#[cfg(target_os = "linux")]
+pub mod webkit_memory;
 
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageFormat};
@@ -1049,10 +1053,28 @@ pub fn tile_fetch_impl(
 const EXIT_LOCK_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn run() {
+    // Export the WebKit memory-pressure environment as the FIRST thing `run()`
+    // does, while the process is still genuinely single-threaded: the `set_var`
+    // calls inside are a data race once any other thread is live, and
+    // `logging::init()` below spawns a `tracing_appender` writer thread. It also
+    // must run before the Tauri builder: on Linux the config-defined window's
+    // WebContext is constructed inside Tauri's setup step (before our own
+    // `.setup()` hook), and `memory-pressure-settings` is a construct-only
+    // property. No-op unless enabled (default on). The summary is logged after
+    // `logging::init()` (the logger does not exist yet here). See `webkit_memory`
+    // and the patched wry fork (https://github.com/Stalagmight/wry).
+    #[cfg(target_os = "linux")]
+    let webkit_mem_cfg = webkit_memory::apply_env_from_config();
+
     let _guard = logging::init();
     // Route panics through tracing + a crash-marker file so a crash oracle can
     // detect a backend panic even when a thread panic leaves the app alive.
     logging::panic_hook::install();
+
+    // Now that logging is initialized, emit the WebKit memory summary that
+    // `apply_env_from_config` computed before any subscriber existed.
+    #[cfg(target_os = "linux")]
+    webkit_memory::log_applied_config(&webkit_mem_cfg);
 
     #[cfg(not(feature = "e2e"))]
     let builder = tauri::Builder::default();

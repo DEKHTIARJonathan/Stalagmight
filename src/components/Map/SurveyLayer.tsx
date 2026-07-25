@@ -17,14 +17,42 @@ import { useUIStore } from '../../store/uiStore';
 import { selectActiveSurveyData } from '../../store/geometrySelectors';
 import { surveyDataFromLegacy } from '../../types/survey-data';
 import { hasLiveStyle } from './mapUtils';
+import { buildGhostFeatures } from './surveyLayer/ghostFeatures';
 import {
-  buildGhostFeatures,
-  buildSurveyFeatures,
   normalizeDepthRange,
+  resolveShotDisplayColor,
+  resolveStationDisplayColor,
   type DepthRange,
+  type DisplayColorContext,
   type GhostSectionData,
-} from './surveyLayer/features';
-import { computeIssueSeverity } from './surveyLayer/severity';
+} from './surveyLayer/displayColor';
+import { SurveyGeometryIndex } from './surveyLayer/geometryIndex';
+import {
+  offsetOverlayPoint,
+  offsetOverlayShot,
+  type DragPreviewFeature,
+  type DragPreviewSet,
+  type MovingEnd,
+  type Projector,
+} from './surveyLayer/dragPreviewSource';
+import { DRAG_PREVIEW_SOURCE, type DragPreviewLayerCtx } from './surveyLayer/dragPreviewLayers';
+import { DragGhostController } from './surveyLayer/dragGhostController';
+import type { GhostRenderData } from './surveyLayer/customRender/surveyGhostLayer';
+import { buildGhostRenderData } from './surveyLayer/dragGhostData';
+import { padProbeBox, type ProbeGeometry } from './surveyLayer/hitProbe';
+import { computeIssueSeverity, type IssueSeverity } from './surveyLayer/severity';
+import { SurveyCustomController, type CustomRenderExclusion } from './surveyLayer/customRender/controller';
+import { SurveyLabelController } from './surveyLayer/customRender/labelController';
+import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
+import { MeasurePathController } from './surveyLayer/customRender/measurePathController';
+import type { MeasurePathRenderData } from './surveyLayer/customRender/surveyMeasurePathLayer';
+import {
+  buildMeasurePathBuffers,
+  type MeasureSegment,
+  type MeasurePoint,
+} from './surveyLayer/customRender/measurePathTessellate';
+import { packCssColor } from './surveyLayer/customRender/colorPack';
+import type { SurveyData } from '../../types/survey-data';
 import type { ProjectWarning } from '../../types/commands';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import {
@@ -40,28 +68,18 @@ import {
   type GasReachFeatureState,
 } from '../../utils/gasReach';
 import { metersToMapCoords } from '../../utils/coordinates';
-import { formatFixed } from '../../i18n/format';
 import { getErrorColor } from '../../utils/colors';
 import { trackNav } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
+import { watchDevicePixelRatio } from '../../utils/dprWatcher';
+import { clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
+import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/mapErrors';
+import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
 import {
-  distanceToLineSegment,
-  projectParamOnSegment,
-  resolveNearestShot,
-  resolveNearestStation,
-} from './surveyLayer/hitTest';
-import { recordFeatureCount, clearFeatureCountsForPrefix, recordPerfTiming } from '../../utils/memoryProbe';
-import { buildSurveyFeaturesAsync } from './surveyLayer/featuresWorkerClient';
-// Note: buildPriorityExpression, compositeIdEquals, inSection no longer needed
-// after switching to setFeatureState for hover/selection highlighting
-
-/** Comment-label halo width (#52): the plain base width and the wider,
- *  more-readable width while `move_comment` is tinting the labels. Shared by
- *  the initial layer defs and the tool-transition restore path so they can't
- *  drift apart. */
-const COMMENT_HALO_WIDTH_BASE = 1.5;
-const COMMENT_HALO_WIDTH_TINTED = 2.5;
+  InteractOverlayHideController,
+  overlayTouchesRemovedSections,
+} from './surveyLayer/interactOverlayHide';
 
 export interface SurveyLayerCallbacks {
   onStationClick?: (ref: StationRef, event: MapMouseEvent) => void;
@@ -78,6 +96,10 @@ export interface SurveyLayerCallbacks {
   onHiddenStationClick?: () => void;
   /** Called when user clicks near a hidden shot (for toast feedback) */
   onHiddenShotClick?: () => void;
+  /** Called when the custom WebGL renderer hits an unrecoverable GL failure
+   *  (WebGL2/GPU). The custom layer is the sole survey renderer with no stock
+   *  fallback, so the survey area is now blank — surface a user-facing error. */
+  onRenderFatal?: (reason: string) => void;
 }
 
 /**
@@ -87,38 +109,38 @@ export interface SurveyLayerCallbacks {
  * For better performance with large datasets, this could be
  * replaced with deck.gl layers.
  */
-export type { GhostSectionData } from './surveyLayer/features';
+export type { GhostSectionData } from './surveyLayer/displayColor';
 
 export default class SurveyLayer {
   private map: MaplibreMap;
   private sourceId = 'survey-data';
-  private shotsLayerId = 'survey-shots';
-  private shotGradientsLayerId = 'survey-shot-gradients';
-  // Measure along-line tint overlay (#26): the measured path's shots redrawn ABOVE
-  // the depth-gradient sub-segments so the tint is never occluded by them.
-  private measurePathLayerId = 'survey-measure-path';
+  // Stable ids kept only as z-order fallback anchors for the custom measure-path
+  // layer's beforeId (the stock layers themselves are gone).
   private stationsLayerId = 'survey-stations';
-  private labelsLayerId = 'survey-labels';
-  private shotLabelsLayerId = 'survey-shot-labels';
-  private stationLabelsLayerId = 'survey-station-labels';
-  private stationCommentsLayerId = 'survey-station-comments';
-  private shotCommentsLayerId = 'survey-shot-comments';
   private loopClosuresLayerId = 'survey-loop-closures';
-  private dragClosuresLayerId = 'survey-drag-loop-closures';
   private ghostShotsLayerId = 'survey-ghost-shots';
   private ghostStationsLayerId = 'survey-ghost-stations';
   private ghostMergeLayerId = 'survey-ghost-merge';
   private stationsHighlightLayerId = 'survey-stations-highlight';
-  // Hitbox layers for improved click detection
-  private stationsHitboxLayerId = 'survey-stations-hitbox';
-  private shotsHitboxLayerId = 'survey-shots-hitbox';
+  // Interact overlay (#mem): a tiny GeoJSON source holding ONLY the currently
+  // hovered / selected / snapped shot(s)/station(s) as individual features.
+  // With merged bulk features, per-item hover/selection can no longer use
+  // per-feature feature-state; instead these few features are redrawn above
+  // the bulk layers with the same resolved paint values, so pixels match.
+  private interactSourceId = 'survey-interact';
+  private interactShotsLayerId = 'survey-interact-shots';
+  private interactShotsMeasuredLayerId = 'survey-interact-shots-measured';
+  private interactStationsLayerId = 'survey-interact-stations';
+  // NOTE: the former dedicated survey-shots-hitbox / survey-stations-hitbox
+  // layers were removed (#mem budget). Each was a full unfiltered duplicate
+  // vertex bucket of its bulk source (~75k line segments / ~90k points) built
+  // solely to gate hit-testing. The candidate-section gate now queries the
+  // VISIBLE shots/stations layers with a padded probe box that reproduces the
+  // old hit tolerance exactly — see hitCandidateSections().
   // Gas route highlight (#233): the picked penetration route drawn over the survey — one line
   // layer, swum legs at full opacity and jump legs faded via a data-driven line-opacity (#243).
   private gasRouteLayerId = 'survey-gas-route';
 
-  // Base zoom-density filters for label layers (set at init, restored when clearing reference filter)
-  private shotLabelsBaseFilter: maplibregl.FilterSpecification | null = null;
-  private stationLabelsBaseFilter: maplibregl.FilterSpecification | null = null;
   private ghostStationsHitboxLayerId = 'survey-ghost-stations-hitbox';
   private ghostShotsHitboxLayerId = 'survey-ghost-shots-hitbox';
   private callbacks: SurveyLayerCallbacks;
@@ -142,9 +164,8 @@ export default class SurveyLayer {
   // Multi-section hover for Move Segment tool (highlights all connected sections)
   private hoveredSegmentSectionIds: string[] = [];
 
-  // Hidden comment during move_comment pickup (visually hides without backend mutation)
-  private hiddenComment: { type: 'station' | 'shot'; sectionId: number; id: number } | null = null;
-  // Cached reference-shots visibility for recomputing comment filters
+  // Cached reference-shots visibility (custom renderer + labels + measure path
+  // read it to hide/show reference legs).
   private showReferenceShotsCached = true;
 
   // Comment tool override: when comment/move_comment tool is active, force both
@@ -158,7 +179,6 @@ export default class SurveyLayer {
 
   // Anchored section IDs (for fading when Move Segment tool is active)
   private anchoredSectionIds: Set<number> = new Set();
-  private prevAnchoredFeatureIds: Set<number> = new Set();
 
   // Immovable feature IDs for Move Station / Move Shot tools
   // (per-feature granularity, unlike anchoredSectionIds which is per-section)
@@ -199,51 +219,61 @@ export default class SurveyLayer {
   private updateScheduled = false;
   /** Coalesced-call counter, surfaced to memory probe for instrumentation. */
   private coalescedUpdateCallsSinceLastFlush = 0;
-  /** Monotonic id incremented on every update() flush start. Async worker
-   *  builds compare against this on resolve to bail if a newer update
-   *  invalidated them mid-flight. */
-  private lastUpdateToken = 0;
-  // Layers that participate in drag preview (main layer → temp layer config)
-  private static readonly DRAG_LAYER_DEFS: Array<{
-    mainLayerId: string;
-    tempLayerId: string;
-    sourceId: string;
-    type: 'line' | 'circle' | 'symbol';
-    translateProp: string;
-    translateAnchorProp: string;
-  }> = [
-    { mainLayerId: 'survey-shots', tempLayerId: 'survey-drag-shots', sourceId: 'survey-data-shots', type: 'line', translateProp: 'line-translate', translateAnchorProp: 'line-translate-anchor' },
-    { mainLayerId: 'survey-shot-gradients', tempLayerId: 'survey-drag-shot-gradients', sourceId: 'survey-data-shot-gradients', type: 'line', translateProp: 'line-translate', translateAnchorProp: 'line-translate-anchor' },
-    { mainLayerId: 'survey-stations', tempLayerId: 'survey-drag-stations', sourceId: 'survey-data-stations', type: 'circle', translateProp: 'circle-translate', translateAnchorProp: 'circle-translate-anchor' },
-    { mainLayerId: 'survey-shot-labels', tempLayerId: 'survey-drag-shot-labels', sourceId: 'survey-data-shot-labels', type: 'symbol', translateProp: 'text-translate', translateAnchorProp: 'text-translate-anchor' },
-    { mainLayerId: 'survey-labels', tempLayerId: 'survey-drag-labels', sourceId: 'survey-data-section-labels', type: 'symbol', translateProp: 'text-translate', translateAnchorProp: 'text-translate-anchor' },
-    { mainLayerId: 'survey-station-labels', tempLayerId: 'survey-drag-station-labels', sourceId: 'survey-data-station-labels', type: 'symbol', translateProp: 'text-translate', translateAnchorProp: 'text-translate-anchor' },
-  ];
-
-  // Station drag preview — dynamic geometry rebuild for connected shots
-  // (translate is insufficient because only one endpoint of each shot moves)
-  private stationDragShots: Array<{
-    properties: Record<string, unknown>;
-    fromCoord: [number, number]; // original [lng, lat]
-    toCoord: [number, number];
-    movingEnd: 'from' | 'to' | 'both';
-    shotLabelProperties: Record<string, unknown>;
-  }> | null = null;
-  private static readonly STATION_DRAG_SHOT_SOURCE = 'survey-drag-station-shots-src';
-  private static readonly STATION_DRAG_SHOT_LAYER = 'survey-drag-station-shots-layer';
-  private static readonly STATION_DRAG_SHOT_LABEL_SOURCE = 'survey-drag-station-shot-labels-src';
-  private static readonly STATION_DRAG_SHOT_LABEL_LAYER = 'survey-drag-station-shot-labels-layer';
-
-  // Station drag preview — dynamic geometry rebuild for connected closure indicator lines
-  // (translate is insufficient because only one endpoint of each closure line may move)
-  private stationDragClosures: Array<{
-    properties: Record<string, unknown>;
-    fromCoord: [number, number]; // original [lng, lat] — station_a
-    toCoord: [number, number];   // original [lng, lat] — station_b
-    movingEnd: 'from' | 'to' | 'both';
-  }> | null = null;
-  private static readonly STATION_DRAG_CLOSURE_SOURCE = 'survey-drag-station-closures-src';
-  private static readonly STATION_DRAG_CLOSURE_LAYER = 'survey-drag-station-closures-layer';
+  // Unified drag-preview source (#mem drag fixes): ONE GeoJSON source holding
+  // every moving GEOMETRY feature for the active drag — stations (points), shots
+  // (lines), loop-closure indicator lines — rebuilt from captured originals each
+  // frame and pushed via a SINGLE setData. Real moved coordinates (not
+  // `*-translate`) so the tiler clips moved geometry — no background wedges at
+  // large offsets (BUG A); one setData so stations/shots can't skew apart (BUG B).
+  // Attached text is not previewed (it is hidden from the stock text layers).
+  // The moving ghost is owned by {@link DragGhostController}; DRAG_PREVIEW_SOURCE
+  // is imported only for setDragExclusionWhenPreviewReady's stock-preview load gate.
+  /** Captured moving geometry for the active drag (originals + movingEnd). */
+  private dragPreviewSet: DragPreviewSet | null = null;
+  /** rAF coalescer for the per-frame interact-overlay follow: MapCanvas may push
+   *  several offsets per frame (pointermove + the map-'move' re-apply), but the
+   *  overlay only needs the latest — one small setData per frame. (The GHOST is
+   *  driven synchronously by {@link DragGhostController}, decoupled from this rAF.) */
+  private dragUpdateRaf: number | null = null;
+  private pendingDragOffset: { dx: number; dy: number } | null = null;
+  /** Drag ghost (#mem drag latency): owns the moving-geometry preview and drives
+   *  it from a live screen-px offset. The CUSTOM path renders a WebGL layer whose
+   *  drag delta is a single vertex-shader uniform (no worker, no re-bake, so no
+   *  overshoot); the STOCK fallback is the historical GeoJSON preview +
+   *  single-flight {@link GhostFollow} bake / `line-translate` machine. See
+   *  {@link DragGhostController}. Constructed once, reused across drags. */
+  private dragGhost!: DragGhostController;
+  /** Interact-overlay follow (#C): a hover/selected highlight on a moving
+   *  station/shot is re-emitted at the drag offset each frame so it tracks the
+   *  cursor. Stationary overlay features (snap ring, highlightedStationIds,
+   *  unrelated selections) keep their true coordinates. */
+  private dragMovingStationKeys = new Set<string>();
+  private dragMovingShots = new Map<string, MovingEnd>();
+  private dragOverlayOffset: { dx: number; dy: number } | null = null;
+  /** Set by commitDragPreview at placement: the follow-offset (dragOverlayOffset +
+   *  moving sets) is deliberately KEPT applied across the IPC + flush window so the
+   *  grabbed highlight stays on the cursor instead of snapping back to the OLD
+   *  coords. endApplyFeatures drops it atomically, right before the post-commit
+   *  overlay refresh reads the freshly installed geometry (no snap-back, and no
+   *  old+offset overshoot). */
+  private dragCommitPending = false;
+  /** Deferred custom-render drag-hide (START-flash fix). The moving originals are
+   *  hidden from the custom WebGL layer only once the drag-preview GeoJSON source
+   *  has parsed and drawn its first frame - the preview's setData is async (~5
+   *  frames on a real project) while setDragHide is a synchronous GPU upload, so
+   *  hiding eagerly leaves a window where the geometry is in NEITHER the custom
+   *  layer nor the (not-yet-parsed) preview: a blank flash. Stored so it can be
+   *  force-applied at commit and torn down on end; `dragGeneration` is bumped per
+   *  drag so a late sourcedata callback from a superseded drag is ignored. */
+  private dragGeneration = 0;
+  private pendingDragHide: {
+    exclusion: CustomRenderExclusion;
+    listener: (e: maplibregl.MapSourceDataEvent) => void;
+  } | null = null;
+  /** Hides the interact-overlay layers across a removal flush's async re-tile so a
+   *  deleted feature's hover/selection highlight drops in the geometry frame
+   *  instead of lingering on the stale GeoJSON tile. See interactOverlayHide.ts. */
+  private readonly interactHide: InteractOverlayHideController;
 
   // Visibility state (for hidden feature detection)
   private stationsVisible: boolean = true;
@@ -262,8 +292,8 @@ export default class SurveyLayer {
   private cachedWarnings: ProjectWarning[] = [];
 
   // Distance-gradient overlay (#34). feature-state based so re-root needs no
-  // feature rebuild; re-applied in updateVisualState() because MapLibre clears
-  // feature-state on every setData().
+  // feature rebuild; re-applied after source rebuilds because endApplyFeatures
+  // clears state before tile IDs can be reused for different merged groups.
   private distanceMode: boolean = false;
   private distanceState: DistanceFeatureState | null = null;
   // Gas reachable-frontier overlay (#38). Same feature-state mechanics as the
@@ -271,13 +301,11 @@ export default class SurveyLayer {
   // the shots/stations color paint), enforced upstream in uiStore.
   private gasReachMode: boolean = false;
   private gasReachState: GasReachFeatureState | null = null;
-  // Gas route highlight (#233): the current picked-route legs. Re-applied after every setData()
+  // Gas route highlight (#233): the current picked-route legs. Re-applied after every source
   // rebuild (its own GeoJSON source survives setData, but a feature rebuild re-pushes the data).
   private gasRouteLegs: RouteLeg[] = [];
-  // Measured along-line path (#26): the path's shots AND stations are tinted via
-  // a `measured` feature-state + a paint `case` on shots line-color / stations
-  // circle-color, in a user-configurable color. Re-applied after setData() (which
-  // clears feature-state), and suppressed while the distance gradient owns color.
+  // Measured along-line path (#26): the path's shots AND stations, tinted in a
+  // user-configurable color by the dedicated custom measure-path layer.
   private measuredPathIds: Set<number> | null = null;
   private measuredPathStationIds: Set<number> | null = null;
   private measureTintColor: string = MEASURE_TINT;
@@ -286,23 +314,11 @@ export default class SurveyLayer {
   // Seeded at construction so first paint uses current theme, not legacy fallbacks
   private themeColors: MapThemeColors = getMapThemeColors();
 
-  // Cached input data for feature rebuild on theme change
+  // Cached input data for the theme rebuild / drag-preview / hit-test paths.
   private cachedSections: Section[] = [];
   private cachedStations: Station[] = [];
   private cachedLoopClosures: LoopClosure[] | undefined;
   private cachedPrecision: DecimalPrecision | undefined;
-
-  // Lazy label sources. shot-labels and station-labels both have minzoom 14
-  // (so do the comment-overlay layers that share those sources). Building
-  // ~75k+89k label features at lower zooms wastes ~100 MB main+worker on
-  // the load path. We track the last built state with hysteresis to avoid
-  // thrashing if the user zooms across the threshold rapidly.
-  private static readonly LABEL_BUILD_ZOOM = 13.5;
-  private static readonly LABEL_DROP_ZOOM = 13;
-  /** Whether label features are currently materialized in the sources. */
-  private labelsCurrentlyBuilt = true;
-  /** Bound handler for map.on('zoomend') — kept for proper off() in destroy. */
-  private boundZoomEndForLabels: (() => void) | null = null;
 
   // Bound event handlers stored for proper cleanup in destroy()
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
@@ -319,43 +335,102 @@ export default class SurveyLayer {
   private pendingHoverEvent: maplibregl.MapMouseEvent | null = null;
   private hoverRafId: number | null = null;
 
-  // Previous feature IDs for setFeatureState (to clear state when hover/selection changes)
-  private prevHoveredStationFeatureId: number | null = null;
-  private prevHoveredShotFeatureId: number | null = null;
-  private prevSelectedStationFeatureId: number | null = null;
-  private prevSelectedShotFeatureId: number | null = null;
-  private prevSnappedStationFeatureId: number | null = null;
+  // Interact-overlay dedupe key: per-frame hover updates only touch the
+  // overlay source when its content actually changes. Reset to '' whenever
+  // styling inputs change (rebuild, config, theme, overlay modes).
+  private lastInteractKey: string | null = null;
 
-  // Previous section-level feature IDs for setFeatureState (to clear state when section hover/selection changes)
-  private prevHoveredSectionShotIds: Set<number> = new Set();
-  private prevHoveredSectionStationIds: Set<number> = new Set();
-  private prevSelectedSectionShotIds: Set<number> = new Set();
-  private prevSelectedSectionStationIds: Set<number> = new Set();
+  // SoA survey data + geometry resolver for the last applied build (#mem).
+  // The resolver serves per-item hit-testing over merged features and the
+  // interact overlay's geometry/color lookups. `cachedIssueSeverity` mirrors
+  // the severity arrays the build used so overlay colors match exactly.
+  private cachedSurveyData: SurveyData | null = null;
+  private geoIndex: SurveyGeometryIndex | null = null;
+  private cachedIssueSeverity: IssueSeverity | undefined;
 
-  // Pre-built section→featureId lookup maps, populated once in update() from feature data.
-  // Eliminates O(N) querySourceFeatures calls during hover (the main perf bottleneck).
-  private sectionShotFeatureIds: Map<number, Set<number>> = new Map();
-  private sectionStationFeatureIds: Map<number, Set<number>> = new Map();
+  // Flag-gated custom WebGL render prototype (#customRender). No-op unless the
+  // `stalagmight_custom_render` gate is on; see surveyLayer/customRender/.
+  private customRender: SurveyCustomController | null = null;
+  // Flag-gated custom WebGL LABEL layer (#customRender labels). No-op unless BOTH
+  // the render gate AND `stalagmight_custom_labels` are on. Draws all five label
+  // kinds, VIEWPORT-SCOPED with screen-space collision, rebuilding on camera
+  // settle (its own moveend/zoomend listener); suppresses the five stock text
+  // layers while active.
+  private customLabels: SurveyLabelController | null = null;
 
-  // Cached section feature IDs to avoid re-scanning on every updateVisualState()
-  // Key is comma-joined section IDs (handles both single-section and multi-section/segment hover)
-  private cachedHoveredSectionKey: string = '';
-  private cachedHoveredSectionShotIds: Set<number> = new Set();
-  private cachedHoveredSectionStationIds: Set<number> = new Set();
-  private cachedSelectedSectionId: string | null = null;
-  private cachedSelectedSectionShotIds: Set<number> = new Set();
-  private cachedSelectedSectionStationIds: Set<number> = new Set();
+  // Dedicated custom WebGL layer for the measured along-line ruler tint (#26,
+  // stage 2a of the stock deletion). Draws the measured shots + stations in
+  // MEASURE_TINT independently of the stock `survey-measure-path` layer / the
+  // `-shots`/`-stations` VT sources. Driven by setMeasuredPath; runs alongside
+  // the stock feature-state tint this stage (identical pixels), so stage 2b can
+  // delete the stock path.
+  private measurePath: MeasurePathController | null = null;
+  /** Dispose for the device-pixel-ratio watcher (custom layers bake dpr). */
+  private dprWatcherDispose: (() => void) | undefined;
 
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
     this.callbacks = callbacks;
+    this.interactHide = new InteractOverlayHideController(map, this.interactSourceId, [
+      this.interactShotsLayerId,
+      this.interactShotsMeasuredLayerId,
+      this.interactStationsLayerId,
+      this.stationsHighlightLayerId,
+    ]);
     this.initializeSources();
     this.initializeLayers();
     this.initializeEventHandlers();
+    this.customRender = new SurveyCustomController(map, undefined, {
+      resync: () => this.resyncCustomRenderFromStore(),
+      onFatal: (reason) => this.handleRenderFatal(reason),
+    });
+    // resyncCustomRenderFromStore syncs BOTH controllers, so one hook covers both.
+    this.customLabels = new SurveyLabelController(map, undefined, {
+      resync: () => this.resyncCustomRenderFromStore(),
+      onFatal: (reason) => this.handleRenderFatal(reason),
+    });
+    this.dragGhost = new DragGhostController(map, {
+      ghostData: (set) => this.dragGhostData(set),
+      layerCtx: () => this.dragPreviewLayerCtx(),
+      projector: () => this.dragProjector(),
+      dpr: () => (typeof window !== 'undefined' && window.devicePixelRatio) || 1,
+      scheduleRestore: (fn) =>
+        typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(fn, 0),
+    });
+    this.measurePath = new MeasurePathController(map, {
+      onFatal: (reason) => this.handleRenderFatal(reason),
+    });
+    // The custom layers bake devicePixelRatio into their device-pixel sizes, so a
+    // DPR change (window dragged to a different-scale monitor) must rebuild them.
+    this.dprWatcherDispose = watchDevicePixelRatio(() => this.handleDprChange());
+  }
+
+  /**
+   * A device-pixel-ratio change invalidated the baked device-pixel sizes of the
+   * custom geometry, label, and measure-path layers; rebuild them from the store
+   * (which re-reads the live dpr). The interact overlay is stock MapLibre and
+   * scales with dpr on its own, so it needs no rebuild here.
+   */
+  private handleDprChange(): void {
+    this.resyncCustomRenderFromStore(); // geometry + labels
+    this.syncCustomMeasurePath(); // measure-path tint
   }
 
   setCallbacks(callbacks: SurveyLayerCallbacks) {
     this.callbacks = callbacks;
+  }
+
+  /**
+   * A custom WebGL renderer subsystem (geometry, labels, or the measure-path
+   * tint) hit an unrecoverable failure and removed its dead layer. There is no
+   * stock fallback, so the affected content is gone until reload. Log ungated
+   * (diagnosable in a production build) and notify the app so it can surface a
+   * user-facing error; the `reason` carries the subsystem so the toast can be
+   * specific. Read at call time, so a later setCallbacks still routes here.
+   */
+  private handleRenderFatal(reason: string): void {
+    console.error(`[customRender] rendering fault: ${reason}`);
+    this.callbacks.onRenderFatal?.(reason);
   }
 
   // Config setter - triggers layer updates when config changes
@@ -363,6 +438,8 @@ export default class SurveyLayer {
     this.config = config;
     this.updateHitboxLayers();
     this.updateGhostVisualLayers();
+    // Overlay features carry config-derived widths/radii — force a rebuild.
+    this.lastInteractKey = null;
     this.updateVisualState();
     this.updateDebugVisualization();
   }
@@ -385,6 +462,7 @@ export default class SurveyLayer {
       this.hoveredStationId = null;
       this.hoveredShotId = null;
       this.hoveredSectionId = null;
+      this.customRender?.setSectionHover([]);
       this.updateVisualState();
       this.map.getCanvas().style.cursor = '';
 
@@ -413,14 +491,13 @@ export default class SurveyLayer {
 
     // Move-comment palette tint (#52): exactly `move_comment` (not the plain
     // `comment` tool) tints each comment label and its owning shot/station.
-    // Re-derive the paint expressions only on transition in/out - they're
-    // computed on demand from current state, so this also naturally restores
-    // whatever the shots/stations color owned before (section/depth/measured
-    // tint, or an analytical overlay, which the tint yields to).
+    // Re-derive the paint expressions only on transition in/out.
     const isMoveComment = tool === 'move_comment';
     if (isMoveComment !== wasMoveComment) {
       this.applyOverlayPaint();
-      this.applyCommentToolTint();
+      // Custom renderer + labels (no feature-state / commentColor property): rebuild
+      // so the shot/station/comment tint appears or clears (commentTint in sync()).
+      this.resyncCustomRenderFromStore();
     }
   }
 
@@ -441,6 +518,25 @@ export default class SurveyLayer {
     return this.config?.map?.shot?.hit_area ?? SurveyLayer.DEFAULTS.shot.hit_area;
   }
 
+  /**
+   * Screen-space "reach" of the (now-removed) hitbox layers — the maximum px
+   * distance from a geometry's center at which a point still registered a hit,
+   * i.e. the tolerance the candidate gate + SoA resolver must reproduce.
+   *
+   * MapLibre's point-in-feature test buffers a LINE by half its rendered width
+   * and a CIRCLE by its radius. The old hitboxes rendered the shot line at
+   * width `hit_area` (reach = hit_area / 2) and the station circle at radius
+   * `hit_area` (reach = hit_area). These are also passed to the SoA resolver
+   * as the point-query `maxDistance`, so gate and resolver agree exactly.
+   */
+  private getShotHitReach(): number {
+    return this.getShotHitArea() / 2;
+  }
+
+  private getStationHitReach(): number {
+    return this.getStationHitArea();
+  }
+
   private getStationHoverRadius(): number {
     return this.config?.map?.station?.hover_radius ?? SurveyLayer.DEFAULTS.station.hover_radius;
   }
@@ -458,42 +554,13 @@ export default class SurveyLayer {
   }
 
   private initializeSources() {
-    // Large buffer prevents tile-boundary clipping when features are translated
-    // during segment drag preview. Default is 128; 512 = full tile width.
-    // Cave survey data is small so the extra tiling cost is negligible.
-    const dragBuffer = 512;
-
-    // Shots line source - promoteId enables setFeatureState for hover/selection
-    this.map.addSource(this.sourceId + '-shots', {
-      type: 'geojson',
-      promoteId: 'featureId',
-      buffer: dragBuffer,
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
-
-    // Stations point source - promoteId enables setFeatureState for hover/selection
-    this.map.addSource(this.sourceId + '-stations', {
-      type: 'geojson',
-      promoteId: 'featureId',
-      buffer: dragBuffer,
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
-
-    // Shot gradient segment source (visual-only overlay for per-shot depth transitions)
-    this.map.addSource(this.sourceId + '-shot-gradients', {
-      type: 'geojson',
-      buffer: dragBuffer,
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
+    // Custom-only renderer: survey geometry + labels + measured-path tint are
+    // drawn by the custom WebGL layers (SurveyCustomController /
+    // SurveyLabelController / MeasurePathController) straight from the SoA
+    // SurveyData — there are no stock bulk vector-tile sources for shots /
+    // stations / shot-gradients / labels anymore. Only the small GeoJSON
+    // auxiliaries (loop closures, gas route, merge ghosts, interact overlay)
+    // live here.
 
     // Loop closures line source
     this.map.addSource(this.sourceId + '-loop-closures', {
@@ -507,36 +574,6 @@ export default class SurveyLayer {
     // Gas route highlight line source (#233): one LineString per route leg, `isJump` flagged.
     this.map.addSource(this.sourceId + '-gas-route', {
       type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
-
-    // Shot labels point source (midpoint of each shot)
-    this.map.addSource(this.sourceId + '-shot-labels', {
-      type: 'geojson',
-      buffer: dragBuffer,
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
-
-    // Section name labels point source (first station of each section)
-    this.map.addSource(this.sourceId + '-section-labels', {
-      type: 'geojson',
-      buffer: dragBuffer,
-      data: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-    });
-
-    // Station index labels point source (at each station)
-    this.map.addSource(this.sourceId + '-station-labels', {
-      type: 'geojson',
-      buffer: dragBuffer,
       data: {
         type: 'FeatureCollection',
         features: [],
@@ -567,46 +604,33 @@ export default class SurveyLayer {
         features: [],
       },
     });
+
+    // Interact overlay source (#mem): holds only the handful of currently
+    // hovered / selected / snapped features as individual GeoJSON features
+    // (see refreshInteractOverlay). Bounded by interaction state, not survey
+    // size, so its retained cost is negligible.
+    this.map.addSource(this.interactSourceId, {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    });
   }
 
   private initializeLayers() {
-    // === HITBOX LAYERS (invisible, for click detection) ===
+    // === HIT-TEST GATING ===
+    // The dedicated survey-shots-hitbox / survey-stations-hitbox layers were
+    // removed (#mem budget): each was a full unfiltered duplicate vertex bucket
+    // of its bulk source. Hit-testing now queries the VISIBLE shots/stations
+    // layers with a padded probe box (see hitCandidateSections). The ghost
+    // hitbox layers below stay — they live on the tiny ghost sources and drive
+    // the merge-preview debug visualization only.
+    //
     // Layer order (bottom to top):
-    // 1. survey-shots-hitbox
-    // 2. survey-stations-hitbox (above shots for hover priority)
-    // 3. survey-ghost-shots-hitbox (debug only)
-    // 4. survey-ghost-stations-hitbox (debug only)
+    // 1. survey-ghost-shots-hitbox (debug only)
+    // 2. survey-ghost-stations-hitbox (debug only)
     // Then visual layers follow...
-
-    // Shot hitbox layer - added first (bottom of stack)
-    // Use opaque color with tiny opacity for reliable queryRenderedFeatures
-    this.map.addLayer({
-      id: this.shotsHitboxLayerId,
-      type: 'line',
-      source: this.sourceId + '-shots',
-      layout: {
-        'line-cap': 'round', // Better endpoint detection
-      },
-      paint: {
-        'line-width': this.getShotHitArea(),
-        'line-color': '#000000', // Opaque color - use opacity for invisibility
-        'line-opacity': 0.001, // CRITICAL: non-zero for queryRenderedFeatures
-      },
-    });
-
-    // Station hitbox layer - above shots for correct hover priority
-    // Use opaque color with tiny opacity for reliable queryRenderedFeatures
-    this.map.addLayer({
-      id: this.stationsHitboxLayerId,
-      type: 'circle',
-      source: this.sourceId + '-stations',
-      paint: {
-        'circle-radius': this.getStationHitArea(),
-        'circle-color': '#000000', // Opaque color - use opacity for invisibility
-        'circle-opacity': 0.001, // CRITICAL: non-zero for queryRenderedFeatures
-        'circle-stroke-width': 0,
-      },
-    });
 
     // Ghost shot hitbox layer (for debug visualization only - NOT interactive)
     this.map.addLayer({
@@ -695,207 +719,36 @@ export default class SurveyLayer {
       },
     });
 
-    // Shots layer (lines) - uses feature-state for hover/selection
-    const baseWidth = this.getShotWidth();
-    const hoverWidth = this.getShotHoverWidth();
-    const selectionWidth = this.getShotSelectionWidth();
+    // === OVERLAY LAYERS (above the custom-rendered survey geometry) ===
+    // Custom-only renderer: survey shots / stations / shot-gradients / labels /
+    // comments / measured-path tint are drawn by the custom WebGL layers (added
+    // by their controllers), NOT stock MapLibre layers. What remains here are the
+    // small auxiliary overlays that sit ABOVE the custom geometry:
+    //   - snap-station highlight + interact hover/selection overlay (interact source),
+    //   - gas-route highlight.
+    // The custom geometry layer inserts itself before `survey-interact-shots`
+    // (see SurveyCustomController.enable), so it lands above loop closures /
+    // ghosts and below every overlay added below. The custom label layer draws on
+    // top of everything; the custom measure-path layer inserts before
+    // `survey-interact-shots-measured` (see syncCustomMeasurePath).
 
-    this.map.addLayer({
-      id: this.shotsLayerId,
-      type: 'line',
-      source: this.sourceId + '-shots',
-      paint: {
-        'line-color': ['get', 'color'],
-        // Width: hover > selected > base (uses feature-state)
-        'line-width': [
-          'case',
-          ['boolean', ['feature-state', 'hover'], false], hoverWidth,
-          ['boolean', ['feature-state', 'selected'], false], selectionWidth,
-          baseWidth,
-        ],
-        'line-opacity': [
-          'case',
-          ['boolean', ['feature-state', 'anchored'], false], 0.25,
-          ['get', 'isReference'], 0.5,
-          1,
-        ],
-      },
-    });
-
-    // Gradient overlay (composed of tiny line segments) for true in->out shot depth transitions.
-    // Uses a slightly smaller width so hover/selection states on the main shots layer remain visible.
-    this.map.addLayer({
-      id: this.shotGradientsLayerId,
-      type: 'line',
-      source: this.sourceId + '-shot-gradients',
-      layout: {
-        'line-cap': 'round',
-        'line-join': 'round',
-      },
-      paint: {
-        'line-color': ['get', 'color'],
-        'line-width': Math.max(1, baseWidth - 0.35),
-        'line-opacity': [
-          'case',
-          ['get', 'isReference'], 0.5,
-          1,
-        ],
-      },
-    });
-
-    // Measure along-line tint overlay (#26): the measured path's shots, drawn on
-    // top of the depth-gradient sub-segments so the highlight is never occluded by
-    // them. Visibility is driven by the same `measured` feature-state as the main
-    // shots layer (opacity 1 when measured, else 0), so non-path shots stay
-    // invisible here and keep their normal/gradient color underneath. Width matches
-    // the main shots line so it fully covers the (narrower) gradient.
-    this.map.addLayer({
-      id: this.measurePathLayerId,
-      type: 'line',
-      source: this.sourceId + '-shots',
-      layout: {
-        'line-cap': 'round',
-        'line-join': 'round',
-      },
-      paint: {
-        'line-color': this.measureTintColor,
-        'line-width': [
-          'case',
-          ['boolean', ['feature-state', 'hover'], false], hoverWidth,
-          ['boolean', ['feature-state', 'selected'], false], selectionWidth,
-          baseWidth,
-        ],
-        'line-opacity': [
-          'case',
-          ['boolean', ['feature-state', 'measured'], false], 1,
-          0,
-        ],
-      },
-    });
-
-    // Stations layer (circles)
-    // Uses feature-state for efficient hover/selection highlighting
-    const baseRadius = this.getStationRadius();
-    const hoverRadius = this.getStationHoverRadius();
-    const selectionRadius = this.getStationSelectionRadius();
-
-    this.map.addLayer({
-      id: this.stationsLayerId,
-      type: 'circle',
-      source: this.sourceId + '-stations',
-      paint: {
-        // Radius: hover > selected > zeroDatum > base (uses feature-state)
-        'circle-radius': [
-          'case',
-          ['boolean', ['feature-state', 'hover'], false], hoverRadius,
-          ['boolean', ['feature-state', 'selected'], false], selectionRadius,
-          ['get', 'isZeroDatum'], baseRadius * 2,
-          baseRadius,
-        ],
-        // Color from feature property
-        'circle-color': ['get', 'color'],
-        // Opacity: reduced for anchored sections
-        'circle-opacity': [
-          'case',
-          ['boolean', ['feature-state', 'anchored'], false], 0.25,
-          1,
-        ],
-        // Stroke width: hover/selected states get thicker strokes (uses feature-state)
-        'circle-stroke-width': [
-          'case',
-          ['boolean', ['feature-state', 'hover'], false], 4,
-          ['boolean', ['feature-state', 'selected'], false], 2.5,
-          ['get', 'isZeroDatum'], 2,
-          1,
-        ],
-        // Stroke color: hover=highlight, selected=select, else from property
-        'circle-stroke-color': [
-          'case',
-          ['boolean', ['feature-state', 'hover'], false], this.themeColors.hoverHighlight,
-          ['boolean', ['feature-state', 'selected'], false], this.themeColors.selectHighlight,
-          ['get', 'strokeColor'],
-        ],
-        // Stroke opacity: reduced for anchored sections
-        'circle-stroke-opacity': [
-          'case',
-          ['boolean', ['feature-state', 'anchored'], false], 0.25,
-          1,
-        ],
-      },
-    });
-
-    // Station highlight layer for snapped/active stations
-    // Inserted immediately after stations - labels added later render on top naturally
-    // Radius is config-based (baseRadius + 3), updated via updateVisualState()
+    // Station highlight layer for snapped/active stations (interact source).
+    // Snapped stations are pushed to the interact overlay as individual
+    // `kind: 'snap'` features (setSnappedStation / setHighlightedStations).
     this.map.addLayer({
       id: this.stationsHighlightLayerId,
       type: 'circle',
-      source: this.sourceId + '-stations',
+      source: this.interactSourceId,
+      filter: ['==', ['get', 'kind'], 'snap'],
       paint: {
         'circle-radius': this.getStationRadius() + 3, // Snapped state: radius + 3
         'circle-color': this.themeColors.snapColor,
         'circle-stroke-width': 4,
         'circle-stroke-color': this.themeColors.snapColor,
-        // Visibility driven by feature-state — same instant mechanism as hover.
-        // setFeatureState is a per-feature GPU update, unlike setFilter which
-        // forces filter re-evaluation across all features.
-        'circle-opacity': ['case', ['boolean', ['feature-state', 'snapped'], false], 1, 0],
-        'circle-stroke-opacity': ['case', ['boolean', ['feature-state', 'snapped'], false], 1, 0],
         // Disable default 300ms paint transitions — snap indicator must appear/disappear instantly
         'circle-opacity-transition': { duration: 0, delay: 0 },
         'circle-stroke-opacity-transition': { duration: 0, delay: 0 },
       },
-    });
-
-    // Shot data labels layer - shows azimuth, length, depth at shot midpoint
-    // Visibility controlled by showShotLabels toggle and zoom-based density
-    this.map.addLayer({
-      id: this.shotLabelsLayerId,
-      type: 'symbol',
-      source: this.sourceId + '-shot-labels',
-      minzoom: 14, // Performance: don't render at low zooms
-      layout: {
-        'text-field': ['get', 'label'],
-        'text-font': ['Open Sans Regular'],
-        'text-size': [
-          'interpolate',
-          ['linear'],
-          ['zoom'],
-          14, 9,
-          18, 12,
-        ],
-        'text-offset': [0, 0.5],
-        'text-anchor': 'top',
-        // Progressive density: hide labels at low zoom
-        'text-allow-overlap': false,
-        'visibility': 'none', // Start hidden, controlled by setShowShotLabels
-      },
-      paint: {
-        'text-color': ['get', 'color'], // Dynamic color for depth gradient support
-        'text-halo-color': this.themeColors.textHaloAlt,
-        'text-halo-width': 2, // Increased for readability with depth colors
-        'text-opacity': [
-          'interpolate',
-          ['linear'],
-          ['zoom'],
-          14, 0.7,
-          18, 1,
-        ],
-      },
-      filter: this.shotLabelsBaseFilter = [
-        'case',
-        // At zoom < 14: show nothing (filter all)
-        ['<', ['zoom'], 14],
-        false,
-        // At zoom 14-16: show every 5th label (index % 5 == 0)
-        ['all', ['>=', ['zoom'], 14], ['<', ['zoom'], 16]],
-        ['==', ['%', ['get', 'index'], 5], 0],
-        // At zoom 16-18: show every 2nd label
-        ['all', ['>=', ['zoom'], 16], ['<', ['zoom'], 18]],
-        ['==', ['%', ['get', 'index'], 2], 0],
-        // At zoom >= 18: show all
-        true,
-      ],
     });
 
     // Gas route highlight (#233): the picked route drawn over the survey. Jump legs are
@@ -913,181 +766,83 @@ export default class SurveyLayer {
       },
     });
 
-    // Section name labels layer - shows section name at first station
-    // Visibility controlled by showSectionNames toggle
+    // === INTERACT OVERLAY LAYERS (#mem) ===
+    // Individual hover/selection highlights, drawn from the tiny interact source,
+    // stacked bottom-to-top: interact-shots (hover/select shot), then the measured
+    // hover tint, then interact-stations, then the snap highlight. They are added
+    // with explicit beforeIds so this relative order holds and the custom geometry
+    // layer (inserted before interact-shots) sits beneath all of them. Colors are
+    // resolved per feature at overlay-build time or via the same ramp expressions
+    // in overlay modes.
     this.map.addLayer({
-      id: this.labelsLayerId,
-      type: 'symbol',
-      source: this.sourceId + '-section-labels',
-      minzoom: 10, // Performance: don't render at very low zooms
+      id: this.interactStationsLayerId,
+      type: 'circle',
+      source: this.interactSourceId,
+      filter: ['==', ['get', 'kind'], 'station'],
+      paint: {
+        'circle-radius': ['get', 'radius'],
+        'circle-color': ['get', 'color'],
+        'circle-opacity': ['get', 'opacity'],
+        'circle-stroke-width': ['get', 'strokeWidth'],
+        'circle-stroke-color': ['get', 'strokeColor'],
+        'circle-stroke-opacity': ['get', 'opacity'],
+      },
+    }, this.stationsHighlightLayerId);
+
+    this.map.addLayer({
+      id: this.interactShotsMeasuredLayerId,
+      type: 'line',
+      source: this.interactSourceId,
+      filter: ['==', ['get', 'kind'], 'shotMeasured'],
       layout: {
-        'text-field': ['get', 'name'],
-        'text-font': ['Open Sans Regular'],
-        'text-size': [
-          'interpolate',
-          ['linear'],
-          ['zoom'],
-          12, 11,
-          18, 14,
-        ],
-        'text-offset': [0, -1.2],
-        'text-anchor': 'bottom',
-        'text-allow-overlap': false, // Avoid clutter in dense areas
-        'visibility': 'visible', // Start visible, controlled by setShowSectionNames
+        'line-cap': 'round',
+        'line-join': 'round',
       },
       paint: {
-        'text-color': ['get', 'color'],
-        'text-halo-color': this.themeColors.textHalo,
-        'text-halo-width': 1.5,
-        'text-opacity': 1,
+        'line-color': ['get', 'color'],
+        'line-width': ['get', 'width'],
+        'line-opacity': 1,
       },
-    });
+    }, this.interactStationsLayerId);
 
-    // Station index labels layer - shows station index (0, 1, 2...) near each station
-    // Visibility controlled by showStationLabels toggle and zoom-dependent density
     this.map.addLayer({
-      id: this.stationLabelsLayerId,
-      type: 'symbol',
-      source: this.sourceId + '-station-labels',
-      minzoom: 14, // Performance: don't render at low zooms
-      layout: {
-        'text-field': ['get', 'label'],
-        'text-font': ['Open Sans Regular'],
-        'text-size': [
-          'interpolate',
-          ['linear'],
-          ['zoom'],
-          14, 9,
-          18, 11,
-        ],
-        'text-offset': [0.8, -0.8], // Offset to top-right of station dot
-        'text-anchor': 'bottom-left',
-        'text-allow-overlap': false, // Avoid clutter with overlapping labels
-        'visibility': 'none', // Start hidden, controlled by setShowStationLabels
-      },
+      id: this.interactShotsLayerId,
+      type: 'line',
+      source: this.interactSourceId,
+      filter: ['==', ['get', 'kind'], 'shot'],
       paint: {
-        'text-color': ['get', 'color'], // Dynamic color for depth gradient support
-        'text-halo-color': this.themeColors.textHaloAlt,
-        'text-halo-width': 2, // Increased for readability with depth colors
-        'text-opacity': [
-          'interpolate',
-          ['linear'],
-          ['zoom'],
-          14, 0.7,
-          18, 1,
-        ],
+        'line-color': ['get', 'color'],
+        'line-width': ['get', 'width'],
+        'line-opacity': ['get', 'opacity'],
       },
-      // Zoom-dependent filtering using globalOrdinal (stable sequential index)
-      // Always show first station in each section (isFirstInSection) to avoid empty-looking sections
-      filter: this.stationLabelsBaseFilter = [
-        'case',
-        // At zoom < 14: show nothing
-        ['<', ['zoom'], 14],
-        false,
-        // At zoom 14-16: show first station + every 5th (globalOrdinal % 5 == 0)
-        ['all', ['>=', ['zoom'], 14], ['<', ['zoom'], 16]],
-        ['any', ['get', 'isFirstInSection'], ['==', ['%', ['get', 'globalOrdinal'], 5], 0]],
-        // At zoom 16-18: show first station + every 2nd
-        ['all', ['>=', ['zoom'], 16], ['<', ['zoom'], 18]],
-        ['any', ['get', 'isFirstInSection'], ['==', ['%', ['get', 'globalOrdinal'], 2], 0]],
-        // At zoom >= 18: show all
-        true,
-      ],
-    });
-
-    // Station comments layer - shows comment text near each station
-    // Uses the same source as station labels, filtered to only show stations with comments
-    this.map.addLayer({
-      id: this.stationCommentsLayerId,
-      type: 'symbol',
-      source: this.sourceId + '-station-labels',
-      minzoom: 14,
-      layout: {
-        'text-field': ['get', 'comment'],
-        'text-font': ['Open Sans Regular'],
-        'text-size': [
-          'interpolate',
-          ['linear'],
-          ['zoom'],
-          14, 8,
-          18, 10,
-        ],
-        'text-offset': [0, 1.5], // Below station dot
-        'text-anchor': 'top',
-        'text-allow-overlap': false,
-        'text-max-width': 12,
-        'visibility': 'none', // Start hidden, controlled by setShowStationComments
-      },
-      paint: {
-        'text-color': this.commentTextColor(),
-        'text-halo-color': this.themeColors.textHaloAlt,
-        'text-halo-width': COMMENT_HALO_WIDTH_BASE,
-        'text-opacity': 0.85,
-      },
-      filter: ['!=', ['get', 'comment'], null],
-    });
-
-    // Shot comments layer - shows comment text near each shot midpoint
-    // Uses the same source as shot labels, filtered to only show shots with comments
-    this.map.addLayer({
-      id: this.shotCommentsLayerId,
-      type: 'symbol',
-      source: this.sourceId + '-shot-labels',
-      minzoom: 14,
-      layout: {
-        'text-field': ['get', 'comment'],
-        'text-font': ['Open Sans Regular'],
-        'text-size': [
-          'interpolate',
-          ['linear'],
-          ['zoom'],
-          14, 8,
-          18, 10,
-        ],
-        'text-offset': [0, 1.5], // Below shot midpoint
-        'text-anchor': 'top',
-        'text-allow-overlap': false,
-        'text-max-width': 12,
-        'visibility': 'none', // Start hidden, controlled by setShowShotComments
-      },
-      paint: {
-        'text-color': this.commentTextColor(),
-        'text-halo-color': this.themeColors.textHaloAlt,
-        'text-halo-width': COMMENT_HALO_WIDTH_BASE,
-        'text-opacity': 0.85,
-      },
-      filter: ['!=', ['get', 'comment'], null],
-    });
-
+    }, this.interactShotsMeasuredLayerId);
   }
 
   private initializeEventHandlers() {
-    // UNIFIED click handler - queries both hitbox layers with station priority
-    // This replaces per-layer click handlers to ensure proper nearest-to-click resolution
+    // UNIFIED click handler - gates candidates via the visible layers with
+    // station priority. Replaces per-layer click handlers for nearest-to-click.
     this.map.on('click', this.handleMapClick);
+
+    // Boundary filter for the residual VT reload-removed ErrorEvents that
+    // MapLibre fires from its own _loadTile catch, upstream of the registry's
+    // guards (see handleMapError). Installed once here; removed in destroy().
+    this.map.on('error', this.handleMapError);
 
     // Note: Per-layer click handlers removed - unified handler handles all click logic
 
     // Process hover update for a given mouse event
     const processHoverUpdate = (e: maplibregl.MapMouseEvent) => {
-      // Query both hitbox layers in a single call for better performance
-      const allFeatures = this.map.queryRenderedFeatures(e.point, {
-        layers: [this.stationsHitboxLayerId, this.shotsHitboxLayerId],
-      });
+      // Padded visible-layer query gates the candidate sections (the layers
+      // already apply visibility + reference filters); the SoA resolver picks
+      // the exact shot/station with the same tolerances the old hitbox had (#mem).
+      const { stationSections, shotSections } = this.hitCandidateSections(e.point);
 
-      // Filter results by layer type
-      const stationFeatures = allFeatures.filter(
-        (f) => f.layer.id === this.stationsHitboxLayerId
-      );
-      const shotFeatures = allFeatures.filter(
-        (f) => f.layer.id === this.shotsHitboxLayerId
-      );
-
-      // Resolve nearest of each type (respect config hit areas)
-      const stationHitArea = this.getStationHitArea();
-      const shotHitArea = this.getShotHitArea();
-      const nearestStation = resolveNearestStation(this.map, e, stationFeatures, stationHitArea);
-      const nearestShot = resolveNearestShot(this.map, e, shotFeatures, shotHitArea);
+      // Resolve nearest of each type within the hit reach the old hitbox
+      // layers gave (station circle radius / shot half line width).
+      const stationHitReach = this.getStationHitReach();
+      const shotHitReach = this.getShotHitReach();
+      const nearestStation = this.resolveStationAt(e.point.x, e.point.y, stationSections, stationHitReach);
+      const nearestShot = this.resolveShotAt(e.point.x, e.point.y, shotSections, shotHitReach);
 
       // Determine what to highlight (stations take priority unless suppressed by tool)
       let newHoveredStationId: string | null = null;
@@ -1100,17 +855,11 @@ export default class SurveyLayer {
       const suppressShotHover = this.activeTool === 'move_station';
 
       if (nearestStation && !suppressStationHover) {
-        const { sectionId, stationIndex } = nearestStation.properties ?? {};
-        if (sectionId !== undefined && stationIndex !== undefined) {
-          newHoveredStationId = `${sectionId}:${stationIndex}`;
-        }
+        newHoveredStationId = `${nearestStation.ref.section_id}:${nearestStation.ref.station_index}`;
       }
       // Show shot hover when no station is hovered (or station was suppressed) and shots not suppressed.
       if (!newHoveredStationId && nearestShot && !suppressShotHover) {
-        const { sectionId, shotId } = nearestShot.properties ?? {};
-        if (sectionId !== undefined && shotId !== undefined) {
-          newHoveredShotId = `${sectionId}:${shotId}`;
-        }
+        newHoveredShotId = `${nearestShot.sectionId}:${nearestShot.shotId}`;
       }
 
       // Update state only if changed
@@ -1125,10 +874,10 @@ export default class SurveyLayer {
             newHoveredShotId,
             suppressStationHover,
             suppressShotHover,
-            stationHitArea,
-            shotHitArea,
-            stationFeatureCount: stationFeatures.length,
-            shotFeatureCount: shotFeatures.length,
+            stationHitReach,
+            shotHitReach,
+            stationCandidateSections: stationSections.size,
+            shotCandidateSections: shotSections.size,
           });
         }
         this.hoveredStationId = newHoveredStationId;
@@ -1256,7 +1005,7 @@ export default class SurveyLayer {
     this.map.on('mousemove', this.boundMouseMove);
     this.map.getCanvas().addEventListener('mouseleave', this.boundMapLeave);
 
-    // UNIFIED context menu handler - queries both hitbox layers with station priority
+    // UNIFIED context menu handler - gates candidates via the visible layers
     this.map.on('contextmenu', this.handleContextMenu);
 
     // Touch long-press → context menu (raw touch listeners on canvas)
@@ -1314,33 +1063,17 @@ export default class SurveyLayer {
     // Track user-initiated map navigation (zoom & pan) for telemetry
     this.map.on('zoomend', this.handleZoomEndTelemetry);
     this.map.on('moveend', this.handleMoveEndTelemetry);
+  }
 
-    // When the camera crosses the lazy-labels threshold, re-fire update()
-    // so the labels source picks up (or sheds) its features. Cheap: the
-    // public update() coalesces into the next microtask and only runs the
-    // build once even if zoom changes again before flush.
-    this.boundZoomEndForLabels = () => {
-      if (!hasLiveStyle(this.map)) return;
-      const zoom = this.map.getZoom();
-      const shouldBuild = this.labelsCurrentlyBuilt
-        ? zoom >= SurveyLayer.LABEL_DROP_ZOOM
-        : zoom >= SurveyLayer.LABEL_BUILD_ZOOM;
-      if (shouldBuild !== this.labelsCurrentlyBuilt
-          && (this.cachedSections.length > 0 || this.cachedStations.length > 0)) {
-        this.update(
-          this.cachedSections,
-          this.cachedStations,
-          this.cachedLoopClosures,
-          this.gpsOrigin,
-          this.showDepthGradient,
-          this.depthRange,
-          this.cachedPrecision,
-          this.showIssueSeverity,
-          this.cachedWarnings,
-        );
-      }
-    };
-    this.map.on('zoomend', this.boundZoomEndForLabels);
+  /**
+   * Re-scope the custom label layer after the programmatic fit-to-bounds settles
+   * (MapCanvas calls this on project load). The custom label controller owns its
+   * own zoom hysteresis + viewport rebuild on camera settle; this forces a
+   * fresh-geometry re-sync so the labels reflect the fitted camera immediately.
+   */
+  resetLabelZoomHysteresis(): void {
+    if (!hasLiveStyle(this.map)) return;
+    this.resyncCustomRenderFromStore();
   }
 
   /** Track user-initiated zoom (scroll wheel, pinch, double-click). Skip programmatic zooms. */
@@ -1369,10 +1102,22 @@ export default class SurveyLayer {
   };
 
   /**
-   * UNIFIED click handler - queries both hitbox layers and resolves priority.
+   * UNIFIED click handler - gates candidates via the visible layers and resolves priority.
    * Stations take priority over shots unless the active tool suppresses one type
    * (move_shot suppresses stations, move_station suppresses shots).
    */
+  // Boundary filter for the residual VT reload-removed noise MapLibre fires from
+  // its own _loadTile catch, upstream of the registry guards (rationale on
+  // shouldSuppressMapError). Suppress exactly that message for this survey's
+  // stalx:// sources; re-log every other error, since MapLibre only console.errors
+  // an ErrorEvent when it has NO listener (verified vs maplibre-gl 5.16
+  // Evented.fire), so registering this listener would otherwise silence the map's
+  // default logging for ALL errors.
+  private handleMapError = (evt: MapErrorEventLike): void => {
+    if (shouldSuppressMapError(evt, this.sourceId)) return;
+    console.error(evt?.error ?? evt);
+  };
+
   private handleMapClick = (e: MapMouseEvent): void => {
     // Ctrl+click in move tools is for panning, not interacting with features
     if (e.originalEvent.ctrlKey &&
@@ -1384,60 +1129,48 @@ export default class SurveyLayer {
     const suppressStationClick = this.activeTool === 'move_shot';
     const suppressShotClick = this.activeTool === 'move_station';
 
-    // Query both hitbox layers in a single call for better performance
-    const allFeatures = this.map.queryRenderedFeatures(e.point, {
-      layers: [this.stationsHitboxLayerId, this.shotsHitboxLayerId],
-    });
-    const stationFeatures = allFeatures.filter((f) => f.layer.id === this.stationsHitboxLayerId);
-    const shotFeatures = allFeatures.filter((f) => f.layer.id === this.shotsHitboxLayerId);
+    // Padded visible-layer query gates candidate sections; SoA resolver picks
+    // the exact item (#mem) — same targets/tolerances as the per-feature path.
+    const { stationSections, shotSections } = this.hitCandidateSections(e.point);
 
-    const stationHitArea = this.getStationHitArea();
-    const shotHitArea = this.getShotHitArea();
+    const stationHitReach = this.getStationHitReach();
+    const shotHitReach = this.getShotHitReach();
 
     // Stations take priority - resolve nearest station first
     const nearestStation = !suppressStationClick
-      ? resolveNearestStation(this.map, e, stationFeatures, stationHitArea)
+      ? this.resolveStationAt(e.point.x, e.point.y, stationSections, stationHitReach)
       : null;
     if (nearestStation) {
-      const { sectionId, stationIndex } = nearestStation.properties ?? {};
-      if (sectionId !== undefined && stationIndex !== undefined) {
-        const ref: StationRef = {
-          section_id: sectionId as number,
-          station_index: stationIndex as number,
-        };
-        // Debug logging - only on click, NOT hover (prevents console spam)
-        if (this.config?.debug?.map?.log_hit_detection) {
-          console.log('[HitDetection] Station click', {
-            layer: this.stationsHitboxLayerId,
-            featureId: `${sectionId}:${stationIndex}`,
-            coordinates: e.lngLat,
-            featuresCount: stationFeatures.length,
-          });
-        }
-        this.callbacks.onStationClick?.(ref, e);
-        return;
+      const ref: StationRef = nearestStation.ref;
+      // Debug logging - only on click, NOT hover (prevents console spam)
+      if (this.config?.debug?.map?.log_hit_detection) {
+        console.log('[HitDetection] Station click', {
+          layer: this.stationsLayerId,
+          featureId: `${ref.section_id}:${ref.station_index}`,
+          coordinates: e.lngLat,
+          candidateSections: stationSections.size,
+        });
       }
+      this.callbacks.onStationClick?.(ref, e);
+      return;
     }
 
     // Then shots - resolve nearest shot
     const nearestShot = !suppressShotClick
-      ? resolveNearestShot(this.map, e, shotFeatures, shotHitArea)
+      ? this.resolveShotAt(e.point.x, e.point.y, shotSections, shotHitReach)
       : null;
     if (nearestShot) {
-      const { sectionId, shotId } = nearestShot.properties ?? {};
-      if (sectionId !== undefined && shotId !== undefined) {
-        // Debug logging - only on click, NOT hover (prevents console spam)
-        if (this.config?.debug?.map?.log_hit_detection) {
-          console.log('[HitDetection] Shot click', {
-            layer: this.shotsHitboxLayerId,
-            featureId: `${sectionId}:${shotId}`,
-            coordinates: e.lngLat,
-            featuresCount: shotFeatures.length,
-          });
-        }
-        this.callbacks.onShotClick?.(sectionId as number, shotId as number, e);
-        return;
+      // Debug logging - only on click, NOT hover (prevents console spam)
+      if (this.config?.debug?.map?.log_hit_detection) {
+        console.log('[HitDetection] Shot click', {
+          layer: 'survey-shots',
+          featureId: `${nearestShot.sectionId}:${nearestShot.shotId}`,
+          coordinates: e.lngLat,
+          candidateSections: shotSections.size,
+        });
       }
+      this.callbacks.onShotClick?.(nearestShot.sectionId, nearestShot.shotId, e);
+      return;
     }
 
     // Empty click - check for hidden features before firing empty callback
@@ -1445,65 +1178,181 @@ export default class SurveyLayer {
   };
 
   /**
-   * UNIFIED context menu handler - queries both hitbox layers and resolves priority.
+   * UNIFIED context menu handler - queries the visible layers and resolves priority.
    * Same pattern as click handler: stations take priority, uses nearest resolution.
    */
   private handleContextMenu = (e: MapMouseEvent): void => {
-    // Query both hitbox layers in a single call for better performance
-    const allFeatures = this.map.queryRenderedFeatures(e.point, {
-      layers: [this.stationsHitboxLayerId, this.shotsHitboxLayerId],
-    });
-    const stationFeatures = allFeatures.filter((f) => f.layer.id === this.stationsHitboxLayerId);
-    const shotFeatures = allFeatures.filter((f) => f.layer.id === this.shotsHitboxLayerId);
+    // Same candidate-section gating + SoA resolution as the click handler.
+    const { stationSections, shotSections } = this.hitCandidateSections(e.point);
 
-    const stationHitArea = this.getStationHitArea();
-    const shotHitArea = this.getShotHitArea();
+    const stationHitReach = this.getStationHitReach();
+    const shotHitReach = this.getShotHitReach();
 
     // Stations take priority
-    const nearestStation = resolveNearestStation(this.map, e, stationFeatures, stationHitArea);
+    const nearestStation = this.resolveStationAt(e.point.x, e.point.y, stationSections, stationHitReach);
     if (nearestStation) {
-      const { sectionId, stationIndex } = nearestStation.properties ?? {};
-      if (sectionId !== undefined && stationIndex !== undefined) {
-        const ref: StationRef = {
-          section_id: sectionId as number,
-          station_index: stationIndex as number,
-        };
-        // Debug logging - only on contextmenu, NOT hover (prevents console spam)
-        if (this.config?.debug?.map?.log_hit_detection) {
-          console.log('[HitDetection] Station context menu', {
-            layer: this.stationsHitboxLayerId,
-            featureId: `${sectionId}:${stationIndex}`,
-            coordinates: e.lngLat,
-            featuresCount: stationFeatures.length,
-          });
-        }
-        this.callbacks.onContextMenu?.({ type: 'station', ref }, e);
-        return;
+      const ref: StationRef = nearestStation.ref;
+      // Debug logging - only on contextmenu, NOT hover (prevents console spam)
+      if (this.config?.debug?.map?.log_hit_detection) {
+        console.log('[HitDetection] Station context menu', {
+          layer: this.stationsLayerId,
+          featureId: `${ref.section_id}:${ref.station_index}`,
+          coordinates: e.lngLat,
+          candidateSections: stationSections.size,
+        });
       }
+      this.callbacks.onContextMenu?.({ type: 'station', ref }, e);
+      return;
     }
 
     // Then shots
-    const nearestShot = resolveNearestShot(this.map, e, shotFeatures, shotHitArea);
+    const nearestShot = this.resolveShotAt(e.point.x, e.point.y, shotSections, shotHitReach);
     if (nearestShot) {
-      const { sectionId, shotId } = nearestShot.properties ?? {};
-      if (sectionId !== undefined && shotId !== undefined) {
-        // Debug logging - only on contextmenu, NOT hover (prevents console spam)
-        if (this.config?.debug?.map?.log_hit_detection) {
-          console.log('[HitDetection] Shot context menu', {
-            layer: this.shotsHitboxLayerId,
-            featureId: `${sectionId}:${shotId}`,
-            coordinates: e.lngLat,
-            featuresCount: shotFeatures.length,
-          });
-        }
-        this.callbacks.onContextMenu?.({ type: 'shot', sectionId: sectionId as number, shotId: shotId as number }, e);
-        return;
+      // Debug logging - only on contextmenu, NOT hover (prevents console spam)
+      if (this.config?.debug?.map?.log_hit_detection) {
+        console.log('[HitDetection] Shot context menu', {
+          layer: 'survey-shots',
+          featureId: `${nearestShot.sectionId}:${nearestShot.shotId}`,
+          coordinates: e.lngLat,
+          candidateSections: shotSections.size,
+        });
       }
+      this.callbacks.onContextMenu?.(
+        { type: 'shot', sectionId: nearestShot.sectionId, shotId: nearestShot.shotId },
+        e
+      );
+      return;
     }
 
     // Empty context menu
     this.callbacks.onContextMenu?.(null, e);
   };
+
+  /**
+   * Candidate sections under a point/box, from the SoA geometry index
+   * (#customRender / #mem). Candidate discovery no longer depends on stock-layer
+   * residency: the endgame renders the survey via the custom WebGL layer, which
+   * hides the stock shots/stations layers (visibility:none), and MapLibre returns
+   * nothing from hidden layers. So instead of `queryRenderedFeatures` we ask the
+   * geometry index for sections whose world-space bounds, projected to screen,
+   * intersect the probe box padded by the type's hit reach. That padded-box query
+   * is a SUPERSET of the sections whose geometry can be within tolerance; the SoA
+   * resolver (`resolveStationAt` / `resolveShotAt` / `geoIndex.stationsInBox`)
+   * then trims it to the exact pick. Per-type padding preserves the two old
+   * queries' semantics (shot vs station reach differ); the pad is the FULL reach
+   * because we test the true geometry, not a thin rendered mark. See
+   * `hitProbe.ts` (`padProbeBox`) and `geometryIndex.ts`
+   * (`sectionsIntersectingBox`), both unit tested.
+   *
+   * A type is gated by the USER visibility flags (`stationsVisible` /
+   * `shotsVisible`, set by setStationsVisibility / setShotsVisibility): a
+   * user-hidden type yields no candidates, exactly as the old query returned
+   * nothing for a hidden layer, so clicks fall through to the hidden-feature
+   * toast in `handleEmptyClick`. These flags are NOT raw layer visibility: the
+   * custom renderer hiding the stock layers (visibility:none) leaves the survey
+   * fully interactive, while a user "hide stations/shots" toggle still suppresses
+   * hits.
+   */
+  private hitCandidateSections(
+    geometry: maplibregl.PointLike | [maplibregl.PointLike, maplibregl.PointLike],
+  ): { stationSections: Set<number>; shotSections: Set<number> } {
+    let stationSections = new Set<number>();
+    let shotSections = new Set<number>();
+    if (!this.geoIndex || !hasLiveStyle(this.map)) return { stationSections, shotSections };
+    const project = this.projector();
+    // One camera snapshot for both probes: the geometry index reuses its
+    // projected per-section AABBs across probes of the same camera, so a static
+    // hover reprojects the 14k+ sections once, not once per probe (#customRender).
+    const camera = this.cameraSnapshot();
+    if (this.shotsVisible) {
+      const [[minX, minY], [maxX, maxY]] = padProbeBox(
+        geometry as ProbeGeometry,
+        this.getShotHitReach(),
+      );
+      shotSections = this.geoIndex.sectionsIntersectingBox(project, minX, minY, maxX, maxY, camera);
+    }
+    if (this.stationsVisible) {
+      const [[minX, minY], [maxX, maxY]] = padProbeBox(
+        geometry as ProbeGeometry,
+        this.getStationHitReach(),
+      );
+      stationSections = this.geoIndex.sectionsIntersectingBox(project, minX, minY, maxX, maxY, camera);
+    }
+    return { stationSections, shotSections };
+  }
+
+  /** Cheap camera snapshot keying the geometry index's projected-AABB cache.
+   *  Keyed by the EXACT center (plus zoom / bearing / pitch / canvas size), so
+   *  the key changes on ANY camera move; axisAligned (no bearing/pitch) enables
+   *  the 2-corner reprojection fast path. The center must stay full-precision:
+   *  quantizing it to pixel bins let two centers in one bin differ by ~1px (Web
+   *  Mercator amplifies the latitude error away from the equator), exceeding the
+   *  probe's 0.5px margin, so a feature near the hit-radius boundary then missed
+   *  hover/click/box-select until the camera crossed a bin. */
+  private cameraSnapshot(): { key: string; axisAligned: boolean } {
+    const c = this.map.getCenter();
+    const cv = this.map.getCanvas();
+    const bearing = this.map.getBearing();
+    const pitch = this.map.getPitch();
+    const key = `${this.map.getZoom()}|${c.lng}|${c.lat}|${bearing}|${pitch}|${cv.width}|${cv.height}`;
+    return { key, axisAligned: bearing === 0 && pitch === 0 };
+  }
+
+  /** Screen projection closure for the geometry resolver. */
+  private projector(): (c: [number, number]) => { x: number; y: number } {
+    return (c) => this.map.project(c);
+  }
+
+  /** Nearest visible station among candidate sections, within maxDistance px. */
+  private resolveStationAt(
+    x: number,
+    y: number,
+    sections: Set<number>,
+    maxDistance: number,
+  ): ReturnType<SurveyGeometryIndex['nearestStation']> {
+    if (sections.size === 0 || !this.geoIndex) return null;
+    return this.geoIndex.nearestStation(this.projector(), x, y, sections, maxDistance, {
+      includeReference: this.showReferenceShotsCached,
+    });
+  }
+
+  /** Nearest visible shot among candidate sections, within maxDistance px. */
+  private resolveShotAt(
+    x: number,
+    y: number,
+    sections: Set<number>,
+    maxDistance: number,
+  ): ReturnType<SurveyGeometryIndex['nearestShot']> {
+    if (sections.size === 0 || !this.geoIndex) return null;
+    return this.geoIndex.nearestShot(this.projector(), x, y, sections, maxDistance, {
+      includeReference: this.showReferenceShotsCached,
+    });
+  }
+
+  /**
+   * Stations whose rendered hit circle intersects the screen-space box —
+   * MapCanvas box-select. Candidate sections come from the padded visible-layer
+   * query (visibility-aware); exact membership from the SoA resolver with
+   * the same circle-box semantics `queryRenderedFeatures(bbox)` had (#mem).
+   */
+  queryStationsInBox(minX: number, minY: number, maxX: number, maxY: number): StationRef[] {
+    if (!this.geoIndex || !hasLiveStyle(this.map)) return [];
+    const { stationSections } = this.hitCandidateSections([
+      [minX, minY],
+      [maxX, maxY],
+    ]);
+    if (stationSections.size === 0) return [];
+    return this.geoIndex.stationsInBox(
+      this.projector(),
+      minX,
+      minY,
+      maxX,
+      maxY,
+      stationSections,
+      this.getStationHitArea(),
+      { includeReference: this.showReferenceShotsCached },
+    );
+  }
 
   /**
    * Handle empty click - check for hidden features before firing empty callback.
@@ -1512,43 +1361,25 @@ export default class SurveyLayer {
   private handleEmptyClick(e: MapMouseEvent): void {
     const HIDDEN_CLICK_THRESHOLD_PX = 15;
 
-    // Check for clicks on hidden stations (stations take priority)
-    if (!this.stationsVisible && this.callbacks.onHiddenStationClick) {
-      const sourceFeatures = this.map.querySourceFeatures(this.sourceId + '-stations');
-      for (const feature of sourceFeatures) {
-        if (feature.geometry.type === 'Point') {
-          const coords = feature.geometry.coordinates as [number, number];
-          const projected = this.map.project(coords);
-          const dx = projected.x - e.point.x;
-          const dy = projected.y - e.point.y;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-          if (distance < HIDDEN_CLICK_THRESHOLD_PX) {
-            this.callbacks.onHiddenStationClick();
-            return;
-          }
-        }
+    // Probe hidden features through the SoA geometry index, not
+    // querySourceFeatures: when the custom geometry layer is active the stock
+    // `-stations` / `-shots` VT sources are dropped and serve empty tiles, so a
+    // source query returns nothing and the "clicked near a hidden feature" toast
+    // is silently lost. `geoIndex` holds every station/shot regardless of the
+    // display toggle. Stations take priority over shots (matches prior behavior).
+    const allSections = this.geoIndex ? new Set(this.cachedSections.map((s) => s.id)) : null;
+
+    if (allSections && !this.stationsVisible && this.callbacks.onHiddenStationClick) {
+      if (this.resolveStationAt(e.point.x, e.point.y, allSections, HIDDEN_CLICK_THRESHOLD_PX)) {
+        this.callbacks.onHiddenStationClick();
+        return;
       }
     }
 
-    // Check for clicks on hidden shots
-    if (!this.shotsVisible && this.callbacks.onHiddenShotClick) {
-      const sourceFeatures = this.map.querySourceFeatures(this.sourceId + '-shots');
-      for (const feature of sourceFeatures) {
-        if (feature.geometry.type === 'LineString') {
-          const lineCoords = feature.geometry.coordinates as [number, number][];
-          for (let i = 0; i < lineCoords.length - 1; i++) {
-            const coord1 = lineCoords[i];
-            const coord2 = lineCoords[i + 1];
-            if (!coord1 || !coord2) continue;
-            const p1 = this.map.project(coord1);
-            const p2 = this.map.project(coord2);
-            const dist = distanceToLineSegment(e.point.x, e.point.y, p1.x, p1.y, p2.x, p2.y);
-            if (dist < HIDDEN_CLICK_THRESHOLD_PX) {
-              this.callbacks.onHiddenShotClick();
-              return;
-            }
-          }
-        }
+    if (allSections && !this.shotsVisible && this.callbacks.onHiddenShotClick) {
+      if (this.resolveShotAt(e.point.x, e.point.y, allSections, HIDDEN_CLICK_THRESHOLD_PX)) {
+        this.callbacks.onHiddenShotClick();
+        return;
       }
     }
 
@@ -1562,81 +1393,6 @@ export default class SurveyLayer {
     const [sectionId, index] = id.split(':').map(Number);
     if (isNaN(sectionId!) || isNaN(index!)) return null;
     return sectionId! * FEATURE_ID_STRIDE + index!;
-  }
-
-  // Collect all feature IDs belonging to a section from a given source.
-  // Uses pre-built lookup maps (O(1)) instead of querySourceFeatures (O(N)).
-  private getSectionFeatureIds(source: string, sectionIdStr: string): Set<number> {
-    const sectionIdNum = Number(sectionIdStr);
-    const isShots = source.endsWith('-shots');
-    const map = isShots ? this.sectionShotFeatureIds : this.sectionStationFeatureIds;
-    return map.get(sectionIdNum) ?? new Set();
-  }
-
-  // Get the effective section IDs for hover highlighting.
-  // Segment hover (multi-section) takes priority over single-section hover.
-  private getEffectiveHoverSectionIds(): string[] {
-    if (this.hoveredSegmentSectionIds.length > 0) return this.hoveredSegmentSectionIds;
-    if (this.hoveredSectionId) return [this.hoveredSectionId];
-    return [];
-  }
-
-  // Check if a feature belongs to any section in the current effective hover set
-  private featureBelongsToHoveredSections(featureId: number): boolean {
-    const ids = this.getEffectiveHoverSectionIds();
-    if (ids.length === 0) return false;
-    const fSectionId = String(Math.floor(featureId / FEATURE_ID_STRIDE));
-    return ids.includes(fSectionId);
-  }
-
-  // Get cached section feature IDs for hover, recomputing only when effective section IDs change
-  private getCachedHoveredSectionIds(shotsSource: string, stationsSource: string): { shots: Set<number>; stations: Set<number> } {
-    const ids = this.getEffectiveHoverSectionIds();
-    const key = ids.join(',');
-    if (this.cachedHoveredSectionKey !== key) {
-      this.cachedHoveredSectionKey = key;
-      if (ids.length > 0) {
-        const shotIds = new Set<number>();
-        const stationIds = new Set<number>();
-        for (const secId of ids) {
-          for (const id of this.getSectionFeatureIds(shotsSource, secId)) shotIds.add(id);
-          for (const id of this.getSectionFeatureIds(stationsSource, secId)) stationIds.add(id);
-        }
-        this.cachedHoveredSectionShotIds = shotIds;
-        this.cachedHoveredSectionStationIds = stationIds;
-      } else {
-        this.cachedHoveredSectionShotIds = new Set();
-        this.cachedHoveredSectionStationIds = new Set();
-      }
-    }
-    return { shots: this.cachedHoveredSectionShotIds, stations: this.cachedHoveredSectionStationIds };
-  }
-
-  // Get cached section feature IDs for selection, recomputing only when section ID changes
-  private getCachedSelectedSectionIds(shotsSource: string, stationsSource: string): { shots: Set<number>; stations: Set<number> } {
-    if (this.cachedSelectedSectionId !== this.selectedSectionId) {
-      this.cachedSelectedSectionId = this.selectedSectionId;
-      if (this.selectedSectionId) {
-        this.cachedSelectedSectionShotIds = this.getSectionFeatureIds(shotsSource, this.selectedSectionId);
-        this.cachedSelectedSectionStationIds = this.getSectionFeatureIds(stationsSource, this.selectedSectionId);
-      } else {
-        this.cachedSelectedSectionShotIds = new Set();
-        this.cachedSelectedSectionStationIds = new Set();
-      }
-    }
-    return { shots: this.cachedSelectedSectionShotIds, stations: this.cachedSelectedSectionStationIds };
-  }
-
-  // Invalidate section ID caches (called after data updates that reset feature-state)
-  private invalidateSectionCaches(): void {
-    this.cachedHoveredSectionKey = '';
-    this.cachedSelectedSectionId = null;
-  }
-
-  // Check if a featureId belongs to a section (derived from encoding: sectionId * FEATURE_ID_STRIDE + index)
-  private featureBelongsToSection(featureId: number, sectionIdStr: string | null): boolean {
-    if (!sectionIdStr) return false;
-    return Math.floor(featureId / FEATURE_ID_STRIDE) === Number(sectionIdStr);
   }
 
   // Check if a feature belongs to an anchored section (suppresses hover/interaction)
@@ -1659,176 +1415,227 @@ export default class SurveyLayer {
     return this.config?.debug?.map?.log_hit_detection ?? false;
   }
 
-  // Update visual state using setFeatureState (much faster than setPaintProperty)
-  // Only updates the specific features that changed, not the entire layer
+  // Update visual state. Section-level hover/selection highlights are drawn by the
+  // custom renderer (setSectionHover / setSectionSelect / setHighlight, wired from
+  // the setHoveredSection / setSelectedSection / setHoveredSegment setters);
+  // individual hover/selection/snap render via the interact overlay (#mem).
   private updateVisualState() {
-    const stationsSource = this.sourceId + '-stations';
-    const shotsSource = this.sourceId + '-shots';
+    this.refreshInteractOverlay();
+  }
 
-    // Update station hover state
-    const newHoveredStationFeatureId = this.parseFeatureId(this.hoveredStationId);
-    if (newHoveredStationFeatureId !== this.prevHoveredStationFeatureId) {
-      // Clear previous hover — but restore section/segment hover if feature belongs to hovered sections.
-      // Check both the section ID derivation AND the actual section hover set, because featureId
-      // encoding may not match sectionId for shots spanning multiple sections.
-      if (this.prevHoveredStationFeatureId !== null) {
-        const restoreSection = this.featureBelongsToHoveredSections(this.prevHoveredStationFeatureId)
-          || this.prevHoveredSectionStationIds.has(this.prevHoveredStationFeatureId);
-        this.map.setFeatureState(
-          { source: stationsSource, id: this.prevHoveredStationFeatureId },
-          { hover: restoreSection }
-        );
+  /**
+   * Rebuild the interact overlay source from the current individual
+   * interaction state (hovered/selected shot + station, snapped/highlighted
+   * stations). A handful of features per update; geometry and colors come
+   * from the SoA resolver + the same helpers the bulk build used, so the
+   * overlay renders pixel-identical to what per-feature feature-state
+   * rendered. Skipped when the composed state key is unchanged.
+   */
+  private refreshInteractOverlay(): void {
+    if (!hasLiveStyle(this.map)) return;
+    const source = this.map.getSource(this.interactSourceId);
+    if (!source || source.type !== 'geojson') return;
+
+    const key = [
+      this.hoveredShotId,
+      this.selectedShotId,
+      this.hoveredStationId,
+      this.selectedStationId,
+      this.snappedStationId,
+      this.highlightedStationIds.join(','),
+    ].join('§');
+    // During a drag the feature IDs are unchanged but their coordinates move, so
+    // the id-based cache would wrongly short-circuit — bypass it while following.
+    if (this.dragOverlayOffset === null && key === this.lastInteractKey) return;
+    this.lastInteractKey = key;
+
+    const features: GeoJSON.Feature[] = [];
+
+    // While the custom ghost is active, the grabbed MOVING feature's highlight is
+    // drawn IN the ghost (shares its offset uniform, no lag), so suppress the
+    // per-frame overlay copy for moving features; non-moving overlay state stays.
+    const suppress = this.dragGhost.isCustom();
+    const keepShot = (id: string | null): string | null =>
+      suppress && id && this.dragMovingShots.has(id) ? null : id;
+    const keepStation = (id: string | null): string | null =>
+      suppress && id && this.dragMovingStationKeys.has(id) ? null : id;
+
+    // Shots: hover wins over selection on the same shot (matches the old
+    // paint case order: hover width > selected width).
+    const hoveredShot = keepShot(this.hoveredShotId);
+    const selectedShot = keepShot(this.selectedShotId !== this.hoveredShotId ? this.selectedShotId : null);
+    if (hoveredShot) {
+      const fid = this.parseFeatureId(hoveredShot);
+      // Old behavior: no hover feedback for anchored/immovable shots.
+      if (fid === null || (!this.isFeatureAnchored(fid) && !this.isShotImmovable(fid))) {
+        const f = this.shotOverlayFeature(hoveredShot, this.getShotHoverWidth());
+        if (f) features.push(f);
       }
-      // Set new hover (suppress for anchored/immovable features — no interaction feedback)
-      if (newHoveredStationFeatureId !== null &&
-          !this.isFeatureAnchored(newHoveredStationFeatureId) &&
-          !this.isStationImmovable(newHoveredStationFeatureId)) {
-        this.map.setFeatureState(
-          { source: stationsSource, id: newHoveredStationFeatureId },
-          { hover: true }
-        );
-      }
-      this.prevHoveredStationFeatureId = newHoveredStationFeatureId;
+    }
+    if (selectedShot) {
+      const f = this.shotOverlayFeature(selectedShot, this.getShotSelectionWidth());
+      if (f) features.push(f);
     }
 
-    // Update shot hover state
-    const newHoveredShotFeatureId = this.parseFeatureId(this.hoveredShotId);
-    if (newHoveredShotFeatureId !== this.prevHoveredShotFeatureId) {
-      // Clear previous hover — but restore section/segment hover if feature belongs to hovered sections.
-      // Check both the section ID derivation AND the actual section hover set, because featureId
-      // encoding may not match sectionId for shots spanning multiple sections.
-      if (this.prevHoveredShotFeatureId !== null) {
-        const restoreSection = this.featureBelongsToHoveredSections(this.prevHoveredShotFeatureId)
-          || this.prevHoveredSectionShotIds.has(this.prevHoveredShotFeatureId);
-        this.map.setFeatureState(
-          { source: shotsSource, id: this.prevHoveredShotFeatureId },
-          { hover: restoreSection }
-        );
+    // Stations: hover wins over selection on the same station.
+    const hoveredStation = keepStation(this.hoveredStationId);
+    const selectedStation =
+      keepStation(this.selectedStationId !== this.hoveredStationId ? this.selectedStationId : null);
+    if (hoveredStation) {
+      const fid = this.parseFeatureId(hoveredStation);
+      if (fid === null || (!this.isFeatureAnchored(fid) && !this.isStationImmovable(fid))) {
+        const f = this.stationOverlayFeature(hoveredStation, 'hover');
+        if (f) features.push(f);
       }
-      // Set new hover (suppress for anchored/immovable features — no interaction feedback)
-      if (newHoveredShotFeatureId !== null &&
-          !this.isFeatureAnchored(newHoveredShotFeatureId) &&
-          !this.isShotImmovable(newHoveredShotFeatureId)) {
-        this.map.setFeatureState(
-          { source: shotsSource, id: newHoveredShotFeatureId },
-          { hover: true }
-        );
-      }
-      this.prevHoveredShotFeatureId = newHoveredShotFeatureId;
+    }
+    if (selectedStation) {
+      const f = this.stationOverlayFeature(selectedStation, 'selected');
+      if (f) features.push(f);
     }
 
-    // Update station selection state
-    const newSelectedStationFeatureId = this.parseFeatureId(this.selectedStationId);
-    if (newSelectedStationFeatureId !== this.prevSelectedStationFeatureId) {
-      // Clear previous selection — but restore section selection if feature belongs to selected section
-      if (this.prevSelectedStationFeatureId !== null) {
-        const restoreSection = this.featureBelongsToSection(this.prevSelectedStationFeatureId, this.selectedSectionId);
-        this.map.setFeatureState(
-          { source: stationsSource, id: this.prevSelectedStationFeatureId },
-          { selected: restoreSection }
-        );
+    // Snap indicator + highlighted stations (both use the snap ring layer).
+    const snapIds = new Set<string>(this.highlightedStationIds);
+    if (this.snappedStationId) snapIds.add(this.snappedStationId);
+    for (const id of snapIds) {
+      const [secStr, idxStr] = id.split(':');
+      const coords = this.geoIndex?.stationCoords({
+        section_id: Number(secStr),
+        station_index: Number(idxStr),
+      });
+      if (coords) {
+        features.push({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: coords },
+          properties: { kind: 'snap' },
+        });
       }
-      // Set new selection
-      if (newSelectedStationFeatureId !== null) {
-        this.map.setFeatureState(
-          { source: stationsSource, id: newSelectedStationFeatureId },
-          { selected: true }
-        );
-      }
-      this.prevSelectedStationFeatureId = newSelectedStationFeatureId;
     }
 
-    // Update shot selection state
-    const newSelectedShotFeatureId = this.parseFeatureId(this.selectedShotId);
-    if (newSelectedShotFeatureId !== this.prevSelectedShotFeatureId) {
-      // Clear previous selection — but restore section selection if feature belongs to selected section
-      if (this.prevSelectedShotFeatureId !== null) {
-        const restoreSection = this.featureBelongsToSection(this.prevSelectedShotFeatureId, this.selectedSectionId);
-        this.map.setFeatureState(
-          { source: shotsSource, id: this.prevSelectedShotFeatureId },
-          { selected: restoreSection }
+    (source as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features });
+  }
+
+  /** The color context matching the last build (see features.ts helpers). */
+  private displayColorContext(): DisplayColorContext {
+    return {
+      showDepthGradient: this.showDepthGradient,
+      depthRange: this.depthRange,
+      themeColors: this.themeColors,
+      showIssueSeverity: this.showIssueSeverity && !!this.cachedIssueSeverity,
+      issueSeverity: this.cachedIssueSeverity,
+    };
+  }
+
+  /**
+   * One interact-overlay feature for a shot ("sectionId:shotId"), drawn at
+   * `width`. Kind `shotMeasured` (measure tint, round caps, above the tint
+   * layer) when the shot is on the measured path, else `shot` (its exact bulk
+   * color; the ramp expressions take over in distance/gas modes via the
+   * carried dist/gasReach values).
+   */
+  private shotOverlayFeature(idStr: string, width: number): GeoJSON.Feature | null {
+    if (!this.geoIndex || !this.cachedSurveyData) return null;
+    const [secStr, shotStr] = idStr.split(':');
+    const sectionId = Number(secStr);
+    const shotId = Number(shotStr);
+    if (Number.isNaN(sectionId) || Number.isNaN(shotId)) return null;
+    const geo = this.geoIndex.shotGeometry(sectionId, shotId);
+    if (!geo) return null;
+    // Hidden reference shots must not surface via the overlay either.
+    if (geo.isReference && !this.showReferenceShotsCached) return null;
+
+    const fid = this.parseFeatureId(idStr);
+    const measured = fid !== null && this.measuredPathIds?.has(fid);
+    const section = this.geoIndex.section(sectionId);
+    const color = measured
+      ? this.measureTintColor
+      : resolveShotDisplayColor(
+          this.cachedSurveyData,
+          section?.color ?? this.themeColors.stationDefault,
+          geo.globalIdx,
+          this.displayColorContext(),
         );
-      }
-      // Set new selection
-      if (newSelectedShotFeatureId !== null) {
-        this.map.setFeatureState(
-          { source: shotsSource, id: newSelectedShotFeatureId },
-          { selected: true }
+    const opacity = fid !== null && this.isFeatureAnchored(fid) ? 0.25 : geo.isReference ? 0.5 : 1;
+    const properties: Record<string, unknown> = {
+      kind: measured ? 'shotMeasured' : 'shot',
+      color,
+      width,
+      opacity,
+    };
+    // Overlay modes read these via the same ramp expressions as the bulk
+    // layers (GPU-identical colors). -1 = unreachable (renders grey).
+    if (this.distanceMode && fid !== null) {
+      properties.dist = this.distanceState?.shots.get(fid) ?? -1;
+    }
+    if (this.gasReachMode && fid !== null) {
+      properties.gasReach = this.gasReachState?.shots.get(fid) ?? -1;
+    }
+    // Follow an active drag: stretch this shot's moving endpoint(s) by the offset
+    // so a selected/hovered highlight tracks the preview (#C).
+    const off = this.dragOverlayOffset;
+    const { from, to } = off
+      ? offsetOverlayShot(geo.from, geo.to, this.dragMovingShots.get(idStr), this.dragProjector(), off.dx, off.dy)
+      : { from: geo.from, to: geo.to };
+    return {
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: [from, to] },
+      properties,
+    };
+  }
+
+  /**
+   * One interact-overlay feature for a station ("sectionId:stationIndex") in
+   * hover or selected style — the same radius/stroke the old feature-state
+   * paint cases produced.
+   */
+  private stationOverlayFeature(idStr: string, style: 'hover' | 'selected'): GeoJSON.Feature | null {
+    if (!this.geoIndex || !this.cachedSurveyData) return null;
+    const [secStr, idxStr] = idStr.split(':');
+    const ref = { section_id: Number(secStr), station_index: Number(idxStr) };
+    if (Number.isNaN(ref.section_id) || Number.isNaN(ref.station_index)) return null;
+    const coords = this.geoIndex.stationCoords(ref);
+    const g = this.geoIndex.stationGlobalIndex(ref);
+    if (!coords || g === null) return null;
+    // A station hidden by the reference-shots toggle must not surface via a
+    // highlight (matches the old stations-layer filter swallowing the ring).
+    if (!this.showReferenceShotsCached && this.geoIndex.isAllReferenceStation(ref)) return null;
+
+    const fid = this.parseFeatureId(idStr);
+    const section = this.geoIndex.section(ref.section_id);
+    const ctx = this.displayColorContext();
+    const measured = fid !== null && this.measuredPathStationIds?.has(fid);
+    const color = measured
+      ? this.measureTintColor
+      : resolveStationDisplayColor(
+          this.cachedSurveyData,
+          section?.color ?? this.themeColors.stationDefault,
+          g,
+          ctx,
         );
-      }
-      this.prevSelectedShotFeatureId = newSelectedShotFeatureId;
+    const properties: Record<string, unknown> = {
+      kind: 'station',
+      color,
+      radius: style === 'hover' ? this.getStationHoverRadius() : this.getStationSelectionRadius(),
+      strokeWidth: style === 'hover' ? 4 : 2.5,
+      strokeColor:
+        style === 'hover' ? this.themeColors.hoverHighlight : this.themeColors.selectHighlight,
+      opacity: fid !== null && this.isFeatureAnchored(fid) ? 0.25 : 1,
+    };
+    if (this.distanceMode && fid !== null) {
+      properties.dist = this.distanceState?.stations.get(fid) ?? -1;
     }
-
-    // --- Section hover (shots + stations) ---
-    {
-      const { shots: newHoveredShotIds, stations: newHoveredStationIds } =
-        this.getCachedHoveredSectionIds(shotsSource, stationsSource);
-
-      // Clear previous section-hovered shots not in new set
-      for (const id of this.prevHoveredSectionShotIds) {
-        if (!newHoveredShotIds.has(id) && id !== newHoveredShotFeatureId) {
-          this.map.setFeatureState({ source: shotsSource, id }, { hover: false });
-        }
-      }
-      // Set new section-hovered shots not in prev set.
-      // During move_segment: always re-apply hover on all section shots to ensure visual
-      // consistency (individual hover interactions can leave stale feature-state).
-      const forceReapply = this.activeTool === 'move_segment';
-      for (const id of newHoveredShotIds) {
-        if (forceReapply || (!this.prevHoveredSectionShotIds.has(id) && id !== newHoveredShotFeatureId)) {
-          this.map.setFeatureState({ source: shotsSource, id }, { hover: true });
-        }
-      }
-      this.prevHoveredSectionShotIds = newHoveredShotIds;
-
-      // Clear previous section-hovered stations not in new set
-      for (const id of this.prevHoveredSectionStationIds) {
-        if (!newHoveredStationIds.has(id) && id !== newHoveredStationFeatureId) {
-          this.map.setFeatureState({ source: stationsSource, id }, { hover: false });
-        }
-      }
-      // Set new section-hovered stations not in prev set
-      for (const id of newHoveredStationIds) {
-        if (forceReapply || (!this.prevHoveredSectionStationIds.has(id) && id !== newHoveredStationFeatureId)) {
-          this.map.setFeatureState({ source: stationsSource, id }, { hover: true });
-        }
-      }
-      this.prevHoveredSectionStationIds = newHoveredStationIds;
+    if (this.gasReachMode && fid !== null) {
+      properties.gasReach = this.gasReachState?.stations.get(fid) ?? -1;
     }
-
-    // --- Section selection (shots + stations) ---
-    {
-      const { shots: newSelectedShotIds, stations: newSelectedStationIds } =
-        this.getCachedSelectedSectionIds(shotsSource, stationsSource);
-
-      // Clear previous section-selected shots not in new set
-      for (const id of this.prevSelectedSectionShotIds) {
-        if (!newSelectedShotIds.has(id) && id !== newSelectedShotFeatureId) {
-          this.map.setFeatureState({ source: shotsSource, id }, { selected: false });
-        }
-      }
-      // Set new section-selected shots not in prev set
-      for (const id of newSelectedShotIds) {
-        if (!this.prevSelectedSectionShotIds.has(id) && id !== newSelectedShotFeatureId) {
-          this.map.setFeatureState({ source: shotsSource, id }, { selected: true });
-        }
-      }
-      this.prevSelectedSectionShotIds = newSelectedShotIds;
-
-      // Clear previous section-selected stations not in new set
-      for (const id of this.prevSelectedSectionStationIds) {
-        if (!newSelectedStationIds.has(id) && id !== newSelectedStationFeatureId) {
-          this.map.setFeatureState({ source: stationsSource, id }, { selected: false });
-        }
-      }
-      // Set new section-selected stations not in prev set
-      for (const id of newSelectedStationIds) {
-        if (!this.prevSelectedSectionStationIds.has(id) && id !== newSelectedStationFeatureId) {
-          this.map.setFeatureState({ source: stationsSource, id }, { selected: true });
-        }
-      }
-      this.prevSelectedSectionStationIds = newSelectedStationIds;
-    }
+    // Follow an active drag: offset this station's highlight if it is moving (#C).
+    const off = this.dragOverlayOffset;
+    const point = off
+      ? offsetOverlayPoint(coords, this.dragMovingStationKeys.has(idStr), this.dragProjector(), off.dx, off.dy)
+      : coords;
+    return {
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: point },
+      properties,
+    };
   }
 
   /**
@@ -1841,8 +1648,10 @@ export default class SurveyLayer {
     this.distanceMode = enabled;
     this.distanceState = state;
     if (!this.map || !hasLiveStyle(this.map)) return;
+    // Interact overlay follows the mode swap; the custom renderer (no feature-state)
+    // rebuilds the survey geometry with the new overlay colors.
     this.applyOverlayPaint();
-    this.applyDistanceFeatureState();
+    this.resyncCustomRenderFromStore();
   }
 
   /**
@@ -1856,8 +1665,10 @@ export default class SurveyLayer {
     this.gasReachMode = enabled;
     this.gasReachState = state;
     if (!this.map || !hasLiveStyle(this.map)) return;
+    // Interact overlay follows the mode swap; the custom renderer rebuilds the
+    // survey geometry with the new overlay colors.
     this.applyOverlayPaint();
-    this.applyGasReachFeatureState();
+    this.resyncCustomRenderFromStore();
   }
 
   /**
@@ -1905,202 +1716,176 @@ export default class SurveyLayer {
     geojsonSource.setData({ type: 'FeatureCollection', features });
   }
 
-  /** The distance-gradient color ramp, shared by the shots line-color and the
-   *  stations circle-color so the two can't drift. */
-  private distanceRampExpression(): ExpressionSpecification {
-    return distanceColorExpression(
-      DISTANCE_NEAR,
-      DISTANCE_FAR,
-      this.distanceState?.max ?? 0,
-      this.themeColors.grayLine,
-    );
-  }
-
-  /** The gas reachable-frontier ramp, shared by the shots line-color and the
-   *  stations circle-color so the two can't drift. */
-  private gasReachRampExpression(): ExpressionSpecification {
-    return gasReachColorExpression(
-      GAS_NEAR,
-      GAS_FAR,
-      this.gasReachState?.max ?? 0,
-      this.themeColors.grayLine,
-    );
-  }
-
-  /** A `measured` feature-state tint case (#26) over the plain per-feature color,
-   *  or just the plain color when no path is set. Shared by shots/stations. */
-  private measuredTintExpression(measuredIds: Set<number> | null): ExpressionSpecification {
-    if (measuredIds && measuredIds.size > 0) {
-      return [
-        'case',
-        ['boolean', ['feature-state', 'measured'], false],
-        this.measureTintColor,
-        ['get', 'color'],
-      ] as ExpressionSpecification;
+  /**
+   * Keep the interact overlay's color inputs in step with the active overlay
+   * mode (#mem): plain state reads the resolved per-feature `color` property;
+   * distance / gas-reach modes read the carried `dist` / `gasReach` value
+   * through the SAME ramp expressions the bulk layers use, so the overlay's
+   * colors are GPU-identical to what feature-state produced.
+   */
+  private applyInteractPaint(): void {
+    if (!this.map || !hasLiveStyle(this.map)) return;
+    const colorProp: ExpressionSpecification = ['get', 'color'] as ExpressionSpecification;
+    const shotColor = this.distanceMode
+      ? distanceColorExpression(
+          DISTANCE_NEAR,
+          DISTANCE_FAR,
+          this.distanceState?.max ?? 0,
+          this.themeColors.grayLine,
+          ['get', 'dist'] as ExpressionSpecification,
+        )
+      : this.gasReachMode
+        ? gasReachColorExpression(
+            GAS_NEAR,
+            GAS_FAR,
+            this.gasReachState?.max ?? 0,
+            this.themeColors.grayLine,
+            ['get', 'gasReach'] as ExpressionSpecification,
+          )
+        : colorProp;
+    if (this.map.getLayer(this.interactShotsLayerId)) {
+      this.map.setPaintProperty(this.interactShotsLayerId, 'line-color', shotColor);
     }
-    return ['get', 'color'] as ExpressionSpecification;
+    if (this.map.getLayer(this.interactStationsLayerId)) {
+      this.map.setPaintProperty(this.interactStationsLayerId, 'circle-color', shotColor);
+    }
   }
 
-  /** Wrap `base` with a move-comment palette tint (#52): features carrying a
-   *  `commentColor` property (the comment's own shot/station) render in that
-   *  color; everything else falls through to `base` unchanged. Only called
-   *  from the plain/measured branch of shots/stations color - the distance
-   *  and gas-reach overlays own color outright while active, so the tint
-   *  yields to them rather than fighting for the same paint property. */
-  private commentToolTintExpression(base: ExpressionSpecification | string): ExpressionSpecification {
-    return ['coalesce', ['get', 'commentColor'], base] as ExpressionSpecification;
-  }
-
-  /** The shots layer's `line-color`: distance ramp when active, else the measured
-   *  along-line tint (#26), else plain. (The `measurePathLayerId` overlay redraws
-   *  the tint on top of the depth gradient; this keeps it correct when the gradient
-   *  is off and centralizes the distance-vs-tint precedence.) */
-  private shotsLineColor(): ExpressionSpecification {
-    if (this.distanceMode) return this.distanceRampExpression();
-    if (this.gasReachMode) return this.gasReachRampExpression();
-    const base = this.measuredTintExpression(this.measuredPathIds);
-    return this.activeTool === 'move_comment' ? this.commentToolTintExpression(base) : base;
-  }
-
-  /** The stations layer's `circle-color`: distance ramp when active, else the
-   *  measured-path tint for the path's stations (#26), else plain. */
-  private stationsCircleColor(): ExpressionSpecification {
-    if (this.distanceMode) return this.distanceRampExpression();
-    if (this.gasReachMode) return this.gasReachRampExpression();
-    const base = this.measuredTintExpression(this.measuredPathStationIds);
-    return this.activeTool === 'move_comment' ? this.commentToolTintExpression(base) : base;
-  }
-
-  /** Swap shots/stations color to whichever analytical overlay is active (the
-   *  distance gradient or the gas reachable-frontier), or restore, and suspend the
-   *  depth sub-segment layer so the overlay - or the move-comment palette tint
-   *  (#52) - wins cleanly. */
+  /** Refresh the interact overlay for the active analytical-overlay mode (the
+   *  distance gradient or the gas reachable-frontier). The custom renderer draws
+   *  the survey geometry in the overlay colors (via syncCustomRender's colorCtx);
+   *  here we only keep the interact overlay's colors + features in step. */
   private applyOverlayPaint(): void {
     if (!this.map) return;
-    if (this.map.getLayer(this.shotsLayerId)) {
-      this.map.setPaintProperty(this.shotsLayerId, 'line-color', this.shotsLineColor());
-    }
-    if (this.map.getLayer(this.stationsLayerId)) {
-      this.map.setPaintProperty(this.stationsLayerId, 'circle-color', this.stationsCircleColor());
-    }
-    // Depth's per-segment gradient renders above the main shot line; hide it while
-    // distance/gas-reach is active so it can't cover their colors, and while
-    // move_comment is active so it can't cover the comment tint (#52 - it draws
-    // on the same shots line but ABOVE it, so the coalesce in commentToolTintExpression
-    // isn't enough on its own). The measure tint overlay (#26) is intentionally NOT
-    // suspended here — the ruler highlight must always sit on top of whatever owns
-    // the shot color. When restoring the gradient, match the main shots layer's
-    // visibility rather than forcing 'visible' — the user may have Shots hidden
-    // (then depth segments must stay hidden too).
-    if (this.map.getLayer(this.shotGradientsLayerId)) {
-      const shotsVisibility =
-        (this.map.getLayoutProperty(this.shotsLayerId, 'visibility') as string | undefined) ??
-        'visible';
-      this.map.setLayoutProperty(
-        this.shotGradientsLayerId,
-        'visibility',
-        this.distanceMode || this.gasReachMode || this.activeTool === 'move_comment'
-          ? 'none'
-          : shotsVisibility,
-      );
-    }
-  }
-
-  /** Push per-feature `dist` into feature-state (no-op when the overlay is off). */
-  private applyDistanceFeatureState(): void {
-    if (!this.map || !this.distanceMode || !this.distanceState) return;
-    const shotsSource = this.sourceId + '-shots';
-    const stationsSource = this.sourceId + '-stations';
-    for (const [id, dist] of this.distanceState.shots) {
-      this.map.setFeatureState({ source: shotsSource, id }, { dist });
-    }
-    for (const [id, dist] of this.distanceState.stations) {
-      this.map.setFeatureState({ source: stationsSource, id }, { dist });
-    }
-  }
-
-  /** Push per-feature `gasReach` into feature-state (no-op when the overlay is off). */
-  private applyGasReachFeatureState(): void {
-    if (!this.map || !this.gasReachMode || !this.gasReachState) return;
-    const shotsSource = this.sourceId + '-shots';
-    const stationsSource = this.sourceId + '-stations';
-    for (const [id, gasReach] of this.gasReachState.shots) {
-      this.map.setFeatureState({ source: shotsSource, id }, { gasReach });
-    }
-    for (const [id, gasReach] of this.gasReachState.stations) {
-      this.map.setFeatureState({ source: stationsSource, id }, { gasReach });
-    }
+    // The interact overlay's color inputs follow the mode swap; its features also
+    // need rebuilding (they carry mode-scoped dist/gasReach).
+    this.applyInteractPaint();
+    this.lastInteractKey = null;
+    this.refreshInteractOverlay();
   }
 
   /** Tint the measured along-cave-line path's shots AND stations (#26) in `color`,
-   *  or clear with empty/null sets. Mirrors the distance-gradient overlay: a
-   *  `measured` feature-state + a paint `case` (see `shotsLineColor` /
-   *  `stationsCircleColor`). The distance gradient still wins on color while it's
-   *  active; the tint resurfaces when it turns off. */
+   *  or clear with empty/null sets. Rendered by the dedicated custom measure-path
+   *  WebGL layer (syncCustomMeasurePath); the interact overlay carries the tint
+   *  for a hovered/selected measured shot. */
   setMeasuredPath(shotIds: Set<number> | null, stationIds: Set<number> | null, color: string): void {
-    const shotsSource = this.sourceId + '-shots';
-    const stationsSource = this.sourceId + '-stations';
-    // Clear any previous tint feature-state.
-    if (this.map && this.measuredPathIds) {
-      for (const id of this.measuredPathIds) {
-        this.map.setFeatureState({ source: shotsSource, id }, { measured: false });
-      }
-    }
-    if (this.map && this.measuredPathStationIds) {
-      for (const id of this.measuredPathStationIds) {
-        this.map.setFeatureState({ source: stationsSource, id }, { measured: false });
-      }
-    }
     this.measuredPathIds = shotIds && shotIds.size > 0 ? shotIds : null;
     this.measuredPathStationIds = stationIds && stationIds.size > 0 ? stationIds : null;
     this.measureTintColor = color;
     if (!this.map || !hasLiveStyle(this.map)) return;
-    if (this.map.getLayer(this.shotsLayerId)) {
-      this.map.setPaintProperty(this.shotsLayerId, 'line-color', this.shotsLineColor());
-    }
-    if (this.map.getLayer(this.stationsLayerId)) {
-      this.map.setPaintProperty(this.stationsLayerId, 'circle-color', this.stationsCircleColor());
-    }
-    // The on-top tint overlay (#26) reads the same `measured` feature-state; only
-    // its color needs updating here.
-    if (this.map.getLayer(this.measurePathLayerId)) {
-      this.map.setPaintProperty(this.measurePathLayerId, 'line-color', this.measureTintColor);
-    }
-    this.applyMeasuredPathFeatureState();
+    // Overlay features carry the tint decision — rebuild them.
+    this.lastInteractKey = null;
+    this.refreshInteractOverlay();
+    // Drive the dedicated custom measure-path layer (the sole measured-path tint).
+    this.syncCustomMeasurePath();
   }
 
-  /** Push the `measured` feature-state for the tinted path shots + stations (no-op
-   *  when empty). Re-applied after setData() wipes feature-state. */
-  private applyMeasuredPathFeatureState(): void {
-    if (!this.map) return;
-    if (this.measuredPathIds) {
-      const shotsSource = this.sourceId + '-shots';
-      for (const id of this.measuredPathIds) {
-        this.map.setFeatureState({ source: shotsSource, id }, { measured: true });
+  /**
+   * (Re)build the dedicated custom measure-path layer (#26, stage 2a) from the
+   * current measured id sets and geometry index, or clear it when no path is
+   * set. Called from setMeasuredPath and after each geometry rebuild (endApply-
+   * Features re-applies the tint), mirroring applyMeasuredPathFeatureState so a
+   * mid-measurement edit keeps the custom tint in sync with moved coords.
+   *
+   * The measured id sets are the encoded feature ids setMeasuredPath received
+   * (`sectionId * FEATURE_ID_STRIDE + scopedId`); they are decoded back and
+   * projected via the SoA geometry index (`shotGeometry` / `stationCoords`), the
+   * same source the interact overlay uses. Reference-hidden features are skipped
+   * to match the stock `measurePathFilter` / interact-overlay guards.
+   *
+   * z-order: inserted beneath `survey-interact-shots-measured` (the hover/
+   * selection tint), which sits above the stock `survey-measure-path`. Both the
+   * custom and stock tints therefore draw between the survey geometry and the
+   * hover overlay in identical MEASURE_TINT — the pixels match this stage.
+   */
+  private syncCustomMeasurePath(): void {
+    if (!this.measurePath) return;
+    if (!this.map || !hasLiveStyle(this.map) || !this.geoIndex) {
+      this.measurePath.clear();
+      return;
+    }
+    if (this.measuredPathIds === null && this.measuredPathStationIds === null) {
+      this.measurePath.clear();
+      return;
+    }
+    // The tint must not float over hidden geometry: measured shots follow the
+    // shots toggle, measured stations follow the stations toggle (setShowShots /
+    // setShowStations re-run this so a live toggle updates the path).
+    const segments: MeasureSegment[] = [];
+    if (this.measuredPathIds && this.shotsVisible) {
+      // Resolve by RE-DERIVING each shot's canonical feature id rather than
+      // decoding the fid: the scoped id folded into a shot fid is the GLOBAL shot
+      // id (>= FEATURE_ID_STRIDE for section >= 1), so a floor(fid / STRIDE) split
+      // mis-attributes every such shot and drops its tint (#26). Hidden reference
+      // legs are excluded to match the interact overlay / stock filter.
+      for (const { from, to } of this.geoIndex.measuredShotSegments(
+        this.measuredPathIds,
+        this.showReferenceShotsCached,
+      )) {
+        segments.push({ a: from, b: to });
       }
     }
-    if (this.measuredPathStationIds) {
-      const stationsSource = this.sourceId + '-stations';
-      for (const id of this.measuredPathStationIds) {
-        this.map.setFeatureState({ source: stationsSource, id }, { measured: true });
+    const points: MeasurePoint[] = [];
+    if (this.measuredPathStationIds && this.stationsVisible) {
+      for (const fid of this.measuredPathStationIds) {
+        const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
+        const stationIndex = fid - sectionId * FEATURE_ID_STRIDE;
+        const ref = { section_id: sectionId, station_index: stationIndex };
+        // Match the interact-overlay guard: a station hidden by the reference
+        // toggle must not surface.
+        if (!this.showReferenceShotsCached && this.geoIndex.isAllReferenceStation(ref)) continue;
+        const coords = this.geoIndex.stationCoords(ref);
+        if (coords) points.push({ center: coords });
       }
     }
+    if (segments.length === 0 && points.length === 0) {
+      this.measurePath.clear();
+      return;
+    }
+    this.measurePath.setPath(this.buildMeasurePathRenderData(segments, points), [
+      // ABOVE the custom survey geometry (which anchors before survey-interact-shots)
+      // so the measured shot lines tint OVER the base geometry rather than being
+      // covered by it; still below the interact hover/selection overlay. Added
+      // after the geometry layer, so `before survey-interact-shots` lands it just
+      // above the geometry. Fallback keeps it placed if that layer is absent.
+      this.interactShotsLayerId,
+      this.interactShotsMeasuredLayerId,
+    ]);
   }
 
-  // Update hitbox layer sizes from config
+  /** Tessellate the measured path + resolve its device-px sizes and tint color
+   *  for the custom measure-path layer. */
+  private buildMeasurePathRenderData(
+    segments: MeasureSegment[],
+    points: MeasurePoint[],
+  ): MeasurePathRenderData {
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    const [r, g, b, a] = packCssColor(this.measureTintColor);
+    const { anchorX, anchorY, line, circle } = buildMeasurePathBuffers(segments, points);
+    return {
+      anchorX,
+      anchorY,
+      line,
+      circle,
+      // Match the stock tint's line width (baseWidth = getShotWidth) and the
+      // station disc radius (getStationRadius); half-width for the capsule.
+      lineHalfWidthPx: (this.getShotWidth() / 2) * dpr,
+      circleRadiusPx: this.getStationRadius() * dpr,
+      aaPx: dpr,
+      color: [r / 255, g / 255, b / 255, a / 255],
+    };
+  }
+
+  // Update ghost hitbox layer sizes from config. The main shots/stations hit
+  // areas are no longer layer paint (the dedicated hitbox layers were removed,
+  // #mem budget); they are read live per query in hitCandidateSections via
+  // getShot/StationHitReach(), so config changes take effect with no layer edit.
   private updateHitboxLayers(): void {
     if (!this.map) return;
 
     const stationHitArea = this.getStationHitArea();
     const shotHitArea = this.getShotHitArea();
 
-    // Update hitbox layer sizes (guard layer existence for safety)
-    if (this.map.getLayer(this.stationsHitboxLayerId)) {
-      this.map.setPaintProperty(this.stationsHitboxLayerId, 'circle-radius', stationHitArea);
-    }
-    if (this.map.getLayer(this.shotsHitboxLayerId)) {
-      this.map.setPaintProperty(this.shotsHitboxLayerId, 'line-width', shotHitArea);
-    }
     if (this.map.getLayer(this.ghostStationsHitboxLayerId)) {
       this.map.setPaintProperty(this.ghostStationsHitboxLayerId, 'circle-radius', stationHitArea);
     }
@@ -2125,45 +1910,17 @@ export default class SurveyLayer {
     }
   }
 
-  // Update debug visualization based on config
-  // Sets BOTH color AND opacity on all hitbox layers for debug mode
-  // CRITICAL: In normal mode, use OPAQUE color (#000) with tiny opacity (0.001)
-  // Using transparent color (rgba(0,0,0,0)) would multiply with opacity to give
-  // effective alpha of 0, breaking queryRenderedFeatures/hover detection
+  // Update debug visualization based on config.
+  // The main shots/stations hitbox layers were removed (#mem budget), so the
+  // show_hitboxes debug toggle no longer paints a visible outline for the main
+  // hit areas (hit-testing is a padded query on the visible layers now). The
+  // ghost hitbox layers still honor it for merge-preview debugging.
   private updateDebugVisualization(): void {
     if (!this.map) return;
 
     const showHitboxes = this.config?.debug?.map?.show_hitboxes ?? false;
     const debugColor = 'rgba(255, 0, 0, 0.3)'; // Semi-transparent red for debug
     const opaqueColor = '#000000'; // OPAQUE color for normal mode (opacity controls visibility)
-
-    // Station hitbox - MUST use opaque color in normal mode for queryRenderedFeatures
-    if (this.map.getLayer(this.stationsHitboxLayerId)) {
-      this.map.setPaintProperty(
-        this.stationsHitboxLayerId,
-        'circle-color',
-        showHitboxes ? debugColor : opaqueColor
-      );
-      this.map.setPaintProperty(
-        this.stationsHitboxLayerId,
-        'circle-opacity',
-        showHitboxes ? 1 : 0.001
-      );
-    }
-
-    // Shot hitbox - MUST use opaque color in normal mode for queryRenderedFeatures
-    if (this.map.getLayer(this.shotsHitboxLayerId)) {
-      this.map.setPaintProperty(
-        this.shotsHitboxLayerId,
-        'line-color',
-        showHitboxes ? debugColor : opaqueColor
-      );
-      this.map.setPaintProperty(
-        this.shotsHitboxLayerId,
-        'line-opacity',
-        showHitboxes ? 1 : 0.001
-      );
-    }
 
     // Ghost hitbox layers - debug visualization only (NOT used for hit detection)
     // Keep at opacity 0 when debug off to avoid unnecessary rendering work
@@ -2227,29 +1984,24 @@ export default class SurveyLayer {
     if (this.snappedStationId === newId) return;
     this.snappedStationId = newId;
 
-    // Update snap indicator via setFeatureState (instant per-feature GPU update)
-    const stationsSource = this.sourceId + '-stations';
-    const newFeatureId = this.parseFeatureId(newId);
-    if (newFeatureId !== this.prevSnappedStationFeatureId) {
-      if (this.prevSnappedStationFeatureId !== null) {
-        this.map.setFeatureState(
-          { source: stationsSource, id: this.prevSnappedStationFeatureId },
-          { snapped: false }
-        );
-      }
-      if (newFeatureId !== null) {
-        this.map.setFeatureState(
-          { source: stationsSource, id: newFeatureId },
-          { snapped: true }
-        );
-      }
-      this.prevSnappedStationFeatureId = newFeatureId;
-    }
+    // During a live move drag EVERY interact refresh is funneled through the
+    // per-frame renderOverlayFollow pass, so the snap ring and the grabbed
+    // highlight update together in the SAME rAF tick. A snap-target change is
+    // driven by the same pointer move that schedules that frame, so the ring
+    // lands one frame later at most; outside a drag, refresh immediately as
+    // before. (The moving ghost follows synchronously via its own translate.)
+    if (this.dragPreviewActive && !this.dragCommitPending) return;
+
+    // Snap ring renders from the interact overlay (#mem): pushing one small
+    // feature is as instant as the old per-feature feature-state was.
+    this.refreshInteractOverlay();
   }
 
   /**
-   * Query the nearest station to a screen point using MapLibre's spatial index.
-   * O(log N) via queryRenderedFeatures instead of iterating all stations.
+   * Query the nearest station to a screen point. The padded visible-layer query
+   * (MapLibre's spatial index) gates the candidate sections; the SoA resolver
+   * picks the exact station with a circular `threshold` (the old post-check
+   * for corner candidates is inherent in the resolver's maxDistance) (#mem).
    */
   queryNearestStation(
     screenX: number,
@@ -2260,47 +2012,21 @@ export default class SurveyLayer {
       [screenX - threshold, screenY - threshold],
       [screenX + threshold, screenY + threshold],
     ];
-    const features = this.map.queryRenderedFeatures(bbox, {
-      layers: [this.stationsHitboxLayerId],
-    });
-    if (features.length === 0) return null;
-
-    const fakeEvent = { point: { x: screenX, y: screenY } } as MapMouseEvent;
-    const nearest = resolveNearestStation(this.map, fakeEvent, features, threshold);
-    if (!nearest) return null;
-
-    // resolveNearestStation skips the distance check for a lone candidate, and the
-    // square bbox reaches ~√2·threshold at a corner — enforce the circular snap
-    // threshold so a corner station doesn't snap (and, in measure mode, doesn't
-    // suppress a closer shot snap) (#26, Codex).
-    if (nearest.geometry.type === 'Point') {
-      const p = this.map.project(nearest.geometry.coordinates as [number, number]);
-      if (Math.hypot(p.x - screenX, p.y - screenY) > threshold) return null;
-    }
-
-    const { sectionId, stationIndex } = nearest.properties ?? {};
-    if (sectionId === undefined || stationIndex === undefined) return null;
-
-    return {
-      section_id: sectionId as number,
-      station_index: stationIndex as number,
-    };
+    const { stationSections } = this.hitCandidateSections(bbox);
+    const nearest = this.resolveStationAt(screenX, screenY, stationSections, threshold);
+    return nearest ? nearest.ref : null;
   }
 
   /**
    * Nearest shot to a screen point, plus the fractional position `t` ∈ [0,1]
    * along that shot's line (#26 ruler snap-to-shot). The caller interpolates the
    * 3D coords at `t` from the active stations (the 2D shot geometry has no z).
-   * Returns null when no shot is within `threshold` pixels.
+   * Returns null when no shot is within `threshold` pixels (circular — the
+   * old corner post-check is inherent in the resolver's maxDistance).
    *
-   * NOTE (known edge case): `t` is derived from the rendered endpoints
-   * (`queryRenderedFeatures`), which MapLibre clips at tile boundaries + the
-   * source buffer. For a long shot with one station well off-screen, those
-   * endpoints can be clip points rather than the true stations, so `t` (and the
-   * snap marker) are slightly off for that shot. Short/on-screen shots — the
-   * common case — are unaffected (the buffer covers them). A precise fix would
-   * require retaining the true per-shot endpoints from setData; deferred as an
-   * edge case.
+   * The SoA resolver computes `t` and the snap point from the TRUE shot
+   * endpoints (#mem), which also fixes the previously-documented edge case
+   * where tile-clipped rendered geometry skewed `t` for long shots.
    */
   queryNearestShotPoint(
     screenX: number,
@@ -2311,37 +2037,17 @@ export default class SurveyLayer {
       [screenX - threshold, screenY - threshold],
       [screenX + threshold, screenY + threshold],
     ];
-    const features = this.map.queryRenderedFeatures(bbox, {
-      layers: [this.shotsHitboxLayerId],
-    });
-    if (features.length === 0) return null;
+    const { shotSections } = this.hitCandidateSections(bbox);
+    const nearest = this.resolveShotAt(screenX, screenY, shotSections, threshold);
+    if (!nearest) return null;
 
-    const fakeEvent = { point: { x: screenX, y: screenY } } as MapMouseEvent;
-    const nearest = resolveNearestShot(this.map, fakeEvent, features, threshold);
-    if (!nearest || nearest.geometry.type !== 'LineString') return null;
-
-    const { sectionId, shotId } = nearest.properties ?? {};
-    if (sectionId === undefined || shotId === undefined) return null;
-
-    const coords = nearest.geometry.coordinates;
-    const c1 = coords[0] as [number, number] | undefined;
-    const c2 = coords[coords.length - 1] as [number, number] | undefined;
-    if (!c1 || !c2) return null;
-    const p1 = this.map.project(c1);
-    const p2 = this.map.project(c2);
-    // resolveNearestShot skips the distance check for a lone candidate, and the
-    // square bbox can include a shot up to ~√2·threshold away at a corner — enforce
-    // the (circular) snap threshold against the actual segment so a click that isn't
-    // close enough doesn't snap to a shot (#26, Codex).
-    if (distanceToLineSegment(screenX, screenY, p1.x, p1.y, p2.x, p2.y) > threshold) return null;
-    const t = projectParamOnSegment(screenX, screenY, p1.x, p1.y, p2.x, p2.y);
-    const lng = c1[0] + t * (c2[0] - c1[0]);
-    const lat = c1[1] + t * (c2[1] - c1[1]);
+    const lng = nearest.from[0] + nearest.t * (nearest.to[0] - nearest.from[0]);
+    const lat = nearest.from[1] + nearest.t * (nearest.to[1] - nearest.from[1]);
 
     return {
-      section_id: sectionId as number,
-      shot_id: shotId as number,
-      t,
+      section_id: nearest.sectionId,
+      shot_id: nearest.shotId,
+      t: nearest.t,
       lng,
       lat,
     };
@@ -2364,6 +2070,9 @@ export default class SurveyLayer {
       });
     }
     this.hoveredSectionId = stringId;
+    // Custom renderer ignores feature-state; drive its per-vertex highlight flag
+    // at hover level (the stock section hover used the same `hover` state).
+    this.customRender?.setSectionHover(sectionId !== null ? [sectionId] : []);
     this.updateVisualState();
   }
 
@@ -2385,6 +2094,9 @@ export default class SurveyLayer {
       });
     }
     this.hoveredSegmentSectionIds = stringIds;
+    // Custom renderer ignores feature-state; drive its per-vertex highlight flag
+    // so the whole connected segment is emphasized under the custom layer too.
+    this.customRender?.setHighlight(sectionIds);
     this.updateVisualState();
   }
 
@@ -2444,6 +2156,9 @@ export default class SurveyLayer {
       });
     }
     this.selectedSectionId = stringId;
+    // Custom renderer ignores feature-state; drive its per-vertex highlight flag
+    // at selection level (smaller bump than hover, matching stock `selected`).
+    this.customRender?.setSectionSelect(sectionId !== null ? [sectionId] : []);
     this.updateVisualState();
   }
 
@@ -2457,297 +2172,127 @@ export default class SurveyLayer {
     return { min: this.depthRange.min, max: this.depthRange.max };
   }
 
-  // Control shot data labels visibility
+  // Control shot data labels visibility (custom label layer uniform).
   setShowShotLabels(show: boolean) {
-    this.map.setLayoutProperty(
-      this.shotLabelsLayerId,
-      'visibility',
-      show ? 'visible' : 'none'
-    );
+    this.customLabels?.setShotLabelsVisible(show);
   }
 
-  // Control section name labels visibility
+  // Control section name labels visibility (custom label layer uniform).
   setShowSectionNames(show: boolean) {
-    this.map.setLayoutProperty(
-      this.labelsLayerId,
-      'visibility',
-      show ? 'visible' : 'none'
-    );
+    this.customLabels?.setSectionNamesVisible(show);
   }
 
-  // Control station index labels visibility
+  // Control station index labels visibility (custom label layer uniform).
   setShowStationLabels(show: boolean) {
-    this.map.setLayoutProperty(
-      this.stationLabelsLayerId,
-      'visibility',
-      show ? 'visible' : 'none'
-    );
+    this.customLabels?.setStationLabelsVisible(show);
   }
 
-  // Control station comments visibility
+  // Control station comments visibility. Effective visibility folds in the
+  // comment-tool override (forces visible); the custom uniform mirrors it.
   setShowStationComments(show: boolean) {
     this.cachedShowStationComments = show;
-    // Skip if comment tool override is forcing visibility on
-    if (this.commentToolActive) return;
-    this.map.setLayoutProperty(
-      this.stationCommentsLayerId,
-      'visibility',
-      show ? 'visible' : 'none'
-    );
+    this.customLabels?.setStationCommentsVisible(this.commentToolActive || show);
   }
 
-  // Control shot comments visibility
+  // Control shot comments visibility (custom uniform mirrors the effective state).
   setShowShotComments(show: boolean) {
     this.cachedShowShotComments = show;
-    // Skip if comment tool override is forcing visibility on
-    if (this.commentToolActive) return;
-    this.map.setLayoutProperty(
-      this.shotCommentsLayerId,
-      'visibility',
-      show ? 'visible' : 'none'
-    );
+    this.customLabels?.setShotCommentsVisible(this.commentToolActive || show);
   }
 
-  // Control stations visibility (also hides loop closures and station hitbox)
-  // Note: Highlight layer stays visible - it uses filter to control what renders,
-  // allowing snapped/origin stations to appear even when stations layer is hidden
+  // Control stations visibility (also hides loop closures). The custom renderer
+  // carries the real stations visibility; hit-testing is gated by stationsVisible
+  // via the SoA geometry index, so hidden stations stay non-interactive.
   setShowStations(visible: boolean): void {
     if (!this.map) return;
     this.stationsVisible = visible;
     const visibility = visible ? 'visible' : 'none';
-    // Clear hover state FIRST when hiding to prevent any race conditions
-    // then set visibility to prevent hover events from triggering while clearing
+    // Clear hover state FIRST when hiding to prevent any race conditions.
     if (!visible) {
       this.clearStationHover();
     }
-    this.map.setLayoutProperty(this.stationsLayerId, 'visibility', visibility);
-    this.map.setLayoutProperty(this.stationsHitboxLayerId, 'visibility', visibility);
+    this.customRender?.setStationsVisible(visible);
     this.map.setLayoutProperty(this.loopClosuresLayerId, 'visibility', visibility);
-    // Note: stationsHighlightLayerId intentionally NOT hidden - it uses feature-state
-    // to show only snapped/origin stations even when main stations layer is hidden
+    // Interact overlay tracks the stations layer: a hover/selection highlight
+    // must not surface a hidden station (#mem).
+    this.map.setLayoutProperty(this.interactStationsLayerId, 'visibility', visibility);
+    // Note: stationsHighlightLayerId intentionally NOT hidden - it shows only
+    // snapped/origin stations even when the main stations layer is hidden.
+    // Drop/restore the measured-path station discs with the stations toggle.
+    this.syncCustomMeasurePath();
   }
 
-  // Control shots visibility (also hides shot hitbox)
+  // Control shots visibility. The custom renderer carries the real shots
+  // visibility; hit-testing is gated by shotsVisible via the SoA geometry index.
   setShowShots(visible: boolean): void {
     if (!this.map) return;
     this.shotsVisible = visible;
     const visibility = visible ? 'visible' : 'none';
-    // Clear hover state FIRST when hiding to prevent any race conditions
+    // Clear hover state FIRST when hiding to prevent any race conditions.
     if (!visible) {
       this.clearShotHover();
     }
-    this.map.setLayoutProperty(this.shotsLayerId, 'visibility', visibility);
-    this.map.setLayoutProperty(this.measurePathLayerId, 'visibility', visibility);
-    this.map.setLayoutProperty(this.shotsHitboxLayerId, 'visibility', visibility);
-    // The depth-gradient sublayer's visibility is owned by applyOverlayPaint: it
-    // matches the shots layer EXCEPT while distance/gas-reach or the move_comment
-    // tint is active, when it must stay hidden. Re-derive it here (rather than
-    // forcing it to `visibility` above) so toggling Shots can't re-show the
-    // gradient over an active overlay/tint (#52).
+    this.customRender?.setShotsVisible(visible);
+    // Interact overlay tracks the shots layers (#mem).
+    this.map.setLayoutProperty(this.interactShotsLayerId, 'visibility', visibility);
+    this.map.setLayoutProperty(this.interactShotsMeasuredLayerId, 'visibility', visibility);
+    // Keep the interact overlay's colors + features in step.
     this.applyOverlayPaint();
+    // Drop/restore the measured-path shot lines with the shots toggle.
+    this.syncCustomMeasurePath();
   }
 
-  // Control reference shots visibility via filter (while keeping regular shots visible)
-  // Also hides reference-only stations, their labels, reference shot labels, and
-  // section names whose stations are all reference.
+  // Control reference shots visibility. The custom renderer + custom label layer
+  // hide/show reference legs via a shader uniform; the interact overlay + custom
+  // measure-path honor the same flag when resolving features.
   setShowReferenceShots(visible: boolean): void {
     if (!this.map) return;
     this.showReferenceShotsCached = visible;
-    const notReference: maplibregl.FilterSpecification = ['!=', ['get', 'isReference'], true];
-    const notAllReference: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsReference'], true];
-    if (visible) {
-      // Restore original filters (label layers have zoom-based density filters)
-      this.map.setFilter(this.shotsLayerId, null);
-      this.map.setFilter(this.shotGradientsLayerId, null);
-      this.map.setFilter(this.measurePathLayerId, null);
-      this.map.setFilter(this.shotsHitboxLayerId, null);
-      this.map.setFilter(this.stationsLayerId, null);
-      this.map.setFilter(this.stationsHitboxLayerId, null);
-      this.map.setFilter(this.shotLabelsLayerId, this.shotLabelsBaseFilter);
-      this.map.setFilter(this.stationLabelsLayerId, this.stationLabelsBaseFilter);
-      this.map.setFilter(this.labelsLayerId, null);
-    } else {
-      // Hide reference shots and their labels
-      this.map.setFilter(this.shotsLayerId, notReference);
-      this.map.setFilter(this.shotGradientsLayerId, notReference);
-      this.map.setFilter(this.measurePathLayerId, notReference);
-      // Also filter the hitbox so a hidden reference shot can't be clicked/snapped
-      // (e.g. the ruler snapping to an invisible reference leg) (#26, Codex).
-      this.map.setFilter(this.shotsHitboxLayerId, notReference);
-      this.map.setFilter(this.shotLabelsLayerId,
-        this.shotLabelsBaseFilter
-          ? ['all', this.shotLabelsBaseFilter, notReference] as maplibregl.FilterSpecification
-          : notReference
-      );
-      // Hide stations that only connect to reference shots (and their labels)
-      this.map.setFilter(this.stationsLayerId, notAllReference);
-      this.map.setFilter(this.stationsHitboxLayerId, notAllReference);
-      this.map.setFilter(this.stationLabelsLayerId,
-        this.stationLabelsBaseFilter
-          ? ['all', this.stationLabelsBaseFilter, notAllReference] as maplibregl.FilterSpecification
-          : notAllReference
-      );
-      // Hide section names when all stations in the section are reference
-      this.map.setFilter(this.labelsLayerId, ['!=', ['get', 'allStationsReference'], true]);
-    }
-    // Recompute comment filters (respects both reference-shots and hidden-comment)
-    this._applyCommentFilters();
+    this.customRender?.setReferenceShotsVisible(visible);
+    this.customLabels?.setReferenceShotsVisible(visible);
+    // Measured-path tint drops hidden reference legs (syncCustomMeasurePath guard).
+    this.syncCustomMeasurePath();
+    // Overlay features honor the reference filter (hidden reference shots /
+    // all-reference stations produce no highlight) — rebuild them.
+    this.lastInteractKey = null;
+    this.refreshInteractOverlay();
   }
 
   /**
-   * Hide/show the source comment marker during move_comment pickup.
-   * Composes with the reference-shots filter so both constraints are respected.
+   * Hide/show the source comment label during move_comment pickup (C3). Threads
+   * the picked-up comment's identity into the custom label layer, which collapses
+   * that one comment's label (LABEL_FLAG.COMMENT_HIDE) so only the cursor-following
+   * tag shows — matching the deleted stock hidden-comment filter. `null` clears it.
    */
   setHiddenComment(hidden: { type: 'station' | 'shot'; sectionId: number; id: number } | null): void {
-    this.hiddenComment = hidden;
-    this._applyCommentFilters();
+    this.customLabels?.setHiddenComment(hidden);
   }
 
-  /**
-   * Recompute comment layer filters combining base filter, reference-shot filter,
-   * and hidden-comment filter into one expression.
-   */
-  private _applyCommentFilters(): void {
-    if (!this.map) return;
-    const commentBase: maplibregl.FilterSpecification = ['!=', ['get', 'comment'], null];
-    const notReference: maplibregl.FilterSpecification = ['!=', ['get', 'isReference'], true];
-    const notAllReference: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsReference'], true];
-
-    // Station comments filter
-    const stationParts: maplibregl.FilterSpecification[] = [commentBase];
-    if (!this.showReferenceShotsCached) stationParts.push(notAllReference);
-    if (this.hiddenComment?.type === 'station') {
-      stationParts.push(['any',
-        ['!=', ['get', 'sectionId'], this.hiddenComment.sectionId],
-        ['!=', ['get', 'stationIndex'], this.hiddenComment.id],
-      ] as maplibregl.FilterSpecification);
-    }
-    this.map.setFilter(
-      this.stationCommentsLayerId,
-      stationParts.length === 1 ? stationParts[0]! : ['all', ...stationParts] as maplibregl.FilterSpecification
-    );
-
-    // Shot comments filter
-    const shotParts: maplibregl.FilterSpecification[] = [commentBase];
-    if (!this.showReferenceShotsCached) shotParts.push(notReference);
-    if (this.hiddenComment?.type === 'shot') {
-      shotParts.push(['any',
-        ['!=', ['get', 'sectionId'], this.hiddenComment.sectionId],
-        ['!=', ['get', 'shotId'], this.hiddenComment.id],
-      ] as maplibregl.FilterSpecification);
-    }
-    this.map.setFilter(
-      this.shotCommentsLayerId,
-      shotParts.length === 1 ? shotParts[0]! : ['all', ...shotParts] as maplibregl.FilterSpecification
-    );
-  }
-
-  /** Force both comment layers visible with overlap priority (comment/move_comment tool) */
+  /** Force both comment kinds visible + overlap-exempt (comment/move_comment
+   *  tool): the custom label uniforms mirror the forced-visible override and the
+   *  reveal pass stops culling comments so ALL stay visible/selectable (C1). */
   private _enableCommentToolOverride(): void {
     this.commentToolActive = true;
-    // Force visible
-    this.map.setLayoutProperty(this.stationCommentsLayerId, 'visibility', 'visible');
-    this.map.setLayoutProperty(this.shotCommentsLayerId, 'visibility', 'visible');
-    // Allow overlap so comments always render on top of other labels
-    this.map.setLayoutProperty(this.stationCommentsLayerId, 'text-allow-overlap', true);
-    this.map.setLayoutProperty(this.shotCommentsLayerId, 'text-allow-overlap', true);
+    this.customLabels?.setStationCommentsVisible(true);
+    this.customLabels?.setShotCommentsVisible(true);
+    this.customLabels?.setCommentOverlapExempt(true);
   }
 
-  /** Restore comment layer visibility and overlap from cached display settings */
+  /** Restore comment visibility from cached display settings + re-enable comment
+   *  collision (custom uniforms + reveal pass). */
   private _disableCommentToolOverride(): void {
     this.commentToolActive = false;
-    // Restore visibility from cached display state
-    this.map.setLayoutProperty(
-      this.stationCommentsLayerId, 'visibility',
-      this.cachedShowStationComments ? 'visible' : 'none'
-    );
-    this.map.setLayoutProperty(
-      this.shotCommentsLayerId, 'visibility',
-      this.cachedShowShotComments ? 'visible' : 'none'
-    );
-    // Restore default overlap behavior
-    this.map.setLayoutProperty(this.stationCommentsLayerId, 'text-allow-overlap', false);
-    this.map.setLayoutProperty(this.shotCommentsLayerId, 'text-allow-overlap', false);
-  }
-
-  /** Comment-label `text-color` (#52): palette tint from the feature's
-   *  `commentColor` while `move_comment` is the exact active tool, else the
-   *  plain theme label color. Shared by both comment layers. Reuses
-   *  `commentToolTintExpression` so the shots/stations color tint and the
-   *  label text tint can't drift apart. */
-  private commentTextColor(): string | ExpressionSpecification {
-    return this.activeTool === 'move_comment'
-      ? this.commentToolTintExpression(this.themeColors.labelColor)
-      : this.themeColors.labelColor;
-  }
-
-  /** Set `text-color` from {@link commentTextColor} on both comment layers.
-   *  Shared by `applyCommentToolTint` (tool transitions) and `applyThemeColors`
-   *  (theme changes) so the two callers can't diverge. */
-  private applyCommentTextColor(): void {
-    if (!this.map) return;
-    const color = this.commentTextColor();
-    if (this.map.getLayer(this.stationCommentsLayerId)) {
-      this.map.setPaintProperty(this.stationCommentsLayerId, 'text-color', color);
-    }
-    if (this.map.getLayer(this.shotCommentsLayerId)) {
-      this.map.setPaintProperty(this.shotCommentsLayerId, 'text-color', color);
-    }
-  }
-
-  /** Apply (or restore) the move-comment palette tint on the comment text layers.
-   *  A wider halo keeps the vivid palette colors readable over the map while
-   *  tinted; restores the normal halo width on exit. Called on tool-transition;
-   *  `applyThemeColors` calls `applyCommentTextColor` directly (it does not touch
-   *  halo width, only the theme-driven halo color) so a theme change while the
-   *  tool is active keeps the tint instead of reverting to the plain label color. */
-  private applyCommentToolTint(): void {
-    if (!this.map) return;
-    this.applyCommentTextColor();
-    const haloWidth = this.activeTool === 'move_comment' ? COMMENT_HALO_WIDTH_TINTED : COMMENT_HALO_WIDTH_BASE;
-    if (this.map.getLayer(this.stationCommentsLayerId)) {
-      this.map.setPaintProperty(this.stationCommentsLayerId, 'text-halo-width', haloWidth);
-    }
-    if (this.map.getLayer(this.shotCommentsLayerId)) {
-      this.map.setPaintProperty(this.shotCommentsLayerId, 'text-halo-width', haloWidth);
-    }
+    this.customLabels?.setStationCommentsVisible(this.cachedShowStationComments);
+    this.customLabels?.setShotCommentsVisible(this.cachedShowShotComments);
+    this.customLabels?.setCommentOverlapExempt(false);
   }
 
   // Set highlighted stations by their string IDs (format: "sectionId:stationIndex")
   setHighlightedStations(stationIds: string[]): void {
     if (!this.map) return;
-    const prevIds = this.highlightedStationIds;
     this.highlightedStationIds = stationIds;
-
-    // Update highlight via setFeatureState (instant per-feature GPU update)
-    const stationsSource = this.sourceId + '-stations';
-    const prevSet = new Set(prevIds);
-    const nextSet = new Set(stationIds);
-
-    // Clear snapped state on stations no longer highlighted
-    for (const id of prevIds) {
-      if (!nextSet.has(id)) {
-        const featureId = this.parseFeatureId(id);
-        if (featureId !== null) {
-          this.map.setFeatureState(
-            { source: stationsSource, id: featureId },
-            { snapped: false }
-          );
-        }
-      }
-    }
-    // Set snapped state on newly highlighted stations
-    for (const id of stationIds) {
-      if (!prevSet.has(id)) {
-        const featureId = this.parseFeatureId(id);
-        if (featureId !== null) {
-          this.map.setFeatureState(
-            { source: stationsSource, id: featureId },
-            { snapped: true }
-          );
-        }
-      }
-    }
+    // Highlights render as snap-ring features from the interact overlay (#mem).
+    this.refreshInteractOverlay();
   }
 
   // Clear station hover state
@@ -2794,10 +2339,11 @@ export default class SurveyLayer {
     this.hoveredSectionId = null;
     this.hoveredSegmentSectionIds = [];
     this.snappedStationId = null;
-    this.prevSnappedStationFeatureId = null;
     this.selectedStationId = null;
     this.selectedShotId = null;
     this.selectedSectionId = null;
+    // Custom renderer: drop every section-emphasis source in one refresh.
+    this.customRender?.clearHighlights();
     this.setHighlightedStations([]);
     this.callbacks.onStationHover?.(null);
     this.callbacks.onShotHover?.(null);
@@ -2810,83 +2356,27 @@ export default class SurveyLayer {
    * Sections in this set get reduced opacity via feature-state.
    */
   setAnchoredSections(sectionIds: Set<number>): void {
-    const stationsSource = this.sourceId + '-stations';
-    const shotsSource = this.sourceId + '-shots';
-
-    // Clear previously anchored features
-    for (const featureId of this.prevAnchoredFeatureIds) {
-      try {
-        this.map.setFeatureState({ source: stationsSource, id: featureId }, { anchored: false });
-      } catch { /* feature may not exist */ }
-      try {
-        this.map.setFeatureState({ source: shotsSource, id: featureId }, { anchored: false });
-      } catch { /* feature may not exist */ }
-    }
-
     this.anchoredSectionIds = sectionIds;
-    const newAnchoredFeatureIds = new Set<number>();
-
-    if (sectionIds.size > 0) {
-      // Find all features belonging to anchored sections and set feature-state
-      for (const source of [stationsSource, shotsSource]) {
-        try {
-          const features = this.map.querySourceFeatures(source);
-          for (const f of features) {
-            if (f.properties?.sectionId != null && sectionIds.has(f.properties.sectionId as number) && f.id != null) {
-              const featureId = typeof f.id === 'number' ? f.id : parseInt(String(f.id), 10);
-              if (!isNaN(featureId)) {
-                this.map.setFeatureState({ source, id: featureId }, { anchored: true });
-                newAnchoredFeatureIds.add(featureId);
-              }
-            }
-          }
-        } catch { /* source may not be loaded */ }
-      }
-    }
-
-    this.prevAnchoredFeatureIds = newAnchoredFeatureIds;
-
-    // Update label layer opacity via setPaintProperty (labels use separate sources
-    // without promoteId, so feature-state isn't available — use data-driven expressions)
-    this.updateLabelAnchoredOpacity(sectionIds);
-
-    // Update loop closure line opacity — gray out closures where both endpoints are anchored
+    // Update loop closure line opacity — gray out closures where both endpoints are anchored.
     this.updateClosureAnchoredOpacity(sectionIds);
-
-    // Refresh main layer opacity so anchored sections dim consistently with current set.
-    this.updateImmovableLayerOpacity(this.immovableStationFeatureIds, this.immovableShotFeatureIds);
+    // The custom renderer + label layer dim the anchored sections' geometry + labels.
+    this.syncCustomDimming();
   }
 
-  // Set text-opacity on label layers: 0.25 for features in anchored sections, normal otherwise
-  private updateLabelAnchoredOpacity(anchoredIds: Set<number>): void {
-    const idsArray = [...anchoredIds];
-    const anchoredCheck: maplibregl.ExpressionSpecification =
-      ['in', ['get', 'sectionId'], ['literal', idsArray]] as maplibregl.ExpressionSpecification;
-
-    // Zoom-interpolated base opacity for shot/station labels
-    const zoomOpacity: maplibregl.ExpressionSpecification = [
-      'interpolate', ['linear'], ['zoom'], 14, 0.7, 18, 1,
-    ] as maplibregl.ExpressionSpecification;
-
-    if (idsArray.length > 0) {
-      // Shot labels: anchored → 0.25, else zoom-interpolated
-      this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', [
-        'case', anchoredCheck, 0.25, zoomOpacity,
-      ] as maplibregl.ExpressionSpecification);
-      // Section name labels: anchored → 0.25, else 1
-      this.map.setPaintProperty(this.labelsLayerId, 'text-opacity', [
-        'case', anchoredCheck, 0.25, 1,
-      ] as maplibregl.ExpressionSpecification);
-      // Station index labels: anchored → 0.25, else zoom-interpolated
-      this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', [
-        'case', anchoredCheck, 0.25, zoomOpacity,
-      ] as maplibregl.ExpressionSpecification);
-    } else {
-      // Restore original opacity (no anchored sections)
-      this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', zoomOpacity);
-      this.map.setPaintProperty(this.labelsLayerId, 'text-opacity', 1);
-      this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', zoomOpacity);
-    }
+  /** Push the current anchored + immovable dim set to the custom-render layers so
+   *  they dim the same features the stock paint expressions do (#customRender).
+   *  Both geometry AND labels take the same {@link CustomDimState}; the label
+   *  controller reproduces the stock LABEL dim rules (anchored dims shot/station/
+   *  section labels, immovable dims individual shot/station labels; comments and
+   *  section-name immovable are left bright, matching stock). */
+  private syncCustomDimming(): void {
+    const dim = {
+      anchoredSectionIds: this.anchoredSectionIds,
+      immovableStationFeatureIds: this.immovableStationFeatureIds,
+      immovableShotFeatureIds: this.immovableShotFeatureIds,
+    };
+    this.customRender?.setDimming(dim);
+    this.customLabels?.setDimming(dim);
   }
 
   // Set line-opacity on loop closures layer: 0.25 when both endpoints are in anchored sections
@@ -2917,170 +2407,12 @@ export default class SurveyLayer {
   setImmovableFeatures(stationIds: Set<number>, shotIds: Set<number>): void {
     this.immovableStationFeatureIds = stationIds;
     this.immovableShotFeatureIds = shotIds;
-
-    // Update main layer paint properties (stations + shots)
-    this.updateImmovableLayerOpacity(stationIds, shotIds);
-
-    // Update label and closure opacity
-    this.updateImmovableLabelOpacity(stationIds, shotIds);
+    // Loop closures dim if either endpoint is immovable (kept GeoJSON overlay).
     this.updateImmovableClosureOpacity(stationIds);
+    // The custom renderer + label layer dim the immovable geometry + labels.
+    this.syncCustomDimming();
   }
 
-  // Set circle-opacity/line-opacity on main layers using data-driven expressions.
-  // Uses setPaintProperty (not setFeatureState) for reliable initial-activation dimming.
-  private updateImmovableLayerOpacity(stationIds: Set<number>, shotIds: Set<number>): void {
-    const anchoredCheck: maplibregl.ExpressionSpecification = this.anchoredSectionIds.size > 0
-      ? ['in', ['get', 'sectionId'], ['literal', [...this.anchoredSectionIds]]]
-      : (false as unknown as maplibregl.ExpressionSpecification);
-
-    if (stationIds.size > 0 || shotIds.size > 0) {
-      // Station circles: dim immovable stations
-      if (stationIds.size > 0) {
-        const stationIdsArray = [...stationIds];
-        const immovableCheck: maplibregl.ExpressionSpecification = [
-          'in', ['get', 'featureId'], ['literal', stationIdsArray],
-        ] as maplibregl.ExpressionSpecification;
-        this.map.setPaintProperty(this.stationsLayerId, 'circle-opacity', [
-          'case',
-          immovableCheck, 0.25,
-          anchoredCheck, 0.25,
-          1,
-        ] as maplibregl.ExpressionSpecification);
-        this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-opacity', [
-          'case',
-          immovableCheck, 0.25,
-          anchoredCheck, 0.25,
-          1,
-        ] as maplibregl.ExpressionSpecification);
-      } else {
-        // Restore default (feature-state only)
-        this.map.setPaintProperty(this.stationsLayerId, 'circle-opacity', [
-          'case',
-          anchoredCheck, 0.25,
-          1,
-        ] as maplibregl.ExpressionSpecification);
-        this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-opacity', [
-          'case',
-          anchoredCheck, 0.25,
-          1,
-        ] as maplibregl.ExpressionSpecification);
-      }
-
-      // Shot lines: dim immovable shots
-      if (shotIds.size > 0) {
-        const shotIdsArray = [...shotIds];
-        const immovableCheck: maplibregl.ExpressionSpecification = [
-          'in', ['get', 'featureId'], ['literal', shotIdsArray],
-        ] as maplibregl.ExpressionSpecification;
-        this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', [
-          'case',
-          immovableCheck, 0.25,
-          anchoredCheck, 0.25,
-          ['get', 'isReference'], 0.5,
-          1,
-        ] as maplibregl.ExpressionSpecification);
-        this.map.setPaintProperty(this.shotGradientsLayerId, 'line-opacity', [
-          'case',
-          immovableCheck, 0.25,
-          anchoredCheck, 0.25,
-          ['get', 'isReference'], 0.5,
-          1,
-        ] as maplibregl.ExpressionSpecification);
-      } else {
-        // Restore default (feature-state only)
-        this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', [
-          'case',
-          anchoredCheck, 0.25,
-          ['get', 'isReference'], 0.5,
-          1,
-        ] as maplibregl.ExpressionSpecification);
-        this.map.setPaintProperty(this.shotGradientsLayerId, 'line-opacity', [
-          'case',
-          anchoredCheck, 0.25,
-          ['get', 'isReference'], 0.5,
-          1,
-        ] as maplibregl.ExpressionSpecification);
-      }
-    } else {
-      // No immovable features — restore original paint properties
-      this.map.setPaintProperty(this.stationsLayerId, 'circle-opacity', [
-        'case',
-        anchoredCheck, 0.25,
-        1,
-      ] as maplibregl.ExpressionSpecification);
-      this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-opacity', [
-        'case',
-        anchoredCheck, 0.25,
-        1,
-      ] as maplibregl.ExpressionSpecification);
-      this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', [
-        'case',
-        anchoredCheck, 0.25,
-        ['get', 'isReference'], 0.5,
-        1,
-      ] as maplibregl.ExpressionSpecification);
-      this.map.setPaintProperty(this.shotGradientsLayerId, 'line-opacity', [
-        'case',
-        anchoredCheck, 0.25,
-        ['get', 'isReference'], 0.5,
-        1,
-      ] as maplibregl.ExpressionSpecification);
-    }
-  }
-
-  // Set text-opacity on label layers: 0.25 for immovable features, normal otherwise.
-  // Uses per-feature ID matching (sectionId * FEATURE_ID_STRIDE + stationIndex/shotId) since
-  // immovable features are per-station, not per-section.
-  private updateImmovableLabelOpacity(
-    stationIds: Set<number>,
-    shotIds: Set<number>
-  ): void {
-    const zoomOpacity: maplibregl.ExpressionSpecification = [
-      'interpolate', ['linear'], ['zoom'], 14, 0.7, 18, 1,
-    ] as maplibregl.ExpressionSpecification;
-
-    if (stationIds.size > 0 || shotIds.size > 0) {
-      // Station labels: compute featureId from sectionId * FEATURE_ID_STRIDE + stationIndex
-      if (stationIds.size > 0) {
-        const stationIdsArray = [...stationIds];
-        const stationAnchoredCheck: maplibregl.ExpressionSpecification = [
-          'in',
-          ['+', ['*', ['get', 'sectionId'], FEATURE_ID_STRIDE], ['get', 'stationIndex']],
-          ['literal', stationIdsArray],
-        ] as maplibregl.ExpressionSpecification;
-        this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', [
-          'case', stationAnchoredCheck, 0.25, zoomOpacity,
-        ] as maplibregl.ExpressionSpecification);
-      } else {
-        this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', zoomOpacity);
-      }
-
-      // Shot labels: compute featureId from sectionId * FEATURE_ID_STRIDE + shotId
-      if (shotIds.size > 0) {
-        const shotIdsArray = [...shotIds];
-        const shotAnchoredCheck: maplibregl.ExpressionSpecification = [
-          'in',
-          ['+', ['*', ['get', 'sectionId'], FEATURE_ID_STRIDE], ['get', 'shotId']],
-          ['literal', shotIdsArray],
-        ] as maplibregl.ExpressionSpecification;
-        this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', [
-          'case', shotAnchoredCheck, 0.25, zoomOpacity,
-        ] as maplibregl.ExpressionSpecification);
-      } else {
-        this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', zoomOpacity);
-      }
-
-      // Section name labels: leave at full opacity (not meaningful to dim per-station)
-      this.map.setPaintProperty(this.labelsLayerId, 'text-opacity', 1);
-    } else {
-      // Restore original opacity
-      this.map.setPaintProperty(this.shotLabelsLayerId, 'text-opacity', zoomOpacity);
-      this.map.setPaintProperty(this.labelsLayerId, 'text-opacity', 1);
-      this.map.setPaintProperty(this.stationLabelsLayerId, 'text-opacity', zoomOpacity);
-    }
-  }
-
-  // Set line-opacity on loop closures layer: 0.25 when either endpoint is immovable
   private updateImmovableClosureOpacity(immovableStationIds: Set<number>): void {
     if (immovableStationIds.size > 0) {
       // Build station key strings matching closure feature "sectionId:stationIndex" format
@@ -3105,150 +2437,256 @@ export default class SurveyLayer {
     }
   }
 
+  /** The drag preview's shot/station color paint. Plain mode reads the resolved
+   *  per-feature `color` property (baked at capture time, like the interact
+   *  overlay); distance / gas-reach modes read the carried `dist` / `gasReach`
+   *  through the SAME ramp expressions the bulk layers use, so colors match. */
+  private dragPreviewColorExpr(): ExpressionSpecification {
+    if (this.distanceMode) {
+      return distanceColorExpression(
+        DISTANCE_NEAR,
+        DISTANCE_FAR,
+        this.distanceState?.max ?? 0,
+        this.themeColors.grayLine,
+        ['get', 'dist'] as ExpressionSpecification,
+      );
+    }
+    if (this.gasReachMode) {
+      return gasReachColorExpression(
+        GAS_NEAR,
+        GAS_FAR,
+        this.gasReachState?.max ?? 0,
+        this.themeColors.grayLine,
+        ['get', 'gasReach'] as ExpressionSpecification,
+      );
+    }
+    return ['get', 'color'] as ExpressionSpecification;
+  }
+
+  /** Build the layer-spec context for the drag-preview layers module: shots +
+   *  stations color / size / highlight (see surveyLayer/dragPreviewLayers.ts). */
+  private dragPreviewLayerCtx(): DragPreviewLayerCtx {
+    return {
+      colorExpr: this.dragPreviewColorExpr(),
+      shotWidth: this.getShotSelectionWidth(),
+      stationRadius: this.getStationSelectionRadius(),
+      selectHighlight: this.themeColors.selectHighlight,
+    };
+  }
+
+  /** Install the captured drag preview geometry (shots / stations / closures) as
+   *  the moving ghost, and hide the moving originals. Attached text is not
+   *  previewed - it is hidden from the stock text layers for the drag duration by
+   *  the begin methods. Shared by the segment and station/shot begins.
+   *
+   *  The ghost is a custom WebGL layer whose live drag delta is a single
+   *  vertex-shader uniform (no worker, no re-bake -> no overshoot). It draws
+   *  synchronously on the next frame, so the moving originals are hidden NOW (they
+   *  overlap the ghost at offset 0). If the custom ghost is not the active path
+   *  (bulk geometry stock, or the ghost layer failed / self-disabled), the STOCK
+   *  GeoJSON preview stands in and its async setData means the hide waits for the
+   *  first source load (START-flash fix). See {@link DragGhostController}. */
+  private installDragPreview(features: DragPreviewFeature[], exclusion: CustomRenderExclusion): void {
+    // New drag generation: invalidates any still-pending deferred drag-hide from
+    // a superseded drag (guards the sourcedata callback in
+    // setDragExclusionWhenPreviewReady).
+    this.dragGeneration += 1;
+    this.dragPreviewSet = { features };
+    this.dragPreviewActive = true;
+    if (this.dragGhost.begin(this.dragPreviewSet) === 'custom') this.setDragExclusion(exclusion);
+    else this.setDragExclusionWhenPreviewReady(exclusion);
+    this.renderOverlayFollow(0, 0);
+  }
+
+  /** Build the custom-ghost render data (buffers + device-px sizes) for a captured
+   *  set: colors resolved at capture time the same way the bulk geometry shows
+   *  them (base / severity / depth from the feature's own `color`, or the
+   *  analytical overlay ramp), the preview's 0.85 line/fill opacity baked into
+   *  alpha. Sizes mirror {@link dragPreviewLayerCtx} (selection width/radius,
+   *  2.5px stroke) scaled to device px, matching the custom bulk layer's dpr. */
+  private dragGhostData(set: DragPreviewSet): GhostRenderData {
+    return buildGhostRenderData(set, {
+      dpr: (typeof window !== 'undefined' && window.devicePixelRatio) || 1,
+      themeColors: this.themeColors,
+      overlay: overlayInputFrom(this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState),
+      shotsVisible: this.shotsVisible,
+      stationsVisible: this.stationsVisible,
+      selShotWidth: this.getShotSelectionWidth(),
+      hoverShotWidth: this.getShotHoverWidth(),
+      selRadius: this.getStationSelectionRadius(),
+      hoverRadius: this.getStationHoverRadius(),
+      hoveredShotId: this.hoveredShotId,
+      selectedShotId: this.selectedShotId,
+      hoveredStationId: this.hoveredStationId,
+      selectedStationId: this.selectedStationId,
+      movingEndForShot: (id) => this.dragMovingShots.get(id),
+      isMovingStation: (id) => this.dragMovingStationKeys.has(id),
+      parseFid: (id) => this.parseFeatureId(id),
+      isAnchored: (fid) => this.isFeatureAnchored(fid),
+      isShotImmovable: (fid) => this.isShotImmovable(fid),
+      isStationImmovable: (fid) => this.isStationImmovable(fid),
+      shotFeature: (id, w) => this.shotOverlayFeature(id, w),
+      stationFeature: (id, s) => this.stationOverlayFeature(id, s),
+    });
+  }
+
+  /** Re-emit any hover/selected highlight on a moving feature at the drag offset
+   *  so it tracks the cursor instead of sticking at the committed position (#C).
+   *  A small setData, coalesced one-per-frame by the rAF (see scheduleDragRender).
+   *  Kept separate from the ghost bake so the highlight stays as responsive as
+   *  before while the ghost bakes single-flight. */
+  private renderOverlayFollow(dx: number, dy: number): void {
+    if (!this.dragPreviewActive) return;
+    this.dragOverlayOffset = { dx, dy };
+    this.refreshInteractOverlay();
+  }
+
+  /** The map-backed projector used for the preview + overlay offset transforms. */
+  private dragProjector(): Projector {
+    return {
+      project: (lngLat) => this.map.project(lngLat),
+      unproject: (pt) => this.map.unproject(pt),
+    };
+  }
+
+  /** Stop the interact overlay following the drag and snap it back to committed
+   *  coordinates (called on commit / end). */
+  private clearDragOverlayFollow(): void {
+    this.dragOverlayOffset = null;
+    this.dragCommitPending = false;
+    this.dragMovingStationKeys.clear();
+    this.dragMovingShots.clear();
+    this.lastInteractKey = null;
+    this.refreshInteractOverlay();
+  }
+
+  /** The per-feature analytical-overlay props (dist / gas-reach) a moving feature
+   *  must carry so the preview's ramp paint matches the bulk layers. Keyed the
+   *  same way the interact overlay keys them ("sec:idx" / "sec:shotId"). */
+  private dragOverlayProps(idStr: string, kind: 'station' | 'shot'): Record<string, unknown> {
+    const props: Record<string, unknown> = {};
+    if (!this.distanceMode && !this.gasReachMode) return props;
+    const fid = this.parseFeatureId(idStr);
+    if (fid === null) return props;
+    const map = kind === 'station'
+      ? { dist: this.distanceState?.stations, gas: this.gasReachState?.stations }
+      : { dist: this.distanceState?.shots, gas: this.gasReachState?.shots };
+    if (this.distanceMode) props.dist = map.dist?.get(fid) ?? -1;
+    if (this.gasReachMode) props.gasReach = map.gas?.get(fid) ?? -1;
+    return props;
+  }
+
   /**
-   * Begin drag preview — hides connected section features from main layers via filter,
-   * then creates temporary layers (same sources) that show only those features with a
-   * *-translate paint property. Per-frame cost becomes just setPaintProperty (shader
-   * uniform update) instead of rebuilding 5 GeoJSON sources.
+   * Begin SEGMENT drag preview — hide the connected sections' real features from
+   * the bulk layers (excluded by sectionId), capture every moving station / shot
+   * / label / closure ONCE with its original coordinates, and render the moving
+   * copy from the unified preview source. All geometry moves uniformly, so a
+   * later per-frame offset is applied to every captured vertex.
    */
   beginDragPreview(connectedSectionIds: Set<number>): void {
     if (this.dragPreviewActive) this.endDragPreview();
     if (connectedSectionIds.size === 0) return;
+    if (!this.geoIndex || !this.cachedSurveyData) return;
 
     const idsArray = [...connectedSectionIds];
-    const exclusion: maplibregl.FilterSpecification = ['!', ['in', ['get', 'sectionId'], ['literal', idsArray]]];
-    const inclusion: maplibregl.FilterSpecification = ['in', ['get', 'sectionId'], ['literal', idsArray]];
 
-    for (const def of SurveyLayer.DRAG_LAYER_DEFS) {
-      // Save and compose exclusion filter on main layer
-      const existing = this.map.getFilter(def.mainLayerId);
-      this.dragSavedFilters.set(def.mainLayerId, existing ?? undefined);
-      // Compose exclusion with existing filter. If existing is trivial (null/boolean), use
-      // exclusion alone. Cast needed because MapLibre's TS types don't fully cover ['all',...].
-      const composed: maplibregl.FilterSpecification = (existing && typeof existing === 'object')
-        ? (['all', existing, exclusion] as unknown as maplibregl.FilterSpecification)
-        : exclusion;
-      this.map.setFilter(def.mainLayerId, composed);
+    // Hide closures with EITHER endpoint in the connected set. Closures with BOTH
+    // endpoints inside move uniformly (captured below); closures bridging a
+    // dragged and a stationary section are hidden during the drag and reappear
+    // with correct geometry on commit. (The survey geometry + labels are hidden in
+    // the custom layers via the drag exclusion in installDragPreview.)
+    const existingClosureFilter = this.map.getFilter(this.loopClosuresLayerId);
+    this.dragSavedFilters.set(this.loopClosuresLayerId, existingClosureFilter ?? undefined);
+    const eitherEndpointExclusion: maplibregl.FilterSpecification = ['!', ['any',
+      ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
+      ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
+    ]] as unknown as maplibregl.FilterSpecification;
+    this.map.setFilter(this.loopClosuresLayerId, (existingClosureFilter && typeof existingClosureFilter === 'object')
+      ? (['all', existingClosureFilter, eitherEndpointExclusion] as unknown as maplibregl.FilterSpecification)
+      : eitherEndpointExclusion);
 
-      // Create temp layer from same source, filtered to connected sections only
-      const paintBase: Record<string, unknown> = {
-        [def.translateProp]: [0, 0] as [number, number],
-        [def.translateAnchorProp]: 'viewport',
-        // Disable the default 300ms paint transition — makes translate instant
-        [`${def.translateProp}-transition`]: { duration: 0, delay: 0 },
-      };
+    // Capture the moving geometry once. Everything in the segment moves uniformly.
+    // Attached text (labels / comments / section names) is not captured - it is
+    // hidden from the stock layers above, not previewed.
+    const features: DragPreviewFeature[] = [];
+    const ctx = this.displayColorContext();
+    const stationDefault = this.themeColors.stationDefault;
 
-      if (def.type === 'line') {
-        this.map.addLayer({
-          id: def.tempLayerId,
-          type: 'line',
-          source: def.sourceId,
-          filter: inclusion,
-          paint: {
-            'line-color': ['get', 'color'],
-            'line-width': this.getShotSelectionWidth(),
-            'line-opacity': 0.85,
-            ...paintBase,
-          },
+    // Read the moving geometry from the SoA (sectionGeometry), NOT from the lazy
+    // `Station[]` proxy or the lazy `section.shots` getter: filtering all ~89k
+    // stations per section (and a linear `shotGeometry` scan per shot) made this
+    // quadratic and froze a 14k-section project on drag start (#mem).
+    // Iterate cachedSections (not the Set) to keep the original emit order; reading
+    // `id`/`color` off a section does not trip its lazy `shots` getter.
+    for (const sectionMeta of this.cachedSections) {
+      const sectionId = sectionMeta.id;
+      if (!connectedSectionIds.has(sectionId)) continue;
+      const sectionColor = sectionMeta.color ?? stationDefault;
+      const { stations: sectionStations, shots: sectionShots } =
+        this.geoIndex.sectionGeometry(sectionId);
+
+      // Stations (points).
+      for (const st of sectionStations) {
+        const idStr = `${sectionId}:${st.stationIndex}`;
+        this.dragMovingStationKeys.add(idStr);
+        const color = resolveStationDisplayColor(
+          this.cachedSurveyData,
+          sectionColor,
+          st.globalIdx,
+          ctx,
+        );
+        features.push({
+          emit: 'point',
+          coords: [st.lngLat],
+          movingEnd: 'uniform',
+          properties: { kind: 'station', color, ...this.dragOverlayProps(idStr, 'station') },
         });
-      } else if (def.type === 'circle') {
-        this.map.addLayer({
-          id: def.tempLayerId,
-          type: 'circle',
-          source: def.sourceId,
-          filter: inclusion,
-          paint: {
-            'circle-color': ['get', 'color'],
-            'circle-radius': this.getStationSelectionRadius(),
-            'circle-stroke-color': this.themeColors.selectHighlight,
-            'circle-stroke-width': 2.5,
-            'circle-opacity': 0.85,
-            ...paintBase,
-          },
-        });
-      } else if (def.type === 'symbol') {
-        // Copy layout properties from main layer so labels keep their position/size
-        const vis = this.map.getLayoutProperty(def.mainLayerId, 'visibility') ?? 'visible';
-        const textSize = this.map.getLayoutProperty(def.mainLayerId, 'text-size') ?? 11;
-        const textOffset = this.map.getLayoutProperty(def.mainLayerId, 'text-offset');
-        const textAnchor = this.map.getLayoutProperty(def.mainLayerId, 'text-anchor');
-        const layoutProps: Record<string, unknown> = {
-          'text-field': def.sourceId.includes('section') ? ['get', 'name'] : ['get', 'label'],
-          'text-font': ['Open Sans Regular'],
-          'text-size': textSize,
-          'text-allow-overlap': true,
-          'visibility': vis as 'visible' | 'none',
-        };
-        if (textOffset != null) layoutProps['text-offset'] = textOffset;
-        if (textAnchor != null) layoutProps['text-anchor'] = textAnchor;
-        this.map.addLayer({
-          id: def.tempLayerId,
-          type: 'symbol',
-          source: def.sourceId,
-          filter: inclusion,
-          layout: layoutProps as NonNullable<maplibregl.SymbolLayerSpecification['layout']>,
-          paint: {
-            'text-color': ['get', 'color'],
-            'text-halo-color': this.themeColors.textHalo,
-            'text-halo-width': 1.5,
-            'text-opacity': 0.85,
-            ...paintBase,
-          },
+      }
+
+      // Shots (lines).
+      for (const shot of sectionShots) {
+        const shotKey = `${sectionId}:${shot.shotId}`;
+        const color = resolveShotDisplayColor(
+          this.cachedSurveyData,
+          sectionColor,
+          shot.globalIdx,
+          ctx,
+        );
+        this.dragMovingShots.set(shotKey, 'both');
+        features.push({
+          emit: 'line',
+          coords: [shot.from, shot.to],
+          movingEnd: 'uniform',
+          properties: { kind: 'shot', color, ...this.dragOverlayProps(shotKey, 'shot') },
         });
       }
     }
 
-    // Loop closures: hide closures that have ANY endpoint in the connected set from
-    // the main layer, then create a temp layer for closures with BOTH endpoints in the
-    // set (those translate uniformly). Closures bridging dragged/stationary sections are
-    // hidden during drag and reappear with correct geometry after commit.
-    {
-      const closureSourceId = this.sourceId + '-loop-closures';
-      const existingFilter = this.map.getFilter(this.loopClosuresLayerId);
-      this.dragSavedFilters.set(this.loopClosuresLayerId, existingFilter ?? undefined);
-
-      // Hide closures where EITHER endpoint is in the connected set
-      const eitherEndpointExclusion: maplibregl.FilterSpecification = ['!', ['any',
-        ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
-        ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
-      ]] as unknown as maplibregl.FilterSpecification;
-      const composedClosure: maplibregl.FilterSpecification = (existingFilter && typeof existingFilter === 'object')
-        ? (['all', existingFilter, eitherEndpointExclusion] as unknown as maplibregl.FilterSpecification)
-        : eitherEndpointExclusion;
-      this.map.setFilter(this.loopClosuresLayerId, composedClosure);
-
-      // Temp layer: closures where BOTH endpoints are in connected set (translate together)
-      const bothEndpointInclusion: maplibregl.FilterSpecification = ['all',
-        ['in', ['get', 'sectionIdA'], ['literal', idsArray]],
-        ['in', ['get', 'sectionIdB'], ['literal', idsArray]],
-      ] as unknown as maplibregl.FilterSpecification;
-
-      this.map.addLayer({
-        id: this.dragClosuresLayerId,
-        type: 'line',
-        source: closureSourceId,
-        filter: bothEndpointInclusion,
-        paint: {
-          'line-color': ['get', 'color'],
-          'line-width': 3,
-          'line-opacity': 0.85,
-          'line-dasharray': [6, 4],
-          'line-translate': [0, 0] as [number, number],
-          'line-translate-anchor': 'viewport',
-          'line-translate-transition': { duration: 0, delay: 0 },
-        },
+    // Loop closures with BOTH endpoints in the moving set (move uniformly).
+    for (const lc of this.cachedLoopClosures ?? []) {
+      if (!connectedSectionIds.has(lc.station_a.section_id) || !connectedSectionIds.has(lc.station_b.section_id)) continue;
+      const a = this.geoIndex.stationCoords(lc.station_a);
+      const b = this.geoIndex.stationCoords(lc.station_b);
+      if (!a || !b) continue;
+      features.push({
+        emit: 'line',
+        coords: [a, b],
+        movingEnd: 'uniform',
+        properties: { kind: 'closure', color: getErrorColor(lc.error_percentage) },
       });
     }
 
-    this.dragPreviewActive = true;
+    // Segment drag hides whole connected sections (shots + stations) in the
+    // custom layer, mirroring the sectionId exclusion applied to the stock layers.
+    this.installDragPreview(features, { sectionIds: new Set(idsArray) });
   }
 
   /**
-   * Begin station drag preview — finds all co-located stations (merged/closured),
-   * hides them and their connected shots from main layers, then creates:
-   *   1. Translate-based temp layers for station circles + labels (GPU-efficient)
-   *   2. Dynamic GeoJSON sources + layers for connected shots + shot labels
-   *      (geometry is rebuilt per-frame since only one endpoint of each shot moves)
+   * Begin station / shot drag preview — finds all co-located stations
+   * (merged/closured), hides them and their connected shots/labels/closures from
+   * the bulk layers, captures that moving geometry (with per-shot movingEnd so a
+   * shot stretches around its fixed endpoint), and renders the moving copy from
+   * the unified preview source. Everything moves through ONE per-frame setData.
    *
    * Returns the list of co-located StationRefs so MapCanvas can batch-move them.
    */
@@ -3259,24 +2697,30 @@ export default class SurveyLayer {
     //    - merged_with: always co-located
     //    - closures_with: only when the closure has been aligned
     //    additionalSeeds allows shot drag to seed from both endpoints simultaneously
-    const stationByKey = new Map(
-      this.cachedStations.map(s => [`${s.station_ref.section_id}:${s.station_ref.station_index}`, s])
-    );
+    // key -> global SoA index, built from NUMBERS only. Mapping the lazy
+    // `Station[]` proxy here materialized the whole ~89k station object graph on
+    // every drag start (and `.filter()` below did it a second time) — the same
+    // quadratic trap that froze segment drags (#mem).
+    const data = this.cachedSurveyData;
+    if (!data) return [];
+    const globalByKey = new Map<string, number>();
+    for (let g = 0; g < data.stationCount; g++) {
+      globalByKey.set(`${data.stationSectionIds[g]}:${data.stationIndices[g]}`, g);
+    }
     const alignedClosureIds = new Set<bigint>(
       (this.cachedLoopClosures ?? [])
         .filter((closure) => closure.is_aligned)
         .map((closure) => closure.id)
     );
     const clickedKey = `${sectionId}:${stationIndex}`;
-    const clickedStation = stationByKey.get(clickedKey);
-    if (!clickedStation) return [];
+    if (!globalByKey.has(clickedKey)) return [];
 
     // Seed BFS from primary station + any additional seeds (e.g., shot's other endpoint)
     const seedKeys = [clickedKey];
     if (additionalSeeds) {
       for (const seed of additionalSeeds) {
         const key = `${seed.section_id}:${seed.station_index}`;
-        if (stationByKey.has(key)) seedKeys.push(key);
+        if (globalByKey.has(key)) seedKeys.push(key);
       }
     }
 
@@ -3286,538 +2730,344 @@ export default class SurveyLayer {
       const key = queue.pop()!;
       if (movingRefKeys.has(key)) continue;
       movingRefKeys.add(key);
-      const st = stationByKey.get(key);
-      if (!st) continue;
-      for (const ref of st.merged_with) {
+      const g = globalByKey.get(key);
+      if (g === undefined) continue;
+      for (const ref of data.stationMergedWith.get(g) ?? []) {
         queue.push(`${ref.section_id}:${ref.station_index}`);
       }
-      for (const cr of st.closures_with ?? []) {
+      for (const cr of data.stationClosuresWith.get(g) ?? []) {
         if (!alignedClosureIds.has(cr.closure_id)) continue;
         queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
       }
     }
-    const movingStations = this.cachedStations.filter(
-      s => movingRefKeys.has(`${s.station_ref.section_id}:${s.station_ref.station_index}`)
-    );
+    // The moving set is a merge/closure cluster (small); resolve each member's
+    // coords + global index straight from the SoA.
+    const movingStations = [...movingRefKeys].flatMap((key) => {
+      const g = globalByKey.get(key);
+      if (g === undefined) return [];
+      const base = g * 3;
+      return [{
+        station_ref: {
+          section_id: data.stationSectionIds[g]!,
+          station_index: data.stationIndices[g]!,
+        } as StationRef,
+        lngLat: metersToMapCoords(
+          data.stationCoords[base]!,
+          data.stationCoords[base + 1]!,
+          this.gpsOrigin,
+        ) as [number, number],
+        globalIdx: g,
+      }];
+    });
 
-    // 2. Build station inclusion/exclusion filters (covers all co-located stations)
-    const stationInclusion: maplibregl.FilterSpecification = (movingStations.length === 1
-      ? ['all',
-          ['==', ['get', 'sectionId'], sectionId],
-          ['==', ['get', 'stationIndex'], stationIndex],
-        ]
-      : ['any',
-          ...movingStations.map(s => ['all',
-            ['==', ['get', 'sectionId'], s.station_ref.section_id],
-            ['==', ['get', 'stationIndex'], s.station_ref.station_index],
-          ]),
-        ]
-    ) as unknown as maplibregl.FilterSpecification;
-    const stationExclusion: maplibregl.FilterSpecification =
-      ['!', stationInclusion] as unknown as maplibregl.FilterSpecification;
+    // 2. Capture the moving geometry once (originals + movingEnd). The moving copy
+    // renders from the drag ghost; the originals are hidden in the custom layers via
+    // the drag exclusion in installDragPreview. Only endpoints in the moving set
+    // follow the offset, so a shot stretches around a fixed end instead of whole.
+    if (!this.geoIndex || !this.cachedSurveyData) return movingStations.map(s => s.station_ref);
+    const ctx = this.displayColorContext();
+    const stationDefault = this.themeColors.stationDefault;
+    const features: DragPreviewFeature[] = [];
+    // Custom-render drag exclusion: the moving stations + shots, keyed by global
+    // SoA index for O(1) skip in tessellate.
+    const excludedStationGlobals = new Set<number>();
+    const excludedShotGlobals = new Set<number>();
+    // Sections owning any moved station / shot: their NAME label drag-hides too
+    // (custom label layer), so it does not sit pinned at the old anchor while the
+    // partial geometry moves. Whole-section segment drags carry the name via
+    // `sectionIds` instead (see beginDragPreview).
+    const affectedSectionIds = new Set<number>();
 
-    // 3. Find connected shots for all moving stations
-    type ShotInfo = typeof this.stationDragShots extends (infer T)[] | null ? T : never;
-    const shotInfos: ShotInfo[] = [];
+    // Moving stations (points) — all uniform.
+    for (const st of movingStations) {
+      const ref = st.station_ref;
+      const idStr = `${ref.section_id}:${ref.station_index}`;
+      this.dragMovingStationKeys.add(idStr);
+      const section = this.geoIndex.section(ref.section_id);
+      excludedStationGlobals.add(st.globalIdx);
+      affectedSectionIds.add(ref.section_id);
+      const color = resolveStationDisplayColor(
+        this.cachedSurveyData,
+        section?.color ?? stationDefault,
+        st.globalIdx,
+        ctx,
+      );
+      features.push({
+        emit: 'point',
+        coords: [st.lngLat],
+        movingEnd: 'uniform',
+        properties: { kind: 'station', color, ...this.dragOverlayProps(idStr, 'station') },
+      });
+    }
+
+    // 4. Connected shots (lines) + shot labels. Walk each AFFECTED SECTION once
+    // (from the SoA), not once per moving station: re-filtering the lazy
+    // `Station[]` proxy per station materialized ~89k objects each time, and the
+    // per-shot `shotGeometry()` scan made it quadratic in section size (#mem).
     const seenShotKeys = new Set<string>();
-
-    for (const movingSt of movingStations) {
-      const section = this.cachedSections.find(s => s.id === movingSt.station_ref.section_id);
+    const movingSectionIds = new Set(movingStations.map((st) => st.station_ref.section_id));
+    for (const secId of movingSectionIds) {
+      const section = this.geoIndex.section(secId);
       if (!section) continue;
+      const { shots: sectionShots } = this.geoIndex.sectionGeometry(secId);
 
-      const sectionStations = this.cachedStations
-        .filter(s => s.station_ref.section_id === section.id)
-        .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index);
-
-      for (let i = 0; i < section.shots.length; i++) {
-        const fromSt = sectionStations[i];
-        const toSt = sectionStations[i + 1];
-        if (!fromSt || !toSt) continue;
-
-        const fromKey = `${fromSt.station_ref.section_id}:${fromSt.station_ref.station_index}`;
-        const toKey = `${toSt.station_ref.section_id}:${toSt.station_ref.station_index}`;
+      for (const shot of sectionShots) {
+        // Shot `index` joins station `index` to `index + 1`.
+        const fromKey = `${secId}:${shot.index}`;
+        const toKey = `${secId}:${shot.index + 1}`;
         const fromIsMoving = movingRefKeys.has(fromKey);
         const toIsMoving = movingRefKeys.has(toKey);
         if (!fromIsMoving && !toIsMoving) continue;
 
-        const shot = section.shots[i];
-        if (!shot) continue;
-        const shotKey = `${section.id}:${shot.id}`;
+        const shotKey = `${secId}:${shot.shotId}`;
         if (seenShotKeys.has(shotKey)) continue;
         seenShotKeys.add(shotKey);
 
-        const fromCoord = metersToMapCoords(
-          fromSt.coordinates.x, fromSt.coordinates.y, this.gpsOrigin
-        ) as [number, number];
-        const toCoord = metersToMapCoords(
-          toSt.coordinates.x, toSt.coordinates.y, this.gpsOrigin
-        ) as [number, number];
-
-        shotInfos.push({
-          properties: {
-            sectionId: section.id,
-            shotId: shot.id,
-            color: section.color,
-            isReference: shot.is_reference,
-          },
-          fromCoord,
-          toCoord,
-          movingEnd: fromIsMoving && toIsMoving ? 'both' : fromIsMoving ? 'from' : 'to',
-          shotLabelProperties: {
-            label: `${formatFixed(shot.azimuth_in, undefined, this.cachedPrecision?.azimuth ?? 0)}° ${formatFixed(shot.length, undefined, this.cachedPrecision?.length ?? 1)}m`,
-            sectionId: section.id,
-            shotId: shot.id,
-            color: section.color,
-          },
+        const movingEnd: MovingEnd = fromIsMoving && toIsMoving ? 'both' : fromIsMoving ? 'from' : 'to';
+        this.dragMovingShots.set(shotKey, movingEnd);
+        const fromCoord = shot.from;
+        const toCoord = shot.to;
+        excludedShotGlobals.add(shot.globalIdx);
+        affectedSectionIds.add(secId);
+        const color = resolveShotDisplayColor(
+          this.cachedSurveyData,
+          section.color ?? stationDefault,
+          shot.globalIdx,
+          ctx,
+        );
+        features.push({
+          emit: 'line',
+          coords: [fromCoord, toCoord],
+          movingEnd,
+          properties: { kind: 'shot', color, ...this.dragOverlayProps(shotKey, 'shot') },
         });
       }
     }
 
-    // 4. Create translate-based temp layers for stations + station labels
-    const stationDefs = SurveyLayer.DRAG_LAYER_DEFS.filter(
-      d => d.mainLayerId === 'survey-stations' || d.mainLayerId === 'survey-station-labels'
-    );
+    // (The moving shots are hidden in the custom geometry + label layers via the
+    // drag exclusion in installDragPreview; no stock-layer filters to set.)
 
-    for (const def of stationDefs) {
-      const existing = this.map.getFilter(def.mainLayerId);
-      this.dragSavedFilters.set(def.mainLayerId, existing ?? undefined);
-      const composed: maplibregl.FilterSpecification = (existing && typeof existing === 'object')
-        ? (['all', existing, stationExclusion] as unknown as maplibregl.FilterSpecification)
-        : stationExclusion;
-      this.map.setFilter(def.mainLayerId, composed);
+    // 5. Closure indicator lines with >= 1 endpoint in the moving set; hide those
+    // from the bulk closures layer (they render in the preview, stretched).
+    const closureExclusions: maplibregl.FilterSpecification[] = [];
+    for (const lc of this.cachedLoopClosures ?? []) {
+      const keyA = `${lc.station_a.section_id}:${lc.station_a.station_index}`;
+      const keyB = `${lc.station_b.section_id}:${lc.station_b.station_index}`;
+      const aMoving = movingRefKeys.has(keyA);
+      const bMoving = movingRefKeys.has(keyB);
+      if (!aMoving && !bMoving) continue;
 
-      const paintBase: Record<string, unknown> = {
-        [def.translateProp]: [0, 0] as [number, number],
-        [def.translateAnchorProp]: 'viewport',
-        [`${def.translateProp}-transition`]: { duration: 0, delay: 0 },
-      };
-
-      if (def.type === 'circle') {
-        this.map.addLayer({
-          id: def.tempLayerId,
-          type: 'circle',
-          source: def.sourceId,
-          filter: stationInclusion,
-          paint: {
-            'circle-color': ['get', 'color'],
-            'circle-radius': this.getStationSelectionRadius(),
-            'circle-stroke-color': this.themeColors.selectHighlight,
-            'circle-stroke-width': 2.5,
-            'circle-opacity': 0.85,
-            ...paintBase,
-          },
-        });
-      } else if (def.type === 'symbol') {
-        const vis = this.map.getLayoutProperty(def.mainLayerId, 'visibility') ?? 'visible';
-        const textSize = this.map.getLayoutProperty(def.mainLayerId, 'text-size') ?? 11;
-        const textOffset = this.map.getLayoutProperty(def.mainLayerId, 'text-offset');
-        const textAnchor = this.map.getLayoutProperty(def.mainLayerId, 'text-anchor');
-        const layoutProps: Record<string, unknown> = {
-          'text-field': ['get', 'label'],
-          'text-font': ['Open Sans Regular'],
-          'text-size': textSize,
-          'text-allow-overlap': true,
-          'visibility': vis as 'visible' | 'none',
-        };
-        if (textOffset != null) layoutProps['text-offset'] = textOffset;
-        if (textAnchor != null) layoutProps['text-anchor'] = textAnchor;
-        this.map.addLayer({
-          id: def.tempLayerId,
-          type: 'symbol',
-          source: def.sourceId,
-          filter: stationInclusion,
-          layout: layoutProps as NonNullable<maplibregl.SymbolLayerSpecification['layout']>,
-          paint: {
-            'text-color': ['get', 'color'],
-            'text-halo-color': this.themeColors.textHalo,
-            'text-halo-width': 1.5,
-            'text-opacity': 0.85,
-            ...paintBase,
-          },
-        });
-      }
+      // Coords from the SoA (O(1) per endpoint) — no Station materialization.
+      const fromCoord = this.geoIndex.stationCoords(lc.station_a);
+      const toCoord = this.geoIndex.stationCoords(lc.station_b);
+      if (!fromCoord || !toCoord) continue;
+      features.push({
+        emit: 'line',
+        coords: [fromCoord, toCoord],
+        movingEnd: aMoving && bMoving ? 'both' : aMoving ? 'from' : 'to',
+        properties: { kind: 'closure', color: getErrorColor(lc.error_percentage) },
+      });
+      closureExclusions.push(['all',
+        ['==', ['get', 'stationA'], keyA],
+        ['==', ['get', 'stationB'], keyB],
+      ] as unknown as maplibregl.FilterSpecification);
     }
-
-    // 5. Create dynamic sources + layers for connected shots + shot labels
-    if (shotInfos.length > 0) {
-      // Build shot exclusion filter and apply to main shot + shot-label layers
-      const firstShot = shotInfos[0]!;
-      const shotInclusion: maplibregl.FilterSpecification = (shotInfos.length === 1
-        ? ['all',
-            ['==', ['get', 'sectionId'], firstShot.properties.sectionId],
-            ['==', ['get', 'shotId'], firstShot.properties.shotId],
-          ]
-        : ['any',
-            ...shotInfos.map(s => ['all',
-              ['==', ['get', 'sectionId'], s.properties.sectionId],
-              ['==', ['get', 'shotId'], s.properties.shotId],
-            ]),
-          ]
-      ) as unknown as maplibregl.FilterSpecification;
-      const shotExclusion: maplibregl.FilterSpecification =
-        ['!', shotInclusion] as unknown as maplibregl.FilterSpecification;
-
-      for (const layerId of ['survey-shots', 'survey-shot-gradients', 'survey-shot-labels']) {
-        const existing = this.map.getFilter(layerId);
-        this.dragSavedFilters.set(layerId, existing ?? undefined);
-        const composed: maplibregl.FilterSpecification = (existing && typeof existing === 'object')
-          ? (['all', existing, shotExclusion] as unknown as maplibregl.FilterSpecification)
-          : shotExclusion;
-        this.map.setFilter(layerId, composed);
-      }
-
-      // Build initial GeoJSON for shots
-      const shotFeatures: GeoJSON.Feature[] = shotInfos.map(s => ({
-        type: 'Feature' as const,
-        geometry: { type: 'LineString' as const, coordinates: [s.fromCoord, s.toCoord] },
-        properties: s.properties,
-      }));
-
-      this.map.addSource(SurveyLayer.STATION_DRAG_SHOT_SOURCE, {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: shotFeatures },
-      });
-      this.map.addLayer({
-        id: SurveyLayer.STATION_DRAG_SHOT_LAYER,
-        type: 'line',
-        source: SurveyLayer.STATION_DRAG_SHOT_SOURCE,
-        paint: {
-          'line-color': ['get', 'color'],
-          'line-width': this.getShotSelectionWidth(),
-          'line-opacity': 0.85,
-        },
-      });
-
-      // Build initial GeoJSON for shot labels
-      const shotLabelFeatures: GeoJSON.Feature[] = shotInfos.map(s => ({
-        type: 'Feature' as const,
-        geometry: {
-          type: 'Point' as const,
-          coordinates: [(s.fromCoord[0] + s.toCoord[0]) / 2, (s.fromCoord[1] + s.toCoord[1]) / 2],
-        },
-        properties: s.shotLabelProperties,
-      }));
-
-      this.map.addSource(SurveyLayer.STATION_DRAG_SHOT_LABEL_SOURCE, {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: shotLabelFeatures },
-      });
-      const shotLabelVis = this.map.getLayoutProperty('survey-shot-labels', 'visibility') ?? 'visible';
-      const shotLabelSize = this.map.getLayoutProperty('survey-shot-labels', 'text-size') ?? 11;
-      this.map.addLayer({
-        id: SurveyLayer.STATION_DRAG_SHOT_LABEL_LAYER,
-        type: 'symbol',
-        source: SurveyLayer.STATION_DRAG_SHOT_LABEL_SOURCE,
-        layout: {
-          'text-field': ['get', 'label'],
-          'text-font': ['Open Sans Regular'],
-          'text-size': shotLabelSize as number,
-          'text-allow-overlap': true,
-          'visibility': shotLabelVis as 'visible' | 'none',
-        },
-        paint: {
-          'text-color': ['get', 'color'],
-          'text-halo-color': this.themeColors.textHalo,
-          'text-halo-width': 1.5,
-          'text-opacity': 0.85,
-        },
-      });
-    }
-
-    this.stationDragShots = shotInfos.length > 0 ? shotInfos : null;
-
-    // 6. Find closure indicator lines with at least one endpoint in the moving set
-    type ClosureInfo = NonNullable<typeof this.stationDragClosures>[number];
-    const closureInfos: ClosureInfo[] = [];
-    if (this.cachedLoopClosures && this.cachedLoopClosures.length > 0) {
-      for (const lc of this.cachedLoopClosures) {
-        const keyA = `${lc.station_a.section_id}:${lc.station_a.station_index}`;
-        const keyB = `${lc.station_b.section_id}:${lc.station_b.station_index}`;
-        const aMoving = movingRefKeys.has(keyA);
-        const bMoving = movingRefKeys.has(keyB);
-        if (!aMoving && !bMoving) continue;
-
-        const stA = stationByKey.get(keyA);
-        const stB = stationByKey.get(keyB);
-        if (!stA || !stB) continue;
-
-        const fromCoord = metersToMapCoords(
-          stA.coordinates.x, stA.coordinates.y, this.gpsOrigin
-        ) as [number, number];
-        const toCoord = metersToMapCoords(
-          stB.coordinates.x, stB.coordinates.y, this.gpsOrigin
-        ) as [number, number];
-
-        closureInfos.push({
-          properties: {
-            stationA: keyA,
-            stationB: keyB,
-            sectionIdA: lc.station_a.section_id,
-            sectionIdB: lc.station_b.section_id,
-            errorPercentage: lc.error_percentage,
-            misclosureDistance: lc.misclosure_distance,
-            pathLength: lc.path_length,
-            color: getErrorColor(lc.error_percentage),
-          },
-          fromCoord,
-          toCoord,
-          movingEnd: aMoving && bMoving ? 'both' : aMoving ? 'from' : 'to',
-        });
-      }
-    }
-
-    if (closureInfos.length > 0) {
-      // Build exclusion filter for closures with ANY endpoint in moving set
-      const closureExclusion: maplibregl.FilterSpecification = ['!', ['any',
-        ...closureInfos.map(c => ['all',
-          ['==', ['get', 'stationA'], c.properties.stationA],
-          ['==', ['get', 'stationB'], c.properties.stationB],
-        ]),
-      ]] as unknown as maplibregl.FilterSpecification;
-
+    if (closureExclusions.length > 0) {
+      const closureExclusion: maplibregl.FilterSpecification = ['!',
+        ['any', ...closureExclusions],
+      ] as unknown as maplibregl.FilterSpecification;
       const existingClosureFilter = this.map.getFilter(this.loopClosuresLayerId);
       this.dragSavedFilters.set(this.loopClosuresLayerId, existingClosureFilter ?? undefined);
       const composedClosure: maplibregl.FilterSpecification = (existingClosureFilter && typeof existingClosureFilter === 'object')
         ? (['all', existingClosureFilter, closureExclusion] as unknown as maplibregl.FilterSpecification)
         : closureExclusion;
       this.map.setFilter(this.loopClosuresLayerId, composedClosure);
-
-      // Create dynamic GeoJSON source + layer for closure lines
-      const closureFeatures: GeoJSON.Feature[] = closureInfos.map(c => ({
-        type: 'Feature' as const,
-        geometry: { type: 'LineString' as const, coordinates: [c.fromCoord, c.toCoord] },
-        properties: c.properties,
-      }));
-
-      this.map.addSource(SurveyLayer.STATION_DRAG_CLOSURE_SOURCE, {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: closureFeatures },
-      });
-      this.map.addLayer({
-        id: SurveyLayer.STATION_DRAG_CLOSURE_LAYER,
-        type: 'line',
-        source: SurveyLayer.STATION_DRAG_CLOSURE_SOURCE,
-        paint: {
-          'line-color': ['get', 'color'],
-          'line-width': 3,
-          'line-opacity': 0.85,
-          'line-dasharray': [6, 4],
-        },
-      });
     }
 
-    this.stationDragClosures = closureInfos.length > 0 ? closureInfos : null;
-    this.dragPreviewActive = true;
+    // Hide the moving originals from the custom layer. installDragPreview applies
+    // this now for the custom ghost (draws next frame) or defers it behind the
+    // async stock preview's first load (START-flash fix).
+    this.installDragPreview(features, {
+      stationGlobalIndices: excludedStationGlobals,
+      shotGlobalIndices: excludedShotGlobals,
+      affectedSectionIds,
+    });
     return movingStations.map(s => s.station_ref);
   }
 
+  /** Point the custom-render layer at (or off, with null) the active drag's
+   *  hidden feature set, so the originals vanish at drag begin and reappear at
+   *  drag end — matching the stock bulk layers' setFilter exclusions the custom
+   *  layer cannot see. Cheap: recomputes + re-uploads only the per-vertex hide
+   *  flag (no buffer rebuild). No-op unless the custom render gate is on. */
+  private setDragExclusion(exclusion: CustomRenderExclusion | null): void {
+    this.customRender?.setDragHide(exclusion);
+    // Labels mirror the SAME exclusion: the dragged features' labels collapse via
+    // the DRAG_HIDE flag (synchronous GPU upload), replacing the stock text-layer
+    // filter drop. On drag commit the synchronous sync() rebuild reflows them at
+    // the new positions and setDragExclusion(null) clears the flag — labels never
+    // lag the geometry (the anti-flicker payoff).
+    this.customLabels?.setDragHide(exclusion);
+  }
+
   /**
-   * Update station drag preview — translates station circles/labels AND
-   * rebuilds connected shot geometries so they stretch to follow the cursor.
-   * Shot geometry rebuild is cheap (typically 1-5 features).
+   * Apply the custom-render drag-hide only once the drag-preview source has
+   * parsed and drawn its first frame (START-flash fix). setDragHide is a
+   * synchronous GPU upload that takes effect on the very next frame, but the
+   * preview's GeoJSON setData is async (worker parse + retile, ~5 frames on a
+   * real project). Hiding the originals eagerly therefore blanks the geometry
+   * for those frames - it is in neither the custom layer nor the not-yet-drawn
+   * preview. Deferring the hide to the source's first `sourcedata`-loaded event
+   * keeps the originals visible until the preview stands in for them (at offset
+   * ~0 they overlap, so there is no visible double either), then swaps to the
+   * preview atomically.
+   */
+  private setDragExclusionWhenPreviewReady(exclusion: CustomRenderExclusion): void {
+    this.clearPendingDragHide();
+    // If the source is already parsed (rare - typically false right after the
+    // begin's setData), hide immediately; nothing to wait for.
+    if (this.map.isSourceLoaded(DRAG_PREVIEW_SOURCE)) {
+      this.setDragExclusion(exclusion);
+      return;
+    }
+    const gen = this.dragGeneration;
+    const listener = (e: maplibregl.MapSourceDataEvent): void => {
+      if (e.sourceId !== DRAG_PREVIEW_SOURCE) return;
+      if (!this.map.isSourceLoaded(DRAG_PREVIEW_SOURCE)) return;
+      this.map.off('sourcedata', listener);
+      if (this.pendingDragHide?.listener === listener) this.pendingDragHide = null;
+      // Ignore a stale callback from a drag that has since ended or been replaced.
+      if (gen !== this.dragGeneration || !this.dragPreviewActive) return;
+      this.setDragExclusion(exclusion);
+    };
+    this.pendingDragHide = { exclusion, listener };
+    this.map.on('sourcedata', listener);
+  }
+
+  /** Tear down a still-pending deferred drag-hide without applying it (on end). */
+  private clearPendingDragHide(): void {
+    if (!this.pendingDragHide) return;
+    this.map.off('sourcedata', this.pendingDragHide.listener);
+    this.pendingDragHide = null;
+  }
+
+  /** Force-apply a still-pending deferred drag-hide immediately (on commit). If a
+   *  very fast drag commits before the async preview ever loaded, the originals
+   *  must be hidden NOW so they cannot show through the preview that is kept alive
+   *  across the IPC window (see commitDragPreview). No-op once already applied. */
+  private flushPendingDragHide(): void {
+    const pending = this.pendingDragHide;
+    if (!pending) return;
+    this.map.off('sourcedata', pending.listener);
+    this.pendingDragHide = null;
+    if (this.dragPreviewActive) this.setDragExclusion(pending.exclusion);
+  }
+
+  /** Drive both followers from a pointermove offset. The GHOST is driven
+   *  SYNCHRONOUSLY by the controller (custom path: one shader-uniform write +
+   *  triggerRepaint, no worker; stock fallback: the single-flight bake / translate
+   *  machine). The interact overlay follow stays rAF-coalesced (one small setData
+   *  per frame). */
+  private scheduleDragRender(dx: number, dy: number): void {
+    this.dragGhost.move(dx, dy);
+    this.pendingDragOffset = { dx, dy };
+    if (this.dragUpdateRaf !== null) return;
+    this.dragUpdateRaf = requestAnimationFrame(() => {
+      this.dragUpdateRaf = null;
+      const off = this.pendingDragOffset;
+      this.pendingDragOffset = null;
+      if (off) this.renderOverlayFollow(off.dx, off.dy);
+    });
+  }
+
+  /** Cancel any pending coalesced render (on commit / end). */
+  private cancelDragRender(): void {
+    if (this.dragUpdateRaf !== null) {
+      cancelAnimationFrame(this.dragUpdateRaf);
+      this.dragUpdateRaf = null;
+    }
+    this.pendingDragOffset = null;
+  }
+
+  /**
+   * Update the station / shot drag preview — one setData over the unified source
+   * (stations, shots, labels, closures all move together, no skew).
    */
   updateStationDragPreview(dx: number, dy: number): void {
-    if (!this.dragPreviewActive) return;
-
-    // Update station circles + labels via translate (GPU shader uniform)
-    const offset: [number, number] = [dx, dy];
-    for (const def of SurveyLayer.DRAG_LAYER_DEFS) {
-      if (this.map.getLayer(def.tempLayerId)) {
-        this.map.setPaintProperty(def.tempLayerId, def.translateProp, offset);
-      }
-    }
-
-    // Rebuild connected shot geometries
-    if (!this.stationDragShots) return;
-
-    const shotFeatures: GeoJSON.Feature[] = [];
-    const shotLabelFeatures: GeoJSON.Feature[] = [];
-
-    for (const s of this.stationDragShots) {
-      let fromLng = s.fromCoord[0], fromLat = s.fromCoord[1];
-      let toLng = s.toCoord[0], toLat = s.toCoord[1];
-
-      if (s.movingEnd === 'from' || s.movingEnd === 'both') {
-        const p = this.map.project([fromLng, fromLat]);
-        const np = this.map.unproject([p.x + dx, p.y + dy]);
-        fromLng = np.lng;
-        fromLat = np.lat;
-      }
-      if (s.movingEnd === 'to' || s.movingEnd === 'both') {
-        const p = this.map.project([toLng, toLat]);
-        const np = this.map.unproject([p.x + dx, p.y + dy]);
-        toLng = np.lng;
-        toLat = np.lat;
-      }
-
-      shotFeatures.push({
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: [[fromLng, fromLat], [toLng, toLat]] },
-        properties: s.properties,
-      });
-
-      shotLabelFeatures.push({
-        type: 'Feature',
-        geometry: {
-          type: 'Point',
-          coordinates: [(fromLng + toLng) / 2, (fromLat + toLat) / 2],
-        },
-        properties: s.shotLabelProperties,
-      });
-    }
-
-    const shotSource = this.map.getSource(SurveyLayer.STATION_DRAG_SHOT_SOURCE);
-    if (shotSource && 'setData' in shotSource) {
-      (shotSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection', features: shotFeatures,
-      });
-    }
-    const shotLabelSource = this.map.getSource(SurveyLayer.STATION_DRAG_SHOT_LABEL_SOURCE);
-    if (shotLabelSource && 'setData' in shotLabelSource) {
-      (shotLabelSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection', features: shotLabelFeatures,
-      });
-    }
-
-    // Rebuild closure indicator line geometries
-    if (this.stationDragClosures) {
-      const closureFeatures: GeoJSON.Feature[] = [];
-      for (const c of this.stationDragClosures) {
-        let fromLng = c.fromCoord[0], fromLat = c.fromCoord[1];
-        let toLng = c.toCoord[0], toLat = c.toCoord[1];
-
-        if (c.movingEnd === 'from' || c.movingEnd === 'both') {
-          const p = this.map.project([fromLng, fromLat]);
-          const np = this.map.unproject([p.x + dx, p.y + dy]);
-          fromLng = np.lng;
-          fromLat = np.lat;
-        }
-        if (c.movingEnd === 'to' || c.movingEnd === 'both') {
-          const p = this.map.project([toLng, toLat]);
-          const np = this.map.unproject([p.x + dx, p.y + dy]);
-          toLng = np.lng;
-          toLat = np.lat;
-        }
-
-        closureFeatures.push({
-          type: 'Feature',
-          geometry: { type: 'LineString', coordinates: [[fromLng, fromLat], [toLng, toLat]] },
-          properties: c.properties,
-        });
-      }
-
-      const closureSource = this.map.getSource(SurveyLayer.STATION_DRAG_CLOSURE_SOURCE);
-      if (closureSource && 'setData' in closureSource) {
-        (closureSource as maplibregl.GeoJSONSource).setData({
-          type: 'FeatureCollection', features: closureFeatures,
-        });
-      }
-    }
+    this.scheduleDragRender(dx, dy);
   }
 
   /**
-   * Update drag preview offset — just updates *-translate paint properties.
-   * This is a shader uniform update (essentially free, no GeoJSON rebuild).
-   * Guards against missing layers so it works for both full segment drag
-   * (5 temp layers) and single station drag (2 temp layers).
+   * Update the segment drag preview — one setData over the unified source. The
+   * whole segment moves uniformly, so every captured vertex takes the offset.
    */
   updateDragPreview(dx: number, dy: number): void {
-    if (!this.dragPreviewActive) return;
-    const offset: [number, number] = [dx, dy];
-    for (const def of SurveyLayer.DRAG_LAYER_DEFS) {
-      if (this.map.getLayer(def.tempLayerId)) {
-        this.map.setPaintProperty(def.tempLayerId, def.translateProp, offset);
-      }
-    }
-    // Update closure drag layer
-    if (this.map.getLayer(this.dragClosuresLayerId)) {
-      this.map.setPaintProperty(this.dragClosuresLayerId, 'line-translate', offset);
-    }
+    this.scheduleDragRender(dx, dy);
   }
 
   /**
-   * Commit drag preview — removes temp layers but keeps exclusion filters on main
-   * layers so connected sections stay hidden. Call this before the backend commit,
-   * then call endDragPreview() after React re-renders with new positions.
-   * This prevents a blink where features briefly appear at newPosition + dragOffset.
+   * Commit drag preview — removes the preview layers but keeps the exclusion
+   * filters on the bulk layers so the moved features stay hidden until React
+   * re-renders with their new positions. Call this before the backend commit,
+   * then endDragPreview() after the re-render. This prevents a blink where
+   * features briefly appear at newPosition + dragOffset.
    */
   commitDragPreview(): void {
     if (!this.dragPreviewActive) return;
-    for (const def of SurveyLayer.DRAG_LAYER_DEFS) {
-      if (this.map.getLayer(def.tempLayerId)) {
-        this.map.removeLayer(def.tempLayerId);
-      }
-    }
-    if (this.map.getLayer(this.dragClosuresLayerId)) {
-      this.map.removeLayer(this.dragClosuresLayerId);
-    }
-    // Station drag dynamic layers + sources
-    this.removeStationDragLayers();
+    this.cancelDragRender();
+    // FINISH-flash fix: do NOT remove the preview here. cancelDragRender above
+    // freezes it at the placement offset (its last setData), which is where the
+    // committed geometry will land. The committed geometry does not exist
+    // client-side until the post-IPC flush installs it (~100ms), and the
+    // custom-render drag-hide stays applied until endDragPreview - so removing
+    // the preview now would leave the moved geometry in NEITHER the preview nor
+    // the custom layer for the whole IPC window: a blank hole where the user just
+    // placed it. Instead endDragPreview (sequenced via onNextUpdate, firing in the
+    // same synchronous flush block that installs the committed geometry and clears
+    // the hide) removes the preview and swaps to the committed geometry atomically.
+    // Force-apply any still-deferred hide now so a very fast drag's stale
+    // originals cannot show through the kept preview during the window.
+    this.flushPendingDragHide();
+    // Keep the interact overlay following (dragOverlayOffset + moving sets) across
+    // the IPC + flush window so the grabbed highlight stays glued to the cursor
+    // instead of snapping back to the OLD coords for the ~100ms until the committed
+    // geometry lands. endApplyFeatures drops the offset atomically, right before the
+    // post-commit overlay refresh reads the installed geometry — so the overlay
+    // never renders old+offset after the install (no 2x flash) nor plain old coords
+    // during the window (no snap-back). It must survive until the geometry swaps,
+    // hence the dragCommitPending handoff. (dragPreviewSet is nulled by the
+    // endDragPreview that MapCanvas sequences right after this via onNextUpdate.)
+    this.dragCommitPending = true;
   }
 
   /**
-   * End drag preview — removes temporary layers (if still present) and restores
-   * original filters so connected sections are visible again.
+   * End drag preview — removes the preview layers (if still present) and restores
+   * every saved bulk-layer filter so the real features are visible again.
    */
   endDragPreview(): void {
     if (!this.dragPreviewActive) return;
 
-    for (const def of SurveyLayer.DRAG_LAYER_DEFS) {
-      // Remove temp layer if commitDragPreview wasn't called first
-      if (this.map.getLayer(def.tempLayerId)) {
-        this.map.removeLayer(def.tempLayerId);
-      }
-
-      // Restore original filter on main layer — only if we saved one
-      // (station drag only modifies 2 of 5 layers)
-      if (this.dragSavedFilters.has(def.mainLayerId)) {
-        const saved = this.dragSavedFilters.get(def.mainLayerId);
-        this.map.setFilter(def.mainLayerId, saved ?? null);
-      }
+    this.cancelDragRender();
+    // Tear down the ghost (custom layer or stock follow machine + preview layers).
+    // This is the single removal point for the preview now that commitDragPreview
+    // keeps it alive across the IPC window.
+    this.dragGhost.end();
+    // Drop any deferred drag-hide that never fired (drag ended before ready).
+    this.clearPendingDragHide();
+    // Restore the saved auxiliary filters (only loop closures now — the survey
+    // geometry + labels are custom-rendered and their drag exclusion is dropped
+    // synchronously below, so they land at the new position at once).
+    for (const [layerId, saved] of this.dragSavedFilters) {
+      if (this.map.getLayer(layerId)) this.map.setFilter(layerId, saved ?? null);
     }
+    this.clearDragOverlayFollow();
 
-    // Remove closure temp layer and restore filter
-    if (this.map.getLayer(this.dragClosuresLayerId)) {
-      this.map.removeLayer(this.dragClosuresLayerId);
-    }
-    if (this.dragSavedFilters.has(this.loopClosuresLayerId)) {
-      const savedClosureFilter = this.dragSavedFilters.get(this.loopClosuresLayerId);
-      this.map.setFilter(this.loopClosuresLayerId, savedClosureFilter ?? null);
-    }
-
-    // Station drag dynamic layers + sources
-    this.removeStationDragLayers();
-
-    // Restore shot/shot-label filters if saved (station drag modifies these)
-    for (const layerId of ['survey-shots', 'survey-shot-labels']) {
-      if (this.dragSavedFilters.has(layerId)) {
-        const saved = this.dragSavedFilters.get(layerId);
-        this.map.setFilter(layerId, saved ?? null);
-      }
-    }
-
-    this.stationDragShots = null;
-    this.stationDragClosures = null;
+    this.dragPreviewSet = null;
     this.dragSavedFilters.clear();
     this.dragPreviewActive = false;
-  }
-
-  /** Remove station drag dynamic layers and sources (idempotent). */
-  private removeStationDragLayers(): void {
-    for (const layerId of [
-      SurveyLayer.STATION_DRAG_SHOT_LAYER,
-      SurveyLayer.STATION_DRAG_SHOT_LABEL_LAYER,
-      SurveyLayer.STATION_DRAG_CLOSURE_LAYER,
-    ]) {
-      if (this.map.getLayer(layerId)) this.map.removeLayer(layerId);
-    }
-    for (const sourceId of [
-      SurveyLayer.STATION_DRAG_SHOT_SOURCE,
-      SurveyLayer.STATION_DRAG_SHOT_LABEL_SOURCE,
-      SurveyLayer.STATION_DRAG_CLOSURE_SOURCE,
-    ]) {
-      if (this.map.getSource(sourceId)) this.map.removeSource(sourceId);
-    }
+    // Drop the custom-render exclusion and rebuild full buffers so the moved
+    // features reappear at their committed positions (mirrors the filter restore).
+    this.setDragExclusion(null);
   }
 
   /**
@@ -3925,10 +3175,9 @@ export default class SurveyLayer {
       const args = this.pendingUpdateArgs;
       this.pendingUpdateArgs = null;
       if (!args) return;
-      // Off-thread build for the normal (non-drag-commit) path. Falls
-      // back to in-line build inside the worker client if Worker can't
-      // be constructed (test envs).
-      void this.flushUpdateViaWorker(
+      // The custom renderer builds synchronously, so the coalesced flush is a
+      // direct synchronous flushUpdate (no worker round-trip).
+      this.flushUpdate(
         args.sections,
         args.stations,
         args.loopClosures,
@@ -3943,98 +3192,68 @@ export default class SurveyLayer {
   }
 
   /**
-   * Async path: feed inputs to the features worker, await the result,
-   * then apply via the shared `applyFeaturesToSources` helper. The
-   * synchronous `flushUpdate` is kept for drag-commit / sync callers.
+   * Prototype hook (#customRender): mirror the just-built bulk geometry into the
+   * flag-gated custom WebGL layer. No-op unless the gate is on. Reads the caches
+   * the flush already populated (surveyData / severity / modes / theme / origin),
+   * so it adds nothing to the hot path when the flag is off.
    */
-  private async flushUpdateViaWorker(
-    sections: Section[],
-    stations: Station[],
-    loopClosures: LoopClosure[] | undefined,
-    gpsOrigin: GpsOrigin | null,
-    showDepthGradient: boolean,
-    depthRange: DepthRange,
-    precision: DecimalPrecision | undefined,
-    showIssueSeverity: boolean = false,
-    warnings: ProjectWarning[] = [],
-  ): Promise<void> {
-    if (!hasLiveStyle(this.map)) return;
-    this.coalescedUpdateCallsSinceLastFlush = 0;
-    this.gpsOrigin = gpsOrigin;
-    this.showDepthGradient = showDepthGradient;
-    this.depthRange = normalizeDepthRange(depthRange);
-    this.showIssueSeverity = showIssueSeverity;
-    this.cachedWarnings = warnings;
-    this.cachedSections = sections;
-    this.cachedStations = stations;
-    this.cachedLoopClosures = loopClosures;
-    if (precision !== undefined) this.cachedPrecision = precision;
+  private syncCustomRender(surveyData: SurveyData): void {
+    if (!this.customRender) return;
+    const colorCtx: DisplayColorContext = {
+      showDepthGradient: this.showDepthGradient,
+      depthRange: this.depthRange,
+      themeColors: this.themeColors,
+      showIssueSeverity: this.showIssueSeverity,
+      issueSeverity: this.cachedIssueSeverity,
+      // Analytical overlay ramp colors (distance #34 / gas-reach #38): the custom
+      // layer has no feature-state, so it resolves them per feature at build time.
+      overlay: overlayInputFrom(this.distanceMode, this.distanceState, this.gasReachMode, this.gasReachState),
+      // Move-comment palette tint (#52): custom features carry no commentColor
+      // property, so the resolvers recompute it (only while move_comment is active).
+      commentTint: this.activeTool === 'move_comment',
+    };
+    this.customRender.sync({
+      surveyData,
+      gpsOrigin: this.gpsOrigin,
+      colorCtx,
+      shotWidthPx: this.getShotWidth(),
+      stationRadiusPx: this.getStationRadius(),
+      stationStrokePx: 1,
+      // Configured highlight bumps (C2): the custom survey shader derives the
+      // hover / selection width + radius from these instead of baking 2x/1.5x.
+      shotHoverWidthPx: this.getShotHoverWidth(),
+      shotSelectionWidthPx: this.getShotSelectionWidth(),
+      stationHoverRadiusPx: this.getStationHoverRadius(),
+      stationSelectionRadiusPx: this.getStationSelectionRadius(),
+    });
+    // Custom LABEL layer (#customRender labels). Shares surveyData + theme; its
+    // own composed gate no-ops when off. Builds all five kinds, viewport-scoped
+    // with collision; a synchronous rebuild here keeps the edit path immediate.
+    this.customLabels?.sync({
+      surveyData,
+      gpsOrigin: this.gpsOrigin,
+      themeColors: this.themeColors,
+      showDepthGradient: this.showDepthGradient,
+      depthRange: this.depthRange,
+      precision: this.cachedPrecision,
+      commentTint: this.activeTool === 'move_comment',
+    });
+  }
 
-    const zoom = hasLiveStyle(this.map) ? this.map.getZoom() : 0;
-    const buildLabels = this.labelsCurrentlyBuilt
-      ? zoom >= SurveyLayer.LABEL_DROP_ZOOM
-      : zoom >= SurveyLayer.LABEL_BUILD_ZOOM;
-    this.labelsCurrentlyBuilt = buildLabels;
-
-    // Tag the call so a later flush invalidates an in-flight build —
-    // protects against a fast cascade where the user fires update() again
-    // while the worker is still building from the previous args.
-    const myToken = ++this.lastUpdateToken;
-
-    // Convert to SurveyData once before posting to the worker. Doing
-    // this here (rather than at the call boundary in MapCanvas) lets
-    // the existing cached `sections`/`stations` continue to feed
-    // drag-preview / theme-rebuild paths inside SurveyLayer that
-    // haven't been migrated yet. The conversion is bounded by N (one
-    // pass over shots + stations); for the 75k-shot project it's
-    // ~10 ms on a single tight loop and the result is a typed-array
-    // bundle that structured-clones to the worker far cheaper than
-    // 75k+89k JS objects ever would.
-    const surveyData = selectActiveSurveyData(
-      useProjectStore.getState(),
-      useUIStore.getState().geometryMode
-    ) ?? surveyDataFromLegacy(sections, stations);
-
-    // Issue-severity arrays are computed against this exact surveyData so the
-    // per-shot/per-station indices align with what the builder iterates.
-    const issueSeverity = showIssueSeverity
-      ? computeIssueSeverity(surveyData, warnings)
-      : undefined;
-    const buildOptions = { buildLabels, showIssueSeverity, issueSeverity };
-
-    const tBuildStart = performance.now();
-    let features: ReturnType<typeof buildSurveyFeatures>;
-    try {
-      features = await buildSurveyFeaturesAsync({
-        surveyData,
-        loopClosures,
-        gpsOrigin: this.gpsOrigin,
-        showDepthGradient: this.showDepthGradient,
-        depthRange: this.depthRange,
-        themeColors: this.themeColors,
-        precision: this.cachedPrecision,
-        options: buildOptions,
-      });
-    } catch (e) {
-      console.error('[SurveyLayer] feature worker failed, falling back to inline build:', e);
-      // Inline fallback so the survey still renders.
-      features = buildSurveyFeatures(
-        surveyData,
-        loopClosures,
-        this.gpsOrigin,
-        this.showDepthGradient,
-        this.depthRange,
-        this.themeColors,
-        this.cachedPrecision,
-        buildOptions,
-      );
-    }
-    recordPerfTiming('buildFeatures (async)', performance.now() - tBuildStart);
-
-    // Bail if a newer update has already taken over.
-    if (myToken !== this.lastUpdateToken) return;
-    if (!hasLiveStyle(this.map)) return;
-    this.applyFeaturesToSources(features);
+  /**
+   * Re-sync the custom-render prototype from CURRENT store geometry
+   * (#customRender). Backs the runtime `__stalagmightSyncCustomRender` hook: the
+   * controller's own snapshot is a previous project's geometry after a switch,
+   * so read fresh geometry here (measured fallback, like every flush) rather
+   * than replaying the stale snapshot. Falls back to the last flush's cached
+   * geometry only when the store has no active geometry (e.g. mid-close).
+   */
+  private resyncCustomRenderFromStore(): void {
+    if (!this.customRender || !hasLiveStyle(this.map)) return;
+    const surveyData =
+      selectActiveSurveyData(useProjectStore.getState(), useUIStore.getState().geometryMode) ??
+      this.cachedSurveyData;
+    if (surveyData) this.syncCustomRender(surveyData);
   }
 
   /**
@@ -4056,14 +3275,6 @@ export default class SurveyLayer {
     // Cancel any pending coalesced flush so we don't re-run with stale args.
     this.updateScheduled = false;
     this.pendingUpdateArgs = null;
-    // Bump the token so any in-flight `flushUpdateViaWorker` (started by
-    // an earlier update before this sync flush kicked in) discards its
-    // result via the `myToken !== this.lastUpdateToken` guard.  Without
-    // this the older worker could land its stale features on top of the
-    // freshly-applied sync data — most visibly during a drag commit
-    // that arrives between the user's last zoom rebuild and the worker
-    // finishing.
-    this.lastUpdateToken += 1;
     this.flushUpdate(
       sections,
       stations,
@@ -4089,38 +3300,30 @@ export default class SurveyLayer {
     warnings: ProjectWarning[] = [],
   ): void {
     // Early bail when the map is gone or its style has been torn down — the
-    // coalescer's queueMicrotask can race with MapCanvas unmount → map.remove(),
-    // and setData on a removed source throws. We have to check this BEFORE
-    // hitting getSource/setData below.
+    // coalescer's queueMicrotask can race with MapCanvas unmount → map.remove().
     if (!hasLiveStyle(this.map)) return;
 
-    // Reset the call counter so the probe can show calls/tick coherently.
     this.coalescedUpdateCallsSinceLastFlush = 0;
-    // Store gpsOrigin for coordinate transforms
     this.gpsOrigin = gpsOrigin;
-    // Store depth mode parameters for use in feature color calculation
     this.showDepthGradient = showDepthGradient;
     this.depthRange = normalizeDepthRange(depthRange);
     this.showIssueSeverity = showIssueSeverity;
     this.cachedWarnings = warnings;
 
-    // Cache input data for feature rebuild on theme change
+    // Sections this flush removes (delete / undo-of-add), read BEFORE the cache
+    // overwrite: their custom geometry vanishes synchronously in syncCustomRender
+    // below, so a removed feature's stale interact-overlay highlight is dropped in
+    // the same frame rather than lingering (#customRender delete straggler).
+    const removedSectionIds = diffRemovedSectionIds(this.cachedSections, sections);
+
+    // Cache input data for the theme rebuild / drag-preview / hit-test paths.
     this.cachedSections = sections;
     this.cachedStations = stations;
     this.cachedLoopClosures = loopClosures;
     if (precision !== undefined) this.cachedPrecision = precision;
 
-    // Decide whether labels should be materialized based on current zoom.
-    // Hysteresis: build past LABEL_BUILD_ZOOM, drop only when zoomed out
-    // below LABEL_DROP_ZOOM — prevents thrashing at the threshold.
-    const zoom = hasLiveStyle(this.map) ? this.map.getZoom() : 0;
-    const buildLabels = this.labelsCurrentlyBuilt
-      ? zoom >= SurveyLayer.LABEL_DROP_ZOOM
-      : zoom >= SurveyLayer.LABEL_BUILD_ZOOM;
-    this.labelsCurrentlyBuilt = buildLabels;
-
-    // Synchronous (drag-commit) path: convert to SurveyData inline
-    // before building. See the async counterpart for the rationale.
+    // Prefer the live store geometry (never a stale project's) over the legacy
+    // cached args; fall back to the args only when the store has no active geometry.
     const surveyData = selectActiveSurveyData(
       useProjectStore.getState(),
       useUIStore.getState().geometryMode
@@ -4129,164 +3332,53 @@ export default class SurveyLayer {
     const issueSeverity = showIssueSeverity
       ? computeIssueSeverity(surveyData, warnings)
       : undefined;
+    this.cachedSurveyData = surveyData;
+    this.cachedIssueSeverity = issueSeverity;
+    // INVARIANT: geoIndex is re-created (never mutated in place) on every flush —
+    // its per-instance lazy caches rest on a fresh instance per geometry change.
+    this.geoIndex = new SurveyGeometryIndex(surveyData, this.gpsOrigin);
 
-    const features = buildSurveyFeatures(
-      surveyData,
-      loopClosures,
-      this.gpsOrigin,
-      this.showDepthGradient,
-      this.depthRange,
-      this.themeColors,
-      this.cachedPrecision,
-      { buildLabels, showIssueSeverity, issueSeverity }
-    );
-    this.applyFeaturesToSources(features);
-  }
+    // Custom WebGL layers are the SOLE survey renderer: geometry + labels
+    // (syncCustomRender) and the measured-path tint (syncCustomMeasurePath) draw
+    // straight from the SoA SurveyData, synchronously in this frame. Loop closures
+    // ride their own small GeoJSON source (not part of the custom buffers).
+    this.syncCustomRender(surveyData);
+    this.syncCustomMeasurePath();
+    this.publishLoopClosures();
 
-  /**
-   * Push a built `SurveyFeatureSets` to MapLibre sources and refresh the
-   * derived state (hover/selection lookup maps, feature-state, etc.).
-   * Shared by the synchronous `flushUpdate` path and the async
-   * `flushUpdateViaWorker` path.
-   */
-  private applyFeaturesToSources(features: ReturnType<typeof buildSurveyFeatures>): void {
-    if (!hasLiveStyle(this.map)) return;
-    const {
-      shotFeatures,
-      shotGradientFeatures,
-      shotLabelFeatures,
-      stationFeatures,
-      sectionLabelFeatures,
-      stationLabelFeatures,
-      loopClosureFeatures,
-    } = features;
-
-    // Build section→featureId lookup maps for O(1) hover highlighting
-    // (replaces per-hover querySourceFeatures which was the main perf bottleneck)
-    this.sectionShotFeatureIds = new Map();
-    for (const f of shotFeatures) {
-      const sid = f.properties?.sectionId as number | undefined;
-      const fid = f.properties?.featureId as number | undefined;
-      if (sid !== undefined && fid !== undefined) {
-        let set = this.sectionShotFeatureIds.get(sid);
-        if (!set) { set = new Set(); this.sectionShotFeatureIds.set(sid, set); }
-        set.add(fid);
-      }
-    }
-    this.sectionStationFeatureIds = new Map();
-    for (const f of stationFeatures) {
-      const sid = f.properties?.sectionId as number | undefined;
-      const fid = f.properties?.featureId as number | undefined;
-      if (sid !== undefined && fid !== undefined) {
-        let set = this.sectionStationFeatureIds.get(sid);
-        if (!set) { set = new Set(); this.sectionStationFeatureIds.set(sid, set); }
-        set.add(fid);
-      }
+    // Delete straggler: a selected / hovered / snapped feature this flush removed
+    // must drop from the interact overlay now (its custom geometry already vanished
+    // above), instead of lingering. Skipped mid-drag (the drag paths own the overlay
+    // follow). Hide the interact layers across the overlay GeoJSON source's own async
+    // re-tile so the stale highlight drops in the geometry frame.
+    if (
+      !this.dragPreviewActive &&
+      removedSectionIds.length > 0 &&
+      (this.selectedShotId || this.hoveredShotId || this.selectedStationId ||
+        this.hoveredStationId || this.snappedStationId || this.highlightedStationIds.length > 0)
+    ) {
+      const stale = overlayTouchesRemovedSections(
+        [this.selectedShotId, this.hoveredShotId, this.selectedStationId,
+          this.hoveredStationId, this.snappedStationId, ...this.highlightedStationIds],
+        removedSectionIds,
+      );
+      this.lastInteractKey = null;
+      this.refreshInteractOverlay();
+      if (stale) this.interactHide.hideUntilRetile();
     }
 
-    // Update sources
-    const shotsSource = this.map.getSource(this.sourceId + '-shots');
-    if (shotsSource && 'setData' in shotsSource) {
-      (shotsSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features: shotFeatures,
-      });
-      recordFeatureCount('survey-shots', shotFeatures.length);
-    }
-
-    const stationsSource = this.map.getSource(this.sourceId + '-stations');
-    if (stationsSource && 'setData' in stationsSource) {
-      (stationsSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features: stationFeatures,
-      });
-      recordFeatureCount('survey-stations', stationFeatures.length);
-    }
-
-    const shotGradientsSource = this.map.getSource(this.sourceId + '-shot-gradients');
-    if (shotGradientsSource && 'setData' in shotGradientsSource) {
-      (shotGradientsSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features: shotGradientFeatures,
-      });
-      recordFeatureCount('survey-shot-gradients', shotGradientFeatures.length);
-    }
-
-    // Update shot labels source
-    const shotLabelsSource = this.map.getSource(this.sourceId + '-shot-labels');
-    if (shotLabelsSource && 'setData' in shotLabelsSource) {
-      (shotLabelsSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features: shotLabelFeatures,
-      });
-      recordFeatureCount('survey-shot-labels', shotLabelFeatures.length);
-    }
-
-    // Update section labels source
-    const sectionLabelsSource = this.map.getSource(this.sourceId + '-section-labels');
-    if (sectionLabelsSource && 'setData' in sectionLabelsSource) {
-      (sectionLabelsSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features: sectionLabelFeatures,
-      });
-      recordFeatureCount('survey-section-labels', sectionLabelFeatures.length);
-    }
-
-    // Update station labels source
-    const stationLabelsSource = this.map.getSource(this.sourceId + '-station-labels');
-    if (stationLabelsSource && 'setData' in stationLabelsSource) {
-      (stationLabelsSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features: stationLabelFeatures,
-      });
-      recordFeatureCount('survey-station-labels', stationLabelFeatures.length);
-    }
-
-    const loopClosuresSource = this.map.getSource(this.sourceId + '-loop-closures');
-    if (loopClosuresSource && 'setData' in loopClosuresSource) {
-      (loopClosuresSource as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features: loopClosureFeatures,
-      });
-      recordFeatureCount('survey-loop-closures', loopClosureFeatures.length);
-    }
-
-    // setData() clears all feature-state — reset tracking and re-apply
-    // Guard: only re-apply if map style is still live (avoids crash during teardown)
-    if (!hasLiveStyle(this.map)) return;
-    this.prevHoveredStationFeatureId = null;
-    this.prevHoveredShotFeatureId = null;
-    this.prevSelectedStationFeatureId = null;
-    this.prevSelectedShotFeatureId = null;
-    this.prevHoveredSectionShotIds = new Set();
-    this.prevHoveredSectionStationIds = new Set();
-    this.prevSelectedSectionShotIds = new Set();
-    this.prevSelectedSectionStationIds = new Set();
-    this.invalidateSectionCaches();
+    // Refresh the interact overlay + its paint inputs against the new geometry.
+    this.lastInteractKey = null;
+    this.applyInteractPaint();
+    // Drag-commit atomic settle: drop the follow-offset now the committed geometry
+    // is installed, BEFORE the overlay refresh reads it (no snap-back / overshoot).
+    if (this.dragCommitPending) this.clearDragOverlayFollow();
     this.updateVisualState();
-    // setData() wiped feature-state, so re-apply the distance-gradient `dist`
-    // HERE (the rebuild path) — NOT in updateVisualState(), which also runs on
-    // every hover where feature-state is intact and re-applying all ~N features
-    // would tank FPS (60→10 on large surveys). (#34)
-    if (this.distanceMode) {
-      this.applyDistanceFeatureState();
-    }
-    // Gas reachable-frontier overlay (#38) — same setData()-wipe re-apply.
-    if (this.gasReachMode) {
-      this.applyGasReachFeatureState();
-    }
-    // Likewise re-apply the measured along-line path tint (#26).
-    if (this.measuredPathIds || this.measuredPathStationIds) {
-      this.applyMeasuredPathFeatureState();
-    }
-    // Gas route highlight (#233): re-push the route LineStrings (coords come from cachedStations,
-    // which a rebuild may have refreshed).
-    if (this.gasRouteLegs.length > 0) {
-      this.applyGasRoute();
-    }
+    // Gas route highlight (#233): re-push the route (coords come from cachedStations).
+    if (this.gasRouteLegs.length > 0) this.applyGasRoute();
 
-    // Fire one-shot callback (used by drag commit to restore filters in the same
-    // synchronous block as setData, ensuring no paint gap between them).
+    // Fire the one-shot callback (drag commit restores its filters in the same
+    // synchronous block that installed the geometry, so there is no paint gap).
     if (this.onNextUpdateCallback) {
       const cb = this.onNextUpdateCallback;
       this.onNextUpdateCallback = null;
@@ -4294,9 +3386,38 @@ export default class SurveyLayer {
     }
   }
 
+  /** Publish the loop-closure indicator lines to their GeoJSON source from the
+   *  cached closures + the geometry index. The custom renderer draws everything
+   *  else; loop closures stay a small stock GeoJSON overlay, like the gas route. */
+  private publishLoopClosures(): void {
+    const source = this.map.getSource(this.sourceId + '-loop-closures');
+    if (!source || source.type !== 'geojson' || !this.geoIndex) return;
+    const features: GeoJSON.Feature[] = [];
+    for (const lc of this.cachedLoopClosures ?? []) {
+      const a = this.geoIndex.stationCoords(lc.station_a);
+      const b = this.geoIndex.stationCoords(lc.station_b);
+      if (!a || !b) continue;
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: [a, b] },
+        properties: {
+          stationA: `${lc.station_a.section_id}:${lc.station_a.station_index}`,
+          stationB: `${lc.station_b.section_id}:${lc.station_b.station_index}`,
+          sectionIdA: lc.station_a.section_id,
+          sectionIdB: lc.station_b.section_id,
+          errorPercentage: lc.error_percentage,
+          misclosureDistance: lc.misclosure_distance,
+          pathLength: lc.path_length,
+          color: getErrorColor(lc.error_percentage),
+        },
+      });
+    }
+    (source as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features });
+  }
+
   /**
    * Register a one-shot callback to run at the end of the next update() call,
-   * after all setData() calls have completed. Used to restore drag preview filters
+   * after all sources have been refreshed. Used to restore drag preview filters
    * in the same synchronous block as the data update (no paint gap).
    */
   onNextUpdate(callback: () => void): void {
@@ -4313,30 +3434,11 @@ export default class SurveyLayer {
 
     if (!hasLiveStyle(this.map)) return;
 
-    // Update paint properties that use constant theme colors
-    // Section label halo
-    if (this.map.getLayer(this.labelsLayerId)) {
-      this.map.setPaintProperty(this.labelsLayerId, 'text-halo-color', colors.textHalo);
-    }
-    // Shot label halo
-    if (this.map.getLayer(this.shotLabelsLayerId)) {
-      this.map.setPaintProperty(this.shotLabelsLayerId, 'text-halo-color', colors.textHaloAlt);
-    }
-    // Station label halo
-    if (this.map.getLayer(this.stationLabelsLayerId)) {
-      this.map.setPaintProperty(this.stationLabelsLayerId, 'text-halo-color', colors.textHaloAlt);
-    }
-    // Comments label text-color (via applyCommentTextColor() to keep the
-    // move-comment palette tint (#52) if that tool is currently active)
-    this.applyCommentTextColor();
-    // Station comments halo
-    if (this.map.getLayer(this.stationCommentsLayerId)) {
-      this.map.setPaintProperty(this.stationCommentsLayerId, 'text-halo-color', colors.textHaloAlt);
-    }
-    // Shot comments halo
-    if (this.map.getLayer(this.shotCommentsLayerId)) {
-      this.map.setPaintProperty(this.shotCommentsLayerId, 'text-halo-color', colors.textHaloAlt);
-    }
+    // Overlay features carry resolved theme colors — rebuild them.
+    this.lastInteractKey = null;
+    this.refreshInteractOverlay();
+
+    // Update the kept auxiliary layers' constant theme colors.
     // Ghost station stroke
     if (this.map.getLayer(this.ghostStationsLayerId)) {
       this.map.setPaintProperty(this.ghostStationsLayerId, 'circle-stroke-color', colors.strokeColor);
@@ -4351,30 +3453,70 @@ export default class SurveyLayer {
       this.map.setPaintProperty(this.stationsHighlightLayerId, 'circle-color', colors.snapColor);
       this.map.setPaintProperty(this.stationsHighlightLayerId, 'circle-stroke-color', colors.snapColor);
     }
-    // Station stroke-color expression (hover/selected colors)
-    if (this.map.getLayer(this.stationsLayerId)) {
-      this.map.setPaintProperty(this.stationsLayerId, 'circle-stroke-color', [
-        'case',
-        ['boolean', ['feature-state', 'hover'], false], colors.hoverHighlight,
-        ['boolean', ['feature-state', 'selected'], false], colors.selectHighlight,
-        ['get', 'strokeColor'],
-      ]);
-    }
 
-    // Rebuild features with new theme colors (colors are embedded in GeoJSON properties)
+    // Rebuild the survey from cache so the custom renderer + labels + measured-path
+    // tint (which embed theme colors) repaint with the new theme.
     if (this.cachedSections.length > 0 || this.cachedStations.length > 0) {
       this.update(
-        this.cachedSections,
-        this.cachedStations,
-        this.cachedLoopClosures,
-        this.gpsOrigin,
-        this.showDepthGradient,
-        this.depthRange,
-        this.cachedPrecision,
-        this.showIssueSeverity,
-        this.cachedWarnings
+        this.cachedSections, this.cachedStations, this.cachedLoopClosures, this.gpsOrigin,
+        this.showDepthGradient, this.depthRange, this.cachedPrecision, this.showIssueSeverity,
+        this.cachedWarnings,
       );
     }
+  }
+
+  /** Dispose the custom-render controllers WITHOUT touching the map (no
+   *  removeLayer). Called on MapCanvas unmount, which deliberately skips the full
+   *  {@link destroy} for unmount speed. Releases the controllers' window sync
+   *  hooks so they no longer pin this layer's cached SurveyData + glyph atlas + GL
+   *  buffers alive until the next SurveyLayer overwrites the globals (#mem).
+   *  dispose() is the map-free counterpart of destroy(); it is idempotent, so the
+   *  destroy() path (which nulls both refs before calling this) is unaffected. */
+  /**
+   * Every drawn station center + shot segment in map coords, honoring the live
+   * reference-shots toggle. Exposed for E2E: the custom renderer draws survey
+   * geometry in a WebGL layer that `queryRenderedFeatures` cannot see, so tests
+   * project these instead of querying deleted stock layers (see MapCanvas's
+   * `__stalagmight_geometry__` hook). Returns null before geometry is indexed.
+   */
+  enumerateGeometry(): ReturnType<SurveyGeometryIndex['enumerateGeometry']> | null {
+    if (!this.geoIndex) return null;
+    return this.geoIndex.enumerateGeometry(this.showReferenceShotsCached);
+  }
+
+  /**
+   * How much measured-path tint is currently drawn (shot segments + station
+   * discs). Exposed for E2E: the tint is a custom GL layer with no MapLibre
+   * feature-state, so this replaces reading a `measured` feature-state off the
+   * deleted vector-tile sources.
+   */
+  measuredPathDrawnCounts(): { shots: number; stations: number } {
+    return this.measurePath?.drawnCounts() ?? { shots: 0, stations: 0 };
+  }
+
+  /**
+   * The live drag-preview offset in screen px, plus which ghost path is drawing
+   * (`custom` while the custom ghost layer is live, else `stock`). Null when no
+   * drag preview is active. Exposed for E2E so a drag test reads the offset from
+   * a supported accessor instead of the ghost layer's private fields.
+   */
+  dragGhostOffset(): { mode: 'custom' | 'stock'; dx: number; dy: number } | null {
+    const off = this.dragOverlayOffset;
+    if (!off) return null;
+    return { mode: this.dragGhost.isCustom() ? 'custom' : 'stock', dx: off.dx, dy: off.dy };
+  }
+
+  releaseVtRegistry(): void {
+    this.customRender?.dispose();
+    this.customLabels?.dispose();
+    // The DPR watcher's matchMedia listener is a JS resource that survives
+    // map.remove() and would otherwise retain this whole SurveyLayer (cached
+    // survey data + geometry index). MapCanvas's lightweight unmount calls this
+    // method but NOT destroy(), so the disposal must live here to run on both
+    // paths — else repeated project opens accumulate stale layers (#customRender).
+    this.dprWatcherDispose?.();
+    this.dprWatcherDispose = undefined;
+    clearFeatureCountsForPrefix('survey-');
   }
 
   destroy() {
@@ -4383,9 +3525,24 @@ export default class SurveyLayer {
     this.updateScheduled = false;
     this.pendingUpdateArgs = null;
 
-    // Zero memory-probe feature counts for our sources so the debug panel
-    // stops showing stale counts from the last setData call.
-    clearFeatureCountsForPrefix('survey-');
+    // Restore any interact layers left hidden by an in-flight removal re-tile and
+    // drop its listener/timer so nothing fires on the torn-down map.
+    this.interactHide.dispose();
+
+    // Tear down the custom-render prototype (removes its layer, restores stock
+    // layer visibility, and unregisters the runtime sync hook) (#customRender).
+    this.customRender?.destroy();
+    this.customRender = null;
+    this.customLabels?.destroy();
+    this.customLabels = null;
+    // Remove the dedicated custom measure-path layer (#26, stage 2a).
+    this.measurePath?.destroy();
+    this.measurePath = null;
+
+    // Drop the module-level VT registry entries + zero the memory-probe counts.
+    // (releaseVtRegistry also disposes the DPR watcher, covering both this path
+    // and MapCanvas's lightweight unmount.)
+    this.releaseVtRegistry();
 
     // Cancel any pending hover RAF
     if (this.hoverRafId !== null) {
@@ -4393,6 +3550,10 @@ export default class SurveyLayer {
       this.hoverRafId = null;
     }
     this.pendingHoverEvent = null;
+    this.cancelDragRender();
+    // Tear down the ghost (custom layer / stock follow listener + timer) so
+    // nothing fires on a torn-down map.
+    this.dragGhost.end();
 
     // Clean up touch long-press timer
     if (this.touchLongPressTimer) {
@@ -4414,6 +3575,7 @@ export default class SurveyLayer {
     try {
       // Unregister event handlers first (before removing layers)
       this.map.off('click', this.handleMapClick);
+      this.map.off('error', this.handleMapError);
       this.map.off('contextmenu', this.handleContextMenu);
 
       if (this.boundMouseMove) {
@@ -4436,35 +3598,26 @@ export default class SurveyLayer {
       }
       this.map.off('zoomend', this.handleZoomEndTelemetry);
       this.map.off('moveend', this.handleMoveEndTelemetry);
-      if (this.boundZoomEndForLabels) {
-        this.map.off('zoomend', this.boundZoomEndForLabels);
-        this.boundZoomEndForLabels = null;
-      }
 
-      // Remove all layers first (must be done before removing their sources)
-      if (this.map.getLayer(this.labelsLayerId)) {
-        this.map.removeLayer(this.labelsLayerId);
-      }
-      if (this.map.getLayer(this.shotLabelsLayerId)) {
-        this.map.removeLayer(this.shotLabelsLayerId);
-      }
-      if (this.map.getLayer(this.stationLabelsLayerId)) {
-        this.map.removeLayer(this.stationLabelsLayerId);
-      }
-      if (this.map.getLayer(this.stationsLayerId)) {
-        this.map.removeLayer(this.stationsLayerId);
-      }
+      // Remove all layers first (must be done before removing their sources).
+      // The custom survey geometry / labels / measured-path layers are removed by
+      // their controllers' destroy() calls above; only the auxiliary GeoJSON
+      // overlays are owned here.
       if (this.map.getLayer(this.stationsHighlightLayerId)) {
         this.map.removeLayer(this.stationsHighlightLayerId);
       }
-      if (this.map.getLayer(this.shotsLayerId)) {
-        this.map.removeLayer(this.shotsLayerId);
+      if (this.map.getLayer(this.gasRouteLayerId)) {
+        this.map.removeLayer(this.gasRouteLayerId);
       }
-      if (this.map.getLayer(this.shotGradientsLayerId)) {
-        this.map.removeLayer(this.shotGradientsLayerId);
+      // Interact overlay layers (#mem)
+      if (this.map.getLayer(this.interactShotsLayerId)) {
+        this.map.removeLayer(this.interactShotsLayerId);
       }
-      if (this.map.getLayer(this.measurePathLayerId)) {
-        this.map.removeLayer(this.measurePathLayerId);
+      if (this.map.getLayer(this.interactShotsMeasuredLayerId)) {
+        this.map.removeLayer(this.interactShotsMeasuredLayerId);
+      }
+      if (this.map.getLayer(this.interactStationsLayerId)) {
+        this.map.removeLayer(this.interactStationsLayerId);
       }
       if (this.map.getLayer(this.loopClosuresLayerId)) {
         this.map.removeLayer(this.loopClosuresLayerId);
@@ -4479,13 +3632,7 @@ export default class SurveyLayer {
       if (this.map.getLayer(this.ghostMergeLayerId)) {
         this.map.removeLayer(this.ghostMergeLayerId);
       }
-      // Remove hitbox layers
-      if (this.map.getLayer(this.stationsHitboxLayerId)) {
-        this.map.removeLayer(this.stationsHitboxLayerId);
-      }
-      if (this.map.getLayer(this.shotsHitboxLayerId)) {
-        this.map.removeLayer(this.shotsHitboxLayerId);
-      }
+      // Remove ghost hitbox layers (the main hitbox layers were removed, #mem)
       if (this.map.getLayer(this.ghostStationsHitboxLayerId)) {
         this.map.removeLayer(this.ghostStationsHitboxLayerId);
       }
@@ -4494,26 +3641,11 @@ export default class SurveyLayer {
       }
 
       // Remove all sources after layers are removed
-      if (this.map.getSource(this.sourceId + '-shots')) {
-        this.map.removeSource(this.sourceId + '-shots');
-      }
-      if (this.map.getSource(this.sourceId + '-shot-gradients')) {
-        this.map.removeSource(this.sourceId + '-shot-gradients');
-      }
-      if (this.map.getSource(this.sourceId + '-stations')) {
-        this.map.removeSource(this.sourceId + '-stations');
-      }
       if (this.map.getSource(this.sourceId + '-loop-closures')) {
         this.map.removeSource(this.sourceId + '-loop-closures');
       }
-      if (this.map.getSource(this.sourceId + '-section-labels')) {
-        this.map.removeSource(this.sourceId + '-section-labels');
-      }
-      if (this.map.getSource(this.sourceId + '-shot-labels')) {
-        this.map.removeSource(this.sourceId + '-shot-labels');
-      }
-      if (this.map.getSource(this.sourceId + '-station-labels')) {
-        this.map.removeSource(this.sourceId + '-station-labels');
+      if (this.map.getSource(this.sourceId + '-gas-route')) {
+        this.map.removeSource(this.sourceId + '-gas-route');
       }
       // Remove ghost section sources
       if (this.map.getSource(this.sourceId + '-ghost-shots')) {
@@ -4524,6 +3656,9 @@ export default class SurveyLayer {
       }
       if (this.map.getSource(this.sourceId + '-ghost-merge')) {
         this.map.removeSource(this.sourceId + '-ghost-merge');
+      }
+      if (this.map.getSource(this.interactSourceId)) {
+        this.map.removeSource(this.interactSourceId);
       }
     } catch {
       // Map already destroyed during unmount, cleanup not needed

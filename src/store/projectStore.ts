@@ -37,7 +37,7 @@ import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
 import type { SurveyData } from '../types/survey-data';
-import { emptySurveyData, surveyDataFromLegacy } from '../types/survey-data';
+import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
 
@@ -983,7 +983,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Update file_path if the backend returned it (first save / save-as)
       if (result.saved_path) {
         const project = get().project;
-        if (project) {
+        // Only mint a new project object when the path ACTUALLY changed (first
+        // save / Save As). A successful save always echoes `saved_path` (Rust
+        // `CommandResult::success().with_path(...)`), so an autosave to the same
+        // path would otherwise re-spread the project on every debounced write.
+        // That changes the project's identity, and MapCanvas's republish
+        // useLayoutEffect keys on it — a no-op save would trigger a full survey
+        // rebuild + republish, briefly blanking all geometry (#mem).
+        if (project && project.file_path !== result.saved_path) {
           set({ project: { ...project, file_path: result.saved_path } });
           // On the first save / Save As the backend derives the sibling
           // name from the final .stalx stem (e.g. `cave.stalx` →
@@ -1113,20 +1120,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   closeProject: async (opts) => {
-    // Terminate the feature-build worker on close so its JSC heap (and any
-    // bmalloc slabs it committed during the last load) goes back to the OS.
-    // The worker is a singleton lazily recreated on the next project open;
-    // start-up cost is small (~50 ms) compared to keeping ~1 GB of committed
-    // slabs alive across the global view. The terminate() helper rejects
-    // any pending build promises with a clear error.
-    try {
-      const { terminateFeaturesWorker } = await import('../components/Map/surveyLayer/featuresWorkerClient');
-      terminateFeaturesWorker();
-    } catch {
-      // Best-effort; the worker module might not have been loaded if the
-      // user never opened a project (unlikely path but harmless).
-    }
-
     // Guard against concurrent close operations (rapid Back clicks or double Discard)
     if (get().isClosing) {
       debugLog('[projectStore] closeProject ignored - already closing');
@@ -1646,7 +1639,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         set({ adjustedLoading: false });
         return true;
       }
-      const surveyDataAdjusted = surveyDataFromLegacy(project.sections, adjusted);
+      // Reuse the measured shot columns (identical under closure adjustment) and
+      // rebuild only the station columns, so entering/restoring the adjusted view
+      // never force-materializes the lazy `section.shots` getters (#mem). Fall
+      // back to the full legacy walk only if the measured SoA is somehow absent.
+      const surveyDataAdjusted = surveyData
+        ? surveyDataWithAdjustedStations(surveyData, adjusted)
+        : surveyDataFromLegacy(project.sections, adjusted);
       set({ stationsAdjusted: adjusted, surveyDataAdjusted, adjustedLoading: false });
       return true;
     } catch (e) {

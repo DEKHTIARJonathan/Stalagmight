@@ -5,10 +5,7 @@ import type { ProjectMetadata } from '../../types/project';
 import GlobalSurveyLayer, { type SystemGeometry, generateSystemColor } from './GlobalSurveyLayer';
 import type { SurveyGeometry } from '../../types/survey';
 import { useGlobalViewStore, type SystemGeometryState } from '../../store/globalViewStore';
-import { useProjectStore } from '../../store/projectStore';
 import { ViewModeToggle, useViewMode, type ViewMode } from './ViewModeToggle';
-import { useFpsMonitor } from '../../hooks/useFpsMonitor';
-import { defaultConfig } from '../../types/config';
 import { getTileConfig } from '../../utils/tileConfig';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
@@ -164,30 +161,11 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
   const viewModeRef = useRef<ViewMode>(viewMode);
   viewModeRef.current = viewMode;
 
-  // Get runtime config from store (falls back to defaults if not loaded)
-  const config = useProjectStore((s) => s.config);
-  const globalViewConfig = config?.global_view ?? defaultConfig.global_view;
-  const { fps_threshold, tolerance, throttle_tolerance } = globalViewConfig;
-
-  // FPS monitoring callbacks - adjust tolerance when performance drops/recovers
-  const handleThrottleNeeded = useCallback(() => {
-    surveyLayerRef.current?.setTolerance(throttle_tolerance);
-  }, [throttle_tolerance]);
-
-  const handleThrottleRestore = useCallback(() => {
-    surveyLayerRef.current?.setTolerance(tolerance);
-  }, [tolerance]);
-
-  // FPS monitor - only active in survey mode when map is loaded
-  const { isThrottled } = useFpsMonitor(
-    handleThrottleNeeded,
-    handleThrottleRestore,
-    {
-      fpsThreshold: fps_threshold,
-      recoveryThreshold: 45, // Hysteresis: recover at higher FPS to prevent oscillation
-      enabled: viewMode === 'survey' && mapLoaded,
-    }
-  );
+  // The FPS-driven tolerance throttle was removed with the GeoJSON source (#mem):
+  // GlobalSurveyLayer now serves bulk geometry as on-demand vector tiles, which
+  // bound rendered geometry to the visible tiles. GeoJSON `tolerance` (whole-
+  // source simplification) has no vector-tile equivalent, so there is nothing
+  // left for an FPS monitor to throttle.
 
   // Filter to only projects with GPS coordinates (null check only, no sentinel)
   const gpsProjects = projects.filter((p) => p.gps_center !== null);
@@ -668,15 +646,6 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     selectSystem(selectedProjectId);
   }, [selectedProjectId, selectSystem]);
 
-  // Sync tolerance to survey layer when throttle state changes or geometry updates
-  // This handles the case where throttling happens before geometry arrives
-  useEffect(() => {
-    if (surveyLayerRef.current && viewMode === 'survey') {
-      const targetTolerance = isThrottled ? throttle_tolerance : tolerance;
-      surveyLayerRef.current.setTolerance(targetTolerance);
-    }
-  }, [isThrottled, tolerance, throttle_tolerance, viewMode, geometryData]);
-
   // Handle view mode changes - cancel pending loads and update visibility
   const handleViewModeChange = useCallback((newMode: ViewMode) => {
     setViewMode(newMode);
@@ -687,15 +656,11 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       cancelPendingLoads();
       // Clear pending geometry buffer to prevent stale data from being applied
       pendingGeometryRef.current = null;
-      // Restore normal tolerance when leaving survey mode
-      // (FPS monitor will call onThrottleRestore when disabled, but we also
-      // explicitly restore here in case the hook was already disabled)
-      surveyLayerRef.current?.setTolerance(tolerance);
     }
 
     // Update survey layer visibility
     surveyLayerRef.current?.setVisible(newMode === 'survey');
-  }, [setViewMode, cancelPendingLoads, tolerance]);
+  }, [setViewMode, cancelPendingLoads]);
 
   // Sync view mode to survey layer when it becomes ready
   useEffect(() => {
@@ -1214,11 +1179,6 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
           count: gpsProjects.length,
           countFormatted: formatNumber(gpsProjects.length),
         })}
-        {isThrottled && (
-          <span className="ml-2 text-warning" title={t('globalView.map.reducedDetailTitle')}>
-            {t('globalView.map.reducedDetail')}
-          </span>
-        )}
       </div>
     </div>
   );

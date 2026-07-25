@@ -318,12 +318,18 @@ impl Project {
     /// point of the measured shot is better estimated by the parent's own
     /// LRUD than by null, and no renderer currently consumes per-shot LRUD.
     /// This is a deliberate mid-station estimate, not a bug.
+    ///
+    /// Returns the new head shot's `ShotId` plus the pieces the split was
+    /// computed from -- the head shot's [`ShotData`] and the [`ShotUpdates`]
+    /// applied to the tail. The command layer reuses these to build its
+    /// human-readable undo label, so [`Self::compute_split`] runs exactly once
+    /// per split (see [`crate::core::AppState::execute_split_shot_at_distance`]).
     pub fn split_shot_at_distance(
         &mut self,
         section_id: SectionId,
         shot_id: ShotId,
         distance: f64,
-    ) -> Result<ShotId, String> {
+    ) -> Result<(ShotId, ShotData, ShotUpdates), String> {
         let section = self
             .get_section(section_id)
             .ok_or_else(|| format!("Section {section_id} not found"))?;
@@ -347,13 +353,13 @@ impl Project {
         tail.apply_updates(&tail_updates);
 
         let new_shot = section
-            .insert_shot_before_with_id(shot_id, head_data, None, None)
+            .insert_shot_before_with_id(shot_id, head_data.clone(), None, None)
             .ok_or_else(|| format!("Failed to insert split shot before {shot_id}"))?;
         let new_shot_id = new_shot.id;
 
         self.debug_assert_merge_alignment("split_shot_at_distance");
         self.touch();
-        Ok(new_shot_id)
+        Ok((new_shot_id, head_data, tail_updates))
     }
 
     /// Pure split math for [`Self::split_shot_at_distance`]: given the shot

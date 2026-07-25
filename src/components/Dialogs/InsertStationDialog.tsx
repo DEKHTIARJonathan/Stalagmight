@@ -4,6 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
+import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -38,6 +39,16 @@ export default function InsertStationDialog() {
 
   const handleConfirm = async () => {
     if (isLoading || sectionId === undefined || shotId === undefined || !isValid) return;
+
+    // Read-only self-check at confirm time: a split has NO server backstop for
+    // the local closure-adjusted / Plan / Export case (see useEditingBlocked's
+    // backstop-asymmetry note), so a dialog left open across a view switch to a
+    // read-only mode must refuse here rather than mutate. Re-checked now, not at
+    // open time, because the mode can flip while the dialog is up.
+    if (isEditingBlockedNow()) {
+      setError('Editing is disabled in the current view.');
+      return;
+    }
 
     setIsLoading(true);
     setError(null);

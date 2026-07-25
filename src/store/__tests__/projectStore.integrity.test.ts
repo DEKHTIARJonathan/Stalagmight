@@ -8,12 +8,6 @@ vi.mock('../../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
 }));
 
-// closeProject dynamically imports the features worker client; stub it so the
-// test doesn't pull in the map/worker stack.
-vi.mock('../../components/Map/surveyLayer/featuresWorkerClient', () => ({
-  terminateFeaturesWorker: () => {},
-}));
-
 describe('projectStore integrity banner dismiss lifecycle', () => {
   let issues: string[];
   let saveBlocked: boolean;

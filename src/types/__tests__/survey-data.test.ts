@@ -18,6 +18,7 @@ import {
   findStationGlobalIndex,
   getShot,
   getStation,
+  lazyStationArray,
   surveyDataFromLegacy as soaFromLegacy,
   SHOT_MARKER_NULL,
 } from '../survey-data';
@@ -263,6 +264,85 @@ describe('SurveyData', () => {
         // `undefined` and "absent" as equivalent.
         expect(viewed.comment ?? undefined).toBe(expected.comment ?? undefined);
       });
+    });
+  });
+
+  describe('lazyStationArray', () => {
+    it('is array-like: length, indexing, iteration match the eager stations', () => {
+      const { sections, stations } = fixture();
+      const data = soaFromLegacy(sections, stations);
+      const lazy = lazyStationArray(data);
+
+      // Reports as a real array so `.map`/`.filter`/`.slice` stay array-typed.
+      expect(Array.isArray(lazy)).toBe(true);
+      expect(lazy.length).toBe(data.stationCount);
+      expect(lazy.length).toBe(stations.length);
+
+      // Deep-equals what the old eager loop would have produced — which is
+      // exactly `getStation(data, i)` for every index.
+      for (let i = 0; i < data.stationCount; i++) {
+        expect(lazy[i]).toEqual(getStation(data, i));
+      }
+
+      // for…of visits every element in order.
+      const iterated = [...lazy];
+      expect(iterated.length).toBe(data.stationCount);
+      iterated.forEach((s, i) => expect(s).toEqual(getStation(data, i)));
+    });
+
+    it('supports the read-only array methods consumers use', () => {
+      const { sections, stations } = fixture();
+      const data = soaFromLegacy(sections, stations);
+      const lazy = lazyStationArray(data);
+
+      // `.find` (tool origin lookups)
+      const found = lazy.find(
+        (s) => s.station_ref.section_id === 2 && s.station_ref.station_index === 0,
+      );
+      expect(found).toEqual(getStation(data, 3));
+
+      // `.filter` (fitToSection)
+      const section1 = lazy.filter((s) => s.station_ref.section_id === 1);
+      expect(section1.length).toBe(3);
+
+      // `.map` (fit-to-bounds coordinate extraction) returns a real array
+      const coords = lazy.map((s) => s.coordinates);
+      expect(Array.isArray(coords)).toBe(true);
+      expect(coords).toEqual(stations.map((s) => s.coordinates));
+
+      // `.some`
+      expect(lazy.some((s) => s.is_zero_datum)).toBe(true);
+    });
+
+    it('out-of-range index reads undefined; empty data yields an empty view', () => {
+      const { sections, stations } = fixture();
+      const data = soaFromLegacy(sections, stations);
+      const lazy = lazyStationArray(data);
+      expect(lazy[data.stationCount]).toBeUndefined();
+
+      const emptyLazy = lazyStationArray(emptySurveyData());
+      expect(emptyLazy.length).toBe(0);
+      expect([...emptyLazy]).toEqual([]);
+    });
+
+    it('throws on writes/deletes instead of silently no-opping (read-only view)', () => {
+      const { sections, stations } = fixture();
+      const data = soaFromLegacy(sections, stations);
+      const lazy = lazyStationArray(data);
+      // A write against the empty backing target would silently vanish and
+      // desync from the SoA; the traps must surface it as a TypeError.
+      expect(() => {
+        (lazy as unknown as Station[])[0] = getStation(data, 0);
+      }).toThrow(TypeError);
+      expect(() => {
+        (lazy as unknown as Station[]).push(getStation(data, 0));
+      }).toThrow(TypeError);
+      expect(() => {
+        delete (lazy as unknown as Record<number, unknown>)[0];
+      }).toThrow(TypeError);
+      // Reads still work after the failed writes.
+      expect(lazy.length).toBe(data.stationCount);
+      expect(lazy[0]).toEqual(getStation(data, 0));
     });
   });
 

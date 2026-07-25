@@ -4,15 +4,27 @@ import {
   createProject,
   seedProjectWithSections,
   waitForMapIdle,
+  getShotScreenPositions,
+  getStationScreenPositions,
+  waitForDrawnShots,
+  readCanvasPixel,
+  type PixelRgba,
   type SectionSeed,
 } from './helpers/app';
 
 /**
- * E2E for the "Issue severity" Display coloring mode (#22). The mode bakes a
- * `color` property per shot/station feature (like depth), so we assert on the
- * `properties.color` of rendered features. Unlist warnings come from the backend
- * validator; the e2e mock returns none, so we inject them via the project store
- * (the same path warning-click.spec.ts uses) to drive red/yellow.
+ * E2E for the "Issue severity" Display coloring mode (#22). Unresolved warnings
+ * come from the backend validator; the e2e mock returns none, so we inject them
+ * via the project store (the same path warning-click.spec.ts uses) to drive
+ * red/yellow.
+ *
+ * The survey is drawn by a custom WebGL layer now: the mode's color is resolved
+ * per shot / station at build time and packed into a vertex attribute, so there is
+ * no `survey-shots` / `survey-stations` layer to read a `line-color` /
+ * `circle-color` paint off and no per-feature `colorIndex` to resolve through it.
+ * The oracle is the PAINTED PIXEL, which also restores per-feature identity for
+ * free (the drawn-geometry hook carries sectionId / shotId / stationIndex), so the
+ * old geometry-matching against merged vector-tile groups is gone.
  *
  * Severity palette (fixed, themeColors): error #ef4444, warning #eab308,
  * clear #22c55e.
@@ -105,48 +117,104 @@ async function issueSeverityFlag(page: Page): Promise<boolean> {
   });
 }
 
-/** Colors of rendered shot features keyed by shotId. */
-async function shotColorsById(page: Page): Promise<Record<number, string>> {
-  return page.evaluate(() => {
-    const map = (window as unknown as {
-      __stalagmight_map__?: {
-        queryRenderedFeatures: (o: { layers: string[] }) => Array<{ properties: { shotId?: number; color?: string } }>;
-      };
-    }).__stalagmight_map__;
-    const out: Record<number, string> = {};
-    if (!map) return out;
-    try {
-      for (const f of map.queryRenderedFeatures({ layers: ['survey-shots'] })) {
-        const id = f.properties?.shotId;
-        if (id != null && f.properties?.color) out[id] = f.properties.color;
-      }
-    } catch { /* style not ready */ }
-    return out;
-  });
+interface MapZoomHandle {
+  getZoom: () => number;
+  setZoom: (z: number) => void;
 }
 
-/** Colors of rendered station features keyed by stationIndex. */
-async function stationColorsByIndex(page: Page): Promise<Record<number, string>> {
-  return page.evaluate(() => {
-    const map = (window as unknown as {
-      __stalagmight_map__?: {
-        queryRenderedFeatures: (o: { layers: string[] }) => Array<{ properties: { stationIndex?: number; color?: string } }>;
-      };
-    }).__stalagmight_map__;
-    const out: Record<number, string> = {};
-    if (!map) return out;
-    try {
-      for (const f of map.queryRenderedFeatures({ layers: ['survey-stations'] })) {
-        const idx = f.properties?.stationIndex;
-        if (idx != null && f.properties?.color) out[idx] = f.properties.color;
-      }
-    } catch { /* style not ready */ }
-    return out;
-  });
+/**
+ * Zoom in before probing painted pixels. The seeded survey is only a few metres
+ * across, so at the fit-to-bounds zoom the whole thing is ~9 screen px wide and
+ * the station discs cover the shot lines entirely, so a probe there cannot tell a
+ * shot's color from a station's. `setZoom` is a jump (no animation) and the
+ * geometry helpers project with the live map, so positions read after this call
+ * already match the new view.
+ *
+ * A fit-to-bounds queued by the seed can still land after the map reports loaded
+ * and take the zoom back, so hold the target zoom until the drawn shots really are
+ * spread out on screen (`minSpanPx`).
+ */
+async function zoomIn(page: Page, delta = 4, minSpanPx = 40): Promise<void> {
+  const target = await page.evaluate((d) => {
+    const map = (window as unknown as { __stalagmight_map__?: MapZoomHandle }).__stalagmight_map__;
+    if (!map) return 0;
+    const z = map.getZoom() + d;
+    map.setZoom(z);
+    return z;
+  }, delta);
+  await expect.poll(async () => {
+    await page.evaluate((z) => {
+      const map = (window as unknown as { __stalagmight_map__?: MapZoomHandle }).__stalagmight_map__;
+      if (map && map.getZoom() < z - 0.01) map.setZoom(z);
+    }, target);
+    const shots = await getShotScreenPositions(page);
+    return shots.reduce((m, s) => Math.max(m, Math.hypot(s.to.x - s.from.x, s.to.y - s.from.y)), 0);
+  }, { timeout: 10000 }).toBeGreaterThan(minSpanPx);
 }
 
-async function waitForShots(page: Page): Promise<void> {
-  await expect.poll(async () => Object.keys(await shotColorsById(page)).length, { timeout: 5000 }).toBeGreaterThan(0);
+/** `#rrggbb` -> the RGB channels a painted pixel would carry. */
+function hexRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+
+/**
+ * Whether a painted sample is the given palette color. A tolerance keeps the
+ * comparison honest without being brittle: the severity palette entries are far
+ * apart from each other and from the section blue, so nothing else lands within it.
+ */
+function isColor(px: PixelRgba | undefined, hex: string, tolerance = 10): boolean {
+  if (!px) return false;
+  const [r, g, b] = hexRgb(hex);
+  return (
+    Math.abs(px[0] - r) <= tolerance &&
+    Math.abs(px[1] - g) <= tolerance &&
+    Math.abs(px[2] - b) <= tolerance
+  );
+}
+
+/** Palette hex -> readable bucket name, so a color mismatch reads as a severity
+ *  mismatch in the failure diff instead of two RGB triples. */
+function severityName(hex: string): string {
+  if (hex === SEV_ERROR) return 'error';
+  if (hex === SEV_WARNING) return 'warning';
+  return 'clear';
+}
+
+/** Which severity bucket a painted sample belongs to (or the raw RGB if none). */
+function describeSeverity(px: PixelRgba | undefined): string {
+  if (!px) return 'not-drawn';
+  for (const hex of [SEV_ERROR, SEV_WARNING, SEV_CLEAR]) {
+    if (isColor(px, hex)) return severityName(hex);
+  }
+  return `other(${px.slice(0, 3).join(',')})`;
+}
+
+/**
+ * Painted color of every drawn shot, keyed by shotId, sampled at the shot's
+ * midpoint. That point is clear of the station discs once zoomed in, and in
+ * severity mode a shot is one flat color for its whole length (only depth mode
+ * ramps along a shot).
+ */
+async function shotColorsById(page: Page): Promise<Record<number, PixelRgba>> {
+  const out: Record<number, PixelRgba> = {};
+  for (const shot of await getShotScreenPositions(page)) {
+    out[shot.shotId] = await readCanvasPixel(page, shot.mid.x, shot.mid.y);
+  }
+  return out;
+}
+
+/**
+ * Painted FILL of every drawn station, keyed by stationIndex (the seed is
+ * single-section, so station_index is unique, keeping the original keying). The
+ * center pixel of a station disc is its fill; the stroke is a ring around it.
+ */
+async function stationColorsByIndex(page: Page): Promise<Record<number, PixelRgba>> {
+  const out: Record<number, PixelRgba> = {};
+  for (const st of await getStationScreenPositions(page)) {
+    out[st.stationIndex] = await readCanvasPixel(page, st.x, st.y);
+  }
+  return out;
 }
 
 test.describe('Issue Severity coloring (#22)', () => {
@@ -155,7 +223,8 @@ test.describe('Issue Severity coloring (#22)', () => {
     await createProject(page, 'Issue Severity Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapIdle(page);
-    await waitForShots(page);
+    await waitForDrawnShots(page, 3);
+    await zoomIn(page);
   });
 
   test('toggle paints clear geometry green and reverts when turned off', async ({ page }) => {
@@ -164,7 +233,7 @@ test.describe('Issue Severity coloring (#22)', () => {
 
     // Baseline: section colors, not the clear-green severity color.
     const shotsBefore = await shotColorsById(page);
-    expect(Object.values(shotsBefore).some((c) => c.toLowerCase() !== SEV_CLEAR)).toBe(true);
+    expect(Object.values(shotsBefore).some((c) => !isColor(c, SEV_CLEAR))).toBe(true);
 
     await toggleDisplayOption(page, 'showIssueSeverity');
     expect(await issueSeverityFlag(page)).toBe(true);
@@ -173,19 +242,19 @@ test.describe('Issue Severity coloring (#22)', () => {
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
       const vals = Object.values(shots);
-      return vals.length > 0 && vals.every((c) => c.toLowerCase() === SEV_CLEAR);
+      return vals.length > 0 && vals.every((c) => isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
     await expect.poll(async () => {
       const stations = await stationColorsByIndex(page);
       const vals = Object.values(stations);
-      return vals.length > 0 && vals.every((c) => c.toLowerCase() === SEV_CLEAR);
+      return vals.length > 0 && vals.every((c) => isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
 
     // Off ⇒ section colors return (no longer all green).
     await toggleDisplayOption(page, 'showIssueSeverity');
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
-      return Object.values(shots).some((c) => c.toLowerCase() !== SEV_CLEAR);
+      return Object.values(shots).some((c) => !isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
   });
 
@@ -205,26 +274,21 @@ test.describe('Issue Severity coloring (#22)', () => {
     await toggleDisplayOption(page, 'showIssueSeverity');
     expect(await issueSeverityFlag(page)).toBe(true);
 
+    // The old test read each feature's `colorIndex` (i.e. "this shot is in severity
+    // bucket N"); the equivalent now is "this shot is PAINTED the severity-N color".
+    const expectedShots = [SEV_ERROR, SEV_WARNING, SEV_CLEAR];
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
-      return [
-        shots[shotIds[0]!]?.toLowerCase(),
-        shots[shotIds[1]!]?.toLowerCase(),
-        shots[shotIds[2]!]?.toLowerCase(),
-      ].join(',');
-    }, { timeout: 4000 }).toBe([SEV_ERROR, SEV_WARNING, SEV_CLEAR].join(','));
+      return expectedShots.map((_, i) => describeSeverity(shots[shotIds[i]!])).join(',');
+    }, { timeout: 4000 }).toBe(expectedShots.map(severityName).join(','));
 
     // Stations: idx0 (shot0 only) = error; idx1 (shot0 error + shot1 warning) =
     // error (max); idx2 (shot1 warning + resolved shot2) = warning; idx3 = clear.
+    const expectedStations = [SEV_ERROR, SEV_ERROR, SEV_WARNING, SEV_CLEAR];
     await expect.poll(async () => {
       const st = await stationColorsByIndex(page);
-      return [
-        st[0]?.toLowerCase(),
-        st[1]?.toLowerCase(),
-        st[2]?.toLowerCase(),
-        st[3]?.toLowerCase(),
-      ].join(',');
-    }, { timeout: 4000 }).toBe([SEV_ERROR, SEV_ERROR, SEV_WARNING, SEV_CLEAR].join(','));
+      return expectedStations.map((_, i) => describeSeverity(st[i])).join(',');
+    }, { timeout: 4000 }).toBe(expectedStations.map(severityName).join(','));
   });
 
   test('is mutually exclusive with the depth gradient', async ({ page }) => {
@@ -253,7 +317,7 @@ test.describe('Issue Severity coloring (#22)', () => {
     // Baseline (Details tab): section colors, not the clear-green severity color.
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
-      return Object.values(shots).some((c) => c.toLowerCase() !== SEV_CLEAR);
+      return Object.values(shots).some((c) => !isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
 
     // Opening the Warnings tab recomputes the map into issue-severity coloring
@@ -262,7 +326,7 @@ test.describe('Issue Severity coloring (#22)', () => {
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
       const vals = Object.values(shots);
-      return vals.length > 0 && vals.every((c) => c.toLowerCase() === SEV_CLEAR);
+      return vals.length > 0 && vals.every((c) => isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
     // The persisted toggle was never mutated by the auto-highlight.
     expect(await issueSeverityFlag(page)).toBe(false);
@@ -271,7 +335,7 @@ test.describe('Issue Severity coloring (#22)', () => {
     await page.getByTestId('detail-tab-details').click();
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
-      return Object.values(shots).some((c) => c.toLowerCase() !== SEV_CLEAR);
+      return Object.values(shots).some((c) => !isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
   });
 });

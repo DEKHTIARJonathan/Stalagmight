@@ -23,6 +23,20 @@ import {
   TrashIcon,
 } from '../common/icons';
 
+/**
+ * True when `relatedTarget` is a DOM node contained by `container`. WebKit
+ * throws from `Node.contains()` when the argument is not a Node — a mouse/focus
+ * leave into browser chrome or the WebGL canvas overlay hands us `window` or
+ * `null` as the related target — so this guards with `instanceof Node` before
+ * calling `contains` (matching the SectionsPanel / Dock leave handlers).
+ */
+export function relatedTargetWithin(
+  container: HTMLElement | null,
+  relatedTarget: EventTarget | null | undefined
+): boolean {
+  return relatedTarget instanceof Node && !!container?.contains(relatedTarget);
+}
+
 interface UndoHistoryDropdownProps {
   /** 'undo' for undo button, 'redo' for redo button */
   mode: 'undo' | 'redo';
@@ -494,13 +508,10 @@ export default function UndoHistoryDropdown({
 
   // Close dropdown with small delay buffer (for mouse leave)
   const closeDropdown = useCallback((event?: React.MouseEvent) => {
-    // If we have a related target, check if we're moving within the component
-    if (event?.relatedTarget && containerRef.current) {
-      const relatedTarget = event.relatedTarget as Node;
-      if (containerRef.current.contains(relatedTarget)) {
-        // Moving within the component, don't close
-        return;
-      }
+    // If focus/pointer moved to a related target inside the component, stay open.
+    if (relatedTargetWithin(containerRef.current, event?.relatedTarget)) {
+      // Moving within the component, don't close
+      return;
     }
 
     // Increment token to invalidate any pending hover callback

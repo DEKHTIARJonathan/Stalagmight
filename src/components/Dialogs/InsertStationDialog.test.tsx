@@ -41,6 +41,10 @@ beforeEach(() => {
     splitShotAtDistance,
   });
   useUIStore.setState({
+    // Editable baseline (the read-only-guard test flips this to closureAdjusted;
+    // reset here so it doesn't bleed into the other tests).
+    geometryMode: 'measured',
+    appMode: 'survey',
     activeDialog: 'insert-station',
     closeDialog,
     setSelection,
@@ -54,6 +58,21 @@ beforeEach(() => {
 });
 
 describe('InsertStationDialog (#59)', () => {
+  it('refuses to split when editing is blocked, with no IPC dispatched', async () => {
+    // A split has NO server backstop for the local closure-adjusted / Plan /
+    // Export case, so the confirm-time isEditingBlockedNow() check is the ONLY
+    // thing stopping a geometry mutation there (see useEditingBlocked). Put the
+    // map in a read-only view, enter a valid distance, and confirm.
+    useUIStore.setState({ geometryMode: 'closureAdjusted' });
+    render(<InsertStationDialog />);
+    fireEvent.change(screen.getByTestId('insert-station-distance'), { target: { value: '4' } });
+    fireEvent.click(screen.getByTestId('insert-station-confirm'));
+    await waitFor(() => {
+      expect(screen.getByText(/editing is disabled/i)).toBeInTheDocument();
+    });
+    expect(splitShotAtDistance).not.toHaveBeenCalled();
+  });
+
   it('disables confirm when the distance field is empty', () => {
     render(<InsertStationDialog />);
     expect(screen.getByTestId('insert-station-confirm')).toBeDisabled();

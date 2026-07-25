@@ -1,6 +1,6 @@
 import type { ExpressionSpecification } from 'maplibre-gl';
 import type { GasReachField } from '../types/ipc.generated';
-import type { Section } from '../types/project';
+import type { SurveyData } from '../types/survey-data';
 import { encodeFeatureId } from './ids';
 
 /**
@@ -57,9 +57,13 @@ export interface GasReachFeatureState {
  * is the **turn budget** (`budget_litres`), not the deepest reachable cost, so the
  * purple end always means "at your turn pressure" regardless of how much of the
  * cave is in range — spare budget reads as spare color, never a false "at-limit".
+ *
+ * Reads the struct-of-arrays `SurveyData` (section metadata + `shotIds`) rather
+ * than `Section[].shots[]`, for the same reason as `buildDistanceFeatureState`:
+ * enabling the overlay must not force-materialize every lazy `Shot` at load.
  */
 export function buildGasReachFeatureState(
-  sections: Section[],
+  data: Pick<SurveyData, 'sections' | 'shotIds'>,
   field: GasReachField,
 ): GasReachFeatureState {
   // station ref → litres (null = not reachable on this plan).
@@ -73,20 +77,20 @@ export function buildGasReachFeatureState(
   const stations = new Map<number, number>();
   const shots = new Map<number, number>();
 
-  for (const section of sections) {
-    const n = section.shots.length;
+  for (const section of data.sections) {
+    const n = section.shotCount;
     // Stations: index 0..=n
     for (let idx = 0; idx <= n; idx++) {
       const v = byRef.get(`${section.id}:${idx}`);
       stations.set(encodeFeatureId(section.id, idx), v == null ? UNREACHABLE_GAS : v);
     }
-    // Shots: connect station i → i+1; key by the shot's stable id.
+    // Shots: connect station i → i+1; key by the shot's stable id (from SoA).
     for (let i = 0; i < n; i++) {
-      const shot = section.shots[i]!;
+      const shotId = data.shotIds[section.shotOffset + i]!;
       const from = byRef.get(`${section.id}:${i}`);
       const to = byRef.get(`${section.id}:${i + 1}`);
       const value = from == null || to == null ? UNREACHABLE_GAS : (from + to) / 2;
-      shots.set(encodeFeatureId(section.id, shot.id), value);
+      shots.set(encodeFeatureId(section.id, shotId), value);
     }
   }
 
@@ -103,12 +107,13 @@ export function gasReachColorExpression(
   far: string,
   max: number,
   grey: string,
+  gasInput: ExpressionSpecification = ['feature-state', 'gasReach'] as ExpressionSpecification,
 ): ExpressionSpecification {
   const safeMax = max > 0 ? max : 1;
   return [
     'let',
     'g',
-    ['coalesce', ['feature-state', 'gasReach'], UNREACHABLE_GAS],
+    ['coalesce', gasInput, UNREACHABLE_GAS],
     [
       'case',
       ['<', ['var', 'g'], 0],

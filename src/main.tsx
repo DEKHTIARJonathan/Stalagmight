@@ -17,9 +17,22 @@ import { useGasPlanStore } from './store/gasPlanStore';
 import { useSpeleoStore } from './store/speleoStore';
 import { useExportStore } from './store/exportStore';
 import { useNetworkStore } from './store/networkStore';
+import { shotMaterialization } from './types/survey-data';
+import { getPerfTimings } from './utils/memoryProbe';
 
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
 installConsoleCapture();
+
+// Dev-only agent bridge: mirror the console and accept eval requests over the
+// Vite dev server so an outside process can drive the webview. Dynamically
+// imported behind the DEV constant so it tree-shakes out of production builds,
+// and installed AFTER installConsoleCapture() so its console patch wraps that
+// one (both fire). See docs/debug-gates.md and scripts/lib/vite-agent-bridge.mjs.
+if (import.meta.env.DEV) {
+  void import('./dev/agentBridge')
+    .then((m) => m.installAgentBridge())
+    .catch(() => {});
+}
 
 // Route unhandled window errors / promise rejections into the same ring buffer
 installGlobalErrorCapture();
@@ -67,6 +80,25 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
   testAPI.exportStore = useExportStore;
   testAPI.networkStore = useNetworkStore;
   window.__E2E_TEST__ = testAPI;
+
+  // Lazy-materialization guard for the load path: the harness reads this after
+  // a settled load and asserts it stayed 0 (see docs/performance.md, #mem SoA).
+  // A live getter so `window.__shotMaterializations` always reflects the
+  // current count; `window.__resetShotMaterializations()` zeroes it.
+  Object.defineProperty(window, '__shotMaterializations', {
+    configurable: true,
+    get: () => shotMaterialization.count,
+  });
+  (window as unknown as { __resetShotMaterializations?: () => void }).__resetShotMaterializations =
+    () => {
+      shotMaterialization.count = 0;
+    };
+
+  // Perf-timings snapshot for the harness (#mem verification): lets a test read
+  // the most recent recordPerfTiming() entries (e.g. feature-build and
+  // per-shot-mode granularity-swap costs) without opening the memory probe.
+  (window as unknown as { __getPerfTimings?: () => Record<string, { ms: number; ts: number }> }).__getPerfTimings =
+    () => getPerfTimings();
 }
 
 // Expose loading hooks for E2E tests (dev/test mode or explicit E2E build flag)

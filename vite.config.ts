@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react';
 import istanbul from 'vite-plugin-istanbul';
 import { execSync } from 'node:child_process';
 import pkg from './package.json';
+// Dev-only console/eval bridge (apply: 'serve', so inert in builds). See
+// scripts/lib/vite-agent-bridge.mjs and docs/debug-gates.md.
+import { agentBridge } from './scripts/lib/vite-agent-bridge.mjs';
 
 /** Short hash of the checked-out commit, or `unknown` when git is unavailable. */
 function gitShortHash(): string {
@@ -26,6 +29,7 @@ const appVersion = process.env.CI
 const coverageEnabled = process.env.VITE_COVERAGE === '1';
 const plugins: PluginOption[] = [
   react(),
+  agentBridge(),
   coverageEnabled
     ? istanbul({
         include: 'src/**/*',

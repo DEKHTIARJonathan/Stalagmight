@@ -2227,6 +2227,62 @@ fn test_export_image_fails_when_directory_missing() {
 }
 
 #[test]
+fn test_export_image_refuses_to_overwrite_open_project_file() {
+    // Exporting an image over the open project's own `.stalx` would corrupt the
+    // live database (image export does a raw file write). The guard must reject
+    // that path before any write, leaving the project file intact.
+    let app = app_with_state();
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let dir = TempDir::new().unwrap();
+    let saved_path = save_project_to_temp(&app, &dir);
+
+    let mut options = crate::export::ExportImageOptions::default();
+    options.format = crate::export::ImageFormat::Svg;
+    let result = export::export_image_impl(state(&app).inner(), saved_path.clone(), options);
+    assert!(
+        result.is_err(),
+        "must refuse to export an image over the open project file"
+    );
+    assert!(
+        result.unwrap_err().contains("open project"),
+        "error must explain the clobber guard"
+    );
+    // The project database on disk is untouched (still present, not an SVG).
+    assert!(saved_path.exists());
+}
+
+#[test]
+fn test_text_exports_refuse_to_overwrite_open_project_file() {
+    // CSV/JSON/TML exports do raw file writes too; exporting over the open
+    // project's own `.stalx` would corrupt the live database. The guard must
+    // reject before any write, leaving the DB bytes byte-for-byte intact.
+    let app = app_with_state();
+    create_project(&app);
+    create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let dir = TempDir::new().unwrap();
+    let saved_path = save_project_to_temp(&app, &dir);
+    let before = fs::read(&saved_path).unwrap();
+
+    for res in [
+        export::export_csv(state(&app), saved_path.clone()),
+        export::export_json(state(&app), saved_path.clone()),
+        export::export_tml(state(&app), saved_path.clone()),
+    ] {
+        assert!(
+            res.is_err(),
+            "text export must refuse the open project path"
+        );
+        assert!(
+            res.unwrap_err().contains("open project"),
+            "error must explain the clobber guard"
+        );
+    }
+    // Byte-for-byte identical: no export path touched the DB.
+    assert_eq!(fs::read(&saved_path).unwrap(), before);
+}
+
+#[test]
 fn test_export_image_rejects_zero_dpi() {
     let app = app_with_state();
     create_project(&app);
