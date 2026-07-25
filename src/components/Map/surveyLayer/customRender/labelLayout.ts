@@ -275,7 +275,7 @@ export class ShapeCache {
 
   /** Shaped label for `(kind, text)` - cached across builds, shaping on a miss. */
   get(kind: LabelKind, text: string, atlas: GlyphAtlas): ShapedLabel {
-    const key = `${kind} ${text}`;
+    const key = `${kind}\0${text}`;
     const hit = this.entries.get(key);
     if (hit !== undefined) {
       // LRU touch: re-insert so it becomes the newest (Map keeps insertion order).
