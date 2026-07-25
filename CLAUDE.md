@@ -2,7 +2,10 @@
 
 Tauri desktop app for processing underwater cave survey data (Rust backend + React/TypeScript frontend).
 
-It is year 2026. No em-dashes.
+It is year 2026. No em-dashes: write an ASCII hyphen instead. This covers the
+figure dash, en dash, em dash, horizontal bar and minus sign (U+2012..U+2015,
+U+2212), and is enforced by `pnpm lint:no-em-dash` in CI. Box-drawing characters
+in ASCII diagrams are fine.
 
 ## Quick Reference
 
@@ -66,6 +69,7 @@ pnpm lint:rust-file-size                                  # Rust file-size ratch
 pnpm lint:ts-file-size                                     # TS file-size ratchet (CI check-job gate)
 pnpm lint:private-leaks                                   # no internal/personal refs in the public tree (CI leak-scan gate)
 pnpm lint:readonly-gates:test && pnpm lint:readonly-gates # read-only gating tripwire (CI check-job gate)
+pnpm lint:no-em-dash:test && pnpm lint:no-em-dash        # Unicode-dash guard (CI leak-scan gate)
 cargo fmt --manifest-path src-tauri/Cargo.toml --check   # exactly what CI's check job runs (run without --check to fix)
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets   # deny-level lint gate
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --features telemetry

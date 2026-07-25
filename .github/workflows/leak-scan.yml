@@ -1,6 +1,10 @@
 name: Leak Scan
 
-# Private-reference leak guard for the public tree (issue #226).
+# Whole-tree text guards: private-reference leaks (#226) and Unicode dashes (#293).
+#
+# Both need to see EVERY tracked file including markdown and docs/, which is what
+# this workflow uniquely provides (see the paths-ignore note below); that shared
+# requirement, not a shared subject, is why they run together here.
 #
 # Fails the build if a tracked file re-introduces an internal/personal reference
 # the de-internalization sweep (#229) removed: maintainer names in non-attribution
@@ -12,6 +16,8 @@ name: Leak Scan
 # and `e2e-smoke.yml` (`smoke`), which BOTH ignore `**/*.md` and `docs/**`. A leak
 # most often lands in exactly those files (e.g. a new `docs/plans/*.md`), so a
 # docs-only change runs neither of those jobs - the gate must run on EVERYTHING.
+# The same argument applies verbatim to the dash guard: prose carries the most
+# em-dashes and a docs-only PR must not slip past it.
 #
 # Pure-Node, no dependencies (only `git ls-files` + the stdlib), no secrets - so
 # it runs on fork PRs too. Sub-second. Safe to block on because `master` is
@@ -46,3 +52,10 @@ jobs:
         run: node scripts/check-private-leaks.test.mjs
       - name: Private-leak scan
         run: node scripts/check-private-leaks.mjs
+      # The Unicode-dash guard (issue #293) rides along here for the same reason
+      # the leak scan does: this workflow has NO path filter, and `check`/`smoke`
+      # both path-ignore `**/*.md` and `docs/**`, which is where most prose lives.
+      - name: No-em-dash rules - fixture test
+        run: node scripts/check-no-em-dash.test.mjs
+      - name: No-em-dash scan
+        run: node scripts/check-no-em-dash.mjs
