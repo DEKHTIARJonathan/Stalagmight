@@ -962,8 +962,9 @@ mod tests {
     /// for issue #296: the device reports inclination +up, so before the import
     /// was normalised every non-horizontal DMP shot arrived with a pitch that
     /// contradicted its own depth change, and validation carried a compensating
-    /// -1x to hide it. Both ends are +down now, and these unmodified readings
-    /// from `9_20260522-naharon.dmp` have to come through clean.
+    /// -1x to hide it. Both ends are +down now, and these readings from
+    /// `9_20260522-naharon.dmp`, normalised exactly as the DMP parser does,
+    /// have to come through clean.
     #[test]
     fn dmp_shots_do_not_trip_the_inclination_cross_check() {
         let config = default_config();
@@ -978,6 +979,10 @@ mod tests {
         ];
 
         for (length, depth_in, depth_out, device_pitch) in device_shots {
+            // `parse_section` normalises the device's +up reading into the
+            // model's +down frame, so this is the pitch a `DmpShot` carries by
+            // the time anything downstream sees it.
+            let pitch = -device_pitch;
             let dmp_shot = crate::parsers::dmp::DmpShot {
                 shot_type: crate::parsers::dmp::DmpShotType::Standard,
                 heading_in: 0.0,
@@ -985,8 +990,8 @@ mod tests {
                 length,
                 depth_in,
                 depth_out,
-                pitch_in: device_pitch,
-                pitch_out: device_pitch,
+                pitch_in: pitch,
+                pitch_out: pitch,
                 left: 0.0,
                 right: 0.0,
                 up: 0.0,
@@ -999,14 +1004,27 @@ mod tests {
                 comment: None,
             };
 
-            let warnings = Validator::validate_shot(&dmp_shot.to_shot_data(), &config, 0, 0);
+            let shot_data = dmp_shot.to_shot_data();
+
+            // The property that makes the cross-check pass rather than an
+            // accident of thresholds: descending shots (depth increasing) carry
+            // a positive pitch, ascending shots a negative one.
+            let descending = depth_out > depth_in;
+            let pitch_in = shot_data.pitch_in.expect("pitch_in survives conversion");
+            assert_eq!(
+                pitch_in > 0.0,
+                descending,
+                "pitch {pitch_in}° does not match the {depth_in}m -> {depth_out}m depth change"
+            );
+
+            let warnings = Validator::validate_shot(&shot_data, &config, 0, 0);
             let mismatch = warnings
                 .iter()
                 .find(|w| w.code == "INCLINATION_DEPTH_MISMATCH");
             assert!(
                 mismatch.is_none(),
-                "device pitch {device_pitch}° over {length}m ({depth_in}m -> {depth_out}m) \
-                 was flagged after import: {:?}",
+                "device pitch {device_pitch}° (imported as {pitch}°) over {length}m \
+                 ({depth_in}m -> {depth_out}m) was flagged after import: {:?}",
                 mismatch.map(|w| &w.message)
             );
         }

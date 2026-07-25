@@ -203,16 +203,20 @@ impl TryFrom<u8> for DmpShotType {
     }
 }
 
-/// A shot from a DMP file, in the device's own frame.
+/// A shot from a DMP file.
 ///
-/// Every field here is what the mNemo wrote, decoded but not reinterpreted.
-/// That matters for `pitch_in` / `pitch_out`, which the device records
-/// positive-UP while the rest of the codebase is positive-DOWN: a `DmpShot`
-/// pitch is the negative of the same shot's `ShotData` pitch.  Normalisation
-/// happens once, in [`DmpShot::to_shot_data`]; read pitch off `ShotData`, not
-/// off this type.  Keeping this type device-faithful is also what lets
-/// [`compute_section_hash`] stay stable across the fix in issue #296, so
-/// re-import deduplication still recognises already-imported sections.
+/// Every field is what the mNemo wrote, decoded, with one deliberate
+/// reinterpretation: `pitch_in` / `pitch_out` are flipped from the device's
+/// positive-UP frame to the model's positive-DOWN one by `parse_section`, so a
+/// `DmpShot` that has left the parser is already in the same frame as
+/// `ShotData` and as the `depth_in` / `depth_out` beside it.  That single
+/// normalisation point is what keeps the TypeScript import dialog, the overlap
+/// merge against existing project shots, and [`DmpShot::to_shot_data`] from
+/// disagreeing about the sign.
+///
+/// [`compute_section_hash`] runs *before* the flip, over the device's own
+/// bytes, so re-import deduplication still recognises sections imported before
+/// issue #296.  See `docs/inclination.md`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DmpShot {
     /// Shot type
@@ -227,9 +231,9 @@ pub struct DmpShot {
     pub depth_in: f64,
     /// Depth at end (meters)
     pub depth_out: f64,
-    /// Pitch when entering (degrees), device frame: positive is UP
+    /// Pitch when entering (degrees), model frame: positive is DOWN
     pub pitch_in: f64,
-    /// Pitch when exiting (degrees), device frame: positive is UP
+    /// Pitch when exiting (degrees), model frame: positive is DOWN
     pub pitch_out: f64,
     /// Left passage dimension (meters), v4+
     pub left: f64,
@@ -257,6 +261,19 @@ pub struct DmpShot {
 // ============================================================================
 // Content Hashing
 // ============================================================================
+
+/// Flip a pitch between the device's positive-UP frame and the model's
+/// positive-DOWN one.
+///
+/// Zero is mapped to itself rather than to `-0.0`, so a flat shot serialises as
+/// `0` and compares equal to a hand-entered zero.
+fn negate_pitch(pitch: f64) -> f64 {
+    if pitch == 0.0 {
+        0.0
+    } else {
+        -pitch
+    }
+}
 
 /// Compute a deterministic content hash for a DMP section.
 ///
@@ -490,6 +507,19 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
 
     let content_hash = compute_section_hash(&name, direction, &shots);
 
+    // The mNemo records pitch positive-UP; every other frame in the codebase
+    // (and the `depth_in` / `depth_out` carried beside it) is positive-DOWN.
+    // Normalise here, once, so that every consumer of a `DmpShot` sees the
+    // model frame: the import preview table, the overlap merge against existing
+    // project shots, and `to_shot_data` alike.  This runs *after*
+    // `compute_section_hash` deliberately, so the hash keeps being taken over
+    // the device's own bytes and re-import deduplication still recognises
+    // sections imported before issue #296.
+    for shot in &mut shots {
+        shot.pitch_in = negate_pitch(shot.pitch_in);
+        shot.pitch_out = negate_pitch(shot.pitch_out);
+    }
+
     Ok(DmpSection {
         version,
         name,
@@ -616,14 +646,11 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
 // ============================================================================
 
 impl DmpShot {
-    /// Convert to our internal ShotData format.
+    /// Convert to our internal `ShotData` format.
     ///
-    /// This is the boundary where the mNemo's device frame becomes the model's
-    /// frame, so it is also where inclination is normalised: the device reports
-    /// pitch positive-UP (-90 = straight down) while the model — and the
-    /// `depth_in` / `depth_out` carried alongside it — is positive-DOWN.  Both
-    /// legs are negated here so the pitch that lands in `ShotData` agrees in
-    /// sign with the depth change beside it.  See `docs/inclination.md`.
+    /// Pitch is copied straight across: `parse_section` already normalised it
+    /// to the model's positive-DOWN frame, so there is nothing left to flip
+    /// here.  See `docs/inclination.md`.
     pub fn to_shot_data(&self) -> crate::models::ShotData {
         crate::models::ShotData {
             azimuth_in: self.heading_in,
@@ -631,8 +658,8 @@ impl DmpShot {
             length: self.length,
             depth_in: self.depth_in,
             depth_out: self.depth_out,
-            pitch_in: Some(-self.pitch_in),
-            pitch_out: Some(-self.pitch_out),
+            pitch_in: Some(self.pitch_in),
+            pitch_out: Some(self.pitch_out),
             left: Some(self.left),
             right: Some(self.right),
             up: Some(self.up),
@@ -1284,8 +1311,10 @@ mod tests {
         assert_eq!(shot.length, 5.0, "Length should be 5.0m");
         assert_eq!(shot.depth_in, 1.0, "Depth in should be 1.0m");
         assert_eq!(shot.depth_out, 1.5, "Depth out should be 1.5m");
-        assert_eq!(shot.pitch_in, 5.0, "Pitch in should be 5.0°");
-        assert_eq!(shot.pitch_out, -5.0, "Pitch out should be -5.0° (negative)");
+        // Pitch bytes decode to +50 / -50 tenths (+5.0° / -5.0°) in the device's
+        // +up frame; the parser hands them back in the model's +down frame.
+        assert_eq!(shot.pitch_in, -5.0, "Pitch in should be -5.0° (+down)");
+        assert_eq!(shot.pitch_out, 5.0, "Pitch out should be +5.0° (+down)");
     }
 
     /// Test 4.3: Verify graceful error handling for files with invalid magic bytes or corrupted headers
@@ -1591,15 +1620,18 @@ mod tests {
 
     /// The mNemo records inclination positive-UP, but `depth_in` / `depth_out`
     /// are positive-DOWN.  Left unreconciled the two disagree, and every
-    /// downstream consumer has to guess which frame a pitch is in.  Conversion
-    /// into `ShotData` is where the device frame is normalised to the model's
-    /// +down convention, so the pitch that comes out must agree in sign with
-    /// the depth change that came out beside it.
+    /// downstream consumer has to guess which frame a pitch is in.
+    /// `parse_section` normalises the device frame once, so a `DmpShot` that has
+    /// left the parser is already +down and `to_shot_data` must carry that sign
+    /// through untouched: the pitch that comes out has to agree in sign with the
+    /// depth change that came out beside it.  A stray second flip here would
+    /// fail this test.
     #[test]
     fn to_shot_data_pitch_agrees_with_depth_geometry() {
         // Real shot from 9_20260522-naharon.dmp: a 12.50 m slope descending
         // 3.64 m, which the depth fields already describe as +16.9° in the
-        // +down frame.  The device stores the negative of that.
+        // +down frame.  The device wrote -16.9° (+up); this is the shot as
+        // `parse_section` hands it on.
         let dmp_shot = DmpShot {
             shot_type: DmpShotType::Standard,
             heading_in: 0.0,
@@ -1607,8 +1639,8 @@ mod tests {
             length: 12.50,
             depth_in: 14.51,
             depth_out: 18.15,
-            pitch_in: -16.9,
-            pitch_out: -16.9,
+            pitch_in: 16.9,
+            pitch_out: 16.9,
             left: 0.0,
             right: 0.0,
             up: 0.0,
@@ -1640,7 +1672,7 @@ mod tests {
             assert!(
                 (pitch - implied).abs() < 1.0,
                 "pitch_{leg} {pitch} disagrees with the {implied} implied by depth \
-                 and length; the device's +up reading was not normalised to +down"
+                 and length; to_shot_data must not re-flip the parser's +down pitch"
             );
         }
     }
@@ -1674,9 +1706,10 @@ mod tests {
         assert_eq!(shot_data.length, 10.0);
         assert_eq!(shot_data.depth_in, 2.0);
         assert_eq!(shot_data.depth_out, 3.0);
-        // Negated out of the device's +up frame into the model's +down frame.
-        assert_eq!(shot_data.pitch_in, Some(-5.0));
-        assert_eq!(shot_data.pitch_out, Some(5.0));
+        // Pitch is copied straight across: `parse_section` already normalised
+        // the device's +up reading, so this boundary must not flip it again.
+        assert_eq!(shot_data.pitch_in, Some(5.0));
+        assert_eq!(shot_data.pitch_out, Some(-5.0));
         assert_eq!(shot_data.left, Some(1.5));
         assert_eq!(shot_data.right, Some(2.0));
         assert_eq!(shot_data.up, Some(3.0));
@@ -2724,14 +2757,19 @@ mod tests {
         assert_eq!(shot.length, 5.0);
         assert_eq!(shot.depth_in, 1.0);
         assert_eq!(shot.depth_out, 1.5);
-        assert_eq!(shot.pitch_in, -15.0, "Negative pitch_in must be preserved");
+        // The device wrote -150 / -300 tenths (-15.0° / -30.0°, +up); the parser
+        // normalises the magnitudes into the model's +down frame.
         assert_eq!(
-            shot.pitch_out, -30.0,
-            "Negative pitch_out must be preserved"
+            shot.pitch_in, 15.0,
+            "device -15.0° (+up) must arrive as +15.0° (+down)"
+        );
+        assert_eq!(
+            shot.pitch_out, 30.0,
+            "device -30.0° (+up) must arrive as +30.0° (+down)"
         );
     }
 
-    /// Steep downward pitch near the -90° limit.
+    /// Steep downward pitch near the device's -90° limit.
     #[test]
     fn test_parse_dmp_steep_negative_pitch() {
         let content = build_v4_shot_section(
@@ -2748,13 +2786,15 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         let shot = &dmp.sections[0].shots[0];
-        assert_eq!(shot.pitch_in, -85.0, "Steep downward pitch_in");
-        assert_eq!(shot.pitch_out, -90.0, "Vertical downward pitch_out");
+        // Device wrote -850 / -900 tenths (-85.0° / -90.0°, +up).
+        assert_eq!(shot.pitch_in, 85.0, "Steep downward pitch_in (+down)");
+        assert_eq!(shot.pitch_out, 90.0, "Vertical downward pitch_out (+down)");
     }
 
-    /// Positive pitch (upward-sloping passage).
+    /// Positive device pitch (upward-sloping passage), which the parser reports
+    /// as negative in the model's +down frame.
     #[test]
-    fn test_parse_dmp_positive_pitch() {
+    fn test_parse_dmp_positive_device_pitch() {
         let content = build_v4_shot_section(
             *b"UPP", 450,  // heading_in 45.0°
             460,  // heading_out 46.0°
@@ -2769,8 +2809,10 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         let shot = &dmp.sections[0].shots[0];
-        assert_eq!(shot.pitch_in, 45.0, "Positive pitch_in");
-        assert_eq!(shot.pitch_out, 30.0, "Positive pitch_out");
+        // Device wrote +450 / +300 tenths (+45.0° / +30.0°, +up = ascending);
+        // depth decreases 2.00m -> 1.00m on the same shot, so +down is negative.
+        assert_eq!(shot.pitch_in, -45.0, "Ascending pitch_in (+down)");
+        assert_eq!(shot.pitch_out, -30.0, "Ascending pitch_out (+down)");
     }
 
     /// Zero pitch (horizontal passage).
@@ -2801,11 +2843,12 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         let shot = &dmp.sections[0].shots[0];
-        assert_eq!(shot.pitch_in, 5.0, "Positive pitch_in");
-        assert_eq!(shot.pitch_out, -5.0, "Negative pitch_out");
+        // Device wrote +50 / -50 tenths (+5.0° / -5.0°, +up); both signs flip.
+        assert_eq!(shot.pitch_in, -5.0, "Ascending pitch_in (+down)");
+        assert_eq!(shot.pitch_out, 5.0, "Descending pitch_out (+down)");
     }
 
-    /// Small negative pitch values (-0.1° to -0.9°) that sit near zero.
+    /// Small negative device pitch values (-0.1° to -0.9°) that sit near zero.
     #[test]
     fn test_parse_dmp_small_negative_pitch() {
         let content = build_v4_shot_section(
@@ -2817,14 +2860,15 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         let shot = &dmp.sections[0].shots[0];
+        // Device wrote -1 / -9 tenths (-0.1° / -0.9°, +up).
         assert!(
-            (shot.pitch_in - (-0.1)).abs() < 1e-9,
-            "pitch_in should be -0.1°, got {}",
+            (shot.pitch_in - 0.1).abs() < 1e-9,
+            "pitch_in should be +0.1° (+down), got {}",
             shot.pitch_in
         );
         assert!(
-            (shot.pitch_out - (-0.9)).abs() < 1e-9,
-            "pitch_out should be -0.9°, got {}",
+            (shot.pitch_out - 0.9).abs() < 1e-9,
+            "pitch_out should be +0.9° (+down), got {}",
             shot.pitch_out
         );
     }
@@ -2850,9 +2894,10 @@ mod tests {
 
     /// End-to-end: pitch magnitude survives to ShotData, negated into the
     /// model's +down frame.  The device's negative (descending) readings come
-    /// out positive, matching the depth increase on the same shot.
+    /// out positive, matching the depth increase on the same shot, and the flip
+    /// happens exactly once: `DmpShot` and `ShotData` agree.
     #[test]
-    fn test_negative_pitch_through_to_shot_data() {
+    fn test_negative_device_pitch_through_to_shot_data() {
         let content = build_v4_shot_section(
             *b"E2E", 900, 910, 500, 100, 150, -200, // pitch_in -20.0° (device, +up)
             -350, // pitch_out -35.0° (device, +up)
@@ -2861,12 +2906,12 @@ mod tests {
         let dmp = parse_dmp(&path).expect("should parse");
         std::fs::remove_file(&path).ok();
 
-        // The parser keeps the device frame verbatim...
+        // The parser is where the device frame is normalised...
         let shot = &dmp.sections[0].shots[0];
-        assert_eq!(shot.pitch_in, -20.0, "DmpShot stays device-raw");
-        assert_eq!(shot.pitch_out, -35.0, "DmpShot stays device-raw");
+        assert_eq!(shot.pitch_in, 20.0, "DmpShot leaves the parser in +down");
+        assert_eq!(shot.pitch_out, 35.0, "DmpShot leaves the parser in +down");
 
-        // ...and the conversion boundary is what normalises it.
+        // ...and the conversion boundary passes it through unchanged.
         let section_data = dmp.sections[0].to_section_data(String::new());
         let shot_data = &section_data.shots[0];
         assert_eq!(shot_data.pitch_in, Some(20.0), "ShotData pitch_in");
@@ -2888,19 +2933,51 @@ mod tests {
         // Section 0 ("BAS"), shot 0:
         // File bytes for pitch: -1;-17 and -1;-18
         // Python: (-1*256)+(-17&0xFF) = -17, (-1*256)+(-18&0xFF) = -18
-        // Expected: pitch_in=-1.7°, pitch_out=-1.8°
+        // Device wrote -1.7° / -1.8° (+up); parser normalises to +1.7° / +1.8°.
         let s0 = &dmp.sections[0];
         assert_eq!(s0.name, "BAS", "First section name");
         let shot0 = &s0.shots[0];
         assert!(
-            (shot0.pitch_in - (-1.7)).abs() < 0.01,
-            "v5 s0 shot0 pitch_in: expected -1.7, got {}",
+            (shot0.pitch_in - 1.7).abs() < 0.01,
+            "v5 s0 shot0 pitch_in: expected +1.7 (device -1.7), got {}",
             shot0.pitch_in
         );
         assert!(
-            (shot0.pitch_out - (-1.8)).abs() < 0.01,
-            "v5 s0 shot0 pitch_out: expected -1.8, got {}",
+            (shot0.pitch_out - 1.8).abs() < 0.01,
+            "v5 s0 shot0 pitch_out: expected +1.8 (device -1.8), got {}",
             shot0.pitch_out
+        );
+    }
+
+    /// `compute_section_hash` is taken over the device's own bytes, *before*
+    /// `parse_section` flips pitch into the +down frame.  That ordering is what
+    /// lets a project imported before issue #296 still recognise a re-imported
+    /// section as the same content, so the hash must not have moved.  The
+    /// expected digest is pinned from a real fixture parse: reordering the flip
+    /// ahead of the hash changes it and fails here.
+    #[test]
+    fn section_hash_is_unchanged_by_the_pitch_normalisation() {
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v5.dmp");
+        if !test_file.exists() {
+            eprintln!("Skipping: fixture not found at {}", test_file.display());
+            return;
+        }
+
+        let dmp = parse_dmp(&test_file).expect("should parse v5 fixture");
+        let s0 = &dmp.sections[0];
+        assert_eq!(s0.name, "BAS", "First section name");
+        assert_eq!(
+            s0.content_hash, "b97987346709cd1089186517af06997c817fbaed0625259f5e12609b8bb66a89",
+            "content_hash moved; is compute_section_hash still running before the pitch flip?"
+        );
+
+        // Re-hashing the shots as they are *now* (already +down) must NOT
+        // reproduce the stored hash, which is the whole point: the stored one
+        // was taken in the device frame.
+        let rehashed = compute_section_hash(&s0.name, s0.direction, &s0.shots);
+        assert_ne!(
+            rehashed, s0.content_hash,
+            "fixture has no non-zero pitch, so this test cannot detect the ordering"
         );
     }
 
@@ -2921,28 +2998,28 @@ mod tests {
 
         // V2 section 0, shot 0: file bytes for pitch_in are 0;-123 and pitch_out is 0;14
         // Python: (0*256)+(-123&0xFF) = 133, (0*256)+(14&0xFF) = 14
-        // Expected: pitch_in=13.3°, pitch_out=1.4°
+        // Device wrote +13.3° / +1.4° (+up); parser normalises to -13.3° / -1.4°.
         let shot0 = &s0.shots[0];
         assert!(
-            (shot0.pitch_in - 13.3).abs() < 0.01,
-            "v2 s0 shot0 pitch_in: expected 13.3, got {}",
+            (shot0.pitch_in - (-13.3)).abs() < 0.01,
+            "v2 s0 shot0 pitch_in: expected -13.3 (device +13.3), got {}",
             shot0.pitch_in
         );
         assert!(
-            (shot0.pitch_out - 1.4).abs() < 0.01,
-            "v2 s0 shot0 pitch_out: expected 1.4, got {}",
+            (shot0.pitch_out - (-1.4)).abs() < 0.01,
+            "v2 s0 shot0 pitch_out: expected -1.4 (device +1.4), got {}",
             shot0.pitch_out
         );
 
-        // Find a shot with negative pitch in the v2 fixture.
+        // Find a shot the device recorded with negative pitch in the v2 fixture.
         // Shot 2 has pitch bytes: 0;-125 and -1;-27
         // Python: (0*256)+(-125&0xFF) = 131, (-1*256)+(-27&0xFF) = -27
-        // Expected: pitch_in=13.1°, pitch_out=-2.7°
+        // Device wrote +13.1° / -2.7° (+up); parser normalises to -13.1° / +2.7°.
         if s0.shots.len() > 2 {
             let shot2 = &s0.shots[2];
             assert!(
-                (shot2.pitch_out - (-2.7)).abs() < 0.01,
-                "v2 s0 shot2 pitch_out: expected -2.7, got {}",
+                (shot2.pitch_out - 2.7).abs() < 0.01,
+                "v2 s0 shot2 pitch_out: expected +2.7 (device -2.7), got {}",
                 shot2.pitch_out
             );
         }
