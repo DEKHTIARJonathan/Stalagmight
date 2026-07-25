@@ -45,6 +45,7 @@ async fn run_blocking<T: Send + 'static>(
             message: format!("SpeleoDB task panicked: {e}"),
             action: SpeleoDbAction::Fatal,
             status: None,
+            transport: None,
         })?
 }
 

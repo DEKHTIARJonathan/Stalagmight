@@ -34,7 +34,7 @@ pub(crate) mod sync;
 pub(crate) mod tls;
 
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
-pub use contract::SpeleoDbAction;
+pub use contract::{SpeleoDbAction, TransportCause};
 pub use models::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoAdoptResult, SpeleoCollaborator,
     SpeleoCollaborators, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
@@ -60,11 +60,20 @@ pub(crate) enum SpeleoDbError {
     /// blank credentials and relying on the server to 400.
     #[error("email and password are required to log in")]
     MissingCredentials,
-    /// A transport-level failure (DNS, timeout, connection reset, body read). The
-    /// inner string is cleaned of `ureq`/io noise (`io: `, ` (os error N)`) at
-    /// construction so the Display is user-facing (see `client::clean_transport`).
-    #[error("Network error talking to SpeleoDB: {0}")]
-    Transport(String),
+    /// A transport-level failure (DNS, timeout, connection reset, body read).
+    ///
+    /// `cause` is the TYPED classification (from `ureq::Error` / `io::ErrorKind`,
+    /// see `client::classify_transport`) that crosses IPC so the frontend can
+    /// render a translated, actionable line naming the configured endpoint.
+    /// `detail` is the raw cause, cleaned of `ureq`/io noise (`io: `,
+    /// ` (os error N)`) - it is the DIAGNOSTIC surface (logs + bug reports), NOT
+    /// what the user is shown: a bare errno like "Invalid argument" tells them
+    /// nothing (#270).
+    #[error("Network error talking to SpeleoDB: {detail}")]
+    Transport {
+        cause: TransportCause,
+        detail: String,
+    },
     /// The server returned a non-2xx status. `status` is the HTTP code; `message`
     /// is a best-effort detail parsed from the body.
     #[error("SpeleoDB returned HTTP {status}: {message}")]
@@ -111,7 +120,7 @@ pub(crate) enum SpeleoDbError {
 
 #[cfg(test)]
 mod tests {
-    use super::SpeleoDbError;
+    use super::{SpeleoDbError, TransportCause};
 
     #[test]
     fn error_display_strings_are_stable() {
@@ -158,9 +167,29 @@ mod tests {
                 .to_string(),
             "SpeleoDB contained multiple ambiguous .stalx files: a.stalx, b.stalx"
         );
+        // [#270] Transport gained a typed `cause`, but its Display is unchanged:
+        // it stays the RAW diagnostic line (logs / bug reports). What changed is
+        // that the FE no longer SHOWS this string - it renders a translated line
+        // off `SpeleoErrorDto::transport` - so a useful cause like "Connection
+        // refused" is still preserved here rather than flattened away.
         assert_eq!(
-            SpeleoDbError::Transport("Connection refused".to_owned()).to_string(),
+            SpeleoDbError::Transport {
+                cause: TransportCause::Refused,
+                detail: "Connection refused".to_owned(),
+            }
+            .to_string(),
             "Network error talking to SpeleoDB: Connection refused"
+        );
+        // The errno that started #270 is likewise kept verbatim for the log,
+        // while its cause classifies as the catch-all (the FE shows the generic
+        // "could not reach the server" line, never this text).
+        assert_eq!(
+            SpeleoDbError::Transport {
+                cause: TransportCause::Unknown,
+                detail: "Invalid argument".to_owned(),
+            }
+            .to_string(),
+            "Network error talking to SpeleoDB: Invalid argument"
         );
         // [Track A] #187: the insecure-endpoint message is the human-facing
         // surface for a blocked public-http / scheme-less endpoint; pin it.

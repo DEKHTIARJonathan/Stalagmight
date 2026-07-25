@@ -53,6 +53,34 @@ pub enum SpeleoDbAction {
     Fatal,
 }
 
+/// Why a transport attempt never reached (or never finished with) the server.
+///
+/// [#270] Derived from the TYPED `ureq::Error` / `io::ErrorKind` at the point of
+/// failure (`client::classify_transport`), never from the error's Display text -
+/// `io::Error`'s message comes from `strerror`, so it is OS- and locale-
+/// dependent and unusable as a discriminant. Crosses IPC on
+/// [`SpeleoErrorDto::transport`] so the frontend renders a translated,
+/// actionable line ("could not reach SpeleoDB at <endpoint> …") instead of
+/// surfacing a bare errno like "Invalid argument". The raw cause is kept in the
+/// error's `detail` (and logged) so bug reports stay actionable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum TransportCause {
+    /// The host answered the dial with a refusal / dropped the connection
+    /// (nothing listening on that port, or the server closed on us).
+    Refused,
+    /// A configured timeout elapsed (dial, response, or body read).
+    Timeout,
+    /// The hostname could not be resolved.
+    Dns,
+    /// The TLS handshake / certificate validation failed.
+    Tls,
+    /// Anything else - no route, a blackholed address (the EINVAL this fix was
+    /// found through), an unclassified transport failure. Fails to the generic
+    /// "could not reach the server" line rather than showing the raw errno.
+    Unknown,
+}
+
 /// The SpeleoDB endpoint a status came from, so [`map_status`] can apply the
 /// per-endpoint 403 semantics (D-B4): a 403 on a read endpoint means read-only
 /// access, a 403 on a write endpoint means a write fence.
@@ -156,10 +184,18 @@ pub(crate) fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
 /// named fn called at the call site (not a blanket `From`).
 ///
 /// - `Status { status, message }` → `map_status(endpoint, status)`, `status: Some`.
-/// - `Transport` (network/timeout, post-retry) → `Retry`, `status: None`.
+/// - `Transport` (network/timeout, post-retry) → `Retry`, `status: None`, and
+///   the typed [`TransportCause`] on `transport` (#270) so the FE can render a
+///   translated "could not reach <endpoint>" line instead of the raw errno.
 /// - `NotAuthenticated` → `ReLogin` (no usable token).
 /// - `InsecureEndpoint` and every other local error → `Fatal`, `status: None`.
 pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto {
+    // Only a Transport error carries a cause; every other arm leaves it None,
+    // which is what makes `transport` a sound discriminant on the FE side.
+    let transport = match err {
+        SpeleoDbError::Transport { cause, .. } => Some(*cause),
+        _ => None,
+    };
     let (action, status, message) = match err {
         // Status: carry the parsed human detail WITHOUT the "SpeleoDB returned HTTP
         // N:" wrapper - the frontend frames it per operation ("Login to SpeleoDB
@@ -169,8 +205,10 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
             Some(*status),
             message.clone(),
         ),
-        // Transport is already fully framed ("Network error talking to SpeleoDB: …").
-        SpeleoDbError::Transport(_) => (SpeleoDbAction::Retry, None, err.to_string()),
+        // Transport: the Display keeps the RAW cause ("Network error talking to
+        // SpeleoDB: Invalid argument") - that string is the diagnostic/log
+        // surface. The FE renders `transport` instead of it (#270).
+        SpeleoDbError::Transport { .. } => (SpeleoDbAction::Retry, None, err.to_string()),
         SpeleoDbError::NotAuthenticated => (SpeleoDbAction::ReLogin, None, err.to_string()),
         // Ariane (`.tml`-only) project: not a failure, a routing signal. The FE
         // offers the one-time C2 adoption flow (#214) on `action == Adopt` rather
@@ -185,12 +223,13 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
         message,
         action,
         status,
+        transport,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{dto_for_error, map_status, Endpoint, SpeleoDbAction};
+    use super::{dto_for_error, map_status, Endpoint, SpeleoDbAction, TransportCause};
     use crate::speleodb::SpeleoDbError;
 
     #[test]
@@ -377,10 +416,39 @@ mod tests {
         // Transport → Retry, no status.
         let dto = dto_for_error(
             Endpoint::DownloadDump,
-            &SpeleoDbError::Transport("timeout".to_owned()),
+            &SpeleoDbError::Transport {
+                cause: TransportCause::Timeout,
+                detail: "timed out".to_owned(),
+            },
         );
         assert_eq!(dto.action, SpeleoDbAction::Retry);
         assert_eq!(dto.status, None);
+        // [#270] and it carries the typed cause, so the FE renders a translated
+        // "could not reach <endpoint>" line instead of the raw errno in `message`.
+        assert_eq!(dto.transport, Some(TransportCause::Timeout));
+        assert!(
+            dto.message.contains("timed out"),
+            "the raw cause stays on the message for the log: {}",
+            dto.message
+        );
+
+        // Every non-transport error leaves `transport` unset - that is what makes
+        // it a sound discriminant on the frontend side.
+        for err in [
+            SpeleoDbError::Status {
+                status: 500,
+                message: "boom".to_owned(),
+            },
+            SpeleoDbError::NotAuthenticated,
+            SpeleoDbError::AdoptAriane,
+            SpeleoDbError::NoRemoteProject,
+        ] {
+            assert_eq!(
+                dto_for_error(Endpoint::UploadAuto, &err).transport,
+                None,
+                "{err:?} must not look like a transport failure"
+            );
+        }
 
         // NotAuthenticated → ReLogin; InsecureEndpoint / local → Fatal.
         assert_eq!(

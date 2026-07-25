@@ -8,6 +8,7 @@ import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 
 /**
  * Close-flow guard (T2d): shown when closing a SpeleoDB project while you still
@@ -115,6 +116,10 @@ export default function SpeleoCloseDialog() {
           </p>
         ) : null}
 
+        {/* #260: same problem as the Finish-editing dialog - this one also stays
+            open when `done` throws, with the shell banner stranded behind its
+            scrim. Show the failure here; "Push & release" below is the retry. */}
+        <SpeleoPushFailureNotice />
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <Button onClick={closeDialog} disabled={busyAny} data-testid="speleodb-close-cancel">
             {t('common.actions.cancel')}

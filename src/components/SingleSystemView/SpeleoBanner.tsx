@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoStore, PUSH_FAILURE_DIALOGS } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { humanizeSpeleoError } from '../../utils/speleoError';
@@ -22,7 +22,10 @@ import { humanizeSpeleoError } from '../../utils/speleoError';
  *   after 3 s, which left a failed upload with no durable surface at all; this banner
  *   keeps the humanized error on screen and offers Retry, which replays the SAME verb
  *   (push keeps the lock, done releases it) with the same commit message. It clears on
- *   the next attempt, on a landed push/release, and when the project closes.
+ *   the next attempt, on a landed push/release, and when the project closes. It is
+ *   HIDDEN while the dialog that issued the verb is open (`PUSH_FAILURE_DIALOGS`):
+ *   that dialog stays open on failure and renders the same error inline, and a
+ *   banner behind its modal scrim is dimmed, unreadable and unclickable.
  * None of these block editing or pushing.
  *
  * Above all of them sits the #213 force-edit banner (big-red, derived from
@@ -39,6 +42,13 @@ export function SpeleoBanner() {
   const lockedByOther = useSpeleoStore((s) => s.link?.lockedByOther ?? false);
   const lockHolder = useSpeleoStore((s) => s.link?.lockHolder ?? null);
   const showToast = useUIStore((s) => s.showToast);
+  // #260: while the dialog that issued the push/unlock is open it OWNS the failure
+  // and renders it inline; this banner would only render behind that dialog's modal
+  // scrim - dimmed, unreadable, its Retry/Dismiss unclickable. Dismissing the dialog
+  // with the failure unresolved brings the banner straight back.
+  const dialogOwnsFailure = useUIStore((s) =>
+    s.activeDialog !== null && PUSH_FAILURE_DIALOGS.includes(s.activeDialog),
+  );
   // #213: Reconnect is the existing acquire+reconcile verb (startEditing).
   // #260: Retry re-issues the push/unlock verb that failed.
   const { startEditing, push, done, busy } = useSpeleoActions();
@@ -89,6 +99,8 @@ export function SpeleoBanner() {
   }
 
   if (!banner) return null;
+  // #260: the failure is on screen inside the dialog that caused it - never both.
+  if (banner.kind === 'push_failed' && dialogOwnsFailure) return null;
 
   // #260: keep the failed attempt's own context so Retry replays the same verb with
   // the same commit message (narrowed once here - the JSX callbacks close over it).

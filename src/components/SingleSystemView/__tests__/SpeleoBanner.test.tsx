@@ -17,6 +17,7 @@ vi.mock('../../../utils/ipc', () => ({
 
 import { SpeleoBanner } from '../SpeleoBanner';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
+import { useUIStore } from '../../../store/uiStore';
 
 const LINK: SpeleoLinkState = {
   permission: 'READ_AND_WRITE',
@@ -38,6 +39,7 @@ beforeEach(() => {
   invokeIpcMock.mockReset();
   invokeIpcMock.mockResolvedValue({ kind: 'editing' });
   useSpeleoStore.setState({ link: null, banner: null, busy: false });
+  useUIStore.setState({ activeDialog: null, dialogData: {} });
 });
 
 describe('SpeleoBanner force-edit (#213)', () => {
@@ -158,6 +160,52 @@ describe('SpeleoBanner push failure (#260)', () => {
     seedFailure('push');
     useSpeleoStore.getState().clearLink();
     expect(useSpeleoStore.getState().banner).toBeNull();
+  });
+
+  /**
+   * #260 defect: the banner rendered BEHIND the modal scrim of the dialog that
+   * issued the failed upload - dimmed, unreadable, its Retry/Dismiss unclickable -
+   * exactly when the user needed it. While such a dialog is open it owns the
+   * failure (rendering it inline); the banner is the surface for AFTER it is
+   * dismissed unresolved.
+   */
+  it('hides itself while the Finish-editing dialog owns the failure', () => {
+    seedFailure('done');
+    useUIStore.setState({ activeDialog: 'speleodb-done' });
+    render(<SpeleoBanner />);
+    expect(screen.queryByTestId('speleo-banner')).not.toBeInTheDocument();
+  });
+
+  it('hides itself while the close-flow dialog owns the failure', () => {
+    seedFailure('done');
+    useUIStore.setState({ activeDialog: 'speleodb-close' });
+    render(<SpeleoBanner />);
+    expect(screen.queryByTestId('speleo-banner')).not.toBeInTheDocument();
+  });
+
+  it('renders again once that dialog is dismissed with the failure unresolved', () => {
+    seedFailure('done', 'wrap up');
+    useUIStore.setState({ activeDialog: 'speleodb-done' });
+    const { rerender } = render(<SpeleoBanner />);
+    expect(screen.queryByTestId('speleo-banner')).not.toBeInTheDocument();
+
+    // Cancel / X / Escape / backdrop all land here: the dialog closes, the failure
+    // is still unresolved, so the durable reminder comes back.
+    useUIStore.getState().closeDialog();
+    rerender(<SpeleoBanner />);
+    const banner = screen.getByTestId('speleo-banner');
+    expect(banner).toHaveAttribute('data-kind', 'push_failed');
+    expect(screen.getByTestId('speleo-banner-retry-push')).toBeInTheDocument();
+  });
+
+  it('still shows an unrelated banner while such a dialog is open', () => {
+    // Only the push-failure kind is owned by the dialog; the informational
+    // notices are not duplicated there, so they must not be suppressed.
+    seedLink({ forceEditing: false });
+    useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
+    useUIStore.setState({ activeDialog: 'speleodb-done' });
+    render(<SpeleoBanner />);
+    expect(screen.getByTestId('speleo-banner')).toHaveAttribute('data-kind', 'no_anchor');
   });
 
   it('clearPushFailedBanner leaves an unrelated banner alone', () => {

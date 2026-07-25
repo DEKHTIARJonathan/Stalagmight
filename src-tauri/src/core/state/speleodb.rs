@@ -2918,7 +2918,7 @@ impl AppState {
                     SpeleoDbError::Status { status, .. } => {
                         map_status(Endpoint::UploadAuto, *status) == SpeleoDbAction::StayDirty
                     }
-                    SpeleoDbError::Transport(_) => true,
+                    SpeleoDbError::Transport { .. } => true,
                     _ => false,
                 };
                 if ambiguous {
@@ -3061,7 +3061,7 @@ mod tests {
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
     use crate::speleodb::auth::{InMemoryStore, SecretStore, TokenStore};
-    use crate::speleodb::SpeleoDbError;
+    use crate::speleodb::{SpeleoDbError, TransportCause};
     use tempfile::TempDir;
 
     #[test]
@@ -4291,7 +4291,10 @@ mod tests {
             message: "server".to_owned(),
         })));
         assert!(!whoami_indicates_dead_token(&Err(
-            SpeleoDbError::Transport("timeout".to_owned())
+            SpeleoDbError::Transport {
+                cause: TransportCause::Timeout,
+                detail: "timed out".to_owned(),
+            }
         )));
     }
 
@@ -4346,7 +4349,10 @@ mod tests {
         }
         // A transport error also never drops.
         let mut session = authed_session();
-        let result: Result<(), SpeleoDbError> = Err(SpeleoDbError::Transport("timeout".to_owned()));
+        let result: Result<(), SpeleoDbError> = Err(SpeleoDbError::Transport {
+            cause: TransportCause::Timeout,
+            detail: "timed out".to_owned(),
+        });
         assert!(!auth_error_drops_token(Endpoint::ListProjects, &result));
         apply_auth_drop(&mut session, &result);
         assert!(session.status().logged_in);

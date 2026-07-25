@@ -2876,13 +2876,23 @@
       "messagePlaceholder": "Describe your changes…",
       "confirm": "Upload & release",
       "pushConfirm": "Upload & keep editing",
-      "pushing": "Uploading…"
+      "pushing": "Uploading…",
+      "failedHeading": "Your changes were NOT uploaded",
+      "retryHint": "They are still only on this computer. Fix the problem, then press the button again to retry."
     },
     "noPermission": {
       "title": "No SpeleoDB access",
       "description": "This project is linked to SpeleoDB, but your account doesn't have permission to view or edit it - it may have been shared with you as a file. You can convert it to a regular, unmanaged .stalx file to keep and edit locally.",
       "convert": "Convert to a local file",
       "converting": "Converting…"
+    },
+    "transport": {
+      "refused": "Could not reach SpeleoDB at {{endpoint}} - the server refused the connection. Check that it is running and that the address is right.",
+      "timeout": "SpeleoDB at {{endpoint}} did not respond in time. Check your network connection and that the server is running.",
+      "dns": "Could not find the SpeleoDB server at {{endpoint}}. Check the address in Settings and your network connection.",
+      "tls": "Could not set up a secure connection to SpeleoDB at {{endpoint}}. Check the server's certificate and the address in Settings.",
+      "unreachable": "Could not reach SpeleoDB at {{endpoint}}. Check your network connection and that the server is running.",
+      "thisServer": "the configured server"
     },
     "banner": {
       "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept - click Done again to retry.",

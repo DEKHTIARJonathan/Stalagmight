@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 // [Track A] #186/D-B2: the typed action carried on the IPC error DTO.
-use super::contract::SpeleoDbAction;
+use super::contract::{SpeleoDbAction, TransportCause};
 
 /// Project permission level.
 ///
@@ -602,6 +602,12 @@ pub struct SpeleoErrorDto {
     pub message: String,
     pub action: SpeleoDbAction,
     pub status: Option<u16>,
+    /// [#270] Set ONLY for a transport failure, classifying why the server was
+    /// never reached. It is the discriminant the frontend branches on to render a
+    /// translated "could not reach SpeleoDB at <endpoint>" line: `message` still
+    /// carries the raw cause (an OS errno such as "Invalid argument"), which is
+    /// for the log, not for the user. `None` on every non-transport error.
+    pub transport: Option<TransportCause>,
 }
 
 #[cfg(test)]
@@ -654,6 +660,7 @@ mod tests {
             message: "SpeleoDB returned HTTP 401: not authenticated".to_owned(),
             action: SpeleoDbAction::ReLogin,
             status: Some(401),
+            transport: None,
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token

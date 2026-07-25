@@ -789,6 +789,30 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 }));
 
 /**
+ * [#260] The dialogs that OWN a push/unlock failure while they are open: they
+ * issue the verb, stay open when it fails, and render the failure INLINE (see
+ * `SpeleoPushFailureNotice`). While one of them is the active dialog the shell
+ * banner suppresses its `push_failed` kind - rendered there it sits behind the
+ * modal scrim, dimmed and unreadable, with its Retry/Dismiss unclickable, exactly
+ * when the user needs it. Closing the dialog with the failure unresolved hands
+ * the banner straight back, so the "your changes are only on this computer"
+ * reminder is never lost.
+ *
+ * Both entries retry through their own primary button (`Upload & release` /
+ * `Upload & keep editing` / `Push & release`), so neither needs a second retry
+ * control and neither loses the commit message the user typed.
+ */
+export const PUSH_FAILURE_DIALOGS: readonly string[] = ['speleodb-done', 'speleodb-close'];
+
+/**
+ * The active push/unlock failure (the `push_failed` banner payload), or `null`.
+ * Shared so the inline dialog notice and the shell banner read ONE source of
+ * truth: they can never disagree, and there is no window where both are visible.
+ */
+export const selectPushFailure = (s: SpeleoStore): PushFailedBanner | null =>
+  s.banner?.kind === 'push_failed' ? s.banner : null;
+
+/**
  * A remote SpeleoDB project opened without the write lock is read-only. Shared so
  * the toolbar, map read-only badge, and context menu all derive "read-only"
  * identically (the backend edit gate is the real enforcement; this is the visual

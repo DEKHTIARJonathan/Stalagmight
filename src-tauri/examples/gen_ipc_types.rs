@@ -70,7 +70,8 @@ use stalagmight_lib::speleodb::{
     SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
     SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
     SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant,
-    SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, UpdateResult, Visibility,
+    SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, TransportCause, UpdateResult,
+    Visibility,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -315,6 +316,9 @@ fn main() {
     export::<SpeleoSessionStatus>(&out_dir);
     export::<SpeleoDbAction>(&out_dir);
     export::<SpeleoErrorDto>(&out_dir);
+    // #270: why a transport call never reached the server, so the FE can render a
+    // translated line instead of a raw OS errno.
+    export::<TransportCause>(&out_dir);
     // SpeleoDB linked-project status for the action shell (#204) + remote-state (T2c)
     export::<SpeleoLinkStatus>(&out_dir);
     export::<RemoteState>(&out_dir);
@@ -521,6 +525,7 @@ fn main() {
         "SpeleoSessionStatus",
         "SpeleoDbAction",
         "SpeleoErrorDto",
+        "TransportCause",
         "SpeleoLinkStatus",
         "RemoteState",
         "StartEditingResult",

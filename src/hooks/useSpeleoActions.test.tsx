@@ -158,6 +158,36 @@ describe('useSpeleoActions - a failed push/unlock raises the persistent banner (
     });
   });
 
+  it('a transport failure reaches the banner humanized, not as a raw errno (#270)', async () => {
+    // What the user actually hit: the host blackholed at the routing level, so the
+    // backend surfaced EINVAL. The DTO's typed `transport` cause is what the
+    // humanizer keys off; the raw text must not reach the user.
+    useSpeleoStore.setState({
+      session: {
+        loggedIn: true,
+        userEmail: 'me@example.com',
+        endpoint: 'https://cave.example.internal:8443/',
+        keychainBacked: true,
+      },
+    });
+    invokeIpcMock.mockRejectedValue({
+      message: 'Network error talking to SpeleoDB: Invalid argument',
+      action: 'Retry',
+      status: null,
+      transport: 'Unknown',
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done('wrap up');
+    });
+
+    const banner = useSpeleoStore.getState().banner as { kind: string; message: string };
+    expect(banner.kind).toBe('push_failed');
+    expect(banner.message).not.toContain('Invalid argument');
+    expect(banner.message).toContain('https://cave.example.internal:8443/');
+  });
+
   it('a retry clears the stale failure banner before the new attempt lands', async () => {
     useSpeleoStore.setState({
       banner: { kind: 'push_failed', message: 'old', origin: 'push', pushMessage: null },

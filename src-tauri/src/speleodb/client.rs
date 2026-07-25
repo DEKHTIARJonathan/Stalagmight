@@ -29,7 +29,7 @@ use super::models::{
     Commit, Permission, Project, RevisionHistory, Team, TeamPermission, TeamPermissionList,
     UserAutocomplete, UserPermission, UserPermissionList,
 };
-use super::SpeleoDbError;
+use super::{SpeleoDbError, TransportCause};
 
 /// Global per-request timeout for reads. Larger than the tile timeout because a
 /// project dump (whole working tree as a ZIP) can be bigger than a single tile.
@@ -117,7 +117,7 @@ fn with_retry(
     super::tls::enforce(base, insecure_http)?;
 
     let max_retries = if idempotent { MAX_RETRIES } else { 0 };
-    let mut last_err: Option<String> = None;
+    let mut last_err: Option<(TransportCause, String)> = None;
     for i in 0..=max_retries {
         if i > 0 {
             let delay = RETRY_DELAYS
@@ -148,20 +148,57 @@ fn with_retry(
                         attempt = i + 1,
                         "SpeleoDB idempotent request returned 5xx; will retry"
                     );
-                    last_err = Some(format!("HTTP {status}"));
+                    last_err = Some((TransportCause::Unknown, format!("HTTP {status}")));
                     continue;
                 }
                 return Ok((status, body));
             }
             Err(e) => {
                 tracing::debug!(error = %e, attempt = i + 1, "SpeleoDB request failed; will retry if attempts remain");
-                last_err = Some(e.to_string());
+                last_err = Some((classify_transport(&e), clean_transport(&e.to_string())));
             }
         }
     }
-    Err(SpeleoDbError::Transport(clean_transport(
-        &last_err.unwrap_or_else(|| "unknown transport error".to_owned()),
-    )))
+    let (cause, detail) = last_err.unwrap_or((
+        TransportCause::Unknown,
+        "unknown transport error".to_owned(),
+    ));
+    // [#270] The user is shown a translated "could not reach <endpoint>" line, so
+    // this is where the RAW cause has to survive: log it (with the classification
+    // and which endpoint failed) or a bug report has nothing to go on.
+    tracing::warn!(
+        ?endpoint,
+        ?cause,
+        detail = %detail,
+        "SpeleoDB transport failure (attempts exhausted)"
+    );
+    Err(SpeleoDbError::Transport { cause, detail })
+}
+
+/// Classify a transport failure from the TYPED `ureq::Error` (and, for io
+/// errors, [`std::io::ErrorKind`]) - never from its Display text: an
+/// `io::Error`'s message comes from the platform's `strerror`, so it is OS- and
+/// locale-dependent and cannot be matched on. The classification crosses IPC and
+/// picks which translated line the frontend shows (#270).
+fn classify_transport(err: &ureq::Error) -> TransportCause {
+    match err {
+        ureq::Error::Timeout(_) => TransportCause::Timeout,
+        ureq::Error::HostNotFound => TransportCause::Dns,
+        ureq::Error::Tls(_) => TransportCause::Tls,
+        ureq::Error::ConnectionFailed => TransportCause::Refused,
+        ureq::Error::Io(e) => match e.kind() {
+            std::io::ErrorKind::TimedOut => TransportCause::Timeout,
+            std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::NotConnected => TransportCause::Refused,
+            // Everything else - EINVAL from a blackholed route, no-route,
+            // network-down, an unexpected io kind - is a plain "cannot reach it".
+            _ => TransportCause::Unknown,
+        },
+        _ => TransportCause::Unknown,
+    }
 }
 
 /// Strip `ureq`/std-io noise from a transport error string so it reads as a
@@ -899,8 +936,13 @@ fn send_json_request(
         Err(_) => Outcome::NetworkError,
     };
     super::metrics::record(endpoint, outcome, started.elapsed());
-    let (status, body) =
-        result.map_err(|e| SpeleoDbError::Transport(clean_transport(&e.to_string())))?;
+    let (status, body) = result.map_err(|e| {
+        let cause = classify_transport(&e);
+        let detail = clean_transport(&e.to_string());
+        // Same #270 contract as `with_retry`: the raw cause lives in the log.
+        tracing::warn!(?endpoint, ?cause, detail = %detail, "SpeleoDB transport failure");
+        SpeleoDbError::Transport { cause, detail }
+    })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
     }
@@ -1158,7 +1200,11 @@ pub(crate) fn grant_permission(
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used, reason = "unit test fixtures")]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "unit test fixtures / let-else assertion"
+)]
 mod tests {
     use std::io::Write as _;
     use std::net::TcpListener;
@@ -1168,12 +1214,13 @@ mod tests {
 
     use super::{
         add_team_permission, add_user_permission, api_url, bearer, build_upload_parts,
-        clean_transport, delete_project, download_dump_at_hash, list_teams, list_user_autocomplete,
-        list_user_permissions, mime_for, parse_error_message, parse_upload_auto_response,
-        remove_team_permission, remove_user_permission, set_user_permission, with_retry, Endpoint,
-        RevisionHistory, UserInfo, DUMP_DOWNLOAD_TIMEOUT, REQUEST_TIMEOUT,
+        classify_transport, clean_transport, delete_project, download_dump_at_hash, list_teams,
+        list_user_autocomplete, list_user_permissions, mime_for, parse_error_message,
+        parse_upload_auto_response, remove_team_permission, remove_user_permission,
+        set_user_permission, with_retry, Endpoint, RevisionHistory, UserInfo,
+        DUMP_DOWNLOAD_TIMEOUT, REQUEST_TIMEOUT,
     };
-    use crate::speleodb::{Permission, SpeleoDbError};
+    use crate::speleodb::{Permission, SpeleoDbError, TransportCause};
 
     #[test]
     fn revisions_payload_decodes_verified_v2_field_names() {
@@ -1338,6 +1385,83 @@ mod tests {
         assert_eq!(
             clean_transport("dns error (lookup failed)"),
             "dns error (lookup failed)"
+        );
+    }
+
+    #[test]
+    fn classify_transport_reads_the_typed_error_not_its_message() {
+        // [#270] The classification MUST come from the typed error / io::ErrorKind:
+        // an io::Error's Display comes from the platform strerror, so it is OS- and
+        // locale-dependent and unusable as a discriminant.
+        assert_eq!(
+            classify_transport(&ureq::Error::HostNotFound),
+            TransportCause::Dns
+        );
+        assert_eq!(
+            classify_transport(&ureq::Error::Timeout(ureq::Timeout::Global)),
+            TransportCause::Timeout
+        );
+        assert_eq!(
+            classify_transport(&ureq::Error::Tls("handshake failed")),
+            TransportCause::Tls
+        );
+        assert_eq!(
+            classify_transport(&ureq::Error::ConnectionFailed),
+            TransportCause::Refused
+        );
+        assert_eq!(
+            classify_transport(&ureq::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "Connection refused"
+            ))),
+            TransportCause::Refused
+        );
+        assert_eq!(
+            classify_transport(&ureq::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "timed out"
+            ))),
+            TransportCause::Timeout
+        );
+        // The errno that started #270: a blackholed host surfaces EINVAL. It has no
+        // useful meaning for a user, so it lands in the catch-all (the FE shows the
+        // generic "could not reach the server" line) - never as raw text.
+        assert_eq!(
+            classify_transport(&ureq::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Invalid argument"
+            ))),
+            TransportCause::Unknown
+        );
+    }
+
+    #[test]
+    fn transport_error_keeps_the_raw_cause_for_the_log() {
+        // [#270] The user-facing line is rendered FE-side from the typed cause, but
+        // the raw cause must survive on the error (it is what a bug report needs).
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener); // nothing is listening on this port now
+        let err = with_retry(
+            &format!("http://127.0.0.1:{port}"),
+            false,
+            false,
+            Endpoint::ListProjects,
+            || {
+                Err(ureq::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "Connection refused (os error 111)",
+                )))
+            },
+        )
+        .expect_err("a transport failure surfaces");
+        let SpeleoDbError::Transport { cause, detail } = err else {
+            panic!("expected a Transport error, got: {err:?}");
+        };
+        assert_eq!(cause, TransportCause::Refused);
+        assert_eq!(
+            detail, "Connection refused",
+            "the raw cause is kept (os-error noise stripped) so the log stays actionable"
         );
     }
 
@@ -1565,7 +1689,7 @@ mod tests {
             },
         )
         .expect_err("transport error surfaces");
-        assert!(matches!(err, SpeleoDbError::Transport(_)));
+        assert!(matches!(err, SpeleoDbError::Transport { .. }));
         assert_eq!(
             n2.load(Ordering::SeqCst),
             1,
