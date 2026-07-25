@@ -6,6 +6,7 @@ import {
   waitForMapReady,
   waitForMapIdle,
   waitForActiveTool,
+  getDragGhostState,
   type SectionSeed,
 } from './helpers/app';
 
@@ -17,8 +18,8 @@ import {
  * live cursor delta as a screen-pixel offset, so the feature renders at
  * `project(original) + offset`. That used to be a MapLibre `*-translate` paint
  * property; it is now one shader uniform on the custom WebGL ghost layer
- * (`survey-drag-ghost`), read back in `featureGap` below. Two independent bugs,
- * each guarded here:
+ * (`survey-drag-ghost`), read back through the app's `__stalagmight_drag_ghost__`
+ * hook in `featureGap` below. Two independent bugs, each guarded here:
  *   - #20 (grab precision): the grab baselined on `unproject(click)`, which at low
  *     zoom lands meters off the feature. Each test clicks a few px OFF the feature
  *     and asserts the *feature* (snapped: a station, or the nearest point on a shot)
@@ -181,9 +182,9 @@ async function centerOnShotMidpoint(page: Page, zoom: number) {
  * ORIGINAL positions and the live cursor delta is a single screen-pixel shader
  * uniform, so the grabbed feature paints at `project(original) + offset` — the same
  * arithmetic the old `getPaintProperty('survey-drag-stations','circle-translate')`
- * read fed, with the offset now read off the ghost layer (the uniform is in DEVICE
- * px, hence the dpr divide). Reaching into the custom layer's offset is a test-only
- * read; it is the only place the live offset exists.
+ * read fed. The offset and the projection come from `getDragGhostState` in ONE
+ * evaluate (so both describe the same frame), which reads the app's
+ * `__stalagmight_drag_ghost__` hook rather than the ghost layer's private fields.
  *
  * `mode` names the live path so a fallback cannot masquerade as a pass: the stock
  * GeoJSON preview (`survey-drag-preview-*`, used only when the custom ghost fails to
@@ -191,29 +192,13 @@ async function centerOnShotMidpoint(page: Page, zoom: number) {
  * `*-translate`, so `project(original) + translate` would not describe it.
  */
 async function featureGap(page: Page, lngLat: { lng: number; lat: number }, cursor: { x: number; y: number }) {
-  return page.evaluate(
-    ({ ll, c }) => {
-      const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
-      if (!map) return { mode: 'none', gx: 0, gy: 0 };
-      // MapLibre wraps a CustomLayerInterface in a style layer that keeps the
-      // instance on `implementation`.
-      const ghost = map.getLayer('survey-drag-ghost') as unknown as
-        | { implementation?: { offsetX: number; offsetY: number } }
-        | undefined;
-      const impl = ghost?.implementation;
-      if (!impl) {
-        return {
-          mode: map.getLayer('survey-drag-preview-stations') != null ? 'stock' : 'none',
-          gx: 0,
-          gy: 0,
-        };
-      }
-      const dpr = window.devicePixelRatio || 1;
-      const p = map.project([ll.lng, ll.lat]);
-      return { mode: 'custom', gx: p.x + impl.offsetX / dpr - c.x, gy: p.y + impl.offsetY / dpr - c.y };
-    },
-    { ll: lngLat, c: cursor },
-  );
+  const ghost = await getDragGhostState(page, lngLat);
+  if (!ghost || !ghost.screen) return { mode: 'none', gx: 0, gy: 0 };
+  return {
+    mode: ghost.mode,
+    gx: ghost.screen.x + ghost.dx - cursor.x,
+    gy: ghost.screen.y + ghost.dy - cursor.y,
+  };
 }
 
 /**

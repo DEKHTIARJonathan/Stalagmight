@@ -458,6 +458,49 @@ export async function getMeasuredPathCounts(
   });
 }
 
+/** Which drag-preview path is drawing, and the live cursor delta in CSS px. */
+export interface DragGhostState {
+  mode: 'custom' | 'stock';
+  dx: number;
+  dy: number;
+}
+
+/**
+ * The live drag-preview offset, and optionally where a map coordinate projects
+ * RIGHT NOW, from a single evaluate so both come from the same frame.
+ *
+ * The moving preview is the custom WebGL ghost layer: its vertices are the
+ * captured ORIGINAL positions and the cursor delta is a shader uniform, so a
+ * grabbed feature paints at `project(original) + offset`. That is the arithmetic
+ * the deleted `getPaintProperty('survey-drag-stations','circle-translate')` read
+ * used to feed. `mode` names the live path, so the stock GeoJSON fallback (which
+ * re-bakes its geometry AT the offset and leaves only a residual translate) can
+ * never masquerade as the custom path. Null while no drag preview is active.
+ *
+ * Backed by `window.__stalagmight_drag_ghost__` (src/dev/mapE2eHooks.ts ->
+ * SurveyLayer.dragGhostOffset()), so no test reaches into the ghost layer's
+ * private fields.
+ */
+export async function getDragGhostState(
+  page: Page,
+  lngLat?: { lng: number; lat: number },
+): Promise<(DragGhostState & { screen: ScreenPoint | null }) | null> {
+  return page.evaluate((ll) => {
+    const w = window as unknown as {
+      __stalagmight_map__?: { project: (c: [number, number]) => { x: number; y: number } };
+      __stalagmight_drag_ghost__?: () => { mode: 'custom' | 'stock'; dx: number; dy: number } | null;
+    };
+    const ghost = w.__stalagmight_drag_ghost__?.() ?? null;
+    if (!ghost) return null;
+    let screen: { x: number; y: number } | null = null;
+    if (ll && w.__stalagmight_map__) {
+      const p = w.__stalagmight_map__.project([ll.lng, ll.lat]);
+      screen = { x: p.x, y: p.y };
+    }
+    return { mode: ghost.mode, dx: ghost.dx, dy: ghost.dy, screen };
+  }, lngLat ?? null);
+}
+
 // ---------------------------------------------------------------------------
 // Canvas pixel probe (custom WebGL renderer)
 // ---------------------------------------------------------------------------
