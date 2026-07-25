@@ -15,6 +15,7 @@
 // Run: node scripts/check-no-em-dash.test.mjs  (also a CI leak-scan step).
 
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
 import {
   findDashes, isExcluded, BANNED, gateFails, looksBinary, scan, report, safePath, ALLOW, applyAllow,
 } from './check-no-em-dash.mjs';
@@ -156,6 +157,18 @@ test('does NOT exclude ordinary source, prose, or scanned text fixtures', () => 
   // the source it pins, so a dash reappearing there must fail the gate.
   assert.ok(!isExcluded('e2e-playwright/__snapshots__/dialog.spec.ts.snap'));
   assert.ok(!isExcluded('src-tauri/src/parsers/fixtures/survey.txt'));
+});
+
+test('neither the scanner nor its test contains a raw NUL byte', () => {
+  // Not hypothetical: the ALLOW cache-key template shipped with a literal NUL at
+  // offset 8884, and passed only because `looksBinary` samples the first 8000
+  // bytes. Deleting ~885 bytes above it would have made the guard classify its
+  // own source as binary and fail closed, blocking CI. Use the `\0` escape.
+  for (const f of ['check-no-em-dash.mjs', 'check-no-em-dash.test.mjs']) {
+    const b = fs.readFileSync(new URL(f, import.meta.url));
+    assert.equal(b.includes(0), false, `${f} contains a raw NUL byte at ${b.indexOf(0)}`);
+    assert.equal(looksBinary(b), false, `${f} would be skipped as binary-like`);
+  }
 });
 
 test('this scanner and its own test are scanned, not excluded (no banned code point)', () => {

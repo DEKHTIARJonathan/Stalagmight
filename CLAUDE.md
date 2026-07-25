@@ -3,7 +3,8 @@
 Tauri desktop app for processing underwater cave survey data (Rust backend + React/TypeScript frontend).
 
 It is year 2026. No em-dashes: write an ASCII hyphen instead, instead of '—' use '-'. This covers the
-figure dash, en dash, em dash, horizontal bar and minus sign (U+2012..U+2015,U+2212). Box-drawing 
+hyphen, non-breaking hyphen, figure dash, en dash, em dash, horizontal bar and
+minus sign (U+2010..U+2015,U+2212). Box-drawing 
 characters in ASCII diagrams are fine.
 
 ## Quick Reference

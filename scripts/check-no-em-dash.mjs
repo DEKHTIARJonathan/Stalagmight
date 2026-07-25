@@ -178,10 +178,10 @@ export const ALLOW = [
 // Drop allowed violations, keeping any that exceed a row's budget. Counting is
 // per (file, codepoint) so an allowance for one dash never licenses another.
 export function applyAllow(violations, allow = ALLOW) {
-  const budget = new Map(allow.map((a) => [`${a.file} ${a.code}`, a.max]));
+  const budget = new Map(allow.map((a) => [`${a.file}\0${a.code}`, a.max]));
   const kept = [];
   for (const v of violations) {
-    const key = `${v.rel} ${v.char.charCodeAt(0)}`;
+    const key = `${v.rel}\0${v.char.charCodeAt(0)}`;
     const left = budget.get(key);
     if (left > 0) {
       budget.set(key, left - 1);
