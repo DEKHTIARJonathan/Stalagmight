@@ -16,7 +16,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  findDashes, isExcluded, BANNED, gateFails, looksBinary, scan, report, safePath,
+  findDashes, isExcluded, BANNED, gateFails, looksBinary, scan, report, safePath, ALLOW, applyAllow,
 } from './check-no-em-dash.mjs';
 
 let passed = 0;
@@ -254,6 +254,39 @@ test('both violation and skip rows are capped so a flood cannot bury the log', (
   const skipLines = [];
   report(scan(many, () => Buffer.from([0x00])), () => {}, (m) => skipLines.push(m));
   assert.ok(skipLines.some((l) => /and 70 more unscanned \(120 total\)/.test(l)));
+});
+
+// --- ALLOW: budgeted, never blanket --------------------------------------------
+
+test('the CLAUDE.md allowance covers exactly one em dash, and nothing else', () => {
+  assert.deepEqual(ALLOW.map((a) => [a.file, a.code, a.max]), [['CLAUDE.md', 0x2014, 1]]);
+  assert.ok(ALLOW.every((a) => a.why && a.why.length > 20), 'every ALLOW row needs a written reason');
+});
+
+test('a second em dash in CLAUDE.md still fails', () => {
+  // The point of budgeting: the file is not carved out of the scan, only its one
+  // documented example is. A dash that creeps in elsewhere must still fail.
+  const two = [
+    { rel: 'CLAUDE.md', char: ch(0x2014), lineNo: 5, col: 75 },
+    { rel: 'CLAUDE.md', char: ch(0x2014), lineNo: 200, col: 3 },
+  ];
+  const kept = applyAllow(two);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].lineNo, 200);
+});
+
+test('the allowance is per codepoint and per file, and licenses nothing else', () => {
+  // An en dash in CLAUDE.md is NOT covered by the em-dash row...
+  assert.equal(applyAllow([{ rel: 'CLAUDE.md', char: ch(0x2013), lineNo: 5, col: 1 }]).length, 1);
+  // ...and an em dash in any other file is not covered at all.
+  assert.equal(applyAllow([{ rel: 'docs/SPEC.md', char: ch(0x2014), lineNo: 1, col: 1 }]).length, 1);
+  assert.equal(applyAllow([{ rel: 'AGENTS.md', char: ch(0x2014), lineNo: 5, col: 75 }]).length, 1);
+});
+
+test('scan() applies the allowance, so the real tree stays green', () => {
+  const r = scan(['CLAUDE.md'], () => buf(`use '${ch(0x2014)}' -> '-'`));
+  assert.equal(r.violations.length, 0);
+  assert.equal(report(r, () => {}, () => {}), 0);
 });
 
 // --- gate semantics ------------------------------------------------------------

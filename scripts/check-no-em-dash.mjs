@@ -32,14 +32,20 @@
 // String.fromCharCode rather than written literally - so the
 // scanner never has to exclude itself, and neither does its test.
 //
-// There is deliberately no per-SITE allowlist. Issue #293 settled every edge
-// case with a substitution instead (i18n display strings, the UI N/A glyphs, the
-// glued `-ref-` diagram form), precisely so that no exception table has to be
-// maintained. Note what that does and does not mean: whole PATHS are still
-// excluded below (vendored, generated, lockfiles, binaries), so the guard is not
-// unconditional - a file placed under one of those prefixes is not scanned. If a
-// future case genuinely needs a per-site exception, add an ALLOW table here with
-// a written reason rather than widening those prefixes.
+// Issue #293 settled nearly every edge case with a substitution rather than an
+// exception (i18n display strings, the UI N/A glyphs, the glued `-ref-` diagram
+// form), so the ALLOW table below stays as small as possible. It exists for the
+// one case a substitution cannot serve: prose that has to SHOW the banned glyph
+// to state the rule. CLAUDE.md is that case - the file defining "no em-dashes"
+// is the file that must be able to print one.
+//
+// ALLOW is budgeted, not blanket: an entry permits at most `max` occurrences of
+// ONE codepoint in ONE file. The 51st dash in CLAUDE.md still fails, so the file
+// is not carved out of the scan - only its documented example is.
+//
+// Whole PATHS are also excluded further below (vendored, generated, lockfiles,
+// binaries), so the guard is not unconditional. Prefer an ALLOW row with a
+// written reason over widening those prefixes.
 //
 // Usage:  node scripts/check-no-em-dash.mjs   (or: pnpm lint:no-em-dash)
 
@@ -156,6 +162,36 @@ export function safePath(rel) {
   return JSON.stringify(rel);
 }
 
+// Budgeted exceptions: {file, code, max, why}. Each row permits at most `max`
+// occurrences of that ONE codepoint in that ONE file; anything beyond the budget
+// is reported as a violation, so the file stays scanned. Keep this table short.
+export const ALLOW = [
+  {
+    file: 'CLAUDE.md',
+    code: 0x2014,
+    max: 1,
+    why: 'the rule statement itself shows the glyph it bans ("instead of \'<em-dash>\' use \'-\'"), '
+      + 'which is clearer to a reader than naming a codepoint. The file cannot follow its own rule here.',
+  },
+];
+
+// Drop allowed violations, keeping any that exceed a row's budget. Counting is
+// per (file, codepoint) so an allowance for one dash never licenses another.
+export function applyAllow(violations, allow = ALLOW) {
+  const budget = new Map(allow.map((a) => [`${a.file} ${a.code}`, a.max]));
+  const kept = [];
+  for (const v of violations) {
+    const key = `${v.rel} ${v.char.charCodeAt(0)}`;
+    const left = budget.get(key);
+    if (left > 0) {
+      budget.set(key, left - 1);
+      continue;
+    }
+    kept.push(v);
+  }
+  return kept;
+}
+
 // Cap on printed rows, per category. A reverted sweep (violations) or a tree of
 // planted NUL files (skips) would otherwise flood the CI log; the totals are
 // still reported truthfully in the "... and N more" tail.
@@ -208,7 +244,7 @@ export function scan(files, readFile) {
     scanned++;
     for (const v of findDashes(buf.toString('utf8'))) violations.push({ rel, ...v });
   }
-  return { violations, skipped, scanned, symlinks };
+  return { violations: applyAllow(violations), skipped, scanned, symlinks };
 }
 
 // Read one tracked file, returning null for a symlink so `scan` can skip it
