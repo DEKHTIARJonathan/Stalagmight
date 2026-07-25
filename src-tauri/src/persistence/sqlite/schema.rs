@@ -543,9 +543,11 @@ impl Database {
             return Ok(false);
         }
 
-        let tx = conn.unchecked_transaction()?;
+        // No transaction here on purpose: the caller wraps this call and the
+        // invalidation that follows it in one, so the two cannot be separated
+        // by a crash.
         for section_id in &flip {
-            tx.execute(
+            conn.execute(
                 "UPDATE shots
                  SET pitch_in  = CASE WHEN pitch_in  IS NULL THEN NULL ELSE -pitch_in  END,
                      pitch_out = CASE WHEN pitch_out IS NULL THEN NULL ELSE -pitch_out END
@@ -553,7 +555,6 @@ impl Database {
                 [section_id],
             )?;
         }
-        tx.commit()?;
 
         tracing::info!(
             sections_flipped = flip.len(),
@@ -808,11 +809,20 @@ impl Database {
         if current < UNDO_FORMAT_SAFE_VERSION {
             self.drop_legacy_undo_history()?;
         }
-        if current < 12 && Self::migrate_pitch_to_down_convention(&self.conn)? {
-            // Anything still holding a pre-flip pitch now disagrees with the
-            // shots table, and the v12 stamp means this never runs again, so
-            // the stale copies have to go now or they are permanent.
-            self.invalidate_pre_pitch_flip_state()?;
+        if current < 12 {
+            // The flip and the invalidation have to land together. The verdict
+            // is re-derived from the rows themselves, so a flip that committed
+            // alone would look already-correct on the next open: the migration
+            // would decline, the invalidation would never run, and v12 would be
+            // stamped over permanently stale undo history, warning dismissals
+            // and collab baseline. One transaction removes that window. The
+            // invalidation runs on this same connection, so its statements join
+            // this transaction.
+            let tx = self.conn.unchecked_transaction()?;
+            if Self::migrate_pitch_to_down_convention(&tx)? {
+                self.invalidate_pre_pitch_flip_state()?;
+            }
+            tx.commit()?;
         }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.

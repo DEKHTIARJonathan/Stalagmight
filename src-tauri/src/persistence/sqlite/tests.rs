@@ -4659,6 +4659,50 @@ fn migrate_v12_is_idempotent_when_run_twice() {
     );
 }
 
+/// The flip must not commit on its own.
+///
+/// `ensure_schema_version` wraps the flip and `invalidate_pre_pitch_flip_state`
+/// in one transaction, because the verdict is re-derived from the rows
+/// themselves: a flip that committed alone would look already-correct on the
+/// next open, so the migration would decline, the invalidation would never run,
+/// and v12 would be stamped over permanently stale undo history, warning
+/// dismissals and collab baseline.
+///
+/// Rolling back the caller's transaction must therefore undo the flip. If this
+/// fails, the migration has taken a transaction of its own again and that
+/// window is back.
+#[test]
+fn migrate_v12_flip_is_governed_by_the_callers_transaction() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("rollback.stalx");
+
+    let mut project = Project::new("Rollback".to_string(), None);
+    project.add_section(descending_section("FromDmp", -1.0, 4));
+
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project).unwrap();
+    assert_eq!(section_pitches(&db, "FromDmp"), vec![Some(-30.0); 4]);
+
+    let tx = db.conn.unchecked_transaction().unwrap();
+    assert!(
+        Database::migrate_pitch_to_down_convention(&tx).unwrap(),
+        "precondition: this section is the kind the migration flips"
+    );
+    assert_eq!(
+        section_pitches(&db, "FromDmp"),
+        vec![Some(30.0); 4],
+        "precondition: the flip is visible inside the open transaction"
+    );
+    tx.rollback().unwrap();
+
+    assert_eq!(
+        section_pitches(&db, "FromDmp"),
+        vec![Some(-30.0); 4],
+        "rolling back the caller's transaction must undo the flip, so the flip \
+         and the invalidation cannot be separated by a crash"
+    );
+}
+
 /// A leg steeper than vertical is a survey blunder, and validation skips the
 /// inclination cross-check for it. It must not vote in the migration either, or
 /// a single typo can drag a section's verdict in whichever direction its sign
@@ -4668,20 +4712,40 @@ fn migrate_v12_ignores_out_of_range_legs_when_voting() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("blunder.stalx");
 
-    // Three shots of genuine +down evidence, plus one -120 blunder. The blunder
-    // scores better flipped (|120-30|=90 vs |-120-30|=150), so if it voted it
-    // would drag this already-correct section towards a flip.
-    let mut section = descending_section("FromCompass", 1.0, 3);
-    section.shots.push(ShotData {
+    // The good shots are deliberately shallow, so each contributes little to the
+    // as-is total and the blunder can dominate. Three correct +2 shots (implied
+    // +2, so as-is 0 and flipped 4 apiece) plus one -91 leg whose geometry
+    // implies +87 (as-is 178, flipped 4).
+    //
+    // Let the blunder vote and the totals are as-is 178 / flipped 16, which
+    // clears the decisive ratio and flips all four shots, so a single typo
+    // corrupts three correct ones. Exclude it and the totals are as-is 0 /
+    // flipped 12, which declines. That gap is what this test exists to hold: it
+    // fails if MAX_VOTING_PITCH_DEG is raised or the guard removed.
+    let shallow = |i: usize| ShotData {
         azimuth_in: 90.0,
         azimuth_out: 90.0,
         length: 10.0,
-        depth_in: 15.0,
-        depth_out: 20.0,
-        pitch_in: Some(-120.0),
-        pitch_out: Some(-120.0),
+        depth_in: 0.349 * i as f64,
+        depth_out: 0.349 * (i + 1) as f64,
+        pitch_in: Some(2.0),
+        pitch_out: Some(2.0),
+        ..Default::default()
+    };
+    let mut shots: Vec<ShotData> = (0..3).map(shallow).collect();
+    shots.push(ShotData {
+        azimuth_in: 90.0,
+        azimuth_out: 90.0,
+        length: 10.0,
+        depth_in: 1.047,
+        depth_out: 11.033,
+        pitch_in: Some(-91.0),
+        pitch_out: Some(-91.0),
         ..Default::default()
     });
+
+    let mut section = descending_section("FromCompass", 1.0, 1);
+    section.shots = shots;
     let mut project = Project::new("Blunder".to_string(), None);
     project.add_section(section);
     seed_v11_project(&path, &project);
@@ -4689,8 +4753,9 @@ fn migrate_v12_ignores_out_of_range_legs_when_voting() {
     let db = Database::open_existing(&path).unwrap();
     assert_eq!(
         section_pitches(&db, "FromCompass"),
-        vec![Some(30.0), Some(30.0), Some(30.0), Some(-120.0)],
-        "an out-of-range leg must neither vote nor be rewritten"
+        vec![Some(2.0), Some(2.0), Some(2.0), Some(-91.0)],
+        "an out-of-range leg must neither vote nor be rewritten, and must not \
+         drag the correct shots around it"
     );
 }
 
