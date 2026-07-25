@@ -142,7 +142,7 @@ const SHORT: Names = Names {
 /// The model is +down (positive descends, matching `depth_in` / `depth_out`).
 /// Ariane is taken to be +up, like every other survey format we read: Walls
 /// and Compass both store +up in-file, and the mNemo device reports +up. That
-/// could not be confirmed from data — across every Ariane file available, all
+/// could not be confirmed from data. Across every Ariane file available, all
 /// 5,686 shots carry `Inclination` 0, because these surveys are depth-gauge
 /// based and Ariane never populates the field. So this is an inference from the
 /// surrounding ecosystem, not a measurement, and it is unobservable on real

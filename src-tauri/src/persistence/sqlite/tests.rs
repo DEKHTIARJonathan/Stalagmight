@@ -4437,7 +4437,7 @@ fn section_pitches(db: &Database, section_name: &str) -> Vec<Option<f64>> {
 /// in the old +up convention, and leaves everything else exactly as it was (#296).
 ///
 /// The verdict has to be per section because nothing records which importer
-/// produced a section — a project can hold a DMP section and a Compass section
+/// produced a section, and a project can hold a DMP section and a Compass section
 /// side by side, and only the DMP one may be touched.
 #[test]
 fn migrate_v12_flips_only_the_sections_stored_in_the_old_convention() {
@@ -4489,7 +4489,7 @@ fn migrate_v12_flips_only_the_sections_stored_in_the_old_convention() {
 
 /// The migration must not invent a pitch where none was recorded, and a shot
 /// whose recorded pitch genuinely contradicts its depth change must stay
-/// contradictory — that disagreement is a real survey blunder and validation
+/// contradictory: that disagreement is a real survey blunder and validation
 /// exists to surface it (#296).
 #[test]
 fn migrate_v12_preserves_null_pitch_and_does_not_launder_a_blunder() {
@@ -4504,7 +4504,7 @@ fn migrate_v12_preserves_null_pitch_and_does_not_launder_a_blunder() {
     // One shot is a genuine blunder: it disagrees with the rest of its own
     // section about which way it points. The section verdict flips it along
     // with everything else, so it comes out still disagreeing with its depth
-    // change — which is exactly right.
+    // change, which is exactly right.
     section.shots[5].pitch_in = Some(30.0);
     section.shots[5].pitch_out = Some(30.0);
     project.add_section(section);

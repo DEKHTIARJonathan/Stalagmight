@@ -1471,9 +1471,6 @@ pub(crate) fn resolve_tml_depth_in(
     }
 }
 
-/// Canonical mapping of a single Ariane TML shot to Stalagmight's `ShotData`.
-///
-/// This is the SINGLE source of truth for the TML→Stalagmight field mapping
 /// Convert Ariane's `<Inclination>` into a model pitch.
 ///
 /// Ariane is taken to be +up, like every other survey format we read: Walls and
@@ -1482,8 +1479,8 @@ pub(crate) fn resolve_tml_depth_in(
 /// flips here.
 ///
 /// This could not be confirmed against data. Across every Ariane file available,
-/// all 5,686 shots carry `Inclination` 0 — these are depth-gauge surveys and
-/// Ariane does not populate the field — so the flip is an inference from the
+/// all 5,686 shots carry `Inclination` 0 (these are depth-gauge surveys and
+/// Ariane does not populate the field), so the flip is an inference from the
 /// surrounding ecosystem rather than a measurement, and on real files it is a
 /// no-op. `0` maps to a plain `0.0`, never `-0.0`, so a round-trip through
 /// Ariane does not show up as a phantom edit. Inverse of
@@ -1496,10 +1493,14 @@ pub(crate) fn inclination_to_pitch(inclination: f64) -> f64 {
     }
 }
 
-/// (azimuth `rem_euclid(360)`, depth in/out, inclination→pitch_in, LRUD 0→None,
-/// VIRTUAL→is_reference). Both DMP/TML import and the collaboration reconcile
-/// engine call it, so a clean round-trip never appears as a phantom edit.
-/// `depth_in` must already be resolved via [`resolve_tml_depth_in`].
+/// Canonical mapping of a single Ariane TML shot to Stalagmight's `ShotData`.
+///
+/// This is the SINGLE source of truth for the TML to Stalagmight field mapping
+/// (azimuth `rem_euclid(360)`, depth in/out, inclination to `pitch_in`, LRUD 0
+/// to None, VIRTUAL to `is_reference`). Both DMP/TML import and the
+/// collaboration reconcile engine call it, so a clean round-trip never appears
+/// as a phantom edit. `depth_in` must already be resolved via
+/// [`resolve_tml_depth_in`].
 pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     // LRUD: pass through, using None for zero values
     let lrud_opt = |v: f64| {

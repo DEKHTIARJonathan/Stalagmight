@@ -183,7 +183,7 @@ export function computeProposedRaw(
     case 'length-from-depth': {
       // Setting length to the depth change makes the shot vertical, so also set
       // the inclination to the matching ±90° in the +down convention (deeper =>
-      // depth increases => +90; shallower => -90) — otherwise a recorded
+      // depth increases => +90; shallower => -90), otherwise a recorded
       // non-vertical pitch would immediately trip a fresh INCLINATION_DEPTH_MISMATCH
       // (issue #57 finding #2, issue #296).
       const p = dz > 0 ? 90 : -90;

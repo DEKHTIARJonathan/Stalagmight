@@ -29,7 +29,7 @@ function recordedPitch(shot: Shot): number | null {
 }
 // Signed implied inclination in the +down convention (matches the production
 // helper and DetailPanel.computeInclination: positive = descending, depth
-// increases) — issue #57 finding #7, issue #296.
+// increases), issue #57 finding #7, issue #296.
 function impliedInclination(shot: Shot): number {
   if (!(shot.length > 0)) return 0;
   const ratio = (shot.depth_out - shot.depth_in) / shot.length;

@@ -424,7 +424,7 @@ impl Database {
     /// were stored with a pitch that contradicted their own depth change while
     /// Walls- and Compass-sourced shots were already +down. Nothing on a shot
     /// or a section records which importer produced it, so the origin cannot be
-    /// looked up — it has to be inferred from the numbers.
+    /// looked up, it has to be inferred from the numbers.
     ///
     /// Decided per SECTION, never per shot. A single shot is often ambiguous:
     /// near-horizontal and very short shots carry almost no signal (1 cm depth
@@ -436,14 +436,17 @@ impl Database {
     /// the section verdict and stays flagged by validation, which is the whole
     /// point of the cross-check.
     ///
-    /// A section is only flipped when the evidence is lopsided — at least
+    /// A section is only flipped when the evidence is lopsided: at least
     /// `MIN_VOTING_SHOTS` usable shots and a flipped error less than half the
     /// as-is error. On real DMP data the flipped error is 3-7x smaller, and on
     /// already-correct Walls/Compass data it is far larger, so the gap is wide.
     /// Anything in between is left alone rather than guessed at; sections whose
     /// pitch is entirely zero (Ariane never populates inclination) produce no
     /// signal at all and are untouched.
-    fn migrate_pitch_to_down_convention(conn: &Connection) -> Result<()> {
+    /// Returns `true` when at least one section was flipped, so the caller can
+    /// invalidate the state that still holds pre-flip pitch (persisted undo
+    /// history, dismissed inclination warnings, the collab sidecar baseline).
+    fn migrate_pitch_to_down_convention(conn: &Connection) -> Result<bool> {
         /// Below this a shot's implied angle is mostly depth-gauge quantisation.
         const MIN_LENGTH_M: f64 = 0.05;
         /// Same, for the vertical change.
@@ -452,6 +455,8 @@ impl Database {
         const MIN_VOTING_SHOTS: usize = 3;
         /// Flipped must beat as-is by this factor to count as decisive.
         const DECISIVE_RATIO: f64 = 2.0;
+        /// A leg steeper than vertical is a blunder and casts no vote.
+        const MAX_VOTING_PITCH_DEG: f64 = 90.0;
 
         let mut stmt = conn.prepare(
             "SELECT section_id, length, depth_in, depth_out, pitch_in, pitch_out
@@ -486,6 +491,13 @@ impl Database {
             if !recorded.is_finite() || !dz.is_finite() || !length.is_finite() {
                 continue;
             }
+            // Out-of-range legs are blunders, not evidence.  Validation skips
+            // the cross-check for them (see `Validator::validate_shot`), so
+            // letting them vote here would let a single 120 degree typo drag a
+            // section's verdict in either direction depending on its sign.
+            if recorded.abs() > MAX_VOTING_PITCH_DEG {
+                continue;
+            }
             let horizontal = (length * length - dz * dz).max(0.0).sqrt();
             let implied = dz.atan2(horizontal).to_degrees();
 
@@ -504,12 +516,31 @@ impl Database {
             .map(|(section_id, _)| *section_id)
             .collect();
 
+        // Sections that had usable geometry but were not decisive enough to
+        // flip keep whatever convention they were stored in, and the v12 stamp
+        // means they are never re-examined.  If one of those was in fact a +up
+        // section, validation will now flag every sloped shot in it, so name
+        // them in the log rather than leaving the user to guess.
+        let declined: Vec<i64> = tally
+            .iter()
+            .filter(|(section_id, (_, _, count))| {
+                *count >= MIN_VOTING_SHOTS && !flip.contains(section_id)
+            })
+            .map(|(section_id, _)| *section_id)
+            .collect();
+        if !declined.is_empty() {
+            tracing::warn!(
+                declined_sections = ?declined,
+                "Pitch convention was not decisive for these sections; leaving them as stored (v11 to v12)"
+            );
+        }
+
         if flip.is_empty() {
             tracing::info!(
                 sections_examined = tally.len(),
-                "No sections needed pitch-convention normalisation (v11→v12)"
+                "No sections needed pitch-convention normalisation (v11 to v12)"
             );
-            return Ok(());
+            return Ok(false);
         }
 
         let tx = conn.unchecked_transaction()?;
@@ -527,9 +558,9 @@ impl Database {
         tracing::info!(
             sections_flipped = flip.len(),
             sections_examined = tally.len(),
-            "Normalised stored pitch to the +down convention (v11→v12)"
+            "Normalised stored pitch to the +down convention (v11 to v12)"
         );
-        Ok(())
+        Ok(true)
     }
 
     /// Migrate undo/redo tables from TEXT to BLOB columns (schema v2→v3).
@@ -622,6 +653,61 @@ impl Database {
                 );
             }
         }
+        Ok(())
+    }
+
+    /// Discard everything outside the `shots` table that still holds a
+    /// pre-#296 pitch, after `migrate_pitch_to_down_convention` flipped at
+    /// least one section (schema v11 to v12).
+    ///
+    /// The migration rewrites `shots` only. Three other stores keep pitch, or a
+    /// verdict derived from it, and none of them is versioned, so a stale copy
+    /// would outlive the migration and there is no second pass to catch it:
+    ///
+    /// 1. Persisted undo/redo. Payloads carry absolute pitch values and whole
+    ///    project snapshots, so one undo of a pre-upgrade edit writes the +up
+    ///    value straight back into a file already stamped v12.
+    /// 2. Dismissed inclination warnings. `resolved_warnings` is keyed by
+    ///    `(section_id, shot_id, warning_code)` with no value component, so a
+    ///    mismatch the user dismissed under the old convention would keep
+    ///    suppressing the check now that the number means something else.
+    /// 3. The collab sidecar baseline. The sibling `.tml` on disk was written
+    ///    by a pre-#296 build in the unflipped convention; clearing the hash and
+    ///    the per-shot baseline forces a fresh export before the next reconcile,
+    ///    instead of diffing the new frame against an old-frame file.
+    fn invalidate_pre_pitch_flip_state(&self) -> Result<()> {
+        self.drop_legacy_undo_history()?;
+
+        if self.table_exists("resolved_warnings")? {
+            let cleared = self.conn.execute(
+                "DELETE FROM resolved_warnings
+                 WHERE warning_code IN ('INCLINATION_DEPTH_MISMATCH', 'LENGTH_BELOW_DEPTH_CHANGE')",
+                [],
+            )?;
+            if cleared > 0 {
+                tracing::info!(
+                    cleared,
+                    "Cleared inclination warning dismissals taken under the pre-#296 convention"
+                );
+            }
+        }
+
+        if self.table_exists("collab_state")? {
+            let updated = self.conn.execute(
+                "UPDATE collab_state
+                 SET state_json = json_remove(
+                         json_remove(state_json, '$.last_export_tml_sha256'),
+                         '$.shot_baseline')
+                 WHERE id = 1",
+                [],
+            )?;
+            if updated > 0 {
+                tracing::info!(
+                    "Cleared collab sidecar baseline; the .tml will be re-exported before the next reconcile"
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -722,8 +808,11 @@ impl Database {
         if current < UNDO_FORMAT_SAFE_VERSION {
             self.drop_legacy_undo_history()?;
         }
-        if current < 12 {
-            Self::migrate_pitch_to_down_convention(&self.conn)?;
+        if current < 12 && Self::migrate_pitch_to_down_convention(&self.conn)? {
+            // Anything still holding a pre-flip pitch now disagrees with the
+            // shots table, and the v12 stamp means this never runs again, so
+            // the stale copies have to go now or they are permanent.
+            self.invalidate_pre_pitch_flip_state()?;
         }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.
