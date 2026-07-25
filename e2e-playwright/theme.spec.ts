@@ -176,6 +176,16 @@ test.describe('Theme Switching - Default Dark Theme', () => {
     await expect(
       page.locator('[data-testid="global-view"]')
     ).toBeVisible({ timeout: 10000 });
+    // GlobalView mounts before loadConfig() resolves, and useTheme() applies the
+    // built-in 'dark' fallback until then. Gate on the config-derived theme so
+    // these tests never observe the pre-config fallback.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => document.documentElement.dataset.theme),
+        { timeout: 10000 }
+      )
+      .toBe('cave');
   });
 
   test('default theme is dark on app load @smoke', async ({ page }) => {
