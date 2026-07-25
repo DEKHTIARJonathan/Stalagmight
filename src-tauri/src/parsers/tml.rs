@@ -186,7 +186,7 @@ fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
         b"Latitude" | b"LT" => Some("latitude"),
         b"Longitude" | b"LGT" => Some("longitude"),
         b"Name" | b"NM" => Some("name"),
-        // Ariane 26+ per-shot UUID — collab-mode round-trip identity.
+        // Ariane 26+ per-shot UUID - collab-mode round-trip identity.
         b"UUID" | b"UU" => Some("uuid"),
         _ => None,
     }
@@ -250,7 +250,7 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
 
     // Parsing state. `current_element_key` holds the normalised field
     // name for the *currently-open* element. We resolve it once at
-    // Start and reuse it at Text — that avoids re-doing the lookup
+    // Start and reuse it at Text - that avoids re-doing the lookup
     // (and any String allocation) on the text event.  For non-shot
     // file-level elements we keep the raw bytes around so the small
     // `match` in the metadata branch can dispatch by slice.
@@ -260,7 +260,7 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
     let mut current_fields: HashMap<&'static str, String> = HashMap::new();
     let mut current_element_key: Option<&'static str> = None;
     let mut current_element_raw: Vec<u8> = Vec::new();
-    // Shape/SH subtrees are skipped — TML's <Shape> per-shot LRUD
+    // Shape/SH subtrees are skipped - TML's <Shape> per-shot LRUD
     // polygons are not consumed by the importer.  We use quick-xml's
     // `read_to_end` to fast-forward past them instead of looping
     // through every nested event ourselves; for a 57 MB Data.xml this
@@ -285,7 +285,7 @@ fn parse_raw_shots(xml: &str) -> Result<(Vec<RawShot>, FileMetadata)> {
                         current_fields.clear();
                     }
                     b"Shape" | b"SH" => {
-                        // Fast-forward past the Shape/SH subtree —
+                        // Fast-forward past the Shape/SH subtree -
                         // quick-xml will scan its bytes without
                         // emitting events back to us.
                         let qname = QName(name_bytes);
@@ -562,7 +562,7 @@ fn convert_ariane_color(color_str: Option<&str>) -> String {
 ///
 /// Ariane stores GPS on START shots (section origin markers) which carry no
 /// measurement data and are excluded from sections. To preserve the geo-reference,
-/// copy lat/lng to the first real shot(s) that follow each START shot — but only
+/// copy lat/lng to the first real shot(s) that follow each START shot - but only
 /// if those successors don't already have their own GPS data.
 fn propagate_start_gps(raw_shots: &mut [RawShot]) {
     // Collect START shots that have GPS data
@@ -1394,7 +1394,7 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
         })
         .collect();
 
-    // Check if already in valid order (common case — skip reallocation)
+    // Check if already in valid order (common case - skip reallocation)
     let already_sorted = dep.iter().enumerate().all(|(i, d)| match d {
         Some(j) => *j < i,
         None => true,
@@ -1432,7 +1432,7 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
         }
     }
 
-    // Append any remaining (cycle — shouldn't happen, but be safe)
+    // Append any remaining (cycle - shouldn't happen, but be safe)
     if order.len() < n {
         for i in 0..n {
             if !order.contains(&i) {
@@ -1455,7 +1455,7 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 /// Depth handling: Ariane `DP` is absolute station depth (depth gauge reading).
 /// For each shot, `depth_in` = DPI if available, otherwise previous shot's DP
 /// (or `start_depth` for the first shot). `depth_out` = this shot's DP.
-/// Depths are stored as absolute values — no rebasing is applied.
+/// Depths are stored as absolute values - no rebasing is applied.
 /// Resolve a TML shot's entry depth, handling the `-1.0` "same as previous" sentinel.
 /// `prev_depth` is the previous real shot's cumulative depth (`None` for the first
 /// shot in a section), `start_depth` the parent station's cumulative depth.
@@ -1551,7 +1551,7 @@ fn convert_shots_to_shot_data(
         return Vec::new();
     }
 
-    // Filter out CLOSURE shots — they are loop-closure markers with zero length,
+    // Filter out CLOSURE shots - they are loop-closure markers with zero length,
     // not real survey measurements. Their topology is captured in TmlClosure.
     // Also filter out excluded shots unless explicitly included.
     let real_shots: Vec<&TmlShot> = shots
@@ -1582,7 +1582,7 @@ fn convert_shots_to_shot_data(
 /// Determine placement for a section based on topology and GPS data.
 ///
 /// `start_ariane_id` is the raw first shot's `from_id` (original topology).
-/// `effective_start_id` is an optional fallback — the `from_id` of the first
+/// `effective_start_id` is an optional fallback - the `from_id` of the first
 /// non-excluded shot, used when excluded leading shots make `start_ariane_id`
 /// unresolvable. We try both, preferring the original.
 fn determine_placement(
@@ -1622,7 +1622,7 @@ fn determine_placement(
 
     for from_id in candidates {
         if let Some(&(target_section, target_station)) = id_to_import_loc.get(&from_id) {
-            // Allow forward references — configs will be topologically sorted
+            // Allow forward references - configs will be topologically sorted
             // afterward so that the target section is created first.
             if target_section != section_index {
                 return ImportPlacement::FromImporting {
@@ -1952,7 +1952,7 @@ mod tests {
 
     #[test]
     fn test_start_gps_not_overwritten_if_successor_has_own_gps() {
-        // Successor already has GPS — should keep its own
+        // Successor already has GPS - should keep its own
         let xml = wrap_xml(
             &[
                 tml_shot_xml_gps(0, -1, "START", "Entrance", 20.2, -87.5),
@@ -2999,8 +2999,8 @@ mod tests {
     #[test]
     fn test_excluded_leading_shots_placement() {
         // Real-world scenario modeled after Ariane data:
-        //   Section A (index 0): shots 1,2 — main line
-        //   Section C (index 1): shot 10 (from_id=2) — virtual jump chain
+        //   Section A (index 0): shots 1,2 - main line
+        //   Section C (index 1): shot 10 (from_id=2) - virtual jump chain
         //   Section B (index 2): excluded shot 5 (from_id=3, where 3 is excluded),
         //     then non-excluded shot 6 (from_id=10 → section C's last shot)
         //
@@ -3068,7 +3068,7 @@ mod tests {
                     end_ariane_id: 6,
                     start_depth: 0.0,
                 },
-                // Section C (index 2): shot 10 (from_id=2) — comes after B in raw order
+                // Section C (index 2): shot 10 (from_id=2) - comes after B in raw order
                 TmlSection {
                     name: "C".to_string(),
                     shots: vec![make_shot(10, 2, false)],

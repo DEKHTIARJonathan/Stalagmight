@@ -3,7 +3,7 @@
  *
  * Receives anonymous usage event batches from the desktop app and stores
  * them in a D1 database. IP addresses are SHA-256 hashed for abuse
- * detection only — no raw IPs or other PII are stored.
+ * detection only - no raw IPs or other PII are stored.
  *
  * Wire format: self-describing JSON (event names sent verbatim), gzip-encoded
  * (`Content-Type: application/json`, `Content-Encoding: gzip`). Uncompressed
@@ -11,7 +11,7 @@
  */
 
 const MAX_BODY_BYTES = 65_536; // 64 KB (compressed body)
-const MAX_DECOMPRESSED_BYTES = 262_144; // 256 KB — gzip-bomb guard
+const MAX_DECOMPRESSED_BYTES = 262_144; // 256 KB - gzip-bomb guard
 const RATE_LIMIT_MAX_FLUSHES_PER_MIN = 10;
 
 interface Env {
@@ -103,7 +103,7 @@ export default {
       return new Response('Not Found', { status: 404 });
     }
 
-    // Require Stalagmight user agent — blocks scanners and bots
+    // Require Stalagmight user agent - blocks scanners and bots
     const ua = request.headers.get('User-Agent') ?? '';
     if (!ua.startsWith('Stalagmight/')) {
       return new Response('Not Found', { status: 404 });
@@ -139,7 +139,7 @@ export default {
       .join('');
 
     // Rate limit: count flushes from this IP in the last minute (read-only).
-    // ip_hash is on event rows directly — no JOIN, no IP-flip exploit.
+    // ip_hash is on event rows directly - no JOIN, no IP-flip exploit.
     const { results: rateRows } = await env.DB.prepare(
       `SELECT COUNT(DISTINCT received_at) as cnt FROM events
        WHERE ip_hash = ?1 AND received_at > datetime('now', '-1 minute')`

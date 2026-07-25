@@ -3,7 +3,7 @@
  *
  * Subject: the Number Format select in Settings > General
  * (`select-number-format`, 4 options). The DataTable section dropdown that
- * these tests previously used no longer exists — the table header was
+ * these tests previously used no longer exists - the table header was
  * condensed and sections are now selected app-wide.
  *
  * Behaviors under test are the Select component's own: open/close, portal
@@ -172,7 +172,7 @@ test.describe('Select Dropdown (Portal)', () => {
     await expect(listbox).not.toBeVisible({ timeout: 2000 });
     await expect(trigger).toHaveAttribute('aria-expanded', 'false');
 
-    // Escape was consumed by the open dropdown — the settings dialog stays open
+    // Escape was consumed by the open dropdown - the settings dialog stays open
     await expect(page.getByTestId('settings-dialog')).toBeVisible();
   });
 

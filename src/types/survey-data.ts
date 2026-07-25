@@ -22,8 +22,8 @@
  * Field correspondence between SurveyData and the existing IPC types
  * (`Shot`, `Station`) is intentionally one-to-one so the migration is
  * mechanical: anywhere a consumer reads `shot.azimuth_in`, after the
- * migration it reads `data.shotAzimuthIn[i]` directly, or — if it
- * needs an object — calls `getShot(data, i)`.
+ * migration it reads `data.shotAzimuthIn[i]` directly, or - if it
+ * needs an object - calls `getShot(data, i)`.
  */
 
 import type { Shot } from './ipc/Shot';
@@ -35,7 +35,7 @@ import type { SurveyDirection } from './ipc/SurveyDirection';
 
 /** Section metadata kept as small structured objects. ~14k items for
  *  92.stalx; total memory is tiny compared to the shot payload. The
- *  `shots[]` array is *gone* — shots live in `SurveyData` keyed by
+ *  `shots[]` array is *gone* - shots live in `SurveyData` keyed by
  *  global index and looked up via `shotOffset` + `shotCount`.
  *
  *  Field names match the IPC `Section` shape minus `shots`. */
@@ -139,7 +139,7 @@ export const SHOT_FLAG_IS_REFERENCE = 0b01;
 export const STATION_FLAG_IS_ZERO_DATUM = 0b01;
 
 /** Convert a `Float32Array` slot back to `number | null`, using NaN as
- *  the null sentinel — matches the encoding in `loadProjectBinary.ts`. */
+ *  the null sentinel - matches the encoding in `loadProjectBinary.ts`. */
 export function nanToNull(v: number): number | null {
   return Number.isNaN(v) ? null : v;
 }
@@ -147,7 +147,7 @@ export function nanToNull(v: number): number | null {
 /**
  * Materialize a single `Shot` from a `SurveyData` at the given global
  * shot index (0-based across all sections). Cheap (one object alloc,
- * ~250 B) but call it sparingly — calling for every shot in a 75k
+ * ~250 B) but call it sparingly - calling for every shot in a 75k
  * project undoes the point of the SoA layout. Use raw typed-array
  * field access (`data.shotAzimuthIn[i]`) in hot iteration paths.
  *
@@ -181,7 +181,7 @@ export function getShot(data: SurveyData, globalIndex: number): Shot {
 }
 
 /**
- * Look up a shot by `(section_id, shot_id)` — the natural identity for
+ * Look up a shot by `(section_id, shot_id)` - the natural identity for
  * UI handlers that receive these from MapLibre feature properties.
  * Returns `null` if not found.
  *
@@ -274,8 +274,8 @@ export function findStationGlobalIndex(
  * produces garbage-collectable temporaries instead of a persistent
  * ~89 k-object array that duplicates `stationCoords` / `stationSectionIds`
  * / `stationIndices` (the eager `Station[]` the binary loader used to
- * build). The proxy is read-only — the app never mutates the store
- * `stations` array — and its `set` / `deleteProperty` traps throw so an
+ * build). The proxy is read-only - the app never mutates the store
+ * `stations` array - and its `set` / `deleteProperty` traps throw so an
  * accidental write surfaces immediately instead of silently no-opping.
  */
 export function lazyStationArray(data: SurveyData): Station[] {
@@ -339,7 +339,7 @@ export function lazyStationArray(data: SurveyData): Station[] {
  * `Station[]` shape that `refreshProjectState` still returns (it pulls
  * via JSON IPC, not the binary `load_project_full_binary` route).
  *
- * This is the migration-window converter — once the JSON IPC is also
+ * This is the migration-window converter - once the JSON IPC is also
  * binary-ized (out of scope for Phase A), this stops being needed.
  *
  * For the binary IPC path, see `buildSurveyData` inside
@@ -433,7 +433,7 @@ export function surveyDataFromLegacy(
     // when the vec is empty (see #[serde(skip_serializing_if =
     // "Vec::is_empty")] on src-tauri/src/models/station.rs), so the
     // JSON IPC path (`get_project_state`) hands back stations with
-    // those fields *missing* — not empty arrays.  Treat undefined as
+    // those fields *missing* - not empty arrays.  Treat undefined as
     // empty.  The binary IPC path always sets them via the sparse
     // pair maps so this only matters for the legacy JSON path.
     const mergedWith = s.merged_with;
@@ -458,7 +458,7 @@ export function surveyDataFromLegacy(
  * Closure adjustment moves station *coordinates* only; shot ids, angles,
  * lengths, section shape and offsets are identical to the measured set. So the
  * adjusted view can share the base's (large) shot typed-arrays and just swap the
- * station arrays — an O(stations) pass that never touches the lazy
+ * station arrays - an O(stations) pass that never touches the lazy
  * `section.shots` getters. The previous `surveyDataFromLegacy(project.sections,
  * adjusted)` walked every section's shots to rebuild shot columns it already had,
  * force-materializing ~75k `Shot` objects the moment the closure-adjusted mode

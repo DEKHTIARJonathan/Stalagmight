@@ -5,8 +5,11 @@
 #
 # A listed SHA only takes effect if it exists on the branch. This assumes the
 # rustfmt PR landed as a MERGE commit (preserves the SHA, as is this repo's
-# convention). A squash/rebase merge would rewrite it — if that happens, replace
+# convention). A squash/rebase merge would rewrite it - if that happens, replace
 # the SHA below with the one that actually landed on master.
 
 # style(rust): cargo fmt --all (no logic changes)
 416ea342a583532aab8260f7af5aa16766db6c01
+
+# chore: sweep Unicode dashes to ASCII hyphens (#293) - no logic changes
+6ddce619b3762550c690e928f9212eb9c81b835c

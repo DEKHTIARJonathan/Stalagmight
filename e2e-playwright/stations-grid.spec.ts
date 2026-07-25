@@ -12,7 +12,7 @@ import {
  * E2E tests for the data table's stations view (SpreadsheetGrid migration).
  *
  * Stations are derived from shots, so X/Y/Depth are read-only and only the
- * comment is editable (one set_station_comment per commit — no batch). The
+ * comment is editable (one set_station_comment per commit - no batch). The
  * station ID pill lives in the row gutter ("1:0"); the GPS cell opens the
  * Edit Station dialog: add-zero-datum mode (GPS input enabled + focused) for
  * plain stations, plain edit mode when the station already is a zero datum.
@@ -217,7 +217,7 @@ test.describe('Stations grid', () => {
     const menu = page.getByTestId('data-table-header-menu');
     await expect(menu).toBeVisible();
 
-    // No angle-mode entries in the stations view — just the group hide.
+    // No angle-mode entries in the stations view - just the group hide.
     await expect(menu.getByRole('button')).toHaveCount(1);
     await menu.getByRole('button', { name: 'Hide Coordinates (m)' }).click();
     await expect(page.getByTestId('grid-header-_y')).toHaveCount(0);

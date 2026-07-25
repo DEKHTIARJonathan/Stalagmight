@@ -180,7 +180,7 @@ fn format_station_with_name(
 
 /// Like [`format_station_with_name`] but for a stored [`StationKey`] (e.g. a
 /// captured loop closure in undo data), where no project is in scope to resolve
-/// the anchor to a positional index — the key's own `Display` is used.
+/// the anchor to a positional index - the key's own `Display` is used.
 fn format_station_key_with_name(
     key: &crate::models::StationKey,
     section_names: &HashMap<SectionId, Option<String>>,
@@ -194,8 +194,8 @@ fn format_station_key_with_name(
 
 /// Truncate `s` to at most `max_chars` characters, appending an ellipsis only
 /// when characters were actually dropped. Counts by character (not byte) so the
-/// cut never lands inside a multi-byte UTF-8 codepoint — `&s[..n]` byte-slicing
-/// panics there — and so the gate and the cut use the same unit (a comment that
+/// cut never lands inside a multi-byte UTF-8 codepoint - `&s[..n]` byte-slicing
+/// panics there - and so the gate and the cut use the same unit (a comment that
 /// is long in bytes but short in characters, e.g. emoji, is not falsely marked
 /// truncated).
 fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {

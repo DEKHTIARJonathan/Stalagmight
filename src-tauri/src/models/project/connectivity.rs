@@ -123,7 +123,7 @@ impl Project {
         }
 
         // Coincidence edges, kept in TWO graphs: merges (the rigid, acyclic
-        // forest — loop-forming merges are rejected in merge_stations) and
+        // forest - loop-forming merges are rejected in merge_stations) and
         // ALIGNED loop closures (the redundant, cycle-closing edges; unaligned
         // closures are inert). Solving merges to full reach FIRST, then closures,
         // keeps a hard merge constraint winning over a stale aligned closure on
@@ -171,7 +171,7 @@ impl Project {
             authoritative.insert(sid);
         }
         for zd in &self.zero_datums {
-            // Skip dangling datums (anchor key no longer resolves) — they are not
+            // Skip dangling datums (anchor key no longer resolves) - they are not
             // real anchors, mirroring `section_has_zero_datum`/`component_datum_refs`
             // (#174). Otherwise an unanchored section gets frozen as authoritative.
             if self.resolve_key(&zd.station_ref).is_some() {
@@ -197,8 +197,8 @@ impl Project {
 
         // Phase 2: aligned closures bridge to any component merges couldn't
         // reach; merges within that component then continue. A redundant closure
-        // (both ends already authoritative) is skipped, leaving its residual —
-        // the loop misclosure — intact.
+        // (both ends already authoritative) is skipped, leaving its residual -
+        // the loop misclosure - intact.
         if !closure_adj.is_empty() {
             let mut combined = merge_adj;
             for (section, edges) in closure_adj {
@@ -221,7 +221,7 @@ impl Project {
     /// section offset set so its station coincides with the anchored side, then
     /// is itself marked authoritative and enqueued. A neighbour reached only
     /// through a dangling/out-of-range edge (coords return `None`) is left alone
-    /// — it is not anchored or propagated, so it can't mis-position a chain
+    /// - it is not anchored or propagated, so it can't mis-position a chain
     /// behind a broken reference.
     pub(super) fn cascade_bfs(
         &mut self,
@@ -251,7 +251,7 @@ impl Project {
                     // through it: marking the unpositioned neighbour authoritative
                     // would drag ITS other partners to a bogus location, and the
                     // alignment check can't see a NaN distance to catch it later.
-                    // Treat it like a dangling edge — leave the neighbour alone.
+                    // Treat it like a dangling edge - leave the neighbour alone.
                     if dx.is_finite() && dy.is_finite() {
                         if dx != 0.0 || dy != 0.0 {
                             self.adjust_section_offset(theirs.section_id, dx, dy);
@@ -335,7 +335,7 @@ impl Project {
 
         // Cold path: cache was cleared (e.g. after deserialisation or a
         // structural remove). Fall back to the legacy linear scan rather
-        // than mutating self here — callers that care about throughput
+        // than mutating self here - callers that care about throughput
         // call `rebuild_merge_adjacency` first.
         let mut queue = vec![section_id];
         while let Some(current) = queue.pop() {
@@ -398,7 +398,7 @@ impl Project {
     /// Every zero-datum station whose section lies in the same merge-connected
     /// component as `section_id` (resolved to current StationRefs).
     ///
-    /// This is the single source of truth for "what anchors this rigid group?" —
+    /// This is the single source of truth for "what anchors this rigid group?" -
     /// `section_has_zero_datum`, `find_connected_zero_datum`, the merge guard, and
     /// the over-anchoring detector all derive from it, so they cannot drift apart.
     ///
@@ -456,7 +456,7 @@ impl Project {
 
     /// Would adding a merge between sections `a` and `b` place two zero datums in
     /// one merge component? True only when `a` and `b` are in DIFFERENT merge
-    /// components and EACH component is already anchored — i.e. the merge would
+    /// components and EACH component is already anchored - i.e. the merge would
     /// fuse two independently-anchored rigid groups. Used to keep
     /// [`Self::convert_orphan_closures_to_merges`] from silently creating the
     /// over-constraint (a closure between two anchored groups is legitimate; a
@@ -464,7 +464,7 @@ impl Project {
     pub(crate) fn merge_would_double_anchor(&self, a: SectionId, b: SectionId) -> bool {
         let component_a = self.get_merged_section_ids(a);
         if component_a.contains(&b) {
-            // Already the same merge component — a redundant merge adds no anchor.
+            // Already the same merge component - a redundant merge adds no anchor.
             return false;
         }
         let anchored = |component: &HashSet<SectionId>| {

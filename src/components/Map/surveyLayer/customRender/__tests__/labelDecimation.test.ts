@@ -19,7 +19,7 @@ import { LABEL_KIND } from '../labelShaders';
  */
 
 describe('shotStationDecimationModulus', () => {
-  it('uses the NESTED bands (14->4, 16->2, 18->1) — the monotone replacement for stock 5->2->1', () => {
+  it('uses the NESTED bands (14->4, 16->2, 18->1) - the monotone replacement for stock 5->2->1', () => {
     expect(shotStationDecimationModulus(14)).toBe(4);
     expect(shotStationDecimationModulus(15.9)).toBe(4);
     expect(shotStationDecimationModulus(16)).toBe(2);
@@ -101,7 +101,7 @@ describe('nested-decimation monotonicity (the core stock-parity break)', () => {
     const coarse = kept(15); // % 4
     const mid = kept(17); // % 2
     const fine = kept(19); // all
-    // coarse ⊆ mid ⊆ fine — no ordinal ever leaves the set as zoom rises.
+    // coarse ⊆ mid ⊆ fine - no ordinal ever leaves the set as zoom rises.
     for (const o of coarse) expect(mid.has(o)).toBe(true);
     for (const o of mid) expect(fine.has(o)).toBe(true);
     expect(fine.size).toBeGreaterThan(mid.size);

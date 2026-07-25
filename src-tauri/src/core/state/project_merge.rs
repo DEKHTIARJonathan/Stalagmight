@@ -98,7 +98,7 @@ impl AppState {
         // collaboration UUID that cross-references and Ariane matching anchor on;
         // preserve it across the merge instead of re-minting. Two source files can
         // legitimately share a UUID (one branched from the other), so dedup
-        // globally — a colliding UUID keeps a fresh mint to stay unique.
+        // globally - a colliding UUID keeps a fresh mint to stay unique.
         let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // Append sections from all projects

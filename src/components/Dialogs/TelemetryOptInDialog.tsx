@@ -45,10 +45,10 @@ export default function TelemetryOptInDialog({
         try {
           await invokeIpc('set_telemetry_enabled', { enabled });
         } catch {
-          // Non-fatal — setting is saved in config
+          // Non-fatal - setting is saved in config
         }
       } catch {
-        // Config save failed — still dismiss the dialog
+        // Config save failed - still dismiss the dialog
       }
 
       setVisible(false);
@@ -70,7 +70,7 @@ export default function TelemetryOptInDialog({
         <p className="text-text-secondary">
           {t(
             'telemetry.optIn.description',
-            'Help improve Stalagmight by sharing anonymous usage statistics. We only collect which features are used and how often — no personal data, no survey data, no file contents.',
+            'Help improve Stalagmight by sharing anonymous usage statistics. We only collect which features are used and how often - no personal data, no survey data, no file contents.',
           )}
         </p>
 

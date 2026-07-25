@@ -84,7 +84,7 @@ type ViewTab = 'map' | 'list';
 /**
  * Conservative upper bound on the OS double-click interval (Windows' max is
  * 500ms). In the list view we wait this long after a single click before showing
- * the details panel, so a double-click-to-open doesn't flash it — by the time it
+ * the details panel, so a double-click-to-open doesn't flash it - by the time it
  * elapses, the click was clearly a select (not the first half of an open).
  */
 const DOUBLE_CLICK_MS = 500;
@@ -122,7 +122,7 @@ export default function GlobalView() {
   const showToast = useUIStore((s) => s.showToast);
   const syntacticLevel = useUIStore((s) => s.syntacticLevel);
   // Toolbar buttons show icons at the 'toolbar_only' level and up (menu items
-  // use the stricter 'icons' level — handled inside AppMenu).
+  // use the stricter 'icons' level - handled inside AppMenu).
   const showToolbarIcons = syntacticLevelAtLeast(syntacticLevel, 'toolbar_only');
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<ViewTab>('list');
@@ -282,7 +282,7 @@ export default function GlobalView() {
         }
         return newSet;
       });
-      // Primary selection for the metadata panel — kept OUT of the updater above
+      // Primary selection for the metadata panel - kept OUT of the updater above
       // so that updater stays pure (no setState side-effect; clean under
       // StrictMode's double-invoke). On an ADD, the clicked project becomes
       // primary; on a DESELECT, promote the last surviving member (or clear).
@@ -508,32 +508,32 @@ export default function GlobalView() {
 
   // Selected projects array for multi-selection support. Declared before the
   // latch effect below so it can treat a surviving multi-selection as a live
-  // selection — the MetadataPanel renders the aggregate from this array even when
+  // selection - the MetadataPanel renders the aggregate from this array even when
   // there is no primary selectedProject.
   const selectedProjects = useMemo(() => {
     return recentProjects.filter(p => multiSelectedIds.has(p.file_path));
   }, [recentProjects, multiSelectedIds]);
 
   // Latch gating the list-view details panel. It starts hidden and opens only
-  // once a selection is confirmed; while a selection holds it STAYS open —
+  // once a selection is confirmed; while a selection holds it STAYS open -
   // switching between projects just updates its content (never re-hide/flicker
   // it). The first reveal is gated so a double-click-to-open doesn't flash it:
   // immediate in the map view (no open-vs-select ambiguity), and debounced by the
   // double-click window in the list view. Clears only when NOTHING is selected
-  // (no primary AND no multi-selection survivors — e.g. the selected project was
+  // (no primary AND no multi-selection survivors - e.g. the selected project was
   // removed/pruned) so the list view never strands the empty "Select a project"
   // panel and the next selection is debounced again. (Also resets when GlobalView
   // remounts, e.g. after returning from a project.)
   const [detailsOpen, setDetailsOpen] = useState(false);
   useEffect(() => {
     if (!selectedProjectId && selectedProjects.length === 0) {
-      setDetailsOpen(false); // nothing selected — re-hide and re-arm the debounce
+      setDetailsOpen(false); // nothing selected - re-hide and re-arm the debounce
       return;
     }
-    if (detailsOpen) return; // already open — leave it; content follows the selection
+    if (detailsOpen) return; // already open - leave it; content follows the selection
     // Past here, something is selected (primary OR a surviving multi-selection),
     // so reveal the panel. A multi-selection with no primary (e.g. the prune
-    // effect nulled the primary while other selections remain) still reveals —
+    // effect nulled the primary while other selections remain) still reveals -
     // the panel renders the aggregate from selectedProjects.
     if (activeTab === 'map') {
       setDetailsOpen(true);
@@ -598,7 +598,7 @@ export default function GlobalView() {
   const isSearching = searchTerm.trim().length > 0;
   // Gate the tabs and content area on the combined count (loaded + missing) so
   // an all-missing recent list still renders its removable rows instead of the
-  // EmptyState — otherwise the user can never clear those entries. (The metadata
+  // EmptyState - otherwise the user can never clear those entries. (The metadata
   // panel stays gated on loaded projects, since missing rows aren't selectable.)
   const hasRecentItems = listItems.length > 0;
 
@@ -707,7 +707,7 @@ export default function GlobalView() {
 
   return (
     <div data-testid="global-view" className="h-full flex flex-col">
-      {/* Header — left: menu + primary actions, center: title, right: Map|List toggle */}
+      {/* Header - left: menu + primary actions, center: title, right: Map|List toggle */}
       <header ref={headerRef} className="grid grid-cols-[1fr_auto_1fr] items-center px-4 py-3 border-b border-border">
         <div className="flex items-center gap-3 justify-self-start">
           <AppMenu items={menuItems} aria-label={t('globalView.menu.aria')} />
@@ -856,7 +856,7 @@ export default function GlobalView() {
             />
           ) : (
             // Top padding lives on the inner content (not the scroll container) so
-            // the table's sticky header pins flush to the top — container
+            // the table's sticky header pins flush to the top - container
             // padding-top would otherwise leave a gap the rows scroll through.
             <div className="h-full overflow-auto px-6 pb-6">
               <div className="flex items-center justify-between gap-4 mb-4 pt-6">
@@ -910,7 +910,7 @@ export default function GlobalView() {
                   )}
                 </p>
 
-                {/* Search — list-only; the map shows all projects. */}
+                {/* Search - list-only; the map shows all projects. */}
                 <div className="relative shrink-0">
                   <input
                     ref={searchInputRef}
@@ -1020,7 +1020,7 @@ export default function GlobalView() {
         {/* Metadata Panel. Map view: always shown (lives alongside the map), incl.
             the empty "Select a project" state. List view: hidden until the first
             selection is confirmed past the double-click window (so it doesn't flash
-            on a double-click-to-open), then it follows the selection — and requires
+            on a double-click-to-open), then it follows the selection - and requires
             a live selection (primary OR a surviving multi-selection), so it never
             shows the empty state in the list. */}
         {recentProjects.length > 0 && (activeTab === 'map' || (detailsOpen && (selectedProject !== null || selectedProjects.length > 0))) && (

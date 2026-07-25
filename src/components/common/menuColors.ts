@@ -1,6 +1,6 @@
 /**
  * Fixed icon tints for the application (hamburger) menus. These are
- * menu-action colors — not survey-entity syntactic roles — so they live here
+ * menu-action colors - not survey-entity syntactic roles - so they live here
  * rather than in the syntactic palette. Shared by the GlobalView (start screen)
  * and SingleSystemView (in-project) menus. Hexes reuse the app's existing
  * palette where natural.

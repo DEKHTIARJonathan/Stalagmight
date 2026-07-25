@@ -8,7 +8,7 @@ import { formatNumber } from '../../i18n/format';
 import type { RawTableData } from '../../types/ipc/RawTableData';
 
 export const RAW_TABLE_PAGE_SIZE = 1000;
-/** Height of the pager footer (px) — subtracted from the grid's share. */
+/** Height of the pager footer (px) - subtracted from the grid's share. */
 const PAGER_HEIGHT = 28;
 
 const noop = () => {};
@@ -23,7 +23,7 @@ interface RawTableViewProps {
 /**
  * Read-only pager over a raw sqlite table of the project database. Values
  * arrive stringified server-side (NULL → "NULL", blobs → "<blob N KB>"), so
- * this always shows the LAST-SAVED state — the host shows an "as of last
+ * this always shows the LAST-SAVED state - the host shows an "as of last
  * save" hint while the project is dirty, and a save refetches the page.
  */
 export default function RawTableView({ tableName, height }: RawTableViewProps) {

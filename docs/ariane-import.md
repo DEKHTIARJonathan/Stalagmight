@@ -17,7 +17,7 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
 - Cave name
 - Measurement unit (metric / imperial)
 - Magnetic azimuth flag
-- GPS reference (latitude, longitude, altitude) — extracted from the first shot with non-zero coordinates
+- GPS reference (latitude, longitude, altitude) - extracted from the first shot with non-zero coordinates
 
 ### Per-section
 - Section name (with `SectionDescription` suffix stripped)
@@ -26,13 +26,13 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
 - Section color (converted from Ariane's integer RGB format)
 
 ### Per-shot
-- Azimuth (normalized to 0–360; Ariane stores a single forward azimuth, not a backsight pair)
+- Azimuth (normalized to 0-360; Ariane stores a single forward azimuth, not a backsight pair)
 - Length
 - Depth in / depth out
 - Inclination
 - LRUD (left, right, up, down)
 - Comment
-- Shot type (Real, Virtual, Start, Closure) — Ariane's "Virtual" type maps to internal `is_reference`
+- Shot type (Real, Virtual, Start, Closure) - Ariane's "Virtual" type maps to internal `is_reference`
 - Excluded flag
 
 ### Loop closures
@@ -42,8 +42,8 @@ CLOSURE-type shots in Ariane encode loop closure metadata. During import these a
 
 The import follows the same two-step flow as DMP imports:
 
-1. **Parse & preview** — The file is parsed and the import dialog shows all sections with a map preview. Users can toggle individual sections on/off.
-2. **Placement** — Each section is placed in the coordinate system. The first section uses GPS coordinates (if available) or manual placement; subsequent sections attach to their parent section's endpoint via topology linking.
+1. **Parse & preview** - The file is parsed and the import dialog shows all sections with a map preview. Users can toggle individual sections on/off.
+2. **Placement** - Each section is placed in the coordinate system. The first section uses GPS coordinates (if available) or manual placement; subsequent sections attach to their parent section's endpoint via topology linking.
 
 ### Excluded shots
 
@@ -61,7 +61,7 @@ When excluded shots are filtered:
 | **Real** | Imported as regular survey shots |
 | **Virtual** | Imported as reference shots (`is_reference = true`; dashed display, hidden by "Reference shots" toggle). The TML type string remains "VIRTUAL" for Ariane compatibility. |
 | **Start** | Marks the first station; not imported as a shot |
-| **Closure** | Not imported as a shot — used to create loop closures between sections |
+| **Closure** | Not imported as a shot - used to create loop closures between sections |
 
 ## Topology Reconstruction
 
@@ -69,7 +69,7 @@ Ariane stores survey data as a flat list of shots with `FromID` linkage. The par
 
 1. Building a graph of shot connectivity from `FromID` references
 2. Detecting branch points where multiple shots share the same `FromID`
-3. Splitting branches into separate sections with parent–child placement relationships
+3. Splitting branches into separate sections with parent-child placement relationships
 4. Resolving cross-section connections via a shot ID → (section index, station index) mapping
 
 ## Unit Conversion

@@ -13,7 +13,7 @@ import type { StationRef } from '../types/project';
 import { divePlanSnapshotOf, divePlanSnapshotsEqual } from '../utils/divePlan';
 
 /**
- * Gas & route-planning sub-mode state (#38, Phase 1). Runtime-only — never
+ * Gas & route-planning sub-mode state (#38, Phase 1). Runtime-only - never
  * persisted. The store's intrinsic default is the compiled `defaultConfig.gas`;
  * on sub-mode entry `GasPlanPanel` overwrites `gasConfig` with the live PERSISTED
  * `projectStore.config.gas` (the user's saved gas prefs), and `uiStore.exitGasPlan`
@@ -25,7 +25,7 @@ import { divePlanSnapshotOf, divePlanSnapshotsEqual } from '../utils/divePlan';
  * later CCR/team phases add no migration (PRD §5).
  */
 
-/** Canonical starting rig: a matched twin AL80 back-gas set — the "call-it-an-80"
+/** Canonical starting rig: a matched twin AL80 back-gas set - the "call-it-an-80"
  *  baseline every cave diver recognizes (≈2295 L usable each at 207 bar). */
 const DEFAULT_DIVER: Diver = { rmv_l_per_min: 20, label: null };
 

@@ -30,7 +30,7 @@ import { defaultConfig } from '../../types/config';
 interface ToolbarProps {
   /** Items for the left-side hamburger (AppMenu): file/project actions. */
   menuItems: AppMenuItem[];
-  /** A save failed — tint the hamburger icon red. */
+  /** A save failed - tint the hamburger icon red. */
   saveFailed?: boolean;
   onImport: () => void;
   onUndo: () => void;
@@ -127,7 +127,7 @@ export const TOOLBAR_ITEMS: ToolbarItem[] = [
 ];
 
 // Plan/Export are read-only workspaces (#38): the mutating tools (merge, comment,
-// move) make no sense there, so they're HIDDEN — not merely disabled — leaving only
+// move) make no sense there, so they're HIDDEN - not merely disabled - leaving only
 // the non-mutating Select / Pan / Zoom / Measure. Filtered once from TOOLBAR_ITEMS so
 // it stays in sync, with separators left dangling by the removals cleaned up.
 export const READ_ONLY_TOOLBAR_ITEMS: ToolbarItem[] = (() => {
@@ -476,7 +476,7 @@ export default function Toolbar({
                 );
               })}
             </div>
-            {/* DisplayMenu is available in Survey + Plan (not Export — the Export panel's own
+            {/* DisplayMenu is available in Survey + Plan (not Export - the Export panel's own
                 controls decide what the exported image contains, so a survey Display menu there
                 is a confusing no-op). The component keeps the survey-only concerns out of Plan
                 internally: the geometry measured/adjusted toggle (Plan forces the closure map)
@@ -509,7 +509,7 @@ function ToolButton({ tool, active, onClick, disabled = false }: ToolButtonProps
 
   const handleMouseEnter = useCallback(() => {
     if (disabled) return;
-    // Suppress informational flyout on touch — no hover on touch devices
+    // Suppress informational flyout on touch - no hover on touch devices
     if (lastPointerTypeRef.current === 'touch') return;
     if (hoverCloseTimerRef.current) {
       clearTimeout(hoverCloseTimerRef.current);

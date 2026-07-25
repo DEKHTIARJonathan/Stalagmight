@@ -3,8 +3,8 @@
  * sibling of `surveyCustomLayer.ts` that draws the moving-geometry preview of a
  * move drag directly from typed-array buffers, with the live drag delta carried
  * as ONE screen-pixel uniform (`u_offset_px`) applied in the vertex shader. A
- * pointermove updates that single uniform + `triggerRepaint` — no worker, no
- * `setData`, no per-frame rebuild — which removes the async re-bake overshoot the
+ * pointermove updates that single uniform + `triggerRepaint` - no worker, no
+ * `setData`, no per-frame rebuild - which removes the async re-bake overshoot the
  * stock GeoJSON ghost + `line-translate` state machine suffered.
  *
  * Same GL discipline as the bulk layer (WebGL2 / GLSL ES 3.00, premultiplied

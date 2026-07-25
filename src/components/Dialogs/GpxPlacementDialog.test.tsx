@@ -1,5 +1,5 @@
 /**
- * Component test (#110) — GPX import warning surfacing.
+ * Component test (#110) - GPX import warning surfacing.
  *
  * Must surface the deferred-save partial-success warning ("imported but
  * unsaved"), but must NOT modal the routine per-shot validation warnings that
@@ -26,7 +26,7 @@ const SAVE_WARNING: ValidationWarning = {
   code: 'SYSTEM',
   message:
     'Imported, but could not save the new project to disk: disk full. ' +
-    'Your changes are unsaved — please save manually.',
+    'Your changes are unsaved - please save manually.',
   severity: 'warning',
 };
 const VALIDATION_WARNING: ValidationWarning = {

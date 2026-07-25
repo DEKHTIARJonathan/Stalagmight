@@ -31,17 +31,17 @@ export type ViewType = 'global' | 'single';
  * Cave geometry display mode.
  * - `measured`: raw survey geometry (the source of truth).
  * - `closureAdjusted`: loop-closure-corrected geometry, derived non-destructively
- *   on the backend. This view is read-only — edits are made in `measured`.
+ *   on the backend. This view is read-only - edits are made in `measured`.
  */
 export type GeometryMode = 'measured' | 'closureAdjusted';
 
 /**
  * Top-level workspace mode (#38 follow-up, the workspace-mode reframe). Selected from the
  * top-middle carousel when a project is open:
- *  - `survey` — the editable survey workspace (everything as it was).
- *  - `plan`   — the gas planner: read-only closure map + gas overlay, Plan-setup
+ *  - `survey` - the editable survey workspace (everything as it was).
+ *  - `plan`   - the gas planner: read-only closure map + gas overlay, Plan-setup
  *               sidebar, tabbed bottom tables.
- *  - `export` — read-only closure map + an export stub (SVG/JPG, future work).
+ *  - `export` - read-only closure map + an export stub (SVG/JPG, future work).
  * Plan/Export force the read-only closure-adjusted map; only Survey edits. Runtime
  * only (never persisted) and meaningful only in single-project view.
  */
@@ -56,7 +56,7 @@ export const GEOMETRY_MODE_DEFAULT: GeometryMode = 'measured';
  * we're in a non-survey workspace (Plan/Export). Both terms are load-bearing:
  * Plan/Export force `closureAdjusted`, but that auto-reverts to `measured` on a
  * project with no eligible closures (see MapCanvas), so `appMode` is the robust
- * authority — a `geometryMode`-only check leaks mutations (import, undo) into the
+ * authority - a `geometryMode`-only check leaks mutations (import, undo) into the
  * read-only workspaces (#243, the #225 bug class). One predicate so the many
  * gate sites can't drift.
  */
@@ -70,8 +70,8 @@ export type DetailPanelTab = 'details' | 'warnings';
 
 /**
  * Shot/station coloring mode. The three overlay flags (showDepthGradient /
- * showDistanceGradient / showIssueSeverity) are mutually exclusive — all paint the
- * shots/stations layer — so this enum is the single-select view of them. `section`
+ * showDistanceGradient / showIssueSeverity) are mutually exclusive - all paint the
+ * shots/stations layer - so this enum is the single-select view of them. `section`
  * = none of the overlays (the default per-section coloring). Read via
  * {@link colorModeOf}; set via the store's `setColorMode` (the one place that owns
  * the select-one mapping).
@@ -102,7 +102,7 @@ export type PanelId = 'sections' | 'detail' | 'data-table';
 
 /**
  * A transient "ghost" geometry overlay shown on the map (in survey meters),
- * used to preview a proposed edit before it is committed — e.g. as the user
+ * used to preview a proposed edit before it is committed - e.g. as the user
  * tries different warning-resolution options (issue #57). Structurally matches
  * the map's GhostSectionData so MapCanvas can hand it straight to the survey
  * layer's setGhostSection.
@@ -156,7 +156,7 @@ export interface MeasureSnapShot {
 }
 
 /**
- * Full reset of all ruler/measure state — the single funnel spread by
+ * Full reset of all ruler/measure state - the single funnel spread by
  * `clearMeasure` and every other reset trigger (tool switch, dialog open,
  * geometry-mode change, project load…).
  */
@@ -321,7 +321,7 @@ interface UIStore {
   savePanelLayout: () => Promise<void>;
 
   // Data-table fullscreen mode: the table overlays the whole window below the
-  // toolbar. Session-only — never persisted, so the app always starts windowed.
+  // toolbar. Session-only - never persisted, so the app always starts windowed.
   dataTableFullScreen: boolean;
   /** Raw sqlite table browsed read-only while fullscreen (null = the normal
    *  Sections-backed view). Only reachable from the fullscreen toolbar. */
@@ -400,7 +400,7 @@ interface UIStore {
   /** Apply display settings from backend (merges with existing state using ??) */
   applyDisplaySettings: (settings: DisplaySettings) => void;
 
-  // Distance-gradient overlay (#34). Runtime-only — deliberately NOT a
+  // Distance-gradient overlay (#34). Runtime-only - deliberately NOT a
   // DisplayToggleKey: it's a transient analytical overlay (defaults to the
   // entrance each session), so it is never persisted via saveDisplaySetting.
   showDistanceGradient: boolean;
@@ -415,7 +415,7 @@ interface UIStore {
 
   // Top-level workspace mode (#38 follow-up): Survey / Plan / Export. Runtime-only
   // (never persisted), meaningful only in single-project view. `plan` subsumes the
-  // former gas sub-mode — the survey layer, the carousel, and the panel swaps all read
+  // former gas sub-mode - the survey layer, the carousel, and the panel swaps all read
   // `appMode`. Plan/Export force the read-only closure-adjusted map (see setAppMode).
   appMode: AppMode;
   /** Switch workspace mode. Entering Plan/Export forces the closure-adjusted (read-only)
@@ -423,12 +423,12 @@ interface UIStore {
    *  geometry mode. Entering Plan reveals the Plan-setup sidebar; leaving Plan resets
    *  gasPlanStore. */
   setAppMode: (mode: AppMode) => void;
-  /** Idempotent "return to Survey" — used by the setView() cleanup funnel (and the
+  /** Idempotent "return to Survey" - used by the setView() cleanup funnel (and the
    *  color-overlay actions) so a stale Plan/Export workspace can't outlive a project/view
    *  switch or coexist with a survey overlay. No-op when already in Survey. */
   exitGasPlan: () => void;
 
-  // Issue-severity coloring overlay (#22). Runtime-only — like
+  // Issue-severity coloring overlay (#22). Runtime-only - like
   // showDistanceGradient it is NOT a DisplayToggleKey and is never persisted
   // (off on every load; the Warnings-tab auto-switch drives it transiently).
   showIssueSeverity: boolean;
@@ -439,7 +439,7 @@ interface UIStore {
   setIssueSeverity: (on: boolean) => void;
   /** Select the active coloring mode (single-select over the three mutually-
    *  exclusive overlays). The one place that owns the "which overlay for which
-   *  mode" mapping — delegates to the per-overlay actions so persistence/telemetry/
+   *  mode" mapping - delegates to the per-overlay actions so persistence/telemetry/
    *  cleanup stay identical. Read the current mode via {@link colorModeOf}. */
   setColorMode: (mode: ColorMode) => void;
 
@@ -589,7 +589,7 @@ let prePlanGeometryMode: GeometryMode | null = null;
 
 /**
  * Display/overlay flags captured when entering Plan/Export, restored on return to
- * Survey — so Display changes made while planning/exporting are scoped to that mode
+ * Survey - so Display changes made while planning/exporting are scoped to that mode
  * and never mutate (or persist to) the Survey view. Includes the color overlays that
  * Plan force-clears on entry, so entering Plan no longer silently turns a survey
  * depth/distance gradient off for good. Module-level bookkeeping like
@@ -691,25 +691,25 @@ export const useUIStore = create<UIStore>((set) => ({
     // any view switch so a stale focus can't outlive the view or project that
     // opened it. No-op when not focused; restores the pre-focus panel layout.
     useUIStore.getState().exitSectionFocus();
-    // Fullscreen table is single-view scoped too — a view switch can't strand it.
+    // Fullscreen table is single-view scoped too - a view switch can't strand it.
     useUIStore.getState().exitDataTableFullScreen();
-    // Gas-planning sub-mode (#38) is single-view scoped too — drop it on any view
+    // Gas-planning sub-mode (#38) is single-view scoped too - drop it on any view
     // switch so a stale reachable overlay + input panel can't outlive the view.
     useUIStore.getState().exitGasPlan();
     setDwellState(view === 'global' ? 'global-view' : `tool.${useUIStore.getState().activeTool}`);
     if (view === 'single') {
       void advanceProjectSeq();
-      // A project open/create/import flow has landed — the entry-point source
+      // A project open/create/import flow has landed - the entry-point source
       // has been consumed, so clear it to prevent bleed into a later open.
       clearProjectActionSource();
     }
-    // Dev stats is a single-view developer overlay — the Display toggle that
+    // Dev stats is a single-view developer overlay - the Display toggle that
     // controls it lives only in SingleSystemView, but <MemoryProbe/> is mounted
     // app-wide. Reset it on the way back to GlobalView so the probe (and its 2 s
     // memory-IPC poll) can't strand there with no in-view way to hide it.
     //
     // The ruler readout/tint now lives in this global store, but is a single-view,
-    // map-only interaction — clear it on any view switch so it can't be resurrected
+    // map-only interaction - clear it on any view switch so it can't be resurrected
     // when MapCanvas remounts on return (#26, Codex).
     set(view === 'global'
       ? { view, showDevStats: DISPLAY_DEFAULTS.showDevStats, ...MEASURE_CLEARED }
@@ -737,7 +737,7 @@ export const useUIStore = create<UIStore>((set) => ({
         : {};
 
       // Clear move comment source when switching away from move_comment tool
-      // No backend restore needed — pickup doesn't mutate backend
+      // No backend restore needed - pickup doesn't mutate backend
       const clearMoveComment = state.moveCommentSource !== null && activeTool !== 'move_comment'
         ? { moveCommentSource: null }
         : {};
@@ -929,8 +929,8 @@ export const useUIStore = create<UIStore>((set) => ({
   revealDetailPanel: () => {
     const s = useUIStore.getState();
     // Hover mode (and NOT section-focused, where the mode is force-pinned): float it
-    // open transiently via the nonce — the same non-persisting idiom as
-    // triggerResolveWarning — so viewing details never overwrites the user's hover
+    // open transiently via the nonce - the same non-persisting idiom as
+    // triggerResolveWarning - so viewing details never overwrites the user's hover
     // preference with a persisted 'pin'. Every other case keeps the prior behavior
     // (the deliberate open-and-pin command), so only the buggy path changes.
     if (s.detailPanelMode === 'hover' && s.focusedSectionId === null) {
@@ -998,7 +998,7 @@ export const useUIStore = create<UIStore>((set) => ({
     // of caller: it rounds to a whole pixel (sub-pixel sizes under the webview UI
     // zoom / HiDPI fail serde and throw), folds a non-finite size to the minimum,
     // AND clamps to the panel's resize bounds so a degenerate 0 can never be
-    // persisted (which would reload the panel collapsed — there is no "unset"
+    // persisted (which would reload the panel collapsed - there is no "unset"
     // sentinel, the stored u32 is taken at face value).
     const { min, max } = PANEL_SIZE_BOUNDS[panel];
     const fields = { [PANEL_FIELDS[panel].width]: clampRound(size, min, max) };
@@ -1043,13 +1043,13 @@ export const useUIStore = create<UIStore>((set) => ({
     // The overlay grows out of the docked table, so the table must be open and
     // pinned (fullscreen is a deliberate, persistent state, not a hover peek).
     // Snapshot the table's prior open/mode on FIRST entry so exit can restore it
-    // — otherwise entering fullscreen from a hover-revealed (or closed) table
+    // - otherwise entering fullscreen from a hover-revealed (or closed) table
     // would leave it stuck pinned-open afterward, silently losing the user's
     // hover/closed preference.
     if (!s.dataTableFullScreen) {
       // Snapshot the table's prior open/mode so exit can restore it. While section-
       // focused (#50), the live dataTableOpen/Mode are focus-forced (open+'pin'),
-      // NOT the user's real preference — that lives in focusLayoutSnapshot. Capture
+      // NOT the user's real preference - that lives in focusLayoutSnapshot. Capture
       // from there so a hover/closed table isn't stranded pinned-open after exiting
       // fullscreen (exit-fullscreen and exit-focus are independent paths).
       fullScreenTableSnapshot =
@@ -1066,7 +1066,7 @@ export const useUIStore = create<UIStore>((set) => ({
     const snap = fullScreenTableSnapshot;
     fullScreenTableSnapshot = null;
     // If section focus is STILL active, its workspace requires the table open+pinned
-    // — re-apply that instead of restoring the pre-fullscreen snapshot (exit-focus
+    // - re-apply that instead of restoring the pre-fullscreen snapshot (exit-focus
     // will restore the user's real state later). Only restore the snapshot when no
     // other override remains, so the table is never stranded pinned-open or wrongly
     // closed while focused.
@@ -1086,7 +1086,7 @@ export const useUIStore = create<UIStore>((set) => ({
     const s = useUIStore.getState();
     // Focus mode is an editable workspace for one section. The closure-adjusted
     // view (#70) is read-only, so entering focus leaves it and returns to the
-    // measured geometry — guaranteeing the focused data table is editable.
+    // measured geometry - guaranteeing the focused data table is editable.
     if (s.geometryMode !== 'measured') {
       s.setGeometryMode('measured', 'sections-panel');
     }
@@ -1185,13 +1185,13 @@ export const useUIStore = create<UIStore>((set) => ({
     // Re-read: the exits above can change the panel's mode/open.
     s = useUIStore.getState();
     // Reveal the Details panel on the Warnings tab so WarningsContent mounts and
-    // consumes the request — without mutating the user's persisted panel mode.
+    // consumes the request - without mutating the user's persisted panel mode.
     // Pinned: just ensure it's open. Hover: bump the reveal nonce so SingleSystemView
     // floats it open like a hover (with a timed auto-close, since no pointer-leave
     // fires for a programmatic reveal), so resolving a warning never silently leaves
     // a hover-mode user pinned.
     // For a pinned-but-closed panel, opening it is a real (persistent) open just
-    // like toggleDetailPanel — persist it so the in-memory open flag doesn't
+    // like toggleDetailPanel - persist it so the in-memory open flag doesn't
     // diverge from the saved layout (which would re-close the panel next session
     // and could be clobbered by any later savePanelLayout).
     const pinOpening = s.detailPanelMode === 'pin' && !s.detailPanelOpen;
@@ -1230,20 +1230,20 @@ export const useUIStore = create<UIStore>((set) => ({
   showShotComments: DISPLAY_DEFAULTS.showShotComments,
   showDevStats: DISPLAY_DEFAULTS.showDevStats,
   gridSpacing: DISPLAY_DEFAULTS.gridSpacing,
-  // Distance-gradient overlay (#34) — runtime-only state, never persisted.
+  // Distance-gradient overlay (#34) - runtime-only state, never persisted.
   showDistanceGradient: false,
   distanceGradientOrigin: null,
   distanceField: null,
   toggleDistanceGradient: () => {
     const on = !useUIStore.getState().showDistanceGradient;
-    // Distance and depth gradients are mutually exclusive — both paint the shots
+    // Distance and depth gradients are mutually exclusive - both paint the shots
     // layer, so enabling one suppresses the other (#34, report of mixed
     // depth-colored shots + distance-colored stations). We flip only depth's
     // *runtime* flag, not its persisted setting, so distance acts as a transient
     // overlay and the depth preference returns next session (distance is always
     // off on load). Turning the overlay off clears the origin + cached field, so
     // re-enabling starts fresh at the entrance (zero-datum) default.
-    // Gas reachability (#38) paints the same shots/stations layer — enabling a
+    // Gas reachability (#38) paints the same shots/stations layer - enabling a
     // color overlay must also leave the gas sub-mode (no-op when gas is off). This
     // closes the reverse hole: setColorMode exits gas, but this action is also
     // reachable directly (e.g. a keyboard shortcut) without going through it.
@@ -1254,14 +1254,14 @@ export const useUIStore = create<UIStore>((set) => ({
         : { showDistanceGradient: false, distanceGradientOrigin: null, distanceField: null }
     );
   },
-  // Issue-severity coloring (#22) — runtime-only, never persisted.
+  // Issue-severity coloring (#22) - runtime-only, never persisted.
   showIssueSeverity: false,
   toggleIssueSeverity: () => {
     const on = !useUIStore.getState().showIssueSeverity;
-    // Mutually exclusive with both gradients — all three paint the shots/stations
+    // Mutually exclusive with both gradients - all three paint the shots/stations
     // layer. Flip depth's *runtime* flag only (don't persist), and clear the
     // distance overlay's origin/field like toggleDistanceGradient does.
-    // Also leave the gas sub-mode (#38) — it owns the same layer paint.
+    // Also leave the gas sub-mode (#38) - it owns the same layer paint.
     if (on) useUIStore.getState().exitGasPlan();
     set(
       on
@@ -1277,7 +1277,7 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   setIssueSeverity: (on) => {
     if (useUIStore.getState().showIssueSeverity === on) return;
-    // Enabling issue-severity leaves the gas sub-mode (#38) — shared layer paint.
+    // Enabling issue-severity leaves the gas sub-mode (#38) - shared layer paint.
     if (on) useUIStore.getState().exitGasPlan();
     set(
       on
@@ -1293,7 +1293,7 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   setColorMode: (mode) => {
     const s = useUIStore.getState();
-    // Selecting any color overlay leaves the gas sub-mode — both own the shots
+    // Selecting any color overlay leaves the gas sub-mode - both own the shots
     // layer paint, so they can't coexist (gas entry is the toolbar toggle,
     // outside this menu). Done before the no-op check so picking 'section' while
     // gas is active still exits it. No-op when gas is off.
@@ -1302,7 +1302,7 @@ export const useUIStore = create<UIStore>((set) => ({
     // Single entry point for the mutually-exclusive coloring overlays. Delegates to
     // the per-overlay actions, which each turn the others off and handle their own
     // persistence (depth is a saved DisplayToggleKey), telemetry, and cleanup (the
-    // distance overlay clears its origin/field) — so the "select one of N" mapping
+    // distance overlay clears its origin/field) - so the "select one of N" mapping
     // lives here in the store instead of being duplicated in the DisplayMenu pills.
     if (mode === 'depth') {
       if (!s.showDepthGradient) s.toggleDisplay('showDepthGradient');
@@ -1322,7 +1322,7 @@ export const useUIStore = create<UIStore>((set) => ({
     // under the new origin's legend/marker while the new field is being fetched.
     set({ distanceGradientOrigin, distanceField: null }),
   setDistanceField: (distanceField) => set({ distanceField }),
-  // Top-level workspace mode (#38 follow-up) — runtime-only, never persisted.
+  // Top-level workspace mode (#38 follow-up) - runtime-only, never persisted.
   appMode: APP_MODE_DEFAULT,
   setAppMode: (mode) => {
     const s = useUIStore.getState();
@@ -1330,7 +1330,7 @@ export const useUIStore = create<UIStore>((set) => ({
     if (mode === 'survey') {
       // Returning to Survey: restore the geometry mode we had before entering
       // Plan/Export. The gas overlay + markers are appMode-gated (they clear when
-      // appMode leaves 'plan'), so we do NOT reset the gas store here — the loaded
+      // appMode leaves 'plan'), so we do NOT reset the gas store here - the loaded
       // plan / working inputs PERSIST across mode switches within a session (#244).
       // A new session / project switch still empties it (the reset on project load).
       const restore = prePlanGeometryMode ?? GEOMETRY_MODE_DEFAULT;
@@ -1355,7 +1355,7 @@ export const useUIStore = create<UIStore>((set) => ({
     // Entering Plan or Export. Both show the read-only closure map, so:
     //  - drop the survey-editing modes (section focus, fullscreen table) that
     //    assume an editable measured view;
-    //  - remember the survey geometry mode (only when coming FROM survey — a
+    //  - remember the survey geometry mode (only when coming FROM survey - a
     //    plan↔export switch must not overwrite the saved survey value with
     //    'closureAdjusted'), then force closureAdjusted. Set directly (not via
     //    setGeometryMode) so this forced display isn't persisted as the user's
@@ -1389,7 +1389,7 @@ export const useUIStore = create<UIStore>((set) => ({
       distanceField: null,
       ...MEASURE_CLEARED,
     });
-    // Both Plan (setup sidebar) and Export (export stub) render in the right Dock —
+    // Both Plan (setup sidebar) and Export (export stub) render in the right Dock -
     // reveal it on entry so the panel surfaces even from a closed dock. Inlined
     // (not revealDetailPanel/toggleDetailPanel) because a mode-forced open is not
     // a user action: it must never persist via savePanelLayout, or the user's
@@ -1419,7 +1419,7 @@ export const useUIStore = create<UIStore>((set) => ({
     const state = useUIStore.getState();
     const newValue = !state[key];
     // Enabling the depth gradient turns off the (runtime-only) distance gradient
-    // and issue-severity overlays — all three paint the shots layer (#34, #22).
+    // and issue-severity overlays - all three paint the shots layer (#34, #22).
     const exclusive =
       key === 'showDepthGradient' && newValue
         ? {
@@ -1429,7 +1429,7 @@ export const useUIStore = create<UIStore>((set) => ({
             showIssueSeverity: false,
           }
         : {};
-    // Enabling the depth gradient also leaves the gas sub-mode (#38) — it owns the
+    // Enabling the depth gradient also leaves the gas sub-mode (#38) - it owns the
     // same shots/stations paint. Critical for the Shift+D keyboard shortcut, which
     // calls toggleDisplay directly (bypassing setColorMode's gas-exit).
     if (key === 'showDepthGradient' && newValue) useUIStore.getState().exitGasPlan();
@@ -1444,7 +1444,7 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   setGridSpacing: (spacing) => {
     set({ gridSpacing: spacing });
-    // Scoped to Plan/Export while there (restored on exit) — don't persist it.
+    // Scoped to Plan/Export while there (restored on exit) - don't persist it.
     if (useUIStore.getState().appMode !== 'survey') return;
     // Persist the spacing setting
     invokeIpc(
@@ -1554,7 +1554,7 @@ export const useUIStore = create<UIStore>((set) => ({
     // staged-reserve `pushyAck` safety acknowledgment). It is normally cleared on sub-mode
     // exit, but a DIRECT project switch sets appMode='survey' here, so the later
     // setView()→exitGasPlan() short-circuits and never reaches reset(). Reset it explicitly on
-    // load so a previous project's plan — and especially its advanced-preset ack — can't leak
+    // load so a previous project's plan - and especially its advanced-preset ack - can't leak
     // into the next (mirrors the showDevStats/showIssueSeverity per-load resets below).
     useGasPlanStore.getState().reset();
     // Apply display settings from backend, merging with existing state.
@@ -1581,7 +1581,7 @@ export const useUIStore = create<UIStore>((set) => ({
       // Dev stats is a session-only developer overlay (memory probe + map dev
       // stats), not a persisted per-project preference and absent from the
       // backend payload. Reset it on every load so enabling it for one project
-      // can't leak the overlay — and its 2 s memory-IPC poll — into the next.
+      // can't leak the overlay - and its 2 s memory-IPC poll - into the next.
       showDevStats: DISPLAY_DEFAULTS.showDevStats,
       // Issue-severity coloring is a runtime-only overlay (never persisted); reset
       // it on every load so a manual enable in one project doesn't leak the
@@ -1668,7 +1668,7 @@ export const useUIStore = create<UIStore>((set) => ({
   openDialog: (activeDialog, dialogData = {}) => {
     const prev = useUIStore.getState().activeDialog;
     if (prev) {
-      // Dialog chaining — previous dialog transitions, not cancelled
+      // Dialog chaining - previous dialog transitions, not cancelled
       trackDialogComplete(prev);
       checkDialogCancel(prev);
     }
@@ -1697,7 +1697,7 @@ export const useUIStore = create<UIStore>((set) => ({
   placementMode: null,
   startPlacementMode: (sectionData, alignStationIndex, onComplete, onCancel, additionalSections) => {
     // Placement mode bypasses the setView() cleanup funnel, so leave the gas sub-mode
-    // (#38) here too — its overlay/panel must not outlive entry into placement
+    // (#38) here too - its overlay/panel must not outlive entry into placement
     // (idempotent no-op when gas is off).
     useUIStore.getState().exitGasPlan();
     setDwellState('placement');

@@ -359,7 +359,7 @@ impl PanelsConfig {
     /// Clamp persisted panel sizes to the same bounds the UI enforces while
     /// dragging, and repair any out-of-range reveal-mode string. The frontend
     /// clamps panel sizes before persisting them (savePanelSizes), but the load
-    /// path did not — so a hand-edited, older, or otherwise degenerate config
+    /// path did not - so a hand-edited, older, or otherwise degenerate config
     /// could load e.g. a 0-pixel width that the frontend then renders as a
     /// collapsed, invisible panel. Bounds mirror PANEL_SIZE_BOUNDS in
     /// src/components/SingleSystemView/layoutConstants.ts.
@@ -1012,7 +1012,7 @@ pub struct ValidationConfig {
     /// If abs(diff - 180) > threshold, show warning.
     #[serde(default = "default_azimuth_diff_threshold")]
     pub azimuth_diff_threshold: f64,
-    /// Threshold for pitch in/out difference warning (degrees) — compares the
+    /// Threshold for pitch in/out difference warning (degrees) - compares the
     /// two recorded inclination legs against each other.
     #[serde(default = "default_pitch_diff_threshold")]
     pub pitch_diff_threshold: f64,
@@ -1100,10 +1100,10 @@ pub struct PlacementSuggestionConfig {
     /// Minimum partial shot length ratio
     #[serde(default = "default_ps_min_partial_ratio")]
     pub min_partial_ratio: f64,
-    /// Short shot threshold (meters) — shots below this get reduced weight
+    /// Short shot threshold (meters) - shots below this get reduced weight
     #[serde(default = "default_ps_short_shot_threshold")]
     pub short_shot_threshold: f64,
-    /// Penalty multiplier for single-shot matches (0.0–1.0)
+    /// Penalty multiplier for single-shot matches (0.0-1.0)
     #[serde(default = "default_ps_single_shot_penalty")]
     pub single_shot_penalty: f64,
     /// Hard cutoff: max azimuth error for full shots (degrees)

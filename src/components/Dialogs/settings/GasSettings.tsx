@@ -11,8 +11,8 @@ import { PositiveNumberField } from '../../common/PositiveNumberField';
 /**
  * Gas & route-planning settings category (#38). Persisted personal defaults a plan is
  * seeded from:
- *  - swim speed — the exit-leg (and symmetric survey-in) speed, default 10 m/min;
- *  - jump RMV multiplier — gas bump on reference/jump legs (tying in a jump is extra
+ *  - swim speed - the exit-leg (and symmetric survey-in) speed, default 10 m/min;
+ *  - jump RMV multiplier - gas bump on reference/jump legs (tying in a jump is extra
  *    work), >= 1.0, default 1.0; 1.5 is a useful value.
  * Both are clamped server-side in GasConfig::normalize. Client-side, PositiveNumberField
  * rejects a non-positive entry at the field itself (it reverts to the last valid value on

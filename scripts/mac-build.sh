@@ -1,5 +1,5 @@
 #!/bin/bash
-# mac-build.sh — Build and test Stalagmight on macOS (standalone)
+# mac-build.sh - Build and test Stalagmight on macOS (standalone)
 # Assumes development tools from mac-setup.sh are already installed.
 set -euo pipefail
 
@@ -145,7 +145,7 @@ if [[ -n "${TELEMETRY_ENDPOINT:-}" ]]; then
   info "  Telemetry enabled (endpoint set)"
   (cd "$PROJECT_DIR" && pnpm tauri build -- --features telemetry)
 else
-  warn "  Telemetry disabled (TELEMETRY_ENDPOINT not set — add to .env)"
+  warn "  Telemetry disabled (TELEMETRY_ENDPOINT not set - add to .env)"
   (cd "$PROJECT_DIR" && pnpm tauri build)
 fi
 ok "Production build complete"
@@ -169,7 +169,7 @@ if [[ -d "$BUNDLE_DIR" ]]; then
     fi
   done
 else
-  echo "  (bundle directory not found — check build output above)"
+  echo "  (bundle directory not found - check build output above)"
 fi
 
 # Also check for DMG

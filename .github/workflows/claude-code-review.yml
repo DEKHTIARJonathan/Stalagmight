@@ -5,7 +5,7 @@ on:
     types: [opened, synchronize, ready_for_review, reopened]
     # Don't spend a full LLM review on changes with nothing to review: pure docs
     # and the quarantined WDIO legacy suite. Rust IS reviewed (not ignored).
-    # Blocklist style; safe because `master` is unprotected — no required-check deadlock (#122).
+    # Blocklist style; safe because `master` is unprotected - no required-check deadlock (#122).
     paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**']
 
 # Cancel an in-flight review when a newer push supersedes it, so rapid pushes
@@ -43,7 +43,7 @@ jobs:
         uses: anthropics/claude-code-action@51705da45eecce209d4700538bf8377d5b5fc695 # v1.0.152
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # KNOWN GAP: this marketplace is unpinned (tracks HEAD) — and it's the
+          # KNOWN GAP: this marketplace is unpinned (tracks HEAD) - and it's the
           # component that actually generates the review, so it's both a drift
           # and a supply-chain risk. Pinning needs an upstream-supported ref
           # syntax; left as a follow-up rather than guess a URL that breaks the
@@ -53,11 +53,11 @@ jobs:
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
           # LIKELY ROOT-CAUSE FIX (#138): the action buffers inline comments and
           # runs a "real review vs test/probe" classifier before posting. Every
-          # run logged "No buffered inline comments" — consistent with the
+          # run logged "No buffered inline comments" - consistent with the
           # classifier dropping them all. 'false' posts inline comments
           # immediately, skipping that classifier. (use_sticky_comment was the
           # wrong knob: it only consolidates comments into one, it doesn't decide
-          # whether anything posts. Unverified until on master — the workflow
+          # whether anything posts. Unverified until on master - the workflow
           # self-skips on PRs that edit this file.)
           classify_inline_comments: 'false'
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md

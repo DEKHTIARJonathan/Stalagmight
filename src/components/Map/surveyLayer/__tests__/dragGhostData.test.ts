@@ -5,7 +5,7 @@ import type { DragPreviewSet } from '../dragPreviewSource';
 /**
  * Custom drag-ghost render-data builder (#mem drag latency): display-toggle
  * filtering + the grabbed-feature highlight pass. The highlight is emitted ONLY
- * for MOVING hovered/selected features — the exact set the stock interact-overlay
+ * for MOVING hovered/selected features - the exact set the stock interact-overlay
  * follow is suppressed for while the custom ghost is active (so there is no
  * lagging duplicate), which these tests pin from the ghost side.
  */

@@ -13,7 +13,7 @@ vi.mock('../../utils/ipc', () => ({
  * #mem flash-free publication, part 1: a successful save always echoes
  * `saved_path` (Rust `CommandResult::success().with_path(...)`). If saveProject
  * re-spread the project on every save, an autosave to the SAME path would change
- * the project object's identity — and MapCanvas's republish `useLayoutEffect`
+ * the project object's identity - and MapCanvas's republish `useLayoutEffect`
  * keys on that identity, so a no-op autosave would trigger a full survey rebuild
  * + republish that briefly blanks all geometry. saveProject must therefore only
  * mint a new project object when the path actually changed (first save / Save As).
@@ -43,7 +43,7 @@ describe('projectStore.saveProject no-op identity (#mem)', () => {
 
     await useProjectStore.getState().saveProject('/cave.stalx', true);
 
-    // Identity preserved — no republish trigger for a no-op save.
+    // Identity preserved - no republish trigger for a no-op save.
     expect(useProjectStore.getState().project).toBe(project);
   });
 

@@ -26,9 +26,9 @@ Two `Vec<UndoEntry>` stacks (undo + redo) behind a `Mutex`, with a configurable 
 
 Commands go through a two-phase capture during execution:
 
-1. **`generate_undo_data()` — before execution**: Captures "before" state. For creates this returns `UndoData::None` since the ID doesn't exist yet. For updates it snapshots previous field values. For deletes it snapshots the entity.
+1. **`generate_undo_data()` - before execution**: Captures "before" state. For creates this returns `UndoData::None` since the ID doesn't exist yet. For updates it snapshots previous field values. For deletes it snapshots the entity.
 
-2. **`finalize_undo_data()` — after execution**: Fills in data that only exists post-execution. For `CreateSection`/`CreateShot`, this captures the assigned ID and full snapshot. For `CreateLoopClosure`, this grabs the closure object from the project.
+2. **`finalize_undo_data()` - after execution**: Fills in data that only exists post-execution. For `CreateSection`/`CreateShot`, this captures the assigned ID and full snapshot. For `CreateLoopClosure`, this grabs the closure object from the project.
 
 ## UndoData Variants
 
@@ -59,7 +59,7 @@ Batch operations (`Command::Batch { commands }`) are **atomic**:
 - Sub-commands execute via `execute_without_undo()` (no individual undo entries)
 - A post-snapshot is taken after all succeed
 - If any sub-command fails, the entire batch rolls back via the pre-snapshot
-- The single `UndoEntry` uses `ProjectSnapshotPair` — undo restores "before", redo restores "after"
+- The single `UndoEntry` uses `ProjectSnapshotPair` - undo restores "before", redo restores "after"
 - The UI shows batch as one history item; the hover preview lists each sub-command
 
 ## Non-Undoable Commands
@@ -70,7 +70,7 @@ These are never pushed to the undo stack: `OpenProject`, `SaveProject`, `ClosePr
 
 Shot IDs are internal and opaque. After database reload they follow the formula `section_id * 100_000 + sequence_order` (0-indexed). Before first save they're plain sequential integers (0, 1, 2...).
 
-The `shot_display_position(shot_id, section_id)` helper in `models/shot.rs` converts these to 1-indexed display positions for both formats. All user-facing text (command descriptions, preview data) uses this helper so "Update shot 13:5" means section 13, 5th shot — not the raw internal ID.
+The `shot_display_position(shot_id, section_id)` helper in `models/shot.rs` converts these to 1-indexed display positions for both formats. All user-facing text (command descriptions, preview data) uses this helper so "Update shot 13:5" means section 13, 5th shot - not the raw internal ID.
 
 ## Persistence
 
@@ -111,11 +111,11 @@ Appears on item hover, positioned to the right of the dropdown (flips left if ne
 
 ### Section Name Resolution
 
-Section names in preview data are resolved at **display time**, not execution time. When you hover a "Merge stations" entry, it shows current section names, not the names at the time of the merge. This is intentional — the preview answers "what is this referring to now?" For historical names, only `ProjectSnapshotPair` data retains the state at execution time.
+Section names in preview data are resolved at **display time**, not execution time. When you hover a "Merge stations" entry, it shows current section names, not the names at the time of the merge. This is intentional - the preview answers "what is this referring to now?" For historical names, only `ProjectSnapshotPair` data retains the state at execution time.
 
 ### Preview Data Generation (`history.rs`)
 
-`derive_preview_data()` matches `(Command, UndoData)` pairs to extract meaningful field changes. Every command type produces preview data — the fallback arm returns the command description as an "Action" field so hover is never empty.
+`derive_preview_data()` matches `(Command, UndoData)` pairs to extract meaningful field changes. Every command type produces preview data - the fallback arm returns the command description as an "Action" field so hover is never empty.
 
 For `UpdateShot`, all changed fields are shown (up to 5): Length, Azimuth In/Out, Depth In/Out, Pitch In/Out, LRUD, Comment, Reference, Temperature. The previous values come from `PreviousValues.values_json`.
 

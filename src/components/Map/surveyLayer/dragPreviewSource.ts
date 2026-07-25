@@ -20,7 +20,7 @@
 // accumulated, never cached across frames) so the preview stays correct when the
 // zoom changes mid-drag.
 
-/** Minimal projection surface — satisfied by a MapLibre map, mockable in tests. */
+/** Minimal projection surface - satisfied by a MapLibre map, mockable in tests. */
 export interface Projector {
   project(lngLat: [number, number]): { x: number; y: number };
   unproject(point: [number, number]): { lng: number; lat: number };

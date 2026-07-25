@@ -4,7 +4,7 @@ import { type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 
 import { useResizeHandle } from '../useResizeHandle';
 
-// `.tsx` so this runs in the jsdom tier (vite.config environmentMatchGlobs) —
+// `.tsx` so this runs in the jsdom tier (vite.config environmentMatchGlobs) -
 // renderHook needs a DOM.
 
 type Rect = Pick<DOMRect, 'top' | 'bottom' | 'left' | 'right'>;
@@ -33,7 +33,7 @@ function pointerEvent(coords: { clientX?: number; clientY?: number } = {}): Reac
  * The uiStore.savePanelSizes test covers the store choke-point; this covers the
  * hook, so a dropped round here can't hide behind the store's re-rounding.
  */
-describe('useResizeHandle — whole-pixel rounding', () => {
+describe('useResizeHandle - whole-pixel rounding', () => {
   it('rounds a sub-pixel vertical drag to a whole pixel for onResize and onResizeEnd', () => {
     const onResize = vi.fn();
     const onResizeEnd = vi.fn();
@@ -92,10 +92,10 @@ describe('useResizeHandle — whole-pixel rounding', () => {
 /**
  * If the handle element unmounts while a drag is active (view/project switch, a
  * section-focus collapse that hides the panel), no pointerup reaches the captured
- * node — the in-progress size must still be persisted exactly once via the
+ * node - the in-progress size must still be persisted exactly once via the
  * unmount cleanup, and a completed drag must NOT persist a second time on unmount.
  */
-describe('useResizeHandle — unmount-mid-drag persistence', () => {
+describe('useResizeHandle - unmount-mid-drag persistence', () => {
   it('persists the last live size on unmount when no pointerup occurred', () => {
     const onResize = vi.fn();
     const onResizeEnd = vi.fn();
@@ -108,7 +108,7 @@ describe('useResizeHandle — unmount-mid-drag persistence', () => {
 
     act(() => result.current.handleProps.onPointerDown(pointerEvent()));
     act(() => result.current.handleProps.onPointerMove(pointerEvent({ clientY: 0 })));
-    // No pointerup — the host unmounts mid-drag.
+    // No pointerup - the host unmounts mid-drag.
     expect(onResizeEnd).not.toHaveBeenCalled();
 
     act(() => unmount());

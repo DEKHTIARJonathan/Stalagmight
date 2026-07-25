@@ -157,7 +157,7 @@ const PLACEMENT_MODE_ALLOWED_SHORTCUTS: Set<ShortcutAction> = new Set([
  * While the data table is fullscreen, only save/undo/redo stay active. Escape
  * and the `toggle_data_table` action exit the mode; every other shortcut is
  * blocked so stray tool/import keys can't act on the hidden map. Grid-internal
- * keys are unaffected — the grid stops propagation of what it handles.
+ * keys are unaffected - the grid stops propagation of what it handles.
  */
 const FULLSCREEN_TABLE_ALLOWED_SHORTCUTS: Set<ShortcutAction> = new Set([
   'save',
@@ -395,7 +395,7 @@ export function useKeyboardShortcuts() {
         clearMergeStations();
         clearMeasure();
         useUIStore.getState().clearCommentTarget();
-        // Cancel move comment — no backend restore needed (pickup doesn't mutate backend)
+        // Cancel move comment - no backend restore needed (pickup doesn't mutate backend)
         useUIStore.getState().clearMoveCommentSource();
         return;
       }
@@ -515,8 +515,8 @@ export function useKeyboardShortcuts() {
       if (dataTableFullScreen && !FULLSCREEN_TABLE_ALLOWED_SHORTCUTS.has(action)) {
         event.preventDefault();
         // Exit is keyed to the toggle_data_table ACTION (not a literal key),
-        // so rebinding the shortcut keeps it working. Everything else —
-        // including import_dmp/export — is swallowed.
+        // so rebinding the shortcut keeps it working. Everything else -
+        // including import_dmp/export - is swallowed.
         if (action === 'toggle_data_table') {
           useUIStore.getState().exitDataTableFullScreen();
         }
@@ -568,7 +568,7 @@ export function useKeyboardShortcuts() {
           break;
 
         // Edit actions
-        // GUARD: undo/redo are survey-only (#243) — parity with the toolbar buttons,
+        // GUARD: undo/redo are survey-only (#243) - parity with the toolbar buttons,
         // which are hidden in Plan/Export. Only appMode is checked (not geometryMode):
         // the buttons stay available in the closure-adjusted survey view, so the
         // shortcuts do too.
@@ -673,7 +673,7 @@ export function useKeyboardShortcuts() {
           if (project) {
             void saveProject().then((result) => {
               if (result && !result.success) {
-                // A save blocked by integrity issues is not a "real" error —
+                // A save blocked by integrity issues is not a "real" error -
                 // route to Review & Repair instead of an error window.
                 surfaceSaveFailure(result.error, openDialog);
               }

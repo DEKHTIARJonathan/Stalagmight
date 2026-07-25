@@ -209,7 +209,7 @@ describe('formatRelativeTime', () => {
 
   it('handles just now (0 seconds)', () => {
     const result = formatRelativeTime(now, 'en', now);
-    // 0 seconds relative — Intl.RelativeTimeFormat with numeric:'auto' may say "now"
+    // 0 seconds relative - Intl.RelativeTimeFormat with numeric:'auto' may say "now"
     expect(typeof result).toBe('string');
   });
 });

@@ -56,7 +56,7 @@ function focusElement(el: HTMLElement): void {
     try {
       el.setSelectionRange(len, len);
     } catch {
-      // Ignore — some input types (e.g., number) don't support selection
+      // Ignore - some input types (e.g., number) don't support selection
     }
   }
 }

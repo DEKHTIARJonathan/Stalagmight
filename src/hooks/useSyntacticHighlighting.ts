@@ -41,7 +41,7 @@ export function useSyntacticHighlighting(): SyntacticHighlightLevel {
   const overrides = active.overrides;
 
   // `overrides` is a stable object from the store except during Settings live
-  // preview, so serialize it only when its reference changes — not on every
+  // preview, so serialize it only when its reference changes - not on every
   // App-root render (this hook runs at the top of App, which re-renders often).
   const overridesKey = useMemo(() => JSON.stringify(overrides), [overrides]);
   const colors = useMemo(

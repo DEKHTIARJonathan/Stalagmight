@@ -1,8 +1,8 @@
 /**
- * Component test (#110) — TML import warning surfacing.
+ * Component test (#110) - TML import warning surfacing.
  *
  * The dialog must surface the deferred-save partial-success warning ("imported
- * but unsaved") BEFORE the optional orphan-placement step — but must NOT modal
+ * but unsaved") BEFORE the optional orphan-placement step - but must NOT modal
  * (or skip orphan for) the routine per-shot validation warnings (LONG_SHOT, …)
  * that ride along on a fully-saved import (those are surfaced via the data-table
  * UI). The helper's filtering logic is unit-tested in
@@ -36,7 +36,7 @@ const SAVE_WARNING: ValidationWarning = {
   code: 'SYSTEM',
   message:
     'Imported, but could not save the new project to disk: disk full. ' +
-    'Your changes are unsaved — please save manually.',
+    'Your changes are unsaved - please save manually.',
   severity: 'warning',
 };
 const VALIDATION_WARNING: ValidationWarning = {
@@ -107,7 +107,7 @@ describe('TmlImportDialog warning surfacing (#110)', () => {
     expect(orphanCalled()).toBe(false); // the save warning short-circuits before the orphan step
   });
 
-  it('does NOT modal a routine validation warning on a saved import — orphan still runs', async () => {
+  it('does NOT modal a routine validation warning on a saved import - orphan still runs', async () => {
     executeTmlImport.mockResolvedValue(ok([VALIDATION_WARNING], [1]));
     render(<TmlImportDialog tmlFile={tmlFile} filePath="/tmp/cave.tml" />);
 

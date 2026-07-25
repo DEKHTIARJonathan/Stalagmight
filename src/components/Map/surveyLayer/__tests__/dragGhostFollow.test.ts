@@ -14,7 +14,7 @@ import { GhostFollow, GHOST_REBAKE_PX, type GhostOffset } from '../dragGhostFoll
  *
  * holds after every move and every land regardless of land timing. The core
  * assertion in every scenario is `displayedOffset()` deep-equalling
- * `liveOffset()` — i.e. NO overshoot, ever.
+ * `liveOffset()` - i.e. NO overshoot, ever.
  */
 
 interface Harness {

@@ -16,7 +16,7 @@ describe('uiStore.savePanelSizes', () => {
 
   // Regression: panel sizes persist as a Rust u32. A fractional value (sub-pixel
   // sizes from getBoundingClientRect under the webview UI zoom / HiDPI) fails serde
-  // deserialization, the IPC throws, and savePanelSizes swallows it — so the resize
+  // deserialization, the IPC throws, and savePanelSizes swallows it - so the resize
   // silently never saved and the panel reverted to its last whole-pixel value (e.g.
   // the data table stuck at its 500px max). Rounding before the IPC fixes it.
   it('rounds a fractional size to a whole pixel before the persist IPC', async () => {
@@ -54,7 +54,7 @@ describe('uiStore.savePanelSizes', () => {
     await expect(useUIStore.getState().savePanelSizes('detail', 300)).resolves.toBeUndefined();
   });
 
-  // Regression: a degenerate 0 (or any sub-minimum value) must not persist — there
+  // Regression: a degenerate 0 (or any sub-minimum value) must not persist - there
   // is no "unset" sentinel, so a stored 0 reloads the panel collapsed. Clamp to the
   // panel's minimum at the store choke-point, not only in the resize-handle caller.
   it('clamps a below-minimum size up to the panel minimum before persisting', async () => {

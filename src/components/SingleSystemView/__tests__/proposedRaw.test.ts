@@ -64,7 +64,7 @@ function negativeLrudOf(shot: Shot): LrudField[] {
 }
 
 // ============================================================================
-// OLD apply switch — transcribed verbatim from the pre-refactor apply().
+// OLD apply switch - transcribed verbatim from the pre-refactor apply().
 // Returns { patch } on success, { invalid } on a rejected manual input,
 // { failed: true } for an unhandled option id.
 // ============================================================================
@@ -183,7 +183,7 @@ function oldApplyPatch(
 }
 
 // ============================================================================
-// OLD preview switch — transcribed verbatim from the pre-refactor preview memo.
+// OLD preview switch - transcribed verbatim from the pre-refactor preview memo.
 // Returns { propAz, propHoriz } or null (no ghost). Operates from currentAz /
 // currentHoriz computed identically to production.
 // ============================================================================
@@ -270,7 +270,7 @@ function oldPreview(
 }
 
 // ============================================================================
-// NEW derivations — exactly as the production preview memo / apply() build them
+// NEW derivations - exactly as the production preview memo / apply() build them
 // from computeProposedRaw.
 // ============================================================================
 function newApplyPatch(

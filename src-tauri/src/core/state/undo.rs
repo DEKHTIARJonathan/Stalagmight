@@ -25,7 +25,7 @@ impl AppState {
             self.mark_remote_dirty();
             // Reconcile derived offsets after the restore. For snapshot-restore
             // undos (Merge/Move/Delete/Repair) the restored `before` is already a
-            // valid aligned state, so realign_merges early-returns (no-op) — EXCEPT
+            // valid aligned state, so realign_merges early-returns (no-op) - EXCEPT
             // undo-of-Repair, whose `before` carries the >=tolerance drift Repair
             // healed. There, reconcile re-derives those offsets: the undo reverts the
             // STRUCTURAL repair (dropped dangling refs / converted closures come back)
@@ -54,7 +54,7 @@ impl AppState {
         };
 
         // Apply undo based on undo_data type
-        // IMPORTANT: No early returns after this point — all paths must flow
+        // IMPORTANT: No early returns after this point - all paths must flow
         // through the epilogue so the entry is either pushed to redo (success)
         // or pushed back to undo (failure).
         let result = match &entry.undo_data {
@@ -483,7 +483,7 @@ impl AppState {
 
         // For snapshot-based undo data, restore from snapshot instead of re-executing.
         // This handles cases where re-execution would create different IDs.
-        // IMPORTANT: No early returns after the pop — all paths flow through the epilogue.
+        // IMPORTANT: No early returns after the pop - all paths flow through the epilogue.
         let result = match &entry.undo_data {
             UndoData::ProjectSnapshotPair { before: _, after } => match self.project.lock() {
                 Ok(mut proj) => {
@@ -513,13 +513,13 @@ impl AppState {
                 ..
             } => {
                 // Redo by re-running the SAME insert the forward command did, with
-                // the original id AND uuid forced — so the ref-shift, offset and
+                // the original id AND uuid forced - so the ref-shift, offset and
                 // cascade are identical to the forward path and can't drift (this
                 // is the single-source-of-truth that prevents the redo-misalignment
                 // bug), and the shot keeps its stable collaboration identity (a
                 // fresh uuid here would dangle every AfterShot anchor and break the
                 // Ariane tier-1 match). `uuid` is None for shots created before this
-                // field existed (legacy persisted undo entries) — falls back to a
+                // field existed (legacy persisted undo entries) - falls back to a
                 // fresh mint, matching the old behavior.
                 // Append (no anchor) does no geometry maintenance, so a plain
                 // restore is exact there.
@@ -555,9 +555,9 @@ impl AppState {
                     // empty section (exact via a raw insert). But a LEGACY persisted
                     // entry (written by a pre-anchor build, reloaded after upgrade) has
                     // both anchors None even for a prepend / mid-section insert, so route
-                    // through the proper insert helper using the captured position — which
+                    // through the proper insert helper using the captured position - which
                     // re-anchors SectionStart on a prepend and cascades offsets on a
-                    // mid-insert — instead of a raw insert that would mis-place anchored
+                    // mid-insert - instead of a raw insert that would mis-place anchored
                     // tails or start-station refs.
                     let section_len = project
                         .get_section(*section_id)
@@ -599,7 +599,7 @@ impl AppState {
                         }
                     } else {
                         // True append (pos == len) or empty section: a raw insert is
-                        // exact — no station shift or SectionStart re-anchor is needed.
+                        // exact - no station shift or SectionStart re-anchor is needed.
                         let id = *shot_id;
                         if let Some(section) = project.get_section_mut(*section_id) {
                             if id >= section.next_shot_id {

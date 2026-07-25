@@ -9,11 +9,11 @@
  * `fonts.openmaptiles.org/{fontstack}/{range}.pbf` dependency this renderer
  * deletes) and rasterization stays synchronous canvas work off the critical
  * path. The charset is tiny (digits, `°`, `m`, `.`, space, section-name /
- * comment letters — a few hundred glyphs), so one 1024-wide page holds
+ * comment letters - a few hundred glyphs), so one 1024-wide page holds
  * everything in practice.
  *
  * PURITY / ENVIRONMENT: this module owns only CPU-side data (the R8 byte grid +
- * per-glyph metrics + dirty-region list). It never touches a `WebGL*` context —
+ * per-glyph metrics + dirty-region list). It never touches a `WebGL*` context -
  * the label GL layer (Phase 2) uploads `data` / consumes {@link GlyphAtlas.takeUploads}.
  * The rasterizer is INJECTABLE so the `node` unit tests can drive packing/growth
  * with a deterministic fake and no canvas: {@link createTinySdfRasterizer}
@@ -33,11 +33,11 @@ import openSansUrl from '../../../../assets/fonts/OpenSans-Regular.ttf';
 /** TinySDF font size in px (the raster em). Layout scales advances/offsets by
  *  `renderedSizePx / SDF_FONT_SIZE`. */
 export const SDF_FONT_SIZE = 24;
-/** Padding around each glyph's ink box, in px — the halo headroom. */
+/** Padding around each glyph's ink box, in px - the halo headroom. */
 export const SDF_BUFFER = 3;
 /** SDF encode radius in px (distance range around the edge). */
 export const SDF_RADIUS = 8;
-/** SDF cutoff — fraction of the radius inside the edge; `1 - cutoff = 0.75` is
+/** SDF cutoff - fraction of the radius inside the edge; `1 - cutoff = 0.75` is
  *  the normalized edge value the shader reads (MapLibre's `192/256`). */
 export const SDF_CUTOFF = 0.25;
 
@@ -57,7 +57,7 @@ export const ATLAS_MAX_HEIGHT = 2048;
  *  neighbour into a glyph's halo band. */
 const GLYPH_GUTTER = 1;
 
-/** The raw output of a rasterizer for one character — the exact shape of
+/** The raw output of a rasterizer for one character - the exact shape of
  *  `TinySDF.draw()`. `data` is `width*height` R8 SDF bytes. */
 export interface RasterizedGlyph {
   data: Uint8ClampedArray | Uint8Array;
@@ -130,7 +130,7 @@ const INERT_GLYPH: GlyphInfo = { ax: 0, ay: 0, aw: 0, ah: 0, advance: 0, left: 0
  * the nominal `fontSize + 2*buffer`. When a new shelf would overflow the current
  * height, the atlas doubles its height (up to {@link maxHeight}); a doubling
  * keeps every existing glyph's `(ax, ay)` valid (row-major, width unchanged), so
- * only the `u_atlas_size` uniform and a full re-upload are needed — no re-layout.
+ * only the `u_atlas_size` uniform and a full re-upload are needed - no re-layout.
  */
 export class GlyphAtlas {
   readonly width = ATLAS_WIDTH;
@@ -165,7 +165,7 @@ export class GlyphAtlas {
    * Returns a cached {@link GlyphInfo} thereafter. In an inert atlas (no
    * rasterizer), or if the glyph cannot fit even after growth, returns a
    * zero-advance fallback so callers never crash (the "tofu"-free degenerate
-   * case — a missing glyph simply contributes nothing).
+   * case - a missing glyph simply contributes nothing).
    */
   getGlyph(char: string): GlyphInfo {
     const cached = this.glyphs.get(char);
@@ -271,7 +271,7 @@ let fontPromise: Promise<boolean> | null = null;
  * Idempotently load + register the bundled Open Sans via the FontFace API. The
  * returned promise resolves `true` once the font is ready (so the atlas
  * rasterizes with the exact letterforms the app shows), or `false` in a non-DOM
- * / unsupported env (tests, SSR) — callers then either inject their own
+ * / unsupported env (tests, SSR) - callers then either inject their own
  * rasterizer or accept the inert atlas. Safe to call many times; the load
  * happens once. Pre-warm at app init so the font is ready before the first
  * label build (a raster requested before ready would fall back to system

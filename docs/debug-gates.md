@@ -1,6 +1,6 @@
 # Debug Gates
 
-Stalagmight ships with a fair amount of instrumentation — phase timings on the
+Stalagmight ships with a fair amount of instrumentation - phase timings on the
 load path, per-section progress markers during TML / Compass / DMP import,
 console traces in the React store, and `debug_assert`-style cross-checks in the
 project model. All of it is **off by default in production**: the dev-only
@@ -9,7 +9,7 @@ default log level. This page is the map of where each gate lives and how to
 turn the noise back on when you actually want to see it.
 
 Read this before adding new diagnostic code. The cost of a stray `tracing::info!`
-or `console.log` on a per-shot / per-merge hot path is *real* — the import work
+or `console.log` on a per-shot / per-merge hot path is *real* - the import work
 in [`performance.md`](performance.md) lists cases where untrimmed logs were a
 measurable fraction of the wall clock.
 
@@ -23,7 +23,7 @@ measurable fraction of the wall clock.
 | `warn!`  | always | Recoverable anomalies (poisoned mutex, FK rebuild fallback). |
 | `info!`  | always (release default filter is `info`) | **Once-per-lifecycle** events: app startup, project create / open / save / close success, schema migrations, full integrity check. |
 | `debug!` | off in release; on when `RUST_LOG=stalagmight_lib=debug` | Per-operation chatter, sub-phase timings, load-loop progress, per-section import timing. |
-| `trace!` | off everywhere by default | Per-shot / per-row spam. (Reserved — no current callers.) |
+| `trace!` | off everywhere by default | Per-shot / per-row spam. (Reserved - no current callers.) |
 
 The default release filter is set in `src-tauri/src/logging/mod.rs`. Override at
 runtime via `RUST_LOG=…` exactly as in any tracing application:
@@ -49,11 +49,11 @@ Enable when investigating slow project opens.
 
 **TML import loop progress** (`debug!` in
 `src-tauri/src/core/state/commands.rs::execute_import_sections`): per-100-section
-batch timing — `batch_ms`, `create_ms`, `placement_ms`. Enable when debugging
+batch timing - `batch_ms`, `create_ms`, `placement_ms`. Enable when debugging
 super-linear growth during a batch import.
 
 **Per-operation success acks** (`debug!` throughout `commands.rs`): "Section
-created", "Stations merged", "Shot updated", etc. Quiet by default — they fire
+created", "Stations merged", "Shot updated", etc. Quiet by default - they fire
 N times during a 14k-section import and don't help in release.
 
 **SQLite open / save chatter** (`debug!` in
@@ -67,9 +67,9 @@ refresh. Enable when chasing slow startup.
 ### `debug_assert_*` and `#[cfg(debug_assertions)]`
 
 `Project::debug_assert_merge_alignment` does an O(N) cross-check after every
-mutating command. The whole body sits under `#[cfg(debug_assertions)]` —
+mutating command. The whole body sits under `#[cfg(debug_assertions)]` -
 release builds compile it to a no-op. **Don't remove the gate.** The function's
-name lies if you don't believe me — there was a stretch where it ran in release
+name lies if you don't believe me - there was a stretch where it ran in release
 and was the dominant cost in batch imports.
 
 If you add a similar O(N) sanity check, put it in `#[cfg(debug_assertions)]`
@@ -78,7 +78,7 @@ and document that fact at the call site, the way that function does.
 ### Profile harnesses
 
 `profile_tml_import_full` and `profile_stalx_load` live in
-`src-tauri/src/core/state/tests.rs`. They are unit tests with `#[ignore]` —
+`src-tauri/src/core/state/tests.rs`. They are unit tests with `#[ignore]` -
 they never run with `cargo test` unless explicitly opted in:
 
 ```bash
@@ -96,7 +96,7 @@ STALAGMIGHT_PROFILE_STALX=/path/to/file.stalx \
 
 Combine with `RUST_LOG=stalagmight_lib=debug` to also get the in-code sub-phase
 timings. Both harnesses print a pretty per-phase table to stderr and exit
-clean — they're meant to be run on demand by hand.
+clean - they're meant to be run on demand by hand.
 
 ## TypeScript frontend
 
@@ -115,18 +115,18 @@ debugLog('[projectStore] refreshProjectState: done');
 ```
 
 Use these for any per-operation diagnostic print. Keep raw `console.error` (and
-`console.warn` for genuine runtime anomalies a user could act on) untouched —
+`console.warn` for genuine runtime anomalies a user could act on) untouched -
 those are signal, not noise.
 
 ### Env-flag-gated debug modules
 
 A few standalone debug modules ship with the codebase but only activate behind
-an env flag — they are off by default and tree-shaken in production.
+an env flag - they are off by default and tree-shaken in production.
 
-- `src/utils/debugLockup.ts` — IPC in-flight tracking for the macOS UI lockup
+- `src/utils/debugLockup.ts` - IPC in-flight tracking for the macOS UI lockup
   investigation. Enabled with `VITE_DEBUG_MACOS_LOCKUP=true`. See
   [`debugging-macos-pan-zoom.md`](debugging-macos-pan-zoom.md).
-- `src/components/Map/panZoomDebug.ts` — MapLibre handler instrumentation,
+- `src/components/Map/panZoomDebug.ts` - MapLibre handler instrumentation,
   same flag, same target investigation.
 
 To enable, set the env var when invoking the dev server:
@@ -145,7 +145,7 @@ clipboard for pasting into bug reports. Also force-visible via the
 `debug.memory_probe` config flag (see [`configuration.md`](configuration.md)).
 
 The probe used to force-materialize every lazy `section.shots` on every tick
-during the SoA migration — that bug is fixed; if you add a new field that's
+during the SoA migration - that bug is fixed; if you add a new field that's
 lazily computed, make sure you read it from `SurveyData` (typed-array slice)
 rather than from `Section.shots` (the legacy lazy getter). See the in-line
 comment in `src/components/MemoryProbe/MemoryProbe.tsx::takeSnapshot`.
@@ -154,7 +154,7 @@ comment in `src/components/MemoryProbe/MemoryProbe.tsx::takeSnapshot`.
 
 A few panels are gated by a runtime config flag set in `~/.config/stalagmight/config.toml`
 (see [`configuration.md`](configuration.md) for full schema). The hit-detection
-log at the click handler in `SurveyLayer.tsx` is the clearest example —
+log at the click handler in `SurveyLayer.tsx` is the clearest example -
 controlled by `debug.map.log_hit_detection`. Off by default; toggle in the
 config file when you need to see which feature was picked on each click.
 

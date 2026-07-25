@@ -500,7 +500,7 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     // value is sentinel-tested as an angle.  For DepthGauge the field
     // is a depth reading whose absolute value can equal the missing-
     // threshold, so only the "+ infinity" half of the sentinel applies
-    // — pass the raw through.
+    // - pass the raw through.
     let mut inclination = match ctx.inclination_units {
         InclinationUnits::DepthGauge => {
             if length_missing(shot.inclination) {
@@ -541,7 +541,7 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     // survey declared into degrees so the rest of the pipeline
     // (elevation_gain, shot_to_shot_data's pitch sign flip) stays
     // unit-agnostic.  DepthGauge needs the slope length to resolve
-    // asin(depth / length) — pass the raw length (same units as the
+    // asin(depth / length) - pass the raw length (same units as the
     // depth reading) so the ratio is dimensionless.
     let inclination_deg = inclination_to_degrees(inclination, &ctx.inclination_units, length);
     // Backstop only: build_ctx sanitizes declination/convergence/corrections
@@ -568,7 +568,7 @@ fn finite_or_zero(v: f64) -> f64 {
 }
 
 /// Process a back-sight pair (`back_azimuth`, `back_inclination`) and return
-/// values comparable to the fore-sight after the same pipeline — i.e. in the
+/// values comparable to the fore-sight after the same pipeline - i.e. in the
 /// forward (FROM → TO) direction, Stalagmight's `+down` pitch convention.
 ///
 /// Compass records back-sight as the raw instrument reading from the TO
@@ -581,11 +581,11 @@ fn finite_or_zero(v: f64) -> f64 {
 /// We need to turn the back-sight around to FROM → TO:
 ///   * Azimuth: add 180° after declination/convergence.
 ///   * Inclination: convert through `inclination_to_degrees` first (the raw
-///     reading is in the survey's declared unit — Grads / DDD.MM / Percent
-///     Grade / DepthGauge — and only the Degrees case is pass-through).
+///     reading is in the survey's declared unit - Grads / DDD.MM / Percent
+///     Grade / DepthGauge - and only the Degrees case is pass-through).
 ///     Then flip sign to undo the TO-side reading direction (yielding
 ///     fore-direction in Compass's +up convention), and flip again to land
-///     in Stalagmight's +down — the two flips cancel, so the final stored
+///     in Stalagmight's +down - the two flips cancel, so the final stored
 ///     `pitch_out` equals the degree-converted back-inclination.  Without
 ///     the unit conversion, Grads / DDD.MM / Percent surveys with
 ///     back-sights store `pitch_out` in the wrong units.
@@ -627,7 +627,7 @@ fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
     let back_az_grid = (back_az + ctx.declination - ctx.convergence_angle).rem_euclid(360.0);
     // Flip 180° so the bearing points FROM → TO, matching azimuth_in.
     let azimuth_out_fore_direction = (back_az_grid + 180.0).rem_euclid(360.0);
-    // Convert the back-inclination into degrees first — Grads / DDD.MM /
+    // Convert the back-inclination into degrees first - Grads / DDD.MM /
     // PercentGrade / DepthGauge are NOT pass-through.  After conversion,
     // back_inc_deg is the TO→FROM slope in Compass +up; the double sign
     // flip (TO→FROM ⇒ FROM→TO, then +up ⇒ +down) cancels, so the value
@@ -663,7 +663,7 @@ fn shot_to_shot_data(
     // store them in the `_out` slots as forward-direction equivalents so
     // Stalagmight has both legs of the measurement available for averaging
     // and warnings.  When no back-sight is present, mirror the fore-sight
-    // into the `_out` slot — matching the TML importer's convention.
+    // into the `_out` slot - matching the TML importer's convention.
     let (azimuth_out, pitch_out) = match shot_backsight_geometry(shot, ctx) {
         Some((back_az, back_pitch)) => (back_az, Some(back_pitch)),
         None => (azimuth, None),
@@ -769,12 +769,12 @@ fn build_ctx(
 /// `elevation_gain` operates in degrees, so this is the single
 /// normalisation point.
 ///
-/// * `Degrees` (D)              — pass through
-/// * `Grads` (R)                — × 0.9 (400 grads / 360°)
-/// * `PercentGrade` (G)         — atan(percent / 100)
-/// * `DegreesAndMinutes` (M)    — DDD.MM packed, minutes in the
+/// * `Degrees` (D)              - pass through
+/// * `Grads` (R)                - × 0.9 (400 grads / 360°)
+/// * `PercentGrade` (G)         - atan(percent / 100)
+/// * `DegreesAndMinutes` (M)    - DDD.MM packed, minutes in the
 ///                                fractional part (e.g. 12.34 → 12 + 34/60)
-/// * `DepthGauge` (W)           — `raw` is a vertical depth reading
+/// * `DepthGauge` (W)           - `raw` is a vertical depth reading
 ///                                (in the survey's length units), not an
 ///                                angle.  Convert to a slope via
 ///                                `asin(depth / slope_length)`.  The two
@@ -884,7 +884,7 @@ fn hemisphere_from_datum(datum: Datum) -> Option<bool> {
         // Unambiguously southern.
         Australian1966 | Australian1984 | SouthAmerican1956 | SouthAmerican1969 | Arc1950
         | Cape | Geodetic1949 | CampAreaAstro => Some(true),
-        // Worldwide / equatorial — caller defaults to north.
+        // Worldwide / equatorial - caller defaults to north.
         WGS1984 | WGS1972 | Pulkovo1942 | Indian | Arc1960 => None,
     }
 }
@@ -894,7 +894,7 @@ fn hemisphere_from_datum(datum: Datum) -> Option<bool> {
 ///
 /// The Compass `.MAK` format records the UTM zone but not the hemisphere.
 /// An earlier "project both, pick the smaller `|lat|`" heuristic was
-/// pathological for northern caves at high latitude — a real anchor at
+/// pathological for northern caves at high latitude - a real anchor at
 /// +60 °N projects to ~-30 °S under `+south`, whose absolute latitude is
 /// smaller, so the heuristic silently flipped genuinely-northern surveys
 /// onto a different continent.
@@ -908,7 +908,7 @@ fn hemisphere_from_datum(datum: Datum) -> Option<bool> {
 ///      worst case for getting it wrong is a clearly-wrong latitude the
 ///      user can immediately see on the map.
 ///   3. If the north projection lands above 84 °N (outside UTM's design
-///      range), fall back to the south projection — that's the one
+///      range), fall back to the south projection - that's the one
 ///      ambiguous case where "default north" is statistically wrong.
 fn utm_to_wgs84(
     easting: f64,
@@ -944,7 +944,7 @@ fn utm_to_wgs84(
         }
         return Some(north);
     }
-    // North gave us an out-of-range latitude — try south.
+    // North gave us an out-of-range latitude - try south.
     match project(true) {
         Some(south) => {
             warnings.push(format!(
@@ -1368,7 +1368,7 @@ pub fn convert_compass_to_import_configs(
     }
 
     // Pass 2c: emit loop closures for shared stations that aren't the
-    // spanning-tree merge edge — pin each chain's other shared station to the
+    // spanning-tree merge edge - pin each chain's other shared station to the
     // canonical (earliest by section_index) occurrence.
     let mut canonical: HashMap<&str, (u32, u32)> = HashMap::new();
     for chain in &chains {
@@ -1440,7 +1440,7 @@ fn section_label(survey: &Survey, multi: bool, chain_idx: usize) -> String {
     // Prefer the survey name; fall back to the cave name; and if both
     // are blank, label as "Unnamed section" so the SectionsPanel never
     // renders an empty row (Compass files with empty header lines do
-    // happen — partial exports, hand-edited DATs, etc.).
+    // happen - partial exports, hand-edited DATs, etc.).
     let trimmed_name = survey.name.trim();
     let base = if !trimmed_name.is_empty() {
         trimmed_name.to_string()
@@ -1498,7 +1498,7 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
             Some(target) if *target < configs.len() => children[*target].push(i),
             // Root: no dependency, immediately ready.
             None => ready.push_back(i),
-            // Dependency points outside the slice — treat as ready (the
+            // Dependency points outside the slice - treat as ready (the
             // legacy fallback was the same).
             Some(_) => ready.push_back(i),
         }
@@ -1618,7 +1618,7 @@ mod tests {
             })
             .expect("zero datum coordinates");
         // The fixture's anchor must reach `GpsCoordinates::new` with a
-        // finite, in-range result — the actual lat/lon is intentionally
+        // finite, in-range result - the actual lat/lon is intentionally
         // unchecked here so this test doesn't pin a real location.
         assert!(
             coords.latitude.is_finite() && coords.latitude.abs() < 90.0,
@@ -2068,7 +2068,7 @@ mod tests {
         // resolve_anchor must use the first FixedStation's own zone/datum,
         // not file 0's, when they disagree.  All fixed_stations in this
         // fixture come from project_stations (none declared inline), so
-        // none are projected here — exercise the path by faking via the
+        // none are projected here - exercise the path by faking via the
         // build_preview output: it must surface file 0's UTM zone (13).
         let preview = build_preview(&parsed);
         assert_eq!(preview.utm_zone, Some(13));
@@ -2082,11 +2082,11 @@ mod tests {
         //
         // Forward: BEARING=90, INC=+100 grads (= +90° up).
         // Back   : BEARING=270 (= 90+180), INC=-100 grads (B looking back
-        //          at A which is below — back-inc is the down-reading).
+        //          at A which is below - back-inc is the down-reading).
         //
         // The two-sign-flip in `shot_backsight_geometry` (TO→FROM ⇒ FROM→TO,
         // then Compass +up ⇒ Stalagmight +down) collapses to identity on
-        // the VALUE — so pitch_out should equal the degree-converted
+        // the VALUE - so pitch_out should equal the degree-converted
         // back_inc, i.e. -100 grads * 0.9 = -90°.  Before the unit-
         // conversion fix the function returned the raw -100 (a grads
         // reading stored as if it were degrees), which is the regression

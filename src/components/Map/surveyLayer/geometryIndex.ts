@@ -3,7 +3,7 @@
  *
  * With merged shot/station features (see `features.ts` `mergeFeatures`), the
  * rendered hitbox layers can only tell us WHICH GROUPS (sections) are under
- * the cursor — the per-item identity (`shotId` / `stationIndex`) is no longer
+ * the cursor - the per-item identity (`shotId` / `stationIndex`) is no longer
  * a feature property. This module resolves the exact item geometrically:
  * MapLibre's rendered query gates the candidate sections, then we search only
  * those sections' shots/stations in screen space with the same
@@ -14,7 +14,7 @@
  * query returns a group iff at least one member is within the rendered hit
  * area (circle radius / half line width). The geometric argmin over ALL
  * members of returned groups therefore has distance <= that member's, i.e.
- * it lies within the rendered hit area too — and every item within the
+ * it lies within the rendered hit area too - and every item within the
  * rendered hit area belongs to a returned group. So the argmin sets coincide.
  * The one deliberate improvement: distances/`t` are computed from the TRUE
  * endpoints instead of tile-clipped rendered geometry, which fixes the
@@ -72,7 +72,7 @@ export interface ResolveOptions {
  * would map a given lng/lat to a different pixel (zoom / center / bearing /
  * pitch / viewport). `axisAligned` is true when the projection preserves axis
  * order (bearing 0 and pitch 0), which lets the reprojection use only the two
- * diagonal AABB corners instead of all four — exact under a top-down mercator
+ * diagonal AABB corners instead of all four - exact under a top-down mercator
  * view, so the conservative-superset contract is unchanged. Omit the snapshot
  * to force a full 4-corner reprojection every call (the legacy behavior).
  */
@@ -93,7 +93,7 @@ export class SurveyGeometryIndex {
   /** sectionId -> (stationIndex -> global station index). */
   private stationLookup = new Map<number, Map<number, number>>();
   /** Per-section cache: stationIndex values that touch >=1 non-reference shot
-   *  (both endpoints present — mirrors the builder's feature-emission guard). */
+   *  (both endpoints present - mirrors the builder's feature-emission guard). */
   private nonRefStationCache = new Map<number, Set<number>>();
   /** Per-section world-coord (map coords) AABB over its stations, stored as flat
    *  parallel arrays (index 0..boundsCount-1) for cache-friendly projection.
@@ -107,7 +107,7 @@ export class SurveyGeometryIndex {
   private boundsBuilt = false;
   /** Projected screen-space AABB per section (parallel to the bounds arrays),
    *  reused across probes of the SAME camera. {@link sectionsIntersectingBox}
-   *  reprojects only when the caller's camera key changes — during hover the
+   *  reprojects only when the caller's camera key changes - during hover the
    *  camera is static, so every probe after the first is pure AABB overlap. */
   private projMinX: Float32Array = new Float32Array(0);
   private projMinY: Float32Array = new Float32Array(0);
@@ -389,7 +389,7 @@ export class SurveyGeometryIndex {
    * projected footprint (exact under the app's unrotated top-down projection,
    * a safe over-approximation under any affine map transform). A section is a
    * candidate iff that screen AABB overlaps the probe box. The result is a
-   * superset — the per-item resolvers ({@link nearestStation} /
+   * superset - the per-item resolvers ({@link nearestStation} /
    * {@link nearestShot} / {@link stationsInBox}) then trim to exact tolerance,
    * so no in-tolerance hit is dropped and none leaks past it.
    */
@@ -403,7 +403,7 @@ export class SurveyGeometryIndex {
   ): Set<number> {
     this.ensureBounds();
     // Reproject the section AABBs only when the camera changed. Without a
-    // snapshot (unit tests / legacy callers) reproject every call — same result,
+    // snapshot (unit tests / legacy callers) reproject every call - same result,
     // just uncached. With a matching key, skip straight to the overlap test.
     if (!camera || camera.key !== this.cachedCameraKey) {
       this.projectBounds(project, camera?.axisAligned ?? false);
@@ -515,7 +515,7 @@ export class SurveyGeometryIndex {
    * hook). Same source of truth the renderer and hit-testing use, so positions
    * agree with what is actually drawn.
    *
-   * `includeReference: false` mirrors the reference-shots toggle — reference
+   * `includeReference: false` mirrors the reference-shots toggle - reference
    * shots and all-reference stations are omitted, exactly as the layers filter
    * them.
    */
@@ -564,7 +564,7 @@ export class SurveyGeometryIndex {
 
   /**
    * One section's stations (ordered by `station_index`) and shots, straight from
-   * the SoA — map coords + the global indices the color resolvers need.
+   * the SoA - map coords + the global indices the color resolvers need.
    *
    * This exists so the drag-preview capture never touches the lazy `Station[]`
    * proxy or the lazy `section.shots` getter. Doing `stations.filter(s => s.
@@ -578,7 +578,7 @@ export class SurveyGeometryIndex {
     stations: Array<{ stationIndex: number; lngLat: [number, number]; globalIdx: number }>;
     shots: Array<{
       /** Position in the section: joins station `index` to `index + 1`. NOT the
-       *  array position — shots with a missing endpoint are skipped. */
+       *  array position - shots with a missing endpoint are skipped. */
       index: number;
       shotId: number;
       globalIdx: number;

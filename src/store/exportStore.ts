@@ -6,7 +6,7 @@ export type DataFormat = 'csv' | 'json' | 'tml';
 
 /**
  * Default image-export options. Mirrors the backend `ExportImageOptions::default`
- * (PNG / 300 DPI / threshold 2 / labels on) with colors off — coloring is
+ * (PNG / 300 DPI / threshold 2 / labels on) with colors off - coloring is
  * opt-in and raster-only (SVG stays monochrome). Station labels are opt-in too.
  */
 export const DEFAULT_IMAGE_OPTIONS: ExportImageOptions = {
@@ -26,7 +26,7 @@ export const DEFAULT_IMAGE_OPTIONS: ExportImageOptions = {
  * Shared Export-mode UI state. Lets the inline `ExportControls` in the Export
  * workspace-mode panel and the large WYSIWYG preview in the map area read/write
  * the same options. The modal Export dialog keeps its OWN local state instead
- * (so it always opens on the data/CSV default its e2e suite asserts) — this
+ * (so it always opens on the data/CSV default its e2e suite asserts) - this
  * store is panel + center only.
  *
  * Defaults to the image type because Export mode is map-centric: entering it

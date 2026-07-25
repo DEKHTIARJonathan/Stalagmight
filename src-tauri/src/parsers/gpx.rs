@@ -270,7 +270,7 @@ fn read_text(reader: &mut Reader<&[u8]>) -> Result<String> {
             }
             Ok(Event::End(_)) | Ok(Event::Eof) => break,
             Ok(Event::Start(_)) => {
-                // Nested element — skip it entirely
+                // Nested element - skip it entirely
                 skip_element(reader)?;
             }
             Err(e) => bail!("XML parse error: {e}"),

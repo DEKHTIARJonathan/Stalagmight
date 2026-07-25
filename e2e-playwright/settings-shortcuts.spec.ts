@@ -776,7 +776,7 @@ test.describe('Visual Regression - Shortcuts', () => {
     });
   });
 
-  test.describe('Accessibility — live region announcements', () => {
+  test.describe('Accessibility - live region announcements', () => {
     // Ported from the retired WDIO `shortcuts-accessibility` spec (#120): the
     // ShortcutRecorder's aria-live region must announce recording state changes
     // for screen-reader users. No other Playwright spec asserts these.

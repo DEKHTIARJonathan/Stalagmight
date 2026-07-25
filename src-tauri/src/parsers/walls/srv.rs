@@ -182,7 +182,7 @@ pub(crate) fn handle_directive(
             match parse_walls_date(raw) {
                 Some(parsed) => *date = Some(parsed),
                 // A later malformed `#Date` must NOT clobber a previously-set
-                // valid date — that would silently drop the survey date and
+                // valid date - that would silently drop the survey date and
                 // force 0° auto-declination for the shots that follow. Keep the
                 // prior value and warn instead.
                 None if !raw.is_empty() => {
@@ -206,7 +206,7 @@ pub(crate) fn handle_directive(
             // Parsed but not modeled (flags/notes/symbols don't affect geometry).
         }
         _ => {
-            // Unknown directive — ignore.
+            // Unknown directive - ignore.
         }
     }
 }
@@ -232,7 +232,7 @@ pub(crate) fn parse_vector_line(
     let extracted = extract_spans(body);
     let tokens = extracted.tokens;
     if tokens.len() < 2 {
-        // Lone-station LRUD lines (passage dimensions) and stray fragments —
+        // Lone-station LRUD lines (passage dimensions) and stray fragments -
         // skip silently (we can't attach a station-only LRUD to a shot).
         return None;
     }
@@ -341,7 +341,7 @@ pub(crate) fn parse_vector_line(
     let mut to_depth = None;
     if is_dive {
         // Two trailing depth columns (station depths below surface). They scale
-        // by the S ("short") unit, NOT the D unit — matching genuine Walls
+        // by the S ("short") unit, NOT the D unit - matching genuine Walls
         // `parse_height`, which reads depth/height columns via
         // `parse_length_arg(val, i, u->bFeetS)` (the S feet flag). The S unit
         // covers LRUD plus instrument/target heights and these station depths.
@@ -355,7 +355,7 @@ pub(crate) fn parse_vector_line(
     }
 
     // Apply the `IncD=` distance correction only when a NON-ZERO distance was
-    // given — genuine Walls guards this as `if (u->incD != 0.0 && d != 0.0)`
+    // given - genuine Walls guards this as `if (u->incD != 0.0 && d != 0.0)`
     // (`wall-srv.cpp`). Adding IncD to an exact-`0` leg would turn a deliberate
     // coincident-station tie (`A B 0 …`) into a spurious IncD-long shot.
     let length_m = length_m
@@ -379,11 +379,11 @@ pub(crate) fn parse_vector_line(
         .unwrap_or((None, None, None, None));
 
     // A floated/`(?)` variance is a network-adjustment hint on a REAL measured
-    // leg — it does not make the shot a splay, so it must not be dropped by the
+    // leg - it does not make the shot a splay, so it must not be dropped by the
     // splay filter. Only anonymous (`-`/`--`) wall endpoints are splays.
     let is_reference = from_anon || to_anon;
 
-    // Pure station-equate (no distance, no depth, no bearing) — skip. A
+    // Pure station-equate (no distance, no depth, no bearing) - skip. A
     // zero-length leg that still carries a bearing (fore- OR back-sight) is a
     // coincident-station tie worth keeping, matching `is_importable_shot`.
     if length_m <= 0.0
@@ -444,7 +444,7 @@ pub(crate) struct ExtractedSpans {
 }
 
 /// True when `close` occurs at or after `start` in `chars` AND that closer is at
-/// end-of-body or immediately followed by whitespace — i.e. a *properly
+/// end-of-body or immediately followed by whitespace - i.e. a *properly
 /// terminated* span. Returns the closer's index. Genuine Walls only treats a
 /// token-initial `<`/`*` as an LRUD when the matching `>`/`*` is followed by
 /// whitespace or end-of-line (`wall-srv.cpp`: `!pNote[1] || isspace(pNote[1])`);
@@ -474,7 +474,7 @@ pub(crate) fn extract_spans(body: &str) -> ExtractedSpans {
         match c {
             c if c.is_whitespace() => flush(&mut current, &mut tokens),
             '#' => {
-                // Inline directive (segment) — stop collecting measurement
+                // Inline directive (segment) - stop collecting measurement
                 // tokens; the rest of the line doesn't carry geometry.
                 flush(&mut current, &mut tokens);
                 break;
@@ -483,9 +483,9 @@ pub(crate) fn extract_spans(body: &str) -> ExtractedSpans {
             // (`current` empty) AND only when properly terminated (closer at
             // end-of-body or before whitespace). Walls lays a shot out as
             // whitespace-separated fields `from to <measures…> [lrud] [(var)]`,
-            // so a delimiter glued inside a token — e.g. the literal `*` in
-            // `W-*/2/46` — or an UNTERMINATED `<`/`*` — e.g. a station named
-            // `*8` — is a literal name character, not a span. Without this a
+            // so a delimiter glued inside a token - e.g. the literal `*` in
+            // `W-*/2/46` - or an UNTERMINATED `<`/`*` - e.g. a station named
+            // `*8` - is a literal name character, not a span. Without this a
             // mid-name `*` tore `W-*/2/46 W-*/2/50` into a phantom `W-` hub, and
             // an unterminated `*8` swallowed the rest of the line as a bogus LRUD.
             '<' | '*' if current.is_empty() => {
@@ -498,7 +498,7 @@ pub(crate) fn extract_spans(body: &str) -> ExtractedSpans {
                 current.push(c); // unterminated → literal name character
             }
             '(' if current.is_empty() => {
-                // Variance override `(...)` — consume through the first `)` (or
+                // Variance override `(...)` - consume through the first `)` (or
                 // to end of body if unterminated) and discard. We don't model
                 // per-shot variance, and a floated `(?)` does NOT turn a real
                 // measured leg into a splay.
@@ -613,7 +613,7 @@ fn parse_fix(rest: &str, units: &WallsUnits, georef: &Option<WallsRef>) -> Optio
     let coords = &tokens[1..];
     // `#Fix` columns are E/N/U coordinates, independent of the vector
     // measurement order (a dive survey's CT `Order=DA` must NOT truncate the
-    // elevation column). The rectangular `rect_order` is exactly that — an
+    // elevation column). The rectangular `rect_order` is exactly that - an
     // explicit `Order=ENU…` if one was set, otherwise the E/N/U default. Each
     // column is a length or an N/S/E/W-prefixed geographic angle.
     let coord_order: &[OrderElem] = &units.rect_order;
@@ -658,7 +658,7 @@ fn parse_fix(rest: &str, units: &WallsUnits, georef: &Option<WallsRef>) -> Optio
 
     // The datum a UTM fix projects under is a property of the inherited `.REF`,
     // not of the individual fix, so any "unrecognized datum" warning is emitted
-    // ONCE per survey (see `parse_srv_contents`) rather than here — otherwise a
+    // ONCE per survey (see `parse_srv_contents`) rather than here - otherwise a
     // surface file's thousands of `#Fix` rows each repeat the same message.
     let mut projected_from_utm = false;
     let lat_long = match (lat, lon) {
@@ -741,8 +741,8 @@ pub(crate) fn parse_walls_date(s: &str) -> Option<NaiveDate> {
     // ISO formats can NOT be tried first: `05/07/17` (May 7 2017) would wrongly
     // parse as year 0005. Disambiguate by field widths: a 4-digit FIRST field is
     // year-first (ISO); otherwise it is month-first, and a 4- vs 2-digit LAST
-    // field selects `%Y` vs `%y` (chrono maps `%y` 00–69 → 2000–2069, 70–99 →
-    // 1970–1999).
+    // field selects `%Y` vs `%y` (chrono maps `%y` 00-69 → 2000-2069, 70-99 →
+    // 1970-1999).
     let parts: Vec<&str> = s.split(['-', '/']).map(str::trim).collect();
     let first_len = parts.first().map_or(0, |f| f.len());
     let last_len = parts.last().map_or(0, |f| f.len());
@@ -759,20 +759,20 @@ pub(crate) fn parse_walls_date(s: &str) -> Option<NaiveDate> {
         }
         return None;
     }
-    // 2-digit year. Genuine Walls maps EVERY 2-digit year into 1900–1999 with no
-    // pivot — `if (y < 100) y += 1900;` in `wall-srv.cpp` `ParseDate`. We mirror
+    // 2-digit year. Genuine Walls maps EVERY 2-digit year into 1900-1999 with no
+    // pivot - `if (y < 100) y += 1900;` in `wall-srv.cpp` `ParseDate`. We mirror
     // that exactly so the date (and any IGRF auto-declination Walls derived from
-    // it) reproduces Walls' own interpretation. chrono's `%y` pivots 00–69 →
+    // it) reproduces Walls' own interpretation. chrono's `%y` pivots 00-69 →
     // 2000s, so roll any 2000s result back a century. (This also keeps a 1960s
     // legacy survey, e.g. `64` → 1964, inside the IGRF range. Trade-off: a survey
-    // actually done in 2025 but written `…-25` reads as 1925 — exactly as Walls
+    // actually done in 2025 but written `…-25` reads as 1925 - exactly as Walls
     // reads it; Walls itself warns that `yyyy-mm-dd` is preferred.)
     //
     // Leap-day exception: `02-29-00` parses (via `%y`) to 2000-02-29, but 1900
     // was NOT a leap year, so `with_year(1900)` fails and `unwrap_or(d)` keeps
     // 2000-02-29. That is the only valid date the two digits can denote (Feb 29
     // 1900 does not exist), so we deliberately leave it at 2000 rather than force
-    // a parse failure — the single date that escapes the "every 2-digit year →
+    // a parse failure - the single date that escapes the "every 2-digit year →
     // 1900s" rule, by arithmetic necessity.
     for fmt in &["%m-%d-%y", "%m/%d/%y"] {
         if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
@@ -836,7 +836,7 @@ pub(crate) fn expand_macros(
                 rest = &after[close + 1..];
             }
             None => {
-                // Unterminated `$(` — emit the remainder literally.
+                // Unterminated `$(` - emit the remainder literally.
                 out.push_str(&rest[pos..]);
                 rest = "";
                 break;

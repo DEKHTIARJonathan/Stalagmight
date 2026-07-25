@@ -44,7 +44,7 @@ interface DockProps {
    *  The reflow spacer still renders in place. */
   overlayContainer?: HTMLElement | null;
   /** Bottom edge only: left/right offsets (px) for the overlay in the portal
-   *  container's frame — so the Data panel stops at open side panels but fills
+   *  container's frame - so the Data panel stops at open side panels but fills
    *  the gap left by minimized ones. Default 0 (full width). */
   overlayLeft?: number;
   overlayRight?: number;
@@ -59,7 +59,7 @@ interface DockProps {
 }
 
 /**
- * One dockable panel — the SOLE mount of its content. Reflows the map when
+ * One dockable panel - the SOLE mount of its content. Reflows the map when
  * pinned (via a flow spacer that only the map reacts to) or floats over the map
  * in hover mode; the panel element itself never moves or remounts across
  * pin/unpin (only the spacer + z-index change), so the transition is seamless.
@@ -111,12 +111,12 @@ function DockComponent({
     onResizeEnd,
     // After a hover-mode resize, onMouseLeave was suppressed during the drag, so
     // re-evaluate the close here. The release pointer often lands on the handle's
-    // overhang (just outside the panel body) — still part of the Dock region — so
+    // overhang (just outside the panel body) - still part of the Dock region - so
     // hit-test the whole outer wrapper (panel + handle + tab). If the pointer
     // ended off it, close on a *generous* grace so the user can move back over.
     onResizeSettled: ({ clientX, clientY }) => {
       // A fast resize released past the window edge (with pointer capture) yields
-      // coords outside the viewport, where elementFromPoint returns null — which
+      // coords outside the viewport, where elementFromPoint returns null - which
       // would read as "not over region" and wrongly schedule a close of the panel
       // being resized. Clamp into the viewport so it hit-tests the nearest
       // in-viewport point (the panel/handle at the edge) instead.
@@ -147,7 +147,7 @@ function DockComponent({
   }, [isResizing, onResizingChange]);
 
   // Keep content mounted through the slide-out so closing animates (single
-  // instance — never remounts on pin/unpin/hover). Visibility is single-sourced
+  // instance - never remounts on pin/unpin/hover). Visibility is single-sourced
   // from reveal.isOpen: while closing, `isClosing` keeps children painted until
   // the outer wrapper's width/height transition ends (onTransitionEnd below),
   // with a SLIDE_MS timer as a fallback so content always unmounts even when no
@@ -182,7 +182,7 @@ function DockComponent({
 
   const sizeNow = open ? size : BAR;
   const spacerSize = reveal.isPinnedOpen ? size : BAR;
-  // Inline transition (robust vs a Tailwind arbitrary value) — suspended while
+  // Inline transition (robust vs a Tailwind arbitrary value) - suspended while
   // dragging so the panel edge + spacer track the pointer 1:1.
   // Edges that follow a sibling's size: the bottom panel's left/right follow the
   // side panels; a side bar's bottom follows the Data panel. Drop their easing
@@ -246,7 +246,7 @@ function DockComponent({
       className={`absolute pointer-events-auto ${fullscreen ? 'z-40' : reveal.isFloatingOpen ? 'z-30' : 'z-20'}`}
       style={{ ...outerStyle, transition: sizeTransition }}
       // The slide-out ends when THIS wrapper's own width/height transition
-      // finishes — unmount the children then (single-sourced from reveal.isOpen;
+      // finishes - unmount the children then (single-sourced from reveal.isOpen;
       // the SLIDE_MS timer above is only a fallback). Guard on target + property
       // so a child's color/other transition bubbling up doesn't end it early.
       onTransitionEnd={(e) => {
@@ -269,7 +269,7 @@ function DockComponent({
         if (!isResizing) reveal.onRegionLeave();
       }}
       // Focus returning to an already-open floating panel (e.g. tabbing back in
-      // within the close grace) cancels the pending close — mirrors the pointer
+      // within the close grace) cancels the pending close - mirrors the pointer
       // onRegionEnter. Guarded by isFloatingOpen so merely tab-focusing a CLOSED
       // panel's opener tab never auto-reveals it (only an explicit click does).
       onFocus={() => {
@@ -277,8 +277,8 @@ function DockComponent({
       }}
       // Keyboard close: a hover panel opened via the keyboard (the opener tab is a
       // real button, so Enter/Space reveals it) gets no mouseleave to trigger the
-      // grace close. When focus leaves the whole region — and the pointer isn't
-      // over it — schedule the close so it can't stay floating open forever.
+      // grace close. When focus leaves the whole region - and the pointer isn't
+      // over it - schedule the close so it can't stay floating open forever.
       onBlur={(e) => {
         const next = e.relatedTarget;
         const stayingInRegion = next instanceof Node && outerRef.current?.contains(next);
@@ -315,7 +315,7 @@ function DockComponent({
 
       {/* Resize handle on the inner edge whenever the panel is open (pinned or
           hover-floating), so hover panels can be resized too. Transparent hit
-          area only — the visible highlight is the edge border + tab border tint
+          area only - the visible highlight is the edge border + tab border tint
           (driven by resizeActive), so nothing draws under the tab. */}
       {reveal.isOpen && !fullscreen && (
         <div
@@ -348,7 +348,7 @@ function DockComponent({
   );
 
   // Portal mode (overlayContainer prop passed, even if momentarily null): render
-  // into the container once the ref resolves, never inline — an inline first
+  // into the container once the ref resolves, never inline - an inline first
   // paint would position against the wrong ancestor and then remount the whole
   // overlay (incl. the DataTable) when it reparents. The parent captures the
   // container via a callback ref in the commit phase; React flushes that setState

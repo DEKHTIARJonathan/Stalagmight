@@ -8,7 +8,7 @@ import { useUIStore } from '../../store/uiStore';
 import { DISTANCE_NEAR, DISTANCE_FAR } from '../../utils/distanceGradient';
 
 interface DistanceLegendProps {
-  /** Largest reachable distance (meters) — the far end of the scale. */
+  /** Largest reachable distance (meters) - the far end of the scale. */
   max: number;
   visible: boolean;
 }

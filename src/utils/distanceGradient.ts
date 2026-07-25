@@ -20,8 +20,8 @@ export const UNREACHABLE_DIST = -1;
  * depth ramp, which also forces constants regardless of theme) and deliberately
  * distinct hues from depth so it reads as a different encoding. (#34)
  */
-export const DISTANCE_NEAR = '#f4d03f'; // gold — close to origin
-export const DISTANCE_FAR = '#7d3c98'; // purple — far from origin
+export const DISTANCE_NEAR = '#f4d03f'; // gold - close to origin
+export const DISTANCE_FAR = '#7d3c98'; // purple - far from origin
 
 export interface DistanceFeatureState {
   /** featureId → dist (avg of the shot's two endpoints; -1 if either unreachable) */
@@ -36,7 +36,7 @@ export interface DistanceFeatureState {
 export type OverlayApplyAction = 'ramp' | 'off' | 'hold';
 
 /**
- * Decide how an analytical-overlay apply effect (distance #34 / gas-reach #38 —
+ * Decide how an analytical-overlay apply effect (distance #34 / gas-reach #38 -
  * both mirror this shape) should drive the survey layer for the current
  * `(mode, field, geometry)` tuple. Shared by both overlays; lives here as the
  * canonical overlay helper.
@@ -45,7 +45,7 @@ export type OverlayApplyAction = 'ramp' | 'off' | 'hold';
  * parameters clears the cached field to `null` (uiStore.setDistanceGradientOrigin
  * / gasPlanStore setters) and a fresh one lands a tick later. A naive
  * `field ? on : off` effect would drive the layer OFF (base colors) for that one
- * tick and back ON — a visible blink of section colors before the new ramp,
+ * tick and back ON - a visible blink of section colors before the new ramp,
  * worst under the custom renderer where OFF is a full buffer rebuild. This guard
  * splits the "off" case in two:
  *   - `'ramp'`: the field is ready → install / refresh the ramp.
@@ -59,7 +59,7 @@ export type OverlayApplyAction = 'ramp' | 'off' | 'hold';
  *
  * A genuinely EMPTY result (no reachable features) is still a NON-null field
  * object, so the caller passes `hasField = true` and it maps to `'ramp'` (the
- * all-grey ramp) — never `'hold'` on stale colors.
+ * all-grey ramp) - never `'hold'` on stale colors.
  *
  * CLEAR ON FAILURE (`failed`): a recompute that REJECTED (the IPC threw) leaves
  * no new field, so `hasField` is false. Without a signal that the compute failed

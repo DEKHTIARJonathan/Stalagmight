@@ -106,7 +106,7 @@ describe('GlobalHitIndex.pick', () => {
 /**
  * Camera-keyed projection cache (#customRender P1): during hover the camera is
  * static, so all but the first pick at a given camera must reuse cached screen
- * coords and never re-project — otherwise a single large system under the cursor
+ * coords and never re-project - otherwise a single large system under the cursor
  * re-projects all its endpoints on every mousemove.
  */
 describe('GlobalHitIndex.pick projection cache', () => {

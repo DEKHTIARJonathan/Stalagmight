@@ -16,7 +16,7 @@ impl Project {
         self.section_offsets.get(&id).copied().unwrap_or((0.0, 0.0))
     }
 
-    /// Apply a delta to one section's offset. Low-level primitive —
+    /// Apply a delta to one section's offset. Low-level primitive -
     /// callers handle cascade and invariants.
     pub(crate) fn adjust_section_offset(&mut self, id: SectionId, dx: f64, dy: f64) {
         let current = self.section_offset(id);
@@ -45,7 +45,7 @@ impl Project {
     /// Does the merge group containing `section_id` hold a zero datum?
     pub(crate) fn rigid_group_has_datum(&self, id: SectionId) -> bool {
         // Delegate to the resolve-aware check so a DANGLING datum (anchor key no
-        // longer resolves) is not counted as an anchor — otherwise a move-drag is
+        // longer resolves) is not counted as an anchor - otherwise a move-drag is
         // wrongly blocked on a phantom-anchored, actually-unanchored group (#174).
         // Same merge-group scope as before: `component_datum_refs` (which backs
         // `section_has_zero_datum`) uses the same `get_merged_section_ids`.
@@ -53,27 +53,27 @@ impl Project {
     }
 
     /// Assert that all merge points are colocated (within 1cm tolerance).
-    /// Only active in debug builds — no-op in release.
+    /// Only active in debug builds - no-op in release.
     /// Check that all merge points are colocated. Logs a warning for any
     /// merge pair more than 5cm apart (allows for floating-point accumulation
     /// across many shots in real survey data). In test builds, panics for
     /// gaps > 1cm to catch regressions with synthetic data.
     pub(crate) fn debug_assert_merge_alignment(&self, context: &str) {
-        // Despite the name, this used to run in release too — and the cost
+        // Despite the name, this used to run in release too - and the cost
         // is brutal: O(N) merges × 2 × O(N) `compute_station_raw_coords`
         // per call, called from every mutating command. For a 1 200-section
         // TML import this contributed ~1.5 billion operations to the hot
         // path. Gate the whole body behind `debug_assertions` so it
         // remains a sanity check during development without harming
         // production performance. The release-mode `error!` log it used
-        // to emit was informational only — alignment drift inside a
+        // to emit was informational only - alignment drift inside a
         // *single* command is a programmer bug, not a data condition the
         // user can fix at runtime.
         #[cfg(debug_assertions)]
         {
             // During a deferred-cascade batch (e.g. a large import) connections
             // are created in dependency order, so intermediate states are
-            // transiently misaligned BY DESIGN — and running this
+            // transiently misaligned BY DESIGN - and running this
             // O(merges × colocation-BFS) check after every command would make the
             // batch O(N³) (the import of a large Walls project pinned a core for
             // minutes in dev builds). Skip until the batch completes; the cascade
@@ -183,7 +183,7 @@ impl Project {
         // shot-UUID anchor now that shots (with UUIDs) are loaded.
         self.reanchor_station_refs();
         self.convert_orphan_closures_to_merges();
-        // Zero-trust: never honor a persisted derivable offset — re-solve
+        // Zero-trust: never honor a persisted derivable offset - re-solve
         // unconditionally so a sub-tolerance stale offset can't survive the load.
         self.resolve_offsets()
     }
@@ -191,11 +191,11 @@ impl Project {
     /// Enforce the invariant that a loop closure exists only for a TRUE loop. If
     /// a closure's two endpoints are no longer connected through the survey
     /// (shots + merges) independently of the closure, the closure is the *sole*
-    /// connection between them — that is a merge, not a loop — so convert it.
+    /// connection between them - that is a merge, not a loop - so convert it.
     ///
     /// Iterative: when two closures bridge the same pair, the first becomes the
     /// merge and the second is then a genuine (redundant) loop and is kept.
-    /// Returns the number converted. (Issue #8 — a shot deletion can strand a
+    /// Returns the number converted. (Issue #8 - a shot deletion can strand a
     /// section so its only attachment is a closure.)
     pub fn convert_orphan_closures_to_merges(&mut self) -> usize {
         let mut converted = 0;
@@ -226,8 +226,8 @@ impl Project {
             // If both endpoints' groups are already zero-datum-anchored, that edge
             // would place two GPS anchors in one merge component, and the next
             // offset cascade would tear the merge apart (the reported failure
-            // mode). Keep it a (soft) closure instead — a closure between two
-            // anchored groups is legitimate — and let the over-anchoring detector
+            // mode). Keep it a (soft) closure instead - a closure between two
+            // anchored groups is legitimate - and let the over-anchoring detector
             // surface it for the user to resolve.
             {
                 let closure = &self.loop_closures[idx];
@@ -298,7 +298,7 @@ impl Project {
     pub fn resolve_offsets(&mut self) -> usize {
         let before = self.check_merge_alignment().len();
         // Snapshot the derived offsets so we can tell whether the re-solve actually
-        // moved anything — including SUB-tolerance changes the `before`/`after`
+        // moved anything - including SUB-tolerance changes the `before`/`after`
         // misalignment count can't see (that is the whole reason this re-cascades
         // unconditionally). Comparing the count alone would miss them.
         let offsets_before = self.section_offsets.clone();
@@ -310,7 +310,7 @@ impl Project {
         // Only stamp a modification when the re-solve genuinely changed an offset.
         // Opening a byte-clean project re-solves to the identical offsets, and
         // touch()ing there would bump `modified_at` for a project the user never
-        // edited — a later no-edit save would then persist a bogus timestamp, and
+        // edited - a later no-edit save would then persist a bogus timestamp, and
         // it would make a no-op integrity Repair look like a real change.
         if self.section_offsets != offsets_before {
             self.touch();

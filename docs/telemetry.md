@@ -1,7 +1,7 @@
 # Telemetry
 
 Anonymous, session-level usage telemetry. Opt-in only, no PII. IP addresses
-are SHA-256 hashed server-side for abuse detection — no raw IPs are stored.
+are SHA-256 hashed server-side for abuse detection - no raw IPs are stored.
 
 ## Architecture
 
@@ -30,10 +30,10 @@ prompted on first launch via `TelemetryOptInDialog`.
 
 ## Payload
 
-### v3 — Self-describing JSON + gzip (wire format)
+### v3 - Self-describing JSON + gzip (wire format)
 
 Sent with `Content-Type: application/json` and `Content-Encoding: gzip`. Event
-names are sent **verbatim** as a `{name: count}` map — there is no numeric ID
+names are sent **verbatim** as a `{name: count}` map - there is no numeric ID
 registry on the wire, so a new event can never be silently dropped by an older
 worker. This is also the on-disk buffer format, so the wire and buffer formats
 are identical (no re-encoding on retry).
@@ -64,36 +64,36 @@ sub-2 KB per flush, and D1 storage is unchanged (it always stored string names).
 ### Event vocabulary
 
 `src-tauri/src/telemetry/registry.rs` keeps `EVENT_NAMES` / `SOURCE_NAMES` as the
-canonical list of event names the app emits. It is **not** a wire ID map — it
+canonical list of event names the app emits. It is **not** a wire ID map - it
 exists only to back the coverage tests (every command / tool / dialog has a
 tracked event; typo detection). Order is irrelevant, and there is no worker-side
 copy to keep in sync.
 
-**`project_seq`** — auto-incrementing project context counter. `0` means global
+**`project_seq`** - auto-incrementing project context counter. `0` means global
 view (no project open) or Rust-originated events. Each time the user opens a
 project (`setView('single')`), the sequence increments. A single flush never
-mixes events from different project contexts — the frontend force-flushes
+mixes events from different project contexts - the frontend force-flushes
 pending events before advancing the counter.
 
 No file paths, project names, survey data, coordinates, or user identity.
 
 ## Event Reference
 
-### Commands — `command.<name>` / `command.<name>:<source>`
+### Commands - `command.<name>` / `command.<name>:<source>`
 
 Every IPC call (except telemetry's own) is tracked via `trackCommand`. When
 a source hint is set (e.g., `keyboard`, `toolbar`), it's appended after `:`.
 
 ```
-command.undo:keyboard       — undo triggered by keyboard shortcut
-command.save_project        — save with no known source
-command.create_shot:toolbar — shot created from toolbar action
+command.undo:keyboard       - undo triggered by keyboard shortcut
+command.save_project        - save with no known source
+command.create_shot:toolbar - shot created from toolbar action
 ```
 
 **Excluded from tracking**: `track_events`, `flush_telemetry`,
 `is_telemetry_available`, `set_telemetry_enabled`.
 
-### Actions — `action.<name>:<source>`
+### Actions - `action.<name>:<source>`
 
 UI-only events tracked via `trackAction`. Always include a source.
 
@@ -108,57 +108,57 @@ UI-only events tracked via `trackAction`. Always include a source.
 | Panel toggles | `panel-open.sections`, `panel-close.detail`, `panel-open.data-table` | `keyboard`, `unknown` (= collapse button) |
 | Context menu | `unmerge`, `remove-closure`, `toggle-reference` | `context-menu`, `detail-panel` |
 
-### Dialog Cancellations — `dialog-cancel.<name>`
+### Dialog Cancellations - `dialog-cancel.<name>`
 
 Emitted when a dialog closes without its success path calling
 `trackDialogComplete()`. Tracks user abandonment rate per dialog.
 
 ```
-dialog-cancel.import        — user opened import dialog then cancelled
-dialog-cancel.merge         — user cancelled merge dialog
+dialog-cancel.import        - user opened import dialog then cancelled
+dialog-cancel.merge         - user cancelled merge dialog
 ```
 
 **Completion-flag pattern**: Success handlers call `trackDialogComplete(name)`
-before `closeDialog()`. Then `closeDialog()` checks the flag — if unset, emits
+before `closeDialog()`. Then `closeDialog()` checks the flag - if unset, emits
 the cancel event. Dialog chaining (dialog A opens dialog B) is handled
-automatically — the previous dialog is marked as completed.
+automatically - the previous dialog is marked as completed.
 
-### Undo Regret — `undo-after.<command>`
+### Undo Regret - `undo-after.<command>`
 
 When the user undoes within 15 seconds of an undoable command, the pair is
 recorded. High `undo-after.X` rates relative to `command.X` signal that
 operation X frequently produces unwanted results.
 
 ```
-undo-after.merge_stations   — user merged then immediately undid
-undo-after.delete_shot      — user deleted then immediately undid
+undo-after.merge_stations   - user merged then immediately undid
+undo-after.delete_shot      - user deleted then immediately undid
 ```
 
-### Display Steady-State — `display-state.<key>:<value>`
+### Display Steady-State - `display-state.<key>:<value>`
 
 Emitted once at project load for each display toggle that differs from
 `DISPLAY_DEFAULTS`. Answers "which defaults do users override most?"
 
 ```
-display-state.showGrid:true          — user has grid on (default: off)
-display-state.showStationLabels:true — user has labels on (default: off)
-display-state.gridSpacing:5          — user changed spacing from default 10
+display-state.showGrid:true          - user has grid on (default: off)
+display-state.showStationLabels:true - user has labels on (default: off)
+display-state.gridSpacing:5          - user changed spacing from default 10
 ```
 
 New projects with default settings emit nothing.
 
-### Workflow Dwell Time — `dwell.<state>`
+### Workflow Dwell Time - `dwell.<state>`
 
 Tracks cumulative seconds spent in each workflow state per session. States are
-mutually exclusive — switching to a new state flushes the accumulated time on
+mutually exclusive - switching to a new state flushes the accumulated time on
 the previous one.
 
 ```
-dwell.tool.select              — seconds with Select tool active
-dwell.dialog.settings          — seconds in Settings dialog
-dwell.dialog.import            — seconds in Import dialog
-dwell.placement                — seconds in placement mode
-dwell.global-view              — seconds on the Welcome/project-list screen
+dwell.tool.select              - seconds with Select tool active
+dwell.dialog.settings          - seconds in Settings dialog
+dwell.dialog.import            - seconds in Import dialog
+dwell.placement                - seconds in placement mode
+dwell.global-view              - seconds on the Welcome/project-list screen
 ```
 
 **Integration points** (all in `uiStore.ts`):
@@ -176,7 +176,7 @@ dwell.global-view              — seconds on the Welcome/project-list screen
 **Flush on close**: `flushTelemetry()` calls `flushDwell()` to capture the
 final state's accumulated time before sending.
 
-**Same-key no-op**: Calling `setDwellState` with the same key is a no-op —
+**Same-key no-op**: Calling `setDwellState` with the same key is a no-op -
 prevents timer resets from redundant calls.
 
 ### SpeleoDB traffic - `speleodb-api.<kind>.*` (#210, F1)
@@ -231,12 +231,12 @@ LATENCY_BUCKETS` and fails until the new kind's ten names are in `EVENT_NAMES`
 | `src-tauri/src/telemetry/registry.rs` | Canonical event/source name vocabulary (backs the coverage tests) |
 | `src-tauri/src/speleodb/metrics.rs` | Per-endpoint SpeleoDB traffic instrumentation (`speleodb-api.*`, #210) |
 | `src-tauri/src/commands/telemetry.rs` | IPC commands: `track_events`, `flush_telemetry`, etc. |
-| `src/store/displaySelectors.ts` | `DISPLAY_DEFAULTS` — single source of truth for default values |
+| `src/store/displaySelectors.ts` | `DISPLAY_DEFAULTS` - single source of truth for default values |
 
 ## Source Tracking
 
 The `setSource(name)` / `consumeSource()` pattern provides attribution for
-where an action originated. Source is a global singleton — set before an action,
+where an action originated. Source is a global singleton - set before an action,
 consumed by the first `trackAction` or `trackCommand` that fires.
 
 Auto-resets after 50ms to prevent bleed to unrelated actions.
@@ -270,15 +270,15 @@ call, but be aware of this when adding new handlers.
 
 The 50 ms `setSource` reset is too short for project open/create/import, whose
 terminal IPC (`load_project_full`, `create_project_full`, `execute_*_import`,
-`import_sections`) fires only after a file picker and/or dialog — long after the
+`import_sections`) fires only after a file picker and/or dialog - long after the
 originating click. A separate **pending project-action source** bridges that gap:
 `setProjectActionSource(name)` is called synchronously at the entry point (recent
 list/map, toolbar, hamburger, keyboard, empty-state) and `peekProjectActionSource()`
 is applied at each terminal command. It is `peek` (not consumed) so multi-command
 flows (e.g. DMP import = `create_project_full` + `import_sections`) all attribute
 to the same entry point, and it is cleared on `setView('single')` (flow complete)
-and on file-picker cancel. Project opens — which bypass the tracked `invokeIpc` via
-the raw binary `load_project_full_binary` invoke — are explicitly counted as
+and on file-picker cancel. Project opens - which bypass the tracked `invokeIpc` via
+the raw binary `load_project_full_binary` invoke - are explicitly counted as
 `command.load_project_full[:source]` inside `loadProject`.
 
 ## Suppression
@@ -290,7 +290,7 @@ onboarding auto-opening panels).
 ```typescript
 import { withTrackingSuppressed } from '../../utils/telemetry';
 
-// Onboarding opens the sections panel — not a user action
+// Onboarding opens the sections panel - not a user action
 withTrackingSuppressed(() => toggleSectionsPanel());
 ```
 
@@ -298,7 +298,7 @@ withTrackingSuppressed(() => toggleSectionsPanel());
 
 `EVENT_NAMES` / `SOURCE_NAMES` in `src-tauri/src/telemetry/registry.rs` are the
 canonical list of event names the app emits. Because the wire format sends names
-verbatim (self-describing JSON), this is **not** an ID map — order is irrelevant,
+verbatim (self-describing JSON), this is **not** an ID map - order is irrelevant,
 entries can be added/renamed/removed freely, and there is no worker-side copy to
 keep in sync. The vocabulary exists only to power the coverage tests below, which
 guarantee every command / tool / dialog actually emits telemetry and catch typos
@@ -307,7 +307,7 @@ before they reach the database.
 ### Adding a new event name
 
 1. Add the bare event name (e.g. `command.my_command`) to `EVENT_NAMES` in
-   `registry.rs` — anywhere; order does not matter — and bump the `event_count`
+   `registry.rs` - anywhere; order does not matter - and bump the `event_count`
    test.
 2. Run `cargo test --manifest-path src-tauri/Cargo.toml --features telemetry -- telemetry::registry`.
 
@@ -356,7 +356,7 @@ corresponding type union that is parsed by Rust exhaustiveness tests.
 
 1. Add `trackDialogComplete('my-dialog')` before every success-path
    `closeDialog()` call.
-2. Cancel/dismiss paths need no changes — `closeDialog()` auto-detects.
+2. Cancel/dismiss paths need no changes - `closeDialog()` auto-detects.
 3. For informational dialogs (no meaningful cancel), add
    `trackDialogComplete` before every close path.
 4. Add three registry entries: `action.dialog.my-dialog`,
@@ -366,7 +366,7 @@ corresponding type union that is parsed by Rust exhaustiveness tests.
 
 ### New IPC command
 
-Automatic — `invokeIpc` calls `trackCommand` for all non-telemetry commands.
+Automatic - `invokeIpc` calls `trackCommand` for all non-telemetry commands.
 If the command is undoable, add it to `UNDOABLE_COMMANDS` in `telemetry.ts`.
 
 You must also add a `command.<name>` entry to `EVENT_NAMES` in `registry.rs`. The
@@ -428,23 +428,23 @@ For keyboard handlers elsewhere, call `setSource('keyboard')` before the action.
 
 Telemetry is behind the Rust `telemetry` feature flag. CI and release builds
 enable it. The telemetry endpoint URL is injected at build time via the
-`TELEMETRY_ENDPOINT` environment variable — it is **not** stored in the repo.
+`TELEMETRY_ENDPOINT` environment variable - it is **not** stored in the repo.
 
 **`TELEMETRY_ENDPOINT`** (required CI/release secret): The full URL where
 telemetry payloads are POSTed.
 The build will fail with a clear error if this variable is missing when the
 `telemetry` feature is enabled. Forks that enable telemetry without setting the
-secret get a build error — no data is ever sent to our server by accident.
+secret get a build error - no data is ever sent to our server by accident.
 
 CI tests use a dummy endpoint (`https://test.invalid/v1/events`) since they
 don't make HTTP calls.
 
 ```yaml
-# CI — runs registry exhaustiveness tests (dummy endpoint, no HTTP)
+# CI - runs registry exhaustiveness tests (dummy endpoint, no HTTP)
 TELEMETRY_ENDPOINT=https://test.invalid/v1/events \
   cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
 
-# Release — compiles telemetry into the binary (real endpoint from secret)
+# Release - compiles telemetry into the binary (real endpoint from secret)
 TELEMETRY_ENDPOINT=$TELEMETRY_ENDPOINT \
   pnpm tauri build -- --features telemetry
 ```
@@ -479,7 +479,7 @@ CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... \
 
 The Rust client sends `User-Agent: Stalagmight/<version>` on every request.
 The worker rejects any request whose `User-Agent` does not start with
-`Stalagmight/` — returning a silent 404 before any parsing or DB work.
+`Stalagmight/` - returning a silent 404 before any parsing or DB work.
 This blocks automated scanners and bots at near-zero cost.
 
 For additional protection, a Cloudflare WAF custom rule can block non-Stalagmight
@@ -516,7 +516,7 @@ visible in the Cloudflare dashboard and via `wrangler tail`.
 (cd telemetry-worker && CLOUDFLARE_API_TOKEN=... npx wrangler tail)
 ```
 
-**Dashboard**: Workers & Pages > stalagmight-telemetry > Logs — searchable,
+**Dashboard**: Workers & Pages > stalagmight-telemetry > Logs - searchable,
 filterable by status code, with invocation traces (wall time, CPU time,
 subrequests).
 

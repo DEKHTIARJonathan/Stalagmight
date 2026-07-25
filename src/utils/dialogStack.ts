@@ -92,7 +92,7 @@ export function popDialog(element: HTMLElement): void {
   element.removeAttribute('inert');
 
   if (stack.length === 0) {
-    // No dialogs left — restore app interactivity
+    // No dialogs left - restore app interactivity
     setAppInert(false);
   } else {
     // Restore interactivity to the new topmost dialog

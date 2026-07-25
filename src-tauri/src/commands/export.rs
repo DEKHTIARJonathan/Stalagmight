@@ -297,7 +297,7 @@ pub(crate) fn export_image_impl(
 ///
 /// Runs the (potentially heavy: bounds + Dijkstra + polyline emission)
 /// work in `spawn_blocking` so the slider can drag without stalling the
-/// Tauri main thread on large surveys — mirroring `export_image`.
+/// Tauri main thread on large surveys - mirroring `export_image`.
 #[tauri::command]
 pub async fn preview_svg_export(
     app_handle: AppHandle,

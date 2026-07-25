@@ -3,8 +3,8 @@
 // Pins the prod-LOC strip heuristic against the exact inputs that the naive
 // brace-counter got wrong: a braceless `#[cfg(test)]` item that swallowed the
 // next production fn, and an unbalanced brace inside a test string that ran the
-// strip to EOF. Both are silent UNDER-counts — the dangerous direction for a
-// ratchet — so they get first-class fixtures here.
+// strip to EOF. Both are silent UNDER-counts - the dangerous direction for a
+// ratchet - so they get first-class fixtures here.
 //
 // Pure Node, no test framework (mirrors scripts/reap-tracked.test.sh's on-demand
 // style). Run: node scripts/check-rust-file-size.test.mjs  (also a CI `check` step).
@@ -40,7 +40,7 @@ test('REGRESSION: braceless `#[cfg(test)] use …;` does NOT swallow the next fn
 });
 
 test('REGRESSION: an unbalanced brace in a test string does not run the strip to EOF', () => {
-  // `assert_eq!(s, "{")` — the unmatched `{` lives in a string; the real block
+  // `assert_eq!(s, "{")` - the unmatched `{` lives in a string; the real block
   // close still returns depth to 0. Production after the test block survives.
   const src = [
     'fn keep_me() {',
@@ -122,7 +122,7 @@ test('a file frozen at/above warn errors when it grows past baseline', () => {
 });
 
 test('REGRESSION: crossing the warn line via growth errors (was only a warn)', () => {
-  // baseline 1400 (below warn), grows to 1600 (above warn) — previously slid by
+  // baseline 1400 (below warn), grows to 1600 (above warn) - previously slid by
   // with a non-fatal warning because the gate keyed on `base >= warn`.
   assert.equal(classify('f.rs', WARN_LOC + 100, WARN_LOC - 100).level, 'error');
 });
@@ -143,7 +143,7 @@ test('a new/grown file over the hard cap reports the budget error', () => {
 
 test('a grandfathered over-cap file only warns while it is not growing', () => {
   assert.equal(classify('project.rs', 7174, 7174).level, 'warn');
-  assert.equal(classify('project.rs', 7000, 7174).level, 'warn'); // shrank — still just a warn
+  assert.equal(classify('project.rs', 7000, 7174).level, 'warn'); // shrank - still just a warn
 });
 
 // --- report ------------------------------------------------------------------

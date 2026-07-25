@@ -39,14 +39,14 @@ interface HookWindow {
 /**
  * Install the map E2E hooks; returns a disposer that removes them.
  *
- * - `__stalagmight_geometry__()` — every drawn station center + shot segment in
+ * - `__stalagmight_geometry__()` - every drawn station center + shot segment in
  *   MAP coords with identities, honoring the reference-shots toggle. Tests project
  *   these via `__stalagmight_map__.project(...)` for screen positions.
- * - `__stalagmight_measured__()` — measured-path (ruler) tint counts
+ * - `__stalagmight_measured__()` - measured-path (ruler) tint counts
  *   `{shots, stations}`; the tint is a custom GL layer with no feature-state.
- * - `__stalagmight_drag_ghost__()` — the live drag-preview offset `{mode, dx, dy}`,
+ * - `__stalagmight_drag_ghost__()` - the live drag-preview offset `{mode, dx, dy}`,
  *   so a drag test never reaches into the ghost layer's private fields.
- * - `__stalagmight_to_meters__(lng, lat)` — the ACTIVE meters transform, so a test
+ * - `__stalagmight_to_meters__(lng, lat)` - the ACTIVE meters transform, so a test
  *   can predict a committed move offset with the same gpsOrigin the app uses (the
  *   no-GPS linear fallback and the ENU transform are not equivalent).
  */

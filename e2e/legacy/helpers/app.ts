@@ -1180,7 +1180,7 @@ export async function elementWithTextExists(text: string): Promise<boolean> {
  * import wizard UI.
  *
  * Parses the file with the real backend (`projectStore.importDmp`) and then calls
- * `createSection` directly for each section — it does NOT drive the DMP wizard
+ * `createSection` directly for each section - it does NOT drive the DMP wizard
  * (selection → zero-datum → placement → orphan-connection dialogs). Use it as
  * fast logic-level setup when a spec just needs sections present; it is **not**
  * coverage of the import flow itself.
@@ -1990,7 +1990,7 @@ export async function openTmlImportWithFile(filePath: string): Promise<void> {
 
 /**
  * Seed sections from a TML/TMLU file **via the store** (`executeTmlImport`),
- * bypassing the import dialog. Logic-level setup for real-backend specs — NOT
+ * bypassing the import dialog. Logic-level setup for real-backend specs - NOT
  * coverage of the TML import UI. See this folder's README ("Logic-level seed
  * helpers"); `tml-import-integration.spec.ts` covers the real backend round-trip.
  *

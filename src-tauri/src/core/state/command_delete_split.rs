@@ -199,11 +199,11 @@ impl AppState {
                 remap_i,
                 new_keys.len(),
                 "split-section remap: map_station_refs visited a different number of \
-                 refs than were captured in old_refs — traversal order diverged"
+                 refs than were captured in old_refs - traversal order diverged"
             );
 
             // The split can strand a section so its only attachment is a loop
-            // closure — that is a merge, not a loop. Convert it now (issue #8)
+            // closure - that is a merge, not a loop. Convert it now (issue #8)
             // so it's fixed immediately, not only on the next reload.
             project.convert_orphan_closures_to_merges();
 
@@ -371,7 +371,7 @@ impl AppState {
                 .collect();
 
             // Preserve connectivity across the dropped stations, then drop their
-            // own refs — BEFORE we capture old_refs, so the stored-ref set is
+            // own refs - BEFORE we capture old_refs, so the stored-ref set is
             // final and the positional remap below stays 1:1 aligned. Both run
             // while the section is structurally intact (indices still resolve).
             project.preserve_connections_for_removed_stations(&interior);
@@ -453,7 +453,7 @@ impl AppState {
                 remap_i,
                 new_keys.len(),
                 "split-range remap: map_station_refs visited a different number of refs \
-                 than were captured in old_refs — traversal order diverged"
+                 than were captured in old_refs - traversal order diverged"
             );
 
             project.convert_orphan_closures_to_merges();
@@ -499,7 +499,7 @@ impl AppState {
         CommandResult::success().with_section_id(new_section_id)
     }
 
-    /// Delete a contiguous range of shots by gap-closing (shifting) — the
+    /// Delete a contiguous range of shots by gap-closing (shifting) - the
     /// survivors rejoin and the section stays single. Generalizes the
     /// single-shot `delete_shot` (`remove_shot_with_rewire`) to a range by
     /// deleting the range's shots in forward order within ONE
@@ -559,7 +559,7 @@ impl AppState {
             if start_pos > end_pos {
                 std::mem::swap(&mut start_pos, &mut end_pos);
             }
-            // Deleting the whole section this way would leave it empty — route
+            // Deleting the whole section this way would leave it empty - route
             // that through delete_section instead.
             if start_pos == 0 && end_pos == n - 1 {
                 return CommandResult::failure(
@@ -601,7 +601,7 @@ impl AppState {
             // canonical (position-independent) keys so renumbering during the
             // per-shot deletes can't invalidate them. Each per-shot gap-close
             // ignores anchors on these when deciding which side keeps its
-            // position — otherwise an anchor on a later, also-doomed range shot
+            // position - otherwise an anchor on a later, also-doomed range shot
             // would displace the survivors (e.g. a suffix shift would keep the
             // doomed tail fixed and shift the head). Whole-section was refused
             // above, so start_pos==0 here means prefix.
@@ -624,14 +624,14 @@ impl AppState {
                     &doomed_anchors,
                     /* defer_cascade */ true,
                 ) {
-                    // Already mutated — roll back to the before snapshot.
+                    // Already mutated - roll back to the before snapshot.
                     let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                     return CommandResult::failure(e);
                 }
             }
             // Single cascade now that every range shot (and any doomed merge) is
             // gone, so a doomed station's intermediate shift never propagates into
-            // a connected free-floating section — the per-shot cascades were
+            // a connected free-floating section - the per-shot cascades were
             // deferred for exactly this reason. Assert alignment here, since each
             // per-shot delete skipped its own alignment check.
             project.cascade_connection_offsets(&[section_id]);
@@ -742,7 +742,7 @@ impl AppState {
                 m.station_a.section_id != section_id && m.station_b.section_id != section_id
             });
             // The retain just dropped entries the adjacency cache still
-            // claims exist — clear it so the next get_merged_section_ids
+            // claims exist - clear it so the next get_merged_section_ids
             // doesn't fast-path against stale data.
             project.merge_adjacency_cache.clear();
 

@@ -2,7 +2,7 @@
  * Input-modality tracking for keyboard-only focus rings.
  *
  * The focus ring (the global :focus-visible outline + the Tailwind focus rings)
- * should only show during keyboard navigation, not on mouse clicks — while the
+ * should only show during keyboard navigation, not on mouse clicks - while the
  * element is still focused. :focus-visible alone is unreliable across engines
  * (notably the WebKitGTK webview Tauri uses, which matches :focus-visible on
  * mouse clicks), so we tag <html data-input-modality="pointer|keyboard"> and
@@ -13,7 +13,7 @@
  */
 
 // Keys that count as keyboard navigation/interaction (reveal the ring). Typing
-// printable characters does not — clicking a field then typing keeps it ringless.
+// printable characters does not - clicking a field then typing keeps it ringless.
 const NAV_KEYS = new Set([
   'Tab',
   'ArrowUp',
@@ -30,7 +30,7 @@ const NAV_KEYS = new Set([
 ]);
 
 // Space and Enter activate controls (so they should reveal the ring), but they
-// are also text entry inside a field — there they must NOT flip modality.
+// are also text entry inside a field - there they must NOT flip modality.
 const ACTIVATION_KEYS = new Set([' ', 'Enter']);
 
 type Modality = 'pointer' | 'keyboard';
@@ -80,7 +80,7 @@ export function initInputModalityTracking(): void {
   const onPointer = () => setModality('pointer');
   const onKey = (e: KeyboardEvent) => {
     if (!NAV_KEYS.has(e.key)) return;
-    // Typing Space/Enter into a text field is text entry, not navigation — don't
+    // Typing Space/Enter into a text field is text entry, not navigation - don't
     // reveal the ring mid-typing (keeps a clicked-then-typed field ringless).
     if (ACTIVATION_KEYS.has(e.key) && isTextEntry(e.target)) return;
     setModality('keyboard');

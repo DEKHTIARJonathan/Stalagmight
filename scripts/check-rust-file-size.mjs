@@ -13,7 +13,7 @@
 //   - A file at/above `WARN_LOC` (1500) prod LOC is "large" and FROZEN by the
 //     ratchet: it may shrink, never grow past its recorded baseline. Split it at
 //     an API boundary, or run `--update` to rebaseline an intentional change.
-//   - A NEW (non-baselined) file may not be introduced at/above `WARN_LOC` —
+//   - A NEW (non-baselined) file may not be introduced at/above `WARN_LOC` -
 //     no new god-files born just under the cap.
 //   - A NEW or GROWN file may never exceed the hard `FAIL_LOC` (2000) budget.
 //   - Files below `WARN_LOC` grow freely (so ordinary edits to small files don't
@@ -21,7 +21,7 @@
 //     stop growing.
 // Anything at/above `WARN_LOC` that isn't a violation prints a non-fatal warning.
 //
-// Runs in the `check` job (ci.yml) — which runs on `src-tauri/**` changes and is
+// Runs in the `check` job (ci.yml) - which runs on `src-tauri/**` changes and is
 // NOT path-ignored (unlike `smoke`), so it actually sees Rust edits. The strip
 // heuristic is pinned by scripts/check-rust-file-size.test.mjs. Mirrors the
 // existing tripwire `scripts/check-e2e-parallel-safe.mjs`.
@@ -39,20 +39,20 @@ const BASELINE_PATH = path.join(REPO_ROOT, 'src-tauri', 'file-size-baseline.json
 
 // Thresholds are owned by the script (the single source of truth). The baseline
 // JSON echoes them for readability, but `main()` asserts the echo matches these
-// and `--update` always writes these — so editing the generated artifact can't
+// and `--update` always writes these - so editing the generated artifact can't
 // quietly loosen the *global thresholds*. (A per-file baseline number can still be
 // bumped to grant a specific file room, but that shows up in the baseline diff
 // right next to the grown file, so it's review-visible, not silent.)
 export const WARN_LOC = 1500;
 export const FAIL_LOC = 2000;
 
-// Whole-file test modules — excluded from the metric entirely.
+// Whole-file test modules - excluded from the metric entirely.
 const TEST_FILE_RE = /(^|\/)(tests\.rs|.*_tests\.rs|command_tests\.rs|.*_fuzz\.rs|test_helpers\.rs)$/;
 
-// `#[cfg(test)]`, `#[cfg(all(test, …))]`, `#[cfg(any(test, …))]` — the test-gated
+// `#[cfg(test)]`, `#[cfg(all(test, …))]`, `#[cfg(any(test, …))]` - the test-gated
 // forms whose items we strip. NOT `#[cfg_attr(test, …)]` (that conditionally
 // applies an attribute to a *production* item) and NOT `#[cfg(not(test))]` (the
-// production-only form) — both correctly fall through and stay counted.
+// production-only form) - both correctly fall through and stay counted.
 const CFG_TEST_RE = /#\[cfg\((?:test\b|all\(test|any\(test)/;
 
 // Files allowed to exceed the budget without ratcheting, each with a written
@@ -68,7 +68,7 @@ const ALLOW = [];
 // Handles // line comments, /* */ (nesting), "…" (with \ escapes, multi-line),
 // raw strings r#*"…"#*, byte variants (b"…", br#"…"#), and char literals ('{',
 // '\n') vs lifetimes ('a). Factored out so the same state machine feeds both the
-// LOC count and the #[cfg(test)] strip — the previous per-line brace counter saw
+// LOC count and the #[cfg(test)] strip - the previous per-line brace counter saw
 // string braces and could run a strip to EOF (a silent under-count).
 const MASK = 'M'; // non-whitespace, non-brace, non-`;` placeholder for string/char bytes
 function maskStr(s) {
@@ -114,7 +114,7 @@ export function maskNonCode(lines) {
         out += maskStr(strStart[0]); i += strStart[0].length; continue;
       }
       if (c === "'") {
-        // '{' / '\n' / '\u{7d}' / '\x7d' — a char literal (masked). A bare 'a is a
+        // '{' / '\n' / '\u{7d}' / '\x7d' - a char literal (masked). A bare 'a is a
         // lifetime/label: keep the ' (harmless; carries no brace).
         const charLit = /^'(?:\\u\{[0-9a-fA-F]*\}|\\x[0-9a-fA-F]{1,2}|\\.|[^'])'/.exec(rest);
         if (charLit) { out += maskStr(charLit[0]); i += charLit[0].length; continue; }
@@ -128,7 +128,7 @@ export function maskNonCode(lines) {
 }
 
 // Given code-only (masked) lines, return a boolean[] marking lines that belong to
-// a `#[cfg(test)]` item — block (`mod tests { … }`) or braceless (`use …;`). On a
+// a `#[cfg(test)]` item - block (`mod tests { … }`) or braceless (`use …;`). On a
 // malformed/unclosed scan it keeps the lines (safe over-count) and records a
 // warning rather than silently dropping everything to EOF.
 export function markCfgTestItems(masked, warnings = []) {
@@ -152,8 +152,8 @@ export function markCfgTestItems(masked, warnings = []) {
     }
     if (endLine >= 0) {
       // If real code follows the terminator on the end line (non-idiomatic line
-      // mixing — rustfmt always splits these, but don't rely on that for the
-      // dangerous direction — e.g. `#[cfg(test)] use x; fn prod() {}`), keep the
+      // mixing - rustfmt always splits these, but don't rely on that for the
+      // dangerous direction - e.g. `#[cfg(test)] use x; fn prod() {}`), keep the
       // end line so the trailing production isn't dropped (over-count is safe).
       const trailingCode = /\S/.test(masked[endLine].slice(endCol + 1));
       const lastDrop = trailingCode ? endLine - 1 : endLine;
@@ -163,7 +163,7 @@ export function markCfgTestItems(masked, warnings = []) {
       if (sawBrace) {
         warnings.push(
           `unbalanced #[cfg(test)] block starting near line ${i + 1}; kept as production ` +
-            `LOC (safe over-count) — verify the strip heuristic.`,
+            `LOC (safe over-count) - verify the strip heuristic.`,
         );
       }
       i++; // keep the attribute line, continue scanning
@@ -259,13 +259,13 @@ export function classify(rel, loc, base) {
   const grew = !isNew && loc > base;
   if (isAllowed(rel)) {
     // An allow-listed file is a documented irreducible exception: exempt from the
-    // warn/new/hard-cap thresholds, but it still may NOT grow past its baseline —
+    // warn/new/hard-cap thresholds, but it still may NOT grow past its baseline -
     // an exception is not a licence to balloon without limit.
     return grew
       ? {
           level: 'error',
           message:
-            `${rel}: ${loc} LOC > baseline ${base} — allow-listed files are exempt from the ` +
+            `${rel}: ${loc} LOC > baseline ${base} - allow-listed files are exempt from the ` +
             `size budget but may not grow; split it, or run --update if the growth is intentional.`,
         }
       : { level: 'ok' };
@@ -274,7 +274,7 @@ export function classify(rel, loc, base) {
     return {
       level: 'error',
       message:
-        `${rel}: ${loc} LOC exceeds the hard ${FAIL_LOC}-prod-LOC budget — split it into ` +
+        `${rel}: ${loc} LOC exceeds the hard ${FAIL_LOC}-prod-LOC budget - split it into ` +
         `logical modules at an API boundary (#157), or run --update if the growth is intentional.`,
     };
   }
@@ -282,7 +282,7 @@ export function classify(rel, loc, base) {
     return {
       level: 'error',
       message:
-        `${rel}: ${loc} LOC > baseline ${base} — a file at/above ${WARN_LOC} prod LOC may ` +
+        `${rel}: ${loc} LOC > baseline ${base} - a file at/above ${WARN_LOC} prod LOC may ` +
         `shrink but not grow. Split it (#157), or run --update to rebaseline if the growth ` +
         `is intentional.`,
     };
@@ -291,7 +291,7 @@ export function classify(rel, loc, base) {
     return {
       level: 'error',
       message:
-        `${rel}: new file at ${loc} prod LOC (>= warn ${WARN_LOC}) — new files may not be ` +
+        `${rel}: new file at ${loc} prod LOC (>= warn ${WARN_LOC}) - new files may not be ` +
         `introduced at/above the warn line. Split it, or run --update to baseline it ` +
         `deliberately (#157).`,
     };
@@ -310,7 +310,7 @@ function main() {
   const measured = measureTree(warnings);
 
   // --update rebuilds the baseline from scratch (writing the script's own
-  // thresholds), so it neither loads nor validates the old file — it always
+  // thresholds), so it neither loads nor validates the old file - it always
   // self-heals a corrupt or drifted baseline.
   if (process.argv.includes('--update')) {
     writeBaseline(measured);
@@ -325,7 +325,7 @@ function main() {
 
   const baseline = loadBaseline();
   // The script owns the thresholds; a drifted echo in the generated baseline is a
-  // tampering smell, not a config knob — fail loudly instead of honoring it.
+  // tampering smell, not a config knob - fail loudly instead of honoring it.
   for (const [key, want] of [['warn_loc', WARN_LOC], ['fail_loc', FAIL_LOC]]) {
     if (baseline[key] !== undefined && Number(baseline[key]) !== want) {
       console.error(
@@ -364,7 +364,7 @@ function main() {
   for (const w of softWarnings) console.log(`  ⚠ file-size: ${w}`);
 
   if (errors.length > 0) {
-    console.error(`\n✗ Rust file-size check failed — ${errors.length} issue(s):\n`);
+    console.error(`\n✗ Rust file-size check failed - ${errors.length} issue(s):\n`);
     for (const e of errors) console.error(`  ${e}`);
     console.error(
       '\nProduction files must stay within the size budget; see #157 for the split plan.\n' +

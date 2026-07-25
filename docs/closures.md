@@ -15,7 +15,7 @@ command. The measured survey geometry (raw shots) is always the source of truth 
   closures are already coincident, so a project with only those shows the option disabled.
 - Closure-adjusted coordinates are derived by running the weighted least-squares solve on a
   **throwaway clone** of the project (`Project::compute_adjusted_station_coordinates`) and
-  returning only the resulting coordinates — the live project's shots/offsets are untouched.
+  returning only the resulting coordinates - the live project's shots/offsets are untouched.
   Because the solve always starts from intact measured data, adding/removing closures
   re-solves accurately instead of compounding on already-adjusted geometry.
 - The adjusted view is **read-only**: geometry-mutating tools are disabled there (edits are
@@ -27,7 +27,7 @@ command. The measured survey geometry (raw shots) is always the source of truth 
 - Headline stats (penetration distance, length, depth) are always computed from **measured**
   geometry.
 
-There is **no** longer an "Adjust Closures" dialog or an `adjust_loop_closures` command — the
+There is **no** longer an "Adjust Closures" dialog or an `adjust_loop_closures` command - the
 old destructive apply path was removed.
 
 > Migration: a project whose shots were already baked by a *previous* destructive adjustment
@@ -109,7 +109,7 @@ and otherwise on a deterministic default anchor (the lexicographically smallest
 `(section_id, station_index)` station in the component, via `default_anchor_for_component`).
 Eligible closures are `Batch` + `LeastSquaresWeighted` (`Move` closures are already coincident).
 
-Algorithm overview (unchanged math; the only change is *where* it writes — a clone, not the
+Algorithm overview (unchanged math; the only change is *where* it writes - a clone, not the
 live project):
 - Build constraint groups where stations connected via merges **or closures** are in the same group.
 - If a group contains a zero datum, it is fixed; multiple zero datums in a single group is an error.
@@ -117,7 +117,7 @@ live project):
 - For each shot, build weighted constraints in X/Y using section quality and base sigmas from config:
   - `base_sigma_length_m`
   - `base_sigma_azimuth_deg`
-  - `base_sigma_depth_m` (depth is not adjusted — the solve is horizontal-only)
+  - `base_sigma_depth_m` (depth is not adjusted - the solve is horizontal-only)
 - Solve independent least-squares systems for X/Y using a sparse Jacobi-preconditioned
   Conjugate Gradient solver (see [performance.md](performance.md) for algorithm details).
 - Update the clone's shot vectors from solved group coordinates and apply section-level

@@ -245,7 +245,7 @@ describe('offsetOverlayShot', () => {
 });
 
 // The scenario the task calls out: a selected station + shot in the moving set,
-// plus one stationary highlighted station — moving pair offsets, stationary one
+// plus one stationary highlighted station - moving pair offsets, stationary one
 // stays. Modeled over the same primitives the overlay builders use.
 describe('overlay follow scenario', () => {
   it('offsets the moving station+shot and leaves the stationary highlight put', () => {

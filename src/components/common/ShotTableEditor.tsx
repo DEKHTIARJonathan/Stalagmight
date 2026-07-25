@@ -189,7 +189,7 @@ export function ShotTableEditor({
   // When no explicit thresholds are passed, prefer the OPEN project's per-project
   // validation thresholds (#57) so the inline preview matches the Warnings panel
   // (which the backend computes from project.validation). Fall back to the user's
-  // GLOBAL config — the "defaults for new projects" — only when no project is open
+  // GLOBAL config - the "defaults for new projects" - only when no project is open
   // (e.g. a new-project import preview), then to the hardcoded built-ins. Callers
   // editing an existing project (EditSectionDialog) pass thresholds explicitly.
   const projectValidation = useProjectStore((s) => s.project?.validation);
@@ -677,7 +677,7 @@ export function ShotTableEditor({
                       )}
                       className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
                       step="0.1"
-                      placeholder="—"
+                      placeholder="-"
                       disabled={readOnly}
                       data-testid={`shot-left-${visibleIdx}`}
                     />
@@ -713,7 +713,7 @@ export function ShotTableEditor({
                       )}
                       className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
                       step="0.1"
-                      placeholder="—"
+                      placeholder="-"
                       disabled={readOnly}
                       data-testid={`shot-right-${visibleIdx}`}
                     />
@@ -749,7 +749,7 @@ export function ShotTableEditor({
                       )}
                       className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
                       step="0.1"
-                      placeholder="—"
+                      placeholder="-"
                       disabled={readOnly}
                       data-testid={`shot-up-${visibleIdx}`}
                     />
@@ -785,7 +785,7 @@ export function ShotTableEditor({
                       )}
                       className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
                       step="0.1"
-                      placeholder="—"
+                      placeholder="-"
                       disabled={readOnly}
                       data-testid={`shot-down-${visibleIdx}`}
                     />
@@ -802,7 +802,7 @@ export function ShotTableEditor({
                         onShotChange(actualIndex, 'comment', e.target.value || null)
                       }
                       className="w-full px-2 py-1 bg-transparent border-none focus:bg-panel"
-                      placeholder="—"
+                      placeholder="-"
                       disabled={readOnly}
                       data-testid={`shot-comment-${visibleIdx}`}
                     />

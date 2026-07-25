@@ -15,12 +15,12 @@
 //!      typed-array byte buffers. Each buffer is a flat `Vec<u8>` whose layout
 //!      is a multiple of the underlying scalar (Float32Array, Float64Array,
 //!      Uint32Array). The JS side reconstructs `TypedArray` views over those
-//!      bytes — no per-element parsing.
+//!      bytes - no per-element parsing.
 //!   3. Sends sparse extras (comments, GPS coordinates, merged_with relations,
 //!      closures_with relations) as small `(global_index, value)` lists.
 //!
 //! The whole struct is encoded with `rmp-serde` (msgpack) and the resulting
-//! `Vec<u8>` is returned via `tauri::ipc::Response::new(bytes)` — Tauri
+//! `Vec<u8>` is returned via `tauri::ipc::Response::new(bytes)` - Tauri
 //! passes raw bytes to JS as an `ArrayBuffer`, no JSON parse on either side.
 
 use std::collections::HashMap;
@@ -78,7 +78,7 @@ pub struct LoadProjectFullBinaryResult {
     pub project_header: ProjectHeaderBinary,
 
     pub shot_count: u32,
-    /// Per-shot f32 fields in fixed order — see SHOT_FLOAT_FIELDS comment.
+    /// Per-shot f32 fields in fixed order - see SHOT_FLOAT_FIELDS comment.
     /// Order: azimuth_in, azimuth_out, length, depth_in, depth_out,
     ///        pitch_in, pitch_out, left, right, up, down, temperature.
     /// NaN means `None` for the nullable fields.
@@ -137,7 +137,7 @@ pub struct ProjectHeaderBinary {
     pub station_comments_map: Vec<(StationRef, String)>,
     pub imported_file_hashes: Vec<String>,
     pub imported_section_hashes: Vec<String>,
-    /// Collaboration state — preserves `Project.collab` across the
+    /// Collaboration state - preserves `Project.collab` across the
     /// binary IPC envelope.  Without this the frontend's
     /// `result.project.collab` is undefined and the load-time collab
     /// detection (collab-mode `loadProject` hook) silently never runs.
@@ -199,7 +199,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
             //
             // PRECISION: shot fields are stored as f64 in the in-memory
             // `Shot` struct but emitted as f32 on the wire to halve the
-            // shot-floats buffer (48 vs 96 bytes per shot — ~3.6 MB
+            // shot-floats buffer (48 vs 96 bytes per shot - ~3.6 MB
             // saved on a 75 k-shot project, with matching memory in
             // Float32Array views on the frontend).  f32 gives ~7
             // significant decimal digits, which exceeds the precision
@@ -212,7 +212,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
             // here and in SurveyData's shot-float arrays, bump
             // BINARY_FORMAT_VERSION).
             //
-            // Hot loop — pack into a single [u8; SHOT_FLOAT_STRIDE]
+            // Hot loop - pack into a single [u8; SHOT_FLOAT_STRIDE]
             // buffer and emit with one extend_from_slice rather than 12
             // separate calls. Saves ~10 % of the encode wall-clock on
             // large projects.

@@ -15,19 +15,19 @@ Please also read [SECURITY.md](SECURITY.md) for how to report vulnerabilities
 
 ## Who we're built for
 
-Stalagmight is built by and for cave-survey divers. The domain — underwater
-cave surveying, instrument data, loop closure, gas and dive planning — takes
+Stalagmight is built by and for cave-survey divers. The domain - underwater
+cave surveying, instrument data, loop closure, gas and dive planning - takes
 specialized, lived experience to get right. A well-meaning change from someone
 who hasn't done the surveying can quietly break *correctness* in ways that
 aren't visible in the code or caught by tests.
 
 So we're honest about our contribution model:
 
-- **Cave-diver engineers** — welcome and encouraged. You're exactly who this is
+- **Cave-diver engineers** - welcome and encouraged. You're exactly who this is
   for. Issues, feature proposals, and PRs across the whole codebase are all fair
   game.
 
-- **Everyone else** — we genuinely value the help, and there's a lot you *can*
+- **Everyone else** - we genuinely value the help, and there's a lot you *can*
   contribute without domain knowledge:
   - clear bug reports with reproduction steps,
   - documentation fixes and improvements,
@@ -38,18 +38,18 @@ So we're honest about our contribution model:
 
   What we'll generally **not** merge from contributors without cave-survey
   experience are changes to the **survey/geometry/planning domain logic, default
-  parameters, or the diving-workflow UX** — not because your code is bad, but
+  parameters, or the diving-workflow UX** - not because your code is bad, but
   because we can't responsibly review domain correctness without the surveying
   background, and carrying that review burden isn't sustainable for us.
 
 We'd rather tell you this up front than walk you through a PR we were never going
 to land. If you're unsure whether an idea falls inside or outside that line,
-**open an issue first** and ask — we're happy to talk it through.
+**open an issue first** and ask - we're happy to talk it through.
 
 ## AI-assisted contributions
 
 We build Stalagmight largely with [Claude](https://claude.com/claude-code), and
-we welcome AI-assisted PRs — in fact we'd rather you used a capable coding agent
+we welcome AI-assisted PRs - in fact we'd rather you used a capable coding agent
 than not. [`AGENTS.md`](AGENTS.md) carries the build and test rules an agent
 needs, so point your agent at it. A few expectations:
 
@@ -63,7 +63,7 @@ needs, so point your agent at it. A few expectations:
   on-topic, and match the surrounding code's style.
 - **Disclose it.** A one-line note in the PR description if an agent did the
   heavy lifting. We don't penalize it; we just like to know.
-- The **domain-scope rule above still applies** — an agent is not a substitute
+- The **domain-scope rule above still applies** - an agent is not a substitute
   for cave-survey expertise on domain logic.
 
 ---
@@ -73,7 +73,7 @@ needs, so point your agent at it. A few expectations:
 **Prerequisites:** [Rust](https://rustup.rs/) (stable), Node 22.x, and the
 [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your OS.
 
-The toolchain is pinned — pnpm `9.15.9` (via `packageManager`) and Node `22.x`
+The toolchain is pinned - pnpm `9.15.9` (via `packageManager`) and Node `22.x`
 (via `.nvmrc`). On a fresh clone:
 
 ```bash
@@ -85,7 +85,7 @@ pnpm install
 A few project rules worth knowing early (full detail in
 [`AGENTS.md`](AGENTS.md)):
 
-- **Never `cd` in a shell command** — use `--manifest-path` for cargo or a
+- **Never `cd` in a shell command** - use `--manifest-path` for cargo or a
   subshell. A persisted `cd` has caused files to land in the wrong directory.
 - **IPC types are generated.** Don't hand-edit `src/types/ipc/`; change the Rust
   type and run `pnpm gen:ipc-types`, then commit the regenerated output.
@@ -110,7 +110,7 @@ TELEMETRY_ENDPOINT=http://localhost/dummy \
 ```
 
 (The dummy `TELEMETRY_ENDPOINT` just satisfies `build.rs` under the `telemetry`
-feature — it sends nothing.) On Windows, run the Rust tests via
+feature - it sends nothing.) On Windows, run the Rust tests via
 `./scripts/test.ps1`.
 
 Notes:
@@ -135,7 +135,7 @@ Notes:
 ## Reporting bugs and requesting features
 
 Open an issue. For bugs, include the platform, app version, steps to reproduce,
-and — if relevant — a (non-sensitive) sample survey file. For domain/feature
+and - if relevant - a (non-sensitive) sample survey file. For domain/feature
 ideas outside the contribution scope above, an issue is the right place to start
 the conversation.
 

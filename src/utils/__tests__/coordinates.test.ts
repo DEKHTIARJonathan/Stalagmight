@@ -30,7 +30,7 @@ function gps(lat: number, lng: number, depth: number): GpsCoordinates {
 const EQUATOR_ORIGIN = { latitude: 0, longitude: 0 };
 
 // ---------------------------------------------------------------------------
-// metersToMapCoords / mapCoordsToMeters — no GPS origin (pseudo mode)
+// metersToMapCoords / mapCoordsToMeters - no GPS origin (pseudo mode)
 // ---------------------------------------------------------------------------
 
 describe('metersToMapCoords (pseudo mode)', () => {
@@ -67,7 +67,7 @@ describe('mapCoordsToMeters (pseudo mode)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// metersToMapCoords / mapCoordsToMeters — with GPS origin
+// metersToMapCoords / mapCoordsToMeters - with GPS origin
 // ---------------------------------------------------------------------------
 
 describe('metersToMapCoords (GPS mode)', () => {

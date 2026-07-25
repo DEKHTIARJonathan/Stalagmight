@@ -165,7 +165,7 @@ function byteClamp(a: number): number {
   return Math.max(0, Math.min(255, Math.round(a * 255)));
 }
 
-/** Mercator centroid (bbox midpoint) of every prim coord — the anchor that keeps
+/** Mercator centroid (bbox midpoint) of every prim coord - the anchor that keeps
  *  anchor-relative float32 positions tiny. `[0.5, 0.5]` for an empty set. */
 function computeAnchor(lines: LinePrim[], circles: CirclePrim[]): [number, number] {
   let minX = Infinity;

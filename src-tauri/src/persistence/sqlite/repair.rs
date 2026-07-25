@@ -48,16 +48,16 @@ impl Database {
     /// The per-session / per-machine LOCAL tables stripped from a push snapshot:
     /// none of these are shared project data, so none may ride to collaborators.
     ///
-    /// - `display_settings` — per-machine VIEW toggles (grid, layer/feature
+    /// - `display_settings` - per-machine VIEW toggles (grid, layer/feature
     ///   visibility, color mode, grid spacing); a collaborator pulls their own view.
-    /// - `undo_stack` / `redo_stack` — the editor's local edit-session history
+    /// - `undo_stack` / `redo_stack` - the editor's local edit-session history
     ///   (#194 b3). NOT shared state, and a *data-corruption* vector if it rode: an
     ///   adopting collaborator pressing Ctrl-Z would replay the pusher's command
     ///   (and its `undo_data_json` prior-state payload) against a now-different tree,
-    ///   silently wiping pitch/LRUD/comment/marker/temperature — the same hazard
+    ///   silently wiping pitch/LRUD/comment/marker/temperature - the same hazard
     ///   `drop_legacy_undo_history` guards against. Stripping here is what makes
     ///   every adopt-remote path (`do_load_project_full`) start with a clean slate.
-    /// - `collab_state` — the LOCAL Ariane-collab wiring (sibling `.tml` filesystem
+    /// - `collab_state` - the LOCAL Ariane-collab wiring (sibling `.tml` filesystem
     ///   path, baseline, per-machine autosave toggle). Meaningless to a remote
     ///   collaborator and never theirs to inherit.
     const PUSH_SNAPSHOT_LOCAL_TABLES: &[&str] = &[
@@ -69,17 +69,17 @@ impl Database {
 
     /// Sanitize a push SNAPSHOT in place (#197/#194) before upload:
     ///
-    /// - clears `speleo_link.has_unpushed_edits` / `last_edit_at` — the dirty bit is
+    /// - clears `speleo_link.has_unpushed_edits` / `last_edit_at` - the dirty bit is
     ///   local hand-off state, never server state (the next puller re-stamps it);
-    /// - empties every table in [`Self::PUSH_SNAPSHOT_LOCAL_TABLES`] — per-machine /
+    /// - empties every table in [`Self::PUSH_SNAPSHOT_LOCAL_TABLES`] - per-machine /
     ///   per-session local state that must not proliferate.
     ///
     /// Everything else PROLIFERATES with the project, by design: survey data,
     /// `project_settings` (shared validation config #57), AND the durable
     /// project-data tables `imported_file_hashes` / `imported_section_hashes`
-    /// (project-wide import-dedup — collaborators must not re-import the same file)
+    /// (project-wide import-dedup - collaborators must not re-import the same file)
     /// and `resolved_warnings` (a resolved warning stays resolved for everyone, like
-    /// a comment). These are NOT stripped — only a writer holding the lock can push,
+    /// a comment). These are NOT stripped - only a writer holding the lock can push,
     /// so anything in the snapshot is a legitimate editor's change.
     ///
     /// Operates on a SNAPSHOT copy via its own connection; the live project file is
@@ -89,7 +89,7 @@ impl Database {
         let conn = Connection::open(snapshot).context("open snapshot to sanitize for push")?;
         // Every statement below runs INDEPENDENTLY + best-effort: a failure of one
         // (e.g. a missing table on an older snapshot shape) is logged, never aborts,
-        // and — crucially — never skips the others. The undo/redo strip is FIRST
+        // and - crucially - never skips the others. The undo/redo strip is FIRST
         // because it is the data-CORRUPTION vector on adopt (#194 b3): it must run
         // even if the dirty-bit clear below were to fail, which the old ordering
         // (fatal dirty-clear first) did not guarantee (#197 review). Per-machine /
@@ -130,7 +130,7 @@ impl Database {
             .context("Failed to open database for recovery")?;
 
         let db = Self { conn };
-        // Skip integrity check intentionally — we know the file may be corrupt
+        // Skip integrity check intentionally - we know the file may be corrupt
         Ok(db)
     }
 
@@ -157,7 +157,7 @@ impl Database {
 
         // 4. VACUUM rebuilds the entire database from readable pages
         conn.execute_batch("VACUUM;")
-            .context("VACUUM failed — database may be too damaged to repair")?;
+            .context("VACUUM failed - database may be too damaged to repair")?;
 
         // 5. Verify result
         let check: String = conn
@@ -166,7 +166,7 @@ impl Database {
         let ok = check == "ok";
 
         if ok {
-            tracing::info!("Repair succeeded — integrity check passed");
+            tracing::info!("Repair succeeded - integrity check passed");
         } else {
             tracing::error!(result = %check, "Repair completed but integrity check still fails");
         }

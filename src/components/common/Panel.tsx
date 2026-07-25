@@ -82,7 +82,7 @@ export function ResizablePanel({
 }: ResizablePanelProps) {
   // Locally-owned size, seeded from defaultSize and driven by the shared
   // useResizeHandle drag loop (rect math, clamp+round, no-op-drag guard, and the
-  // ref/state isResizing dance all live there — one resize implementation).
+  // ref/state isResizing dance all live there - one resize implementation).
   const [size, setSize] = useState(defaultSize);
   const panelRef = useRef<HTMLDivElement>(null);
 

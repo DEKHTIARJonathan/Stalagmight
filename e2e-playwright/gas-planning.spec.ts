@@ -40,13 +40,13 @@ async function createProject(page: Page, name: string): Promise<void> {
 }
 
 // A single section long enough that the mock's fixed budget (1500 L) leaves the
-// far stations out of range — so the overlay has both reachable (gold→purple) and
+// far stations out of range - so the overlay has both reachable (gold→purple) and
 // unreachable (grey) stations and a non-empty turn frontier.
 const sectionSeeds: SectionSeed[] = [
   {
     name: 'Gas A',
     direction: 'in',
-    // Positive depths (z = depth, positive below surface — the real convention), so the route
+    // Positive depths (z = depth, positive below surface - the real convention), so the route
     // depth readouts show physically-sensible values a regression would visibly break.
     shots: Array.from({ length: 10 }, (_, i) => ({
       azimuth_in: 90,
@@ -110,7 +110,7 @@ async function appMode(page: Page): Promise<string> {
 
 /** The gas plan's chosen route endpoint (null if unset). Shared so the endpoint-pick
  *  specs don't each re-spell the `__E2E_TEST__.gasPlanStore` cast. `?? null` keeps a
- *  `.not.toBeNull()` assertion honest — a missing hook reads null, not undefined. */
+ *  `.not.toBeNull()` assertion honest - a missing hook reads null, not undefined. */
 async function gasEndpoint(page: Page): Promise<StationRefLite | null> {
   return page.evaluate(
     () => (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().endpoint ?? null,
@@ -378,7 +378,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-panel"]')).toContainText('Distance to turnaround');
     // The Max / Average depth rows render once a route is known. This asserts the WIRING only: the
     // e2e mock's get_project_state hardcodes station z = 0 (it doesn't derive depth from shot data),
-    // so these readouts show "0.0 m" here regardless of the seed — there's no meaningful depth value
+    // so these readouts show "0.0 m" here regardless of the seed - there's no meaningful depth value
     // to assert at the mock level. The exact distance/depth math (tie-exclusion, deepest-point, sign)
     // is pinned in the Rust unit tests (gas/tests.rs).
     await expect(page.locator('[data-testid="gas-readout-max-depth"]')).toBeVisible();
@@ -389,8 +389,8 @@ test.describe('Gas planning', () => {
     await enterMode(page, 'plan');
     const swim = page.locator('[data-testid="gas-swim-speed-input"]');
     await expect(swim).toBeVisible({ timeout: 3000 });
-    // Editing swim speed writes back to the saved config (#236) — unlike the panel's other
-    // per-session inputs — so it sticks across Plan exit / restart and stays in sync with Settings.
+    // Editing swim speed writes back to the saved config (#236) - unlike the panel's other
+    // per-session inputs - so it sticks across Plan exit / restart and stays in sync with Settings.
     await swim.fill('14');
     await swim.blur();
     await expect
@@ -423,7 +423,7 @@ test.describe('Gas planning', () => {
       await expect(page.locator('[data-testid="display-menu"]')).toHaveCount(0);
     };
 
-    // Survey: the full menu — visibility toggles + the geometry toggle + the color overlays.
+    // Survey: the full menu - visibility toggles + the geometry toggle + the color overlays.
     await openMenu();
     await expect(page.locator('[data-testid="display-toggle-showStations"]')).toBeVisible();
     await expect(page.locator('[data-testid="geometry-mode-measured"]')).toBeVisible();
@@ -439,7 +439,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="display-color-section"]')).toHaveCount(0);
     await closeMenu();
 
-    // Export: the Display menu is gone entirely — the Export panel's own controls decide what
+    // Export: the Display menu is gone entirely - the Export panel's own controls decide what
     // the exported image contains, so a survey-style Display menu would be a confusing no-op.
     await enterMode(page, 'export');
     await expect(page.locator('[data-testid="display-menu-button"]')).toHaveCount(0);
@@ -483,7 +483,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toBeVisible();
   });
 
-  test('a cylinder can be disabled — the row dims and it drops out of the plan (#245) @smoke', async ({
+  test('a cylinder can be disabled - the row dims and it drops out of the plan (#245) @smoke', async ({
     page,
   }) => {
     await enterMode(page, 'plan');
@@ -525,7 +525,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toBeVisible();
 
     // Disable that stage. The engine counts only ENABLED stages, so it falls back to All-thirds;
-    // the panel must mirror that — the staged-only reserve control disappears and the 1-stage
+    // the panel must mirror that - the staged-only reserve control disappears and the 1-stage
     // button greys out (before the fix, stageCount counted the disabled stage and both stayed live).
     await page
       .locator('[data-testid="gas-cylinder-row"]')
@@ -546,7 +546,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-cylinder-usable"]')).toHaveCount(0);
 
     // Free is advanced (manual reserves, incl. zero-reserve), so it routes through the advanced
-    // acknowledgment the first time — then flips the column to an editable field per budget-role tank.
+    // acknowledgment the first time - then flips the column to an editable field per budget-role tank.
     await page.locator('[data-testid="gas-reserve-free"]').click();
     await expect(page.locator('[data-testid="gas-pushy-ack"]')).toBeVisible();
     await page.locator('[data-testid="gas-pushy-ack-confirm"]').click();
@@ -610,7 +610,7 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-stage-reserve-input"]')).toHaveCount(0);
 
     // The mock budget is a fixed 1500 regardless of margin (cylinders are ignored there), so assert
-    // the input round-trips into the config instead — the budget math is unit-tested in Rust.
+    // the input round-trips into the config instead - the budget math is unit-tested in Rust.
     await margin.fill('20');
     await margin.blur();
     await expect
@@ -661,7 +661,7 @@ test.describe('Gas planning', () => {
     });
 
     await expect(page.getByText('Set as endpoint')).toBeVisible();
-    // "Set as origin" was removed from the right-click menu — origin is set by single-click / the
+    // "Set as origin" was removed from the right-click menu - origin is set by single-click / the
     // datum star, and the menu is reserved for the endpoint pick + future recalc affordances.
     await expect(page.getByText('Set as origin')).toHaveCount(0);
     // The survey mutation menu must NOT appear (the read-only bug): no "Edit Station".
@@ -696,12 +696,12 @@ test.describe('Gas planning', () => {
       .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
       .toBeGreaterThan(0);
     // Capture which station the first marker represents (markers are built in
-    // turn_frontier order), so we assert the pick set THAT ref — a wrong-ref bug
+    // turn_frontier order), so we assert the pick set THAT ref - a wrong-ref bug
     // (all markers picking the same station, or an off-by-one) would slip past a
     // mere "endpoint is non-null" check.
     const expected = (await turnFrontier(page))[0];
     expect(expected).toBeTruthy();
-    // A single left click sets the endpoint directly — no menu round-trip (#243).
+    // A single left click sets the endpoint directly - no menu round-trip (#243).
     await page.locator('[data-testid="gas-turn-marker"]').first().click();
     await expect.poll(() => gasEndpoint(page), { timeout: 2000 }).toEqual(expected);
     // And it must not have opened the context menu.
@@ -754,7 +754,7 @@ test.describe('Gas planning', () => {
     expect(await getCalls()).toEqual([]);
 
     // Export is guarded by the same `appMode !== 'survey'` term, not a plan-specific
-    // check — pin it so a refactor to `=== 'plan'` can't silently re-open Export.
+    // check - pin it so a refactor to `=== 'plan'` can't silently re-open Export.
     await enterMode(page, 'export');
     await page.keyboard.press('Control+z');
     await page.keyboard.press('Control+y');
@@ -787,7 +787,7 @@ test.describe('Gas planning', () => {
       ).__MOCK_RESET_DIALOG_OPEN_COUNT__(),
     );
     // The default seed has no eligible closures, so Plan's forced closureAdjusted
-    // reverts to measured — the exact trap a geometryMode-only guard would miss.
+    // reverts to measured - the exact trap a geometryMode-only guard would miss.
     await page.keyboard.press('Control+i');
     expect(await openCount()).toBe(0);
 
@@ -824,7 +824,7 @@ test.describe('Gas planning', () => {
 
     // Jump legs are FADED, not dashed (#243): one line layer, opacity driven by a
     // data expression on `isJump`. Pin the expression so reverting to a constant
-    // opacity (or typo-ing the property) — which MapLibre evaluates silently — fails.
+    // opacity (or typo-ing the property) - which MapLibre evaluates silently - fails.
     const opacity = await page.evaluate(() => {
       const map = (
         window as unknown as {
@@ -953,7 +953,7 @@ test.describe('Gas planning', () => {
     await enterMode(page, 'plan');
     // Select a shot via the store, then press Delete. Plan/Export are read-only even on a
     // no-closures project (where geometryMode falls back to 'measured'), so the appMode
-    // guard must block the delete — no confirm dialog opens.
+    // guard must block the delete - no confirm dialog opens.
     await page.evaluate(() => {
       const e2e = (window as unknown as {
         __E2E_TEST__?: {

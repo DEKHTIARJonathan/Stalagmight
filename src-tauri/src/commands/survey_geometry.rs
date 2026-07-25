@@ -120,7 +120,7 @@ fn get_survey_geometry_for_file_impl(path: &Path) -> Result<SurveyGeometry, Surv
     project.assign_closure_ids();
     // Section offsets are derived: re-solve them so the GlobalView preview renders
     // a drifted file the same way the workspace will after it redrives on open
-    // (otherwise the two views can disagree). In-memory only — the DB is read-only.
+    // (otherwise the two views can disagree). In-memory only - the DB is read-only.
     project.redrive_offsets_after_load();
 
     // Compute geometry from project

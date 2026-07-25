@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# release.sh — bump version, update changelog, commit and tag
+# release.sh - bump version, update changelog, commit and tag
 #
 # Usage:
 #   ./scripts/release.sh <major|minor|patch|X.Y.Z> [--no-edit] [--dry-run]

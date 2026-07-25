@@ -148,7 +148,7 @@ mod tests {
         let result = export_csv(&project, file.path());
         assert!(result.is_ok());
         let contents = std::fs::read_to_string(file.path()).unwrap();
-        // CSV only exports section_name, not surveyor — verify Unicode section name
+        // CSV only exports section_name, not surveyor - verify Unicode section name
         assert!(
             contents.contains("Grotte de l'Ours"),
             "Unicode section name should be in CSV"

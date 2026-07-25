@@ -7,8 +7,8 @@
  * Why the offset lives in the shader: the moving geometry's vertices are the
  * ORIGINAL (pre-move) positions captured ONCE at drag start, stored
  * anchor-relative mercator (same precision trick as `mercator.ts`) and projected
- * through `u_matrix` every frame. The live drag delta — a screen-pixel residual
- * recomputed each frame by MapCanvas against the re-projected grab point — is
+ * through `u_matrix` every frame. The live drag delta - a screen-pixel residual
+ * recomputed each frame by MapCanvas against the re-projected grab point - is
  * added to the projected endpoints as a screen-space shift. Because the anchor
  * re-projects correctly through `u_matrix`, a mid-drag ZOOM keeps the ghost glued
  * to the cursor with zero rebuild: the vertices follow the camera and the

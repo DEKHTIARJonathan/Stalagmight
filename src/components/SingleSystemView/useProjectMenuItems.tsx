@@ -37,7 +37,7 @@ import {
 interface UseProjectMenuItemsArgs {
   /** The SingleSystemView-wrapped save (cancels autosave, then saves). */
   onSave: (opts?: { closeAfterSave?: boolean }) => Promise<{ success: boolean } | null | undefined>;
-  /** A save (auto or manual) failed — flag the Save row with a dark-red bg. */
+  /** A save (auto or manual) failed - flag the Save row with a dark-red bg. */
   saveFailed?: boolean;
 }
 
@@ -244,7 +244,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         disabled: editingBlocked,
         submenu: [
           // DMP-only filter (dmpImportFilters, no "All Files"): with a project
-          // open, an unrelated file — notably a `.stalx` — must NOT be pickable
+          // open, an unrelated file - notably a `.stalx` - must NOT be pickable
           // here, or the shared router would open it and replace the current
           // project. DMP is the only additive in-project import; GPX/Ariane/
           // Compass start new projects (the router rejects those if dropped/

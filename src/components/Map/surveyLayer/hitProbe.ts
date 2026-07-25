@@ -24,7 +24,7 @@
 export type XY = { x: number; y: number };
 export type ProbePoint = XY | [number, number];
 export type ProbeGeometry = ProbePoint | [ProbePoint, ProbePoint];
-/** `[[minX, minY], [maxX, maxY]]` — a MapLibre `queryRenderedFeatures` box. */
+/** `[[minX, minY], [maxX, maxY]]` - a MapLibre `queryRenderedFeatures` box. */
 export type ProbeBox = [[number, number], [number, number]];
 
 /** Small guard against subpixel rasterization at the exact tolerance boundary

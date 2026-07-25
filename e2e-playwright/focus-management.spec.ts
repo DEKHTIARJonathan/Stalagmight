@@ -39,7 +39,7 @@ async function focusedTestId(page: Page): Promise<string | null> {
 // ---------------------------------------------------------------------------
 
 test.describe('Focus Management', () => {
-  test.describe('Tab cycling – form dialog (NewProjectDialog)', () => {
+  test.describe('Tab cycling - form dialog (NewProjectDialog)', () => {
     test.beforeEach(async ({ page }) => {
       await setupMockedPage(page);
     });
@@ -47,7 +47,7 @@ test.describe('Focus Management', () => {
     test('Tab wraps from last to first focusable element', async ({ page }) => {
       await openNewProjectDialog(page);
 
-      // NewProjectDialog is a form dialog – initial focus lands on the first text input
+      // NewProjectDialog is a form dialog - initial focus lands on the first text input
       await expect(page.getByTestId('new-project-name-input')).toBeFocused({ timeout: 3000 });
 
       // The focus trap container (dialogRef) is the parent of the dialog content.
@@ -63,13 +63,13 @@ test.describe('Focus Management', () => {
       });
       expect(focusableCount).toBeGreaterThan(1);
 
-      // Tab focusableCount times — this should wrap back to the start
+      // Tab focusableCount times - this should wrap back to the start
       for (let i = 0; i < focusableCount; i++) {
         await page.keyboard.press('Tab');
       }
 
       // After a full cycle, focus should be on the same element we started on
-      // (the name input — the initial focus target)
+      // (the name input - the initial focus target)
       await expect(page.getByTestId('new-project-name-input')).toBeFocused();
 
       // Confirm focus is inside the dialog
@@ -110,7 +110,7 @@ test.describe('Focus Management', () => {
       );
       expect(focusInside).toBe(true);
 
-      // The last focusable element — verify it matches
+      // The last focusable element - verify it matches
       const lastFocusableTestId = await dialog.evaluate((el) => {
         const selector =
           'a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])';
@@ -123,7 +123,7 @@ test.describe('Focus Management', () => {
     });
   });
 
-  test.describe('Return focus – non-form dialog (ConfirmDialog)', () => {
+  test.describe('Return focus - non-form dialog (ConfirmDialog)', () => {
     test.beforeEach(async ({ page }) => {
       await setupMockedPage(page);
       await createProject(page, 'Focus Return Test');
@@ -148,7 +148,7 @@ test.describe('Focus Management', () => {
 
     test('closing dialog via Escape returns focus to trigger element', async ({ page }) => {
       // Use a stable, always-present control as the trigger. (Section delete moved
-      // to the context menu, whose item unmounts when the dialog opens — so it can
+      // to the context menu, whose item unmounts when the dialog opens - so it can
       // no longer be the focus-return target.) Focus the Add-section button, then
       // open the ConfirmDialog while it holds focus so the dialog captures it.
       const trigger = page.getByTestId('sections-add-button');
@@ -177,13 +177,13 @@ test.describe('Focus Management', () => {
     });
   });
 
-  test.describe('Stacked dialog isolation – dirty-confirm overlay', () => {
+  test.describe('Stacked dialog isolation - dirty-confirm overlay', () => {
     test.beforeEach(async ({ page }) => {
       await setupMockedPage(page);
     });
 
     test('dirty-confirm overlay traps focus and outer dialog is inert', async ({ page }) => {
-      // Open NewProjectDialog — it has isDirty when the name field is filled
+      // Open NewProjectDialog - it has isDirty when the name field is filled
       await openNewProjectDialog(page);
       await expect(page.getByTestId('new-project-name-input')).toBeFocused({ timeout: 3000 });
 
@@ -216,7 +216,7 @@ test.describe('Focus Management', () => {
       await page.keyboard.press('Tab');
       for (let i = 0; i < alertFocusableCount + 1; i++) {
         // Focus must be inside the trap container (alertDialogRef) or the
-        // alertdialog itself — never outside.
+        // alertdialog itself - never outside.
         const insideTrap = await trapContainer.evaluate(
           (el) => el.contains(document.activeElement),
         );
@@ -224,7 +224,7 @@ test.describe('Focus Management', () => {
         await page.keyboard.press('Tab');
       }
 
-      // Dismiss the overlay via Escape — focus should return to the outer dialog
+      // Dismiss the overlay via Escape - focus should return to the outer dialog
       await page.keyboard.press('Escape');
       await expect(alertDialog).not.toBeVisible({ timeout: 3000 });
 
@@ -242,7 +242,7 @@ test.describe('Focus Management', () => {
     });
   });
 
-  test.describe('Initial focus – primary action button (ConfirmDialog)', () => {
+  test.describe('Initial focus - primary action button (ConfirmDialog)', () => {
     test.beforeEach(async ({ page }) => {
       await setupMockedPage(page);
       await createProject(page, 'Initial Focus Test');
@@ -279,7 +279,7 @@ test.describe('Focus Management', () => {
 
       // The ConfirmDialog has a Delete button with data-primary-action attribute.
       // According to DialogWrapper's initial focus heuristic (priority 3), this
-      // button should receive initial focus — ConfirmDialog has no form inputs
+      // button should receive initial focus - ConfirmDialog has no form inputs
       // and no [data-autofocus].
       //
       // Note: For 'section' type, the Delete button is disabled (type === 'station'
@@ -377,7 +377,7 @@ test.describe('Focus Management', () => {
       await expect(generalTab).toBeFocused({ timeout: 1000 });
     });
   });
-  test.describe('DMP Import Wizard – confirm overlay focus', () => {
+  test.describe('DMP Import Wizard - confirm overlay focus', () => {
     test.beforeEach(async ({ page }) => {
       await setupMockedPage(page);
       await createProject(page, 'Import Focus');
@@ -427,7 +427,7 @@ test.describe('Focus Management', () => {
   });
 });
 
-test.describe('Existing dialog tests – portal migration sanity', () => {
+test.describe('Existing dialog tests - portal migration sanity', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
   });

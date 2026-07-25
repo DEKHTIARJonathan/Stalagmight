@@ -16,7 +16,7 @@ export default function UnsavedChangesDialog() {
   // back to the global view.
   const pendingOpenPath = typeof dialogData?.pendingOpenPath === 'string' ? dialogData.pendingOpenPath : null;
   // Set by handleNewProject when discarding to start a fresh project: on discard
-  // we open the new-project dialog over the current (dirty) one — createProject
+  // we open the new-project dialog over the current (dirty) one - createProject
   // replaces it. Backing out of that dialog leaves the current project untouched.
   const pendingNewProject = dialogData?.pendingNewProject === true;
   // Set by quitApp when the app is quitting with unsaved changes: Discard quits,

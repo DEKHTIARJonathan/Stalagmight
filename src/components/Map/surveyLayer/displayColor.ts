@@ -54,7 +54,7 @@ export interface GhostSectionData {
 /**
  * The inputs that decide a shot's / station's display color. Factored out of
  * the builder loops so `SurveyLayer` can resolve the exact same color for a
- * single feature (interact-overlay highlights) that the bulk build produced —
+ * single feature (interact-overlay highlights) that the bulk build produced -
  * parity by construction, not by re-implementation.
  */
 export interface DisplayColorContext {
@@ -66,7 +66,7 @@ export interface DisplayColorContext {
   issueSeverity?: { shotSeverity: Uint8Array; stationSeverity: Uint8Array } | undefined;
   /** An analytical overlay (distance gradient / gas reach) active in the CUSTOM
    *  renderer. Null / absent = off. See {@link OverlayColorInput}. The stock
-   *  feature builder ignores this — it colors by section/depth/severity and lets
+   *  feature builder ignores this - it colors by section/depth/severity and lets
    *  the feature-state paint ramp override on the bulk layers; only the custom
    *  color resolvers (which have no feature-state) read it. */
   overlay?: OverlayColorInput | null;

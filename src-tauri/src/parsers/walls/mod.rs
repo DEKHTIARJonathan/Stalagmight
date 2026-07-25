@@ -17,7 +17,7 @@
 //!   survey vectors.  Foresight/backsight pairs are written `fs/bs`; a Normal
 //!   backsight is reversed 180° (azimuth) / negated (inclination) and
 //!   averaged.  Underwater "depth-gauge" surveys (`#Units Order=DA Tape=SS`)
-//!   carry two trailing columns that are station depths below the surface —
+//!   carry two trailing columns that are station depths below the surface -
 //!   these map straight onto Stalagmight's native `depth_in`/`depth_out`.
 //! - CT inclinations are integrated (`length·sin(inc)`) along the station
 //!   graph into absolute depths; the graph is split into linear sections
@@ -81,7 +81,7 @@ pub struct WallsFile {
     /// in, instead of leaving the button permanently disabled.
     pub splay_count: u32,
     /// True when the project carries a `.REF` projection reference (UTM/datum).
-    /// This is the coordinate system, NOT a station anchor — see
+    /// This is the coordinate system, NOT a station anchor - see
     /// `fixed_station_count` for actual GPS anchors.
     pub has_georeference: bool,
     pub datum: Option<String>,
@@ -245,7 +245,7 @@ pub(crate) struct WallsUnits {
     pub(crate) ab_unit: AngleUnit,
     pub(crate) v_unit: AngleUnit,
     pub(crate) vb_unit: AngleUnit,
-    /// Explicit `Decl=` declination, degrees. `None` means unset — an explicit
+    /// Explicit `Decl=` declination, degrees. `None` means unset - an explicit
     /// `Decl=0` (`Some(0.0)`) suppresses auto-derivation, a bare `Decl=` clears
     /// back to `None`.
     pub(crate) decl: Option<f64>,
@@ -397,7 +397,7 @@ pub(crate) struct WallsVector {
     pub(crate) inch: f64,
     pub(crate) grid_relative: bool,
     /// `#Units Grid=` grid convergence (degrees) to subtract from the vector's
-    /// azimuth (true → grid north). Applies to CT and RECT vectors alike — it is
+    /// azimuth (true → grid north). Applies to CT and RECT vectors alike - it is
     /// `units.grid` regardless of vector type. What a RECT vector excludes is the
     /// `RECT=<angle>` FRAME rotation (already baked into the computed bearing) and
     /// magnetic declination (forced to 0 for RECT); `Grid=` convergence is NOT
@@ -423,7 +423,7 @@ pub(crate) struct WallsFix {
     /// Resolved geographic position, when the `#Fix` gave lat/long (or could be
     /// projected via the inherited `.REF`).
     pub(crate) lat_long: Option<(f64, f64)>,
-    /// Up coordinate (meters) if supplied — used to seed the station's depth.
+    /// Up coordinate (meters) if supplied - used to seed the station's depth.
     pub(crate) up: Option<f64>,
     /// True when `lat_long` came from projecting UTM E/N through the inherited
     /// `.REF` datum (rather than explicit lat/long). Lets the survey emit ONE
@@ -441,7 +441,7 @@ pub(crate) struct ParsedSurvey {
     pub(crate) surveyor: Option<String>,
     pub(crate) vectors: Vec<WallsVector>,
     pub(crate) fixes: Vec<WallsFix>,
-    /// The `.REF` inherited by this survey (nearest ancestor) — drives grid
+    /// The `.REF` inherited by this survey (nearest ancestor) - drives grid
     /// convergence + auto-declination for its shots.
     pub(crate) georef: Option<WallsRef>,
     pub(crate) resolved: bool,

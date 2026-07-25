@@ -136,7 +136,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   const networkStatus = useNetworkStore((s) => s.isOnline);
   const [tileFetchStats, setTileFetchStats] = useState<TileFetchStats | null>(null);
 
-  // Map state — zoom/center stored in refs and flushed to React state periodically
+  // Map state - zoom/center stored in refs and flushed to React state periodically
   // to avoid triggering expensive re-renders on every pan frame
   const [zoom, setZoom] = useState(map.getZoom());
   const [center, setCenter] = useState(map.getCenter());
@@ -183,11 +183,11 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   }, [map]);
 
   // Collect draw calls and render stats; update React state at ~2 Hz to avoid churn
-  // PERF NOTE: querySourceFeatures is expensive (20-40ms) — only run on idle, not on render.
+  // PERF NOTE: querySourceFeatures is expensive (20-40ms) - only run on idle, not on render.
   // The render event handler only flushes draw call counters (cheap).
   useEffect(() => {
     let lastProfileUpdate = 0;
-    const PROFILE_INTERVAL = 500; // ms — match the FPS update cadence
+    const PROFILE_INTERVAL = 500; // ms - match the FPS update cadence
 
     const handleRender = () => {
       // Flush per-frame draw call counters (accumulated since last flush)
@@ -198,7 +198,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
       }
     };
 
-    // Collect stats on idle only (NOT on every render — avoids feedback loop)
+    // Collect stats on idle only (NOT on every render - avoids feedback loop)
     let idleRafId = 0;
     const scheduleIdleUpdate = () => {
       cancelAnimationFrame(idleRafId);
@@ -389,7 +389,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   // Track map state changes
   useEffect(() => {
     const handleMove = () => {
-      // Write to refs only — flushed to React state in the periodic update loop
+      // Write to refs only - flushed to React state in the periodic update loop
       zoomRef.current = map.getZoom();
       centerRef.current = map.getCenter();
     };

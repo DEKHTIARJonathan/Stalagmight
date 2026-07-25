@@ -13,7 +13,7 @@ export interface OnboardingStep {
 const EMPTY: OnboardingStep = { flowId: null, stepId: null };
 
 interface OnboardingStepState {
-  /** Replaced (new identity) only when a field actually changes — see below. */
+  /** Replaced (new identity) only when a field actually changes - see below. */
   step: OnboardingStep;
 }
 
@@ -23,7 +23,7 @@ const useOnboardingStepStore = create<OnboardingStepState>(() => ({ step: EMPTY 
  * Publish the active onboarding step. OnboardingOverlay calls this on mount /
  * step change and resets it to empty on unmount. The overlay is the SOLE writer,
  * so it pushes the step directly into this store instead of every consumer
- * running its own body-wide MutationObserver — the previous design fired on
+ * running its own body-wide MutationObserver - the previous design fired on
  * EVERY DOM mutation app-wide (react-virtual row churn during table scroll, map
  * tooltips), even though onboarding is inactive in nearly all sessions.
  *

@@ -14,7 +14,7 @@ async function selectAlpha(page: Page): Promise<void> {
   await expect(page.getByTestId('metadata-name')).toContainText('Cave System Alpha');
 }
 
-test.describe('GlobalView — rename project', () => {
+test.describe('GlobalView - rename project', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await expect(page.getByTestId('global-view')).toBeVisible({ timeout: 10000 });

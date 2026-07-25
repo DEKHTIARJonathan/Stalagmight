@@ -38,7 +38,7 @@ impl Database {
     /// without rewriting the whole project (mirrors
     /// [`save_collab_state`](Self::save_collab_state)). `Some(link)` upserts the
     /// single row id=1; `None` deletes it. `base_commit_sha` binds as
-    /// `Option<String>` so `None` becomes SQL NULL — **never** `""` (NULL is the
+    /// `Option<String>` so `None` becomes SQL NULL - **never** `""` (NULL is the
     /// empty-repo BASE sentinel).
     ///
     /// FRESHNESS-FOLD SEAM (D-B1): #185's get_project/list_projects return the

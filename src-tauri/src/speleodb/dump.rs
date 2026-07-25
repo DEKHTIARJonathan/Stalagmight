@@ -23,15 +23,15 @@ const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 /// What a downloaded project dump contains, from the caller's point of view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DumpClassification {
-    /// Exactly one `*.stalx` — open it. Holds the entry's path within the ZIP.
+    /// Exactly one `*.stalx` - open it. Holds the entry's path within the ZIP.
     Stalx(String),
-    /// No `*.stalx` but an `ariane.tml` is present — route to C2 adoption (#214).
+    /// No `*.stalx` but an `ariane.tml` is present - route to C2 adoption (#214).
     /// Holds the `ariane.tml` entry's path within the ZIP (the adoption flow
     /// extracts + imports it).
     AdoptAriane(String),
-    /// Neither a `*.stalx` nor an `ariane.tml` — nothing to open.
+    /// Neither a `*.stalx` nor an `ariane.tml` - nothing to open.
     NothingToOpen,
-    /// More than one `*.stalx` — ambiguous; fail closed (never guess which).
+    /// More than one `*.stalx` - ambiguous; fail closed (never guess which).
     AmbiguousStalx(Vec<String>),
 }
 
@@ -83,7 +83,7 @@ impl<'a> Dump<'a> {
         Ok(Self { archive })
     }
 
-    /// The entry paths, in central-directory order — what [`classify`] consumes.
+    /// The entry paths, in central-directory order - what [`classify`] consumes.
     pub(crate) fn entry_paths(&mut self) -> Result<Vec<String>, SpeleoDbError> {
         let mut names = Vec::with_capacity(self.archive.len());
         for i in 0..self.archive.len() {
@@ -107,8 +107,8 @@ impl<'a> Dump<'a> {
     }
 
     /// Extraction with an explicit byte ceiling (parameterized for testing). The
-    /// entry's declared size comes from the ZIP central directory — server- /
-    /// attacker-controlled — so it is rejected up front when it exceeds `max_bytes`
+    /// entry's declared size comes from the ZIP central directory - server- /
+    /// attacker-controlled - so it is rejected up front when it exceeds `max_bytes`
     /// (a lying-high header that would otherwise trigger a huge up-front
     /// allocation), and the read is bounded by `take(max_bytes + 1)` so a lying-low
     /// header over a deflate stream (a zip bomb: tiny compressed, huge inflated)
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn extract_entry_rejects_oversized_entry() {
         // An entry whose declared size exceeds the cap is rejected before it can
-        // allocate/read — guarding against a zip bomb from a hostile server.
+        // allocate/read - guarding against a zip bomb from a hostile server.
         let zip = make_zip(&[("misc/project.stalx", b"0123456789")]); // 10 bytes
         let dir = tempfile::tempdir().expect("tempdir");
         let dest = dir.path().join("out.stalx");

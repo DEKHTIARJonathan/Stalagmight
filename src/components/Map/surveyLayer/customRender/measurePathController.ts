@@ -1,7 +1,7 @@
 // Measure-path controller (#26, #customRender stock deletion). Owns the dedicated
 // {@link SurveyMeasurePathLayer} that draws the ruler's measured along-cave-line
 // tint (measured shots as round-cap lines, measured stations as filled discs, one
-// tint via a uniform) directly from typed-array buffers — no stock
+// tint via a uniform) directly from typed-array buffers - no stock
 // `survey-measure-path` layer, no `-shots`/`-stations` vector-tile source, no
 // `measured` feature-state. This is the SOLE measure-path renderer; the stock
 // path is gone.
@@ -9,7 +9,7 @@
 // SurveyLayer builds the render data (resolving the measured id sets to coords via
 // its geometry index) and calls `setPath(...)` / `clear()`; this controller only
 // owns the layer lifecycle: add at the right z-order, re-upload on change, remove
-// on clear, and — since there is no stock tint behind it — surface a GL failure
+// on clear, and - since there is no stock tint behind it - surface a GL failure
 // via `onFatal` while dropping the dead layer, rather than vanishing silently.
 
 import type maplibregl from 'maplibre-gl';
@@ -104,7 +104,7 @@ export class MeasurePathController {
    *
    * `beforeIdCandidates` are tried in order; the layer is inserted before the
    * first one that exists so it lands above the survey geometry and directly
-   * beneath the hover/selection overlay — see SurveyLayer. If none exist the
+   * beneath the hover/selection overlay - see SurveyLayer. If none exist the
    * layer draws on top.
    */
   setPath(data: MeasurePathRenderData | null, beforeIdCandidates: readonly string[] = []): void {
@@ -138,7 +138,7 @@ export class MeasurePathController {
 
   /** Create + add the layer at the resolved z-order. Drops the dead layer and
    *  surfaces the failure via {@link onFatal} if WebGL2 is unavailable / shaders
-   *  fail / it throws — there is no stock tint to fall back to. */
+   *  fail / it throws - there is no stock tint to fall back to. */
   private add(data: MeasurePathRenderData, beforeIdCandidates: readonly string[]): void {
     try {
       const layer = this.makeLayer(this.layerId, data, (reason) => this.handleSelfDisable(reason));
@@ -173,7 +173,7 @@ export class MeasurePathController {
   /**
    * The layer hit a GL error mid-render and disabled itself (fired INSIDE
    * MapLibre's render pass, so a style mutation now is unsafe). Defer dropping
-   * the dead layer, then surface the failure via {@link onFatal} — there is no
+   * the dead layer, then surface the failure via {@link onFatal} - there is no
    * stock tint behind it, so a measured path silently loses its highlight
    * otherwise. Idempotent + generation-guarded.
    */

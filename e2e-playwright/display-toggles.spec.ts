@@ -81,7 +81,7 @@ async function toggleDisplayOption(page: Page, toggleKey: string): Promise<void>
  *
  * The seeded survey is only a few metres across, so at the fit-to-bounds zoom the
  * whole thing is ~9 screen px wide and the station discs cover the shot lines
- * entirely — a pixel probe there cannot tell "shot hidden" from "shot behind a
+ * entirely - a pixel probe there cannot tell "shot hidden" from "shot behind a
  * station". `setZoom` is a jump (no animation), and the geometry helpers project
  * with the live map, so positions read after this call already match the new view.
  */
@@ -126,7 +126,7 @@ test.describe('Display Toggle Visibility', () => {
     // `survey-stations` layer whose `visibility` can stand in for "markers are on
     // screen": hiding them is a skipped draw call. The oracle is painted ink around
     // the station. It cannot be the center pixel alone: a station disc and its
-    // shots share the section color, so the center stays that color either way —
+    // shots share the section color, so the center stays that color either way -
     // what changes is that the disc's ~9 px footprint collapses to the shot's line
     // width.
     await zoomIn(page);

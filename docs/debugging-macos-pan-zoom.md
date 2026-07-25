@@ -1,4 +1,4 @@
-# macOS UI Lockup — Postmortem and Re-enabling the Debug Toolkit
+# macOS UI Lockup - Postmortem and Re-enabling the Debug Toolkit
 
 ## What happened
 
@@ -25,7 +25,7 @@ wedged the queue permanently. From that point on, every subsequent
 and even programmatic calls like `__map.panBy()` produced no movement.
 
 **Fix:** guard the references with `typeof TouchEvent !== 'undefined' && ...`.
-Two-line change in `src/components/Map/SurveyLayer.tsx` —
+Two-line change in `src/components/Map/SurveyLayer.tsx` -
 `handleZoomEndTelemetry` and `handleMoveEndTelemetry`.
 
 ## When to re-enable the debug toolkit
@@ -67,7 +67,7 @@ out of bundles built without the flag, so there is no production cost.
 - Logs MapLibre lifecycle events (`movestart`, `zoomend`, …) and raw canvas
   pointer/wheel/gesture events.
 - **Auto-discovers and wraps** any method on the map instance whose source
-  contains the string `"already running"` — that's how it found
+  contains the string `"already running"` - that's how it found
   `_renderTaskQueue.run` during this investigation, without knowing the
   property name in advance. On catch, the wrap dumps the owner's primitive
   state and force-resets known "currently running" flag names
@@ -94,13 +94,13 @@ The two snapshots together cover:
 | MapLibre handler enable-state | `__debugSnapshot().handlerEnabled` |
 | MapLibre internal flags (`_running`, `_currentlyRunning`, …) | `__debugSnapshot().hmInternals` |
 | Custom-pan refs (`MapCanvas.tsx`) | `__debugSnapshot().refs` |
-| Uncaught throws | console — search for `[debug-lockup] window.onerror` |
-| Stuck render-loop callbacks | console — search for `[swallow] re-entry caught` |
-| Which click → state-change path fired | console — `[debug-lockup] click` then `[debug-lockup] activeTool` |
+| Uncaught throws | console - search for `[debug-lockup] window.onerror` |
+| Stuck render-loop callbacks | console - search for `[swallow] re-entry caught` |
+| Which click → state-change path fired | console - `[debug-lockup] click` then `[debug-lockup] activeTool` |
 
 When `[swallow] re-entry caught` appears, the line includes the owner's full
 primitive state at the moment of the throw, and the next throw in the chain
-(now no longer cascaded) becomes visible via `window.onerror` — that's how
+(now no longer cascaded) becomes visible via `window.onerror` - that's how
 the `TouchEvent` ReferenceError surfaced once `_currentlyRunning` stopped
 leaking.
 
@@ -115,11 +115,11 @@ leaking.
 - `installConsoleCapture` (in `main.tsx`) pipes every `console.*` call to an
   IPC `push_frontend_log` invoke. If you add new debug logs from within
   debugLockup itself, cache `console.log.bind(console)` *before*
-  `installConsoleCapture` runs (which the current code does) — otherwise your
+  `installConsoleCapture` runs (which the current code does) - otherwise your
   logs recurse back through the IPC layer you're measuring.
 - The lockup symptom can present in three layers: events not reaching the
   canvas (DOM/CSS), state stuck in a React ref or Zustand store, or a leaked
   MapLibre internal flag. Run all three snapshots before forming a
-  hypothesis — the lockup we just fixed looked like #2 in the early
+  hypothesis - the lockup we just fixed looked like #2 in the early
   snapshots and only revealed itself as #3 once we dumped MapLibre's
   internals.

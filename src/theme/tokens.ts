@@ -169,7 +169,7 @@ export const themeTokens = {
     '--cc-success-30': 'rgba(39, 118, 78, 0.3)',
   },
   cave: {
-    // UI Chrome — very dark, desaturated, faint warm tint
+    // UI Chrome - very dark, desaturated, faint warm tint
     '--cc-background': '#0e0d0c',
     '--cc-panel': '#171615',
     '--cc-border': '#2a2826',
@@ -795,7 +795,7 @@ export const themeTokens = {
     '--cc-success-30': 'rgba(166, 227, 161, 0.3)',
   },
   kaleido_eink: {
-    // UI Chrome — pure white bg, pure black text, maximum e-ink contrast
+    // UI Chrome - pure white bg, pure black text, maximum e-ink contrast
     '--cc-background': '#ffffff',
     '--cc-panel': '#ffffff',
     '--cc-border': '#555555',
@@ -829,7 +829,7 @@ export const themeTokens = {
     '--cc-map-scale-border': '#555555',
     '--cc-map-scale-text': '#000000',
 
-    // Map Visualization — white background, black outlines
+    // Map Visualization - white background, black outlines
     '--cc-map-background': '#ffffff',
     '--cc-snap-color': '#cc0000',
     '--cc-hover-highlight': '#cc7700',
@@ -862,12 +862,12 @@ export const themeTokens = {
     '--cc-accent-80': '#3374b3',
     '--cc-accent-90': '#1a62aa',
 
-    // Opacity Variants: background (white on white — all white)
+    // Opacity Variants: background (white on white - all white)
     '--cc-background-30': '#ffffff',
     '--cc-background-50': '#ffffff',
     '--cc-background-80': '#ffffff',
 
-    // Opacity Variants: panel (white on white — all white)
+    // Opacity Variants: panel (white on white - all white)
     '--cc-panel-20': '#ffffff',
     '--cc-panel-50': '#ffffff',
     '--cc-panel-90': '#ffffff',

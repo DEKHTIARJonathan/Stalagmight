@@ -7,13 +7,13 @@ import type { ValidationWarning } from '../types/ipc/ValidationWarning';
  * Surface a failed (non-throwing) save to the user.
  *
  * Three classes of failure, in priority order:
- *  1. Unresolvable cross-references — NOT an error, an integrity problem the
+ *  1. Unresolvable cross-references - NOT an error, an integrity problem the
  *     user can fix. Route them straight to the Review & Repair dialog instead
  *     of a scary "Save Failed" error window.
- *  2. Filesystem permission denial (e.g. macOS forgot folder access) — already
+ *  2. Filesystem permission denial (e.g. macOS forgot folder access) - already
  *     surfaced by `saveProject` itself via the folder-access guidance dialog,
  *     so don't double up with a generic error window.
- *  3. Anything else (a real I/O error) — show the error dialog as before.
+ *  3. Anything else (a real I/O error) - show the error dialog as before.
  *
  * Reads `integritySaveBlocked`, which `saveProject` refreshes (awaited) on
  * failure, so it is current by the time this runs.
@@ -38,14 +38,14 @@ export function surfaceSaveFailure(
  * crate. So this reliably distinguishes "imported but couldn't save to disk" from
  * ordinary per-shot validation warnings (LONG_SHOT, AZIMUTH_DEVIATION, …): those
  * carry their own codes, ride along on a *successful, fully-saved* import, and are
- * already surfaced through the data-table warning UI — they must NOT pop a modal
+ * already surfaced through the data-table warning UI - they must NOT pop a modal
  * here (nor suppress the orphan-placement step). (#110)
  */
 const DEFERRED_SAVE_WARNING_CODE = 'SYSTEM';
 
 /**
  * The subset of an import's `CommandResult.warnings` that mean "the import is only
- * in memory — the save failed". Empty for a fully-persisted import, even one that
+ * in memory - the save failed". Empty for a fully-persisted import, even one that
  * carries routine validation warnings. (#110)
  */
 export function deferredSaveWarnings(
@@ -58,7 +58,7 @@ export function deferredSaveWarnings(
  * Surface deferred-save warning(s) so the user learns their import is only in
  * memory and must be saved manually (#110). Pass the result of
  * `deferredSaveWarnings()`; no-op when empty. Reuses the generic error dialog but
- * suppresses its "report this as a bug" footer — a failed save is an actionable
+ * suppresses its "report this as a bug" footer - a failed save is an actionable
  * disk/permission condition, not a bug to report.
  */
 export function surfaceImportWarnings(
@@ -98,7 +98,7 @@ export function completeImportToSingleView(dialogName: string, ui: ImportDialogU
  * Handle the deferred-save partial-success case shared by the TML and Compass
  * import dialogs: when a new-project import couldn't be saved to disk, it lives
  * only in memory. Close the dialog, return to the fitted view, and surface the
- * "save manually" warning — returning true so the caller bails before the
+ * "save manually" warning - returning true so the caller bails before the
  * orphan-placement step. Returns false (and does nothing) for a fully-saved
  * import, even one carrying routine per-shot validation warnings. (#110)
  */

@@ -48,7 +48,7 @@ pub struct TileProvider {
     pub tilemap_url_template: Option<String>,
 }
 
-/// Response DTO returned by IPC commands — includes all `TileProvider` fields
+/// Response DTO returned by IPC commands - includes all `TileProvider` fields
 /// plus a computed `available` flag.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct TileProviderInfo {

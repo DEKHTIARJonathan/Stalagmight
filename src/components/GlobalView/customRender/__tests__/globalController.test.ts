@@ -146,7 +146,7 @@ describe('GlobalCustomController', () => {
     const active: boolean[] = [];
     const c = new GlobalCustomController(map, undefined, { onActiveChange: (a) => active.push(a) });
     c.sync(makeSystems());
-    // A second sync is a refresh (update()), never a disable — the custom layer
+    // A second sync is a refresh (update()), never a disable - the custom layer
     // is the sole renderer, so it stays active.
     c.sync(makeSystems());
     expect(removed).not.toContain(CUSTOM_ID);

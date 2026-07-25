@@ -22,7 +22,7 @@ export function horizontalLength(slopeLength: number, depthChange: number): numb
 
 /**
  * Ghost endpoint for a proposed shot edit, or `null` when the planar model
- * can't reproduce the current solved endpoint within tolerance — e.g. a
+ * can't reproduce the current solved endpoint within tolerance - e.g. a
  * rotated/offset section whose solved frame differs from raw azimuths. The
  * caller shows no ghost in that case rather than a misleading one.
  *
@@ -78,7 +78,7 @@ export function lengthFromInclination(depthChange: number, pitchDeg: number | nu
  * (`depth_out - depth_in = depthChange`) must equal `length * sin(pitch)` with
  * `length > 0`, so the recorded pitch has to point the SAME way as the depth
  * change. A reversed-sign inclination (e.g. a 5 m descent recorded as `-30°`) has
- * no positive-length solution — it can only be fixed by adjusting the inclination —
+ * no positive-length solution - it can only be fixed by adjusting the inclination -
  * and a zero depth change has none either, so the "adjust length"/"split" options
  * are withheld for those (issue #57 / Codex, issue #296).
  *
@@ -94,7 +94,7 @@ export function lengthFixableFromInclination(depthChange: number, pitchDeg: numb
 
 /**
  * Whether the proposed slope `length` is shorter than the vertical change it
- * must span — i.e. `length + ε < |depthOut - depthIn|`, the same condition the
+ * must span - i.e. `length + ε < |depthOut - depthIn|`, the same condition the
  * backend raises `LENGTH_BELOW_DEPTH_CHANGE` for (validation.rs uses ε = 1e-6).
  * A preview built from such values would draw a clamped, misleading ghost, and
  * applying it raises an error on revalidation (issue #57). Requires a positive

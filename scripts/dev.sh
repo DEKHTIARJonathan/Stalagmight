@@ -8,7 +8,7 @@ pgrep -f "vite.*1420" > /dev/null && pkill -f "vite.*1420"
 sleep 1
 
 # Load local env (.env is gitignored; see .env.example). Devs put TELEMETRY_ENDPOINT
-# here to dogfood telemetry — it is intentionally NOT hardcoded in this script.
+# here to dogfood telemetry - it is intentionally NOT hardcoded in this script.
 if [ -f .env ]; then
   set -a
   source ./.env

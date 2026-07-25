@@ -212,7 +212,7 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
     c.sync(makeParams());
     // Error state: dead layer removed, onFatal fired with the reason. There is no
     // stock fallback, so the controller never TOUCHES the stock layers (they stay
-    // at their untouched initial visibility — not deliberately restored).
+    // at their untouched initial visibility - not deliberately restored).
     expect(removed).toContain(CUSTOM_ID);
     expect(fatals).toEqual(['webgl2-unavailable']);
     expect(warn).toHaveBeenCalledOnce();
@@ -258,7 +258,7 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
     expect(holder.fn).not.toBeNull();
     holder.fn?.();
     // Error state: dead layer removed, onFatal fired once, stock NOT restored
-    // (stays hidden from the clean enable — no fallback).
+    // (stays hidden from the clean enable - no fallback).
     expect(removed).toEqual([CUSTOM_ID]); // torn down exactly once
     expect(fatals).toEqual(['gl-error-0x502']);
     // Fatal is latched: a later sync() rebuilds nothing.
@@ -319,7 +319,7 @@ describe('SurveyCustomController error state (no stock fallback)', () => {
     const c = new SurveyCustomController(map);
     c.sync(makeParams());
     expect(c.isActive()).toBe(true);
-    // A second sync is a refresh (update()), never a disable — the custom layer
+    // A second sync is a refresh (update()), never a disable - the custom layer
     // is the sole renderer.
     c.sync(makeParams());
     expect(c.isActive()).toBe(true);
@@ -388,7 +388,7 @@ describe('SurveyCustomController onActiveChange (stock-suppression signal)', () 
     const c = new SurveyCustomController(map, undefined, { onActiveChange: (a) => calls.push(a) });
     c.sync(makeParams());
     expect(calls).toEqual([true]);
-    // A re-sync is a refresh, not a transition — must NOT re-fire.
+    // A re-sync is a refresh, not a transition - must NOT re-fire.
     c.sync(makeParams());
     expect(calls).toEqual([true]);
   });

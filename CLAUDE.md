@@ -2,7 +2,10 @@
 
 Tauri desktop app for processing underwater cave survey data (Rust backend + React/TypeScript frontend).
 
-It is year 2026. No em-dashes.
+It is year 2026. No em-dashes: write an ASCII hyphen instead, instead of '—' use '-'. This covers the
+hyphen, non-breaking hyphen, figure dash, en dash, em dash, horizontal bar and
+minus sign (U+2010..U+2015,U+2212). Box-drawing 
+characters in ASCII diagrams are fine.
 
 ## Quick Reference
 
@@ -18,12 +21,12 @@ It is year 2026. No em-dashes.
 
 ## Critical Rules
 
-### Pinned Toolchain — enable corepack
+### Pinned Toolchain - enable corepack
 
 The toolchain is pinned so every machine + CI runs the same versions:
 
 - **pnpm `9.15.9`** via `"packageManager"` in `package.json` (corepack and
-  `pnpm/action-setup@v4` both read it — no per-workflow `version:`).
+  `pnpm/action-setup@v4` both read it - no per-workflow `version:`).
 - **node `22.x`** via `.nvmrc` + advisory `engines` (a warning, not a hard block,
   on newer node).
 
@@ -37,7 +40,7 @@ pnpm install         # build scripts are pre-approved (pnpm.onlyBuiltDependencie
 
 Without `corepack enable`, a globally-installed **pnpm 11** hard-fails
 `pnpm tauri dev` on a fresh clone (its stricter deps check rejects unapproved
-build scripts — issue #109). Don't commit a lockfile-only drift. Coordinated
+build scripts - issue #109). Don't commit a lockfile-only drift. Coordinated
 pnpm/node upgrades are a deliberate, separate change (Phase 2).
 
 ### Never Use `cd` in Bash Commands
@@ -66,6 +69,7 @@ pnpm lint:rust-file-size                                  # Rust file-size ratch
 pnpm lint:ts-file-size                                     # TS file-size ratchet (CI check-job gate)
 pnpm lint:private-leaks                                   # no internal/personal refs in the public tree (CI leak-scan gate)
 pnpm lint:readonly-gates:test && pnpm lint:readonly-gates # read-only gating tripwire (CI check-job gate)
+pnpm lint:no-em-dash:test && pnpm lint:no-em-dash        # Unicode-dash guard (CI leak-scan gate)
 cargo fmt --manifest-path src-tauri/Cargo.toml --check   # exactly what CI's check job runs (run without --check to fix)
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets   # deny-level lint gate
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
@@ -89,7 +93,7 @@ env var makes `build.rs` delay-load comctl32 for test binaries so the symbol is
 never resolved at startup. The shipping app is unaffected (it gets a
 Common-Controls v6 manifest from `tauri_build`).
 
-### Pre-PR Review — required before every PR
+### Pre-PR Review - required before every PR
 
 Never open a PR (`gh pr create`, push-to-open, or marking ready) until the repository
 pre-PR review has run at least once on the current change: `/pre-pr` in Claude Code or
@@ -100,32 +104,32 @@ proceed.
 ### Rust lints + formatting are CI-gated
 
 The `check` job enforces **both** `cargo fmt --check` and `cargo clippy`
-(deny-level) on `src-tauri`. The full policy — the strict anti-AI-slop clippy
+(deny-level) on `src-tauri`. The full policy - the strict anti-AI-slop clippy
 config, the per-test-module `#[expect]` idiom (no `#[allow]`, no `clippy.toml`),
-and which lints were deliberately deferred — is in
+and which lints were deliberately deferred - is in
 [docs/linting.md](docs/linting.md).
 
 `cargo fmt` is the formatter for the **`src-tauri` crate**, enforced in CI: the
 `check` job runs `cargo fmt --manifest-path src-tauri/Cargo.toml --check` and
 fails on any drift. Run `cargo fmt` to fix formatting before pushing; the
 `--check` in the Pre-Push Checklist then passes. Config is `src-tauri/rustfmt.toml`
-— stable rustfmt defaults, only `edition` pinned; do **not** add nightly-only keys
+- stable rustfmt defaults, only `edition` pinned; do **not** add nightly-only keys
 (they'd diverge local vs CI).
 
 **Scope:** the gate formats only the `stalagmight` package. The separate
 first-party `scripts/lib/slice-rs` helper crate and the vendored, locally-patched
 `src-tauri/vendor/compass_data` path-dependency are **not** gated (vendored code is
-left as-is on purpose) — don't assume `cargo fmt` touched them.
+left as-is on purpose) - don't assume `cargo fmt` touched them.
 
 The crate was adopted into rustfmt in one mechanical commit (recorded in
-`.git-blame-ignore-revs`, so `git blame` skips it — wire it locally once with
+`.git-blame-ignore-revs`, so `git blame` skips it - wire it locally once with
 `git config blame.ignoreRevsFile .git-blame-ignore-revs`). If a `cargo fmt` diff
 ever looks large, that's normal re-wrapping; the gate keeps it from drifting
 again. (Idiomatic-Rust / clippy cleanup is tracked separately → #147.)
 
 ### Playwright Tests Require a Headless Environment
 
-Only run `pnpm test:ui` when a display server is available or in a headless environment (e.g. `xvfb-run`). Do **not** run Playwright tests in a bare terminal without a display — they will fail.
+Only run `pnpm test:ui` when a display server is available or in a headless environment (e.g. `xvfb-run`). Do **not** run Playwright tests in a bare terminal without a display - they will fail.
 
 ### Dev Server
 

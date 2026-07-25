@@ -7,7 +7,7 @@ const MODES: readonly AppMode[] = ['survey', 'plan', 'export'];
  * Top-middle workspace switcher (#38, the workspace-mode reframe). Selects the top-level mode
  * for an open project: Survey (the editable survey workspace), Plan (the gas planner
  * over a read-only closure map), or Export (read-only closure map + export stub).
- * Lives in the Toolbar's center slot — the active *tool* is already shown by the
+ * Lives in the Toolbar's center slot - the active *tool* is already shown by the
  * highlighted toolbar button, so the center is free for the mode switch.
  *
  * No discard-on-switch guard: the gas store now persists across mode switches (#244),

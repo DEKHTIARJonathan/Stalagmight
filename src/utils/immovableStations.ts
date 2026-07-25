@@ -8,7 +8,7 @@ import { type SurveyData, STATION_FLAG_IS_ZERO_DATUM } from '../types/survey-dat
  * Reads the SoA `SurveyData` directly (section ids / indices / flags + the sparse
  * merged/closure maps) rather than a materialized `Station[]`. The move-tool memo
  * used to `stations.map(...)` the lazy proxy, which rebuilt AND retained the whole
- * ~89k-`Station` object graph while a move tool was active — undoing the binary
+ * ~89k-`Station` object graph while a move tool was active - undoing the binary
  * loader's lazy memory win (#customRender, Codex round 5). Only a `Map<string,
  * number>` of keys (plus the result set) is allocated here.
  *

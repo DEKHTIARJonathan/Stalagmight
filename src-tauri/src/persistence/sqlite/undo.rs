@@ -60,7 +60,7 @@ impl Database {
             ))
         })?;
 
-        // Collect compressed blobs first, then decompress in parallel —
+        // Collect compressed blobs first, then decompress in parallel -
         // the command_json and undo_data_json blobs of a single entry
         // are independent of each other, and on big undo entries (e.g.
         // a multi-MB project snapshot from a batch import) gzip
@@ -168,7 +168,7 @@ impl Database {
             ))
         })?;
 
-        // Parallel gzip decompression of the per-entry blobs — see
+        // Parallel gzip decompression of the per-entry blobs - see
         // load_undo_stack_with_timestamps for the rationale.
         let mut raw: Vec<(i64, Vec<u8>, Vec<u8>, Option<String>)> = Vec::new();
         for row in rows {

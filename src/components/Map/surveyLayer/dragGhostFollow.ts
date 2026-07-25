@@ -11,7 +11,7 @@
 // `sourcedata` gated by `isSourceLoaded`) ELASTICALLY OVERSHOOTS: with a bake
 // issued every frame there are always several in flight, so when an EARLIER bake
 // lands the displayed geometry advances but `isSourceLoaded` is still false (a
-// later bake is pending) — the rebase is skipped, the translate reference stays
+// later bake is pending) - the rebase is skipped, the translate reference stays
 // behind the displayed geometry, and displayed = cursor + (displayedBake -
 // staleRef) shoots past the cursor, snapping back only when motion stops and the
 // queue drains. The `sourcedata` event never says WHICH bake landed, so any

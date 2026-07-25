@@ -62,7 +62,7 @@ describe('routeOpenedFile', () => {
     expect(useUIStore.getState().activeDialog).toBe('unsaved-changes');
     expect(useUIStore.getState().dialogData).toMatchObject({ pendingOpenPath: '/cave/project.stalx' });
     expect(loadProject).not.toHaveBeenCalled();
-    // Handed off to the dialog — the source must survive for the deferred load.
+    // Handed off to the dialog - the source must survive for the deferred load.
     expect(peekProjectActionSource()).toBe('keyboard');
   });
 
@@ -100,7 +100,7 @@ describe('routeOpenedFile', () => {
   });
 });
 
-describe('routeOpenedFile — read-only-map import guard (#243)', () => {
+describe('routeOpenedFile - read-only-map import guard (#243)', () => {
   beforeEach(() => {
     useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
   });

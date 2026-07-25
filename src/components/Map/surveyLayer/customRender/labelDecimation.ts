@@ -7,7 +7,7 @@
  * section (`isFirstInSection`). Section names and comments are NOT decimated.
  *
  * REVEAL-ZOOM REWORK (deliberate stock-parity break): the stock bands are
- * `5 -> 2 -> 1`, which are NON-NESTED — `{index % 5 == 0}` is NOT a subset of
+ * `5 -> 2 -> 1`, which are NON-NESTED - `{index % 5 == 0}` is NOT a subset of
  * `{index % 2 == 0}` (index 5, 15, 25 ... are kept at z15 but vanish at z16),
  * so the visible set is not monotone in zoom. That non-monotonicity is part of
  * the user's "labels disappear when I zoom in" complaint. We replace the bands
@@ -20,7 +20,7 @@
  * into the per-label REVEAL ZOOM (`labelReveal.ts`): {@link decimationAdmitZoom}
  * is the minimum zoom at which a label passes the nested filter, and the reveal
  * pass takes the max of it and the collision-clearance zoom. The shader then
- * only compares the live zoom against the baked `a_reveal_zoom` — one float, no
+ * only compares the live zoom against the baked `a_reveal_zoom` - one float, no
  * modulus, monotone by construction. See §5/§6 of the design.
  */
 import { LABEL_KIND, type LabelKind } from './labelShaders';
@@ -34,7 +34,7 @@ export const DECIM_BAND_FINE_ZOOM = 18;
 
 /**
  * Decimation modulus N for shot / station labels at `zoom`, using the NESTED
- * chain (see the module header — a deliberate break from the non-monotone stock
+ * chain (see the module header - a deliberate break from the non-monotone stock
  * `5 -> 2 -> 1`):
  *   - `[minzoom, 16)` -> 4 (every 4th; nested replacement for the stock 5)
  *   - `[16, 18)`      -> 2 (every 2nd)
@@ -79,7 +79,7 @@ export function decimationTier(ordinal: number): 0 | 1 | 2 {
 }
 
 /**
- * The minimum zoom at which a label passes decimation — the floor of its reveal
+ * The minimum zoom at which a label passes decimation - the floor of its reveal
  * zoom (`labelReveal.ts` takes `max(admitZoom, collisionClearanceZoom)`). A
  * first-in-section station label and every non-decimating kind (section names,
  * comments) are admitted at the kind's `minzoom`; otherwise the nested tier sets
@@ -105,7 +105,7 @@ export function decimationAdmitZoom(
 }
 
 /**
- * Whether a label is thinned OUT by decimation at a given modulus — the CPU
+ * Whether a label is thinned OUT by decimation at a given modulus - the CPU
  * predicate the reveal pass and the nested-monotonicity tests share. A
  * first-in-section station label always survives; a modulus <= 1 shows all.
  * (With the nested moduli this is monotone in zoom: as the modulus drops

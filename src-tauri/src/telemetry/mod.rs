@@ -2,10 +2,10 @@
 //!
 //! Always compiled, but the real implementation is behind the `telemetry` Cargo
 //! feature flag. When disabled, all public methods are empty no-ops that the
-//! compiler eliminates entirely — zero runtime cost.
+//! compiler eliminates entirely - zero runtime cost.
 //!
 //! Design:
-//! - Session-level anonymous counters only — no PII
+//! - Session-level anonymous counters only - no PII
 //! - Opt-in via config (`general.telemetry_enabled`)
 //! - Buffers to disk when offline, retries on next flush
 //! - Periodic flush every 60s (low-frequency-only batches every 10 min) + flush on app close
@@ -47,7 +47,7 @@ const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 // ── Payload type ─────────────────────────────────────────────────────
 
 /// Self-describing wire payload (v3): event names are sent verbatim as a
-/// `{name: count}` map. Serialized as JSON and gzipped on the wire — and also
+/// `{name: count}` map. Serialized as JSON and gzipped on the wire - and also
 /// the on-disk buffer format for offline retry, so the two are identical.
 #[cfg(feature = "telemetry")]
 #[derive(Debug, Serialize, Deserialize)]
@@ -74,7 +74,7 @@ struct TelemetryInner {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TelemetryCollector — real implementation (feature = "telemetry")
+// TelemetryCollector - real implementation (feature = "telemetry")
 // ══════════════════════════════════════════════════════════════════════
 
 #[cfg(feature = "telemetry")]
@@ -216,7 +216,7 @@ impl TelemetryCollector {
             let payload: TelemetryPayload = match serde_json::from_str(&content) {
                 Ok(p) => p,
                 Err(_) => {
-                    // Corrupt file — remove it
+                    // Corrupt file - remove it
                     let _ = fs::remove_file(&path);
                     continue;
                 }
@@ -230,7 +230,7 @@ impl TelemetryCollector {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TelemetryCollector — no-op stub (feature != "telemetry")
+// TelemetryCollector - no-op stub (feature != "telemetry")
 // ══════════════════════════════════════════════════════════════════════
 
 #[cfg(not(feature = "telemetry"))]

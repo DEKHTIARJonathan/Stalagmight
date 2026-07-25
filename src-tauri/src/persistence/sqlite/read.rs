@@ -12,7 +12,7 @@ use super::Database;
 
 impl Database {
     /// Load a project from the database
-    /// Load only the metadata needed to populate `ProjectMetadata` — no
+    /// Load only the metadata needed to populate `ProjectMetadata` - no
     /// per-shot deserialization. Uses SQL COUNT/SUM aggregates and a
     /// single small read of `zero_datums` for GPS info. This replaces the
     /// "load entire project just to drop everything but metadata" path
@@ -122,7 +122,7 @@ impl Database {
         let station_count = (shot_count as usize) + (section_count as usize);
 
         // Trace where the time went, in ms, so we can spot which query
-        // is the bottleneck. Debug-level — fires for every recent
+        // is the bottleneck. Debug-level - fires for every recent
         // project on every metadata refresh, so default releases skip
         // it.  Enable with `RUST_LOG=stalagmight_lib=debug` when you
         // need to see it.
@@ -374,7 +374,7 @@ impl Database {
                             temperature: row.get(16)?,
                             // `uuid` column was added in schema v6; pre-v6
                             // rows return NULL here.  Treat NULL and empty
-                            // string the same — the next save mints a
+                            // string the same - the next save mints a
                             // fresh UUID and persists it.
                             uuid: row.get::<_, Option<String>>(17)?.filter(|s| !s.is_empty()),
                         },
@@ -388,8 +388,8 @@ impl Database {
                     // single non-finite (NaN/inf) value would otherwise propagate
                     // through the offset cascade and break the whole survey. The
                     // degenerate-but-finite result is localized and visible. (Our own
-                    // save can't write NaN — SQLite coerces it to NULL, which the
-                    // NOT NULL columns reject — so this guards inf, hand-edited DBs,
+                    // save can't write NaN - SQLite coerces it to NULL, which the
+                    // NOT NULL columns reject - so this guards inf, hand-edited DBs,
                     // and any future nullable geometry column.)
                     if shot.sanitize_non_finite() {
                         sanitized_shots += 1;
@@ -397,7 +397,7 @@ impl Database {
                     if let Some(&idx) = section_by_id.get(&section_id) {
                         sections[idx].shots.push(shot);
                     }
-                    // (rows for unknown sections are silently dropped —
+                    // (rows for unknown sections are silently dropped -
                     // matches the legacy `WHERE section_id = ?` filter
                     // which never returned orphan rows in the first place.)
                 }
@@ -560,7 +560,7 @@ impl Database {
         for (i, s) in sections.iter().enumerate() {
             section_index_cache.insert(s.id, i);
         }
-        // Same for merge adjacency — the first compute_station_coordinates
+        // Same for merge adjacency - the first compute_station_coordinates
         // call hammers get_merged_section_ids and would otherwise pay the
         // O(N) linear fallback on every BFS step.
         let mut merge_adjacency_cache: HashMap<u32, Vec<u32>> = HashMap::new();
@@ -939,7 +939,7 @@ impl Database {
     }
 
     /// Load the per-project validation config (#57). Returns `None` for legacy
-    /// projects that predate the feature — either no stored `validation` row, or
+    /// projects that predate the feature - either no stored `validation` row, or
     /// a project_settings table that doesn't exist at all (open_existing() skips
     /// migrations and pre-#57 .stalx files predate the table). `None` lets the
     /// caller seed from the live global config (the "defaults for new projects")

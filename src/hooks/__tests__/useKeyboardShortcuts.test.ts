@@ -46,7 +46,7 @@ describe('isNonModifierShortcut (via normalizeShortcut)', () => {
 });
 
 describe('buildShortcutMap logic', () => {
-  // Exercises the REAL buildShortcutMap (imported above) — a previous local
+  // Exercises the REAL buildShortcutMap (imported above) - a previous local
   // replica had drifted (it was missing `quit`), so the test couldn't guard the
   // real action list. Testing the real function means dropping an action from it
   // now fails here.

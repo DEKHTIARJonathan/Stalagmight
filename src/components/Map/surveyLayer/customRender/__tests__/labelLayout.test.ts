@@ -263,7 +263,7 @@ describe('LABEL_KIND_LAYOUT parity table', () => {
 });
 
 describe('ShapeCache', () => {
-  it('returns the SAME ShapedLabel object for a repeated (kind, text) — no re-shaping', () => {
+  it('returns the SAME ShapedLabel object for a repeated (kind, text) - no re-shaping', () => {
     // A counting rasterizer proves the atlas is only touched on a cache MISS.
     let rasterCalls = 0;
     const atlas = new GlyphAtlas({

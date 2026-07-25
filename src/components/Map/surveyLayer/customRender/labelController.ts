@@ -6,7 +6,7 @@
  * independently"). SurveyLayer constructs one of these alongside the geometry
  * controller and calls `sync(...)` after each flush.
  *
- * SOLE renderer (no gate): the custom label layer is now the only label path —
+ * SOLE renderer (no gate): the custom label layer is now the only label path -
  * `sync()` always builds/enables it and hides the five stock text layers. It is
  * an independent sibling of the geometry layer (labels anchor from `SurveyData`,
  * not the geometry buffers), so it enables / fails / rebuilds on its own. There
@@ -15,7 +15,7 @@
  * `setStockLabelVisibility` restore path survives only for the non-fatal
  * `destroy()` teardown (a later stage deletes the stock label layers).
  *
- * SCOPE (Phase 3): ALL FIVE kinds — shot labels, station labels, section names,
+ * SCOPE (Phase 3): ALL FIVE kinds - shot labels, station labels, section names,
  * station comments, shot comments. It builds every kind's descriptors, hides the
  * five stock text layers while active, and drives each kind's visibility via a
  * shader uniform (the `setShow*` setters). Reference-shot hiding and the
@@ -24,19 +24,19 @@
  *
  * SCOPE: the build is VIEWPORT-SCOPED with a per-label REVEAL ZOOM
  * (`labelReveal.ts`) that folds the screen-space declutter AND the zoom-band
- * decimation into one float per label — the min live zoom at which it draws.
+ * decimation into one float per label - the min live zoom at which it draws.
  * Only anchors inside the padded viewport build; below the label-build zoom
  * (13.5/13 hysteresis) only the cheap section names build (down to their own
  * minzoom 10), below 10 nothing. The reveal pass runs synchronously on every
- * `sync()` (edits stay immediate — the whole point of this project); labels are
+ * `sync()` (edits stay immediate - the whole point of this project); labels are
  * emitted up to `buildZoom + EMIT_SLACK` so a modest zoom-in needs no rebuild at
  * all (the shader admits more labels per frame as the live zoom rises). A camera
  * settle only rebuilds when the padded viewport is EXITED (pan / zoom-out) or the
- * live zoom passes `buildZoom + EMIT_SLACK/2` (deep zoom-in) — zoom-in otherwise
+ * live zoom passes `buildZoom + EMIT_SLACK/2` (deep zoom-in) - zoom-in otherwise
  * needs no rebuild, which is the core latency fix. ADAPTIVE EMIT sharpens this at
  * high zoom: when the viewport-scoped candidate set is small (`ADAPTIVE_EMIT_MAX`)
  * the build emits it IN FULL (reveal ladder to the app max zoom) so a zoom-in is
- * ENTIRELY rebuild-free — the emitted slack window only bounds vertices in the
+ * ENTIRELY rebuild-free - the emitted slack window only bounds vertices in the
  * crowded low-zoom case. A per-kind / reference toggle
  * stays off the render loop: it flips the uniform and reruns the reveal pass
  * (cheap reveal-only re-upload), never a buffer rebuild.
@@ -113,7 +113,7 @@ const LABEL_BUILD_ZOOM = 13.5;
 const LABEL_DROP_ZOOM = 13;
 /** Section names are cheap (1 per section) and orienting, so they follow their
  *  own `minzoom` (10, the stock `survey-labels` layer) rather than the expensive
- *  band — they still show at z10..13.5. Below 10 the shader hides them anyway. */
+ *  band - they still show at z10..13.5. Below 10 the shader hides them anyway. */
 const SECTION_NAME_MIN_ZOOM = LABEL_KIND_STYLE[LABEL_KIND.SECTION_NAME].minzoom;
 /** Padded-viewport margin as a fraction of the viewport span, applied to EACH
  *  side (0.5 → the build box is 2× the viewport per axis, a half-screen margin
@@ -132,20 +132,20 @@ const NO_KINDS: ReadonlySet<LabelKind> = new Set();
 
 // ─── Phase 5: dim + drag-hide interaction state ──────────────────────────────
 
-/** Anchored / immovable dim set — the SAME shape the geometry controller takes
+/** Anchored / immovable dim set - the SAME shape the geometry controller takes
  *  ({@link CustomDimState}), so SurveyLayer pushes one state to both. */
 const EMPTY_DIM: CustomDimState = {
   anchoredSectionIds: new Set<number>(),
   immovableStationFeatureIds: new Set<number>(),
   immovableShotFeatureIds: new Set<number>(),
 };
-/** Drag-exclusion set — the SAME shape the geometry controller takes
+/** Drag-exclusion set - the SAME shape the geometry controller takes
  *  ({@link CustomRenderExclusion}); dragged features' labels hide. */
 const EMPTY_EXCLUSION: CustomRenderExclusion = {};
 
 /** The single comment picked up during `move_comment` (C3). `type` selects the
  *  comment kind; `id` is the station index (station comment) or shot id (shot
- *  comment) within `sectionId` — the exact identity SurveyLayer.setHiddenComment
+ *  comment) within `sectionId` - the exact identity SurveyLayer.setHiddenComment
  *  receives. That one comment's label is collapsed (LABEL_FLAG.COMMENT_HIDE) so
  *  only the cursor-following tag shows during pickup. */
 export interface HiddenComment {
@@ -157,7 +157,7 @@ export interface HiddenComment {
 /** The padded viewport rect (anchor-relative mercator) used for the build set,
  *  the UNPADDED viewport rect (anchor-relative mercator) used for the "did the
  *  camera exit coverage?" test, and the world-pixel scale (CSS px per unit
- *  anchor-relative mercator at the current zoom) the reveal pass needs — all
+ *  anchor-relative mercator at the current zoom) the reveal pass needs - all
  *  derived from ONE `map.getBounds()` read. `null` when the map cannot supply
  *  bounds / a canvas (unit-test fakes), in which case the build skips viewport
  *  scoping + reveal (whole-survey, every label visible). */
@@ -216,7 +216,7 @@ export class SurveyLabelController {
   private readonly layerId: string;
   private layer: SurveyCustomLabelLayer | null = null;
   private active = false;
-  /** The glyph atlas — created once the font resolves (or injected in tests). */
+  /** The glyph atlas - created once the font resolves (or injected in tests). */
   private atlas: GlyphAtlas | null = null;
   private lastData: LabelRenderData | null = null;
   private lastThemeColors: MapThemeColors | null = null;
@@ -281,7 +281,7 @@ export class SurveyLabelController {
   private lastEmitSlack = EMIT_SLACK;
   /** Whether the last build was BOUNDED (candidate set too large to emit in
    *  full). Only a bounded build can run out of emitted slack on a zoom-in, so
-   *  the zoom-in slack rebuild ({@link needsRebuild} clause 2) is gated on this —
+   *  the zoom-in slack rebuild ({@link needsRebuild} clause 2) is gated on this -
    *  an adaptive (emit-all) build never schedules a pointless zoom-in rebuild.
    *  Defaults true (defensive before the first build). */
   private lastEmitBounded = true;
@@ -320,7 +320,7 @@ export class SurveyLabelController {
     this.installHook();
     // Camera-settle viewport rebuild (§4): re-scope + re-collide once the camera
     // stops. Coalesced, never per frame, never mid-animation. Both events route
-    // here (a zoom fires moveend too — coalescing collapses the pair). Guarded
+    // here (a zoom fires moveend too - coalescing collapses the pair). Guarded
     // for unit-test fakes without an event emitter.
     this.boundCameraSettle = () => this.onCameraSettle();
     this.map.on?.('moveend', this.boundCameraSettle);
@@ -338,7 +338,7 @@ export class SurveyLabelController {
           // stock label fallback anymore, so no labels can be drawn this session.
           // Building an INERT atlas would enable the layer while drawing ZERO
           // glyphs, so leave `this.atlas` null (sync() stays a no-op), latch fatal
-          // so a later sync() bails, and SURFACE the failure — otherwise every
+          // so a later sync() bails, and SURFACE the failure - otherwise every
           // section / station / shot / comment label silently disappears.
           console.warn('[customRender] label font unavailable; labels disabled this session');
           this.fatal = true;
@@ -359,13 +359,13 @@ export class SurveyLabelController {
     return this.active;
   }
 
-  /** Build/refresh the label layer, all five kinds (the sole label path — no
+  /** Build/refresh the label layer, all five kinds (the sole label path - no
    *  gate). */
   sync(params: LabelSyncParams): void {
     // A destroyed (unmounted) or fatal (dead GL) controller never rebuilds.
     if (this.destroyed || this.fatal) return;
     this.pendingParams = params;
-    if (!this.atlas) return; // font not resolved yet — build on resolve.
+    if (!this.atlas) return; // font not resolved yet - build on resolve.
     const data = this.build(params);
     if (!this.active) this.enable(data);
     else {
@@ -397,7 +397,7 @@ export class SurveyLabelController {
     this.kindVisible[kind] = visible;
     // The toggle itself is a pure uniform flip (the shader shows/hides the kind
     // with no rebuild). It also changes the collision CANDIDATE set, so re-run
-    // the reveal pass + re-upload the reveal buffer — a toggled-off kind stops
+    // the reveal pass + re-upload the reveal buffer - a toggled-off kind stops
     // occupying declutter space and a toggled-on kind is decluttered against
     // immediately. rerunReveal no-ops without a world-pixel scale (unit-test
     // fakes / below-gate), leaving the pure-uniform flip.
@@ -477,7 +477,7 @@ export class SurveyLabelController {
     // Adaptive emit: a small viewport-scoped set is emitted IN FULL (ladder to
     // the app max zoom) so a zoom-in never needs a rebuild; a large set keeps the
     // bounded slack horizon to cap the emitted vertex count. `descriptors.length`
-    // is the viewport-scoped candidate count (pre reveal-filter) — the upper
+    // is the viewport-scoped candidate count (pre reveal-filter) - the upper
     // bound on emitted labels, so thresholding it directly bounds the vertices.
     let emitBounded = false;
     let emitSlack = EMIT_SLACK;
@@ -552,7 +552,7 @@ export class SurveyLabelController {
    * The full per-label flag byte = STATIC bits (FIRST_IN_SECTION / REFERENCE /
    * ALL_REFERENCE, from the descriptor) OR the dynamic interaction bits: DIM
    * (anchored / immovable) and DRAG_HIDE (a move tool is dragging its feature).
-   * Decluttering is NOT a flag anymore — it lives in the per-label reveal zoom —
+   * Decluttering is NOT a flag anymore - it lives in the per-label reveal zoom -
    * so a flags-only refresh (dim / drag) never disturbs the declutter and vice
    * versa. One place both the build emit and the flags-only refresh compute the
    * byte, so they never diverge.
@@ -623,7 +623,7 @@ export class SurveyLabelController {
    * follow the station set, shot-owned follow the shot set, and either follows a
    * whole-section exclusion.
    *
-   * SECTION NAMES now drag-hide too, for every AFFECTED section — a DELIBERATE
+   * SECTION NAMES now drag-hide too, for every AFFECTED section - a DELIBERATE
    * break from stock parity (stock left `survey-labels` out of the drag
    * hide-layers, so a section name stayed pinned at the OLD anchor while the
    * geometry moved, reading as stuck). A whole-section (segment) drag hides the
@@ -637,7 +637,7 @@ export class SurveyLabelController {
     const sid = desc.sectionId;
     if (sid === undefined) return false;
     // Whole-section (segment) drag: the entire section translates, so every label
-    // of the section hides — section name included.
+    // of the section hides - section name included.
     if (sectionIds?.has(sid) === true) return true;
     switch (desc.kind) {
       case LABEL_KIND.STATION_LABEL:
@@ -672,13 +672,13 @@ export class SurveyLabelController {
   /**
    * Re-run the reveal pass over the retained (emitted) viewport set with the
    * CURRENT candidate inputs (kind toggles, reference-hide) and re-upload just
-   * the reveal-zoom buffer — no reshape / reproject / recolor / rebuild. Used
+   * the reveal-zoom buffer - no reshape / reproject / recolor / rebuild. Used
    * when a toggle changes the collision candidate set so the declutter updates
    * off the render loop (a toggled-off kind frees space; a toggled-on kind is
    * decluttered against immediately). No-op without a world-pixel scale
-   * (unit-test fakes / below-gate builds) — the toggle stays a pure uniform flip
+   * (unit-test fakes / below-gate builds) - the toggle stays a pure uniform flip
    * there. Note: labels that were NOT emitted (reveal past the horizon at build
-   * time) can only reappear at the next settle / edit rebuild — an accepted deep
+   * time) can only reappear at the next settle / edit rebuild - an accepted deep
    * approximation, since freed space beyond the emit slack is rare and a camera
    * nudge rebuilds.
    */
@@ -729,7 +729,7 @@ export class SurveyLabelController {
    * Point the label layer at (or off, with null) the active drag's hidden feature
    * set (SurveyLayer.setDragExclusion). Cheap flags-only refresh; state stored so
    * a mid-drag build / re-enable reproduces it. The dragged features' labels
-   * collapse via DRAG_HIDE — the synchronous GPU flag that makes the stock
+   * collapse via DRAG_HIDE - the synchronous GPU flag that makes the stock
    * LabelRestoreController deferral unnecessary under the gate (§8).
    */
   setDragHide(exclusion: CustomRenderExclusion | null): void {
@@ -739,7 +739,7 @@ export class SurveyLabelController {
 
   /**
    * Hide (or clear, with null) the single comment picked up during move_comment
-   * (SurveyLayer.setHiddenComment). Cheap flags-only refresh — the one matching
+   * (SurveyLayer.setHiddenComment). Cheap flags-only refresh - the one matching
    * comment label collapses via LABEL_FLAG.COMMENT_HIDE so only the
    * cursor-following tag shows; state stored so a mid-pickup build / re-enable
    * reproduces it. Mirrors {@link setDragHide}. (C3)
@@ -779,11 +779,11 @@ export class SurveyLabelController {
 
   /**
    * The padded viewport rect (build set), the UNPADDED viewport rect (exit test)
-   * — both anchor-relative mercator — and the world-pixel scale (CSS px per unit
+   * - both anchor-relative mercator - and the world-pixel scale (CSS px per unit
    * anchor-relative mercator at the current zoom), all from one
    * `map.getBounds()`. Rotation + pitch are disabled app-wide (north-up, 0°
    * pitch) and mercator is isotropic, so the reveal pass scales the world-pixel
-   * scale by `2^Δzoom` for other ladder zooms — no per-label `map.project`.
+   * scale by `2^Δzoom` for other ladder zooms - no per-label `map.project`.
    * `null` when the map cannot supply bounds / a canvas (unit-test fakes → no
    * viewport scoping, no reveal).
    */
@@ -822,8 +822,8 @@ export class SurveyLabelController {
    * rebuild EVALUATION (never per frame); the deferred callback skips if the
    * camera is still animating (a chained ease) and otherwise rebuilds only when
    * {@link needsRebuild} says the emitted set no longer covers the view. A plain
-   * zoom-in (superset already emitted) does nothing — the shader admits more
-   * labels per frame from their reveal zooms — which is the core latency fix.
+   * zoom-in (superset already emitted) does nothing - the shader admits more
+   * labels per frame from their reveal zooms - which is the core latency fix.
    */
   private onCameraSettle(): void {
     if (!this.active || this.viewportRebuildScheduled) return;
@@ -831,7 +831,7 @@ export class SurveyLabelController {
     this.scheduleRebuild(() => {
       this.viewportRebuildScheduled = false;
       if (!this.active) return;
-      if (this.map.isMoving?.()) return; // still animating — the next settle re-evaluates
+      if (this.map.isMoving?.()) return; // still animating - the next settle re-evaluates
       if (this.needsRebuild()) this.rebuildViewport();
     });
   }
@@ -841,10 +841,10 @@ export class SurveyLabelController {
    * rebuild is warranted. True when: the padded built viewport was EXITED (a pan
    * or a zoom-OUT grows the on-screen bounds past it); OR the last build was
    * BOUNDED and the live zoom rose past `buildZoom + EMIT_SLACK/2` (a deep
-   * zoom-IN would soon run out of the emitted slack — moot for an adaptive
+   * zoom-IN would soon run out of the emitted slack - moot for an adaptive
    * emit-all build, which reached the ceiling); OR the expensive-kinds hysteresis
    * band was crossed (the set of kinds to build changed). A plain zoom-in within
-   * the slack (or any zoom-in after an adaptive build) returns false — no
+   * the slack (or any zoom-in after an adaptive build) returns false - no
    * rebuild, the reveal-zoom shader handles admission. Rebuilds defensively when
    * it cannot read the camera (no bounds / zoom).
    */
@@ -855,7 +855,7 @@ export class SurveyLabelController {
     if (!vpCtx || this.builtViewport === null) return true;
     // 1. Camera exited the padded built viewport (pan / zoom-out).
     if (!rectContains(this.builtViewport, vpCtx.bounds)) return true;
-    // 2. Zoom-in past the emitted slack window — ONLY for a bounded build. An
+    // 2. Zoom-in past the emitted slack window - ONLY for a bounded build. An
     //    adaptive (emit-all) build already emitted every reachable label to the
     //    ceiling, so a zoom-in has nothing more to gain and never rebuilds here.
     if (
@@ -902,7 +902,7 @@ export class SurveyLabelController {
     this.map.addLayer(layer);
     if (layer.isDisabled()) {
       // FATAL: the custom label layer cannot draw (no WebGL2 / shader link
-      // failure). There is NO stock fallback — remove the dead layer and route
+      // failure). There is NO stock fallback - remove the dead layer and route
       // to the error state instead of restoring stock labels.
       const reason = layer.getDisabledReason() ?? 'unknown';
       console.warn(
@@ -929,7 +929,7 @@ export class SurveyLabelController {
     console.info('[customRender] label layer disabled');
   }
 
-  /** Remove the custom label layer (the sole label renderer — no stock to
+  /** Remove the custom label layer (the sole label renderer - no stock to
    *  restore). Safe when already inactive. Non-fatal teardown only (destroy). */
   private teardown(): void {
     this.setActive(false);
@@ -969,7 +969,7 @@ export class SurveyLabelController {
    * FATAL teardown: remove the dead label layer WITHOUT restoring or
    * republishing the stock label layers, latch {@link fatal} so a later sync()
    * bails, and surface the error via {@link onFatal}. Deliberately does NOT fire
-   * `onActiveChange(false)` — that would drive SurveyLayer to republish the stock
+   * `onActiveChange(false)` - that would drive SurveyLayer to republish the stock
    * label VT groups, exactly the fallback this stage removes.
    */
   private tearDownFatal(reason: string): void {

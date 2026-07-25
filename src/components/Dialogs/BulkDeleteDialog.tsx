@@ -13,7 +13,7 @@ import { setSource, trackDialogComplete } from '../../utils/telemetry';
 /**
  * Confirm + impact dialog for deleting a contiguous range of shots (#95).
  * Opened by the data table when >1 real shot is selected. Interior ranges offer
- * a choice — split the section in two (keeps both ends in place) or close the
+ * a choice - split the section in two (keeps both ends in place) or close the
  * gap (shift the downstream survey). Prefix/suffix ranges only shift. Splitting
  * drops any zero datum / comment on a dropped interior station (warned below);
  * a gap-close that would drop a datum is blocked instead.
@@ -62,7 +62,7 @@ export default function BulkDeleteDialog() {
   const fmt = (s: StationRef) => formatStationId(s.section_id, s.station_index);
   // The preview is the only source of the datum/comment/shift-blocked warnings,
   // so keep the destructive actions disabled until it resolves (loaded or
-  // errored) — otherwise a fast click could confirm before the warning renders.
+  // errored) - otherwise a fast click could confirm before the warning renders.
   const previewReady = impact !== null || impactError !== null;
 
   // Prefill split names for interior ranges (mirrors the single-shot dialog).
@@ -99,11 +99,11 @@ export default function BulkDeleteDialog() {
     startStationIndex !== undefined &&
     endStationIndex !== undefined &&
     sectionId !== undefined
-      ? `Delete ${shotCount} shots (stations ${formatStationId(sectionId, startStationIndex)}–${formatStationId(sectionId, endStationIndex)} in ${sectionName ?? `Section ${sectionId}`}).`
+      ? `Delete ${shotCount} shots (stations ${formatStationId(sectionId, startStationIndex)}-${formatStationId(sectionId, endStationIndex)} in ${sectionName ?? `Section ${sectionId}`}).`
       : `Delete ${shotCount ?? 0} shots.`;
 
   const finish = (split: boolean) => {
-    // Split keeps the original section as "A" — re-select it; otherwise clear.
+    // Split keeps the original section as "A" - re-select it; otherwise clear.
     if (split && sectionId !== undefined) {
       setSelection({ type: 'section', sectionId });
     } else {
@@ -170,7 +170,7 @@ export default function BulkDeleteDialog() {
           <p className="text-text-secondary text-sm">
             These shots are in the middle of the section. Split keeps both ends in place; closing
             the gap shifts the downstream survey. The relationship changes below cover closing the
-            gap — the split keeps the stations at each end and their connections.
+            gap - the split keeps the stations at each end and their connections.
           </p>
         )}
 

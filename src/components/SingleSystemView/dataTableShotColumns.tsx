@@ -39,7 +39,7 @@ export interface ShotColumnContext {
   geometryReadOnly: boolean;
   isShotFrozen: (sectionId: number, shotIndex: number) => boolean;
   getShotWarnings: (sectionId: number, shotId: number) => ProjectWarning[];
-  /** Map a grid row index to its index in the section's shots array — `null`
+  /** Map a grid row index to its index in the section's shots array - `null`
    *  for draft rows (grid rows interleave drafts with the real shots). */
   shotIndexAt: (gridRowIndex: number) => number | null;
   /** Toggle a shot's reference flag (the inline dot control). */
@@ -186,7 +186,7 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
         );
       },
     },
-    // Raw identifiers (read-only, hidden by default) — for cross-referencing and
+    // Raw identifiers (read-only, hidden by default) - for cross-referencing and
     // copying out alongside the data.
     {
       key: 'section_id',
@@ -200,7 +200,7 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       header: t('dataTable.columns.shotIdShort'),
       width: 60,
       align: 'right',
-      // The shot sub-portion of the displayed id — the 1-based position after
+      // The shot sub-portion of the displayed id - the 1-based position after
       // the ':' in the pill, not the internal row id. Drafts have none yet.
       getValue: (_r, rowIndex) => {
         const shotIndex = shotIndexAt(rowIndex);

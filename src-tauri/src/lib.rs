@@ -216,7 +216,7 @@ const TILE_FETCH_RETRY_DELAYS: [Duration; 2] =
 /// HTTP 4xx/5xx are NOT retried since the server understood the request.
 fn is_retryable_error(err: &ureq::Error) -> bool {
     match err {
-        ureq::Error::StatusCode(_) => false, // Server responded — don't retry
+        ureq::Error::StatusCode(_) => false, // Server responded - don't retry
         _ => true, // Transport errors (DNS, timeout, connection reset, etc.)
     }
 }
@@ -721,7 +721,7 @@ fn derive_tile_from_parent(
         .ok_or_else(|| "Overzoom scale overflow".to_string())?;
 
     // Use decoded image cache to avoid redundant JPEG decoding.
-    // When overzooming 2 levels, 16 child tiles share the same parent — caching
+    // When overzooming 2 levels, 16 child tiles share the same parent - caching
     // the decoded DynamicImage saves ~15 redundant decodes (~5ms each).
     let img = {
         let mut cache = DECODED_IMAGE_CACHE
@@ -1173,7 +1173,7 @@ pub fn run() {
                             )
                         });
 
-                    // Notify connectivity changes (debounced — only emits on state transitions)
+                    // Notify connectivity changes (debounced - only emits on state transitions)
                     if had_network_success {
                         tile_fetch_stats_notify.notify_transport_success(&app_handle);
                     } else if had_network_error {
@@ -1181,7 +1181,7 @@ pub fn run() {
                     }
 
                     // Tile-consumption telemetry (#31): one event per SERVED tile, tagged by
-                    // provider — `tile.fetch.<provider>` for a fresh network pull (provider
+                    // provider - `tile.fetch.<provider>` for a fresh network pull (provider
                     // consumption) vs `tile.cache.<provider>` for one served from the local
                     // cache (incl. the stale offline fallback). Uses the PER-REQUEST
                     // `network_hit` (not the shared stats diff, which concurrent requests

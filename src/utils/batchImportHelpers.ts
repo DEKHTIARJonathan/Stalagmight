@@ -71,7 +71,7 @@ export function findOverlapForStation(
   confirmedOverlaps: Map<number, ConfirmedOverlapInfo>,
   fullPool: CrossSectionSuggestion[],
 ): ConfirmedOverlapInfo | null {
-  // 1. Check confirmed overlap — the merge station determines the deleted zone boundary
+  // 1. Check confirmed overlap - the merge station determines the deleted zone boundary
   const confirmed = confirmedOverlaps.get(sectionIndex);
   if (confirmed) {
     const isFront = confirmed.importStationIndex === 0;
@@ -81,7 +81,7 @@ export function findOverlapForStation(
     if (inDeletedZone) return confirmed;
   }
 
-  // 2. Fall back to suggestion pool — for unconfirmed overlaps ALL overlap shots
+  // 2. Fall back to suggestion pool - for unconfirmed overlaps ALL overlap shots
   //    are deleted, so the boundary is at the edge of the overlap region.
   for (const s of fullPool) {
     if (s.importSectionIndex !== sectionIndex) continue;
@@ -219,7 +219,7 @@ export function redirectDeletedTargets(
       depth++;
 
       if (overlap.targetType === 'existing' && overlap.existingSectionId != null) {
-        // Redirect to existing section — end of chain
+        // Redirect to existing section - end of chain
         conn.targetType = 'existing';
         conn.existingSectionId = overlap.existingSectionId;
         conn.existingStationIndex = newStation;
@@ -227,7 +227,7 @@ export function redirectDeletedTargets(
         delete conn.targetImportStationIndex;
         break;
       } else if (overlap.targetImportIndex != null) {
-        // Redirect to another import section — continue chain
+        // Redirect to another import section - continue chain
         targetIdx = overlap.targetImportIndex;
         targetStation = newStation;
       } else {

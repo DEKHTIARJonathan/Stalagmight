@@ -12,7 +12,7 @@ use ts_rs::TS;
 /// sentinel (same idiom as `ThemeMode::Unknown`), normalized back to
 /// `SessionOnly` so an unrecognized TOML value never blocks loading. `Plaintext`
 /// is the headless-Linux escape hatch; the warned confirmation that *sets* it is
-/// #205 Settings — Track C only honors the persisted preference.
+/// #205 Settings - Track C only honors the persisted preference.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -30,7 +30,7 @@ pub enum TokenFallback {
 
 /// SpeleoDB connection settings (#183 read-only spike).
 ///
-/// The auth token is **never** stored here — it lives in the OS keychain (or a
+/// The auth token is **never** stored here - it lives in the OS keychain (or a
 /// plaintext escape hatch / in-memory session fallback); see
 /// `crate::speleodb::auth`. At runtime the `DEV_SPELEODB_URL` env var overrides
 /// `endpoint`. The full Settings-tab UI binding is #205.
@@ -50,7 +50,7 @@ pub struct SpeleoDbConfig {
     pub token_fallback: TokenFallback,
     /// [Track C] (#187/D-B10/D-B19): allow an `http://` endpoint to a PUBLIC host.
     /// Off by default. Relaxes ONLY the public-http scheme block in
-    /// `speleodb::tls::enforce` (Track A #187) — NEVER TLS cert verification
+    /// `speleodb::tls::enforce` (Track A #187) - NEVER TLS cert verification
     /// (self-signed / internal CAs stay rejected). Pre-wired for #205 Settings;
     /// D-B19's scheme reject lives in `tls.rs`, not here.
     #[serde(default)]

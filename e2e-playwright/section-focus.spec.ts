@@ -57,7 +57,7 @@ async function getSectionIdByName(page: Page, name: string): Promise<number> {
 
 /**
  * Enter focus mode via the dedicated per-row focus button (revealed on hover).
- * Double-clicking a row now only zooms to the section — focus is button-only.
+ * Double-clicking a row now only zooms to the section - focus is button-only.
  */
 async function enterFocus(page: Page, sectionId: number): Promise<void> {
   const row = page.locator(`[data-testid="section-row-${sectionId}"]`);

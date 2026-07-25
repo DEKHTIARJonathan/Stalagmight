@@ -16,14 +16,14 @@ struct CommandIntegrity {
     /// needs the post-command geometry reconcile. Pure metadata/lifecycle edits
     /// cannot, so they skip it.
     affects_geometry: bool,
-    /// Can introduce a dangling/out-of-range cross-reference — by removing a
-    /// referenced entity or renumbering station indices — and so needs the
+    /// Can introduce a dangling/out-of-range cross-reference - by removing a
+    /// referenced entity or renumbering station indices - and so needs the
     /// (expensive) whole-project rollback snapshot to reject corruption at the
     /// source. Geometry-only commands add valid refs or shift offsets but cannot
     /// dangle a reference, so they skip the serialize.
     can_dangle_refs: bool,
     /// Can REMOVE connectivity and strand a section so its only attachment is a
-    /// loop closure — which must then be converted to a merge (issue #8). Commands
+    /// loop closure - which must then be converted to a merge (issue #8). Commands
     /// that add or keep connectivity are excluded (a move must leave an inert
     /// closure independent).
     can_orphan_closures: bool,
@@ -33,7 +33,7 @@ impl AppState {
     /// Declare every command's integrity-relevant capabilities in one exhaustive
     /// match, so adding a [`Command`] variant FORCES a decision here (the compiler
     /// rejects a non-exhaustive match) rather than silently defaulting across three
-    /// separate allow/deny lists — where a miss fails open: a skipped rollback
+    /// separate allow/deny lists - where a miss fails open: a skipped rollback
     /// snapshot commits corruption, a missing reconcile leaves merges drifted, and
     /// a missing orphan-closure conversion leaves a phantom loop closure.
     /// Whether a command is a lifecycle pass-through that the read-only edit gate
@@ -41,7 +41,7 @@ impl AppState {
     /// Autosave (a `SaveProject`) must keep working on a read-only remote project,
     /// and opening/closing/creating/merging are not "edits of the open project".
     /// An exhaustive `match` (like `command_integrity`) forces a deliberate choice
-    /// for every new `Command` variant — anti-fail-open: a new mutating variant
+    /// for every new `Command` variant - anti-fail-open: a new mutating variant
     /// defaults to gated.
     fn is_lifecycle_passthrough(cmd: &Command) -> bool {
         use Command::*;
@@ -121,7 +121,7 @@ impl AppState {
             // must NOT run the reconcile epilogue. Classifying them GEOMETRY_ONLY
             // would heal an already-drifted project as a side effect of a comment
             // edit, while their undo (restore the previous comment) does not invert
-            // that geometry change — an asymmetric undo.
+            // that geometry change - an asymmetric undo.
             | SetStationComment { .. }
             | MoveComment { .. }
             | RepairIntegrity
@@ -162,10 +162,10 @@ impl AppState {
     /// Whether a *specific* command instance warrants the geometry-reconcile
     /// epilogue. Refines the per-variant [`CommandIntegrity::affects_geometry`]
     /// flag with a per-instance check for [`Command::UpdateShot`]: the same
-    /// command carries both geometry edits (length/azimuth/depth/pitch — must
-    /// reconcile) and pure metadata edits (comment/LRUD/reference — must NOT).
+    /// command carries both geometry edits (length/azimuth/depth/pitch - must
+    /// reconcile) and pure metadata edits (comment/LRUD/reference - must NOT).
     /// Running the reconcile on a metadata-only edit would heal an already-drifted
-    /// project as a side effect, while its undo only restores the metadata — the
+    /// project as a side effect, while its undo only restores the metadata - the
     /// same asymmetric undo that keeps `SetStationComment` INERT (see
     /// `command_integrity`). The variant flag stays `true` (it CAN move stations);
     /// only the epilogue decision is instance-aware.
@@ -173,7 +173,7 @@ impl AppState {
     /// A [`Command::Batch`] inherits the union of its members, so a metadata-only
     /// batch (a multi-cell comment/LRUD paste) skips the reconcile at BOTH the
     /// inner `execute_batch` epilogue and the outer `execute` epilogue that re-runs
-    /// it — otherwise the outer pass would heal the drift the inner pass left.
+    /// it - otherwise the outer pass would heal the drift the inner pass left.
     fn cmd_affects_geometry(cmd: &Command) -> bool {
         match cmd {
             Command::UpdateShot { updates, .. } => updates.touches_geometry(),
@@ -249,14 +249,14 @@ impl AppState {
     ///
     /// `pre_had_critical` is the project's critical state BEFORE the edit. Matching
     /// `guard_introduced_corruption` / `execute`, an already-critical project (one
-    /// opened with a dangling ref or non-finite shot — permitted; the banner offers
+    /// opened with a dangling ref or non-finite shot - permitted; the banner offers
     /// Repair) does not block an otherwise-clean collab apply / import: only NEWLY
     /// introduced corruption rolls back.
     /// `can_orphan_closures` mirrors [`CommandIntegrity::can_orphan_closures`]:
     /// only an operation that can SEVER connectivity can strand a section behind a
     /// sole-bridge closure (issue #8). Pure-addition paths (a fresh import) never
     /// create one, so they pass `false` and skip the O(closures × connectivity)
-    /// sole-bridge scan — which otherwise dominated a large import.
+    /// sole-bridge scan - which otherwise dominated a large import.
     pub(super) fn finalize_structural_edit(
         &self,
         pre_had_critical: bool,
@@ -285,7 +285,7 @@ impl AppState {
 
     /// Full integrity check for the open project: the violation messages
     /// (critical first; empty = sound) plus whether the project is currently
-    /// save-blocked (has unresolvable cross-references — the exact condition that
+    /// save-blocked (has unresolvable cross-references - the exact condition that
     /// refuses both manual and auto-save). The frontend uses `save_blocked` to keep
     /// the integrity banner non-dismissable while saving is blocked, so the Repair
     /// entry point can't be hidden on a project that can't be saved.
@@ -336,10 +336,10 @@ impl AppState {
         // Read-only edit gate (#191, D-B5): Repair mutates the project, so it is
         // gated on a read-only remote project. It returns IntegrityRepairResult
         // (not CommandResult), so it can't carry the EDIT_DISABLED code; instead
-        // return `changed: false` and log — the FE treats changed:false as
+        // return `changed: false` and log - the FE treats changed:false as
         // "nothing happened" (it dirties only on changed). The coded-failure
         // surface for repair is #204's; #191 just refuses to mutate. (The
-        // integrity banner stays dismissable for non-blocking corruption — see
+        // integrity banner stays dismissable for non-blocking corruption - see
         // OPEN-3/D-B5.)
         if self.guard_mutation("Repair integrity").is_err() {
             tracing::info!(
@@ -390,8 +390,8 @@ impl AppState {
         let after = self.integrity_violation_messages().len();
         // Record an undo entry (before -> after) so the user can revert the repair.
         // Only when it actually changed the project, so a no-op repair doesn't add
-        // a spurious history entry. Undo restores the pre-repair (corrupt) state —
-        // which the save guard still refuses to persist — and redo re-applies the
+        // a spurious history entry. Undo restores the pre-repair (corrupt) state -
+        // which the save guard still refuses to persist - and redo re-applies the
         // fix; both go through the snapshot-pair restore, never re-executing.
         //
         // `changed` mirrors that same before != after condition: it is the honest
@@ -427,7 +427,7 @@ impl AppState {
         // MergeProjects) always pass through (autosave must not be blocked).
         // `execute_move_comment` and `apply_collab_changes` are reached via this
         // `execute()` (early `return self.execute_move_comment(..)` and the
-        // `ApplyCollabChanges` arm), so they inherit this guard — see the
+        // `ApplyCollabChanges` arm), so they inherit this guard - see the
         // chokepoint enumeration test (`gate_rejects_every_mutation_entrypoint`).
         if !Self::is_lifecycle_passthrough(&cmd) {
             if let Err(f) = self.guard_mutation(&cmd.description()) {
@@ -463,7 +463,7 @@ impl AppState {
         let integrity = Self::command_integrity(&cmd);
 
         // Snapshot before a ref-removing/renumbering command so a result that
-        // introduces dangling references can be rejected and rolled back —
+        // introduces dangling references can be rejected and rolled back -
         // corruption must not enter through the command path (#17). Only those
         // commands can dangle a ref, so geometry-only commands (moves, merges,
         // datums) skip the expensive whole-project serialize (#8).
@@ -477,7 +477,7 @@ impl AppState {
             } else {
                 None
             };
-        // If the project is ALREADY corrupt (loaded that way), don't block — the
+        // If the project is ALREADY corrupt (loaded that way), don't block - the
         // user repairs via the banner. We only reject commands that newly
         // introduce corruption into a clean project.
         let pre_had_critical = integrity_snapshot.is_some() && self.project_has_critical();
@@ -608,7 +608,7 @@ impl AppState {
         }
 
         // A command that REMOVES connectivity (delete shot/section, unmerge) can
-        // strand a section so its only attachment is a loop closure — which is
+        // strand a section so its only attachment is a loop closure - which is
         // then a merge, not a loop. Convert before reconciling offsets so the new
         // merge is solved immediately (#8). Scoped to removal commands so a move
         // still leaves an inert closure independent.
@@ -619,8 +619,8 @@ impl AppState {
         // Treat section offsets as derived: after any structural command,
         // reconcile geometry so no command path can leave merged stations
         // drifted (a no-op when nothing moved; skipped during bulk import). A
-        // metadata-only UpdateShot (comment/LRUD/reference) is excluded — see
-        // `cmd_affects_geometry` — so it can't silently heal drift with no undo.
+        // metadata-only UpdateShot (comment/LRUD/reference) is excluded - see
+        // `cmd_affects_geometry` - so it can't silently heal drift with no undo.
         if result.success && Self::cmd_affects_geometry(&cmd) {
             self.reconcile_geometry();
         }
@@ -658,7 +658,7 @@ impl AppState {
     /// edit (paste/fill) as a single undo unit: it keeps refs + connectivity
     /// intact, self-validates length/finiteness/frozen-geometry, and a geometry
     /// edit has the moved stations baked in by the batch epilogue's
-    /// `reconcile_geometry()` — which the epilogue runs only when the batch
+    /// `reconcile_geometry()` - which the epilogue runs only when the batch
     /// actually touches geometry (see `cmd_affects_geometry`), so a metadata-only
     /// UpdateShot batch (comment/LRUD/reference) commits WITHOUT reconciling.
     /// `SetStationComment` is still NOT allowed: as a whole it is INERT metadata
@@ -699,7 +699,7 @@ impl AppState {
         }
 
         // Whether the project was ALREADY corrupt before the batch (loaded that
-        // way) — captured against the pre-batch state so the guard below only
+        // way) - captured against the pre-batch state so the guard below only
         // rejects corruption the batch itself introduces.
         let pre_had_critical = self.project_has_critical();
 
@@ -729,7 +729,7 @@ impl AppState {
             section_ids.extend(result.section_ids);
         }
 
-        // Block corruption at the source — BEFORE pushing the undo entry. The
+        // Block corruption at the source - BEFORE pushing the undo entry. The
         // sub-commands ran via execute_without_undo (no per-command guard), so a
         // batch can strand a dangling reference; if we pushed the snapshot pair
         // first (as before) a later undo+redo would reinstate the corrupt state.
@@ -743,14 +743,14 @@ impl AppState {
         // Finalize structural side-effects BEFORE snapshotting for redo, mirroring
         // the per-command epilogue in execute(). A batch that strands a sole-bridge
         // closure must have the closure→merge conversion baked into the after-
-        // snapshot; otherwise undo→redo restores the pre-conversion topology — redo
-        // only reconciles geometry, it does NOT re-run the conversion — and the
+        // snapshot; otherwise undo→redo restores the pre-conversion topology - redo
+        // only reconciles geometry, it does NOT re-run the conversion - and the
         // merge is silently lost. The conversion stays unconditional: a batched
         // CreateLoopClosure can itself create the sole-bridge closure that needs it.
         //
         // The reconcile, however, is gated exactly as execute() gates its own (see
         // cmd_affects_geometry): a batch that touches no geometry (a multi-cell
-        // paste/fill of comments / LRUD / reference flags — all metadata-only
+        // paste/fill of comments / LRUD / reference flags - all metadata-only
         // UpdateShots) must NOT reconcile, or it would heal an already-drifted
         // project as a side effect of a metadata edit whose undo only restores the
         // metadata (the asymmetric-undo hazard that keeps SetStationComment out of
@@ -803,7 +803,7 @@ mod integrity_capability_tests {
     /// Locks the integrity-capability table (one command per profile). The
     /// exhaustive match in `command_integrity` makes a new variant a *compile*
     /// error; this guards against an existing variant being moved to the wrong
-    /// profile — especially the REMOVES group, where dropping `can_dangle_refs`
+    /// profile - especially the REMOVES group, where dropping `can_dangle_refs`
     /// would skip the rollback snapshot and let corruption be committed.
     #[test]
     fn command_integrity_profiles_are_stable() {
@@ -823,7 +823,7 @@ mod integrity_capability_tests {
         );
         // RepairIntegrity never runs through execute(); it is classified INERT.
         assert_eq!(caps(&Command::RepairIntegrity), (false, false, false));
-        // Comment edits are metadata-only — INERT, so a comment edit can't run the
+        // Comment edits are metadata-only - INERT, so a comment edit can't run the
         // reconcile epilogue (which would heal a drifted project with no undo).
         assert_eq!(
             caps(&Command::SetStationComment {
@@ -884,7 +884,7 @@ mod integrity_capability_tests {
             (true, false, false)
         );
         // UpdateShot shifts geometry (a measurement edit moves stations) but keeps
-        // refs valid and connectivity intact — it must reconcile, not be inert.
+        // refs valid and connectivity intact - it must reconcile, not be inert.
         assert_eq!(
             caps(&Command::UpdateShot {
                 section_id: 1,
@@ -898,7 +898,7 @@ mod integrity_capability_tests {
     /// The data-table grid commits multi-cell edits (paste/fill) as one batch →
     /// one undo. `UpdateShot` must be batch-allowed (the batch epilogue reconciles
     /// only when an edit in the batch actually touches geometry); `SetStationComment`
-    /// must NOT be (INERT metadata — it could never carry the geometry that
+    /// must NOT be (INERT metadata - it could never carry the geometry that
     /// justifies a batch, and batching it once ran the reconcile epilogue and could
     /// heal drift silently).
     #[test]
@@ -982,7 +982,7 @@ mod update_shot_clear_undo_tests {
     }
 
     /// The reverse direction: setting a previously-empty field must undo back
-    /// to empty — the captured previous value `Some(None)` has to survive the
+    /// to empty - the captured previous value `Some(None)` has to survive the
     /// `values_json` round-trip as `null` rather than fold into "no update".
     #[test]
     fn update_shot_set_on_empty_field_undoes_back_to_empty() {

@@ -1,4 +1,4 @@
-//! Pure SpeleoDB sync-engine logic — the data-loss-critical decisions, with no
+//! Pure SpeleoDB sync-engine logic - the data-loss-critical decisions, with no
 //! I/O.
 //!
 //! These functions take the SHAs / commit lists already fetched by the client
@@ -7,8 +7,8 @@
 //! branch exhaustively unit-testable offline, which is what the guardrail suite
 //! (#211) relies on.
 //!
-//! - [`fence`] — the base-SHA divergence fence (#192): BASE vs server tip.
-//! - [`classify_ancestry`] — guardrail-7 ancestry recovery (#193): after a push
+//! - [`fence`] - the base-SHA divergence fence (#192): BASE vs server tip.
+//! - [`classify_ancestry`] - guardrail-7 ancestry recovery (#193): after a push
 //!   whose confirmation was lost, did my edit actually land on the server?
 
 use std::collections::{HashMap, HashSet};
@@ -23,15 +23,15 @@ pub(crate) enum FenceOutcome {
     /// no remote change to reconcile; any local dirty edits are simply ours to
     /// push.
     UpToDate,
-    /// Server advanced beyond our BASE and we hold NO local edits — safe to
+    /// Server advanced beyond our BASE and we hold NO local edits - safe to
     /// fast-forward (pull the server state and re-stamp BASE).
     FastForward,
-    /// Server advanced beyond our BASE AND we hold un-pushed local edits — a
+    /// Server advanced beyond our BASE AND we hold un-pushed local edits - a
     /// genuine divergence. NEVER auto-resolved or overwritten; the caller
     /// surfaces it for the user to reconcile.
     Diverged,
     /// Anomalous: we hold a BASE commit but the server reports no tip at all
-    /// (e.g. a transient/empty response, or a vanished commit). Fail closed —
+    /// (e.g. a transient/empty response, or a vanished commit). Fail closed -
     /// the caller should re-fetch once before trusting it and must never assume
     /// it may overwrite the server.
     FailClosed,
@@ -46,17 +46,17 @@ pub(crate) enum FenceOutcome {
 /// standing between a stale local copy and silently clobbering someone else's
 /// push.
 ///
-/// - `base`  — our `speleo_link.base_commit_sha` (`None` = empty-repo BASE).
-/// - `tip`   — the server's current latest commit (`None` = server reports none).
-/// - `dirty` — `has_unpushed_edits`.
+/// - `base`  - our `speleo_link.base_commit_sha` (`None` = empty-repo BASE).
+/// - `tip`   - the server's current latest commit (`None` = server reports none).
+/// - `dirty` - `has_unpushed_edits`.
 #[must_use]
 pub(crate) fn fence(base: Option<&str>, tip: Option<&str>, dirty: bool) -> FenceOutcome {
     match (base, tip) {
         // base == tip (including the empty-repo None == None): nothing remote to
-        // reconcile. The dirty bit is orthogonal — those edits are ours to push.
+        // reconcile. The dirty bit is orthogonal - those edits are ours to push.
         (None, None) => FenceOutcome::UpToDate,
         (Some(b), Some(t)) if b == t => FenceOutcome::UpToDate,
-        // We based on a real commit but the server now reports none — anomalous,
+        // We based on a real commit but the server now reports none - anomalous,
         // never an invitation to overwrite.
         (Some(_), None) => FenceOutcome::FailClosed,
         // Server tip moved beyond our BASE: either (None -> Some) (the repo
@@ -76,7 +76,7 @@ pub(crate) fn fence(base: Option<&str>, tip: Option<&str>, dirty: bool) -> Fence
 /// lost, whether our edit landed on the server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AncestryOutcome {
-    /// The server tip is still our BASE — our push is NOT on the server. The
+    /// The server tip is still our BASE - our push is NOT on the server. The
     /// re-push is retry-safe.
     NotLanded,
     /// Our push landed: every commit between BASE (exclusive) and the tip is ours
@@ -85,7 +85,7 @@ pub(crate) enum AncestryOutcome {
     /// edit happened after the push began (`last_edit_at <= push_start_at`); a
     /// post-push edit is not in the landed commit, so the dirty bit must stay set.
     Landed { clear_dirty: bool },
-    /// A commit authored by someone else sits between BASE and the tip — a real
+    /// A commit authored by someone else sits between BASE and the tip - a real
     /// divergence. Never overwritten.
     Diverged,
     /// History we cannot reason about safely (a merge / multiple parents, a
@@ -107,11 +107,11 @@ pub(crate) enum AncestryOutcome {
 /// are identified purely by `author_email == my_email`; a second device editing
 /// the same project under the same account concurrently is out of scope.
 ///
-/// - `base` — our recorded BASE (`None` = empty-repo BASE).
-/// - `tip` — the server's current tip (`None` = server reports none).
-/// - `commits` — the project's linear revision history.
-/// - `my_email` — the authenticated user's email.
-/// - `last_edit_at` / `push_start_at` — RFC-3339 UTC timestamps gating whether
+/// - `base` - our recorded BASE (`None` = empty-repo BASE).
+/// - `tip` - the server's current tip (`None` = server reports none).
+/// - `commits` - the project's linear revision history.
+/// - `my_email` - the authenticated user's email.
+/// - `last_edit_at` / `push_start_at` - RFC-3339 UTC timestamps gating whether
 ///   the landed push captured all our edits (see [`AncestryOutcome::Landed`]).
 pub(crate) fn classify_ancestry(
     base: Option<&str>,
@@ -144,11 +144,11 @@ pub(crate) fn classify_ancestry(
             break;
         }
         let Some(c) = by_id.get(cursor).copied() else {
-            // A referenced commit is absent from the fetched history — we can't
+            // A referenced commit is absent from the fetched history - we can't
             // verify ancestry.
             return AncestryOutcome::FailClosed;
         };
-        // A merge (more than one parent) is non-linear — cannot reason safely.
+        // A merge (more than one parent) is non-linear - cannot reason safely.
         if c.parent_ids.len() > 1 {
             return AncestryOutcome::FailClosed;
         }
@@ -160,7 +160,7 @@ pub(crate) fn classify_ancestry(
             if base.is_none() {
                 break; // empty-repo BASE: the root is the valid terminus.
             }
-            // We hold a BASE commit, but it is not in the tip's linear history —
+            // We hold a BASE commit, but it is not in the tip's linear history -
             // the histories diverged.
             return AncestryOutcome::Diverged;
         }
@@ -202,15 +202,15 @@ pub(crate) fn classify_ancestry(
 /// commit that **no other commit lists as a parent**.
 ///
 /// We CANNOT use the server's `latest_commit` field for this. It is computed as
-/// `commits.order_by("-authored_date").first()` — the max git *author* timestamp
-/// — and project-creation + the first upload land within the same second, so
+/// `commits.order_by("-authored_date").first()` - the max git *author* timestamp
+/// - and project-creation + the first upload land within the same second, so
 /// their author timestamps tie and the tie breaks arbitrarily (verified live: it
 /// returns the service-account ROOT, not the real HEAD; confirmed in the server
 /// source). The parent-id topology is unambiguous, so the fence resolves the tip
 /// from it instead.
 ///
 /// Returns `None` for an empty history OR an ambiguous one (zero or multiple
-/// leaves — e.g. a fork), so the caller fails closed rather than guessing.
+/// leaves - e.g. a fork), so the caller fails closed rather than guessing.
 pub(crate) fn tip_of(commits: &[RevisionCommit]) -> Option<&str> {
     let parents: HashSet<&str> = commits
         .iter()
@@ -222,7 +222,7 @@ pub(crate) fn tip_of(commits: &[RevisionCommit]) -> Option<&str> {
         .filter(|id| !parents.contains(id));
     let head = leaves.next()?;
     if leaves.next().is_some() {
-        return None; // more than one head (fork) — ambiguous, fail closed
+        return None; // more than one head (fork) - ambiguous, fail closed
     }
     Some(head)
 }
@@ -263,10 +263,10 @@ pub(crate) fn base_is_ancestor_of_tip(
             return true;
         }
         let Some(c) = by_id.get(cursor).copied() else {
-            return false; // tip (or an ancestor) absent from history — can't verify
+            return false; // tip (or an ancestor) absent from history - can't verify
         };
         if c.parent_ids.len() > 1 {
-            return false; // a merge is non-linear — refuse
+            return false; // a merge is non-linear - refuse
         }
         let Some(parent) = c.parent_ids.first() else {
             return false; // reached a root without meeting base → not an ancestor
@@ -279,7 +279,7 @@ pub(crate) fn base_is_ancestor_of_tip(
     }
 }
 
-/// Whether a confirmed-landed push captured all our local edits — i.e. no edit
+/// Whether a confirmed-landed push captured all our local edits - i.e. no edit
 /// happened after the push began. Biased to **false** (keep the dirty bit) on any
 /// uncertainty: a wrongly-kept dirty bit costs only a redundant no-op re-push,
 /// whereas a wrongly-cleared one drops un-pushed edits.
@@ -312,13 +312,13 @@ pub(crate) fn edits_captured_by_push(
 pub(crate) enum ReconcileVerdict {
     /// BASE == tip: nothing remote to reconcile.
     UpToDate,
-    /// Tip moved forward of a clean BASE AND BASE is a genuine ancestor of it —
+    /// Tip moved forward of a clean BASE AND BASE is a genuine ancestor of it -
     /// safe to pull + re-stamp.
     FastForward,
     /// Anything we must NOT auto-resolve: a real fork, a fast-forward target BASE
     /// is not an ancestor of (the eventually-consistent `latest_commit`), OR a
     /// server inconsistency (non-linear / multi-root / a recorded BASE with no
-    /// tip). All route to the divergence PROMPT — never a hard error, never an
+    /// tip). All route to the divergence PROMPT - never a hard error, never an
     /// overwrite (#193 b2: "fail closed to the divergence prompt").
     Diverged,
 }
@@ -388,7 +388,7 @@ pub(crate) fn plan_push(
                 AncestryOutcome::Landed { clear_dirty: true } => PushPlan::AdoptConfirmed,
                 AncestryOutcome::Landed { clear_dirty: false } => PushPlan::AdoptThenUpload,
                 // Stranger commit, a non-linear/multi-root inconsistency, or (not
-                // reachable on a moved tip) a not-landed push — never overwrite or
+                // reachable on a moved tip) a not-landed push - never overwrite or
                 // guess, route to the divergence prompt.
                 AncestryOutcome::Diverged
                 | AncestryOutcome::NotLanded
@@ -408,7 +408,7 @@ pub(crate) fn plan_push(
 /// project breaks that proxy (its commit reads as "mine" and could wrongly clear
 /// the dirty bit). The single-writer lock makes this rare, but if the server
 /// already reports a lock held by our OWN account when we open, a second session is
-/// live — surface a notice. Case-insensitive (the server may normalise email case);
+/// live - surface a notice. Case-insensitive (the server may normalise email case);
 /// a lock held by a DIFFERENT account is an ordinary contended-lock case, not this.
 #[must_use]
 pub(crate) fn concurrent_session_notice(active_mutex_user: Option<&str>, my_email: &str) -> bool {
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn up_to_date_ignores_dirty_when_tip_unmoved() {
         // We hold local edits but no one else pushed (tip == base): still
-        // UpToDate — the divergence fence is about REMOTE movement only.
+        // UpToDate - the divergence fence is about REMOTE movement only.
         assert_eq!(
             fence(Some("abc"), Some("abc"), true),
             FenceOutcome::UpToDate
@@ -799,7 +799,7 @@ mod tests {
 
     #[test]
     fn reconcile_empty_tip_with_recorded_base_routes_to_divergence() {
-        // FailClosed (recorded BASE, server reports no tip — incl. the multi-root
+        // FailClosed (recorded BASE, server reports no tip - incl. the multi-root
         // case where tip_of() yields None) folds into the divergence prompt.
         assert_eq!(
             reconcile_verdict(Some("b"), None, false, &[]),

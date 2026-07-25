@@ -20,7 +20,7 @@ export default function ErrorDialog() {
   const rawStack = dialogData.stackTrace;
   const stackTrace = typeof rawStack === 'string' ? rawStack : rawStack ? String(rawStack) : undefined;
   // Callers surfacing an actionable, non-bug condition (e.g. an import's
-  // deferred-save failure — see surfaceImportWarnings) set this to drop the
+  // deferred-save failure - see surfaceImportWarnings) set this to drop the
   // "report this as a bug" hint, which would otherwise contradict the message.
   const hideReportHint = Boolean(dialogData.hideReportHint);
 

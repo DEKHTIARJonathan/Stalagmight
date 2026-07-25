@@ -310,7 +310,7 @@ test.describe('Issue Severity coloring (#22)', () => {
 
   test('switching to the Warnings tab auto-enables severity coloring and leaving reverts it', async ({ page }) => {
     // The Warnings-tab auto-highlight is DERIVED from the tab (issue #57, finding
-    // #6) — it is never written to the store, so assert the rendered colors, not a
+    // #6) - it is never written to the store, so assert the rendered colors, not a
     // store flag. The persisted toggle stays off throughout.
     expect(await issueSeverityFlag(page)).toBe(false);
 

@@ -9,7 +9,7 @@ interface UseDismissableLayerOptions {
    *  outside click. Typically the trigger plus the portaled surface(s). */
   contains: Array<RefObject<HTMLElement | null>>;
   /** Subset whose own scrolling must NOT dismiss (the portaled, scrollable surface).
-   *  Scrolling anything else — the page behind a `position:fixed` portal — dismisses
+   *  Scrolling anything else - the page behind a `position:fixed` portal - dismisses
    *  so the portal's captured position can't go stale. Defaults to `contains`. */
   scrollSafe?: Array<RefObject<HTMLElement | null>>;
 }
@@ -24,7 +24,7 @@ interface UseDismissableLayerOptions {
  * differ (Select matches the trigger width; AppMenu caps height and adds a submenu).
  *
  * The latest `onDismiss` and ref arrays are read at event time via refs, so the
- * three listeners bind once per open — a fresh inline `onDismiss`/array each render
+ * three listeners bind once per open - a fresh inline `onDismiss`/array each render
  * doesn't re-bind them.
  */
 export function useDismissableLayer({

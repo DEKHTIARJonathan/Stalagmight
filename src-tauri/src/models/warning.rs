@@ -12,12 +12,12 @@ use crate::models::{SectionId, ShotId, StationRef};
 
 /// Warning code for a merge-connected group anchored by two or more zero datums.
 /// This is a structural over-constraint, not a tolerance the surveyor can wave
-/// off: it is an **error**, so (like every error) it is not ignorable — the only
+/// off: it is an **error**, so (like every error) it is not ignorable - the only
 /// resolutions are keeping one datum and removing the others, or going to the
 /// station to fix it. (See issue #57.)
 pub const MULTIPLE_DATUMS_PER_MERGE_COMPONENT: &str = "multiple_datums_per_merge_component";
 
-/// Canonical severity for a validation warning code — the SINGLE source of truth
+/// Canonical severity for a validation warning code - the SINGLE source of truth
 /// shared by `Validator::validate_shot`, the project-level over-anchoring check,
 /// the issue-severity map coloring, and the resolve/ignore gate. Errors are
 /// blocking data problems that must be fixed; warnings are tolerances the

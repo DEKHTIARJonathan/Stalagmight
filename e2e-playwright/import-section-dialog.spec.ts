@@ -5,7 +5,7 @@ import { setupMockedPage, createProject } from './helpers/app';
  * Coverage ported from the retired WDIO `import-section-dialog` spec (#120).
  *
  * The manual "Import / Create Section" dialog (`ImportDialog`, rendered for the
- * `import` dialog type — see App.tsx) has no other Playwright twin, so this is
+ * `import` dialog type - see App.tsx) has no other Playwright twin, so this is
  * its only mocked-tier coverage: it opens with the section-name field and the
  * Create / Cancel actions, the name field is wired, and Cancel closes it.
  */

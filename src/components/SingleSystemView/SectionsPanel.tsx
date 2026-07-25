@@ -27,7 +27,7 @@ const SECTION_FOCUS_TABLE_FRACTION = 0.3;
 
 // Delay before an external hover (e.g. skimming geometry on the map) scrolls the
 // hovered section's row into view. Debouncing avoids the list thrashing as the
-// pointer crosses many shots/stations in quick succession — it settles on the
+// pointer crosses many shots/stations in quick succession - it settles on the
 // section the pointer lands on. Un-hover restore stays immediate.
 const HOVER_SCROLL_DEBOUNCE_MS = 120;
 
@@ -49,7 +49,7 @@ const SECTION_ROW_ESTIMATED_HEIGHT = 56;
  * (lowest-index) mounted row. A focused row keeps the Tab stop via its own
  * `isFocused` path, so this returns `-1` when a MOUNTED row is focused. But a
  * focused index whose row scrolled out of the virtual window (unmounting it,
- * which does not reliably fire `blur`) must NOT suppress the default Tab stop —
+ * which does not reliably fire `blur`) must NOT suppress the default Tab stop -
  * otherwise no mounted row is tabbable and keyboard users are trapped out.
  */
 export function rovingDefaultTabIndex(
@@ -88,14 +88,14 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const editingBlocked = useEditingBlocked();
 
   // The row to highlight comes from any of: an explicit section hover (panel row /
-  // DetailPanel section link), or — for map hovers — the section that owns the
+  // DetailPanel section link), or - for map hovers - the section that owns the
   // currently hovered shot or station. Deriving in the panel keeps the map-driven
   // highlight out of `hoveredSectionId`, which is also consumed by the map's
   // section-wide highlighter.
   const effectiveHoveredSectionId: SectionId | null =
     hoveredSectionId ?? hoveredShot?.sectionId ?? hoveredStation?.section_id ?? null;
 
-  // Identity of the hovered GEOMETRY, not just its section — moving between two
+  // Identity of the hovered GEOMETRY, not just its section - moving between two
   // shots/stations of the SAME section still changes this, so the debounced
   // scroll re-arms and only fires once the pointer truly settles (mirrors the
   // precedence in effectiveHoveredSectionId above).
@@ -108,7 +108,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
           ? `station:${hoveredStation.section_id}:${hoveredStation.station_index}`
           : null;
 
-  // The section that owns the current selection — a directly selected section, or
+  // The section that owns the current selection - a directly selected section, or
   // the section of a selected shot/station (selected from the map, data table, or
   // details panel). The matching row is highlighted and scrolled into view so the
   // Sections panel always reflects what's selected elsewhere. Same mapping used by
@@ -211,14 +211,14 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // block: 'nearest' is a no-op when the row is already visible, so this
   // is silent for panel-internal hovers and only acts on external (map) hovers.
   //
-  // For external hovers (map / data table / details panel — the panel itself did
+  // For external hovers (map / data table / details panel - the panel itself did
   // not set the hover, so `lastHoveredIdRef` is null) we remember the scroll
   // position before the first auto-scroll and restore it once nothing is hovered
   // anywhere, so skimming other surfaces doesn't permanently move the list.
   useEffect(() => {
     const container = listContainerRef.current;
     if (effectiveHoveredSectionId === null) {
-      // Nothing hovered anywhere — undo any external-hover auto-scroll. Immediate
+      // Nothing hovered anywhere - undo any external-hover auto-scroll. Immediate
       // (the prior effect's cleanup already dropped any pending hover-scroll).
       if (preHoverScrollTopRef.current !== null && container) {
         container.scrollTop = preHoverScrollTopRef.current;
@@ -229,7 +229,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     const idx = sectionIndexById.get(effectiveHoveredSectionId) ?? -1;
     if (idx < 0) return;
     // Panel-internal row hovers (lastHoveredIdRef set) are the user already
-    // interacting with the list — don't capture/restore for those.
+    // interacting with the list - don't capture/restore for those.
     const isExternalHover = lastHoveredIdRef.current === null;
     // Debounce the reveal: skimming geometry on the map changes the hovered
     // section many times in quick succession; only scroll once it settles.
@@ -238,14 +238,14 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       // Skip while a DATA-TABLE dropdown is open (e.g. the section picker, whose
       // own option hovers drive this scroll): the move is invisible behind the
       // dropdown and the resulting scroll event would trip its outside-scroll
-      // guard and close it. Scoped to the data table — NOT a global
-      // `[data-dropdown-open]` — so an unrelated open menu/Select elsewhere in
+      // guard and close it. Scoped to the data table - NOT a global
+      // `[data-dropdown-open]` - so an unrelated open menu/Select elsewhere in
       // the app doesn't suppress a legitimate map-hover reveal. (position:fixed
       // dropdowns stay DOM descendants of the data table, so this still matches
-      // them.) Checked at fire time — the hover can be set before the dropdown
+      // them.) Checked at fire time - the hover can be set before the dropdown
       // opens.
       if (document.querySelector('[data-testid="data-table"] [data-dropdown-open]')) return;
-      // Capture the pre-hover scroll position right before we actually move it —
+      // Capture the pre-hover scroll position right before we actually move it -
       // NOT when the timer was armed. A skipped scroll (guard above, or a
       // non-external hover) then leaves preHoverScrollTopRef null, so a later
       // un-hover can't restore the list to a position this hover never moved it
@@ -271,8 +271,8 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
 
   // Scroll the selected section's row into view when the selection changes (a
   // shot/station/section selected from the map, data table, or details panel).
-  // Unlike the hover scroll, this is a persistent reveal — there's nothing to
-  // restore — so it's kept separate from the hover save/restore bookkeeping.
+  // Unlike the hover scroll, this is a persistent reveal - there's nothing to
+  // restore - so it's kept separate from the hover save/restore bookkeeping.
   // Keyed on the full `selection` (not just the owning section id): selecting
   // another shot of the SAME section (e.g. clicking rows in the data table)
   // must re-reveal the section row even though its id didn't change.
@@ -286,7 +286,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     if (selectedSectionId === null) return;
     const idx = sectionIndexById.get(selectedSectionId) ?? -1;
     if (idx < 0) return;
-    // A selection reveal wins over a pending (debounced) hover scroll — cancel it
+    // A selection reveal wins over a pending (debounced) hover scroll - cancel it
     // so it can't snap the list back to the hovered row 50ms later.
     if (hoverScrollTimerRef.current !== null) {
       clearTimeout(hoverScrollTimerRef.current);
@@ -295,7 +295,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     // Mounts the owning row (if virtualization has it unmounted) and brings it
     // into view; align:'auto' leaves an already-visible row untouched.
     rowVirtualizer.scrollToIndex(idx, { align: 'auto' });
-    // EVERY selection event re-anchors the panel here — including re-selecting
+    // EVERY selection event re-anchors the panel here - including re-selecting
     // the already-selected section. If it happened during an active external
     // hover (hover a shot, then click to select it), drop the pre-hover restore
     // so un-hovering stays on the selection rather than snapping back to where
@@ -309,9 +309,9 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     // Only handle left mouse button for mouse events
     if (e && e.button !== 0) return;
     setSource('sections-panel');
-    // Single click only selects — it must NOT move the map (reverts #64's
+    // Single click only selects - it must NOT move the map (reverts #64's
     // single-click-centers behaviour). Double-click enters focus mode, which is
-    // what frames the section — see handleSectionDoubleClick.
+    // what frames the section - see handleSectionDoubleClick.
     setSelection({
       type: 'section',
       sectionId: section.id,
@@ -425,7 +425,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     if (e.button !== 0) return;
     // Don't trigger if double-clicking nested controls (like the focus button)
     if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('button')) return;
-    // Select, then zoom/frame the section on the map — without entering focus
+    // Select, then zoom/frame the section on the map - without entering focus
     // mode (that's what the dedicated per-row focus button is for).
     handleSectionClick(section, e);
     triggerZoomToSection(section.id);
@@ -439,7 +439,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
 
   // Dedicated focus-mode entry button (replaces the old per-row delete control;
   // section deletion now lives in the right-click / long-press context menu).
-  // Single click selects the section and enters focus mode — the same outcome as
+  // Single click selects the section and enters focus mode - the same outcome as
   // double-clicking the row, but discoverable as an explicit affordance.
   const handleEnterFocusClick = useCallback((section: Section, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -578,7 +578,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
  * built once per surveyData change, replacing the former per-row
  * `surveyData.sections.find(...)` that made a panel open O(n^2). Given the
  * metadata, the shot range is read straight from the `shotLength` / `shotFlags`
- * typed arrays — it never touches `section.shots`, so the lazy Shot
+ * typed arrays - it never touches `section.shots`, so the lazy Shot
  * materialization stays cold (the Phase-A.5 memory optimization).
  *
  * Falls back to the legacy `section.shots` walk only on the unusual path where
@@ -606,7 +606,7 @@ function calculateSectionStats(
     }
     return { shotCount: meta.shotCount, length, referenceCount };
   }
-  // Legacy fallback — only hit during the JSON refresh window where
+  // Legacy fallback - only hit during the JSON refresh window where
   // `surveyData` may briefly be a stale legacy-converted copy. Same
   // behavior as before, just kept for safety.
   let length = 0;

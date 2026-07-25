@@ -243,7 +243,7 @@ describe('buildLabelBuffers output shape', () => {
     const b = buildLabelBuffers(descs, atlas);
     // All 4 verts of the single glyph share the label attributes. buildLabelBuffers
     // takes no reveal resolver, so the reveal zoom defaults to 0 (visible from any
-    // zoom — the whole-survey / no-projector fallback).
+    // zoom - the whole-survey / no-projector fallback).
     for (let v = 0; v < 4; v++) {
       expect(b.anchor[v * 2]).toBeCloseTo(0.1, 6);
       expect(b.anchor[v * 2 + 1]).toBeCloseTo(0.2, 6);

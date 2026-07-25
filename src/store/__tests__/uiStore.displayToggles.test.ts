@@ -240,8 +240,8 @@ describe('Display Toggle State', () => {
 
   // Depth and distance gradients both paint the shots layer; showing both at once
   // produced mixed coloring (depth-colored shots, distance-colored stations after
-  // a Shots toggle). They are mutually exclusive — enabling one disables the other
-  // — so the conflicting state is unreachable (#34).
+  // a Shots toggle). They are mutually exclusive - enabling one disables the other
+  // - so the conflicting state is unreachable (#34).
   describe('Distance/Depth Gradient Mutual Exclusion (#34)', () => {
     beforeEach(() => {
       useUIStore.setState(getCleanTestState());
@@ -346,7 +346,7 @@ describe('Display Toggle State', () => {
       expect(s.showIssueSeverity).toBe(false);
     });
 
-    it('is runtime-only — toggling it never persists a display setting', () => {
+    it('is runtime-only - toggling it never persists a display setting', () => {
       useUIStore.setState({ showIssueSeverity: false });
       useUIStore.getState().toggleIssueSeverity();
       expect(invoke).not.toHaveBeenCalledWith(
@@ -840,7 +840,7 @@ describe('Geometry Mode', () => {
 
   it('setView(global) resets showDevStats so the probe cannot strand over GlobalView', () => {
     // The Display toggle lives only in SingleSystemView, so leaving for GlobalView
-    // must clear it — otherwise the app-mounted probe lingers with no way to hide.
+    // must clear it - otherwise the app-mounted probe lingers with no way to hide.
     useUIStore.setState({ view: 'single', showDevStats: true });
     useUIStore.getState().setView('global');
     expect(useUIStore.getState().showDevStats).toBe(false);
@@ -860,7 +860,7 @@ describe('Plan/Export display isolation', () => {
     // Toggling in Plan takes effect immediately (the plan view re-renders).
     useUIStore.getState().toggleDisplay('showGrid');
     expect(useUIStore.getState().showGrid).toBe(true);
-    // Returning to Survey restores the pre-Plan survey value — Plan didn't touch it.
+    // Returning to Survey restores the pre-Plan survey value - Plan didn't touch it.
     useUIStore.getState().setAppMode('survey');
     expect(useUIStore.getState().showGrid).toBe(false);
   });

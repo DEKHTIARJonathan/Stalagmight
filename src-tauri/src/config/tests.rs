@@ -232,7 +232,7 @@ fn test_gas_config_normalize_clamps_reserve_profile() {
 
 #[test]
 fn test_gas_config_caps_oversized_stage_reserve() {
-    // A LARGE stage reserve only shrinks a stage's usable in-gas — the SAFE direction — so it is
+    // A LARGE stage reserve only shrinks a stage's usable in-gas - the SAFE direction - so it is
     // merely capped at the max (resetting it to the smaller default would be *less* conservative),
     // unlike the negative case which resets. A plausible value is preserved.
     let mut config = GasConfig {
@@ -259,12 +259,12 @@ fn test_gas_config_caps_oversized_stage_reserve() {
 #[test]
 fn test_gas_config_deserializes_with_reserve_profile_missing() {
     // Migration tolerance: an old config whose [gas] block predates reserve_profile (or omits
-    // some members) must still load, defaulting the missing pieces — not error.
+    // some members) must still load, defaulting the missing pieces - not error.
     let missing: GasConfig =
         toml::from_str("units = \"metric\"\n").expect("gas config without reserve_profile loads");
     assert_eq!(missing.reserve_profile, ReserveProfile::default());
 
-    // An old config carrying the RENAMED `turn_buffer_bar` key loads fine — the unknown key is
+    // An old config carrying the RENAMED `turn_buffer_bar` key loads fine - the unknown key is
     // ignored and stage_reserve_bar defaults (30). The new key is honoured when present.
     let legacy: GasConfig =
         toml::from_str("units = \"metric\"\n[reserve_profile]\nturn_buffer_bar = 20.0\n")
@@ -2530,7 +2530,7 @@ fn test_syntactic_highlighting_normalize_removes_empty_preset_maps() {
 #[test]
 fn test_panels_config_normalize_clamps_sizes() {
     // Out-of-range sizes (e.g. hand-edited or written by an older build) must be
-    // clamped to the same bounds the UI enforces while dragging — a degenerate 0
+    // clamped to the same bounds the UI enforces while dragging - a degenerate 0
     // would otherwise reload the panel collapsed/invisible.
     let mut p = PanelsConfig {
         sections_panel_width: 0,
@@ -2622,7 +2622,7 @@ fn speleodb_config_defaults_are_safe() {
     assert_eq!(config.token_fallback, TokenFallback::SessionOnly);
     assert!(!config.insecure_http);
     // An empty [speleodb] table (no fields) loads the same safe defaults, since
-    // both new fields are #[serde(default)] — existing configs load unchanged.
+    // both new fields are #[serde(default)] - existing configs load unchanged.
     let sdb: SpeleoDbConfig = toml::from_str("").expect("empty table loads");
     assert_eq!(sdb.token_fallback, TokenFallback::SessionOnly);
     assert!(!sdb.insecure_http);

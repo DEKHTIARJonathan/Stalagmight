@@ -66,9 +66,9 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
 
       // A partial-success import (new-project deferred save failed) returns
       // success WITH a "SYSTEM" save-failure warning. Surface ONLY that, before
-      // the optional orphan step, so "unsaved — save manually" isn't buried.
+      // the optional orphan step, so "unsaved - save manually" isn't buried.
       // Routine per-shot validation warnings (LONG_SHOT, …) also ride along on a
-      // successful import but are surfaced via the data-table UI — they must not
+      // successful import but are surfaced via the data-table UI - they must not
       // modal here or skip orphan placement (#110).
       if (finalizeDeferredSaveWarnings(result.warnings, 'compass-import', importUi)) {
         return;

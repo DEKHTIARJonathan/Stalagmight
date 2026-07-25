@@ -6,7 +6,7 @@ import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 
 /**
- * Shown when the OS denies filesystem access to a project file — most often
+ * Shown when the OS denies filesystem access to a project file - most often
  * because macOS reset previously-granted folder access after an update. Gives
  * actionable guidance instead of the misleading "corrupted database" / raw OS
  * error the user would otherwise see (#39).

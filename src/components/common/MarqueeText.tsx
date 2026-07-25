@@ -12,7 +12,7 @@ interface MarqueeTextProps {
 
 /**
  * Single-line text truncated with an ellipsis to fit its width; on hover the full
- * text scrolls (marquee) in place — no tooltip — for as long as the pointer stays
+ * text scrolls (marquee) in place - no tooltip - for as long as the pointer stays
  * over it. The scrolling copy is absolutely positioned, so it never widens its
  * container. For file paths use {@link ElidedPath} instead (smart path elision).
  */
@@ -27,7 +27,7 @@ export function MarqueeText({
   return (
     <span
       ref={containerRef}
-      // The ellipsis only applies at rest — while scrolling it would otherwise
+      // The ellipsis only applies at rest - while scrolling it would otherwise
       // stay pinned at the clip edge over the moving overlay.
       className={`relative block overflow-hidden whitespace-nowrap ${scrolling ? '' : 'text-ellipsis'} ${className}`}
       data-testid={dataTestId}

@@ -7,7 +7,7 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
  * `overscroll-behavior: none` so wheel/trackpad scroll can't chain up to the
  * document and rubber-band the window on macOS WKWebView.
  *
- * This guards the CSS contract — the macOS rubber-band itself is WKWebView-only
+ * This guards the CSS contract - the macOS rubber-band itself is WKWebView-only
  * and can't be reproduced in headless Chromium, so the behavioural check stays
  * a manual macOS step.
  */
@@ -31,13 +31,13 @@ test.describe('Scroll containment', () => {
       };
     });
 
-    // overscroll-behavior: none — stops wheel scroll from chaining to the window.
+    // overscroll-behavior: none - stops wheel scroll from chaining to the window.
     expect(styles.html.overscrollY).toBe('none');
     expect(styles.body.overscrollY).toBe('none');
-    // overflow: hidden — the document shell itself has no scroll range.
+    // overflow: hidden - the document shell itself has no scroll range.
     expect(styles.html.overflowY).toBe('hidden');
     expect(styles.body.overflowY).toBe('hidden');
-    // #root is covered by the same rule — guard it independently.
+    // #root is covered by the same rule - guard it independently.
     expect(styles.root).not.toBeNull();
     expect(styles.root?.overscrollY).toBe('none');
     expect(styles.root?.overflowY).toBe('hidden');

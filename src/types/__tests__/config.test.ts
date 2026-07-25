@@ -199,7 +199,7 @@ describe('defaultConfig structure', () => {
 
   describe('gas config', () => {
     // Pins defaultConfig.gas, which is now generated from Config::default()
-    // (src-tauri/src/config/gas.rs) via `pnpm gen:ipc-types` — see
+    // (src-tauri/src/config/gas.rs) via `pnpm gen:ipc-types` - see
     // src/types/ipc/defaultConfig.ts. Fails loudly if a regen changes these
     // values unintentionally.
     it('has correct gas defaults', () => {

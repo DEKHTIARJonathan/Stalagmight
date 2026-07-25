@@ -1968,7 +1968,7 @@ mod tests {
 
     #[test]
     fn test_content_hash_excludes_date() {
-        // Same shots, different dates — hash should be identical
+        // Same shots, different dates - hash should be identical
         let shots = vec![DmpShot {
             shot_type: DmpShotType::Standard,
             heading_in: 90.0,
@@ -2046,7 +2046,7 @@ mod tests {
     }
 
     // ========================================================================
-    // kb5.dmp regression tests (skip by default — requires fixture file)
+    // kb5.dmp regression tests (skip by default - requires fixture file)
     // ========================================================================
 
     /// Parse kb5.dmp and validate section structure, shot counts, and key shot data.

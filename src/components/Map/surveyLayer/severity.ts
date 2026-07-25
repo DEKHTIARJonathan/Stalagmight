@@ -4,9 +4,9 @@
  * Computes, per global shot index and per global station index, the highest
  * *unresolved* validation severity affecting that geometry:
  *
- *   0 = SEV_CLEAR    (green  — no unresolved issue)
- *   1 = SEV_WARNING  (yellow — only warnings)
- *   2 = SEV_ERROR    (red    — at least one error)
+ *   0 = SEV_CLEAR    (green  - no unresolved issue)
+ *   1 = SEV_WARNING  (yellow - only warnings)
+ *   2 = SEV_ERROR    (red    - at least one error)
  *
  * A shot's severity comes directly from its unresolved `ProjectWarning`s. A
  * station takes the MAX severity of every shot touching it, then that severity
@@ -71,7 +71,7 @@ export function computeIssueSeverity(
     if (sev > shotSeverity[g]!) shotSeverity[g] = sev;
   }
 
-  // (2) (sectionId, stationIndex) → global station index — mirrors features.ts.
+  // (2) (sectionId, stationIndex) → global station index - mirrors features.ts.
   const stationLookup = new Map<number, Map<number, number>>();
   for (let g = 0; g < data.stationCount; g++) {
     const sid = data.stationSectionIds[g]!;

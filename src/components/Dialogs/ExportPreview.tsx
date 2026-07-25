@@ -22,7 +22,7 @@ const PREVIEW_SIZE = 300;
 /**
  * Inline-SVG preview of the map export. Calls the backend's
  * `preview_svg_export` command (debounced) so the preview is the *exact*
- * markup the export will write — no separate rendering pipeline.
+ * markup the export will write - no separate rendering pipeline.
  */
 export default function ExportPreview({ options, fill = false }: ExportPreviewProps) {
   const project = useProjectStore((state) => state.project);
@@ -39,7 +39,7 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
     if (!project) {
       // Project closed (or never opened). Bump the seq so any earlier
       // in-flight `preview_svg_export` call's response is treated as
-      // stale and discarded — otherwise it'd repopulate the preview
+      // stale and discarded - otherwise it'd repopulate the preview
       // with SVG from a project that's no longer open.
       ++requestSeqRef.current;
       if (timeoutRef.current) {
@@ -96,7 +96,7 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
       }`}
       style={fill ? undefined : { width: PREVIEW_SIZE, height: PREVIEW_SIZE }}
     >
-      {/* Inline SVG — the backend output is `<?xml ...?><svg .../>`. The
+      {/* Inline SVG - the backend output is `<?xml ...?><svg .../>`. The
           wrapper div constrains the size; the SVG carries its own viewBox
           and scales to fit. */}
       {svg && (

@@ -1,5 +1,5 @@
 /**
- * Truth table for `isMapReadOnly` — the single predicate every "the survey map is
+ * Truth table for `isMapReadOnly` - the single predicate every "the survey map is
  * read-only right now" gate shares (toolbar controls, Delete/Import guards, the
  * mutating-tool reset). The load-bearing row is (Plan, measured): Plan/Export force
  * closureAdjusted, but that auto-reverts to measured on a no-closures project, so a

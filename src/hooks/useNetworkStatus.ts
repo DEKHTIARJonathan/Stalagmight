@@ -28,7 +28,7 @@ export function useNetworkStatus() {
     if (!isOnlineRef.current) {
       setOnline(true);
       triggerTileReload();
-      console.info('[useNetworkStatus] Online — tiles reloading');
+      console.info('[useNetworkStatus] Online - tiles reloading');
     }
   }, [setOnline, triggerTileReload]);
 
@@ -47,10 +47,10 @@ export function useNetworkStatus() {
     unlisteners.push(listen('tile-transport-success', () => goOnline()));
 
     const handleBrowserOnline = () => {
-      // Browser reports online — verify with backend
+      // Browser reports online - verify with backend
       invokeIpc<boolean>('get_network_status', undefined, { purpose: 'check network status' })
         .then((online) => { if (online) goOnline(); })
-        .catch(() => { /* ignore — tile events will confirm */ });
+        .catch(() => { /* ignore - tile events will confirm */ });
     };
     const handleBrowserOffline = () => goOffline();
 

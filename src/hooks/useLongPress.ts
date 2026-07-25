@@ -18,7 +18,7 @@ interface LongPressHandlers {
 
 /**
  * Hook for long-press detection on touch devices.
- * Only activates for `pointerType === 'touch'` — mouse events pass through untouched.
+ * Only activates for `pointerType === 'touch'` - mouse events pass through untouched.
  * After firing, prevents the subsequent synthetic click.
  */
 export function useLongPress(

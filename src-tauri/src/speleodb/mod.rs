@@ -1,15 +1,15 @@
-//! SpeleoDB integration — P0 read-only spike (#183).
+//! SpeleoDB integration - P0 read-only spike (#183).
 //!
 //! Proves the read-only half of the single-writer hand-off: log in, list
 //! projects, download a project "dump", extract the `.stalx`, and open it
-//! locally. No lock, no real push, no SpeleoLink persistence, no edit gate —
+//! locally. No lock, no real push, no SpeleoLink persistence, no edit gate -
 //! those are later issues (see the epic, #182).
 //!
 //! Layout:
-//! - [`client`] — the ureq HTTP surface (Bearer auth, retry/timeout idiom).
-//! - [`auth`]   — backend-only token storage (OS keychain + in-memory fallback).
-//! - [`dump`]   — ZIP dump classification + `.stalx` extraction.
-//! - [`models`] — serde DTOs + the IPC-facing summary types.
+//! - [`client`] - the ureq HTTP surface (Bearer auth, retry/timeout idiom).
+//! - [`auth`]   - backend-only token storage (OS keychain + in-memory fallback).
+//! - [`dump`]   - ZIP dump classification + `.stalx` extraction.
+//! - [`models`] - serde DTOs + the IPC-facing summary types.
 //!
 //! The orchestration that ties these to `AppState`/config/app-dirs lives in
 //! `core::state::speleodb`; the IPC commands are in `commands::speleodb`.
@@ -43,7 +43,7 @@ pub use models::{
 /// [`SpeleoDbError::Status`] without re-parsing message strings.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SpeleoDbError {
-    /// No token is available — the user is not logged in (or the token was dropped).
+    /// No token is available - the user is not logged in (or the token was dropped).
     #[error("not logged in to SpeleoDB")]
     NotAuthenticated,
     /// No endpoint is configured (no `DEV_SPELEODB_URL`, no saved config).
@@ -74,7 +74,7 @@ pub(crate) enum SpeleoDbError {
     /// hard error.
     #[error("this is an Ariane (.tml) project; adopt it to edit it in Stalagmight")]
     AdoptAriane,
-    /// The dump held more than one `.stalx` — ambiguous; fail closed.
+    /// The dump held more than one `.stalx` - ambiguous; fail closed.
     #[error("SpeleoDB contained multiple ambiguous .stalx files: {}", .0.join(", "))]
     AmbiguousDump(Vec<String>),
     /// A local filesystem error while extracting/writing.
@@ -93,7 +93,7 @@ pub(crate) enum SpeleoDbError {
     InvalidRevision,
     // [Track A] #187: the endpoint scheme/host failed the http private-network
     // policy (public `http://`, a missing/unknown scheme, or an unresolvable
-    // host). Non-retryable by construction — `tls::enforce` errors before any
+    // host). Non-retryable by construction - `tls::enforce` errors before any
     // request attempt, so `with_retry` never loops on it.
     #[error("refusing to use an insecure SpeleoDB endpoint: {endpoint}")]
     InsecureEndpoint { endpoint: String },
@@ -181,7 +181,7 @@ mod live_tests {
     //! HTTP) and skip when those are absent. See `docs/speleodb-dev-testing.md`.
     //!
     //! Env-var tiers (each test early-returns/skips cleanly when its tier's vars
-    //! are absent — they NEVER run in CI, there is no dev box there):
+    //! are absent - they NEVER run in CI, there is no dev box there):
     //! - **URL-only** (needs `DEV_SPELEODB_URL`): `live_bad_credentials_returns_400`,
     //!   `live_missing_auth_header_returns_403`, `live_dead_token_returns_403`,
     //!   `live_http_to_public_blocked` (the public-host block needs no box at all).
@@ -212,8 +212,8 @@ mod live_tests {
     }
 
     /// The SECOND account (a pre-provisioned, email-verified collaborator). It
-    /// can't be created over HTTP — the box enforces mandatory email
-    /// verification — so the two-account tests skip unless these are set.
+    /// can't be created over HTTP - the box enforces mandatory email
+    /// verification - so the two-account tests skip unless these are set.
     fn live_env2() -> Option<(String, String, String)> {
         Some((
             std::env::var("DEV_SPELEODB_URL").ok()?,
@@ -227,7 +227,7 @@ mod live_tests {
         "/../e2e/fixtures/fractal_plant_iter2.stalx"
     );
 
-    /// A **real** Ariane `.tml` (a ZIP archive — verified live: the server's
+    /// A **real** Ariane `.tml` (a ZIP archive - verified live: the server's
     /// `ArianeTMLFileProcessor` 400s a non-zip with "File is not a zip file").
     /// Tracks A/B/C do not generate a `.tml` (that is the #184/#196 render path),
     /// so the upload live tests seed with this known-good Ariane fixture to
@@ -387,7 +387,7 @@ mod live_tests {
         // `_cleanup` drops here → soft-deletes the test project.
     }
 
-    /// The `GET /user/` whoami returns the token owner's email — the basis for the
+    /// The `GET /user/` whoami returns the token owner's email - the basis for the
     /// token-paste login path deriving the email from the token instead of input.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* env (run with --ignored)"]
@@ -408,7 +408,7 @@ mod live_tests {
     }
 
     /// Two-account: a collaborator granted READ_ONLY sees the project with the
-    /// parsed `Permission::ReadOnly` label — the end-to-end check that the wire
+    /// parsed `Permission::ReadOnly` label - the end-to-end check that the wire
     /// format is the string label, not the integer the issues describe.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* + _EMAIL2/_PASSWORD2 (run with --ignored)"]
@@ -451,7 +451,7 @@ mod live_tests {
     }
 
     /// Two-account: a WEB_VIEWER cannot download the dump (needs ≥ READ_ONLY), so
-    /// the pull surfaces HTTP 403 — the contract the #203 "disable Open for
+    /// the pull surfaces HTTP 403 - the contract the #203 "disable Open for
     /// view-only rows" gating builds on.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* + _EMAIL2/_PASSWORD2 (run with --ignored)"]
@@ -507,7 +507,7 @@ mod live_tests {
         );
 
         // #188 C5 / D-B4: the download 403 above is AMBIGUOUS (a real read-only
-        // grant vs a dead token). The whoami probe disambiguates it — and this
+        // grant vs a dead token). The whoami probe disambiguates it - and this
         // WEB_VIEWER token is *alive*, so `GET /user/` returns 200 (resolves the
         // viewer's own email). The probe therefore KEEPS the token: a read-only
         // user is never logged out by the ambiguous-403 auto-drop. (Contrast
@@ -516,12 +516,12 @@ mod live_tests {
             .expect("a live WEB_VIEWER token must still resolve whoami (probe keeps it)");
         assert_eq!(
             whoami, email2,
-            "whoami should resolve the viewer's own email — proving the token is alive, not dead"
+            "whoami should resolve the viewer's own email - proving the token is alive, not dead"
         );
     }
 
     /// Two-account: when a different user holds the mutex, the owner's project
-    /// list shows that user as the lock holder — validating the
+    /// list shows that user as the lock holder - validating the
     /// `active_mutex.user` → `SpeleoProjectSummary::lock_holder` mapping.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* + _EMAIL2/_PASSWORD2 (run with --ignored)"]
@@ -577,7 +577,7 @@ mod live_tests {
     /// L4: a `GET /projects/` with **no** `Authorization` header is rejected with
     /// HTTP **403** (DRF "not authenticated on a protected endpoint with no
     /// credentials"). NOTE (verified live): a present-but-dead token is **also**
-    /// 403 (L5) — the status alone does not distinguish missing-vs-dead; only a
+    /// 403 (L5) - the status alone does not distinguish missing-vs-dead; only a
     /// whoami 200-vs-403 separates a valid token from a dead one. The typed client
     /// always sends a Bearer header, so this is a raw `ureq` call. Needs only
     /// `DEV_SPELEODB_URL`.
@@ -606,11 +606,11 @@ mod live_tests {
     }
 
     /// L5: a `GET /user/` (whoami) with a **junk/dead** token is rejected with HTTP
-    /// **403**, NOT 401 — verified against the live box. This is the DRF `401→403`
+    /// **403**, NOT 401 - verified against the live box. This is the DRF `401→403`
     /// downgrade the research flagged (D-B4): a `TokenAuthentication` that fails to
     /// resolve the token supplies no `WWW-Authenticate` challenge, so DRF answers
     /// 403. A *valid* token returns 200 (see `live_fetch_user_email…`), so a **403
-    /// from the whoami endpoint is the unambiguous dead-token signal** — no
+    /// from the whoami endpoint is the unambiguous dead-token signal** - no
     /// per-resource permission applies to `/user/`. Sent with the production
     /// `Bearer` scheme so it exercises the real client's dead-token path. Needs
     /// only `DEV_SPELEODB_URL`.
@@ -640,7 +640,7 @@ mod live_tests {
         assert_eq!(
             resp.status().as_u16(),
             403,
-            "the live box returns 403 (not 401) for a dead token — the DRF \
+            "the live box returns 403 (not 401) for a dead token - the DRF \
              downgrade; a whoami-403 is the dead-token signal"
         );
     }
@@ -648,7 +648,7 @@ mod live_tests {
     // ── L9 / L10 / L11: two-account permission + contention ─────────────────
 
     /// L9: a project the second user has **no grant** on does not even appear in
-    /// their `GET /projects/` list — and on any project they *can* see without a
+    /// their `GET /projects/` list - and on any project they *can* see without a
     /// grant the `permission` field is **ABSENT** (not `null`), parsing to `None`.
     /// We assert the structural invariant the wire format guarantees: when a
     /// project carries no permission the parsed field is `None` (absent ≡ null ≡
@@ -686,7 +686,7 @@ mod live_tests {
             "an un-granted project must NOT appear in the collaborator's list"
         );
         // Every project the collaborator can see carries a parsed permission OR
-        // None — never a parse error from a present-but-absent field. (The wire
+        // None - never a parse error from a present-but-absent field. (The wire
         // format omits the field entirely when there is no access; serde maps the
         // absent field to None.)
         for p in &projects {
@@ -698,7 +698,7 @@ mod live_tests {
     }
 
     /// L10: when the collaborator **holds the mutex**, the owner's acquire is
-    /// rejected with HTTP **400** (`mutex.py` contention) — explicitly NOT 423 /
+    /// rejected with HTTP **400** (`mutex.py` contention) - explicitly NOT 423 /
     /// 409 / 412. Pins the "no first-class lock-status codes" contract `map_status`
     /// relies on (lock contention is a plain 400).
     #[test]
@@ -748,7 +748,7 @@ mod live_tests {
     }
 
     /// L11: a collaborator with only READ_ONLY (no write permission) attempting to
-    /// acquire the mutex is rejected with HTTP **403** ("no write perm" fence) —
+    /// acquire the mutex is rejected with HTTP **403** ("no write perm" fence) -
     /// the contrast to contention's 400 (L10). `map_status(Acquire, 403) == Fence`.
     #[test]
     #[ignore = "hits a live SpeleoDB box; needs DEV_SPELEODB_* + _EMAIL2/_PASSWORD2 (run with --ignored)"]
@@ -862,7 +862,7 @@ mod live_tests {
     }
 
     /// #193: after an upload, `get_revisions` returns the project's LINEAR commit
-    /// history — at least our commit, authored by us, with the tip matching the
+    /// history - at least our commit, authored by us, with the tip matching the
     /// adopted hexsha and no merges. Validates the new `get_revisions` client + the
     /// linear-history contract the ancestry classifier (g7) assumes.
     #[test]
@@ -885,7 +885,7 @@ mod live_tests {
 
         // upload_auto adopts the TOP-LEVEL `hexsha` (the commit this push created),
         // not the nested `project.latest_commit` (which is max-authored-date and
-        // ties to the service-account root — see speleodb_server_head).
+        // ties to the service-account root - see speleodb_server_head).
         let hexsha = client::upload_auto(
             &url,
             &token,
@@ -913,14 +913,14 @@ mod live_tests {
                 c.parent_ids
             );
         }
-        // The TOPOLOGICAL leaf — the tip the fence trusts — must equal the commit
+        // The TOPOLOGICAL leaf - the tip the fence trusts - must equal the commit
         // upload_auto just created (NOT necessarily the server's latest_commit).
         assert_eq!(
             super::sync::tip_of(&history.commits),
             Some(hexsha.as_str()),
             "the revision-topology HEAD must equal the just-pushed hexsha"
         );
-        // That HEAD commit is authored by us — the property g7 ancestry keys off.
+        // That HEAD commit is authored by us - the property g7 ancestry keys off.
         let head = history
             .commits
             .iter()
@@ -938,7 +938,7 @@ mod live_tests {
     }
 
     /// L13: re-uploading the **identical** tree (no change since the last commit)
-    /// returns **304** — the benign "remote already at this state" outcome
+    /// returns **304** - the benign "remote already at this state" outcome
     /// `map_status(UploadAuto, 304) == UpToDate` models. A 304 is a non-2xx, so the
     /// production `upload_auto` surfaces it as `Status { status: 304, .. }`.
     #[test]
@@ -992,9 +992,9 @@ mod live_tests {
     }
 
     /// L14: a malformed `upload/auto` payload (a multipart that omits the required
-    /// `artifact` part, here a `message`-only form) is rejected with HTTP **400** —
+    /// `artifact` part, here a `message`-only form) is rejected with HTTP **400** -
     /// NOT 422 (verified live: this API answers 400 for malformed input across the
-    /// board — bad creds, non-zip, missing artifact). A 400 on upload has no
+    /// board - bad creds, non-zip, missing artifact). A 400 on upload has no
     /// first-class `map_status` row, so it correctly falls to the fail-closed
     /// default (`map_status(UploadAuto, 400) == Fatal`). The 422 row is kept as a
     /// defensive fail-closed mapping but is not the missing-artifact status. Sent
@@ -1028,7 +1028,7 @@ mod live_tests {
         client::acquire_lock(&url, &token, false, &cleanup.id).expect("acquire mutex");
 
         // A deliberately malformed multipart: only the message text part, NO
-        // `artifact` part — the server rejects it as a bad request → 400.
+        // `artifact` part - the server rejects it as a bad request → 400.
         let upload_url = api_url(&url, &format!("projects/{}/upload/auto/", cleanup.id));
         let resp = raw_agent()
             .put(&upload_url)
@@ -1106,7 +1106,7 @@ mod live_tests {
     // ── L15 / L16: the AUTO catch-all `.stalx` coupling + drift canary ──────
 
     /// L15: a `.stalx` pushed through `upload/auto` is stored **verbatim** by the
-    /// server's AUTO catch-all and comes back in the dump — located by its `.stalx`
+    /// server's AUTO catch-all and comes back in the dump - located by its `.stalx`
     /// **suffix**, never a hard-coded `misc/project.stalx` path (so it survives a
     /// server `TARGET_FOLDER` change). The bytes round-trip: the extracted `.stalx`
     /// opens as a real sqlite project.
@@ -1167,11 +1167,11 @@ mod live_tests {
         );
     }
 
-    /// L16 — SERVER-DRIFT CANARY (kept `#[ignore]` like the rest). TODAY the
+    /// L16 - SERVER-DRIFT CANARY (kept `#[ignore]` like the rest). TODAY the
     /// server's AUTO catch-all (`BaseFileProcessor`) **accepts and stores** a file
     /// with an unknown extension. This test asserts that *current* behavior: the
     /// upload of an unknown-extension artifact succeeds. If the server ever starts
-    /// **rejecting** unknown extensions, this test FAILS LOUDLY — that is the whole
+    /// **rejecting** unknown extensions, this test FAILS LOUDLY - that is the whole
     /// point. It is a tripwire on the `.stalx` catch-all coupling (D-T-stalx): the
     /// hand-off relies on the catch-all storing arbitrary extensions verbatim, so a
     /// behavior change here would silently break every push/pull. When this fails,
@@ -1202,7 +1202,7 @@ mod live_tests {
         };
         client::acquire_lock(&url, &token, false, &cleanup.id).expect("acquire mutex");
 
-        // An artifact with an unknown extension — what the AUTO catch-all is
+        // An artifact with an unknown extension - what the AUTO catch-all is
         // expected to accept TODAY.
         let dir = tempfile::tempdir().expect("tempdir");
         let blob = dir.path().join("mystery.zzz");
@@ -1227,12 +1227,12 @@ mod live_tests {
         // CANARY ASSERTION: today the AUTO catch-all ACCEPTS the unknown extension.
         // A 2xx (200 stored / 304 unchanged) is the documented current behavior.
         // If the server starts rejecting unknown extensions (4xx), this fails
-        // LOUDLY — the catch-all coupling has drifted; see the doc-comment.
+        // LOUDLY - the catch-all coupling has drifted; see the doc-comment.
         assert!(
             (200..400).contains(&status),
             "DRIFT: the AUTO catch-all rejected an unknown extension (HTTP {status}); \
              the .stalx hand-off relies on it storing arbitrary extensions verbatim \
-             — investigate the server processor allow-list before editing this test"
+             - investigate the server processor allow-list before editing this test"
         );
 
         if let Err(e) = client::release_lock(&url, &token, false, &cleanup.id) {
@@ -1244,7 +1244,7 @@ mod live_tests {
 
     /// L19: pointing the client at a **public** `http://` host is blocked **before
     /// any dial** with `SpeleoDbError::InsecureEndpoint` (the `tls::enforce`
-    /// policy) — unless `insecure_http` is set, in which case the request is
+    /// policy) - unless `insecure_http` is set, in which case the request is
     /// allowed to proceed (and fails for an unrelated reason, NOT InsecureEndpoint).
     /// Needs no box: the block happens client-side before the network. Uses a
     /// documentation/test public host so no real public SpeleoDB is contacted.
@@ -1276,7 +1276,7 @@ mod live_tests {
 
     /// L20: a `GET /projects/` to the real **private** box over plain
     /// `http://10.10.0.220:8000/` (RFC-1918) is **allowed** by the #187 policy
-    /// without `insecure_http` — `classify_addr` puts the box in the private range.
+    /// without `insecure_http` - `classify_addr` puts the box in the private range.
     /// The whole single-account round-trip already exercises this, so here we just
     /// assert the http private endpoint is not rejected by the TLS policy.
     #[test]
@@ -1327,7 +1327,7 @@ mod live_tests {
     /// Build an in-memory project with one section of two real shots. With
     /// `anchor = Some((lat, lon))` it carries a georeferenced zero datum, so
     /// [`export_tml`](crate::export::tml::export_tml) writes a real GPS anchor on
-    /// the exported START shot — the thing `openspeleo_lib` needs to emit a
+    /// the exported START shot - the thing `openspeleo_lib` needs to emit a
     /// `ProjectGeoJSON`. With `None` the exported `.tml` START is 0/0 (no anchor).
     #[expect(clippy::expect_used, reason = "ignored live integration test helper")]
     fn build_render_project(anchor: Option<(f64, f64)>) -> crate::models::Project {
@@ -1437,7 +1437,7 @@ mod live_tests {
             id: project_id,
         };
 
-        // Export OUR georeferenced .tml (not a static fixture) — this is the
+        // Export OUR georeferenced .tml (not a static fixture) - this is the
         // exporter output whose render-compat we are gating.
         let project = build_render_project(Some((20.25, -87.5)));
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1486,13 +1486,13 @@ mod live_tests {
             "RENDER-COMPAT GATE FAILED: our exported georeferenced .tml did not produce a \
              ProjectGeoJSON for commit {hexsha} (points status={points_status}, lines \
              status={lines_status}). SpeleoDB's openspeleo_lib did not accept our exporter \
-             output — fix the exporter or fast-track the #219 GeoJSON-acceptance ask before \
+             output - fix the exporter or fast-track the #219 GeoJSON-acceptance ask before \
              building P1 render/push on this path."
         );
     }
 
     /// #184 (single-account): a push with **no** georeferenced anchor still
-    /// succeeds (the push is never blocked — the D2 "no-GPS-anchor" banner case)
+    /// succeeds (the push is never blocked - the D2 "no-GPS-anchor" banner case)
     /// but generates no new render for that commit. OBSERVATIONAL: the exact
     /// no-anchor detection inside `openspeleo_lib` (does 0/0 count as "no known
     /// anchor"?) is what this spike records; it asserts only the load-bearing
@@ -1564,7 +1564,7 @@ mod live_tests {
     /// → `ArianeTMLFileProcessor`) then validates the part's `Content-Type`
     /// against `ALLOWED_MIMETYPES = ["application/octet-stream", "application/zip"]`
     /// (`processors/_impl/ariane.py`; enforced in `processors/artifact.py`
-    /// `assert_valid`) — `text/plain` is NOT allowed. Our production `upload_auto`
+    /// `assert_valid`) - `text/plain` is NOT allowed. Our production `upload_auto`
     /// always sends `application/octet-stream`, so this probe pushes the `.tml`
     /// part WITHOUT an explicit MIME to discover what `ureq` defaults to and
     /// whether that default is accepted. OBSERVATIONAL: it prints the verdict that
@@ -1604,7 +1604,7 @@ mod live_tests {
         let tml = dir.path().join("ariane.tml");
         crate::export::tml::export_tml(&project, &tml).expect("export georeferenced .tml");
 
-        // A single `.tml` artifact part with NO explicit `.mime_str(...)` — let
+        // A single `.tml` artifact part with NO explicit `.mime_str(...)` - let
         // ureq pick the Content-Type, then see whether the server accepts it.
         let part = Part::file(&tml)
             .expect("part from .tml file")
@@ -1624,7 +1624,7 @@ mod live_tests {
              Server allows only Content-Type in {{application/octet-stream, application/zip}} for \
              .tml (ArianeTMLFileProcessor.ALLOWED_MIMETYPES). 400 => explicit per-part MIME is \
              REQUIRED (the client.rs `mime_for` 'robustness, not a hard requirement' comment is \
-             wrong — correct it); 2xx => ureq's default part Content-Type is already accepted, so \
+             wrong - correct it); 2xx => ureq's default part Content-Type is already accepted, so \
              the explicit MIME is belt-and-suspenders."
         );
         assert!(

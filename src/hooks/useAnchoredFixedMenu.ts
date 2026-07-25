@@ -17,10 +17,10 @@ interface AnchoredMenuOptions {
   gap: number;
   /** Menu width (px). The hook uses this for the center/right alignment + left-clamp
    *  math AND sets it as the element's width (returned in the style), so width has a
-   *  single source of truth — do NOT also put a `w-*` class on the menu. */
+   *  single source of truth - do NOT also put a `w-*` class on the menu. */
   width: number;
   /** Optional absolute cap (px) on the menu's height, applied on top of the
-   *  per-side free-space cap — restores the old fixed `max-h-*` so a long list
+   *  per-side free-space cap - restores the old fixed `max-h-*` so a long list
    *  stays compact (and scrolls) on a tall window instead of growing to fill the
    *  whole free side. Omit to bound only by the available side space. */
   maxHeightCap?: number;
@@ -39,7 +39,7 @@ interface Placement {
 
 /**
  * Position a trigger-anchored dropdown with `position: fixed` so it escapes any
- * ancestor `overflow: hidden` (e.g. the Dock's clip box) — unlike `position:
+ * ancestor `overflow: hidden` (e.g. the Dock's clip box) - unlike `position:
  * absolute`, which gets clipped when the menu flips upward and makes its items
  * unclickable (clicks fall through to whatever is painted behind the clip).
  *

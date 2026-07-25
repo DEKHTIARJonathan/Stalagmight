@@ -28,9 +28,9 @@ pub struct IntegrityViolation {
 }
 
 impl Project {
-    /// Reason a stored [`StationKey`] is invalid — it names a section that no
+    /// Reason a stored [`StationKey`] is invalid - it names a section that no
     /// longer exists, or its anchor no longer resolves to a real station (its
-    /// anchoring shot was deleted) — or `None` if it points at a real station.
+    /// anchoring shot was deleted) - or `None` if it points at a real station.
     /// With stable identity this catches a *dangling* anchor (the integrity win
     /// over positional refs, which could only ever be out-of-range, never
     /// silently mispointed at the wrong in-range station).
@@ -52,16 +52,16 @@ impl Project {
 
     /// Audit every cross-reference in the project and return all structural
     /// violations (an empty vec means the project is structurally sound). This
-    /// does not mutate the project and does not look at shot geometry — it only
+    /// does not mutate the project and does not look at shot geometry - it only
     /// checks that merges, loop closures, zero datums, and the offset/comment
     /// maps point at stations and sections that actually exist.
     ///
     /// Used to (a) block commands that would introduce corruption and (b) warn
-    /// about — and repair — corruption already present in a loaded project.
+    /// about - and repair - corruption already present in a loaded project.
     pub fn check_structural_integrity(&self) -> Vec<IntegrityViolation> {
         let mut violations = Vec::new();
 
-        // Non-finite (NaN/inf) shot geometry — loaded from an older/corrupt file
+        // Non-finite (NaN/inf) shot geometry - loaded from an older/corrupt file
         // or an unguarded import. It silently poisons coordinates (NaN passes the
         // tolerance comparisons in the alignment checks), so surface it.
         for section in &self.sections {
@@ -80,7 +80,7 @@ impl Project {
         // Two shots in one section sharing a UUID make AfterShot anchors
         // mis-resolve: resolve_key takes the FIRST match via position(), so a
         // merge/closure/datum pointing at the second station silently snaps to
-        // the first — geometrically wrong with no other signal. Critical, and
+        // the first - geometrically wrong with no other signal. Critical, and
         // section-scoped because resolve_key is section-local. Empty UUIDs are
         // "no identity yet" (ensure_shot_uuids fills them) so they don't count.
         for section in &self.sections {
@@ -129,7 +129,7 @@ impl Project {
         });
 
         // section_offsets is keyed by SectionId (not a StationRef), so it isn't
-        // covered by for_each_station_ref — check it for a missing section here.
+        // covered by for_each_station_ref - check it for a missing section here.
         for section_id in self.section_offsets.keys() {
             if self.get_section(*section_id).is_none() {
                 violations.push(IntegrityViolation {
@@ -144,7 +144,7 @@ impl Project {
         // the rigid group (two GPS anchors), so the offset cascade tears a merge
         // edge apart. The interactive guards (set_zero_datum / merge_stations)
         // prevent this on clean state, but a file written by an older build or a
-        // closure-to-merge conversion can still arrive in this state — surface it
+        // closure-to-merge conversion can still arrive in this state - surface it
         // instead of silently mis-solving the geometry. Warning, not Critical: the
         // project still opens and the user resolves it by removing a datum.
         for component in self.over_anchored_merge_components() {
@@ -166,7 +166,7 @@ impl Project {
         violations
     }
 
-    /// True if the project has any [`ViolationSeverity::Critical`] violation —
+    /// True if the project has any [`ViolationSeverity::Critical`] violation -
     /// the cheap gate used to block corrupting commands.
     pub fn has_critical_integrity_violations(&self) -> bool {
         self.check_structural_integrity()
@@ -175,7 +175,7 @@ impl Project {
     }
 
     /// True if ANY persisted cross-reference (a merge/closure/datum endpoint, or
-    /// an offset/comment key) no longer resolves — its anchoring shot was deleted
+    /// an offset/comment key) no longer resolves - its anchoring shot was deleted
     /// or its section is gone. These are precisely the keys that would otherwise
     /// be collapsed to a phantom `(section, 0)` ref on save and can collide on the
     /// `(section_id, station_index)` PRIMARY KEY. The save path blocks on this so
@@ -248,7 +248,7 @@ impl Project {
         violations
     }
 
-    /// Cross-section merges whose two stations have drifted apart — the
+    /// Cross-section merges whose two stations have drifted apart - the
     /// references are valid but the geometry is wrong (a stale section offset
     /// from a missed cascade). Distinct from [`Self::check_structural_integrity`];
     /// repaired by re-cascading offsets via [`Self::realign_merges`] rather than
@@ -294,7 +294,7 @@ impl Project {
 
     /// Cross-section *aligned* loop closures whose two stations have drifted
     /// apart. An aligned closure (`is_aligned == true`) asserts its loop is
-    /// closed — its endpoints coincide — and the offset solver enforces it as a
+    /// closed - its endpoints coincide - and the offset solver enforces it as a
     /// rigid edge. But `is_aligned` is never set back to false, so a later shot
     /// edit can leave the closure stale while still marked aligned. The
     /// merge-only [`Self::check_merge_alignment`] cannot see this; surface it so
@@ -325,7 +325,7 @@ impl Project {
                         severity: ViolationSeverity::Critical,
                         category: "closure_misaligned".to_string(),
                         message: format!(
-                            "Loop closure {} ({}:{} ↔ {}:{}) is marked closed but its ends are {:.2} m apart — recompute or remove it",
+                            "Loop closure {} ({}:{} ↔ {}:{}) is marked closed but its ends are {:.2} m apart - recompute or remove it",
                             closure.id,
                             a.section_id,
                             a.station_index,
@@ -345,7 +345,7 @@ impl Project {
     /// [`Self::convert_orphan_closures_to_merges`] normally fixes these the
     /// moment they appear (on delete/split and on load), so this is a safety-net
     /// detector for any path that bypassed that (e.g. a collaborator's reconciled
-    /// edit) — it lets the integrity banner surface the condition.
+    /// edit) - it lets the integrity banner surface the condition.
     pub fn check_orphan_closures(&self) -> Vec<IntegrityViolation> {
         let mut violations = Vec::new();
         for closure in &self.loop_closures {
@@ -361,7 +361,7 @@ impl Project {
             if !self.are_stations_connected_excluding_shot(a, b, None, false) {
                 // A sole-bridge closure between two independently zero-datum-anchored
                 // groups is intentionally KEPT as a closure (converting it to a rigid
-                // merge would double-anchor one merge component and tear it — see
+                // merge would double-anchor one merge component and tear it - see
                 // `convert_orphan_closures_to_merges`). Don't flag it as an
                 // orphan-that-should-be-a-merge: that warning would be misleading and
                 // Repair could never clear it, since the converter correctly refuses
@@ -374,7 +374,7 @@ impl Project {
                     severity: ViolationSeverity::Warning,
                     category: "orphan_closure".to_string(),
                     message: format!(
-                        "Loop closure {} ({}:{} ↔ {}:{}) is the only connection between its sections — it should be a merge, not a loop",
+                        "Loop closure {} ({}:{} ↔ {}:{}) is the only connection between its sections - it should be a merge, not a loop",
                         closure.id,
                         a.section_id,
                         a.station_index,

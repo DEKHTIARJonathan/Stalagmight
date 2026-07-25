@@ -9,7 +9,7 @@ import type { ExportImageOptions } from '../../types/commands';
 /**
  * Modal Export dialog (reached from the project menu / Ctrl+E). A thin
  * `DialogWrapper` around the shared {@link ExportControls}. Keeps its OWN local
- * state — defaulting to the data/CSV selection its e2e suite asserts — rather
+ * state - defaulting to the data/CSV selection its e2e suite asserts - rather
  * than the Export-mode `exportStore` (that store is panel + center only).
  */
 export default function ExportDialog() {

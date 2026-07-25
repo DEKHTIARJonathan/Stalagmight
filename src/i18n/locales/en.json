@@ -276,9 +276,9 @@
         "help": "Default follows the standard palette. The colorblind-safe presets retune the colors for different types of color-vision deficiency.",
         "options": {
           "default": "Default",
-          "deuteranopia": "Colorblind — Deuteranopia",
-          "protanopia": "Colorblind — Protanopia",
-          "tritanopia": "Colorblind — Tritanopia"
+          "deuteranopia": "Colorblind - Deuteranopia",
+          "protanopia": "Colorblind - Protanopia",
+          "tritanopia": "Colorblind - Tritanopia"
         }
       },
       "colors": {
@@ -476,7 +476,7 @@
     },
     "validation": {
       "title": "Validation",
-      "defaultsNote": "These are the defaults for newly created projects. Each project stores its own thresholds (in its .stalx) — edit them per project under Project Settings.",
+      "defaultsNote": "These are the defaults for newly created projects. Each project stores its own thresholds (in its .stalx) - edit them per project under Project Settings.",
       "sections": {
         "shotLength": "Shot Length Warnings",
         "depth": "Depth Warnings",
@@ -1153,7 +1153,7 @@
       "title": "Review Collaborator Changes",
       "intro": "The companion Ariane file (.tml) was edited outside Stalagmight. The following changes will be merged into this project. Stalagmight-only data (loop closures, merges, offsets, comments) is preserved.",
       "matchFingerprint": "Shots were matched by geometry (the returned file has no shared IDs). Review the changes carefully before applying.",
-      "matchPositional": "Shots could only be matched by position. Matching is approximate — review the changes carefully before applying.",
+      "matchPositional": "Shots could only be matched by position. Matching is approximate - review the changes carefully before applying.",
       "countAdded": "Added",
       "countEdited": "Edited",
       "countRemoved": "Removed",
@@ -1173,7 +1173,7 @@
       "errorTitle": "Reconcile Failed",
       "errorUnknown": "Unknown error while applying changes",
       "errorApply": "Failed to apply collaborator changes",
-      "siblingWarning": "This project has an Ariane companion file ({{siblingName}}) but collaboration is off — it will not be updated when you save. Enable Ariane collaboration in Project details to keep them in sync."
+      "siblingWarning": "This project has an Ariane companion file ({{siblingName}}) but collaboration is off - it will not be updated when you save. Enable Ariane collaboration in Project details to keep them in sync."
     },
     "unsaved": {
       "title": "Unsaved Changes",
@@ -1244,7 +1244,7 @@
         "targetStation": "Target station",
         "noSections": "No existing sections available",
         "doNotPlace": "Do not place",
-        "doNotPlaceDescription": "Skip this segment entirely — its sections will not be imported",
+        "doNotPlaceDescription": "Skip this segment entirely - its sections will not be imported",
         "next": "Next"
       }
     },
@@ -1363,7 +1363,7 @@
     "viewStations": "Stations",
     "empty": "No shots in this section.",
     "stationsEmpty": "No stations in this section.",
-    "frozen": "Geometry locked — part of adjusted network",
+    "frozen": "Geometry locked - part of adjusted network",
     "pasteReport": {
       "written_one": "Pasted {{count}} cell",
       "written_other": "Pasted {{count}} cells",
@@ -1382,7 +1382,7 @@
     "selectSectionPill": "Select this section on the map",
     "sectionMenu": "Choose section",
     "rawTableMenu": "Choose table",
-    "multiDeleteUnsupported": "Deleting multiple shots at once isn't supported yet — delete one shot at a time.",
+    "multiDeleteUnsupported": "Deleting multiple shots at once isn't supported yet - delete one shot at a time.",
     "removeDraft_one": "Remove draft row",
     "removeDraft_other": "Remove {{count}} draft rows",
     "shotNoun_one": "shot",
@@ -1433,7 +1433,7 @@
       "asOfLastSave": "As of last save",
       "loading": "Loading…",
       "unavailable": "Save the project to browse raw data",
-      "pager": "Rows {{from}}–{{to}} of {{total}}"
+      "pager": "Rows {{from}}-{{to}} of {{total}}"
     }
   },
   "grid": {
@@ -1489,7 +1489,7 @@
       "resolveSkip": "Skip",
       "resolveDone": "Done",
       "resolveRemaining": "Resolve remaining",
-      "resolveSummary": "Resolved {{resolved}}, skipped {{skipped}} — {{remaining}} remaining.",
+      "resolveSummary": "Resolved {{resolved}}, skipped {{skipped}} - {{remaining}} remaining.",
       "resolveFailed": "Could not apply the fix.",
       "resolveInvalid": "Enter a valid number.",
       "resolveInvalidLength": "Length must be greater than 0.",
@@ -1508,14 +1508,14 @@
         "manualDepth": "Set depths",
         "manualPitch": "Set inclination",
         "deleteShot": "Delete this shot",
-        "normalize": "Normalize to 0–360°",
+        "normalize": "Normalize to 0-360°",
         "useAbs": "Use absolute value",
         "clear": "Clear value",
         "keepDatum": "Keep {{station}}, remove the others",
         "goToStation": "Go to station",
-        "adjustLength": "Use inclination — adjust length",
-        "adjustInclination": "Use length — adjust inclination",
-        "splitInclLength": "Split — adjust inclination & length",
+        "adjustLength": "Use inclination - adjust length",
+        "adjustInclination": "Use length - adjust inclination",
+        "splitInclLength": "Split - adjust inclination & length",
         "lengthFromDepth": "Set length to depth change",
         "lengthFromInclination": "Set length from inclination",
         "ignore": "Ignore (keep value, don't warn again)"
@@ -2131,7 +2131,7 @@
       "saving": "Saving...",
       "unsavedChanges": "Unsaved changes",
       "autoSaveCountdown": "Auto-save in {{seconds}}s",
-      "saveError": "Auto-save didn't run — not saved"
+      "saveError": "Auto-save didn't run - not saved"
     }
   },
   "gasPanel": {
@@ -2143,7 +2143,7 @@
       "reset": "Reset",
       "hint": "Click a station to set the origin, or the ★ to start from a zero datum.",
       "datumAria": "Start the plan from this zero datum",
-      "datumTooltip": "Zero datum — click to start the plan here"
+      "datumTooltip": "Zero datum - click to start the plan here"
     },
     "diver": {
       "rmvLabel": "RMV (surface air consumption)",
@@ -2165,7 +2165,7 @@
       "needsStages": "Add {{count}} stage cylinder(s) to your rig to use this strategy.",
       "stageReserveLabel": "Stage reserve",
       "safetyMarginLabel": "Safety margin",
-      "safetyMarginHint": "Extra gas held back from every cylinder on top of thirds — a conservatism knob for teams of two or specific caves.",
+      "safetyMarginHint": "Extra gas held back from every cylinder on top of thirds - a conservatism knob for teams of two or specific caves.",
       "advancedTitle": "Advanced gas strategy",
       "advancedBody": "Use only if you're trained to balance gas across back gas and stages.",
       "advancedConfirm": "I understand",
@@ -2229,7 +2229,7 @@
       "dropAria": "Stage {{n}} drop point: drag or use arrow keys to move it along the route, Delete to reset",
       "finalTurnTooltip": "Turn around here",
       "turnMarkerTooltip": "Click to set as endpoint",
-      "turnMarkerAria": "Candidate route endpoint — activate to set as endpoint"
+      "turnMarkerAria": "Candidate route endpoint - activate to set as endpoint"
     }
   },
   "modeCarousel": {
@@ -2262,7 +2262,7 @@
     "profile": {
       "title": "Anticipated dive profile",
       "subtitle": "Depth · time · gas along the planned route",
-      "comingSoon": "Export to Subsurface — coming soon"
+      "comingSoon": "Export to Subsurface - coming soon"
     }
   },
   "exportPanel": {
@@ -2652,7 +2652,7 @@
   "telemetry": {
     "optIn": {
       "title": "Help Improve Stalagmight",
-      "description": "Help improve Stalagmight by sharing anonymous usage statistics. We only collect which features are used and how often — no personal data, no survey data, no file contents.",
+      "description": "Help improve Stalagmight by sharing anonymous usage statistics. We only collect which features are used and how often - no personal data, no survey data, no file contents.",
       "whatWeCollect": "What we collect",
       "collect": {
         "commands": "Which commands are used (e.g., import, export, undo)",

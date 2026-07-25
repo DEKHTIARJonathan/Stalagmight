@@ -58,7 +58,7 @@ const base: FakeMapState = {
 describe('SurveyLayer.cameraSnapshot key', () => {
   it('changes on a sub-pixel center shift (no quantization binning)', () => {
     const a = snapshotFor(base);
-    // A shift far below one device pixel at z12 — the old pixel-bin key would
+    // A shift far below one device pixel at z12 - the old pixel-bin key would
     // have collapsed this into the same bin and returned an identical key.
     const b = snapshotFor({ ...base, center: { lng: 12.5 + 1e-9, lat: 55.5 + 1e-9 } });
     expect(b.key).not.toBe(a.key);

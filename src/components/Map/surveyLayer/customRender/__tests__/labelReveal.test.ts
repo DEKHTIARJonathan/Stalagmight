@@ -22,7 +22,7 @@ import { LABEL_KIND_STYLE, interpolateStops } from '../labelStyle';
  * reveal zoom, the zoom-independent priority order (coarser tier / higher kind
  * priority wins), determinism (same input → same output, and stable across
  * rebuilds whose membership shifts), the candidate filter (toggled-off /
- * reference-hidden / empty labels), and — the headline property — MONOTONICITY:
+ * reference-hidden / empty labels), and - the headline property - MONOTONICITY:
  * the visible set only grows with zoom and never overlaps at any zoom.
  */
 
@@ -138,7 +138,7 @@ describe('computeRevealZooms determinism', () => {
 });
 
 describe('computeRevealZooms candidate filter (matches the shader gates)', () => {
-  it('a toggled-off kind is NOT contested — it reveals at its floor and blocks nobody', () => {
+  it('a toggled-off kind is NOT contested - it reveals at its floor and blocks nobody', () => {
     // Shot toggled off: it is emitted at its admission floor (so a later toggle-on
     // shows it without a rebuild) and does not cull the coincident section.
     const descs = [desc(LABEL_KIND.SECTION_NAME), desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 })];
@@ -159,7 +159,7 @@ describe('computeRevealZooms candidate filter (matches the shader gates)', () =>
     expect(reveal[1]).toBe(14);
   });
 
-  it('an empty (whitespace) label never reveals — no ink, never emitted', () => {
+  it('an empty (whitespace) label never reveals - no ink, never emitted', () => {
     const descs = [desc(LABEL_KIND.SECTION_NAME)];
     expect(computeRevealZooms(descs, [null], input())[0]).toBe(REVEAL_NEVER);
   });
@@ -168,7 +168,7 @@ describe('computeRevealZooms candidate filter (matches the shader gates)', () =>
 describe('computeRevealZooms comment overlap-exempt (C1)', () => {
   it('exempt comment kinds reveal uncontested at their minzoom, blocking nobody', () => {
     // A shot comment coincident (0 separation) with a section name is normally
-    // culled — lowest priority, always overlapping. Overlap-exempt: it reveals at
+    // culled - lowest priority, always overlapping. Overlap-exempt: it reveals at
     // its floor (comment minzoom 14) and the section is unaffected.
     const descs = [desc(LABEL_KIND.SECTION_NAME), desc(LABEL_KIND.SHOT_COMMENT)];
     const culled = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input());
@@ -180,7 +180,7 @@ describe('computeRevealZooms comment overlap-exempt (C1)', () => {
     expect(exempt[1]).toBe(14); // comment now revealed uncontested at its floor
   });
 
-  it('exempts ONLY comment kinds — a coincident non-comment label still collides', () => {
+  it('exempts ONLY comment kinds - a coincident non-comment label still collides', () => {
     // A shot LABEL coincident with a section name stays culled even with the
     // exemption on: the flag must not touch non-comment kinds.
     const descs = [desc(LABEL_KIND.SECTION_NAME), desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 })];
@@ -224,7 +224,7 @@ describe('emitSlackFor (adaptive emit horizon)', () => {
 
 describe('computeRevealZooms adaptive ceiling emits high-reveal labels', () => {
   it('a band-edge label past the bounded horizon is emitted when the ladder runs to the ceiling', () => {
-    // Built at z15. An isolated odd (tier 2) shot admits at z18 — past the bounded
+    // Built at z15. An isolated odd (tier 2) shot admits at z18 - past the bounded
     // horizon 17 (15 + EMIT_SLACK) but within the adaptive ladder. Bounded →
     // REVEAL_NEVER (dropped, appears only after a rebuild); adaptive → reveal 18
     // (emitted, admitted per-frame by the shader as the live zoom reaches 18).
@@ -295,7 +295,7 @@ describe('computeRevealZooms MONOTONICITY (randomized zoom sweep)', () => {
         sectionId: i,
       };
       // A distinct stable id per label (viewport-independent), set on the field
-      // that matches the kind — avoids passing `undefined` under exactOptionalPropertyTypes.
+      // that matches the kind - avoids passing `undefined` under exactOptionalPropertyTypes.
       if (kind === LABEL_KIND.SHOT_LABEL) over.shotGlobal = i;
       else if (kind === LABEL_KIND.STATION_LABEL) over.stationGlobal = i;
       descs.push(desc(kind, over));

@@ -25,9 +25,9 @@ import {
 
 /**
  * True when `relatedTarget` is a DOM node contained by `container`. WebKit
- * throws from `Node.contains()` when the argument is not a Node — a mouse/focus
+ * throws from `Node.contains()` when the argument is not a Node - a mouse/focus
  * leave into browser chrome or the WebGL canvas overlay hands us `window` or
- * `null` as the related target — so this guards with `instanceof Node` before
+ * `null` as the related target - so this guards with `instanceof Node` before
  * calling `contains` (matching the SectionsPanel / Dock leave handlers).
  */
 export function relatedTargetWithin(
@@ -764,7 +764,7 @@ export default function UndoHistoryDropdown({
     if (!isOpen) return;
 
     const handleShortcut = (event: KeyboardEvent) => {
-      // Don't intercept when focus is in a text input — let native text undo/redo work
+      // Don't intercept when focus is in a text input - let native text undo/redo work
       if (
         event.target instanceof HTMLInputElement ||
         event.target instanceof HTMLTextAreaElement ||

@@ -211,7 +211,7 @@ type WarningFlow =
 // Identity of a warning for queue stepping + live-set rehydration. Include the
 // datum index for over-anchoring warnings: two separate over-anchored components
 // can put their representative on the SAME shot (e.g. stations 0 and 1 both map to
-// shot 0), sharing sectionId/shotId/code but differing by datum — without this they
+// shot 0), sharing sectionId/shotId/code but differing by datum - without this they
 // collapse and the resolve flow would act on the wrong datum (issue #57 / Codex).
 const warningKey = (w: ProjectWarning) =>
   `${w.sectionId}:${w.shotId}:${w.code}${w.datumStationIndex !== undefined ? `:d${w.datumStationIndex}` : ''}`;
@@ -244,7 +244,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
   const displayedWarnings = showResolved ? warnings : unresolvedWarnings;
 
   // Virtualize the list so a large warning set (hundreds+) doesn't mount every
-  // row — only the visible window renders, and a refreshWarnings() after each
+  // row - only the visible window renders, and a refreshWarnings() after each
   // resolve step reconciles a handful of rows instead of the whole list.
   const listParentRef = useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({
@@ -255,8 +255,8 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
   });
 
   // The warning currently under resolution. Rehydrate it from the LIVE warnings
-  // (matched by identity) so its shotIndex — which WarningResolution uses for
-  // frozen-shot gating and the on-map preview endpoints — reflects edits an
+  // (matched by identity) so its shotIndex - which WarningResolution uses for
+  // frozen-shot gating and the on-map preview endpoints - reflects edits an
   // earlier "Resolve all" step applied (e.g. a delete-shot renumbers later shots'
   // indices). Falls back to the queued copy if it's no longer present (#57 / Codex).
   const queuedWarning = flow.kind === 'resolve' ? flow.queue[flow.index] : undefined;
@@ -330,7 +330,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
   };
 
   // Advance after the user applied an option. Only count it as resolved if the
-  // active warning actually cleared from the live set — a data fix can succeed
+  // active warning actually cleared from the live set - a data fix can succeed
   // yet leave the warning firing (e.g. a manual length still below the minimum),
   // and that must not be reported as resolved.
   const advanceAfterApply = () => {
@@ -1412,7 +1412,7 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
 
     return (
       <div className="h-full bg-panel overflow-auto">
-      {/* `bare`: no surrounding card border — the panel itself is the container.
+      {/* `bare`: no surrounding card border - the panel itself is the container.
           The title's border-b is the "Project stats / PROJECT" divider line.
           The invisible button-sized placeholder matches the entity-detail headers
           (which carry the center-on-map button), so the title divider sits at the
@@ -1510,7 +1510,7 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
           </div>
 
           {/* Per-project settings: name, validation, and Ariane collaboration
-              (Experimental tab) — all stored in the .stalx. */}
+              (Experimental tab) - all stored in the .stalx. */}
           <div className="pt-2 border-t border-border">
             <button
               onClick={() => openDialog('project-settings')}

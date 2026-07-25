@@ -208,7 +208,7 @@ test.describe('Warning Click Navigation', () => {
     expect(selection?.sectionId).toBe(mainSectionId);
     expect(selection?.shotId).toBe(targetShotId);
 
-    // Still on the Warnings tab — the row select does not navigate to Details.
+    // Still on the Warnings tab - the row select does not navigate to Details.
     await expect(page.getByTestId('warnings-content')).toBeVisible();
   });
 
@@ -261,7 +261,7 @@ test.describe('Warning Click Navigation', () => {
     expect(selection?.sectionId).toBe(firstSectionId);
     expect(selection?.shotId).toBe(targetShotId);
 
-    // Still on the Warnings tab — the row select does not navigate to Details.
+    // Still on the Warnings tab - the row select does not navigate to Details.
     await expect(page.getByTestId('warnings-content')).toBeVisible();
   });
 });
@@ -475,7 +475,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await page.getByTestId('resolve-warning').first().click();
     await expect(page.getByTestId('warning-resolution')).toBeVisible();
     // Depth is trusted, so resolution adjusts the inclination (and length when a
-    // pitch is recorded) — never the depth. This seed shot has no recorded pitch,
+    // pitch is recorded) - never the depth. This seed shot has no recorded pitch,
     // so the length/split options are omitted; adjust-inclination stays, and the
     // old depth-changing option must not appear.
     await expect(page.getByTestId('warning-resolution-option-incl-from-depth')).toBeVisible();
@@ -541,7 +541,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await page.getByTestId('detail-tab-warnings').click();
     await expect(page.getByTestId('warnings-content')).toBeVisible();
     // With 200 warnings the virtualizer mounts only the visible window, not all
-    // rows — so far fewer Resolve buttons are in the DOM than warnings.
+    // rows - so far fewer Resolve buttons are in the DOM than warnings.
     const rendered = await page.getByTestId('resolve-warning').count();
     expect(rendered).toBeGreaterThan(0);
     expect(rendered).toBeLessThan(many.length);
@@ -636,7 +636,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warning-resolution')).toBeVisible();
 
     // Full focus: the shot is selected (which highlights it on the map and
-    // focuses the details, sections and data panels — same as a link click).
+    // focuses the details, sections and data panels - same as a link click).
     const selection = await pollSelectionState(
       page,
       (sel) => sel?.type === 'shot' && sel?.shotId === shotIds[0]!,

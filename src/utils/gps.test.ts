@@ -396,7 +396,7 @@ describe('parseUrl', () => {
 
   it('extracts !3d/!4d data params for place URLs without coordinate names', () => {
     const result = parseUrl(
-      'https://www.google.com/maps/place/Some+Cave/@20.2,−87.5,500m/data=!3m2!1e3!4b1!4m4!3m3!8m2!3d20.200556!4d-87.499944'
+      'https://www.google.com/maps/place/Some+Cave/@20.2,-87.5,500m/data=!3m2!1e3!4b1!4m4!3m3!8m2!3d20.200556!4d-87.499944'
     );
     expectCoordsClose(result, 20.200556, -87.499944);
   });

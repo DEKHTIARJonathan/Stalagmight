@@ -32,7 +32,7 @@ export default {
         error: 'var(--cc-error)',
         success: 'var(--cc-success)',
 
-        // Section palette colors (hardcoded — per-project display settings, not theme-dependent)
+        // Section palette colors (hardcoded - per-project display settings, not theme-dependent)
         'section-teal': '#4ecdc4',
         'section-coral': '#ff6b6b',
         'section-mint': '#95e1d3',

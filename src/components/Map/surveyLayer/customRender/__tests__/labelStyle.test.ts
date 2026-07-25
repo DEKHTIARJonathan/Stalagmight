@@ -102,7 +102,7 @@ describe('computeLabelUniforms', () => {
   });
 });
 
-describe('computeLabelUniforms — all five kinds (stock parity)', () => {
+describe('computeLabelUniforms - all five kinds (stock parity)', () => {
   const SHOT = LABEL_KIND.SHOT_LABEL;
   const STC = LABEL_KIND.STATION_COMMENT;
   const SHC = LABEL_KIND.SHOT_COMMENT;

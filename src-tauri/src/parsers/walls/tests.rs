@@ -54,7 +54,7 @@ fn approx(a: f64, b: f64) -> bool {
 
 /// RAII temp directory: created on construction, removed on `Drop` (so a
 /// panicking test can't leak it). Isolation is by PID + tag + a process-wide
-/// atomic nonce, so two tests sharing a tag — or repeated calls in one test —
+/// atomic nonce, so two tests sharing a tag - or repeated calls in one test -
 /// never collide on the same path.
 struct TempDir {
     path: PathBuf,
@@ -130,7 +130,7 @@ fn datum_proj_token_and_recognition_agree() {
 fn wgs1984_utm_fix_does_not_warn() {
     // Regression: "WGS 1984" is the standard Walls name for WGS84, so a
     // surface file of many UTM `#Fix` points under it must produce ZERO
-    // datum warnings (previously one per fix — hundreds of them).
+    // datum warnings (previously one per fix - hundreds of them).
     let georef = Some(WallsRef {
         zone: 34,
         convergence: 0.0,
@@ -289,7 +289,7 @@ fn depth_gauge_conversion_keeps_gauge_depths() {
 #[test]
 fn dive_depth_columns_scale_by_s_unit() {
     // The two trailing dive-depth columns scale by the S ("short") unit, NOT the
-    // D unit — matching genuine Walls `parse_height`, which reads them via
+    // D unit - matching genuine Walls `parse_height`, which reads them via
     // `parse_length_arg(val, i, u->bFeetS)` (the S feet flag). Here D=Meters but
     // S=Feet, so depths `5.0`/`7.0` are feet and must come out ×0.3048, proving
     // `s_unit` (not `d_unit`) is applied. (If d_unit were used they'd stay 5/7 m.)
@@ -471,7 +471,7 @@ fn multi_dash_station_is_anonymous_not_named() {
         ..Default::default()
     };
     let (configs, _closures, _w) = convert_walls_to_import_configs(&parsed, &opts).unwrap();
-    // The two splays import as reference shots and stay independent — there
+    // The two splays import as reference shots and stay independent - there
     // is no real shared station named after the dashes (the regression
     // produced a phantom `--` hub joining unrelated splays).
     let splay_shots: usize = configs.iter().map(|c| c.shots.len()).sum();
@@ -482,7 +482,7 @@ fn multi_dash_station_is_anonymous_not_named() {
 fn wpj_no_grid_bit_does_not_rotate_azimuth() {
     // Regression (root grid_relative defaulted to `true`): a .wpj that
     // carries a .REF with nonzero grid convergence but sets NO grid STATUS
-    // bit must NOT rotate azimuths — matching dewalls
+    // bit must NOT rotate azimuths - matching dewalls
     // `WpjEntry::gridRelative()` (false at the root) and our own
     // `derive_decl: false` default. Convergence here is 5°; a 90° reading
     // must import as 90°, not 85°.
@@ -844,7 +844,7 @@ fn units_tolerates_stray_spaces_around_equals() {
             "stray spaces around = must not warn: {warnings:?}"
         );
         // order=ADV puts Distance in the 2nd column, so `A B 10 5 0` has
-        // length 5 (not the default DAV's 10) — proving the order applied.
+        // length 5 (not the default DAV's 10) - proving the order applied.
         assert_eq!(survey.vectors.len(), 1);
         assert!(
             (survey.vectors[0].length_m - 5.0).abs() < 1e-9,
@@ -992,7 +992,7 @@ fn convergence_applied_from_survey_georef() {
 #[test]
 fn explicit_decl_zero_suppresses_auto_derivation() {
     // Same large-declination georef as `auto_declination_gated_on_derive_flag`,
-    // derive flag ON, but the survey pins `Decl=0` — auto-IGRF must NOT fire.
+    // derive flag ON, but the survey pins `Decl=0` - auto-IGRF must NOT fire.
     let georef = Some(test_ref(0.0, 60.0, -150.0));
     let srv = "#DATE 2020-01-01\n#UNITS meters order=DAV Decl=0\nA B 10 90 0\n";
     let configs = convert_survey_with(
@@ -1028,7 +1028,7 @@ fn fix_assigns_lat_long_by_prefix_not_column() {
 
 #[test]
 fn unrecognized_datum_warns_on_utm_fix() {
-    // A UTM #Fix under an unusual datum projects as WGS84 — warn about it.
+    // A UTM #Fix under an unusual datum projects as WGS84 - warn about it.
     let georef = Some(WallsRef {
         zone: 16,
         convergence: 0.0,
@@ -1122,7 +1122,7 @@ fn resolve_survey_appends_srv_for_non_srv_extension() {
 #[test]
 fn resolve_survey_rejects_path_like_name() {
     // A `.NAME` carrying a path separator / drive prefix is a traversal
-    // attempt (`.NAME ../../../../etc/passwd`), not a node name — must be
+    // attempt (`.NAME ../../../../etc/passwd`), not a node name - must be
     // refused (None ⇒ reported missing), never joined onto the dir.
     let ctx = WpjContext {
         dir: PathBuf::from("/proj"),
@@ -1251,7 +1251,7 @@ fn multiple_fixes_anchor_separate_components() {
 
 #[test]
 fn multiple_fixes_in_one_component_yield_single_datum() {
-    // A0 ... J ... B0 — both fixed, but connected through J (one component).
+    // A0 ... J ... B0 - both fixed, but connected through J (one component).
     // The model forbids 2 datums in one merge component, so only ONE datum
     // is emitted and the other fixed station is merged + closed in.
     let srv = "#UNITS meters order=DAV\n\
@@ -1377,7 +1377,7 @@ fn per_survey_fixed_station_count_dedups_and_validates() {
         warnings: Vec::new(),
     };
     let preview = build_preview(&parsed);
-    // Project total: A0 (deduped across both surveys) — BAD is out of range.
+    // Project total: A0 (deduped across both surveys) - BAD is out of range.
     assert_eq!(preview.fixed_station_count, 1);
     // Each per-survey count must not exceed the deduped, validated total.
     for s in &preview.surveys {
@@ -1756,7 +1756,7 @@ fn rect_angle_rotates_bearing() {
 #[test]
 fn rect_frame_angle_does_not_leak_into_later_ct() {
     // `RECT=90` sets the rectangular frame bearing; switching to `CT` must NOT
-    // carry that 90° in as a (negative) grid convergence on later CT shots —
+    // carry that 90° in as a (negative) grid convergence on later CT shots -
     // `rect` and `grid` are distinct fields consumed with opposite signs.
     let srv = "#UNITS RECT=90 order=ENU\n\
                A B 0 10 0\n\
@@ -1817,7 +1817,7 @@ fn out_of_range_date_warns_on_declination_derive() {
 #[test]
 fn utm_to_wgs84_reference_lat_long_not_swapped() {
     // Zone 16N easting/northing from the `.REF` fixture -> lat ~20.43°N,
-    // lon ~-87.31°. Confirms this importer returns (lat, lon) — a swap would
+    // lon ~-87.31°. Confirms this importer returns (lat, lon) - a swap would
     // put lat at ~-87 (out of the [-90, 90] band) and be obviously wrong.
     let (lat, lon) = utm_to_wgs84(467427.0, 2258942.0, 16, "NAD83").unwrap();
     assert!((lat - 20.43).abs() < 0.1, "latitude {lat}");
@@ -1876,7 +1876,7 @@ fn malformed_units_order_tape_lrud_warn() {
 
 #[test]
 fn zero_length_bearing_leg_kept() {
-    // `A B 0 90 0`: zero tape but a real bearing — keep it as a tie so the
+    // `A B 0 90 0`: zero tape but a real bearing - keep it as a tie so the
     // endpoints stay connected instead of splitting into components.
     let srv = "#UNITS meters order=DAV\n\
                A B 0 90 0\n\
@@ -1974,7 +1974,7 @@ fn two_digit_year_dates_parse_to_full_year() {
 #[test]
 fn rect_vector_honors_units_grid() {
     // `#Units RECT Grid=2`: the manual grid convergence applies to a RECT leg
-    // exactly like CT — a bearing along +N (0°) becomes 0 - 2 = 358°.
+    // exactly like CT - a bearing along +N (0°) becomes 0 - 2 = 358°.
     let srv = "#UNITS RECT order=ENU Grid=2\n\
                A B 0 10 0\n";
     let (configs, _c, _w) = convert_one(parse_srv(srv));
@@ -2054,7 +2054,7 @@ fn rect_plumb_shot_has_no_spurious_bearing() {
 #[test]
 fn preview_shot_count_excludes_splays() {
     // A survey of only anonymous-wall splays imports nothing by default, so
-    // the preview shot count must be 0 — not the raw vector count.
+    // the preview shot count must be 0 - not the raw vector count.
     let srv = "#UNITS meters order=DAV\n\
                A - 3 90 0\n\
                A - 4 180 0\n";
@@ -2264,7 +2264,7 @@ fn second_fix_anchor_depth_disagreement_warns() {
         "a disagreeing second fixed-station depth must warn: {warnings:?}"
     );
     // ...but the measured shot geometry must be preserved (the 2nd anchor is
-    // a consistency check, not a second datum) — a 10 m flat shot must not be
+    // a consistency check, not a second datum) - a 10 m flat shot must not be
     // stretched by a fabricated 50 m vertical, so no length clamp fires.
     assert!(
         !warnings.iter().any(|w| w.contains("clamped")),
@@ -2289,7 +2289,7 @@ fn dive_leg_missing_one_depth_warns() {
 #[test]
 fn two_digit_year_maps_to_1900s_like_walls() {
     // Genuine Walls (`wall-srv.cpp` ParseDate) does `if (y < 100) y += 1900`,
-    // so EVERY 2-digit year lands in 1900-1999 — never the 2000s, never the
+    // so EVERY 2-digit year lands in 1900-1999 - never the 2000s, never the
     // future. `64` => 1964, `17` => 1917, `00` => 1900, `30` => 1930.
     for (s, y) in [
         ("03-15-64", 1964),

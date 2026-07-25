@@ -53,7 +53,7 @@ interface SystemEntry {
   // GlobalHitIndex.pick). Parallel to `stations` / `shots`; the AABB is the
   // projected diagonal corners. `projValid` is false until first projected, and
   // stays false for a degenerate (no-shot / infinite-AABB) system that is never
-  // projected — those are skipped in the scan, as before.
+  // projected - those are skipped in the scan, as before.
   projStations: Float64Array;
   projShots: Float64Array;
   projMinX: number;
@@ -182,7 +182,7 @@ export class GlobalHitIndex {
    *
    * Projections are cached per `cameraKey`: during hover the camera is static,
    * so all but the first pick at a given camera reuse the cached screen coords
-   * and never call `project` — otherwise a single large system under the cursor
+   * and never call `project` - otherwise a single large system under the cursor
    * would re-project all of its (up to ~150k) endpoints on every mousemove. Pass
    * a stable key that changes iff the projection changes (zoom / center /
    * bearing / pitch / viewport); pass `null` to reproject every call (the
@@ -216,7 +216,7 @@ export class GlobalHitIndex {
         continue;
       }
 
-      // Stations (priority) — cached screen coords, no projection.
+      // Stations (priority) - cached screen coords, no projection.
       for (let s = 0; s < e.stationAllRef.length; s++) {
         if (!opts.includeReference && e.stationAllRef[s] === 1) continue;
         const dx = e.projStations[s * 2]! - px;
@@ -227,7 +227,7 @@ export class GlobalHitIndex {
         }
       }
 
-      // Shots — cached screen coords, no projection.
+      // Shots - cached screen coords, no projection.
       for (let i = 0; i < e.shotRef.length; i++) {
         if (!opts.includeReference && e.shotRef[i] === 1) continue;
         const dist = distanceToLineSegment(

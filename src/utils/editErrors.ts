@@ -4,8 +4,8 @@
  * read-only (no write lock). Mirrors `EDIT_DISABLED_CODE` in
  * `src-tauri/src/core/command.rs`.
  *
- * The full edit-state UX — an indicator that suppresses this toast and offers
- * "Start editing" (acquire the lock) — is owned by #204. Until then,
+ * The full edit-state UX - an indicator that suppresses this toast and offers
+ * "Start editing" (acquire the lock) - is owned by #204. Until then,
  * `executeCommand` surfaces a friendly read-only notice instead of the raw
  * coded error so a blocked edit isn't a silent no-op.
  */

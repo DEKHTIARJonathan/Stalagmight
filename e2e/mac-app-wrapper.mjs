@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// mac-app-wrapper.mjs — Stdout delay wrapper for tauri-wd on macOS
+// mac-app-wrapper.mjs - Stdout delay wrapper for tauri-wd on macOS
 //
 // tauri-wd creates a WebDriver session as soon as it sees the plugin's
 // "[webdriver] listening on port" message on stdout.  But the Tauri window

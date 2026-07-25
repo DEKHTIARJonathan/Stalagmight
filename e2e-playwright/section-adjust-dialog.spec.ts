@@ -79,7 +79,7 @@ test.describe('Section Adjust Dialog', () => {
     await expect(dyInput).toBeVisible();
 
     // Fields start empty (placeholder shows "0") so a leading '-' isn't rejected
-    // as '0-' — see the negative-input regression test below (#161).
+    // as '0-' - see the negative-input regression test below (#161).
     await expect(dxInput).toHaveValue('');
     await expect(dyInput).toHaveValue('');
     await expect(dxInput).toHaveAttribute('placeholder', '0');
@@ -241,7 +241,7 @@ test.describe('Section Adjust Dialog', () => {
     await expect(dialog.locator('text=Move failed')).toBeVisible();
   });
 
-  test('adjusts a section in the −X direction via typed negative input (#161)', async ({ page }) => {
+  test('adjusts a section in the -X direction via typed negative input (#161)', async ({ page }) => {
     const sectionItem = page.locator('[data-testid^="section-item-"]').filter({ hasText: /Section|Main Passage|Side Tunnel/ }).first();
     await sectionItem.click({ button: 'right' });
     await page.click('button:has-text("Adjust Position...")');
@@ -249,10 +249,10 @@ test.describe('Section Adjust Dialog', () => {
     const dialog = page.locator('[data-testid="section-adjust-dialog"]');
     await expect(dialog).toBeVisible({ timeout: 3000 });
 
-    // Type the negative value KEY BY KEY onto the empty field — no clear/select.
+    // Type the negative value KEY BY KEY onto the empty field - no clear/select.
     // Unlike .fill() (used by the test above, which sets the value atomically and
     // passed even while the bug was live), this exercises the intermediate '-'
-    // state the old numeric control snapped back to 0 — the actual #161 failure.
+    // state the old numeric control snapped back to 0 - the actual #161 failure.
     const dxInput = dialog.locator('[data-testid="dx-input"]');
     await dxInput.click();
     await dxInput.pressSequentially('-4');

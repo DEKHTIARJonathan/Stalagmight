@@ -12,7 +12,7 @@ import {
  * Ghost-follow latency fix (#mem drag latency). The moving preview ("ghost")
  * used to update ONLY through a GeoJSON `setData` -> MapLibre worker parse +
  * retile round-trip, landing several frames after the pointermove for a large
- * moving set — so it lagged the cursor and, notably, lagged MORE than the tiny
+ * moving set - so it lagged the cursor and, notably, lagged MORE than the tiny
  * interact-overlay highlight (which re-tiles in ~1 frame). The fix keeps the
  * per-frame re-`setData` but adds a SYNCHRONOUS, viewport-anchored `*-translate`
  * that tracks the cursor with no worker in the loop. These tests lock the

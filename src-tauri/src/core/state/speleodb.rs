@@ -3,7 +3,7 @@
 //!
 //! The `commands::speleodb` IPC layer is a thin wrapper over these methods.
 //! Everything here is read-only against the server (login / list / pull); no
-//! lock, push, or persistence — those are later issues (#182 epic).
+//! lock, push, or persistence - those are later issues (#182 epic).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -252,7 +252,7 @@ fn classify_dump_entry(names: &[String]) -> Result<String, SpeleoDbError> {
 }
 
 /// [Track C] (#188, C5): the pure 401 auto-drop predicate. A genuine 401 on an
-/// established-session call drops the token; **everything else is kept** — 403 is
+/// established-session call drops the token; **everything else is kept** - 403 is
 /// never a drop (D-B4, robust to a DRF 401→403 downgrade), and 2xx/5xx/transport/
 /// local errors pass through. Extracted so the drop decision is unit-testable
 /// without a full `AppState`.
@@ -275,7 +275,7 @@ fn auth_error_drops_token<T>(endpoint: Endpoint, result: &Result<T, SpeleoDbErro
 /// is dead. The live box returns 200 for any valid token and 403 for a dead one
 /// (the DRF 401→403 downgrade), so a probe whose status maps to
 /// [`SpeleoDbAction::ReLogin`] (a 403 or 401 on the `User` endpoint) means the
-/// token is dead. A success means it is alive — so a resource 403 was a genuine
+/// token is dead. A success means it is alive - so a resource 403 was a genuine
 /// permission denial, keep the token (D-B4). A transport error is inconclusive
 /// and is treated as not-dead (never drop on a flaky probe). Pure + unit-tested;
 /// the network call lives in [`AppState::speleodb_token_is_dead`].
@@ -309,7 +309,7 @@ impl SpeleoDbSession {
     }
 
     /// Current session status for the dialog. `logged_in` means a usable token is
-    /// held *locally* — it is not re-validated against the server here (a token
+    /// held *locally* - it is not re-validated against the server here (a token
     /// revoked server-side is caught on the next real call by the 401 auto-drop
     /// handler, [Track C] #188 C5). When not logged in, neither the email nor the
     /// keychain flag is surfaced, so the status can never claim a keychain-backed
@@ -327,7 +327,7 @@ impl SpeleoDbSession {
     }
 
     /// Forget the local token (every tier: keychain + plaintext + in-memory) and
-    /// clear the session. No server-side call — logout is purely local (the DRF
+    /// clear the session. No server-side call - logout is purely local (the DRF
     /// token is not revoked). [Track C] (#188): also the 401-drop sink (C5).
     fn forget(&mut self) {
         if let (Some(endpoint), Some(email)) = (self.endpoint.clone(), self.email.clone()) {
@@ -378,7 +378,7 @@ enum PushOutcome {
     /// bit was cleared UNLESS an edit landed after push_start (then it is retained for
     /// the next push), so the caller must re-check it before releasing the lock.
     Confirmed,
-    /// A stranger commit sits between our BASE and the server tip — never pushed.
+    /// A stranger commit sits between our BASE and the server tip - never pushed.
     /// Stay locked + dirty for the user to reconcile (#198).
     Diverged,
     /// The push outcome was ambiguous (transport drop / retried-then-exhausted
@@ -389,8 +389,8 @@ enum PushOutcome {
 
 /// Sanitize a push SNAPSHOT copy before upload: clear the dirty bit and strip the
 /// per-machine view toggles (`display_settings`) so they don't ride to the server
-/// (#197). All durable project data — survey, config, import-dedup,
-/// resolved-warnings — proliferates with the project. Best-effort — a failure only
+/// (#197). All durable project data - survey, config, import-dedup,
+/// resolved-warnings - proliferates with the project. Best-effort - a failure only
 /// means the pushed file keeps a stale dirty bit, which the next puller re-stamps.
 /// See [`crate::persistence::Database::sanitize_push_snapshot`] for the exact set.
 fn clear_snapshot_dirty(snapshot: &Path) {
@@ -402,7 +402,7 @@ fn clear_snapshot_dirty(snapshot: &Path) {
 /// Snapshot the local per-machine `display_settings` from an existing cache file
 /// BEFORE a download-replace overwrites it. View toggles are stripped from the
 /// server copy on push (#197), so without re-applying them a fast-forward / re-open
-/// — which replaces the whole local `.stalx` with the server's — would reset the
+/// - which replaces the whole local `.stalx` with the server's - would reset the
 /// user's view to defaults. Empty when the file is absent or unreadable (a first
 /// open → defaults, which is correct). Pairs with [`restore_display_settings`].
 fn preserved_display_settings(dest: &Path) -> HashMap<String, String> {
@@ -415,7 +415,7 @@ fn preserved_display_settings(dest: &Path) -> HashMap<String, String> {
 }
 
 /// Re-apply preserved local `display_settings` into a freshly-downloaded cache file
-/// (companion to [`preserved_display_settings`]). Best-effort per key — a failed
+/// (companion to [`preserved_display_settings`]). Best-effort per key - a failed
 /// restore only means that one view toggle falls back to its default.
 fn restore_display_settings(
     db: &crate::persistence::Database,
@@ -429,7 +429,7 @@ fn restore_display_settings(
 }
 
 /// Resolve the server head, re-fetching ONCE when a recorded BASE meets an empty
-/// tip (#192). `(base Some, tip None)` is the fence's fail-closed trigger — but a
+/// tip (#192). `(base Some, tip None)` is the fence's fail-closed trigger - but a
 /// momentary empty read (replication lag, or a race right after project creation)
 /// must not be mistaken for "the history is gone," so re-fetch a single time
 /// before letting the caller fail closed. `(base None, tip None)` is the valid
@@ -446,7 +446,7 @@ where
     >,
 {
     let first = fetch()?;
-    // Key the retry on the TRUE transient signal — an EMPTY commit list — not on
+    // Key the retry on the TRUE transient signal - an EMPTY commit list - not on
     // `tip.is_none()`: tip_of also returns None for a multi-leaf FORK, which is not
     // transient and must fail closed immediately rather than waste a second GET
     // (#197 review). A recorded BASE meeting an empty history is the momentary
@@ -548,7 +548,7 @@ impl AppState {
         // [Track C] (#188): rehydrate first so a restart with a stored keychain
         // token reports logged_in:true without a re-login (the headline fix).
         self.speleodb_ensure_rehydrated();
-        // No network call — only the (local) session-lock error can surface here.
+        // No network call - only the (local) session-lock error can surface here.
         Ok(self.speleodb_session_lock().map_err(local_dto)?.status())
     }
 
@@ -786,11 +786,11 @@ impl AppState {
         result
     }
 
-    /// Full local token clear (keychain + plaintext + memory) + session reset —
+    /// Full local token clear (keychain + plaintext + memory) + session reset -
     /// the shared sink for the C5 auto-drop paths. Also drops the transient edit
     /// gate: `guard_mutation` reads only `edit_enabled`, so leaving it open after
     /// the token is gone would let the user keep editing a remote project that can
-    /// no longer be pushed. The server lock is intentionally NOT released here — a
+    /// no longer be pushed. The server lock is intentionally NOT released here - a
     /// 401 may be transient, and surrendering the single-writer claim on a flaky
     /// blip is worse than holding it; a re-login reconciles. (This is the AppState
     /// auto-drop sink; `Session::forget` is left untouched so the login
@@ -798,7 +798,7 @@ impl AppState {
     fn speleodb_forget(&self) {
         // Drop the transient edit gate for a remote edit session. A dead token
         // surfaces as a 401 on ANY SpeleoDB call (e.g. a background list_projects /
-        // refresh), and this is the auto-drop sink for all of them — so an
+        // refresh), and this is the auto-drop sink for all of them - so an
         // unconditional drop would silently turn an open LOCAL project read-only.
         // Mirror speleodb_logout's remote-gated, fail-SAFE drop exactly (#197
         // review): only a confirmed local-only project (NoRemoteProject) keeps the
@@ -820,7 +820,7 @@ impl AppState {
     /// downgrade): the box answers 403 for BOTH a real read-only / fence grant AND
     /// a dead token, so a 403 here is ambiguous. Probe the `/user/` whoami
     /// chokepoint (200 for any valid token, 403 for a dead one) and report the
-    /// token dead **iff** the probe also indicates death — a whoami success means a
+    /// token dead **iff** the probe also indicates death - a whoami success means a
     /// genuine permission denial, so the token is kept (never log out a read-only
     /// user). Only the ambiguous 403s (`ReadOnly` / `Fence`) reach the probe; an
     /// unambiguous `ReLogin` (whoami 403 / 401) is handled by
@@ -879,7 +879,7 @@ impl AppState {
 
     /// Log in: exchange email+password for a token (or accept a pasted `token`),
     /// store it backend-side, and record the session. The token never crosses
-    /// back to the webview — only the email + whether the keychain was used.
+    /// back to the webview - only the email + whether the keychain was used.
     pub(crate) fn speleodb_login(
         &self,
         override_endpoint: Option<String>,
@@ -944,7 +944,7 @@ impl AppState {
             }
             // [Track C] (#188): store() now returns the resolved TokenTier; only
             // Keychain counts as "backed" for the UI's restart warning (Plaintext
-            // and Memory both report false — #205 owns surfacing the distinction).
+            // and Memory both report false - #205 owns surfacing the distinction).
             let tier = session
                 .token_store
                 .store(&endpoint, &email, &token, allow_plaintext);
@@ -971,8 +971,8 @@ impl AppState {
     ) -> Result<Vec<SpeleoProjectSummary>, SpeleoErrorDto> {
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
-        // [Track C] (#188, C5): route through the 401 auto-drop handler — a
-        // genuine 401 on this established-session call fully clears the token —
+        // [Track C] (#188, C5): route through the 401 auto-drop handler - a
+        // genuine 401 on this established-session call fully clears the token -
         // then map the surfaced SpeleoDbError to the typed DTO ([Track A] D-B2).
         let projects = self
             .speleodb_handle_auth(
@@ -1013,7 +1013,7 @@ impl AppState {
         // FRESHNESS-FOLD SEAM (D-B1, #189/#191): #185's get_project/list_projects
         // return the authoritative Project; the pull stamp (project_name +
         // latest_commit_sha → speleo_link) and the cache-the-verdict fold land
-        // with #189/#191 — this call site is where they hook in.
+        // with #189/#191 - this call site is where they hook in.
         //
         // [Track C] (#188, C5): route through the 401 auto-drop handler before
         // mapping the surfaced SpeleoDbError to the typed DTO ([Track A] D-B2).
@@ -1032,7 +1032,7 @@ impl AppState {
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
         // Carry the user's local view toggles across the download-replace (a re-open
-        // of a previously-customized remote project shouldn't reset their view —
+        // of a previously-customized remote project shouldn't reset their view -
         // display_settings are stripped from the server copy). Empty on first open.
         let preserved_view = preserved_display_settings(&dest);
         dump.extract_entry_to(&entry, &dest).map_err(local_dto)?;
@@ -1040,7 +1040,7 @@ impl AppState {
         // Stamp BASE = the server's TRUE HEAD (the revision-topology leaf), NOT the
         // list/get_project `latest_commit` field, which is `max(authored_date)` and
         // ties to the root creation commit (see speleodb_server_head). The dump we
-        // just downloaded IS this HEAD's working tree, so BASE must match it — else
+        // just downloaded IS this HEAD's working tree, so BASE must match it - else
         // the first Start editing would needlessly fast-forward. Best-effort: fall
         // back to the caller-supplied SHA if the history can't be fetched (Start
         // editing then fast-forwards to reconcile).
@@ -1067,7 +1067,7 @@ impl AppState {
 
         // Concurrent same-account session notice (#193 b8): if the server already
         // reports a lock held by our OWN account, a second session is editing this
-        // project — the ancestry classifier's "author_email == me" proxy can't tell
+        // project - the ancestry classifier's "author_email == me" proxy can't tell
         // the two sessions apart (a second session's commit reads as "mine" and
         // could wrongly clear the dirty bit), so surface a notice on open. Computed
         // here, before `endpoint`/`token` are moved into the stamped link.
@@ -1324,13 +1324,13 @@ impl AppState {
     /// Forget the local token (keychain + in-memory) and clear the session. The
     /// DRF token is not revoked server-side, but if we were mid-edit on a remote
     /// project we best-effort RELEASE the write lock (it needs the token, so before
-    /// `forget`) so it isn't stranded, and drop the transient edit gate — a
+    /// `forget`) so it isn't stranded, and drop the transient edit gate - a
     /// token-less session must not keep mutating a project it can never push.
     pub(crate) fn speleodb_logout(&self) -> Result<(), SpeleoErrorDto> {
         // A held write lock exists only on a remote EDIT session (edit_enabled +
         // a remote link); a read-only-open or local project holds none. In that
         // case best-effort RELEASE the lock (needs the token, so before `forget`)
-        // and drop the gate — independent of whether the token still resolves, a
+        // and drop the gate - independent of whether the token still resolves, a
         // logged-out session must not keep editing a project it can never push.
         if self.edit_enabled() {
             match self.speleodb_open_link() {
@@ -1353,12 +1353,12 @@ impl AppState {
                     self.set_edit_enabled(false);
                     self.set_force_editing(false);
                 }
-                // Local-only project (no hand-off link): no lock, nothing to push —
+                // Local-only project (no hand-off link): no lock, nothing to push -
                 // keep it editable.
                 Err(SpeleoDbError::NoRemoteProject) => {}
                 // Couldn't determine locality (e.g. a poisoned database Mutex): the
                 // gate-drop is a SAFETY action, so it must not be skipped just because
-                // the link load failed — a logged-out session must not keep editing a
+                // the link load failed - a logged-out session must not keep editing a
                 // project it may be unable to push. Fail safe to read-only. (#197
                 // review; no project_id available here, so no lock release.)
                 Err(_) => {
@@ -1509,7 +1509,7 @@ impl AppState {
     /// reconcile; on contention the lock holder is reported. Errors (no
     /// permission, an anomalous server state, network) surface as `SpeleoErrorDto`.
     ///
-    /// Uses the base-SHA fence (#192) — NOT ancestry recovery (#193), which is the
+    /// Uses the base-SHA fence (#192) - NOT ancestry recovery (#193), which is the
     /// push path's concern (#197): start-editing only reconciles, it never pushes.
     /// `set_edit_enabled(true)` happens ONLY on a clean reconcile (UpToDate /
     /// FastForward), and for FastForward it happens AFTER the in-place reload (the
@@ -1584,7 +1584,7 @@ impl AppState {
             }
             ReconcileVerdict::FastForward => {
                 // A failure here (e.g. a corrupt re-pulled dump) leaves us holding
-                // the lock with a closed project — release it before surfacing the
+                // the lock with a closed project - release it before surfacing the
                 // error so it isn't stranded (mirrors the divergence arm).
                 let local_path = match self.speleodb_fast_forward(
                     &endpoint,
@@ -1614,7 +1614,7 @@ impl AppState {
             // inconsistency (non-linear / multi-root / a recorded BASE with no tip):
             // can't edit a diverged/anomalous copy. Release the lock we just took so
             // it isn't stranded while the user reconciles (#198, next batch) and
-            // surface the divergence prompt — never overwrite, never a hard error
+            // surface the divergence prompt - never overwrite, never a hard error
             // (#193 b2). The edit gate stays disabled.
             ReconcileVerdict::Diverged => {
                 self.speleodb_release_best_effort(
@@ -2315,7 +2315,7 @@ impl AppState {
 
     /// Best-effort: re-GET the project and return who holds its mutex (the active
     /// lock's user email), or `None` if unlocked / the lookup fails. Deliberately NOT
-    /// routed through [`Self::speleodb_handle_auth`] — these are best-effort
+    /// routed through [`Self::speleodb_handle_auth`] - these are best-effort
     /// lock-holder probes (the concurrent-session notice on open, the contended-lock
     /// report), so a transient 401 must fall through rather than auto-drop the whole
     /// session (#197 review). Shared by both probe sites so they can't diverge.
@@ -2384,7 +2384,7 @@ impl AppState {
         let entry = classify_dump_entry(&dump.entry_paths()?)?;
         let dest = self.speleodb_cache_path(project_id)?;
         // Capture the user's local view toggles BEFORE the download replaces the
-        // file — they're stripped from the server copy, so they'd otherwise reset
+        // file - they're stripped from the server copy, so they'd otherwise reset
         // to defaults on every fast-forward.
         let preserved_view = preserved_display_settings(&dest);
         dump.extract_entry_to(&entry, &dest)?;
@@ -2429,7 +2429,7 @@ impl AppState {
         // project so do_load_project_full's "already open" guard won't reject the
         // same path; do_load_project_full re-opens it. The pulled snapshot carries
         // NO undo/redo history (stripped on push by sanitize_push_snapshot, #194 b3),
-        // so the reload starts the in-memory stacks empty — i.e. adopt-remote resets
+        // so the reload starts the in-memory stacks empty - i.e. adopt-remote resets
         // undo/redo, never inheriting the pusher's edit history.
         let local_path = dest.to_string_lossy().into_owned();
         self.close_project();
@@ -2439,11 +2439,11 @@ impl AppState {
     }
 
     /// Render the open remote project to a scratch `ariane.tml` at `dest` for
-    /// co-push (#196). Mints a stable UUID for any shot still missing one — a
+    /// co-push (#196). Mints a stable UUID for any shot still missing one - a
     /// no-op for modern files; for legacy pre-v6 shots it mints AND persists so
     /// the canonical `.stalx` (hence its push snapshot) shares the identity the
     /// `.tml` carries. Renders via `export_tml` DIRECTLY (never the collab sibling
-    /// `export_tml_with_baseline`), discarding the baseline — the `.tml` is a
+    /// `export_tml_with_baseline`), discarding the baseline - the `.tml` is a
     /// throwaway render sidecar, not the collab round-trip file.
     fn speleodb_render_tml(&self, dest: &Path) -> Result<(), SpeleoDbError> {
         // Snapshot the in-memory project so the UUID-persist + render run without
@@ -2505,7 +2505,7 @@ impl AppState {
 
         // Edit-session gate: Done acts only on an ACTIVE edit session. The edit gate
         // is set true only by Start editing (after acquiring the lock) / its FF arm,
-        // so `!edit_enabled` means we hold no lock — opened read-only, or already
+        // so `!edit_enabled` means we hold no lock - opened read-only, or already
         // finished. Releasing here would POST /release/ for a mutex this session
         // never acquired (a confusing Fence error, or a 401 that auto-drops the
         // token). We are already read-only, so report Released without a server call.
@@ -2529,7 +2529,7 @@ impl AppState {
                 // landed after push_start (edits_captured_by_push == false): that edit
                 // is not on the server yet. Re-read the link and, if it is still dirty,
                 // keep the lock + editability and report PushUnconfirmed so a retry of
-                // Done re-pushes the late edit — releasing now would strand it
+                // Done re-pushes the late edit - releasing now would strand it
                 // read-only until a fresh Start editing. Only release once clean.
                 let still_dirty = self
                     .speleodb_open_link()
@@ -2539,7 +2539,7 @@ impl AppState {
                     return Ok(DoneResult::PushUnconfirmed);
                 }
                 // Edits are safely on the server; release the lock and go
-                // read-only. Drop the edit gate only after a confirmed release —
+                // read-only. Drop the edit gate only after a confirmed release -
                 // if release fails the lock is still held, so a retry of Done
                 // (now a no-op push, dirty already cleared) re-attempts it.
                 self.speleodb_handle_auth(
@@ -2626,7 +2626,7 @@ impl AppState {
             ReconcileVerdict::FastForward => {
                 // speleodb_fast_forward reloads in place, which re-derives the edit
                 // gate from is_remote (= false for a remote project). If the caller
-                // was mid-edit-session (gate on, lock held — reachable if the lock
+                // was mid-edit-session (gate on, lock held - reachable if the lock
                 // lapsed/was admin-released and another writer advanced the tip),
                 // a clean FF must NOT silently strip editability; restore it after
                 // the reload, mirroring speleodb_start_editing's FF arm. Captured
@@ -2651,8 +2651,8 @@ impl AppState {
     /// Resolve the server's TRUE HEAD and return it with the full revision
     /// history. The server's `latest_commit` field (carried by acquire /
     /// get_project / list) is `max(authored_date)` and ties to the ROOT creation
-    /// commit when commits land within the same second — verified unreliable both
-    /// live and in the server source — so every fence resolves the tip from the
+    /// commit when commits land within the same second - verified unreliable both
+    /// live and in the server source - so every fence resolves the tip from the
     /// parent-id topology ([`sync::tip_of`]) instead. Returns `(tip, commits)`;
     /// `tip` is `None` for an empty / ambiguous (forked) history.
     fn speleodb_server_head(
@@ -2684,7 +2684,7 @@ impl AppState {
     ) -> Result<PushOutcome, SpeleoErrorDto> {
         let project_id = &link.project_id;
 
-        // Authoritative server tip — the revision topology, NOT the unreliable
+        // Authoritative server tip - the revision topology, NOT the unreliable
         // latest_commit field (see speleodb_server_head). The fetched history is
         // reused for ancestry recovery below, so this is the only revisions GET.
         let (tip, commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
@@ -2700,7 +2700,7 @@ impl AppState {
 
         // push-start is not persisted, so the ancestry timing stays conservative
         // (clear_dirty == false → AdoptThenUpload, never AdoptConfirmed) and we
-        // re-push on top of any landed commit — a no-op 304 if nothing changed.
+        // re-push on top of any landed commit - a no-op 304 if nothing changed.
         match sync::plan_push(
             link.base_commit_sha.as_deref(),
             tip.as_deref(),
@@ -2730,7 +2730,7 @@ impl AppState {
                 return Ok(PushOutcome::Confirmed);
             }
             // A stranger's commit, OR a server inconsistency (non-linear / multi-root
-            // / a recorded BASE with no tip): never overwrite or guess — surface the
+            // / a recorded BASE with no tip): never overwrite or guess - surface the
             // divergence prompt (#193 b2 + b5). Stays locked + dirty in speleodb_done.
             PushPlan::Diverged => return Ok(PushOutcome::Diverged),
         }
@@ -2792,7 +2792,7 @@ impl AppState {
 
         // Push-start fence (#197): capture the instant BEFORE the flush/snapshot.
         // Any edit recorded after this (last_edit_at > push_start) is NOT in the
-        // snapshot we upload, so a confirmed push must NOT clear its dirty bit — it
+        // snapshot we upload, so a confirmed push must NOT clear its dirty bit - it
         // is re-pushed on the next Done instead of being silently dropped. (dirty
         // edits always carry a last_edit_at: mark_remote_dirty stamps both
         // together, so the None branch of edits_captured_by_push is unreachable for
@@ -2834,7 +2834,7 @@ impl AppState {
         match result {
             // 200: BASE advances to the adopted hexsha. Clear the dirty bit ONLY if
             // no edit was recorded after push_start (else a concurrent edit during
-            // the upload would be dropped — keep it dirty so the next Done re-pushes
+            // the upload would be dropped - keep it dirty so the next Done re-pushes
             // it). BASE advances unconditionally: the uploaded snapshot IS the new
             // base; a kept late edit is a clean second commit on top of it.
             Ok(pushed) => {
@@ -2850,7 +2850,7 @@ impl AppState {
                 Ok(PushOutcome::Confirmed)
             }
             Err(e) => {
-                // 304: the remote tree already matches — clear dirty (same push-start
+                // 304: the remote tree already matches - clear dirty (same push-start
                 // guard as the 200 path), BASE unchanged.
                 if matches!(&e, SpeleoDbError::Status { status: 304, .. }) {
                     self.speleodb_mutate_link(|l| {
@@ -2866,7 +2866,7 @@ impl AppState {
                     return Ok(PushOutcome::Confirmed);
                 }
                 // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
-                // don't know whether it landed — stay dirty, recover via ancestry
+                // don't know whether it landed - stay dirty, recover via ancestry
                 // on the next attempt.
                 let ambiguous = match &e {
                     SpeleoDbError::Status { status, .. } => {
@@ -3202,7 +3202,7 @@ mod tests {
     #[test]
     fn clear_snapshot_dirty_clears_the_flag_in_the_copy() {
         // #197 guardrail: the push snapshot must never carry has_unpushed_edits to
-        // the server — clear_snapshot_dirty wipes the dirty bit (and last_edit_at)
+        // the server - clear_snapshot_dirty wipes the dirty bit (and last_edit_at)
         // in the COPY while preserving the hand-off identity.
         let temp = TempDir::new().expect("temp dir");
         let path = temp.path().join("snap.stalx");
@@ -3234,7 +3234,7 @@ mod tests {
             "dirty bit cleared in the snapshot copy"
         );
         assert_eq!(link.last_edit_at, None, "last_edit_at cleared too");
-        // Identity is preserved — only the dirty bit / timestamp change.
+        // Identity is preserved - only the dirty bit / timestamp change.
         assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
         assert_eq!(link.project_id, "11111111-1111-1111-1111-111111111111");
     }
@@ -3243,7 +3243,7 @@ mod tests {
     fn local_display_settings_survive_a_download_replace() {
         // #197: view toggles are stripped from the server copy, so a fast-forward /
         // re-open (which replaces the whole local .stalx with the server's) must
-        // carry the user's local display_settings across the overwrite — otherwise
+        // carry the user's local display_settings across the overwrite - otherwise
         // their view resets to defaults on every sync.
         let temp = TempDir::new().expect("temp dir");
         let dest = temp.path().join("cache.stalx");
@@ -3298,7 +3298,7 @@ mod tests {
         let calls = std::cell::Cell::new(0u32);
         // The settled read returns a realistic shape: a resolved tip always rides a
         // non-empty history (tip_of(&[]) is None), so the success case carries a
-        // commit — not the unreachable (Some, empty) pair (#197 review).
+        // commit - not the unreachable (Some, empty) pair (#197 review).
         let settled = vec![crate::speleodb::models::RevisionCommit {
             id: "tip-sha".to_owned(),
             parent_ids: vec!["base-sha".to_owned()],
@@ -3382,7 +3382,7 @@ mod tests {
     #[test]
     fn head_no_retry_on_fork() {
         // #197 review: a multi-leaf FORK also yields tip None, but it is NOT a
-        // transient empty read — it must fail closed immediately, never burning a
+        // transient empty read - it must fail closed immediately, never burning a
         // second GET. Keyed on the (non-empty) commit list, not tip.is_none().
         let calls = std::cell::Cell::new(0u32);
         let fork = vec![
@@ -3415,16 +3415,16 @@ mod tests {
     fn base_commit_sha_advances_only_at_sanctioned_sites() {
         // Tripwire (mirrors the MUTATION_ENTRYPOINTS guard): BASE may change ONLY
         // via the sanctioned triggers. If a count below changes, a base write was
-        // added/removed — confirm the new site is a legitimate trigger before
+        // added/removed - confirm the new site is a legitimate trigger before
         // updating it. (#192/#193/#197)
         //
         //   mutate `l.base_commit_sha =` (inside speleodb_mutate_link closures):
-        //     1. push 200 confirmed — advance to the adopted hexsha
-        //     2. push ancestry Landed — advance BASE to tip
-        //     3. push ancestry Landed — already-up-to-date sub-case
+        //     1. push 200 confirmed - advance to the adopted hexsha
+        //     2. push ancestry Landed - advance BASE to tip
+        //     3. push ancestry Landed - already-up-to-date sub-case
         //   struct-init `base_commit_sha:` (a fresh SpeleoLink):
-        //     1. speleodb_open_project — stamp BASE on pull
-        //     2. speleodb_fast_forward — re-stamp BASE = tip after a clean FF
+        //     1. speleodb_open_project - stamp BASE on pull
+        //     2. speleodb_fast_forward - re-stamp BASE = tip after a clean FF
         //     3. speleodb_publish - stamp BASE = the create response's latest_commit
         //        (None for a brand-new repo) when minting the link for a published
         //        local project (#207)
@@ -3454,8 +3454,8 @@ mod tests {
     fn push_flushes_to_disk_before_snapshotting() {
         // #195 quiescent-point invariant: the push must flush in-memory edits to the
         // live .stalx (save_project) BEFORE taking the VACUUM snapshot, or the
-        // uploaded snapshot would miss the last edit (data loss). The snapshot — NOT
-        // the live bytes — is then what upload_auto streams. The ordering can't be
+        // uploaded snapshot would miss the last edit (data loss). The snapshot - NOT
+        // the live bytes - is then what upload_auto streams. The ordering can't be
         // observed without a client seam, so pin it structurally (like the
         // BASE-advance tripwire); the live round-trips prove the behaviour itself.
         let src = include_str!("speleodb.rs");
@@ -3475,7 +3475,7 @@ mod tests {
             .expect("push streams via upload_auto");
         assert!(
             save < vacuum,
-            "save_project (flush) must precede vacuum_snapshot — the snapshot must be quiescent (#195)"
+            "save_project (flush) must precede vacuum_snapshot - the snapshot must be quiescent (#195)"
         );
         assert!(
             vacuum < upload_call,
@@ -3486,7 +3486,7 @@ mod tests {
     #[test]
     fn push_renders_via_pure_export_tml_not_the_collab_pipeline() {
         // #196 b1 + b5: the push renders the .tml through the PURE export_tml and
-        // never routes through the Ariane-collab pipeline — export_tml_with_baseline
+        // never routes through the Ariane-collab pipeline - export_tml_with_baseline
         // (whose baseline would be discarded) is not called, and nothing in the push
         // writes the collab sibling, so CollabState / reconcile.rs / sibling-.tml stay
         // untouched. Pin it structurally (like the BASE-advance + quiescent tripwires)
@@ -3517,13 +3517,13 @@ mod tests {
         // Nothing in the push ever CALLS the Ariane-collab sibling writer.
         assert!(
             !prod.contains("write_collab_sibling("),
-            "the push must never call write_collab_sibling — sibling-.tml stays untouched (#196 b5)"
+            "the push must never call write_collab_sibling - sibling-.tml stays untouched (#196 b5)"
         );
     }
 
     #[test]
     fn forget_keeps_local_project_editable() {
-        // #197 review: speleodb_forget is the dead-token auto-drop sink — it runs on a
+        // #197 review: speleodb_forget is the dead-token auto-drop sink - it runs on a
         // 401 from ANY SpeleoDB call (e.g. a background list_projects/refresh). It must
         // NOT turn an open LOCAL project read-only; only a remote edit session loses
         // the gate. (No remote link open here → open_link Err → gate untouched.)
@@ -3849,10 +3849,10 @@ mod tests {
     #[test]
     fn rehydration_is_idempotent_and_skips_live_session() {
         // Once attempted, a second rehydrate (even with a now-seeded keychain) is
-        // a no-op — it won't clobber or re-probe. The `Arc<InMemoryStore>` handle
+        // a no-op - it won't clobber or re-probe. The `Arc<InMemoryStore>` handle
         // (via the `SharedStore` delegating wrapper below) lets the test seed the
-        // keychain *after* the latch is set, proving the latch — not an empty
-        // store — is what keeps the second rehydrate logged-out.
+        // keychain *after* the latch is set, proving the latch - not an empty
+        // store - is what keeps the second rehydrate logged-out.
         let endpoint = "https://x/";
         let email = "u@x";
         let keychain = std::sync::Arc::new(InMemoryStore::new());
@@ -3913,7 +3913,7 @@ mod tests {
         // The pure half of the ambiguous-403 disambiguation: a whoami 403/401
         // (→ ReLogin on the User endpoint) means the token is dead; a whoami
         // success means it is alive (so a resource 403 was a real permission
-        // denial — keep it, D-B4); a 5xx / transport probe is inconclusive → not
+        // denial - keep it, D-B4); a 5xx / transport probe is inconclusive → not
         // dead (never drop on a flaky probe).
         assert!(whoami_indicates_dead_token(&Err(SpeleoDbError::Status {
             status: 403,
@@ -4066,7 +4066,7 @@ mod tests {
 
     #[test]
     fn resolve_endpoint_precedence_and_trimming() {
-        // Override wins over env and config (trailing slash is left intact —
+        // Override wins over env and config (trailing slash is left intact -
         // normalization is account_key's job, not the resolver's).
         assert_eq!(
             resolve_endpoint(
@@ -4164,7 +4164,7 @@ mod tests {
     // ===================== Live orchestration round-trips (#194/#197) =========
     // AppState driven against the REAL dev box: the full wiring (acquire ->
     // server_head -> fence -> edit gate / fast-forward / push / release) with real
-    // server responses — what the offline LoopbackStub cannot reproduce. Gated on
+    // server responses - what the offline LoopbackStub cannot reproduce. Gated on
     // DEV_SPELEODB_* + #[ignore]; run with `--ignored --test-threads=1`.
 
     use crate::core::{AppState, Command};
@@ -4195,7 +4195,7 @@ mod tests {
     }
 
     /// The second pre-provisioned collaborator account (email + password). `None`
-    /// when `DEV_SPELEODB_EMAIL2`/`_PASSWORD2` are unset — the two-account tests
+    /// when `DEV_SPELEODB_EMAIL2`/`_PASSWORD2` are unset - the two-account tests
     /// skip rather than fail. (That account can't be created over HTTP; see
     /// docs/speleodb-dev-testing.md.)
     fn orch_env2() -> Option<(String, String)> {
@@ -4286,7 +4286,7 @@ mod tests {
     /// Open a remote project INTO this AppState: run the REAL download + BASE-stamp
     /// pull (`speleodb_open_project`), then load the extracted `.stalx` into state.
     /// The production load (`do_load_project_full`) needs a Wry `AppHandle` we can't
-    /// build headless, so we do its essential work directly — open the db + project
+    /// build headless, so we do its essential work directly - open the db + project
     /// and drop the edit gate (a freshly pulled remote project is read-only until
     /// Start editing). The push path reads the same `speleodb_cache_path`, so the
     /// `file_path` we stamp here matches the live `.stalx` the upload snapshots.
@@ -4415,7 +4415,7 @@ mod tests {
     // NOTE on fast-forward coverage: the FF *decision* (clean local + moved tip ->
     // FastForward) is exhaustively unit-tested in `sync.rs` (fence/ancestry). Its
     // *execution* re-pulls and reloads via `do_load_project_full`, which hard-requires
-    // a Wry `AppHandle` (progress events) that can't be built in a headless test —
+    // a Wry `AppHandle` (progress events) that can't be built in a headless test -
     // so a live FF orchestration test is intentionally omitted here rather than
     // asserting a test-environment artifact.
 
@@ -4538,7 +4538,7 @@ mod tests {
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
     fn live_orch_pushed_snapshot_carries_no_undo_history() {
         // #194 b3: an edit builds local undo history; after Done (push), the copy
-        // the SERVER stores must carry NO undo/redo — so any collaborator adopting
+        // the SERVER stores must carry NO undo/redo - so any collaborator adopting
         // it starts with a clean slate (never inheriting + replaying the pusher's
         // edit history, a data-corruption vector).
         let Some((url, email, password)) = orch_env() else {
@@ -4617,7 +4617,7 @@ mod tests {
     #[test]
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* + _EMAIL2/_PASSWORD2 (run with --ignored --test-threads=1)"]
     fn live_orch_start_editing_reports_locked_by_other_account() {
-        // #194 b5: a contended acquire (HTTP 400 — lock held by someone else) maps
+        // #194 b5: a contended acquire (HTTP 400 - lock held by someone else) maps
         // to StartEditingResult::LockedBy{email}, surfacing WHO holds it, not an
         // error. Needs the second collaborator account.
         let (Some((url, owner_email, owner_pw)), Some((email2, pw2))) = (orch_env(), orch_env2())
@@ -4661,7 +4661,7 @@ mod tests {
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
     fn live_orch_pushed_dump_is_self_contained_without_sidecars() {
         // #195 end-to-end against the real server: after a Done push, the dump the
-        // server STORED must be exactly the VACUUM snapshot — one self-contained
+        // server STORED must be exactly the VACUUM snapshot - one self-contained
         // `.stalx` (opens via open_existing with the pushed edit) co-pushed with the
         // `ariane.tml`, and NO `-wal`/`-journal`/`-shm` sidecar ever rode along
         // (bullets 1/2/3). The cache `.stalx` is default DELETE journal mode, so this
@@ -4713,14 +4713,14 @@ mod tests {
                 );
             }
         }
-        // Exactly one `.stalx` (the snapshot) — never the ambiguous multi-.stalx shape.
+        // Exactly one `.stalx` (the snapshot) - never the ambiguous multi-.stalx shape.
         let stalx_count = entries.iter().filter(|e| e.ends_with(".stalx")).count();
         assert_eq!(
             stalx_count, 1,
             "the server dump must hold exactly one .stalx, got {entries:?}"
         );
         // (#196 b2/b3/b5) the .tml is co-pushed, lands as `ariane.tml`, and is the
-        // ONLY .tml — no Ariane-collab sibling rode along.
+        // ONLY .tml - no Ariane-collab sibling rode along.
         assert!(
             entries.iter().any(|e| e.ends_with("ariane.tml")),
             "the render must be co-pushed as ariane.tml, got {entries:?}"
@@ -4728,7 +4728,7 @@ mod tests {
         let tml_count = entries.iter().filter(|e| e.ends_with(".tml")).count();
         assert_eq!(
             tml_count, 1,
-            "exactly one .tml (ariane.tml) — no collab sibling rode along, got {entries:?}"
+            "exactly one .tml (ariane.tml) - no collab sibling rode along, got {entries:?}"
         );
 
         // (1/2) it extracts + opens as a SELF-CONTAINED DB carrying the pushed edit.
@@ -4762,7 +4762,7 @@ mod tests {
     fn live_orch_pushed_tml_byte_stable_vs_rerender() {
         // #196 b4 end-to-end: the ariane.tml the server STORED must be byte-identical
         // to a fresh local re-render of the same (UUID-minted) project. The render is
-        // deterministic — the one-time shot-UUID pass ran on push — so re-pushing
+        // deterministic - the one-time shot-UUID pass ran on push - so re-pushing
         // unchanged content never churns the .tml. (The offline byte-stability test
         // proves export_tml is deterministic; this proves the bytes the server holds
         // are exactly that deterministic render, intact through the round-trip.)
@@ -4833,7 +4833,7 @@ mod tests {
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
     fn live_orch_done_without_edits_skips_push_and_releases() {
         // #197 b1: a non-dirty Done must push NOTHING (the dirty-bit gate skips the
-        // upload) yet still release the lock back to read-only — no empty commit.
+        // upload) yet still release the lock back to read-only - no empty commit.
         let Some((url, email, password)) = orch_env() else {
             return;
         };
@@ -4891,7 +4891,7 @@ mod tests {
     #[test]
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
     fn live_orch_ambiguous_upload_preserves_dirty_bit() {
-        // #197 b5: an ambiguous push (transport drop / exhausted 5xx — we never learn
+        // #197 b5: an ambiguous push (transport drop / exhausted 5xx - we never learn
         // whether it landed) must NOT clear the dirty bit or advance BASE; the
         // un-pushed edits survive for ancestry recovery (g7) on the next Done. Forced
         // by pointing the UPLOAD at a dead port (connection refused -> Transport ->

@@ -112,7 +112,7 @@ export default function ZeroDatumConfigDialog({
     if (value !== null) {
       setPreviewStationIndex(parseInt(value, 10));
     } else {
-      // Dropdown closed without selection — revert
+      // Dropdown closed without selection - revert
       setPreviewStationIndex(stationIndexRef.current);
     }
   }, []);
@@ -306,7 +306,7 @@ export default function ZeroDatumConfigDialog({
           className="flex-1 min-w-0 overflow-y-auto p-4 space-y-5"
           data-testid="zero-datum-config-right-pane"
         >
-          {/* Zero Datum Location — prominent card */}
+          {/* Zero Datum Location - prominent card */}
           <div className="rounded-lg border border-accent/30 bg-accent/5 p-4 space-y-3">
             <div>
               <h3 className="text-sm font-semibold text-text-primary">

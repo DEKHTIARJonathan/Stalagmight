@@ -10,7 +10,7 @@
 #
 # Run from the repo root. Writes results to ./build-profile-<timestamp>.log.
 # Cargo's --timings flag also produces an HTML breakdown at
-# <target>/cargo-timings/cargo-timing.html — open that for a per-crate view.
+# <target>/cargo-timings/cargo-timing.html - open that for a per-crate view.
 
 set -euo pipefail
 
@@ -101,7 +101,7 @@ run_timed() {
     status=0
   else
     status=$?
-    echo "(command exited non-zero [$status] — see full log above)"
+    echo "(command exited non-zero [$status] - see full log above)"
     FAILED=1
   fi
   end=$(date +%s)
@@ -163,7 +163,7 @@ fi
 # First tsc run produces the .tsbuildinfo file (incremental cache).
 run_timed "tsc --noEmit (first run)" pnpm typecheck
 
-# Second run benefits from the cache — this is the true edit-loop cost.
+# Second run benefits from the cache - this is the true edit-loop cost.
 run_timed "tsc --noEmit (incremental)" pnpm typecheck
 
 if [[ "$VITE" -eq 1 ]]; then
@@ -181,6 +181,6 @@ echo "Finished: $(date)"
 echo "Full log: $LOG"
 
 if [[ "$FAILED" -ne 0 ]]; then
-  echo "One or more profiled steps exited non-zero — see the log above." >&2
+  echo "One or more profiled steps exited non-zero - see the log above." >&2
   exit 1
 fi

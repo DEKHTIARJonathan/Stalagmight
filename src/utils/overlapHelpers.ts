@@ -108,7 +108,7 @@ export function computeOverlapIds(
 }
 
 /**
- * Compute the subset of overlap IDs that are "actionable" — shots up to
+ * Compute the subset of overlap IDs that are "actionable" - shots up to
  * (but not past) the merge station.
  *
  * Front: shots 0..mergeImportStation-1

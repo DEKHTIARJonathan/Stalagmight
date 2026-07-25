@@ -67,8 +67,8 @@ pub(crate) fn resolve_warning_impl(
 ) -> Result<(), String> {
     // Errors are not ignorable (issue #57): refuse to persist a suppression for
     // any error-severity warning (over-anchoring, invalid pitch/azimuth, zero/
-    // negative length, length-below-depth, negative LRUD). One predicate —
-    // `warning_is_ignorable` — is the single policy source shared with the
+    // negative length, length-below-depth, negative LRUD). One predicate -
+    // `warning_is_ignorable` - is the single policy source shared with the
     // warnings computation. Returning Ok keeps callers simple, and
     // compute_project_warnings never honors such a row regardless.
     if !warning_is_ignorable(&warning_code) {
@@ -82,7 +82,7 @@ pub(crate) fn resolve_warning_impl(
 
     // Policy (issue #57): UUID-keyed suppression is the only supported model for
     // new ignores. shot_uuid_for returns None only when no project is open, the
-    // lock is poisoned, or the (section_id, shot_id) shot does not exist — in
+    // lock is poisoned, or the (section_id, shot_id) shot does not exist - in
     // every case we cannot bind a stable identity, so refuse rather than write a
     // position-keyed row that could later suppress an unrelated shot reusing the id.
     let Some(shot_uuid) = state.shot_uuid_for(section_id, shot_id) else {
@@ -106,7 +106,7 @@ pub(crate) fn resolve_warning_impl(
     // shot's UUID is minted in memory and not written until the project is saved;
     // keying the ignore by it would orphan the row on the next open (different
     // UUIDs are minted), losing the ignore for a legacy file closed without saving.
-    // Fall back to a legacy position-keyed ignore for such a shot — it survives via
+    // Fall back to a legacy position-keyed ignore for such a shot - it survives via
     // the position fallback and the load-time backfill upgrades it once the UUID is
     // persisted (issue #57 / Codex).
     let shot_uuid = if state.shot_uuid_is_persisted(&shot_uuid) {

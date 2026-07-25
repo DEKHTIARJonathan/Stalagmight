@@ -1,8 +1,8 @@
 /**
  * GLSL ES 3.00 shader sources for the dedicated MEASURE-PATH custom layer (#26,
  * stage 2a of #customRender stock deletion). A small sibling of `shaders.ts` /
- * `ghostShaders.ts`: it draws the measured along-cave-line path — the ruler's
- * result — as round-cap tint lines (the measured shots) and filled tint discs
+ * `ghostShaders.ts`: it draws the measured along-cave-line path - the ruler's
+ * result - as round-cap tint lines (the measured shots) and filled tint discs
  * (the measured stations), so the tint no longer depends on the stock
  * `survey-measure-path` layer reading the stock `-shots` vector-tile source.
  *

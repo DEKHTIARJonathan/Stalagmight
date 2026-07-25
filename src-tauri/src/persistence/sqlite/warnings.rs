@@ -61,9 +61,9 @@ impl Database {
         // The legacy UNIQUE(section_id, shot_id, warning_code) keys rows by
         // POSITION, but a UUID-keyed ignore's real identity is its shot_uuid. A
         // plain INSERT OR REPLACE would, on a positional collision, delete a
-        // DIFFERENT live shot's by-UUID ignore that occupies that slot — e.g. after
+        // DIFFERENT live shot's by-UUID ignore that occupies that slot - e.g. after
         // a save remapped rows to sequence positions while the open project still
-        // uses pre-save shot ids — silently losing it (issue #57 / Codex). Use a
+        // uses pre-save shot ids - silently losing it (issue #57 / Codex). Use a
         // conditional upsert that only ever overwrites the SAME shot's row (or
         // upgrades a legacy NULL-uuid row at that position), never a different
         // shot's UUID-keyed row. `excluded` is the row we tried to insert.
@@ -98,7 +98,7 @@ impl Database {
             // reload). Roll back (drop without commit) so neither ignore is lost,
             // and surface the failure so the caller can prompt a reload + retry.
             anyhow::bail!(
-                "could not record this ignore: its position is held by another shot's ignore — reload the project and try again"
+                "could not record this ignore: its position is held by another shot's ignore - reload the project and try again"
             );
         }
         tx.commit()?;
@@ -108,7 +108,7 @@ impl Database {
     /// Whether `uuid` is already stored in the on-disk `shots` table. A pre-v6
     /// shot's UUID is minted only in memory until the project is saved, so keying
     /// a new ignore by such an unpersisted UUID would orphan the row on the next
-    /// open (different UUIDs are minted) — the resolve path keeps those ignores
+    /// open (different UUIDs are minted) - the resolve path keeps those ignores
     /// position-keyed instead (issue #57 / Codex).
     pub fn shot_uuid_is_persisted(&self, uuid: &str) -> Result<bool> {
         let exists: bool = self.conn.query_row(
@@ -121,12 +121,12 @@ impl Database {
 
     /// Delete any resolved-warning rows matching `warning`. When a `shot_uuid`
     /// is present we match its own (section_id, uuid) row, plus any *legacy*
-    /// NULL-uuid row at the same `(section_id, shot_id)` — but NEVER a *different*
+    /// NULL-uuid row at the same `(section_id, shot_id)` - but NEVER a *different*
     /// shot's valid by-UUID row that happens to occupy that position after a
     /// renumber (the `shot_uuid IS NULL` guard on the position branch ensures
     /// that). The UUID branch is constrained by `section_id` because
     /// `ensure_unique_shot_uuids` only de-dups within a section, so two sections
-    /// can share a shot UUID — without the section guard, ignoring/un-ignoring on
+    /// can share a shot UUID - without the section guard, ignoring/un-ignoring on
     /// one section would clear the other's suppression too (issue #57 / Codex).
     /// This lets un-ignoring a live shot still clear a legacy position-keyed
     /// suppression of that same shot even on a load path that did not run the
@@ -224,7 +224,7 @@ impl Database {
         {
             // Conditional upsert (see save_resolved_warning): on a positional
             // collision only the SAME shot's row is overwritten, or a legacy
-            // NULL-uuid row at that position is UPGRADED to the new UUID — a
+            // NULL-uuid row at that position is UPGRADED to the new UUID - a
             // different shot's UUID-keyed ignore is never clobbered. This both
             // collapses a batch that maps two warnings to one (shot, code) and
             // absorbs a legacy NULL-uuid row colliding with a remapped UUID row

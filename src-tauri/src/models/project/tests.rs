@@ -55,7 +55,7 @@ fn get_connected_section_ids_traverses_merges() {
 fn station_key_round_trips_and_tracks_station_across_insert() {
     // A StationKey (stored, position-independent) round-trips with the positional
     // StationRef, and crucially tracks the SAME physical station when an unrelated
-    // shot insert renumbers indices — the property that lets the stable-identity
+    // shot insert renumbers indices - the property that lets the stable-identity
     // refactor delete shift_station_refs.
     let mut project = Project::new("Keys".to_string(), None);
     let a = project
@@ -100,8 +100,8 @@ fn station_key_round_trips_and_tracks_station_across_insert() {
 fn station_key_deserializes_legacy_positional_shape() {
     // Persisted undo snapshots (and offset/comment keys) written by pre-anchor
     // builds embed station refs in the old positional `{section_id, station_index}`
-    // shape. The current StationKey must still deserialize them — mapping the index
-    // to a transitional anchor — so opening an old project after upgrading does not
+    // shape. The current StationKey must still deserialize them - mapping the index
+    // to a transitional anchor - so opening an old project after upgrading does not
     // silently drop its undo history (the old blob would fail to parse otherwise).
     // Legacy index 0 -> SectionStart.
     let start: StationKey = serde_json::from_str(r#"{"section_id":3,"station_index":0}"#).unwrap();
@@ -124,7 +124,7 @@ fn station_key_deserializes_legacy_positional_shape() {
 #[test]
 fn cascade_bfs_does_not_propagate_through_a_non_finite_section() {
     // A section with non-finite (NaN/inf) geometry must be treated like a dangling
-    // edge: cascade_bfs must NOT mark it — nor anything reachable ONLY through it —
+    // edge: cascade_bfs must NOT mark it - nor anything reachable ONLY through it -
     // authoritative, or it would seed propagation from an unpositioned section and
     // mis-locate that section's other merge partners. (Regression guard: the bug
     // anchored + enqueued the neighbour unconditionally, skipping only the offset
@@ -196,7 +196,7 @@ fn station_ref_traversals_cover_every_bearing_collection() {
     // for_each_station_ref / map_station_refs are the single enumeration of every
     // StationRef-bearing collection. If a new such collection is added without
     // wiring it in here, this test (and the integrity check that consumes the
-    // traversal) won't see it — the failure that motivates centralizing them.
+    // traversal) won't see it - the failure that motivates centralizing them.
     let mut project = Project::new("Refs".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -277,7 +277,7 @@ fn station_ref_traversals_cover_every_bearing_collection() {
     });
     // Pure traversal mechanics: keys were inserted as transitional Index anchors
     // and never reanchored, so compare the rewritten keys directly (a:2 is
-    // intentionally past the end — this checks the rewrite, not resolvability).
+    // intentionally past the end - this checks the rewrite, not resolvability).
     assert_eq!(
         project.station_merges[0].station_a,
         StationRef::new(a, 2).into()
@@ -1213,7 +1213,7 @@ fn set_zero_datum_rejects_across_multi_hop_merge_chain() {
         mk(&mut project),
     );
 
-    // Chain A — B — C — D, each merge joining one section's end to the next's start.
+    // Chain A - B - C - D, each merge joining one section's end to the next's start.
     for (x, y) in [(a, b), (b, c), (c, d)] {
         project.station_merges.push(StationMerge {
             station_a: StationRef::new(x, 1).into(),
@@ -1240,8 +1240,8 @@ fn set_zero_datum_rejects_across_multi_hop_merge_chain() {
 fn convert_orphan_closures_leaves_double_anchored_groups_unconverted() {
     // Two independently GPS-anchored surveys (separate merge components) joined only
     // by a sole-bridge loop closure. Converting that closure into a rigid MERGE would
-    // place two datums in one merge component and tear it on the next cascade — the
-    // reported failure mode — so the conversion must leave it as a (soft) closure.
+    // place two datums in one merge component and tear it on the next cascade - the
+    // reported failure mode - so the conversion must leave it as a (soft) closure.
     let mut project = Project::new("DoubleAnchorBridge".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -1640,7 +1640,7 @@ fn create_loop_closure_creates_correct_values() {
 #[test]
 fn create_loop_closures_batch_matches_sequential() {
     // The batch path must be byte-for-byte equivalent to calling
-    // create_loop_closure(.., Batch) for each pair in order — same created
+    // create_loop_closure(.., Batch) for each pair in order - same created
     // closures (ids, keys, metrics) and same per-pair Ok/Err outcomes.
     fn build() -> (Project, Vec<(StationRef, StationRef)>) {
         let mut p = Project::new("Batch".to_string(), None);
@@ -1761,7 +1761,7 @@ fn create_loop_closures_batch_matches_sequential_zero_datum_unconnected() {
             })
             .id;
         // Two disconnected sections (no merge between them), each with its own
-        // zero datum — the only setup that accepts an unconnected closure pair.
+        // zero datum - the only setup that accepts an unconnected closure pair.
         p.set_zero_datum(
             StationRef::new(a, 0),
             GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
@@ -2556,7 +2556,7 @@ fn along_line_same_shot_prefers_shorter_route_around() {
     // Two points on one long shot whose endpoints are ALSO tied by a zero-cost loop
     // closure: routing around the closure (0.1·100 + 0 + 0.1·100 = 20) beats the
     // direct sub-segment (0.8·100 = 80), so the same-shot case must NOT short-circuit
-    // to the direct segment — Dijkstra picks the genuine shortest path (#26, Codex).
+    // to the direct segment - Dijkstra picks the genuine shortest path (#26, Codex).
     let mut project = Project::new("SameShotRoute".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -2587,7 +2587,7 @@ fn along_line_same_shot_prefers_shorter_route_around() {
         r.along_line
     );
     // The end-legs of the shot are traversed (v→A.0 and A.1→v), but the middle
-    // A.0→A.1 leg uses the closure, not the shot — still exactly one shot entry.
+    // A.0→A.1 leg uses the closure, not the shot - still exactly one shot entry.
     assert_eq!(
         r.path_shots,
         vec![PathShot {
@@ -2600,8 +2600,8 @@ fn along_line_same_shot_prefers_shorter_route_around() {
 #[test]
 fn along_line_parallel_closure_does_not_tint_shot() {
     // A loop closure parallel to a real shot (same station pair): measuring between
-    // the two stations routes via the zero-cost closure, so the shot — which the
-    // path did NOT traverse — must not be tinted (#26, Codex).
+    // the two stations routes via the zero-cost closure, so the shot - which the
+    // path did NOT traverse - must not be tinted (#26, Codex).
     let mut project = Project::new("ParallelClosure".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -3822,7 +3822,7 @@ fn test_cleanup_guarded_by_existence() {
     let orig_station_offsets = project.station_offsets.len();
     let orig_datums = project.zero_datums.len();
 
-    // Section 999 doesn't exist — cleanup should be a no-op
+    // Section 999 doesn't exist - cleanup should be a no-op
     project.cleanup_section_references(999);
 
     assert_eq!(project.station_merges.len(), orig_merges);
@@ -3886,8 +3886,8 @@ fn test_get_section_relationships() {
 
 // (Removed `shift_station_refs_updates_related_collections`: the positional
 // ref-shifting mechanism it exercised no longer exists. Under stable
-// shot-UUID identity, cross-references never shift on insert/delete — they
-// resolve to the moved station automatically — so there is nothing to shift.
+// shot-UUID identity, cross-references never shift on insert/delete - they
+// resolve to the moved station automatically - so there is nothing to shift.
 // Anchor-stability is covered by the insert/delete identity tests instead.)
 
 #[test]
@@ -4278,7 +4278,7 @@ fn insert_shot_after_shifts_station_refs() {
     project.next_closure_id = 2;
 
     // Canonicalize the transitional Index anchors to stable shot-UUID anchors
-    // (as a load would) so they track the physical station across the insert —
+    // (as a load would) so they track the physical station across the insert -
     // that position-independence is exactly what C1 verifies here.
     project.reanchor_station_refs();
 
@@ -4313,8 +4313,8 @@ fn insert_shot_after_shifts_station_refs() {
 }
 
 /// C1 regression: inserting a shot UPSTREAM of a merge must keep the merge on
-/// the SAME physical station — the stored anchor never moves, it just resolves
-/// to a higher index — and must NOT silently re-point onto the new in-range
+/// the SAME physical station - the stored anchor never moves, it just resolves
+/// to a higher index - and must NOT silently re-point onto the new in-range
 /// station the insert created. This is the exact failure mode positional refs
 /// produced (a missed shift mispointed the merge); anchors make it impossible.
 #[test]
@@ -4379,7 +4379,7 @@ fn insert_upstream_keeps_cross_refs_on_same_physical_station() {
 
 /// C1 regression: a stored anchor whose shot was deleted is flagged Critical by
 /// the integrity check (a dangling reference), where a positional ref could only
-/// ever be out-of-range — never a silent in-range mispoint.
+/// ever be out-of-range - never a silent in-range mispoint.
 #[test]
 fn dangling_anchor_flagged_by_integrity() {
     let mut project = Project::new("Dangling".to_string(), None);
@@ -4490,7 +4490,7 @@ fn compute_distances_from_chosen_station() {
             .unwrap()
     };
 
-    // Root at the middle station (index 1) — no zero datum needed: distances are
+    // Root at the middle station (index 1) - no zero datum needed: distances are
     // 10 (to station 0), 0 (self), 5 (to station 2).
     let dist = project.compute_distances_from(&stations, &[idx(1)]);
     assert!((dist[idx(0)] - 10.0).abs() < 1e-6, "got {}", dist[idx(0)]);
@@ -4590,7 +4590,7 @@ fn reachability_keeps_jump_reference_shots() {
 fn reachability_uses_reference_shot_shortcut() {
     // A reference shot is a real connection: B's reference shot links B0-B1 (len
     // 5). Even though B0/B1 are ALSO connected the long way through section A
-    // (A0-A1-A2 = 20), shortest-path takes the direct reference (5) — references
+    // (A0-A1-A2 = 20), shortest-path takes the direct reference (5) - references
     // are included, not dropped, so a real jump shortcut is honored. (#34)
     let mut project = Project::new("RefShortcut".to_string(), None);
     let a = project
@@ -4618,7 +4618,7 @@ fn reachability_uses_reference_shot_shortcut() {
 
     // Tie B's endpoints onto A's chain so B0-B1 has an alternate route: B0<->A0
     // via a merge, B1<->A2 via an aligned loop closure (merging an already-
-    // connected pair is rejected — cycles must be closures).
+    // connected pair is rejected - cycles must be closures).
     project
         .merge_stations(StationRef::new(b, 0), StationRef::new(a, 0))
         .unwrap();
@@ -4654,7 +4654,7 @@ fn reachability_uses_reference_shot_shortcut() {
 fn reachability_includes_non_aligned_closures() {
     // A non-aligned (e.g. Batch) loop closure is still a real physical connection.
     // Section B is reachable from A's zero datum ONLY across a non-aligned closure
-    // — it must NOT show as unreachable. (#34: areas connected via closure)
+    // - it must NOT show as unreachable. (#34: areas connected via closure)
     let mut project = Project::new("NonAlignedClosure".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -4694,7 +4694,7 @@ fn reachability_includes_non_aligned_closures() {
             .position(|s| s.station_ref == StationRef::new(sec, i))
             .unwrap()
     };
-    // A0=0, A1=10, B0=10 (closure, 0-cost), B1=17 — all finite (reachable).
+    // A0=0, A1=10, B0=10 (closure, 0-cost), B1=17 - all finite (reachable).
     assert_eq!(
         field.distances[pos(b, 0)],
         Some(10.0),
@@ -5112,7 +5112,7 @@ fn distribute_closure_with_zero_datum_mid_path() {
         .compute_station_raw_coords(StationRef::new(a, 1))
         .unwrap();
 
-    // Distribute closure error — datum is mid-path, so path splits at A:1
+    // Distribute closure error - datum is mid-path, so path splits at A:1
     project
         .test_distribute_closure_error(
             StationRef::new(a, 2),
@@ -5435,7 +5435,7 @@ fn apply_station_move_adjusts_incoming_and_outgoing_shots() {
         .compute_station_raw_coords(StationRef::new(a, 3))
         .unwrap();
 
-    // Distribute closure error — this will move intermediate stations including middle ones
+    // Distribute closure error - this will move intermediate stations including middle ones
     project
         .test_distribute_closure_error(
             StationRef::new(a, 3),
@@ -5456,7 +5456,7 @@ fn apply_station_move_adjusts_incoming_and_outgoing_shots() {
         "Endpoints should be aligned"
     );
 
-    // Intermediate stations (1, 2) should have moved — their positions should differ from
+    // Intermediate stations (1, 2) should have moved - their positions should differ from
     // the original linear progression
     let coords_1 = project
         .compute_station_raw_coords(StationRef::new(a, 1))
@@ -5491,7 +5491,7 @@ fn apply_station_move_station_zero_uses_section_offset() {
         })
         .id;
 
-    // Section B: 1 shot going south, slightly short — creates misclosure at station 0
+    // Section B: 1 shot going south, slightly short - creates misclosure at station 0
     let b = project
         .add_section(SectionData {
             shots: vec![shot(180.0, 180.0, 10.0, 0.0, 0.0)],
@@ -5511,9 +5511,9 @@ fn apply_station_move_station_zero_uses_section_offset() {
         .unwrap_or((0.0, 0.0));
 
     // A:0 is at the origin. B:1 is at (0, 10) + (0, -10) = (0, 0) after merge alignment.
-    // Both A:0 and B:1 are at (0, 0), so zero misclosure — perfect loop.
+    // Both A:0 and B:1 are at (0, 0), so zero misclosure - perfect loop.
     // Let's modify B to create a gap:
-    // Actually, let's use a more direct test — just set up the closure so station 0 needs to move
+    // Actually, let's use a more direct test - just set up the closure so station 0 needs to move
     let c = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
@@ -5525,7 +5525,7 @@ fn apply_station_move_station_zero_uses_section_offset() {
         .unwrap();
 
     // Now we have A:0 merged to chain, create a closure between A:0's group and C:1
-    // A:0=(0,0), C:1 = some other position — distribute will move stations
+    // A:0=(0,0), C:1 = some other position - distribute will move stations
     // The test verifies that if station 0 needs an XY move, section_offsets is used
     let _offset_a_before = project
         .section_offsets
@@ -5533,7 +5533,7 @@ fn apply_station_move_station_zero_uses_section_offset() {
         .copied()
         .unwrap_or((0.0, 0.0));
 
-    // Distribute error — this exercises apply_station_move_internal on various stations
+    // Distribute error - this exercises apply_station_move_internal on various stations
     project
         .test_distribute_closure_error(
             StationRef::new(a, 0),
@@ -5542,7 +5542,7 @@ fn apply_station_move_station_zero_uses_section_offset() {
         )
         .unwrap();
 
-    // The test passes if no panic/error occurs — the internal logic correctly
+    // The test passes if no panic/error occurs - the internal logic correctly
     // routes station 0 XY moves through section_offsets
     let coords_a0 = project
         .compute_station_raw_coords(StationRef::new(a, 0))
@@ -5668,7 +5668,7 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
         .merge_stations(StationRef::new(a, 3), StationRef::new(c, 0))
         .unwrap();
 
-    // Create closures between B:1 and C:1 — they form a loop through section A
+    // Create closures between B:1 and C:1 - they form a loop through section A
     project
         .create_loop_closure(
             StationRef::new(b, 1),
@@ -5912,7 +5912,7 @@ fn solve_reduced_laplacian_matches_dense() {
         x
     }
 
-    // (n, extra_random_edges) — 0 extra = pure chain (fully peels, empty core);
+    // (n, extra_random_edges) - 0 extra = pure chain (fully peels, empty core);
     // a few = small cycle core; many = a denser core that exercises the PCG path.
     let configs = [(2, 0), (6, 0), (8, 2), (20, 5), (40, 30), (60, 80)];
     let mut seed = 0x9E3779B97F4A7C15u64;
@@ -6003,7 +6003,7 @@ fn solve_reduced_laplacian_matches_dense() {
 fn solve_reduced_laplacian_preserves_unconstrained_axis_warm_start() {
     // Two nodes. Node 0 is grounded on both axes. Node 1 couples to node 0 on Y
     // only (the X off-diagonal weight is 0), and has zero X diagonal + zero X rhs
-    // — i.e. nothing constrains its X. Its warm-start X (42) must survive.
+    // - i.e. nothing constrains its X. Its warm-start X (42) must survive.
     let n = 2;
     let diag_x = vec![1.0, 0.0];
     let diag_y = vec![2.0, 1.0];
@@ -6030,7 +6030,7 @@ fn solve_reduced_laplacian_preserves_unconstrained_axis_warm_start() {
 }
 
 /// Regression for the early-exit fix (Codex #86 follow-up): when the reduced core
-/// has a zero RHS but non-zero, full-rank matrix rows, the unique minimizer is 0 —
+/// has a zero RHS but non-zero, full-rank matrix rows, the unique minimizer is 0 -
 /// the warm start must NOT be returned just because `‖b‖ = 0`. Uses a K4 core (all
 /// degree 3, so it survives degree-≤2 reduction and exercises the core PCG).
 #[test]
@@ -6067,7 +6067,7 @@ fn solve_reduced_laplacian_zero_rhs_constrained_core_solves_not_warm_start() {
 /// degree-≤2 reduction before the core PCG sees them.
 ///
 /// Mechanism: the surviving core node keeps its own measured value (warm start),
-/// and back-substitution reproduces the measured *relative* offsets — so the whole
+/// and back-substitution reproduces the measured *relative* offsets - so the whole
 /// component lands exactly on its measured coordinates, matching the old
 /// full-system CG. (In real surveys this case can't even arise: every
 /// positive-length shot has positive weight on both axes, so floating components
@@ -6103,7 +6103,7 @@ fn solve_reduced_laplacian_preserves_floating_component_nullspace() {
 
 /// Regression for the scale-relative pivot floor (#89 / Codex). A *loop* that
 /// floats on X with **varied** edge weights drives the last null-space pivot to
-/// roundoff (~1e-12), not exactly 0 — so the old absolute 1e-30 floor eliminated
+/// roundoff (~1e-12), not exactly 0 - so the old absolute 1e-30 floor eliminated
 /// it and divided by ~0, shifting the component. The pivot must be judged relative
 /// to its original diagonal so the node stays in the warm-started core and the
 /// measured translation is preserved.
@@ -6226,7 +6226,7 @@ fn adjust_line_loop_matches_hand_computed_optimum() {
 ///   - never mutate the measured geometry, and
 ///   - unify each eligible closure's endpoints (the adjusted gap is ~0).
 /// Optimality of every one of these random solves is asserted *inside*
-/// `adjust_least_squares` (the `#[cfg(test)]` `‖A·x−b‖∞` residual guard), so this
+/// `adjust_least_squares` (the `#[cfg(test)]` `‖A·x-b‖∞` residual guard), so this
 /// sweep doubles as a broad optimality check across diverse topologies.
 #[test]
 fn adjust_random_geometries_are_optimal_and_well_formed() {
@@ -6353,9 +6353,9 @@ fn adjust_random_geometries_are_optimal_and_well_formed() {
         }
         // Count solves actually exercised. We deliberately do NOT assert that each
         // closure's endpoints coincide: with multiple closures the least-squares
-        // solution is a *compromise*, so an individual loop needn't close to zero —
+        // solution is a *compromise*, so an individual loop needn't close to zero -
         // that is correct LSQ behavior, not a bug. Optimality (that the result is
-        // the true minimizer of the whole system) is asserted by the `‖A·x−b‖∞`
+        // the true minimizer of the whole system) is asserted by the `‖A·x-b‖∞`
         // guard inside `adjust_least_squares`, which fired for each solve above.
         exercised_closures += closures.len();
     }
@@ -6373,11 +6373,11 @@ fn adjust_random_geometries_are_optimal_and_well_formed() {
 ///     profile_closure_solve_large -- --ignored --nocapture
 ///
 /// Builds single-closure surveys shaped as one big loop made of two long
-/// degree-2 chains joined at both ends — the worst case for the closure solve
+/// degree-2 chains joined at both ends - the worst case for the closure solve
 /// (a single high-diameter loop). Sweeping the size demonstrates the scaling:
 /// with the degree-≤2 graph reduction the loop peels to a ~1-node core, so the
 /// whole `compute_adjusted_station_coordinates` is O(n) (it was O(n²) before #81
-/// — both the per-station coordinate walk and the O(diameter) PCG iterations).
+/// - both the per-station coordinate walk and the O(diameter) PCG iterations).
 #[test]
 #[ignore]
 fn profile_closure_solve_large() {
@@ -6464,7 +6464,7 @@ fn compute_adjusted_equals_measured_without_closures() {
 #[test]
 fn compute_adjusted_closes_datumless_loop_deterministically() {
     // Two paths from a shared (merged) origin to a near-shared endpoint joined by
-    // a closure, but with NO zero datum — so the solve anchors each component on
+    // a closure, but with NO zero datum - so the solve anchors each component on
     // the deterministic default anchor (`default_anchor_for_component`) instead.
     let mut project = Project::new("DatumlessLoop".to_string(), None);
     let a = project
@@ -6571,7 +6571,7 @@ fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
     }
 
     let mut project = Project::new("MixedComponents".to_string(), None);
-    // Component 1 — will FAIL (two datums forced into the origin constraint group).
+    // Component 1 - will FAIL (two datums forced into the origin constraint group).
     let (a, b) = looped(&mut project);
     project
         .set_zero_datum(
@@ -6584,7 +6584,7 @@ fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
         station_ref: dup_key,
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
     });
-    // Component 2 — disconnected from the first, with a single datum; SUCCEEDS.
+    // Component 2 - disconnected from the first, with a single datum; SUCCEEDS.
     let (c, d) = looped(&mut project);
     project
         .set_zero_datum(
@@ -7354,8 +7354,8 @@ fn path_length_nonexistent_station_returns_zero() {
 fn path_length_fallback_clamps_negative_shot_lengths() {
     // When the target station EXISTS but is unreachable, calculate_path_length_impl
     // falls back to the sum of the start component's shot lengths. That sum must
-    // clamp negative lengths to 0 — same as the Dijkstra edges and the other graph
-    // builders — so a corrupt/deserialized negative leg doesn't under-count (#176).
+    // clamp negative lengths to 0 - same as the Dijkstra edges and the other graph
+    // builders - so a corrupt/deserialized negative leg doesn't under-count (#176).
     let mut project = Project::new("NegFallback".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -7367,7 +7367,7 @@ fn path_length_fallback_clamps_negative_shot_lengths() {
         })
         .id;
     // A disconnected second section so the target station exists yet is unreachable
-    // from A — this forces the fallback-sum branch, not the early not-found return.
+    // from A - this forces the fallback-sum branch, not the early not-found return.
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 7.0, 0.0, 0.0)],
@@ -8152,7 +8152,7 @@ fn cleanup_preserves_unrelated_merges() {
         merged_at: Utc::now(),
     });
 
-    // Remove section b — only the a↔b merge goes away
+    // Remove section b - only the a↔b merge goes away
     project.cleanup_section_references(b);
     assert_eq!(project.station_merges.len(), 1);
     assert_eq!(project.station_merges[0].station_b.section_id, c);
@@ -8252,7 +8252,7 @@ fn assign_closure_ids_fills_zeros_and_updates_counter() {
 
 // (Removed `shift_station_refs_adjusts_all_references`: `shift_station_refs`
 // no longer exists. Stable shot-UUID anchors are position-independent, so an
-// insert/delete never rewrites a cross-reference's index — the ref resolves to
+// insert/delete never rewrites a cross-reference's index - the ref resolves to
 // the moved station on the fly. Covered by the insert/delete identity tests.)
 
 // ── Station depth computation tests ─────────────────────────────────
@@ -8285,7 +8285,7 @@ fn compute_station_depth_from_surrounding_shots() {
 
 #[test]
 fn compute_station_depth_first_station() {
-    // Station 0 has only an outgoing shot — depth = shot[0].depth_in
+    // Station 0 has only an outgoing shot - depth = shot[0].depth_in
     let mut project = Project::new("Depth".to_string(), None);
     project.add_section(SectionData {
         shots: vec![shot(0.0, 0.0, 1.0, 3.0, 7.0)],
@@ -8305,7 +8305,7 @@ fn compute_station_depth_first_station() {
 
 #[test]
 fn compute_station_depth_last_station() {
-    // Station 2 (last) has only an incoming shot — depth = shot[1].depth_out
+    // Station 2 (last) has only an incoming shot - depth = shot[1].depth_out
     let mut project = Project::new("Depth".to_string(), None);
     project.add_section(SectionData {
         shots: vec![
@@ -8328,7 +8328,7 @@ fn compute_station_depth_last_station() {
 
 #[test]
 fn compute_station_depth_with_merge_averages_both_sections() {
-    // Two sections merged at a station — depth should average across all colocated readings
+    // Two sections merged at a station - depth should average across all colocated readings
     let mut project = Project::new("MergeDepth".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -8539,7 +8539,7 @@ fn compute_raw_coords_with_station_offset() {
 
 #[test]
 fn lsq_no_closures_is_noop() {
-    // With no closures, there are no constraints to adjust — should return Ok
+    // With no closures, there are no constraints to adjust - should return Ok
     let mut project = Project::new("LSQ".to_string(), None);
     let sec = project
         .add_section(SectionData {
@@ -9011,7 +9011,7 @@ fn lsq_long_chain_per_shot_changes_are_small() {
         }
         assert!(
             len_delta < 0.5,
-            "shot {} length changed by {:.3}m (orig={:.3}, new={:.3}) — \
+            "shot {} length changed by {:.3}m (orig={:.3}, new={:.3}) - \
              suggests solver did not converge",
             i,
             len_delta,
@@ -9027,7 +9027,7 @@ fn lsq_long_chain_per_shot_changes_are_small() {
         };
         assert!(
             az_delta < 10.0,
-            "shot {} azimuth changed by {:.3}° (orig={:.3}, new={:.3}) — \
+            "shot {} azimuth changed by {:.3}° (orig={:.3}, new={:.3}) - \
              suggests solver did not converge",
             i,
             az_delta,
@@ -9193,7 +9193,7 @@ fn lsq_realistic_topology_preserves_geometry() {
     }
     assert!(
         max_len_delta_a < 1.0,
-        "shot {} length changed by {:.4}m — too large for {:.2}m misclosure",
+        "shot {} length changed by {:.4}m - too large for {:.2}m misclosure",
         worst_shot,
         max_len_delta_a,
         actual_misclosure,
@@ -9210,8 +9210,8 @@ fn lsq_spur_shots_are_not_modified() {
     //   Section C: 20 shots east (3m each), merged to A:50 via C:0↔A:50.
     //   Closure: A:30 ↔ B:1.
     //
-    // Spur stations: A:0–A:29 (before closure), C:1–C:20 (branch beyond merge).
-    // Loop stations: A:30–A:100, B:0–B:1.
+    // Spur stations: A:0-A:29 (before closure), C:1-C:20 (branch beyond merge).
+    // Loop stations: A:30-A:100, B:0-B:1.
     let mut project = Project::new("SpurTest".to_string(), None);
 
     let shots_a: Vec<ShotData> = (0..100).map(|_| shot(0.0, 0.0, 5.0, 0.0, 0.0)).collect();
@@ -9261,7 +9261,7 @@ fn lsq_spur_shots_are_not_modified() {
 
     // Save original shot data for spur sections
     let orig_a_spur: Vec<(f64, f64)> = project.sections.iter().find(|s| s.id == a).unwrap().shots
-        [..30] // A:0–A:29 are spur shots (before closure at A:30)
+        [..30] // A:0-A:29 are spur shots (before closure at A:30)
         .iter()
         .map(|s| (s.azimuth_in, s.length))
         .collect();
@@ -9358,7 +9358,7 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
     // `delete_section` clears `merge_adjacency_cache` while keeping
     // surviving merges in `station_merges`, leaving the cache empty
     // and the merges intact.  Before the fix, the next
-    // `record_station_merge` only inserted ITS edge into the cache —
+    // `record_station_merge` only inserted ITS edge into the cache -
     // and since `get_merged_section_ids` treats any non-empty cache as
     // authoritative, every surviving merge from before the delete
     // became invisible.
@@ -9520,7 +9520,7 @@ fn integrity_flags_non_finite_geometry() {
 #[test]
 fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
     // A: A0-A1-A2 north; B: B0-B1-B2 north; merge A2=B0 (chain). A closure
-    // A0=B2 marked aligned, but geometry makes A0 and B2 20m apart — the merge
+    // A0=B2 marked aligned, but geometry makes A0 and B2 20m apart - the merge
     // is fine, only the (redundant) closure is stale.
     let mut project = Project::new("StaleClosure".to_string(), None);
     let a = project
@@ -9547,7 +9547,7 @@ fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
         project.check_merge_alignment().is_empty(),
         "merge should be aligned"
     );
-    // A closure A0 <-> B2, marked aligned — but A0=(0,0) and B2 is 20m north.
+    // A closure A0 <-> B2, marked aligned - but A0=(0,0) and B2 is 20m north.
     project.loop_closures.push(LoopClosure {
         id: 1,
         station_a: StationRef::new(a, 0).into(),
@@ -9638,7 +9638,7 @@ fn insert_before_and_after_agree_on_boundary_merge_ref() {
                 ..Default::default()
             })
             .id;
-        // Merge B0 onto A's MIDDLE station (index 1) — the insertion boundary.
+        // Merge B0 onto A's MIDDLE station (index 1) - the insertion boundary.
         p.record_station_merge(StationMerge {
             station_a: StationRef::new(a, 1).into(),
             station_b: StationRef::new(b, 0).into(),
@@ -9678,7 +9678,7 @@ fn insert_before_and_after_agree_on_boundary_merge_ref() {
         "insert_after and insert_before disagree on the boundary merge ref index \
          (after={after_idx}, before={before_idx})"
     );
-    // And the merge partner stays geometrically colocated in BOTH paths — the
+    // And the merge partner stays geometrically colocated in BOTH paths - the
     // off-by-one re-pointed the merge onto the new station, which still
     // "coincided" but at the wrong place; this checks the merge holds after the
     // insert + cascade.
@@ -9736,7 +9736,7 @@ fn redrive_dedups_uuids_before_reanchor_preserving_second_duplicate_ref() {
     // load-time canonicalization of positional Index anchors to AfterShot(uuid)
     // MUST run after de-duplicating UUIDs. Otherwise a ref at the station after the
     // SECOND duplicate canonicalizes to AfterShot(dup), which resolve_key resolves
-    // to the FIRST duplicate — silently moving the ref off its endpoint and
+    // to the FIRST duplicate - silently moving the ref off its endpoint and
     // defeating Repair.
     let mut project = Project::new("Dup".to_string(), None);
     let s = project
@@ -9758,7 +9758,7 @@ fn redrive_dedups_uuids_before_reanchor_preserving_second_duplicate_ref() {
         .unwrap();
     project.get_section_mut(s).unwrap().shots[1].uuid = Some(dup.clone());
 
-    // A station offset stored in the legacy positional form at station 2 — the
+    // A station offset stored in the legacy positional form at station 2 - the
     // station immediately AFTER the second duplicate shot.
     project
         .station_offsets
@@ -9798,7 +9798,7 @@ fn redrive_dedups_uuids_before_reanchor_preserving_second_duplicate_ref() {
 #[test]
 fn resolve_offsets_does_not_touch_when_already_consistent() {
     // Opening a byte-clean project re-solves to identical offsets; resolve_offsets
-    // must NOT bump modified_at then — otherwise a later no-edit save persists a
+    // must NOT bump modified_at then - otherwise a later no-edit save persists a
     // bogus timestamp and a no-op integrity Repair looks like a real change.
     let mut project = Project::new("Clean".to_string(), None);
     let a = project
@@ -9841,7 +9841,7 @@ fn resolve_offsets_does_not_touch_when_already_consistent() {
 #[test]
 fn section_has_zero_datum_ignores_dangling_datum() {
     // A corrupt project can be opened with a DANGLING zero datum (anchor shot
-    // deleted) so the user can repair it. It must NOT count as a real anchor — else
+    // deleted) so the user can repair it. It must NOT count as a real anchor - else
     // a merge picks the phantom-anchored section as the fixed group and shifts the
     // world coordinate system around a station that doesn't resolve.
     let mut project = Project::new("DanglingDatum".to_string(), None);
@@ -9875,7 +9875,7 @@ fn section_has_zero_datum_ignores_dangling_datum() {
 #[test]
 fn has_datum_path_excluding_ignores_dangling_datum() {
     // A dangling datum (anchor key unresolvable) must NOT count as a reachable
-    // anchor in has_datum_path_excluding — same resolve-aware invariant as
+    // anchor in has_datum_path_excluding - same resolve-aware invariant as
     // section_has_zero_datum (#174). Without the resolve guard the BFS reports a
     // datum path that doesn't actually anchor anything.
     let mut project = Project::new("DanglingPath".to_string(), None);
@@ -9906,7 +9906,7 @@ fn has_datum_path_excluding_ignores_dangling_datum() {
 #[test]
 fn realign_after_shot_edit_ignores_dangling_datum() {
     // With only a dangling datum in the merge group, realign must treat the group
-    // as unanchored (early return) — NOT run the Step-2 merge BFS that would
+    // as unanchored (early return) - NOT run the Step-2 merge BFS that would
     // realign partner offsets around the phantom-anchor section (#174).
     let mut project = Project::new("DanglingRealign".to_string(), None);
     let a = project
@@ -9944,7 +9944,7 @@ fn realign_after_shot_edit_ignores_dangling_datum() {
 
 #[test]
 fn rigid_group_has_datum_ignores_dangling_datum() {
-    // A dangling datum must not mark a merge group as anchored — otherwise a
+    // A dangling datum must not mark a merge group as anchored - otherwise a
     // move-drag is wrongly blocked on an actually-unanchored group (#174; the
     // guard sits at command_move's "merge group holds a zero datum" check).
     let mut project = Project::new("DanglingRigid".to_string(), None);
@@ -10084,7 +10084,7 @@ fn realign_corrects_sub_tolerance_offset_drift() {
         .unwrap();
     let b_correct = project.section_offset(b);
 
-    // Nudge B by 3 cm — under the 5 cm reporting tolerance.
+    // Nudge B by 3 cm - under the 5 cm reporting tolerance.
     project.adjust_section_offset(b, 0.03, 0.0);
     assert!(
         project.check_merge_alignment().is_empty(),
@@ -10117,7 +10117,7 @@ fn realign_corrects_sub_tolerance_offset_drift() {
 #[test]
 fn realign_preserves_floating_section_offset() {
     // A datum-less, merge-less (floating) section's absolute position is
-    // non-derivable (free placement). The always-on re-solve must NOT zero it —
+    // non-derivable (free placement). The always-on re-solve must NOT zero it -
     // it's a cascade seed/anchor, never seed-adjusted.
     let mut project = Project::new("Float".to_string(), None);
     let a = project
@@ -10223,7 +10223,7 @@ fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
     // A: A0-A1-A2 (datum A0); B: B0-B1. B hangs off A2 (merge A2=B0), and a
     // closure A0=B1 closes the loop. Now delete A's last shot (A1->A2): that
     // removes A2 and the A2=B0 merge, so A and B are connected ONLY through the
-    // closure A0=B1. A closure that is the sole bridge is not a loop — it must
+    // closure A0=B1. A closure that is the sole bridge is not a loop - it must
     // become a merge (issue #8, the section-31 case).
     let mut project = Project::new("Bridge".to_string(), None);
     let a = project
@@ -10513,7 +10513,7 @@ fn warm_shot_uuid_index_resolves_duplicate_to_first_occurrence() {
     // Reachable by undoing a `duplicate_shot_uuid` integrity Repair: it restores
     // the duplicate state and rebuilds the cache warm. If the index used
     // last-write-wins, the warm cache would resolve to station 2 while a cold
-    // scan resolves to station 1 — a silent divergence.
+    // scan resolves to station 1 - a silent divergence.
     let mut project = Project::new("DupWarm".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -10614,7 +10614,7 @@ fn dangling_cross_references_are_omitted_from_wire_output() {
 fn has_unresolvable_cross_references_detects_dangling_offset() {
     // The save gate blocks on this. A dangling station offset is only
     // Warning-severity, but it still collapses to (section, 0) on save and can
-    // collide on the PRIMARY KEY — so it must count as unresolvable.
+    // collide on the PRIMARY KEY - so it must count as unresolvable.
     let mut project = Project::new("Block".to_string(), None);
     let a = project
         .add_section(SectionData {
@@ -10641,10 +10641,10 @@ fn has_unresolvable_cross_references_detects_dangling_offset() {
 // KNOWN-ANSWER regression guards for the weighted least-squares closure solve
 // (`compute_adjusted_station_coordinates`). Each fixture pins the EXACT adjusted
 // coordinates a correct adjustment must produce, derived in closed form from the
-// normal equations — NOT by running the solver.
+// normal equations - NOT by running the solver.
 //
 // These COMPLEMENT the in-repo suite that proves the solver finds the true
-// minimiser of the *production-assembled* system (the `‖A·x−b‖∞` optimality
+// minimiser of the *production-assembled* system (the `‖A·x-b‖∞` optimality
 // guard inside `adjust_least_squares`, the dense reduced-Laplacian check, and
 // `adjust_random_geometries_are_optimal_and_well_formed`). What those cannot
 // catch is a wrong WEIGHT MODEL: they all inherit production's σ→weight assembly,
@@ -10685,8 +10685,8 @@ fn golden_symmetric_v_resolves_to_axis_of_symmetry() {
     // closure:
     //     leg A: azimuth 80°,  10 m → predicts (10·sin80°,  10·cos80°)
     //     leg B: azimuth 100°, 10 m → predicts (10·sin80°, -10·cos80°)
-    // The legs are mirror images across the East axis, so |sin| and |cos| — and
-    // hence the X/Y weights — are identical. The ~3.47 m vertical (North)
+    // The legs are mirror images across the East axis, so |sin| and |cos| - and
+    // hence the X/Y weights - are identical. The ~3.47 m vertical (North)
     // disagreement must average to the axis of symmetry: Y = 0, with X left at the
     // common predicted value (both legs agree on X, so it is not corrected).
     // Config-INDEPENDENT: the equal weights cancel, so the answer does not depend
@@ -10824,7 +10824,7 @@ fn weighted_mean_star_expected(
         // Star legs are flat (depth_in == depth_out), so horizontal_length() ==
         // shot.length and Δ = len·(sin, cos). Production uses horizontal_length for Δ
         // but SLOPE length for the σ azimuth term; they coincide only under this
-        // flat-leg assumption — split them if a sloped leg is ever added here.
+        // flat-leg assumption - split them if a sloped leg is ever added here.
         let dx = len * az.sin();
         let dy = len * az.cos();
         num_x += w_x * dx;
@@ -10839,8 +10839,8 @@ fn weighted_mean_star_expected(
 fn golden_weight_model_star_matches_sigma_propagation() {
     // The closure-fused endpoint of a star is the Gauss weighted mean of each
     // leg's independent position fix, with weights from the σ→weight propagation.
-    // Matching the production solve across diverse leg geometries — varied
-    // azimuths, lengths, and section qualities — pins the weight MODEL
+    // Matching the production solve across diverse leg geometries - varied
+    // azimuths, lengths, and section qualities - pins the weight MODEL
     // independently of production's normal-equation assembly. This is the one
     // thing #86's optimality/dense checks structurally cannot verify: they reuse
     // the same assembly, so a wrong weight formula is self-consistent there.
@@ -10869,15 +10869,15 @@ fn golden_weight_model_star_matches_sigma_propagation() {
 // gama-local is not available in CI, so this in-process reference plays its role:
 // a from-scratch weighted least-squares adjustment that makes NONE of production's
 // modelling shortcuts. Production minimises, per shot,
-//     w_dx·(Δx_meas − Δx)² + w_dy·(Δy_meas − Δy)²
+//     w_dx·(Δx_meas - Δx)² + w_dy·(Δy_meas - Δy)²
 // i.e. CARTESIAN coordinate-difference observations with DIAGONAL weights, X and Y
 // DECOUPLED, linearised ONCE at the measured geometry. This reference instead
 // minimises the RAW POLAR residuals
-//     w_dist·(dist_meas − |Pj−Pi|)² + w_az·(az_meas − az(Pj−Pi))²
-// with the X/Y-COUPLED Jacobian, ITERATED to convergence (Gauss–Newton). It keeps
-// the dx–dy covariance production drops and re-linearises every step, so agreement
+//     w_dist·(dist_meas - |Pj-Pi|)² + w_az·(az_meas - az(Pj-Pi))²
+// with the X/Y-COUPLED Jacobian, ITERATED to convergence (Gauss-Newton). It keeps
+// the dx-dy covariance production drops and re-linearises every step, so agreement
 // is independent evidence that production's model is a sound approximation of
-// rigorous LSQ — the role the external Gama oracle would play.
+// rigorous LSQ - the role the external Gama oracle would play.
 //
 // The two are NOT bit-identical: the gap is the first-order error of production's
 // approximation and grows with the angular misclosure of the network. The cases
@@ -10913,7 +10913,7 @@ fn dense_solve_gauss(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> 
     Some((0..n).map(|i| b[i] / a[i][i]).collect())
 }
 
-/// Rigorous coupled-polar Gauss–Newton adjustment of a single-component,
+/// Rigorous coupled-polar Gauss-Newton adjustment of a single-component,
 /// single-datum network. Returns each station's adjusted (x, y).
 fn rigorous_polar_reference(
     project: &Project,
@@ -11150,7 +11150,7 @@ fn rigorous_polar_reference(
 
 /// A 2-D loop with OBLIQUE legs (30°/90°): two paths from a merged, datum-anchored
 /// origin to a closure. Path A's last leg is 10.0 m and path B's is `len_b`, so the
-/// misclosure scales with `len_b − 10`.
+/// misclosure scales with `len_b - 10`.
 fn oblique_loop(len_b: f64) -> Project {
     let mut project = Project::new("Oblique".to_string(), None);
     let a = project
@@ -11241,7 +11241,7 @@ fn model_soundness_oracle_reproduces_known_rigorous_optima() {
 
     // (2) Symmetric V (legs az80°/az100°, 10 m): by symmetry the rigorous optimum
     // sits on the East axis at distance 10 → (10, 0). Production's once-linearised
-    // cartesian model gives 10·sin80° ≈ 9.848 instead — the legitimate first-order
+    // cartesian model gives 10·sin80° ≈ 9.848 instead - the legitimate first-order
     // gap, which at this 10° angular misclosure is ~15 cm. This both validates the
     // oracle on a known answer and demonstrates the model gap is real and signed.
     let mut v = Project::new("RefSymV".to_string(), None);
@@ -11285,9 +11285,9 @@ fn model_sound_matches_rigorous_in_small_misclosure_regime() {
     // loops). The residual gap is the first-order error of production's
     // approximation: it grows with ANGULAR misclosure (see
     // model_soundness_oracle_reproduces_known_rigorous_optima, where a 10° angular
-    // misclosure opens a ~15 cm gap) and, for oblique legs, with the dx–dy
-    // covariance production drops. On ~0.1–0.2 m corrections the two agree to a few
-    // millimetres or better — independent evidence the model is a sound LSQ
+    // misclosure opens a ~15 cm gap) and, for oblique legs, with the dx-dy
+    // covariance production drops. On ~0.1-0.2 m corrections the two agree to a few
+    // millimetres or better - independent evidence the model is a sound LSQ
     // adjustment in regime. Tolerances are keyed per case: tight where legs are
     // axis-aligned (no dropped covariance), looser where they are oblique.
     let config = ClosureAdjustmentConfig::default();
@@ -11317,7 +11317,7 @@ fn model_sound_matches_rigorous_in_small_misclosure_regime() {
 // ── GNU Gama gold-standard fixtures ──────────────────────────────────────────
 //
 // Production's closure solve is DECOUPLED per axis, and each axis minimises
-// Σ w·(Δ_meas − (p_j − p_i))² — i.e. exactly a 1-D LEVELLING network. GNU Gama
+// Σ w·(Δ_meas - (p_j - p_i))² - i.e. exactly a 1-D LEVELLING network. GNU Gama
 // (gama-local) adjusts levelling networks natively, linearly and exactly, so it is
 // an independent GOLD STANDARD: we emit each network's X- and Y-axis as a Gama
 // levelling network, run gama-local ONCE offline, and freeze the adjusted
@@ -11350,7 +11350,7 @@ fn xorshift01(state: &mut u64) -> f64 {
 
 /// A fuzzed two-path loop: two sections of random oblique legs from a shared,
 /// datum-anchored origin, joined at their far ends by a closure. Single-component,
-/// single-datum, no spurs — every station lies on the loop. Misclosure is whatever
+/// single-datum, no spurs - every station lies on the loop. Misclosure is whatever
 /// the random geometry produces (irrelevant to the per-axis levelling gold solve).
 fn fuzz_loop(seed: u64) -> Project {
     let mut st = seed | 1;
@@ -11407,7 +11407,7 @@ fn drift_shots(st: &mut u64, n: usize, base_az: f64) -> Vec<ShotData> {
 }
 
 /// One big loop: two paths of `n` shots from a merged datum origin joined by a
-/// single closure at the far end. ~2n+1 stations — pure-scale stress for the O(n)
+/// single closure at the far end. ~2n+1 stations - pure-scale stress for the O(n)
 /// solve.
 fn big_loop(n: usize, seed: u64) -> Project {
     let mut st = seed | 1;
@@ -11479,7 +11479,7 @@ fn ladder(segs: usize, seg: usize, seed: u64) -> Project {
 
 /// A 2-D grid mesh: `rows` row-sections (mostly-East shots) and `cols`
 /// column-sections (mostly-North shots), with every grid node (r,c) shared between
-/// its row and column via a merge. A dense lattice of loops — one per cell.
+/// its row and column via a merge. A dense lattice of loops - one per cell.
 fn grid(rows: usize, cols: usize, seed: u64) -> Project {
     let mut st = seed | 1;
     let mut p = Project::new(format!("grid_{rows}x{cols}"), None);
@@ -11523,7 +11523,7 @@ fn grid(rows: usize, cols: usize, seed: u64) -> Project {
         .unwrap();
     }
     // Interior nodes are already path-connected, so identifying row r / col c there
-    // CLOSES a cell loop — one closure per interior node.
+    // CLOSES a cell loop - one closure per interior node.
     for r in 1..rows {
         for c in 1..cols {
             p.create_loop_closure(
@@ -11540,7 +11540,7 @@ fn grid(rows: usize, cols: usize, seed: u64) -> Project {
 /// `paths` independent random sections from a merged datum origin, all fused at
 /// their far ends by closures → `paths-1` independent loops, no spurs. Shots span
 /// the FULL azimuth circle and a wide length band `[len_min, len_max]`, plus a
-/// random per-section quality — deliberately harsher than the structured nets.
+/// random per-section quality - deliberately harsher than the structured nets.
 fn fuzz_paths(seed: u64, paths: usize, max_shots: usize, len_min: f64, len_max: f64) -> Project {
     let mut st = seed | 1;
     let mut p = Project::new(format!("wild_{seed:x}"), None);
@@ -11730,7 +11730,7 @@ fn station_groups(project: &Project) -> (HashMap<StationRef, usize>, Vec<Vec<Sta
     (gidx, members)
 }
 
-/// Reverse Cuthill–McKee ordering of the group graph. Gama's envelope solver cost
+/// Reverse Cuthill-McKee ordering of the group graph. Gama's envelope solver cost
 /// is `O(n·bandwidth²)`, and emitting points in section order leaves a huge
 /// bandwidth on big loops; RCM keeps it near-constant so the gold solve scales.
 /// Returns `rcm[k]` = the group emitted at position `k`.
@@ -11890,7 +11890,7 @@ fn generate_gama_golden_fixtures() {
             .unwrap();
         let dg = gidx[&datum];
         let datum_raw = project.compute_station_raw_coords(datum).unwrap();
-        // Group adjacency from inter-group shots → reverse Cuthill–McKee point order.
+        // Group adjacency from inter-group shots → reverse Cuthill-McKee point order.
         let mut edges: Vec<(usize, usize)> = Vec::new();
         for sec in &project.sections {
             for idx in 0..sec.shots.len() {
@@ -11964,7 +11964,7 @@ fn generate_gama_golden_fixtures() {
         );
         // Refuse to freeze a fixture production doesn't already reproduce: a large
         // gap here is an emitter/model bug (wrong Δ/σ/sign), not a production
-        // regression — writing it would bake a wrong gold standard.
+        // regression - writing it would bake a wrong gold standard.
         assert!(
             net_worst < 1e-5,
             "regeneration aborted: production diverged from freshly-emitted gama on {name} by {net_worst:.3e} m"

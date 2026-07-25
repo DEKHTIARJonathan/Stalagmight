@@ -4,13 +4,13 @@
 //! normalized endpoint + email, and **never** crosses into the webview / IPC
 //! payloads:
 //!
-//! 1. **OS keychain** ([`KeyringStore`], keyring-rs v3) — the persistent,
+//! 1. **OS keychain** ([`KeyringStore`], keyring-rs v3) - the persistent,
 //!    survives-a-restart tier. First precedence on both read and write.
-//! 2. **Plaintext file** ([`PlaintextStore`], `0o600` on Unix) — the opt-in
+//! 2. **Plaintext file** ([`PlaintextStore`], `0o600` on Unix) - the opt-in
 //!    headless-Linux escape hatch; only written when the two gates pass (the
 //!    `token_fallback == Plaintext` preference AND the keychain failed this
 //!    session). See [`TokenStore::store`].
-//! 3. **In-memory** ([`InMemoryStore`] / the live session cache) — session-only,
+//! 3. **In-memory** ([`InMemoryStore`] / the live session cache) - session-only,
 //!    never persisted; the always-available fallback.
 //!
 //! [Track C] (#188) closed the spike's three holes documented here historically:
@@ -40,7 +40,7 @@ pub(crate) fn account_key(endpoint: &str, email: &str) -> String {
 /// [Track C] (#188, D-188 "URL-parse endpoint normalization"): a proper parse so
 /// `https://Sdb.Example.com/`, `https://sdb.example.com`, and
 /// `https://sdb.example.com:443` all collapse to one key. D-B19's *scheme reject*
-/// (require explicit http/https) is **not** done here — it lives in Track A's
+/// (require explicit http/https) is **not** done here - it lives in Track A's
 /// `tls.rs`; this is keying only, so an unparseable endpoint degrades gracefully
 /// to the trimmed/lowercased string rather than erroring.
 fn normalize_endpoint(endpoint: &str) -> String {
@@ -199,7 +199,7 @@ impl SecretStore for InMemoryStore {
 ///
 /// [Track C] (#188, D-B18): on Unix the file is created `0o600` and tightened if
 /// it pre-existed looser (the 0600-at-create invariant). On Windows there is no
-/// `0o600` equivalent — it relies on the per-user profile-dir ACL (documented
+/// `0o600` equivalent - it relies on the per-user profile-dir ACL (documented
 /// gap, no new platform dep). The `root` is injectable so tests use a tempdir.
 pub(crate) struct PlaintextStore {
     root: PathBuf,
@@ -320,7 +320,7 @@ pub(crate) struct TokenStore {
 impl Default for TokenStore {
     /// Production wiring: a real keychain plus an *available* plaintext store
     /// rooted at `<config_dir>/speleodb/tokens`. Plaintext availability is not the
-    /// same as plaintext *use* — the two-gate in [`Self::store`] still requires
+    /// same as plaintext *use* - the two-gate in [`Self::store`] still requires
     /// the `token_fallback == Plaintext` preference AND a keychain failure.
     fn default() -> Self {
         let plaintext_root =
@@ -392,7 +392,7 @@ impl TokenStore {
                 );
                 // Two-gate plaintext opt-in (C6): gate 1 = the persisted
                 // preference (`allow_plaintext`); gate 2 = this keychain failure
-                // (intrinsic — we only reach here in the keychain-Err branch).
+                // (intrinsic - we only reach here in the keychain-Err branch).
                 match (allow_plaintext, &self.plaintext) {
                     (true, Some(plaintext)) => match plaintext.store(&key, token) {
                         Ok(()) => {
@@ -465,7 +465,7 @@ impl TokenStore {
     }
 
     /// Forget the token from **every** tier (keychain + plaintext + memory). The
-    /// single sink the 401 auto-drop handler and logout both call — a 401-drop is
+    /// single sink the 401 auto-drop handler and logout both call - a 401-drop is
     /// a full clear (D-188). Each backend delete is best-effort.
     pub(crate) fn clear(&mut self, endpoint: &str, email: &str) {
         let key = account_key(endpoint, email);
@@ -523,7 +523,7 @@ mod tests {
         SecretStoreError, TokenStore, TokenTier,
     };
 
-    /// A [`SecretStore`] whose every op errors — simulates a headless box with no
+    /// A [`SecretStore`] whose every op errors - simulates a headless box with no
     /// secret service. Drives the plaintext two-gate + the keychain-failure path.
     struct FailingSecretStore;
 

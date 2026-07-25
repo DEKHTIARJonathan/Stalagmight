@@ -5,10 +5,10 @@ export type RangeDeleteCase = 'whole' | 'prefix' | 'suffix' | 'interior';
 /**
  * Classify a contiguous shot-range deletion `[firstIdx..lastIdx]` within a
  * section of `total` shots. Mirrors the backend `RangeDeleteKind`:
- * - `whole`    — every shot selected → the section is removed
- * - `prefix`   — starts at shot 0, shots remain after → gap-close (shift)
- * - `suffix`   — ends at the last shot, shots remain before → truncate (shift)
- * - `interior` — shots remain before AND after → split-vs-shift choice
+ * - `whole`    - every shot selected → the section is removed
+ * - `prefix`   - starts at shot 0, shots remain after → gap-close (shift)
+ * - `suffix`   - ends at the last shot, shots remain before → truncate (shift)
+ * - `interior` - shots remain before AND after → split-vs-shift choice
  * `splitRequired` is true only for an interior range (the only case that can
  * split the section and so needs two section names).
  */

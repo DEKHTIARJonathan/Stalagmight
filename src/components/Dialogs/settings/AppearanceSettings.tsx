@@ -77,7 +77,7 @@ export function AppearanceSettings({
         ? 'light'
         : 'dark';
 
-  // Description text for each section — only shown in auto mode
+  // Description text for each section - only shown in auto mode
   const dayDescription =
     currentMode === 'auto'
       ? t('settings.appearance.theme.lightCard.description')

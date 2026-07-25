@@ -13,7 +13,7 @@ pub fn attempt_repair(path: PathBuf) -> Result<RepairResult, String> {
     match Database::attempt_repair(&path) {
         Ok((backup_path, integrity_ok)) => {
             let message = if integrity_ok {
-                "Repair succeeded — database integrity restored.".to_string()
+                "Repair succeeded - database integrity restored.".to_string()
             } else {
                 "Repair completed but integrity check still fails. \
                  Try exporting salvageable data instead."

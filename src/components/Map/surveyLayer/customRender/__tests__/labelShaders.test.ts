@@ -3,7 +3,7 @@ import { LABEL_FLAG, LABEL_VERTEX_SRC } from '../labelShaders';
 
 /**
  * Label flag + shader contract (#customRender labels, reveal-zoom rework). The
- * old per-build boolean COLLIDE_HIDE is GONE — decluttering + decimation are now
+ * old per-build boolean COLLIDE_HIDE is GONE - decluttering + decimation are now
  * a per-label `a_reveal_zoom` compared against the live `u_zoom` each frame,
  * which is monotone in zoom by construction. DRAG_HIDE stays a distinct flag so a
  * drag flip (flags-only upload) never disturbs the reveal buffer.

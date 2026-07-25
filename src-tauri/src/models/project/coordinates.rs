@@ -14,7 +14,7 @@ impl Project {
     fn get_colocated_stations(&self, station_ref: StationRef) -> Vec<StationRef> {
         // Colocation adjacency = merges + ALIGNED closures, every endpoint
         // resolved once (O(edges)). BFS over it is O(edges + group) instead of
-        // rescanning all merges/closures at each BFS node — the latter made
+        // rescanning all merges/closures at each BFS node - the latter made
         // coordinate/closure work on a large merged component O(group × edges).
         let mut adjacency = self.build_station_merge_adjacency();
         for closure in &self.loop_closures {
@@ -63,7 +63,7 @@ impl Project {
         let mut depths: Vec<f64> = Vec::new();
 
         for &sr in colocated {
-            // O(1) cache lookup; legacy linear scan was the hot path —
+            // O(1) cache lookup; legacy linear scan was the hot path -
             // 79 k groups × O(N sections) per `compute_station_coordinates`
             // call dominated load time for large projects.
             if let Some(section) = self.get_section(sr.section_id) {
@@ -131,11 +131,11 @@ impl Project {
         Some(coords)
     }
 
-    /// World `(x, y)` of a single station via the shot-walk only — the same x/y
+    /// World `(x, y)` of a single station via the shot-walk only - the same x/y
     /// [`Self::compute_station_raw_coords`] returns, but WITHOUT the
     /// `get_colocated_stations` colocation BFS that computes Z. For callers that
     /// only need the horizontal position (e.g. merge offset alignment), this
-    /// avoids an O(group × merges) traversal per call — the dominant cost when
+    /// avoids an O(group × merges) traversal per call - the dominant cost when
     /// merging the thousands of stations of a large import.
     pub(crate) fn compute_station_raw_xy(&self, station_ref: StationRef) -> Option<(f64, f64)> {
         let section = self.get_section(station_ref.section_id)?;
@@ -160,7 +160,7 @@ impl Project {
     }
 
     /// Coordinate-only, component-scoped batch of raw (measured) station
-    /// coordinates — the same values [`Self::compute_station_raw_coords`] returns,
+    /// coordinates - the same values [`Self::compute_station_raw_coords`] returns,
     /// computed for every station in `component` in one linear pass.
     ///
     /// The closure solve runs this once per connected component, so it deliberately
@@ -291,7 +291,7 @@ impl Project {
     ///
     /// Returns the lexicographically smallest `(section_id, station_index)` station
     /// in the component. The anchor only fixes the otherwise-free absolute translation
-    /// (gauge) of a datum-less component — the *shape* of the adjusted geometry is
+    /// (gauge) of a datum-less component - the *shape* of the adjusted geometry is
     /// independent of this choice. Picking the lex-min keeps it stable and reproducible
     /// across reloads so the adjusted view doesn't jump between refreshes.
     fn default_anchor_for_component(&self, component: &HashSet<SectionId>) -> Option<StationRef> {
@@ -367,7 +367,7 @@ impl Project {
     /// The measured project is never mutated: the proven adjustment runs on a
     /// throwaway clone and only the resulting coordinates are returned. The output
     /// is identical to the geometry users saw after the old "Run Adjustment" action,
-    /// but it is recomputed live from intact measured data — so adding/removing
+    /// but it is recomputed live from intact measured data - so adding/removing
     /// closures always re-solves accurately instead of compounding on already-adjusted
     /// geometry. Each disconnected component is solved independently, anchored on a
     /// zero datum when present and otherwise on a deterministic default anchor.
@@ -405,7 +405,7 @@ impl Project {
     /// so a cache-miss solve clones the project `O(eligible components)` times.
     /// In practice that is one or two clones (most surveys are a single connected
     /// component), it only happens on a cache miss, and `adjust_least_squares`
-    /// rewrites `section.shots` in place — so a cheaper offsets-only snapshot would
+    /// rewrites `section.shots` in place - so a cheaper offsets-only snapshot would
     /// be unsound. Revisit with a scoped {sections, offsets, closures} snapshot
     /// only if profiling large surveys shows the clones matter.
     pub fn into_adjusted_station_coordinates(
@@ -444,7 +444,7 @@ impl Project {
 
         // Pre-compute absolute station depths using colocated groups.
         // Each station's Z is the average of surrounding shot depths across
-        // all merge/closure partners — no cumulative dz walk needed.
+        // all merge/closure partners - no cumulative dz walk needed.
         let t_phase = std::time::Instant::now();
         let colocated_groups = self.build_colocated_groups();
         tracing::debug!(

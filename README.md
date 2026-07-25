@@ -14,8 +14,8 @@ the editing and planning workflows that come after the dive.
 
 Stalagmight is an open source project because we believe in transparency,
 accessibility, and freedom for users to manipulate their tools. Stalagmight
-does not store your data on our servers — everything stays local to your
-machine — and the only tracking is opt-in telemetry, meant to help developers
+does not store your data on our servers - everything stays local to your
+machine - and the only tracking is opt-in telemetry, meant to help developers
 fix issues.
 
 Stalagmight use is meant for certified cave survey divers who
@@ -32,18 +32,18 @@ replacement for, cave survey training.
 
 ## What it does
 
-- **Import** — Ariane `.dmp` (raw survey, versions 2–5) and `.tml`, Compass
+- **Import** - Ariane `.dmp` (raw survey, versions 2-5) and `.tml`, Compass
   `.mak`/`.dat` projects, and Walls (experimental).
-- **Export** — map images (`.svg`, `.png`, `.pdf`) plus `.tml`, `.csv`, `.json`
-- **Map** — survey lines and stations rendered with [MapLibre](https://maplibre.org/)
+- **Export** - map images (`.svg`, `.png`, `.pdf`) plus `.tml`, `.csv`, `.json`
+- **Map** - survey lines and stations rendered with [MapLibre](https://maplibre.org/)
   over satellite imagery, with snapping, measurement, a distance-gradient overlay,
   and hover/selection highlighting.
-- **Edit** — move stations / segments / shots, merge stations, adjust sections,
-  edit comments and LRUD, bulk-delete shots — all with hybrid undo/redo.
-- **Loop closure** — least-squares loop adjustment to distribute survey error.
-- **Collaboration** — an Ariane-compatible collab mode (sibling `.tml`,
+- **Edit** - move stations / segments / shots, merge stations, adjust sections,
+  edit comments and LRUD, bulk-delete shots - all with hybrid undo/redo.
+- **Loop closure** - least-squares loop adjustment to distribute survey error.
+- **Collaboration** - an Ariane-compatible collab mode (sibling `.tml`,
   save-both, reconcile/diff). See [docs/collaboration.md](docs/collaboration.md).
-- **Safe by default** — atomic saves, auto-save, dirty-state guards, and a
+- **Safe by default** - atomic saves, auto-save, dirty-state guards, and a
   recent-projects list.
 
 ## Tech stack
@@ -59,7 +59,7 @@ generated from the Rust types via `ts-rs`.
 [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your
 platform.
 
-The toolchain is pinned so every machine builds the same versions — pnpm
+The toolchain is pinned so every machine builds the same versions - pnpm
 `9.15.9` (via `packageManager` in `package.json`) and Node `22.x` (via
 `.nvmrc`). On a fresh clone:
 
@@ -86,7 +86,7 @@ The `docs/` tree is extensive. Good entry points:
 
 | Document | Contents |
 |----------|----------|
-| [SPEC.md](docs/SPEC.md) | Full specification — data model, UI, workflows, file formats, validation |
+| [SPEC.md](docs/SPEC.md) | Full specification - data model, UI, workflows, file formats, validation |
 | [architecture.md](docs/architecture.md) | State flow, command pattern, key files, Rust patterns |
 | [project-structure.md](docs/project-structure.md) | Directory tree and tech stack |
 | [TESTING.md](docs/TESTING.md) | Test tiers and patterns (Rust, Playwright, vitest) |
@@ -94,7 +94,7 @@ The `docs/` tree is extensive. Good entry points:
 
 ## Contributing
 
-Contributions are welcome — with one important caveat about domain scope (cave
+Contributions are welcome - with one important caveat about domain scope (cave
 surveying is a specialized field) and some guidance on AI-assisted work. Please
 read **[CONTRIBUTING.md](CONTRIBUTING.md)** before opening an issue or PR.
 

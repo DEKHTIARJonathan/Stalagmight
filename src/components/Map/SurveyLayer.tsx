@@ -98,7 +98,7 @@ export interface SurveyLayerCallbacks {
   onHiddenShotClick?: () => void;
   /** Called when the custom WebGL renderer hits an unrecoverable GL failure
    *  (WebGL2/GPU). The custom layer is the sole survey renderer with no stock
-   *  fallback, so the survey area is now blank — surface a user-facing error. */
+   *  fallback, so the survey area is now blank - surface a user-facing error. */
   onRenderFatal?: (reason: string) => void;
 }
 
@@ -136,8 +136,8 @@ export default class SurveyLayer {
   // vertex bucket of its bulk source (~75k line segments / ~90k points) built
   // solely to gate hit-testing. The candidate-section gate now queries the
   // VISIBLE shots/stations layers with a padded probe box that reproduces the
-  // old hit tolerance exactly — see hitCandidateSections().
-  // Gas route highlight (#233): the picked penetration route drawn over the survey — one line
+  // old hit tolerance exactly - see hitCandidateSections().
+  // Gas route highlight (#233): the picked penetration route drawn over the survey - one line
   // layer, swum legs at full opacity and jump legs faded via a data-driven line-opacity (#243).
   private gasRouteLayerId = 'survey-gas-route';
 
@@ -185,17 +185,17 @@ export default class SurveyLayer {
   private immovableStationFeatureIds: Set<number> = new Set();
   private immovableShotFeatureIds: Set<number> = new Set();
 
-  // Drag preview state — uses temporary layers with *-translate paint properties
+  // Drag preview state - uses temporary layers with *-translate paint properties
   // instead of rebuilding GeoJSON on every frame
   private dragPreviewActive = false;
   private dragSavedFilters = new Map<string, maplibregl.FilterSpecification | undefined>();
-  // One-shot callback fired at end of update() — used to restore filters after
+  // One-shot callback fired at end of update() - used to restore filters after
   // source data has been updated, in the same synchronous block (no paint gap).
   private onNextUpdateCallback: (() => void) | null = null;
 
   /**
    * setData coalescer: if multiple update() calls land in the same microtask
-   * (typical of React effect cascades — depthRange/gpsOrigin/precision refs
+   * (typical of React effect cascades - depthRange/gpsOrigin/precision refs
    * changing in lockstep on project load), we batch them into a single
    * buildSurveyFeatures + setData pass. This was measured at 6× call count
    * per survey load before coalescing; collapsing it ~6× the GC churn.
@@ -220,10 +220,10 @@ export default class SurveyLayer {
   /** Coalesced-call counter, surfaced to memory probe for instrumentation. */
   private coalescedUpdateCallsSinceLastFlush = 0;
   // Unified drag-preview source (#mem drag fixes): ONE GeoJSON source holding
-  // every moving GEOMETRY feature for the active drag — stations (points), shots
-  // (lines), loop-closure indicator lines — rebuilt from captured originals each
+  // every moving GEOMETRY feature for the active drag - stations (points), shots
+  // (lines), loop-closure indicator lines - rebuilt from captured originals each
   // frame and pushed via a SINGLE setData. Real moved coordinates (not
-  // `*-translate`) so the tiler clips moved geometry — no background wedges at
+  // `*-translate`) so the tiler clips moved geometry - no background wedges at
   // large offsets (BUG A); one setData so stations/shots can't skew apart (BUG B).
   // Attached text is not previewed (it is hidden from the stock text layers).
   // The moving ghost is owned by {@link DragGhostController}; DRAG_PREVIEW_SOURCE
@@ -232,7 +232,7 @@ export default class SurveyLayer {
   private dragPreviewSet: DragPreviewSet | null = null;
   /** rAF coalescer for the per-frame interact-overlay follow: MapCanvas may push
    *  several offsets per frame (pointermove + the map-'move' re-apply), but the
-   *  overlay only needs the latest — one small setData per frame. (The GHOST is
+   *  overlay only needs the latest - one small setData per frame. (The GHOST is
    *  driven synchronously by {@link DragGhostController}, decoupled from this rAF.) */
   private dragUpdateRaf: number | null = null;
   private pendingDragOffset: { dx: number; dy: number } | null = null;
@@ -438,7 +438,7 @@ export default class SurveyLayer {
     this.config = config;
     this.updateHitboxLayers();
     this.updateGhostVisualLayers();
-    // Overlay features carry config-derived widths/radii — force a rebuild.
+    // Overlay features carry config-derived widths/radii - force a rebuild.
     this.lastInteractKey = null;
     this.updateVisualState();
     this.updateDebugVisualization();
@@ -519,7 +519,7 @@ export default class SurveyLayer {
   }
 
   /**
-   * Screen-space "reach" of the (now-removed) hitbox layers — the maximum px
+   * Screen-space "reach" of the (now-removed) hitbox layers - the maximum px
    * distance from a geometry's center at which a point still registered a hit,
    * i.e. the tolerance the candidate gate + SoA resolver must reproduce.
    *
@@ -557,7 +557,7 @@ export default class SurveyLayer {
     // Custom-only renderer: survey geometry + labels + measured-path tint are
     // drawn by the custom WebGL layers (SurveyCustomController /
     // SurveyLabelController / MeasurePathController) straight from the SoA
-    // SurveyData — there are no stock bulk vector-tile sources for shots /
+    // SurveyData - there are no stock bulk vector-tile sources for shots /
     // stations / shot-gradients / labels anymore. Only the small GeoJSON
     // auxiliaries (loop closures, gas route, merge ghosts, interact overlay)
     // live here.
@@ -624,7 +624,7 @@ export default class SurveyLayer {
     // removed (#mem budget): each was a full unfiltered duplicate vertex bucket
     // of its bulk source. Hit-testing now queries the VISIBLE shots/stations
     // layers with a padded probe box (see hitCandidateSections). The ghost
-    // hitbox layers below stay — they live on the tiny ghost sources and drive
+    // hitbox layers below stay - they live on the tiny ghost sources and drive
     // the merge-preview debug visualization only.
     //
     // Layer order (bottom to top):
@@ -745,15 +745,15 @@ export default class SurveyLayer {
         'circle-color': this.themeColors.snapColor,
         'circle-stroke-width': 4,
         'circle-stroke-color': this.themeColors.snapColor,
-        // Disable default 300ms paint transitions — snap indicator must appear/disappear instantly
+        // Disable default 300ms paint transitions - snap indicator must appear/disappear instantly
         'circle-opacity-transition': { duration: 0, delay: 0 },
         'circle-stroke-opacity-transition': { duration: 0, delay: 0 },
       },
     });
 
     // Gas route highlight (#233): the picked route drawn over the survey. Jump legs are
-    // faded rather than dashed (#243) — the same half-opacity treatment reference shots
-    // get — and unlike `line-dasharray`, `line-opacity` IS data-driven, so one layer
+    // faded rather than dashed (#243) - the same half-opacity treatment reference shots
+    // get - and unlike `line-dasharray`, `line-opacity` IS data-driven, so one layer
     // covers both leg kinds.
     this.map.addLayer({
       id: this.gasRouteLayerId,
@@ -1079,7 +1079,7 @@ export default class SurveyLayer {
   /** Track user-initiated zoom (scroll wheel, pinch, double-click). Skip programmatic zooms. */
   private handleZoomEndTelemetry = (e: maplibregl.MapLibreEvent): void => {
     const orig = e.originalEvent;
-    if (!orig) return; // programmatic — already tracked by trigger functions
+    if (!orig) return; // programmatic - already tracked by trigger functions
     if (orig instanceof WheelEvent) {
       trackNav('zoom', 'mouse');
     } else if (typeof TouchEvent !== 'undefined' && orig instanceof TouchEvent) {
@@ -1092,8 +1092,8 @@ export default class SurveyLayer {
   /** Track user-initiated pan (click-drag, touch-drag). Skip programmatic pans and zoom-induced moves. */
   private handleMoveEndTelemetry = (e: maplibregl.MapLibreEvent): void => {
     const orig = e.originalEvent;
-    if (!orig) return; // programmatic — already tracked by trigger functions
-    if (orig instanceof WheelEvent) return; // zoom gesture — tracked by zoomend
+    if (!orig) return; // programmatic - already tracked by trigger functions
+    if (orig instanceof WheelEvent) return; // zoom gesture - tracked by zoomend
     if (orig instanceof MouseEvent) {
       trackNav('pan', 'mouse');
     } else if (typeof TouchEvent !== 'undefined' && orig instanceof TouchEvent) {
@@ -1130,7 +1130,7 @@ export default class SurveyLayer {
     const suppressShotClick = this.activeTool === 'move_station';
 
     // Padded visible-layer query gates candidate sections; SoA resolver picks
-    // the exact item (#mem) — same targets/tolerances as the per-feature path.
+    // the exact item (#mem) - same targets/tolerances as the per-feature path.
     const { stationSections, shotSections } = this.hitCandidateSections(e.point);
 
     const stationHitReach = this.getStationHitReach();
@@ -1330,7 +1330,7 @@ export default class SurveyLayer {
   }
 
   /**
-   * Stations whose rendered hit circle intersects the screen-space box —
+   * Stations whose rendered hit circle intersects the screen-space box -
    * MapCanvas box-select. Candidate sections come from the padded visible-layer
    * query (visibility-aware); exact membership from the SoA resolver with
    * the same circle-box semantics `queryRenderedFeatures(bbox)` had (#mem).
@@ -1445,7 +1445,7 @@ export default class SurveyLayer {
       this.highlightedStationIds.join(','),
     ].join('§');
     // During a drag the feature IDs are unchanged but their coordinates move, so
-    // the id-based cache would wrongly short-circuit — bypass it while following.
+    // the id-based cache would wrongly short-circuit - bypass it while following.
     if (this.dragOverlayOffset === null && key === this.lastInteractKey) return;
     this.lastInteractKey = key;
 
@@ -1584,7 +1584,7 @@ export default class SurveyLayer {
 
   /**
    * One interact-overlay feature for a station ("sectionId:stationIndex") in
-   * hover or selected style — the same radius/stroke the old feature-state
+   * hover or selected style - the same radius/stroke the old feature-state
    * paint cases produced.
    */
   private stationOverlayFeature(idStr: string, style: 'hover' | 'selected'): GeoJSON.Feature | null {
@@ -1642,7 +1642,7 @@ export default class SurveyLayer {
    * Apply the distance-gradient overlay (#34). `enabled` swaps the shots/stations
    * color paint to the distance ramp (or restores section/depth color); `state`
    * carries per-feature `dist` (feature-id → distance, -1 = unreachable).
-   * Re-rooting just calls this again — no feature rebuild.
+   * Re-rooting just calls this again - no feature rebuild.
    */
   setDistanceGradient(enabled: boolean, state: DistanceFeatureState | null): void {
     this.distanceMode = enabled;
@@ -1659,7 +1659,7 @@ export default class SurveyLayer {
    * {@link setDistanceGradient}: `enabled` swaps the shots/stations color to the
    * gas ramp (gold near the origin → purple at the turn budget, grey =
    * unreachable); `state` carries per-feature `gasReach` (litres-to-reach).
-   * Re-running on an input change just calls this again — no feature rebuild.
+   * Re-running on an input change just calls this again - no feature rebuild.
    */
   setGasReach(enabled: boolean, state: GasReachFeatureState | null): void {
     this.gasReachMode = enabled;
@@ -1672,7 +1672,7 @@ export default class SurveyLayer {
   }
 
   /**
-   * Apply the gas route highlight (#233): the picked penetration route drawn over the survey —
+   * Apply the gas route highlight (#233): the picked penetration route drawn over the survey -
    * swum legs at full opacity, jump legs faded (#243). Has its own GeoJSON source (survives
    * `setData()`); the legs are stored so `applyFeaturesToSources` re-pushes them after a feature
    * rebuild. `[]` clears it.
@@ -1689,7 +1689,7 @@ export default class SurveyLayer {
     const source = this.map.getSource(this.sourceId + '-gas-route');
     if (!source || source.type !== 'geojson') return;
     const geojsonSource = source as maplibregl.GeoJSONSource;
-    // Index the stations once (keyed by section:index) so the per-leg endpoint lookups are O(1) —
+    // Index the stations once (keyed by section:index) so the per-leg endpoint lookups are O(1) -
     // the route can be long and this re-runs after every setData() rebuild, so a linear scan per
     // endpoint would be quadratic on large surveys.
     const coordByRef = new Map<string, [number, number]>();
@@ -1773,7 +1773,7 @@ export default class SurveyLayer {
     this.measuredPathStationIds = stationIds && stationIds.size > 0 ? stationIds : null;
     this.measureTintColor = color;
     if (!this.map || !hasLiveStyle(this.map)) return;
-    // Overlay features carry the tint decision — rebuild them.
+    // Overlay features carry the tint decision - rebuild them.
     this.lastInteractKey = null;
     this.refreshInteractOverlay();
     // Drive the dedicated custom measure-path layer (the sole measured-path tint).
@@ -1796,7 +1796,7 @@ export default class SurveyLayer {
    * z-order: inserted beneath `survey-interact-shots-measured` (the hover/
    * selection tint), which sits above the stock `survey-measure-path`. Both the
    * custom and stock tints therefore draw between the survey geometry and the
-   * hover overlay in identical MEASURE_TINT — the pixels match this stage.
+   * hover overlay in identical MEASURE_TINT - the pixels match this stage.
    */
   private syncCustomMeasurePath(): void {
     if (!this.measurePath) return;
@@ -2021,7 +2021,7 @@ export default class SurveyLayer {
    * Nearest shot to a screen point, plus the fractional position `t` ∈ [0,1]
    * along that shot's line (#26 ruler snap-to-shot). The caller interpolates the
    * 3D coords at `t` from the active stations (the 2D shot geometry has no z).
-   * Returns null when no shot is within `threshold` pixels (circular — the
+   * Returns null when no shot is within `threshold` pixels (circular - the
    * old corner post-check is inherent in the resolver's maxDistance).
    *
    * The SoA resolver computes `t` and the snap point from the TRUE shot
@@ -2253,7 +2253,7 @@ export default class SurveyLayer {
     // Measured-path tint drops hidden reference legs (syncCustomMeasurePath guard).
     this.syncCustomMeasurePath();
     // Overlay features honor the reference filter (hidden reference shots /
-    // all-reference stations produce no highlight) — rebuild them.
+    // all-reference stations produce no highlight) - rebuild them.
     this.lastInteractKey = null;
     this.refreshInteractOverlay();
   }
@@ -2262,7 +2262,7 @@ export default class SurveyLayer {
    * Hide/show the source comment label during move_comment pickup (C3). Threads
    * the picked-up comment's identity into the custom label layer, which collapses
    * that one comment's label (LABEL_FLAG.COMMENT_HIDE) so only the cursor-following
-   * tag shows — matching the deleted stock hidden-comment filter. `null` clears it.
+   * tag shows - matching the deleted stock hidden-comment filter. `null` clears it.
    */
   setHiddenComment(hidden: { type: 'station' | 'shot'; sectionId: number; id: number } | null): void {
     this.customLabels?.setHiddenComment(hidden);
@@ -2357,7 +2357,7 @@ export default class SurveyLayer {
    */
   setAnchoredSections(sectionIds: Set<number>): void {
     this.anchoredSectionIds = sectionIds;
-    // Update loop closure line opacity — gray out closures where both endpoints are anchored.
+    // Update loop closure line opacity - gray out closures where both endpoints are anchored.
     this.updateClosureAnchoredOpacity(sectionIds);
     // The custom renderer + label layer dim the anchored sections' geometry + labels.
     this.syncCustomDimming();
@@ -2577,7 +2577,7 @@ export default class SurveyLayer {
   }
 
   /**
-   * Begin SEGMENT drag preview — hide the connected sections' real features from
+   * Begin SEGMENT drag preview - hide the connected sections' real features from
    * the bulk layers (excluded by sectionId), capture every moving station / shot
    * / label / closure ONCE with its original coordinates, and render the moving
    * copy from the unified preview source. All geometry moves uniformly, so a
@@ -2682,7 +2682,7 @@ export default class SurveyLayer {
   }
 
   /**
-   * Begin station / shot drag preview — finds all co-located stations
+   * Begin station / shot drag preview - finds all co-located stations
    * (merged/closured), hides them and their connected shots/labels/closures from
    * the bulk layers, captures that moving geometry (with per-shot movingEnd so a
    * shot stretches around its fixed endpoint), and renders the moving copy from
@@ -2699,7 +2699,7 @@ export default class SurveyLayer {
     //    additionalSeeds allows shot drag to seed from both endpoints simultaneously
     // key -> global SoA index, built from NUMBERS only. Mapping the lazy
     // `Station[]` proxy here materialized the whole ~89k station object graph on
-    // every drag start (and `.filter()` below did it a second time) — the same
+    // every drag start (and `.filter()` below did it a second time) - the same
     // quadratic trap that froze segment drags (#mem).
     const data = this.cachedSurveyData;
     if (!data) return [];
@@ -2778,7 +2778,7 @@ export default class SurveyLayer {
     // `sectionIds` instead (see beginDragPreview).
     const affectedSectionIds = new Set<number>();
 
-    // Moving stations (points) — all uniform.
+    // Moving stations (points) - all uniform.
     for (const st of movingStations) {
       const ref = st.station_ref;
       const idStr = `${ref.section_id}:${ref.station_index}`;
@@ -2857,7 +2857,7 @@ export default class SurveyLayer {
       const bMoving = movingRefKeys.has(keyB);
       if (!aMoving && !bMoving) continue;
 
-      // Coords from the SoA (O(1) per endpoint) — no Station materialization.
+      // Coords from the SoA (O(1) per endpoint) - no Station materialization.
       const fromCoord = this.geoIndex.stationCoords(lc.station_a);
       const toCoord = this.geoIndex.stationCoords(lc.station_b);
       if (!fromCoord || !toCoord) continue;
@@ -2897,7 +2897,7 @@ export default class SurveyLayer {
 
   /** Point the custom-render layer at (or off, with null) the active drag's
    *  hidden feature set, so the originals vanish at drag begin and reappear at
-   *  drag end — matching the stock bulk layers' setFilter exclusions the custom
+   *  drag end - matching the stock bulk layers' setFilter exclusions the custom
    *  layer cannot see. Cheap: recomputes + re-uploads only the per-vertex hide
    *  flag (no buffer rebuild). No-op unless the custom render gate is on. */
   private setDragExclusion(exclusion: CustomRenderExclusion | null): void {
@@ -2905,7 +2905,7 @@ export default class SurveyLayer {
     // Labels mirror the SAME exclusion: the dragged features' labels collapse via
     // the DRAG_HIDE flag (synchronous GPU upload), replacing the stock text-layer
     // filter drop. On drag commit the synchronous sync() rebuild reflows them at
-    // the new positions and setDragExclusion(null) clears the flag — labels never
+    // the new positions and setDragExclusion(null) clears the flag - labels never
     // lag the geometry (the anti-flicker payoff).
     this.customLabels?.setDragHide(exclusion);
   }
@@ -2990,7 +2990,7 @@ export default class SurveyLayer {
   }
 
   /**
-   * Update the station / shot drag preview — one setData over the unified source
+   * Update the station / shot drag preview - one setData over the unified source
    * (stations, shots, labels, closures all move together, no skew).
    */
   updateStationDragPreview(dx: number, dy: number): void {
@@ -2998,7 +2998,7 @@ export default class SurveyLayer {
   }
 
   /**
-   * Update the segment drag preview — one setData over the unified source. The
+   * Update the segment drag preview - one setData over the unified source. The
    * whole segment moves uniformly, so every captured vertex takes the offset.
    */
   updateDragPreview(dx: number, dy: number): void {
@@ -3006,7 +3006,7 @@ export default class SurveyLayer {
   }
 
   /**
-   * Commit drag preview — removes the preview layers but keeps the exclusion
+   * Commit drag preview - removes the preview layers but keeps the exclusion
    * filters on the bulk layers so the moved features stay hidden until React
    * re-renders with their new positions. Call this before the backend commit,
    * then endDragPreview() after the re-render. This prevents a blink where
@@ -3032,7 +3032,7 @@ export default class SurveyLayer {
     // the IPC + flush window so the grabbed highlight stays glued to the cursor
     // instead of snapping back to the OLD coords for the ~100ms until the committed
     // geometry lands. endApplyFeatures drops the offset atomically, right before the
-    // post-commit overlay refresh reads the installed geometry — so the overlay
+    // post-commit overlay refresh reads the installed geometry - so the overlay
     // never renders old+offset after the install (no 2x flash) nor plain old coords
     // during the window (no snap-back). It must survive until the geometry swaps,
     // hence the dragCommitPending handoff. (dragPreviewSet is nulled by the
@@ -3041,7 +3041,7 @@ export default class SurveyLayer {
   }
 
   /**
-   * End drag preview — removes the preview layers (if still present) and restores
+   * End drag preview - removes the preview layers (if still present) and restores
    * every saved bulk-layer filter so the real features are visible again.
    */
   endDragPreview(): void {
@@ -3054,7 +3054,7 @@ export default class SurveyLayer {
     this.dragGhost.end();
     // Drop any deferred drag-hide that never fired (drag ended before ready).
     this.clearPendingDragHide();
-    // Restore the saved auxiliary filters (only loop closures now — the survey
+    // Restore the saved auxiliary filters (only loop closures now - the survey
     // geometry + labels are custom-rendered and their drag exclusion is dropped
     // synchronously below, so they land at the new position at once).
     for (const [layerId, saved] of this.dragSavedFilters) {
@@ -3126,7 +3126,7 @@ export default class SurveyLayer {
     showIssueSeverity: boolean = false,
     warnings: ProjectWarning[] = []
   ) {
-    // Overwrite the pending args — last-call-wins is correct because the
+    // Overwrite the pending args - last-call-wins is correct because the
     // builder is deterministic in its inputs; coalescing equivalent calls
     // is the whole point.
     this.pendingUpdateArgs = {
@@ -3144,7 +3144,7 @@ export default class SurveyLayer {
 
     // Drag-commit short-circuit: callers that registered onNextUpdate
     // (e.g. MapCanvas.endDragPreview) expect the setData and the
-    // callback to land in the same frame — they're restoring filters
+    // callback to land in the same frame - they're restoring filters
     // that hide the dragged preview while the real geometry catches
     // up.  The default async-worker path delays the callback by the
     // worker round-trip (~100 ms on a 14 k-section project), leaving
@@ -3299,7 +3299,7 @@ export default class SurveyLayer {
     showIssueSeverity: boolean = false,
     warnings: ProjectWarning[] = [],
   ): void {
-    // Early bail when the map is gone or its style has been torn down — the
+    // Early bail when the map is gone or its style has been torn down - the
     // coalescer's queueMicrotask can race with MapCanvas unmount → map.remove().
     if (!hasLiveStyle(this.map)) return;
 
@@ -3334,7 +3334,7 @@ export default class SurveyLayer {
       : undefined;
     this.cachedSurveyData = surveyData;
     this.cachedIssueSeverity = issueSeverity;
-    // INVARIANT: geoIndex is re-created (never mutated in place) on every flush —
+    // INVARIANT: geoIndex is re-created (never mutated in place) on every flush -
     // its per-instance lazy caches rest on a fresh instance per geometry change.
     this.geoIndex = new SurveyGeometryIndex(surveyData, this.gpsOrigin);
 
@@ -3434,7 +3434,7 @@ export default class SurveyLayer {
 
     if (!hasLiveStyle(this.map)) return;
 
-    // Overlay features carry resolved theme colors — rebuild them.
+    // Overlay features carry resolved theme colors - rebuild them.
     this.lastInteractKey = null;
     this.refreshInteractOverlay();
 
@@ -3513,7 +3513,7 @@ export default class SurveyLayer {
     // map.remove() and would otherwise retain this whole SurveyLayer (cached
     // survey data + geometry index). MapCanvas's lightweight unmount calls this
     // method but NOT destroy(), so the disposal must live here to run on both
-    // paths — else repeated project opens accumulate stale layers (#customRender).
+    // paths - else repeated project opens accumulate stale layers (#customRender).
     this.dprWatcherDispose?.();
     this.dprWatcherDispose = undefined;
     clearFeatureCountsForPrefix('survey-');

@@ -282,7 +282,7 @@ impl Database {
         // Add last_edit_at column to an EXISTING v9 speleo_link (schema v9→v10:
         // guardrail-7 push-start comparison, #193). CREATE IF NOT EXISTS above is
         // a no-op when the table already exists, so a pre-v10 table needs the
-        // column added explicitly — same idempotent ALTER pattern as shot uuid.
+        // column added explicitly - same idempotent ALTER pattern as shot uuid.
         let has_last_edit_at_column: bool = self
             .conn
             .query_row(
@@ -298,7 +298,7 @@ impl Database {
             // Backfill (#197 review): a row already dirtied under v9 has
             // has_unpushed_edits=1 but no last_edit_at. Without a timestamp,
             // edits_captured_by_push(None, push_start) is false, so a confirmed push
-            // could NEVER clear that legacy dirty bit — the project would show
+            // could NEVER clear that legacy dirty bit - the project would show
             // un-pushed edits forever and re-push a no-op on every Done. The edit
             // demonstrably predates any future push, so stamp the Unix epoch
             // (guaranteed <= any push-start) and let the next confirmed push clear it.
@@ -335,7 +335,7 @@ impl Database {
 
         // Add uuid column to shots table (schema v5→v6: per-shot UUIDs
         // for collaboration round-trip identity).  We don't backfill
-        // existing rows here — `load_project` lazily mints a UUID for
+        // existing rows here - `load_project` lazily mints a UUID for
         // any row that comes back with NULL, and the next save persists
         // it.  That keeps the migration cost a single ALTER TABLE for
         // even very large pre-v6 databases.
@@ -653,7 +653,7 @@ impl Database {
     /// `command_json` / `undo_data_json` payloads. Under the v7 `double_option`
     /// semantics an explicit `null` means "clear the field", so replaying such
     /// an entry would silently wipe pitch/LRUD/comment/marker/temperature on
-    /// the target shot — an upgrade-path data loss. The legacy JSON is
+    /// the target shot - an upgrade-path data loss. The legacy JSON is
     /// ambiguous (null = "untouched" and "restore-to-empty" look identical),
     /// so the only safe option is to drop the persisted stacks: they are
     /// best-effort history (capped at ~20 entries), and losing them once at

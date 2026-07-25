@@ -11,16 +11,16 @@ vi.mock('../../utils/ipc', () => ({
 }));
 
 /**
- * #191 read-only edit gate — executeCommand failure handling. When the backend
+ * #191 read-only edit gate - executeCommand failure handling. When the backend
  * rejects a mutation on a remote project opened read-only it RETURNS
  * `{success:false, error:"EDIT_DISABLED…"}` (a struct, not a throw). executeCommand
  * must then:
- *  (a) ALWAYS re-sync the view to backend truth, discarding any optimistic edit —
+ *  (a) ALWAYS re-sync the view to backend truth, discarding any optimistic edit -
  *      the load-bearing guard against the "shots vanish on drag" regression (a
  *      committed drag preview was left stranded because the success-only refresh
  *      never fired); this also holds on a genuine IPC throw (re-sync, then re-throw);
  *  (b) surface ONE friendly read-only toast, while NON-read-only failures stay
- *      silent here (dialogs render their own inline error — no double message).
+ *      silent here (dialogs render their own inline error - no double message).
  */
 describe('projectStore executeCommand failure handling (#191 read-only gate)', () => {
   let showToast: ReturnType<typeof vi.fn>;

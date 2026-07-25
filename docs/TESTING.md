@@ -15,8 +15,8 @@ This document describes the testing infrastructure, conventions, and best practi
 
 Stalagmight uses a multi-layered testing approach. Beyond speed, note the
 **mocked-IPC vs. real-backend** axis: every *frontend* tier (Vitest unit/
-component, Playwright, smoke) mocks the Tauri backend. The real backend — actual
-file I/O, Recent Projects, the save/import persistence pipeline — is exercised by
+component, Playwright, smoke) mocks the Tauri backend. The real backend - actual
+file I/O, Recent Projects, the save/import persistence pipeline - is exercised by
 the **Rust command-layer tests** (`src-tauri/src/commands/command_tests.rs`), which
 run in the CI-gated `check` job against real `TempDir` files with no display or
 Tauri build. The on-demand WDIO suite is the only tier that drives the **real Tauri
@@ -28,7 +28,7 @@ app** end-to-end (webview + Rust), but it runs nowhere automatically.
 | Component | Vitest + Testing Library | `jsdom` | Render React components, assert handlers/wiring (`*.test.tsx`) | Fast |
 | Playwright E2E | Playwright | mocked IPC | UI flows (`e2e-playwright/`) | Fast |
 | WebdriverIO E2E | WebdriverIO + tauri-driver | real Tauri app | Full real-app tests (`e2e/legacy/`, **on-demand only**) | Slow (real backend) |
-| Backend Unit | Rust `#[test]` | — | Rust logic tests | Fast |
+| Backend Unit | Rust `#[test]` | - | Rust logic tests | Fast |
 | Agent harness | MCP + WebdriverIO | real Tauri app | LLM-agent-driven exploration, stress scenarios, bug repro (`e2e/agent/`, **on-demand**, Node 22) | Slow (real backend) |
 
 The Vitest unit + component tiers are gated in CI (the `check` job) as of #107;
@@ -112,7 +112,7 @@ Tiering is by **file extension** (see `vite.config.ts` → `environmentMatchGlob
 
 | Extension | Environment | Use for |
 |-----------|-------------|---------|
-| `*.{test,spec}.ts` | `node` | Pure logic — stores, utils, selectors, formatters. No DOM. |
+| `*.{test,spec}.ts` | `node` | Pure logic - stores, utils, selectors, formatters. No DOM. |
 | `*.{test,spec}.tsx` | `jsdom` | Rendering a React component with Testing Library. |
 
 `src/test/setup.ts` registers jest-dom matchers and auto-unmounts React trees
@@ -122,7 +122,7 @@ between tests. The DOM libraries load lazily behind a `document` guard, so the
 ### Writing a component test
 
 Render the real component, then assert on accessible roles and that handlers
-fire — prefer this over an E2E test when the behavior is component-local
+fire - prefer this over an E2E test when the behavior is component-local
 ("completing X calls Y", "dialog renders Z on state W"). The full cross-view
 flow still belongs in Playwright.
 
@@ -189,7 +189,7 @@ per-test discipline:
 
 - IPC is mocked **per page** (`mocks/tauri-ipc.ts`); all backend state lives on
   `window.*` inside each isolated browser context.
-- The single shared `webServer` (Vite, `:1420`) is **stateless** — it serves the
+- The single shared `webServer` (Vite, `:1420`) is **stateless** - it serves the
   bundle only.
 - The one real disk write (`fixtures/coverage.ts`) is uniquely named per
   `test + workerIndex` and gated behind `E2E_COVERAGE=1`.
@@ -202,13 +202,13 @@ than `:1420`, and no forced serial mode (`test.describe.serial(...)` or
 workers, that kind of bad hygiene surfaces as flake.
 
 **Enforcement:** `pnpm lint:e2e-parallel` (`scripts/check-e2e-parallel-safe.mjs`)
-fails on any of the patterns above. It runs in the **`smoke` CI job** — the only
+fails on any of the patterns above. It runs in the **`smoke` CI job** - the only
 job that runs the Playwright tier on `e2e-playwright/**` changes (the `check` job
 path-ignores them, so a gate there would be a no-op for an e2e-playwright-only
 change). Run it locally before pushing. `fixtures/coverage.ts` is the one
 allow-listed write; a genuinely necessary exception goes in the `ALLOW` list in
 that script with a written reason. The scanner is a line-based tripwire for the
-common, accidental regression — not a parser; it intentionally does not inspect
+common, accidental regression - not a parser; it intentionally does not inspect
 `page.screenshot({path})` (framework I/O) or the root `playwright.config.ts`.
 
 ### Writing Playwright Tests
@@ -966,7 +966,7 @@ case 'get_undo_stack': {
 
 ### Testing Select Dropdowns (Portal)
 
-The `Select` component renders its dropdown listbox via `createPortal` to `document.body` with `position: fixed`. This means the listbox is **not** inside the Select component's container in the DOM — it's a sibling of `<div id="root">`.
+The `Select` component renders its dropdown listbox via `createPortal` to `document.body` with `position: fixed`. This means the listbox is **not** inside the Select component's container in the DOM - it's a sibling of `<div id="root">`.
 
 #### Key Rules
 
@@ -1013,7 +1013,7 @@ expect(isTopmost).toBe(true);
 
 #### Keyboard Navigation
 
-`aria-activedescendant` is set synchronously from React state — no `setTimeout` workaround is needed for assertions.
+`aria-activedescendant` is set synchronously from React state - no `setTimeout` workaround is needed for assertions.
 
 ```typescript
 const trigger = sectionSelect.locator('button').first();
@@ -1366,7 +1366,7 @@ await page.click('[data-testid="new-project-button"]');
 const dialog = page.locator('[data-testid="new-project-dialog"]');
 await expect(dialog).toBeVisible();
 
-// Tab through all focusable elements — focus should wrap
+// Tab through all focusable elements - focus should wrap
 const firstFocusable = dialog.locator('input, button, select, textarea, [tabindex]').first();
 const lastFocusable = dialog.locator('input, button, select, textarea, [tabindex]').last();
 
@@ -1386,12 +1386,12 @@ await expect(lastFocusable).toBeFocused();
 The dialog initial focus follows a priority order: `[data-autofocus]` > `input` > `[data-primary-action]` > first non-close button > close X button.
 
 ```typescript
-// Dialog with an input field — input should receive focus
+// Dialog with an input field - input should receive focus
 await page.click('[data-testid="new-project-button"]');
 const input = page.locator('[data-testid="new-project-name-input"]');
 await expect(input).toBeFocused();
 
-// Dialog without input but with data-primary-action — that button gets focus
+// Dialog without input but with data-primary-action - that button gets focus
 // (e.g., confirmation dialogs)
 ```
 
@@ -1474,17 +1474,17 @@ await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible();
 
 Two GitHub Actions run on every push/PR to `master`:
 
-1. **`ci.yml` (`check`)** — `pnpm tsc --noEmit` + `pnpm test` (Vitest unit +
+1. **`ci.yml` (`check`)** - `pnpm tsc --noEmit` + `pnpm test` (Vitest unit +
    component, since #107) + `cargo test --manifest-path src-tauri/Cargo.toml --features telemetry`.
-   This is the historical merge gate. (Note: `--features telemetry` is required —
+   This is the historical merge gate. (Note: `--features telemetry` is required -
    a plain `cargo test` filters out the `registry_covers_all_*` tests, and
    `build.rs` requires `TELEMETRY_ENDPOINT` under that feature.)
-2. **`e2e-smoke.yml` (`smoke`)** — the fast Playwright `@smoke` subset
+2. **`e2e-smoke.yml` (`smoke`)** - the fast Playwright `@smoke` subset
    (`pnpm test:ui:smoke`), Chromium-only against the Vite dev server.
 
 The **full** Playwright suite runs on a schedule via **`nightly-e2e.yml`**
 (`pnpm test:ui`), not on every change. The WebdriverIO suite (`e2e/legacy/`) is
-**not** run by any workflow — it is on-demand only (see
+**not** run by any workflow - it is on-demand only (see
 [`e2e/legacy/README.md`](../e2e/legacy/README.md)).
 
 See "Test Tiers" below for the rationale.

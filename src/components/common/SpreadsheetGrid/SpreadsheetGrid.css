@@ -77,14 +77,14 @@
 .sg-row-frozen .sg-cell {
   background: color-mix(in srgb, var(--cc-warning) 14%, var(--cc-panel));
 }
-/* Externally-hovered row (e.g. the shot hovered on the map) — faint accent
+/* Externally-hovered row (e.g. the shot hovered on the map) - faint accent
    tint. Selection visuals render in overlays above the cells, so this never
    masks them. Declared after the frozen tint so hover wins on frozen rows. */
 .sg-row-hover .sg-cell {
   background: color-mix(in srgb, var(--cc-accent) 8%, var(--cc-panel));
 }
 /* A cell that cannot be edited while the grid as a whole can (read-only
-   column, frozen geometry, read-only mode): visibly recessed — darker
+   column, frozen geometry, read-only mode): visibly recessed - darker
    background, dimmed text, not-allowed cursor. Declared after the row tints
    so the recess survives frozen/hover backgrounds. */
 .sg-grid .sg-cell-locked {
@@ -169,7 +169,7 @@
   box-sizing: border-box;
 }
 
-/* Cell editor — fills the active cell, sits above the selection overlay. */
+/* Cell editor - fills the active cell, sits above the selection overlay. */
 .sg-grid .sg-editor {
   box-sizing: border-box;
   margin: 0;

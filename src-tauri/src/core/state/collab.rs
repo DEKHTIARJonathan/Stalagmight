@@ -104,7 +104,7 @@ impl AppState {
         }
 
         // Read-only edit gate (#191, D-B6): this method mutates a `.stalx` BY PATH
-        // — usually NOT the open AppState project — so the transient edit_enabled
+        // - usually NOT the open AppState project - so the transient edit_enabled
         // flag (which describes the *open* project) can only speak for it when the
         // path IS the currently open project. So compute the open-project identity
         // FIRST, BEFORE the disk write, and gate only on a match. The identity
@@ -170,7 +170,7 @@ impl AppState {
 
     /// When collaboration was turned OFF on a project that previously had it on,
     /// return the name of the companion `.tml` if it still exists, so the UI can
-    /// warn it will no longer be kept in sync. Gated on provenance — a project
+    /// warn it will no longer be kept in sync. Gated on provenance - a project
     /// that never had collaboration (`project.collab` is `None`) returns `None`,
     /// so an unrelated `.tml` sharing the basename (e.g. an import source) does
     /// not trigger a false warning. Also `None` when collaboration is on, no
@@ -185,8 +185,8 @@ impl AppState {
         // Provenance guard: only warn when a baseline sha exists,
         // meaning Stalagmight actually exported the sibling at some
         // point.  Without this, a user who toggled collaboration on
-        // then off before any successful export — or whose first
-        // sibling write failed — would still get warned about any
+        // then off before any successful export - or whose first
+        // sibling write failed - would still get warned about any
         // same-basename `.tml` the user dropped next to the project
         // (e.g. an Ariane import source).
         collab.last_export_tml_sha256.as_ref()?;
@@ -204,7 +204,7 @@ impl AppState {
     ///
     /// TODO(v2): this re-runs `compute_collab` (fresh hash + diff) at apply
     /// time rather than applying the changeset that the review dialog was
-    /// populated with.  Under the v1 external-edit-lock that's fine — only
+    /// populated with.  Under the v1 external-edit-lock that's fine - only
     /// one person edits at a time, so the `.tml` can't change between the
     /// preview and the apply.  Without the lock (true concurrent edit
     /// support), the user could silently apply a different change set than
@@ -276,7 +276,7 @@ impl AppState {
         self.push_snapshot_undo(crate::core::Command::ApplyCollabChanges, before, after);
         // Dirty-bit flip (#191, D-B16): applying a collaborator's changes mutated
         // a remote project. apply_collab_changes is reached via execute(
-        // ApplyCollabChanges) — already guarded by execute()'s chokepoint — so the
+        // ApplyCollabChanges) - already guarded by execute()'s chokepoint - so the
         // gate is inherited; here we only flip the dirty bit. Set-only; no-op for
         // local-only.
         self.mark_remote_dirty();
@@ -341,12 +341,12 @@ impl AppState {
         let Some(collab) = project.collab.as_ref() else {
             return Ok(None);
         };
-        // Require collab to be on AND a recorded export — the sha is set in
+        // Require collab to be on AND a recorded export - the sha is set in
         // `write_collab_sibling` and is the only proof that the sibling
         // `.tml` next to us came from Stalagmight (not an unrelated TML the
         // user happened to drop in the same dir).  Note: an empty baseline
         // would currently fall through to `diff()`'s own empty-baseline
-        // guard, which still short-circuits to an empty change set — so
+        // guard, which still short-circuits to an empty change set - so
         // the "enable collab on an empty project, then Ariane adds first
         // shots" workflow is unsupported until the diff guard can be
         // removed safely (it currently regresses real-Ariane corpus
@@ -389,14 +389,14 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
     for e in &cs.shots_edited {
         let Some(section) = project.get_section_mut(e.section_id) else {
             skipped.push(format!(
-                "Skipped edit on '{}' (section gone — baseline drifted from current project)",
+                "Skipped edit on '{}' (section gone - baseline drifted from current project)",
                 e.section_name
             ));
             continue;
         };
         let Some(shot) = section.shots.get_mut(e.shot_index as usize) else {
             skipped.push(format!(
-                "Skipped edit on '{}' shot #{} (index out of range — Stalagmight edited the section after the baseline was captured)",
+                "Skipped edit on '{}' shot #{} (index out of range - Stalagmight edited the section after the baseline was captured)",
                 e.section_name,
                 e.shot_index + 1,
             ));
@@ -404,7 +404,7 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
         };
         let d = &e.new_data;
         // Reject non-finite (NaN/±inf) geometry from the collaborator's TML before
-        // it poisons coordinate computation — the collab path writes foreign data
+        // it poisons coordinate computation - the collab path writes foreign data
         // directly, so this is its ingest gate (mirrors the command-boundary checks).
         if !d.all_finite() {
             skipped.push(format!(
@@ -444,7 +444,7 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
         }
     }
 
-    // Removes — descending shot index so earlier indices stay valid.
+    // Removes - descending shot index so earlier indices stay valid.
     let mut removals: Vec<(SectionId, u32, String)> = cs
         .shots_removed
         .iter()
@@ -461,7 +461,7 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
                 let _ = project.remove_shot_with_rewire(sid, shot_id);
             }
             None => skipped.push(format!(
-                "Skipped removal on '{}' shot #{} (index out of range — Stalagmight already removed this shot, or the section is missing)",
+                "Skipped removal on '{}' shot #{} (index out of range - Stalagmight already removed this shot, or the section is missing)",
                 section_name,
                 idx + 1,
             )),
@@ -491,7 +491,7 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
             _ => None,
         };
         // Adopt the collaborator's UUID on the inserted shot so the next Ariane
-        // round-trip still matches via tier-1 — but only if it's free in this
+        // round-trip still matches via tier-1 - but only if it's free in this
         // section. A duplicate would make AfterShot anchors mis-resolve (resolve_key
         // takes the first match), and stamping it could even displace an EXISTING
         // shot's identity if the new shot sorts ahead of it; on collision keep the
@@ -501,7 +501,7 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
         // post-patching: the prepend path (insert_shot_before, pos == 0) re-anchors
         // this section's `SectionStart` refs to the new first shot's UUID, so
         // overwriting the UUID *after* the insert would leave those refs pointing at
-        // the discarded fresh UUID — orphaning a start-station datum/merge/closure
+        // the discarded fresh UUID - orphaning a start-station datum/merge/closure
         // (critical → the whole collab apply rolls back) or offset/comment (a
         // dangling ref that later blocks saving). Passing forced_uuid makes the
         // re-anchor use the final UUID, so no orphan is ever created.
@@ -547,7 +547,7 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
                 .and_then(|s| s.shots.iter().position(|sh| sh.id == nid))
                 .map(|i| i as u32);
             // Attach the inserted shot's station-portion of Comment to its
-            // `to` station — the same shot+1 convention used at export time.
+            // `to` station - the same shot+1 convention used at export time.
             if let Some(idx) = shot_pos {
                 if let Some(text) = a.station_comment.as_deref().filter(|s| !s.is_empty()) {
                     let to = crate::models::StationRef::new(sid, idx + 1);
@@ -597,7 +597,7 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
                 }
             }
         }
-        // Station-portion comments parallel to s.shots — each entry, if
+        // Station-portion comments parallel to s.shots - each entry, if
         // present, attaches to the new shot's `to` station (shot_index + 1).
         for (shot_idx, sc_opt) in s.shot_station_comments.iter().enumerate() {
             if let Some(text) = sc_opt.as_deref().filter(|s| !s.is_empty()) {
@@ -747,7 +747,7 @@ mod tests {
     #[test]
     fn apply_insert_with_colliding_uuid_stays_unique() {
         // A hostile/corrupt .tml whose added shot carries a UUID that already
-        // exists in the section must NOT make two shots share it — that would
+        // exists in the section must NOT make two shots share it - that would
         // make AfterShot anchors mis-resolve (resolve_key takes the first
         // match). The collaborator UUID is rejected in favour of a fresh one,
         // and the pre-existing shot keeps its identity.
@@ -791,7 +791,7 @@ mod tests {
         // (after_shot_id == None) of a new first shot carrying a collaborator UUID
         // used to: (1) mint a FRESH UUID inside insert_shot_before and re-anchor the
         // section's SectionStart refs to AfterShot(fresh_uuid), then (2) overwrite
-        // the shot's UUID with the collaborator UUID — orphaning the just-re-anchored
+        // the shot's UUID with the collaborator UUID - orphaning the just-re-anchored
         // refs. With a station-0 zero datum that made the entire apply roll back as
         // critical corruption (and with a start offset/comment it left a dangling ref
         // that blocked the next save). The collaborator UUID is now plumbed INTO the
@@ -909,7 +909,7 @@ mod tests {
                 old: "5.000".into(),
                 new: "99.000".into(),
             }],
-            // What a returned Ariane shot carries — no azimuth_out/pitch_out/marker/temp.
+            // What a returned Ariane shot carries - no azimuth_out/pitch_out/marker/temp.
             new_data: ShotData {
                 azimuth_in: 10.0,
                 length: 99.0,

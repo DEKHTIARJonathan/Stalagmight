@@ -197,7 +197,7 @@ export class SurveyMeasurePathLayer implements CustomLayerInterface {
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
 
-    // Shots (capsules) first, stations (discs) on top — the discs cover the path
+    // Shots (capsules) first, stations (discs) on top - the discs cover the path
     // junctions so a measured joint reads as a clean dot, mirroring the bulk
     // station-over-shot stacking.
     this.drawLines(gl, matrix, viewport, data);

@@ -24,7 +24,7 @@ impl Validator {
         let mut warnings = Vec::new();
 
         // Build every warning through one helper so its severity is sourced from
-        // the single `severity_for_code` map (issue #57) — the validator, the
+        // the single `severity_for_code` map (issue #57) - the validator, the
         // ignore gate, and the map coloring can never disagree on a code's class.
         let warn = |code: &str, message: String| ValidationWarning {
             code: code.to_string(),
@@ -256,7 +256,7 @@ impl Validator {
         // right triangle: dz = length * sin(pitch). Two checks fall out of it.
         let dz = shot.depth_out - shot.depth_in;
         if shot.length > 0.0 {
-            // The slope length can never be shorter than the vertical change —
+            // The slope length can never be shorter than the vertical change -
             // that would need sin(pitch) > 1. A small epsilon absorbs rounding.
             if shot.length + 1e-6 < dz.abs() {
                 warnings.push(warn(
@@ -906,13 +906,13 @@ mod tests {
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
     }
 
-    /// Slope length must be >= the vertical (depth) change — otherwise the
+    /// Slope length must be >= the vertical (depth) change - otherwise the
     /// geometry is impossible (would need sin(pitch) > 1).
     #[test]
     fn test_length_below_depth_change() {
         let config = default_config();
 
-        // length 3m but a 5m drop — impossible.
+        // length 3m but a 5m drop - impossible.
         let bad = ShotData {
             azimuth_in: 90.0,
             azimuth_out: 90.0,
@@ -1065,7 +1065,7 @@ mod tests {
         );
 
         // Recorded -30° has the right MAGNITUDE but the WRONG DIRECTION (says the
-        // shot ascends while the depth change says it descends) — flagged (finding #7).
+        // shot ascends while the depth change says it descends) - flagged (finding #7).
         let reversed = ShotData {
             pitch_in: Some(-30.0),
             pitch_out: Some(-30.0),

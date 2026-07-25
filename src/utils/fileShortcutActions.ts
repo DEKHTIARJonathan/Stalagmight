@@ -4,7 +4,7 @@
  * GlobalView and SingleSystemView each register their own keyboard dispatcher,
  * but both expose this same set of file actions. Routing them through one helper
  * keeps the unsaved-changes guard, the entry-point source tag, the read-only
- * import guard, and the picker filters in a single place — so the two views can't
+ * import guard, and the picker filters in a single place - so the two views can't
  * drift (e.g. the `quit` action previously had to be added to both dispatchers
  * independently, and the New-project unsaved-changes guard existed in the menu
  * path but not the keyboard path).

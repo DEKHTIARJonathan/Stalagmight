@@ -2,14 +2,14 @@
 //
 // The `e2e-playwright/` tier runs with `fullyParallel: true` at multiple workers.
 // That is safe ONLY because every spec keeps its backend state per-page on
-// `window.*` (mocked IPC) — no spec binds a port, writes a fixed disk path, or
+// `window.*` (mocked IPC) - no spec binds a port, writes a fixed disk path, or
 // shares a server / global. This scanner fails the build if a spec introduces a
 // pattern that would break that invariant. See docs/TESTING.md.
 //
-// Runs in the `smoke` job (e2e-smoke.yml) — the only CI job that runs the
+// Runs in the `smoke` job (e2e-smoke.yml) - the only CI job that runs the
 // Playwright tier on `e2e-playwright/**` changes. `check` (the home of the
 // repo's Rust/vitest grep-gates) path-ignores `e2e-playwright/**`, so a gate
-// there would be a no-op for an e2e-playwright-only PR — exactly the change this
+// there would be a no-op for an e2e-playwright-only PR - exactly the change this
 // must catch. (claude-code-review.yml also lacks that path-ignore, but it's an
 // LLM review that wouldn't run this gate, and is currently disabled anyway.)
 //
@@ -31,7 +31,7 @@ const SHARED_VITE_PORT = '1420'; // the one shared webServer every page talks to
 
 // Files allowed to break a specific rule, each with the reason it is safe. The
 // coverage fixture writes a per-(test,worker)-unique file under docs/coverage,
-// gated behind E2E_COVERAGE=1 — parallel-safe by construction. To add a genuine
+// gated behind E2E_COVERAGE=1 - parallel-safe by construction. To add a genuine
 // exception, append a row here with a written justification.
 const ALLOW = [
   {
@@ -47,26 +47,26 @@ const RULES = [
   {
     id: 'own-server',
     re: /\bcreateServer\s*\(/,
-    why: 'starts its own server — every page shares the one Vite webServer (:1420).',
+    why: 'starts its own server - every page shares the one Vite webServer (:1420).',
   },
   {
     id: 'port-listen',
     re: /\.listen\s*\(/,
-    why: 'binds a port — parallel workers would collide on it.',
+    why: 'binds a port - parallel workers would collide on it.',
   },
   {
     id: 'disk-write',
     // Require the call paren so mock command labels such as 'plugin:fs|writeFile'
     // (string literals, no `(`) do not false-positive. `page.screenshot({path})`
-    // is intentionally absent — it's framework I/O, used here with unique names.
+    // is intentionally absent - it's framework I/O, used here with unique names.
     re: /\b(?:writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream|copyFileSync|cpSync|renameSync)\s*\(/,
-    why: 'writes disk — use a per-(test,worker)-unique path only (see fixtures/coverage.ts), else concurrent workers clobber each other.',
+    why: 'writes disk - use a per-(test,worker)-unique path only (see fixtures/coverage.ts), else concurrent workers clobber each other.',
   },
   {
     id: 'foreign-host-port',
     re: /(?:127\.0\.0\.1|localhost):(\d+)/,
     accept: (m) => m[1] === SHARED_VITE_PORT, // allow the shared Vite port
-    why: `hardcodes a host:port other than :${SHARED_VITE_PORT} — implies a per-test server/socket, not parallel-safe.`,
+    why: `hardcodes a host:port other than :${SHARED_VITE_PORT} - implies a per-test server/socket, not parallel-safe.`,
   },
   {
     id: 'serial',
@@ -111,7 +111,7 @@ function stripComments(line, state) {
   code = code.replace(/\/\*.*?\*\//g, ''); // inline /* ... */ blocks
   const open = code.indexOf('/*');
   if (open !== -1) {
-    state.inBlock = true; // unterminated block — rest of line is comment
+    state.inBlock = true; // unterminated block - rest of line is comment
     code = code.slice(0, open);
   }
   return code.replace(/(^|\s)\/\/.*$/, '$1');
@@ -148,7 +148,7 @@ function main() {
     return 0;
   }
 
-  console.error(`\n✗ e2e-playwright parallel-safety check failed — ${violations.length} issue(s):\n`);
+  console.error(`\n✗ e2e-playwright parallel-safety check failed - ${violations.length} issue(s):\n`);
   for (const v of violations) {
     console.error(`  [${v.ruleId}] ${v.rel}:${v.lineNo}`);
     console.error(`      ${v.snippet}`);

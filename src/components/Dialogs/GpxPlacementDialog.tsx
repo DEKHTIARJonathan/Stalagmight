@@ -146,7 +146,7 @@ export default function GpxPlacementDialog() {
           message: result.error ?? 'Unknown error during import',
         });
       } else {
-        // Partial-success import (deferred save failed) — surface ONLY the
+        // Partial-success import (deferred save failed) - surface ONLY the
         // "SYSTEM" save-failure warning so the user knows their import is unsaved;
         // routine validation warnings are surfaced elsewhere (#110).
         surfaceImportWarnings(deferredSaveWarnings(result.warnings), openDialog);

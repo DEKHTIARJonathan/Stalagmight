@@ -157,7 +157,7 @@ export function Select({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<(HTMLDivElement | null)[]>([]);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  // The trigger's scrollable ancestor, captured on open — kept scroll-safe so the
+  // The trigger's scrollable ancestor, captured on open - kept scroll-safe so the
   // focus-into-view scroll that opening triggers can't dismiss the dropdown.
   const scrollAncestorRef = useRef<HTMLElement | null>(null);
 
@@ -191,7 +191,7 @@ export function Select({
   }, [flatOptions, value]);
 
   // Close on outside mousedown / external scroll (not internal dropdown scroll) /
-  // resize — shared with AppMenu. The portaled dropdown is the scroll-safe surface.
+  // resize - shared with AppMenu. The portaled dropdown is the scroll-safe surface.
   useDismissableLayer({
     open: isOpen,
     onDismiss: () => {
@@ -233,7 +233,7 @@ export function Select({
     });
   }, [isOpen, triggerRect]);
 
-  // Reset highlighted index only on open/close transitions — NOT on every
+  // Reset highlighted index only on open/close transitions - NOT on every
   // re-render while the dropdown is open.  Parent re-renders (e.g. from hover
   // preview state changes) can create new option array references; without
   // the transition guard, highlighted index and scroll position would snap
@@ -241,7 +241,7 @@ export function Select({
   const prevIsOpenRef = useRef(false);
   useEffect(() => {
     if (isOpen && !prevIsOpenRef.current) {
-      // Dropdown just opened — highlight the currently selected option if enabled
+      // Dropdown just opened - highlight the currently selected option if enabled
       const selectedIdx = findSelectedIndex();
       const selectedOpt = selectedIdx >= 0 ? flatOptions[selectedIdx] : null;
       if (selectedIdx >= 0 && selectedOpt && !selectedOpt.disabled) {
@@ -562,14 +562,14 @@ export function Select({
           viewBox="0 0 24 24"
           aria-hidden="true"
         >
-          {/* Filled chevron (down) — robust under the page-zoom UI scale. Width
+          {/* Filled chevron (down) - robust under the page-zoom UI scale. Width
               includes the round-cap extension (len + weight). */}
           <rect x="9.45" y="11.4" width="12.1" height="2.2" rx="1.1" transform="rotate(135 15.5 12.5)" />
           <rect x="2.45" y="11.4" width="12.1" height="2.2" rx="1.1" transform="rotate(-135 8.5 12.5)" />
         </svg>
       </button>
 
-      {/* Dropdown — portaled to document.body to escape stacking contexts */}
+      {/* Dropdown - portaled to document.body to escape stacking contexts */}
       {isOpen && createPortal(
         <div
           ref={dropdownRef}

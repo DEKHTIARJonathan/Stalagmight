@@ -174,13 +174,13 @@ describe('anchor-relative mercator invariant (zoom correctness)', () => {
 
     const [mAx, mAy] = lngLatToMercator(coordA[0], coordA[1]);
     // Vertex 0 stores endpoint A anchor-relative (float32 buffer, so ~1e-3 with
-    // float32 resolution — the mercator.ts precision trick that keeps rel small).
+    // float32 resolution - the mercator.ts precision trick that keeps rel small).
     expect(line.posA[0]).toBeCloseTo(mAx - anchorX, 6);
     expect(line.posA[1]).toBeCloseTo(mAy - anchorY, 6);
 
     // The anchor fold is exact (float64): for the float64 rel = mercator - anchor,
     // composeAnchorMatrix(mvp, anchor) * rel maps to the SAME clip position as
-    // projecting the raw mercator coord under mvp — for realistic mercator->clip
+    // projecting the raw mercator coord under mvp - for realistic mercator->clip
     // matrices (scale ~1-4). This is why a mid-drag ZOOM keeps the ghost glued:
     // the anchored position re-projects correctly whatever the camera, and the
     // screen-px drag delta is a separate additive uniform (zero here).

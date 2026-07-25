@@ -2,7 +2,7 @@
  * Pure selection / navigation / paste / fill math for SpreadsheetGrid.
  *
  * All functions operate on the DATA MODEL (row indices + visible-column
- * indices), never the DOM — this is the keystone constraint: virtualized rows
+ * indices), never the DOM - this is the keystone constraint: virtualized rows
  * unmount when scrolled off-screen, so selection, copy, paste and fill must be
  * computable for cells that aren't currently rendered. Unit-tested.
  */
@@ -181,7 +181,7 @@ export function placePaste(
 
 /**
  * Fill targets: copy the leading edge of the rect across the rest.
- * Copy-fill only (NO numeric auto-series — deliberate for survey data).
+ * Copy-fill only (NO numeric auto-series - deliberate for survey data).
  * `down` fills each column's top row downward; otherwise fills each row's left
  * column rightward. Returns (destRow,destCol)→(srcRow,srcCol) pairs, excluding
  * the source edge itself.

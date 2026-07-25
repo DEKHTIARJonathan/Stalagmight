@@ -7,7 +7,7 @@
  * index, a section name, a comment) and the exact same per-label color (depth
  * ramp vs `labelColor`, section color, comment palette). Reimplementing either
  * on the custom path would risk a subtle A/B mismatch (precision, the
- * depth-vs-flat fallback), so both paths call THESE helpers — parity by
+ * depth-vs-flat fallback), so both paths call THESE helpers - parity by
  * construction, the same pattern `colorResolvers.ts` uses for shot/station
  * fills. `features.ts` imports this module (never the reverse), so there is no
  * import cycle.
@@ -104,10 +104,10 @@ export function resolveSectionLabelColor(sectionColor: string): string {
  * Build the shared {@link LabelColorContext} from the same three inputs the stock
  * feature builder uses (`showDepthGradient`, the depth range, the theme colors).
  * Both `features.ts` and the custom label controller call this, so shot/station
- * label colors are parity-by-construction (§Risk 4) — a single place resolves the
+ * label colors are parity-by-construction (§Risk 4) - a single place resolves the
  * ramp endpoints + range + flat fallback. `depthRange` is taken structurally
  * (`{ min, max }`) so this pure module never imports `features.ts` (which imports
- * it — no cycle).
+ * it - no cycle).
  */
 export function labelColorContextFrom(
   showDepthGradient: boolean,

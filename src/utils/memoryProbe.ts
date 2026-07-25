@@ -8,7 +8,7 @@
  *    worker memory, so we publish the counts ourselves at the call site.
  *
  * 2. Estimate retained bytes for the categories the WebProcess accumulates
- *    over a session. The estimates are deliberately rough heuristics — the
+ *    over a session. The estimates are deliberately rough heuristics - the
  *    point is to surface *which bucket grew*, not produce a byte-accurate
  *    accountant.
  *
@@ -34,7 +34,7 @@ export type FeatureSourceKind =
 export interface FeatureCountSnapshot {
   /** Number of features published to MapLibre per source. */
   perSource: Record<FeatureSourceKind, number>;
-  /** Total cumulative setData calls per source — surfaces churn rate. */
+  /** Total cumulative setData calls per source - surfaces churn rate. */
   setDataCalls: Record<FeatureSourceKind, number>;
 }
 
@@ -106,7 +106,7 @@ export function clearFeatureCountsForPrefix(prefix: string): void {
 }
 
 /**
- * Recent perf timings — surfaced in the MemoryProbe panel so the user can
+ * Recent perf timings - surfaced in the MemoryProbe panel so the user can
  * see freeze costs without opening devtools. Keyed by a short label; the
  * most recent entry per label wins.
  */
@@ -157,7 +157,7 @@ export function startLongTaskObserver(): void {
 
   // Frame-gap detector: only records the *worst* freeze seen in each
   // ~1 s window so the panel doesn't fill with `freeze #N` entries from
-  // every minor stall. Threshold raised to 200 ms — short stalls are
+  // every minor stall. Threshold raised to 200 ms - short stalls are
   // noise; we only care about user-perceptible ones.
   if (!frameGapDetectorRunning) {
     frameGapDetectorRunning = true;
@@ -188,7 +188,7 @@ export function startLongTaskObserver(): void {
 }
 
 /**
- * Estimate retained bytes for a `SurveyGeometry` payload — used to compute
+ * Estimate retained bytes for a `SurveyGeometry` payload - used to compute
  * how much memory the GlobalView geometryData cache holds in aggregate.
  *
  * Heuristic per shot: 2 boxed [lng,lat] arrays (~64B each in JSC including
@@ -204,7 +204,7 @@ export function estimateGeometryBytes(geometry: SurveyGeometry): number {
 /**
  * Estimate retained bytes for a single GeoJSON Feature with the rough
  * property shape we use (LineString + ~9 props, or Point + ~7 props).
- * Calibrated empirically — see docs/performance.md.
+ * Calibrated empirically - see docs/performance.md.
  */
 export function estimateFeatureBytes(kind: FeatureSourceKind): number {
   switch (kind) {
@@ -223,7 +223,7 @@ export function estimateFeatureBytes(kind: FeatureSourceKind): number {
       // Point feature + ~7 properties (label string included)
       return 320;
     case 'global-survey':
-      // Mixed — assume average of line + point shapes
+      // Mixed - assume average of line + point shapes
       return 320;
   }
 }
@@ -234,7 +234,7 @@ export function estimateMaplibreFeatureBytes(): number {
   for (const key of Object.keys(counts.perSource) as FeatureSourceKind[]) {
     total += counts.perSource[key] * estimateFeatureBytes(key);
   }
-  // MapLibre clones into the worker — double on the main thread side
+  // MapLibre clones into the worker - double on the main thread side
   // accounting (we observe both copies in the WebProcess).
   return total * 2;
 }

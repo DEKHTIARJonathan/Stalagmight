@@ -16,11 +16,11 @@ import { AZIMUTH_AVG_KEY } from './dataTableEdits';
 
 /** Where a draft sits relative to the real shots. `'end'` is the always-present
  *  trailing draft; the id anchors pin an inserted draft to a neighbour shot
- *  (surviving unrelated inserts/deletes — a deleted anchor prunes the draft). */
+ *  (surviving unrelated inserts/deletes - a deleted anchor prunes the draft). */
 export type DraftAnchor = { afterShotId: number } | { beforeShotId: number } | 'end';
 
 export interface ShotDraft {
-  /** Negative, unique per draft — doubles as the grid row id (real shot ids
+  /** Negative, unique per draft - doubles as the grid row id (real shot ids
    *  are positive). The end draft is always {@link END_DRAFT_KEY}. */
   key: number;
   anchor: DraftAnchor;
@@ -36,7 +36,7 @@ export type RowEntry =
 export const END_DRAFT_KEY = -1;
 
 /** A fresh, empty end draft. Callers allocate keys from a monotonic counter so
- *  a key is NEVER reused — grid-internal per-cell state (missing-cell marks)
+ *  a key is NEVER reused - grid-internal per-cell state (missing-cell marks)
  *  is keyed by row identity and must not leak onto a later draft. */
 export const endDraft = (key: number = END_DRAFT_KEY): ShotDraft => ({ key, anchor: 'end', data: {} });
 
@@ -91,7 +91,7 @@ export function pruneDrafts(drafts: ShotDraft[], shots: Shot[]): ShotDraft[] {
  *  The new drafts anchor to the boundary's neighbour: after the shot above,
  *  before the first shot at the very top, and between same-anchor drafts they
  *  keep the clicked position. Returns the new drafts array, or `null` when
- *  there is nothing to anchor to (no shots yet — the end draft IS the insert
+ *  there is nothing to anchor to (no shots yet - the end draft IS the insert
  *  affordance there). */
 export function insertDraftsAt(
   shots: Shot[],
@@ -118,7 +118,7 @@ export function insertDraftsAt(
   } else if (prev.kind === 'shot') {
     anchor = { afterShotId: prev.shot.id };
   } else if (prev.draft.anchor === 'end') {
-    // Below the end draft — there is no further row, so after the last shot.
+    // Below the end draft - there is no further row, so after the last shot.
     anchor = { afterShotId: lastShot.id };
   } else {
     anchor = prev.draft.anchor;
@@ -160,7 +160,7 @@ export function materializeDraft(draft: ShotDraft): Shot {
 
 /** The draft's still-missing required fields, split into visible columns (tint
  *  the cell red) and hidden ones (tint the columns button / menu row instead).
- *  Inserted drafts surface them immediately — the user asked for a row there,
+ *  Inserted drafts surface them immediately - the user asked for a row there,
  *  so it is incomplete by construction. The end draft is an invitation, not an
  *  obligation: it stays quiet until it holds ANY value. */
 export function draftMissing(
@@ -192,7 +192,7 @@ export function draftMissing(
 }
 
 /** The full ShotData to commit, or `null` while required fields are missing
- *  (length > 0, both depths, at least one azimuth — the missing azimuth leg
+ *  (length > 0, both depths, at least one azimuth - the missing azimuth leg
  *  duplicates the other; inclination/LRUD/comment stay optional). */
 export function completeDraftData(draft: ShotDraft): ShotData | null {
   const d = draft.data;

@@ -14,10 +14,10 @@ impl AppState {
         );
         // `try_exists()` rather than `exists()`: a metadata-access denial (e.g.
         // macOS folder-permission loss after an OS/app update) must not collapse to
-        // a misleading "not found" — `exists()` would do exactly that. Parity with
+        // a misleading "not found" - `exists()` would do exactly that. Parity with
         // `do_load_project_full` (#169 / #92 / #104). A denial is tagged with
         // `PERMISSION_DENIED_CODE`, matching the save path's `save_failure`.
-        // NOTE: `open_project` is the legacy command — its frontend consumer
+        // NOTE: `open_project` is the legacy command - its frontend consumer
         // (`openProject`, projectStore.ts) does NOT strip the marker or run
         // `isPermissionError` (the load/save paths do). So this tag is currently
         // forward-compatible hardening, not live folder-access guidance; the
@@ -112,7 +112,7 @@ impl AppState {
         // does: a pre-v6 file installed here otherwise keeps positional Index cross-
         // reference anchors live, and since inserts/deletes no longer shift positional
         // refs, a later edit would silently move a merge/datum/comment to the wrong
-        // station — and the integrity check can't see an in-range Index ref. Mint
+        // station - and the integrity check can't see an in-range Index ref. Mint
         // UUIDs, then re-anchor (Index→AfterShot) and re-solve offsets, so the two
         // load entry points can't diverge. (This legacy IPC has no production caller
         // today, but it stays registered and invokable, so harden it.)
@@ -187,7 +187,7 @@ impl AppState {
         if let Ok(mut database) = self.database.lock() {
             *database = Some(db);
         }
-        // Opened an existing project from disk — its initial save is not deferred.
+        // Opened an existing project from disk - its initial save is not deferred.
         self.initial_save_deferred
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
@@ -294,7 +294,7 @@ impl AppState {
         // === PHASE 0: Opening database (5%) ===
         progress.start_phase(LoadingPhase::OpeningDatabase);
         // `try_exists()` rather than `exists()`: a metadata-access denial
-        // (macOS folder permission) must surface guidance, not NOT_FOUND —
+        // (macOS folder permission) must surface guidance, not NOT_FOUND -
         // `exists()` would collapse that error to `false`.
         match path.try_exists() {
             Ok(true) => {}
@@ -318,7 +318,7 @@ impl AppState {
             Err(e) => {
                 let msg = e.to_string();
                 // A permission denial (e.g. macOS forgot folder access after an
-                // update) otherwise masquerades as corruption — check it first.
+                // update) otherwise masquerades as corruption - check it first.
                 if crate::core::loading::is_permission_denied(&e) {
                     early_return_err!(LoadError::permission(msg, &path.display().to_string()));
                 }
@@ -352,7 +352,7 @@ impl AppState {
             Ok(None) => {
                 project.validation = self.get_config().validation;
             }
-            Ok(Some(_)) => {} // explicit row present — honor it as-is
+            Ok(Some(_)) => {} // explicit row present - honor it as-is
             Err(e) => {
                 tracing::warn!(
                     error = %e,
@@ -365,7 +365,7 @@ impl AppState {
         // map BEFORE minting so it only contains shots whose UUID is already
         // PERSISTED: a freshly-minted, not-yet-saved UUID written into
         // resolved_warnings on open would be orphaned if the user closes without
-        // saving (the next open mints a different UUID) — issue #57 / Codex. Pre-v6
+        // saving (the next open mints a different UUID) - issue #57 / Codex. Pre-v6
         // shots keep position-keyed ignores until a save persists their UUIDs and
         // the carry-over re-keys them. Shared with open_project. Idempotent; non-fatal.
         let live_shot_uuids = project.shot_uuid_by_position();
@@ -419,7 +419,7 @@ impl AppState {
         // Pre-compute the expected station total so the UI can show a real
         // progress bar from the start of this phase. Otherwise the first
         // ~second of the phase (build_colocated_groups + station_depths)
-        // shows an indeterminate spinner — the per-station callback only
+        // shows an indeterminate spinner - the per-station callback only
         // fires once the main walk begins.
         let expected_station_total: u32 = project
             .sections
@@ -554,7 +554,7 @@ impl AppState {
             .database
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
-        // Loaded an existing project from disk — its initial save is not deferred.
+        // Loaded an existing project from disk - its initial save is not deferred.
         self.initial_save_deferred
             .store(false, std::sync::atomic::Ordering::Relaxed);
 

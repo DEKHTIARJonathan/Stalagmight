@@ -26,7 +26,7 @@ struct CascadeDeferGuard<'a> {
 impl<'a> CascadeDeferGuard<'a> {
     /// Set `cascade_deferred = true` on the project (if present) and
     /// return a guard.  If the lock is already poisoned the flag is set
-    /// anyway via `into_inner` — the import is about to run regardless,
+    /// anyway via `into_inner` - the import is about to run regardless,
     /// and we still want the Drop reset to fire.
     fn arm(project: &'a Mutex<Option<Project>>) -> Self {
         Self::set_flag(project, true);
@@ -130,7 +130,7 @@ impl AppState {
         // Step 3: Merge the stations
         let merge_result = self.merge_stations(import_station_ref, target_station);
         if !merge_result.success {
-            // Merge failed after section was created — rollback to pre-mutation snapshot
+            // Merge failed after section was created - rollback to pre-mutation snapshot
             // to avoid leaving a created section with no undo entry.
             tracing::error!(
                 purpose = "keep project consistent after failed merge",
@@ -293,7 +293,7 @@ impl AppState {
                     //   - merges / aligned closures where the PARTNER can
                     //     independently reach a datum (without going through
                     //     this section).  A merge to a free-floating section
-                    //     is NOT a positional constraint — the partner can
+                    //     is NOT a positional constraint - the partner can
                     //     follow when this section's geometry changes.
                     let mut anchor_indices: Vec<u32> = Vec::new();
 
@@ -369,7 +369,7 @@ impl AppState {
 
                 // Record anchor station positions BEFORE applying updates.
                 // For each affected section that has a zero datum, we need to keep
-                // the datum station fixed — otherwise modifying shots between station 0
+                // the datum station fixed - otherwise modifying shots between station 0
                 // and the datum shifts the datum's absolute position.
                 let mut anchor_positions: HashMap<SectionId, (StationRef, Coordinates)> =
                     HashMap::new();
@@ -494,7 +494,7 @@ impl AppState {
 
                 // Cascade offset adjustments through drifted merge/closure
                 // connections.  After shot updates and zero datum compensation,
-                // some connections may be misaligned — the modified section's
+                // some connections may be misaligned - the modified section's
                 // station shifted but its partner didn't follow.
                 let cascade_seeds: Vec<SectionId> = affected_section_ids
                     .iter()
@@ -520,7 +520,7 @@ impl AppState {
         // batch under us is creating its connections in dependency order
         // (topological sort happens during `convert_tml_to_import_configs`).
         // We arm the guard here, run the loop, then disarm + run one
-        // final cascade after the loop — equivalent to the union of the
+        // final cascade after the loop - equivalent to the union of the
         // deferred per-call cascades.  The guard's Drop resets the flag
         // even on the panic-poisoned-mutex path so a partial import
         // can't leave `cascade_deferred = true` and silently skip
@@ -535,7 +535,7 @@ impl AppState {
                 project.rebuild_section_index();
                 project.rebuild_merge_adjacency();
                 // Make `resolve_key`'s AfterShot lookup O(1) for the hot
-                // merge/closure connectivity loops below — without this, a large
+                // merge/closure connectivity loops below - without this, a large
                 // import (e.g. a big Walls project) pins a core for minutes.
                 project.rebuild_shot_uuid_index();
             }
@@ -543,7 +543,7 @@ impl AppState {
 
         // [perf-debug] Time the per-section apply loop. Used to confirm
         // whether the dominant cost in execute_import_sections scales
-        // linearly with section count (good) or super-linearly (bad —
+        // linearly with section count (good) or super-linearly (bad -
         // a per-section graph traversal that re-walks already-imported
         // sections would show up here as quadratic growth).
         let loop_start = std::time::Instant::now();
@@ -618,7 +618,7 @@ impl AppState {
             let t_placement_start = std::time::Instant::now();
             match &config.placement {
                 ImportPlacement::Origin => {
-                    // No-op — section starts at origin
+                    // No-op - section starts at origin
                 }
 
                 ImportPlacement::ZeroDatum {
@@ -742,14 +742,14 @@ impl AppState {
             let _ = t_section_start;
 
             // [perf-debug] Periodic log: emit every `report_every` sections.
-            // The "recent" delta highlights super-linear growth — if each
+            // The "recent" delta highlights super-linear growth - if each
             // 100-section batch is taking longer than the last, a
             // per-section graph traversal is to blame.
             if (idx + 1) % report_every == 0 || idx + 1 == sections.len() {
                 let now_elapsed = loop_start.elapsed();
                 let batch = now_elapsed.saturating_sub(last_report_elapsed);
                 let batch_n = (idx + 1) - last_report_idx;
-                // Per-batch import progress is debug-only — it's
+                // Per-batch import progress is debug-only - it's
                 // perf-investigation noise, not something a release
                 // log should record.
                 tracing::debug!(
@@ -780,7 +780,7 @@ impl AppState {
         // Lift the deferral (clears the flag now so `cascade_connection_offsets`
         // is allowed to run) and execute ONE cascade across every newly
         // created section. This propagates any drift that would have
-        // been caught by the per-call cascades — for a tree-shaped
+        // been caught by the per-call cascades - for a tree-shaped
         // import (no closures yet) this is a near-no-op single pass
         // that early-exits on the first iteration.  `disarm` consumes
         // the guard so its Drop becomes a no-op for the success path.
@@ -801,7 +801,7 @@ impl AppState {
         // Create loop closures from TML CLOSURE shots (non-fatal). Resolve every
         // pair first (in order), then create them in ONE batch that builds the
         // closure-graph invariants once instead of rebuilding the whole graph per
-        // closure — the dominant cost on a large import.
+        // closure - the dominant cost on a large import.
         let mut closure_pairs: Vec<(StationRef, StationRef)> = Vec::with_capacity(closures.len());
         for closure in &closures {
             let Some(&from_section_id) = created_ids.get(&closure.from_section_index) else {
@@ -888,7 +888,7 @@ impl AppState {
         // it must run the same epilogue itself (#integrity Root 4 / catalog #19).
         // An import only ADDS sections/merges/closures (its closures are loops over
         // the spanning-tree merges, never sole bridges), so it can't strand a
-        // section behind a closure — skip the O(closures × connectivity)
+        // section behind a closure - skip the O(closures × connectivity)
         // sole-bridge conversion that otherwise dominated a large import.
         if self.finalize_structural_edit(pre_had_critical, false) {
             self.rollback_project(&before_snapshot);

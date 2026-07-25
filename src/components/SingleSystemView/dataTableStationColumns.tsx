@@ -21,12 +21,12 @@ export interface StationColumnContext {
   precision: { coordinates: number; depth: number; gps: number };
   geometryReadOnly: boolean;
   /** The survey's GPS anchor (first zero datum), as the map uses it; null when
-   *  the project has none — the GPS columns then stay blank. */
+   *  the project has none - the GPS columns then stay blank. */
   gpsOrigin: { latitude: number; longitude: number } | null;
-  /** Click on the GPS (zero-datum) cell — opens the Edit Station dialog in
+  /** Click on the GPS (zero-datum) cell - opens the Edit Station dialog in
    *  the mode matching the station's zero-datum state. */
   onGpsCellClick: (station: Station) => void;
-  /** Click on a connections cell with connections — opens the merged/closure
+  /** Click on a connections cell with connections - opens the merged/closure
    *  station picker at the pointer. */
   onConnectionsCellClick: (station: Station, pos: { x: number; y: number }) => void;
 }
@@ -82,7 +82,7 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
       // The clickable dot follows the shots view's J/R pattern: the set state
       // renders a dot, the unset one a hover affordance; either opens the
       // Edit Station dialog (add-zero-datum or edit mode). Disabled in the
-      // closure-adjusted (read-only) view — the dialog can set/remove the zero
+      // closure-adjusted (read-only) view - the dialog can set/remove the zero
       // datum, which must not mutate geometry while viewing the adjusted network
       // (same gate as the shot reference toggle and the station comment edit).
       render: (station): ReactNode => (

@@ -34,15 +34,15 @@ impl std::fmt::Display for StationRef {
 /// shots in the section, so it is the *stored* form of a station reference
 /// (see [`StationKey`]). It is resolved to a transient positional [`StationRef`]
 /// at the geometry/IPC boundary.
-// Internal identity types — NOT crossing IPC (the wire ref stays positional
+// Internal identity types - NOT crossing IPC (the wire ref stays positional
 // `StationRef`), so no `TS` derive; serde is for in-memory project (de)serialization.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StationAnchor {
     SectionStart,
     AfterShot(String),
-    /// Positional fallback: a raw station index. Used ONLY transitionally — when
+    /// Positional fallback: a raw station index. Used ONLY transitionally - when
     /// loading a pre-anchor (v6) file's positional refs, and for test/construction
-    /// convenience — then canonicalized to `SectionStart`/`AfterShot` by the load
+    /// convenience - then canonicalized to `SectionStart`/`AfterShot` by the load
     /// re-anchor pass. The library never compares or looks up with an `Index` key
     /// against a stored (canonical) key; it builds keys via `Project::key_for_ref`
     /// and compares via `Project::resolve_key`. A stray `Index` therefore can't
@@ -66,7 +66,7 @@ pub struct StationKey {
 // `{section_id, anchor}` shape AND the legacy positional `{section_id,
 // station_index}` shape written by pre-anchor builds. The legacy shape appears
 // in persisted data that embeds a serialized `Project` or `StationMerge`/
-// `LoopClosure`/`ZeroDatum`/offset/comment key — most importantly the
+// `LoopClosure`/`ZeroDatum`/offset/comment key - most importantly the
 // `undo_stack` snapshot blobs, which are NOT re-encoded through the positional
 // wire form. Without this, opening an old project after upgrading would fail to
 // deserialize every legacy undo entry and silently drop the undo history. A
@@ -74,10 +74,10 @@ pub struct StationKey {
 // which the resolve layer tolerates and the load re-anchor pass canonicalizes.
 //
 // NOTE: this `Compat` shim distinguishes the two shapes by FIELD NAME, so it only
-// works for self-describing formats (JSON — what the undo blobs and offset/comment
+// works for self-describing formats (JSON - what the undo blobs and offset/comment
 // maps use). If a future code path serializes a `StationKey` through a
 // non-self-describing format (bincode/postcard/positional msgpack), this manual
-// impl must be revisited — there is no such path today (the binary IPC/SQLite
+// impl must be revisited - there is no such path today (the binary IPC/SQLite
 // routes use the positional `StationRef` wire types, never `StationKey`).
 impl<'de> Deserialize<'de> for StationKey {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -94,12 +94,12 @@ impl<'de> Deserialize<'de> for StationKey {
         }
         let c = Compat::deserialize(deserializer)?;
         match (c.anchor, c.station_index) {
-            // Current shape — the anchor is authoritative.
+            // Current shape - the anchor is authoritative.
             (Some(anchor), _) => Ok(StationKey {
                 section_id: c.section_id,
                 anchor,
             }),
-            // Legacy positional shape — map index to a transitional anchor.
+            // Legacy positional shape - map index to a transitional anchor.
             (None, Some(index)) => Ok(StationKey::positional(c.section_id, index)),
             (None, None) => Err(<D::Error as serde::de::Error>::missing_field("anchor")),
         }

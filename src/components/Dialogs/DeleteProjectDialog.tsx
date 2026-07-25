@@ -9,7 +9,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
  * Destructive confirm for permanently deleting a project from disk (#118).
  *
  * Distinct from "Remove from recent" (which only forgets the entry): this hands
- * the project's files to the OS delete — the Trash where the platform provides
+ * the project's files to the OS delete - the Trash where the platform provides
  * one, otherwise a permanent remove. Opened via
  * `openDialog('delete-project', { path, name })` from the GlobalView context menu
  * and the metadata panel.

@@ -664,7 +664,7 @@ test.describe('Settings Dialog - Fixed Dimensions', () => {
     await setupTauriMocks(page);
     await page.goto('/');
     await page.waitForSelector('[data-testid="global-view"]');
-    // Open from GlobalView directly — no project needed
+    // Open from GlobalView directly - no project needed
   });
 
   test('dialog dimensions remain constant across category switches', async ({ page }) => {

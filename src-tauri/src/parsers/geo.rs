@@ -1,8 +1,8 @@
 //! Geographic helpers shared by the survey importers (Compass, Walls).
 //!
-//! Each importer keeps its own format-specific logic — the Compass datum table
+//! Each importer keeps its own format-specific logic - the Compass datum table
 //! and datum-implied hemisphere, the Walls signed-zone hemisphere and string
-//! datum names — and calls into here only for the parts that are genuinely the
+//! datum names - and calls into here only for the parts that are genuinely the
 //! same: the `igrf` magnetic-declination boundary and the `proj4rs` UTM → WGS84
 //! projection. Keeping those in one place means the external-crate API surface
 //! is maintained once instead of drifting between the two parsers.
@@ -13,7 +13,7 @@ use chrono::{Datelike, NaiveDate};
 /// conversion has a single source of truth.
 pub const FEET_TO_METERS: f64 = 0.3048;
 
-/// Trim `s` and return the owned result only when it is non-empty — the survey
+/// Trim `s` and return the owned result only when it is non-empty - the survey
 /// parsers' shared "skip blank fields" helper.
 pub fn non_empty(s: &str) -> Option<String> {
     let t = s.trim();

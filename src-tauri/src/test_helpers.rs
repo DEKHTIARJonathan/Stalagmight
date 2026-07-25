@@ -43,7 +43,7 @@ pub fn app_state_with_project_db(project: Project) -> Result<(AppState, TestDb)>
 // `AppState::new()` loads the global config via `Config::load()`, which (because
 // `app_dirs` is never initialized in unit tests) falls back to the developer's
 // REAL `~/.config/stalagmight/config.toml`. Tests that read or write config
-// therefore raced on — and permanently polluted — that real file (e.g. a test
+// therefore raced on - and permanently polluted - that real file (e.g. a test
 // writing `undo_history_limit = 42` made `test_get_config`'s default assertion
 // fail forever after). These helpers redirect the config path to a fresh temp
 // dir, serialized so the process-global override can't tear under parallel

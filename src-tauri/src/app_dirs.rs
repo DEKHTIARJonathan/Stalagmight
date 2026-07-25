@@ -83,14 +83,14 @@ pub fn cache_dir() -> Option<&'static Path> {
 /// User documents directory (default project location).
 ///
 /// `None` if not yet initialized, or if the platform could not resolve a
-/// documents directory — callers should fall back rather than use a relative path.
+/// documents directory - callers should fall back rather than use a relative path.
 pub fn document_dir() -> Option<&'static Path> {
     DIRS.get().and_then(|d| d.document.as_deref())
 }
 
 /// Test-only: initialise [`DIRS`] pointing at a throwaway tree under the system
 /// temp dir, so the cache/config/data getters resolve without a Tauri runtime.
-/// Idempotent — the `OnceLock` ignores later calls (and any prior real `init`).
+/// Idempotent - the `OnceLock` ignores later calls (and any prior real `init`).
 /// Only the env-gated live SpeleoDB orchestration tests use this; the standard
 /// `cargo test` run never calls it, so `DIRS` stays `None` for every other test.
 #[cfg(test)]

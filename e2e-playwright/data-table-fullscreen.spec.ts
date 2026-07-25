@@ -20,9 +20,9 @@ import {
  * table's title. Escape and the toggle_data_table shortcut (Ctrl+3 in the
  * mock config) exit the mode without closing the table; Escape closes an
  * open dialog first. While fullscreen only save/undo/redo shortcuts stay
- * alive — the Sections view itself remains editable.
+ * alive - the Sections view itself remains editable.
  *
- * The table picker groups "Sections" (the editable table) and "Raw data" —
+ * The table picker groups "Sections" (the editable table) and "Raw data" -
  * read-only grids over the raw sqlite tables (mocked get_raw_table_names /
  * get_raw_table; blobs arrive as "<blob N KB>" placeholders). The raw view
  * shows last-saved state, so an "As of last save" hint appears while the
@@ -175,7 +175,7 @@ test.describe('Data table fullscreen mode', () => {
     await page.keyboard.press('Control+3');
     await expectWindowed(page);
 
-    // Outside fullscreen the same shortcut toggles the table again — closing
+    // Outside fullscreen the same shortcut toggles the table again - closing
     // unmounts the DataTable in favor of the closed-state opener tab.
     await page.keyboard.press('Control+3');
     await expect(page.getByTestId('panel-tab-data')).toBeVisible();
@@ -236,7 +236,7 @@ test.describe('Data table fullscreen mode', () => {
     await expect(page.getByTestId('export-dialog')).toHaveCount(0);
     await expect(page.getByTestId('data-table')).toHaveAttribute('data-fullscreen', 'true');
 
-    // The fullscreen Sections view stays editable — dirty the project.
+    // The fullscreen Sections view stays editable - dirty the project.
     await fillCell(page, 0, 'length', '42');
     await expect.poll(() => getIsDirty(page)).toBe(true);
 

@@ -173,7 +173,7 @@ pub(crate) async fn fetch_tile_impl(
 /// Returns a Vec of TileProviderInfo structs from the static registry.
 /// Each entry includes provider metadata and a computed `available` flag
 /// indicating whether any required API key environment variable is set.
-/// No app state access needed — the registry is static.
+/// No app state access needed - the registry is static.
 #[tauri::command]
 pub fn get_tile_providers() -> Vec<crate::tile_providers::TileProviderInfo> {
     crate::tile_providers::get_all_provider_info()

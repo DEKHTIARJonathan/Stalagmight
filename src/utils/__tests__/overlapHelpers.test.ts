@@ -689,7 +689,7 @@ describe('reverse direction: computeTargetShotIndex exact values', () => {
     it.each([
       [0, 1],   // k=0 → 2-1-0 = 1
       [1, 0],   // k=1 → 2-1-1 = 0
-      [2, -1],  // k=2 → 2-1-2 = -1  (out of bounds — caller must check)
+      [2, -1],  // k=2 → 2-1-2 = -1  (out of bounds - caller must check)
     ])('overlapId=%i → target %i', (overlapId, expected) => {
       expect(computeTargetShotIndex(overlapId, params)).toBe(expected);
     });
@@ -873,10 +873,10 @@ describe('reverse direction: needsDirectionReversal + reverseTargetShot pipeline
     expect(reversed.azimuth_out).toBe(182); // (2+180) % 360
   });
 
-  it('Back + reverse: NO reversal applied — target passes through', () => {
+  it('Back + reverse: NO reversal applied - target passes through', () => {
     expect(needsDirectionReversal(5, 'reverse')).toBe(false);
     const target = makeTargetShot({ azimuth_in: 90, azimuth_out: 91 });
-    // No reverseTargetShot applied — values should be identical
+    // No reverseTargetShot applied - values should be identical
     const result = applyTargetData(makeEditableShot(0), target);
     expect(result.azimuth_in).toBe(90);
     expect(result.azimuth_out).toBe(91);
@@ -909,7 +909,7 @@ describe('reverse direction: needsDirectionReversal + reverseTargetShot pipeline
 
 describe('reverse direction: computeActionableIds', () => {
   it('Front + reverse: actionable IDs work identically to Front + forward', () => {
-    // computeActionableIds doesn't depend on direction — only on
+    // computeActionableIds doesn't depend on direction - only on
     // importStationIndex and mergeImportStation. Verify this.
     const actionableFwd = computeActionableIds(0, 4, 2);
     // Should be same regardless of direction since direction is not a parameter
@@ -1084,7 +1084,7 @@ describe('reverse direction: full pipeline Back + reverse', () => {
     expect(computeTargetShotIndex(6, params)).toBe(7);
   });
 
-  it('needsReversal is false — target data passes through unchanged', () => {
+  it('needsReversal is false - target data passes through unchanged', () => {
     expect(needsDirectionReversal(7, 'reverse')).toBe(false);
 
     const importShot = makeEditableShot(4);
@@ -1295,7 +1295,7 @@ function walkStations(shots: TargetShotLike[]): Array<{ x: number; y: number; z:
   const stations = [{ x: 0, y: 0, z: 0 }];
   for (const s of shots) {
     const prev = stations[stations.length - 1]!;
-    // Simple average — fine when azimuth_in ≈ azimuth_out (no wrap-around issues)
+    // Simple average - fine when azimuth_in ≈ azimuth_out (no wrap-around issues)
     const az = ((s.azimuth_in + s.azimuth_out) / 2) * (Math.PI / 180);
     stations.push({
       x: prev.x + s.length * Math.sin(az),
@@ -1346,7 +1346,7 @@ describe('geometric invariant: station coordinates stay close across overlap mod
   }));
 
   // "Opposite-direction" existing section: heading ~225° SW (opposite of import).
-  // Used for cases where needsReversal=true — reverseTargetShot flips ~225° → ~45°.
+  // Used for cases where needsReversal=true - reverseTargetShot flips ~225° → ~45°.
   // Created by reversing the same-direction shots, so the round-trip is exact.
   const existingOppositeDir: TargetShotLike[] = existingSameDir.map(reverseTargetShot);
 
@@ -1364,7 +1364,7 @@ describe('geometric invariant: station coordinates stay close across overlap mod
   }));
 
   // Tolerance: generous enough for survey error, but catches any 180° flip.
-  // A 180° flip on a 5m shot produces ~10m displacement — easily beyond 2m.
+  // A 180° flip on a 5m shot produces ~10m displacement - easily beyond 2m.
   const TOLERANCE_PER_STATION = 2.0;
 
   type Case = {
@@ -1472,7 +1472,7 @@ describe('geometric invariant: station coordinates stay close across overlap mod
       });
 
       it('import_data mode: station coords = import coords exactly', () => {
-        // import_data keeps import shots as-is — coordinates must be identical
+        // import_data keeps import shots as-is - coordinates must be identical
         const resultCoords = walkStations(importOverlapShots);
         for (let i = 0; i < resultCoords.length; i++) {
           expect(resultCoords[i]!.x).toBeCloseTo(importCoords[i]!.x, 10);
@@ -1616,7 +1616,7 @@ describe('multi-connection overlap: target shot updates', () => {
     // Simulates the kb.dmp scenario:
     // Connection 1: B→A at A station 25, 2 matched, forward (updates A[25],A[26])
     // Connection 2: C→A at A station 27, 2 matched, forward (updates A[27],A[28])
-    // These should be independent — no conflict.
+    // These should be independent - no conflict.
 
     // Expand section A to 30 shots for this test
     const bigA: EditableShotLike[] = Array.from({ length: 30 }, (_, i) =>

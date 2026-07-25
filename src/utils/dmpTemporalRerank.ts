@@ -17,7 +17,7 @@ export const TEMPORAL_CANDIDATES_PER_SECTION = 10;
  * generated union so tsc flags it if the IPC enum gains/renames a tier.
  */
 const CONFIDENCE_RANK: Record<SuggestionConfidence, number> = { high: 0, medium: 1, low: 2 };
-/** Tier for an unrecognized confidence value — treat as lowest so a malformed
+/** Tier for an unrecognized confidence value - treat as lowest so a malformed
  *  input can never displace a valid higher-confidence candidate. */
 const CONFIDENCE_RANK_FALLBACK = 3;
 
@@ -457,7 +457,7 @@ export function rerankSuggestionsByTemporalPlan(
   });
 
   // #101: within each import section, surface the highest-confidence feasible
-  // candidate first — but do NOT disturb the temporal plan's cross-section order
+  // candidate first - but do NOT disturb the temporal plan's cross-section order
   // (the plan still chooses which section leads). The plan's `rankStates` weighs
   // `checkedPairs` above geometry, so a weak import-to-import link (e.g. AC3→AC2,
   // Low) that "explains" a temporal adjacency can become a section's first

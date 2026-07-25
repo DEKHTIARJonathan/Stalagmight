@@ -315,7 +315,7 @@ export function ShortcutsSettings({
           </div>
         )}
 
-        {/* Shortcuts list — outer container handles scrolling */}
+        {/* Shortcuts list - outer container handles scrolling */}
         <div className="space-y-4">
           {SHORTCUT_CATEGORIES.map((category) => {
             const filteredActions = category.actions.filter(filterAction);

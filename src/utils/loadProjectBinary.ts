@@ -5,13 +5,13 @@
  * keeps small/sparse metadata in an msgpack envelope and packs the bulk
  * numeric fields (shot/station per-row data) into typed-array byte
  * buffers. Reconstructing the same JS shape as the legacy `Project` /
- * `Station[]` is cheap because it's pure memory reads — no per-field
+ * `Station[]` is cheap because it's pure memory reads - no per-field
  * parser, no string lookups.
  *
  * Performance target: a 75k-shot / 89k-station project decodes in
  * ~150-300 ms (vs ~5 s for JSON.parse + materialization on the same
  * payload as JSON). Wire format documented in
- * src-tauri/src/core/load_binary.rs — keep field orders in sync.
+ * src-tauri/src/core/load_binary.rs - keep field orders in sync.
  */
 import { invoke } from '@tauri-apps/api/core';
 import { decode as msgpackDecode } from '@msgpack/msgpack';
@@ -148,7 +148,7 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
 
   // Tauri 2 on Linux delivers Raw responses as ArrayBuffer through the
   // URI scheme protocol fast path. Older configurations or platforms might
-  // hand back Uint8Array or a JSON-array fallback — handle all three so
+  // hand back Uint8Array or a JSON-array fallback - handle all three so
   // the load works even if the IPC path changes shape.
   let bytes: Uint8Array;
   if (raw instanceof Uint8Array) {
@@ -156,7 +156,7 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
   } else if (raw instanceof ArrayBuffer) {
     bytes = new Uint8Array(raw);
   } else if (Array.isArray(raw)) {
-    // Slow fallback — Tauri's eval-based callback path. Should not happen
+    // Slow fallback - Tauri's eval-based callback path. Should not happen
     // for `load_project_full_binary` on Linux/Windows but keep the
     // conversion correct in case the platform changes.
     bytes = new Uint8Array(raw as number[]);
@@ -221,7 +221,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   // typed-array-only.
   //
   // Each Section's shots getter caches the materialized array after
-  // first access (consumer code expects identity stability — repeat
+  // first access (consumer code expects identity stability - repeat
   // calls return the same array). The cache is per-section, so the
   // memory cost is bounded by which sections are accessed × shots in
   // those sections. For typical UI use (one section at a time in
@@ -355,9 +355,9 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   // to know about the multiplexed `shots_floats`/`shots_uints` layout.
   // No additional allocations beyond:
   //   - 12 per-field Float32 views over the same `shots_floats` buffer
-  //     (and similar for stations) — DataView-style, zero copy
+  //     (and similar for stations) - DataView-style, zero copy
   //   - 1 Int32Array `shotSectionIds` (4 bytes/shot, derived from the
-  //     section metadata + offsets — we have to materialize this because
+  //     section metadata + offsets - we have to materialize this because
   //     it's not in the wire format)
   //   - 1 Uint8Array `shotFlags` mapping the wire's u32 marker_or_max
   //     into the Int32Array `shotMarkerIndex` and bit-packed flags
@@ -366,7 +366,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
   // Stations: a *lazy* `Station[]` view over `surveyData`, not an eager
   // ~89k-object array. The old eager loop (removed here) materialized one
   // `Station` (plus nested `station_ref` / `coordinates` objects) per
-  // station and held them for the project's whole lifetime — a pure
+  // station and held them for the project's whole lifetime - a pure
   // duplicate of `surveyData.stationCoords` / `stationSectionIds` /
   // `stationIndices` / the sparse extras maps. `lazyStationArray`
   // reconstructs the exact same `Station` shape on index access via
@@ -484,7 +484,7 @@ function buildSurveyData(
   const SN = env.station_count;
   const stationSectionIds = new Int32Array(SN);
   const stationIndices = new Uint32Array(SN);
-  // Reuse the existing stationsF64 view directly — it's already
+  // Reuse the existing stationsF64 view directly - it's already
   // [x0,y0,z0,x1,y1,z1,…] which matches our stationCoords stride-3.
   // Take a copy though, because the underlying buffer is borrowed from
   // msgpack's decoded Uint8Array which can be reused/recycled.

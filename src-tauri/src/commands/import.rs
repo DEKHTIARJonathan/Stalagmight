@@ -122,13 +122,13 @@ pub fn check_section_hashes(
 /// #92: durably persist a newly-imported project. A project whose initial save is
 /// still deferred (created with no save path, never written) has no `.stalx` and no
 /// Recent Projects entry, so importing into it would otherwise be invisible and
-/// lost on close — regardless of which import type or UI is used. Every import
+/// lost on close - regardless of which import type or UI is used. Every import
 /// command funnels its result through here, so resolving the deferred save once an
 /// import lands guarantees the project becomes real on disk + in recents on its
 /// first import. Already-persisted projects are left untouched, so their unrelated
 /// pending edits are never force-committed.
 ///
-/// A failed deferred save is surfaced as a partial success — the import keeps its
+/// A failed deferred save is surfaced as a partial success - the import keeps its
 /// `success` (so the frontend still refreshes and marks the project dirty, keeping
 /// the in-memory import under the close-guard) but carries a warning about the
 /// failed save. Returning a hard failure here would make the UI treat the import as
@@ -153,7 +153,7 @@ fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> C
         };
         return import_result.with_warning(&format!(
             "Imported, but could not save the new project to disk: {detail}. \
-             Your changes are unsaved — please save manually."
+             Your changes are unsaved - please save manually."
         ));
     }
     import_result
