@@ -562,6 +562,74 @@ export class SurveyGeometryIndex {
     return { stations, shots };
   }
 
+  /**
+   * One section's stations (ordered by `station_index`) and shots, straight from
+   * the SoA — map coords + the global indices the color resolvers need.
+   *
+   * This exists so the drag-preview capture never touches the lazy `Station[]`
+   * proxy or the lazy `section.shots` getter. Doing `stations.filter(s => s.
+   * station_ref.section_id === id)` per section materialized the WHOLE ~89k
+   * station object graph once per section (quadratic, and on a 14k-section
+   * project it pinned a core for minutes), and `shotGeometry()` per shot is a
+   * linear scan over the section, so the pair was O(stations x sections) +
+   * O(shots^2). Both are linear here.
+   */
+  sectionGeometry(sectionId: number): {
+    stations: Array<{ stationIndex: number; lngLat: [number, number]; globalIdx: number }>;
+    shots: Array<{
+      /** Position in the section: joins station `index` to `index + 1`. NOT the
+       *  array position — shots with a missing endpoint are skipped. */
+      index: number;
+      shotId: number;
+      globalIdx: number;
+      isReference: boolean;
+      from: [number, number];
+      to: [number, number];
+    }>;
+  } {
+    this.ensureBuilt();
+    const section = this.sectionById.get(sectionId);
+    const lookup = this.stationLookup.get(sectionId);
+    if (!section || !lookup) return { stations: [], shots: [] };
+
+    const stations: Array<{ stationIndex: number; lngLat: [number, number]; globalIdx: number }> = [];
+    for (const g of this.sectionStationIdxs.get(sectionId) ?? []) {
+      stations.push({
+        stationIndex: this.data.stationIndices[g]!,
+        lngLat: this.stationLngLat(g),
+        globalIdx: g,
+      });
+    }
+    // The capture walks stations in station_index order (shot i joins station i
+    // to i+1); SoA iteration order is global-index order, which normally matches
+    // but is not guaranteed after edits.
+    stations.sort((a, b) => a.stationIndex - b.stationIndex);
+
+    const shots: Array<{
+      index: number;
+      shotId: number;
+      globalIdx: number;
+      isReference: boolean;
+      from: [number, number];
+      to: [number, number];
+    }> = [];
+    for (let i = 0; i < section.shotCount; i++) {
+      const gi = section.shotOffset + i;
+      const fromGlobal = lookup.get(i);
+      const toGlobal = lookup.get(i + 1);
+      if (fromGlobal === undefined || toGlobal === undefined) continue;
+      shots.push({
+        index: i,
+        shotId: this.data.shotIds[gi]!,
+        globalIdx: gi,
+        isReference: (this.data.shotFlags[gi]! & SHOT_FLAG_IS_REFERENCE) !== 0,
+        from: this.stationLngLat(fromGlobal),
+        to: this.stationLngLat(toGlobal),
+      });
+    }
+    return { stations, shots };
+  }
+
   /** Whether every shot touching the station is a reference shot (the
    *  station is filtered out while reference shots are hidden). Stations
    *  with no feature-producing shots at all also count as all-reference,

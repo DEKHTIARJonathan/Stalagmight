@@ -300,6 +300,56 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
 });
 
 /**
+ * Per-section geometry, used by the drag-preview capture. It must agree with the
+ * per-item accessors and expose each shot's TRUE section position (`index`), since
+ * the capture maps shot i to stations i / i+1. Reading this from the SoA replaces
+ * filtering the lazy `Station[]` proxy per section, which was quadratic and froze
+ * segment drags on a 14k-section project.
+ */
+describe('SurveyGeometryIndex.sectionGeometry', () => {
+  const { data } = buildPerFeature();
+  const index = new SurveyGeometryIndex(data, null);
+
+  it('returns a section\'s stations in station_index order with matching coords', () => {
+    const { stations } = index.sectionGeometry(1);
+    expect(stations.map((s) => s.stationIndex)).toEqual([0, 1, 2, 3]);
+    for (const s of stations) {
+      expect(s.lngLat).toEqual(
+        index.stationCoords({ section_id: 1, station_index: s.stationIndex })!,
+      );
+    }
+  });
+
+  it('returns shots with their section position and endpoints matching shotGeometry', () => {
+    const { shots } = index.sectionGeometry(1);
+    expect(shots.map((s) => s.index)).toEqual([0, 1, 2]);
+    for (const sh of shots) {
+      const geo = index.shotGeometry(1, sh.shotId)!;
+      expect(sh.from).toEqual(geo.from);
+      expect(sh.to).toEqual(geo.to);
+      expect(sh.globalIdx).toBe(geo.globalIdx);
+      expect(sh.isReference).toBe(geo.isReference);
+    }
+    // Shot `index` joins station index -> index+1, which the drag capture relies on.
+    for (const sh of shots) {
+      expect(sh.from).toEqual(index.stationCoords({ section_id: 1, station_index: sh.index })!);
+      expect(sh.to).toEqual(index.stationCoords({ section_id: 1, station_index: sh.index + 1 })!);
+    }
+  });
+
+  it('includes reference shots (the drag capture moves them too)', () => {
+    // Fixture shot 103 in section 1 is a reference shot.
+    const { shots } = index.sectionGeometry(1);
+    const ref = shots.find((s) => s.shotId === 103);
+    expect(ref?.isReference).toBe(true);
+  });
+
+  it('returns empty for an unknown section', () => {
+    expect(index.sectionGeometry(999)).toEqual({ stations: [], shots: [] });
+  });
+});
+
+/**
  * Bulk geometry enumeration. With the custom renderer there are no stock
  * `survey-stations` / `survey-shots` layers, so E2E tests project these coords
  * instead of calling `queryRenderedFeatures`. Must agree with the per-item

@@ -2612,49 +2612,52 @@ export default class SurveyLayer {
     const ctx = this.displayColorContext();
     const stationDefault = this.themeColors.stationDefault;
 
-    for (const section of this.cachedSections) {
-      if (!connectedSectionIds.has(section.id)) continue;
-      const sectionStations = this.cachedStations
-        .filter(s => s.station_ref.section_id === section.id)
-        .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index);
-      const sectionColor = section.color ?? stationDefault;
+    // Read the moving geometry from the SoA (sectionGeometry), NOT from the lazy
+    // `Station[]` proxy or the lazy `section.shots` getter: filtering all ~89k
+    // stations per section (and a linear `shotGeometry` scan per shot) made this
+    // quadratic and froze a 14k-section project on drag start (#mem).
+    // Iterate cachedSections (not the Set) to keep the original emit order; reading
+    // `id`/`color` off a section does not trip its lazy `shots` getter.
+    for (const sectionMeta of this.cachedSections) {
+      const sectionId = sectionMeta.id;
+      if (!connectedSectionIds.has(sectionId)) continue;
+      const sectionColor = sectionMeta.color ?? stationDefault;
+      const { stations: sectionStations, shots: sectionShots } =
+        this.geoIndex.sectionGeometry(sectionId);
 
       // Stations (points).
       for (const st of sectionStations) {
-        const ref = st.station_ref;
-        const coord = metersToMapCoords(st.coordinates.x, st.coordinates.y, this.gpsOrigin) as [number, number];
-        const idStr = `${ref.section_id}:${ref.station_index}`;
+        const idStr = `${sectionId}:${st.stationIndex}`;
         this.dragMovingStationKeys.add(idStr);
-        const g = this.geoIndex.stationGlobalIndex(ref);
-        const color = g === null
-          ? stationDefault
-          : resolveStationDisplayColor(this.cachedSurveyData, sectionColor, g, ctx);
+        const color = resolveStationDisplayColor(
+          this.cachedSurveyData,
+          sectionColor,
+          st.globalIdx,
+          ctx,
+        );
         features.push({
           emit: 'point',
-          coords: [coord],
+          coords: [st.lngLat],
           movingEnd: 'uniform',
           properties: { kind: 'station', color, ...this.dragOverlayProps(idStr, 'station') },
         });
       }
 
       // Shots (lines).
-      for (let i = 0; i < section.shots.length; i++) {
-        const fromSt = sectionStations[i];
-        const toSt = sectionStations[i + 1];
-        const shot = section.shots[i];
-        if (!fromSt || !toSt || !shot) continue;
-        const fromCoord = metersToMapCoords(fromSt.coordinates.x, fromSt.coordinates.y, this.gpsOrigin) as [number, number];
-        const toCoord = metersToMapCoords(toSt.coordinates.x, toSt.coordinates.y, this.gpsOrigin) as [number, number];
-        const geo = this.geoIndex.shotGeometry(section.id, shot.id);
-        const color = geo
-          ? resolveShotDisplayColor(this.cachedSurveyData, sectionColor, geo.globalIdx, ctx)
-          : sectionColor;
-        this.dragMovingShots.set(`${section.id}:${shot.id}`, 'both');
+      for (const shot of sectionShots) {
+        const shotKey = `${sectionId}:${shot.shotId}`;
+        const color = resolveShotDisplayColor(
+          this.cachedSurveyData,
+          sectionColor,
+          shot.globalIdx,
+          ctx,
+        );
+        this.dragMovingShots.set(shotKey, 'both');
         features.push({
           emit: 'line',
-          coords: [fromCoord, toCoord],
+          coords: [shot.from, shot.to],
           movingEnd: 'uniform',
-          properties: { kind: 'shot', color, ...this.dragOverlayProps(`${section.id}:${shot.id}`, 'shot') },
+          properties: { kind: 'shot', color, ...this.dragOverlayProps(shotKey, 'shot') },
         });
       }
     }
@@ -2694,24 +2697,30 @@ export default class SurveyLayer {
     //    - merged_with: always co-located
     //    - closures_with: only when the closure has been aligned
     //    additionalSeeds allows shot drag to seed from both endpoints simultaneously
-    const stationByKey = new Map(
-      this.cachedStations.map(s => [`${s.station_ref.section_id}:${s.station_ref.station_index}`, s])
-    );
+    // key -> global SoA index, built from NUMBERS only. Mapping the lazy
+    // `Station[]` proxy here materialized the whole ~89k station object graph on
+    // every drag start (and `.filter()` below did it a second time) — the same
+    // quadratic trap that froze segment drags (#mem).
+    const data = this.cachedSurveyData;
+    if (!data) return [];
+    const globalByKey = new Map<string, number>();
+    for (let g = 0; g < data.stationCount; g++) {
+      globalByKey.set(`${data.stationSectionIds[g]}:${data.stationIndices[g]}`, g);
+    }
     const alignedClosureIds = new Set<bigint>(
       (this.cachedLoopClosures ?? [])
         .filter((closure) => closure.is_aligned)
         .map((closure) => closure.id)
     );
     const clickedKey = `${sectionId}:${stationIndex}`;
-    const clickedStation = stationByKey.get(clickedKey);
-    if (!clickedStation) return [];
+    if (!globalByKey.has(clickedKey)) return [];
 
     // Seed BFS from primary station + any additional seeds (e.g., shot's other endpoint)
     const seedKeys = [clickedKey];
     if (additionalSeeds) {
       for (const seed of additionalSeeds) {
         const key = `${seed.section_id}:${seed.station_index}`;
-        if (stationByKey.has(key)) seedKeys.push(key);
+        if (globalByKey.has(key)) seedKeys.push(key);
       }
     }
 
@@ -2721,19 +2730,35 @@ export default class SurveyLayer {
       const key = queue.pop()!;
       if (movingRefKeys.has(key)) continue;
       movingRefKeys.add(key);
-      const st = stationByKey.get(key);
-      if (!st) continue;
-      for (const ref of st.merged_with) {
+      const g = globalByKey.get(key);
+      if (g === undefined) continue;
+      for (const ref of data.stationMergedWith.get(g) ?? []) {
         queue.push(`${ref.section_id}:${ref.station_index}`);
       }
-      for (const cr of st.closures_with ?? []) {
+      for (const cr of data.stationClosuresWith.get(g) ?? []) {
         if (!alignedClosureIds.has(cr.closure_id)) continue;
         queue.push(`${cr.station_ref.section_id}:${cr.station_ref.station_index}`);
       }
     }
-    const movingStations = this.cachedStations.filter(
-      s => movingRefKeys.has(`${s.station_ref.section_id}:${s.station_ref.station_index}`)
-    );
+    // The moving set is a merge/closure cluster (small); resolve each member's
+    // coords + global index straight from the SoA.
+    const movingStations = [...movingRefKeys].flatMap((key) => {
+      const g = globalByKey.get(key);
+      if (g === undefined) return [];
+      const base = g * 3;
+      return [{
+        station_ref: {
+          section_id: data.stationSectionIds[g]!,
+          station_index: data.stationIndices[g]!,
+        } as StationRef,
+        lngLat: metersToMapCoords(
+          data.stationCoords[base]!,
+          data.stationCoords[base + 1]!,
+          this.gpsOrigin,
+        ) as [number, number],
+        globalIdx: g,
+      }];
+    });
 
     // 2. Capture the moving geometry once (originals + movingEnd). The moving copy
     // renders from the drag ghost; the originals are hidden in the custom layers via
@@ -2756,59 +2781,60 @@ export default class SurveyLayer {
     // Moving stations (points) — all uniform.
     for (const st of movingStations) {
       const ref = st.station_ref;
-      const coord = metersToMapCoords(st.coordinates.x, st.coordinates.y, this.gpsOrigin) as [number, number];
       const idStr = `${ref.section_id}:${ref.station_index}`;
       this.dragMovingStationKeys.add(idStr);
       const section = this.geoIndex.section(ref.section_id);
-      const g = this.geoIndex.stationGlobalIndex(ref);
-      if (g !== null) excludedStationGlobals.add(g);
+      excludedStationGlobals.add(st.globalIdx);
       affectedSectionIds.add(ref.section_id);
-      const color = g === null
-        ? stationDefault
-        : resolveStationDisplayColor(this.cachedSurveyData, section?.color ?? stationDefault, g, ctx);
+      const color = resolveStationDisplayColor(
+        this.cachedSurveyData,
+        section?.color ?? stationDefault,
+        st.globalIdx,
+        ctx,
+      );
       features.push({
         emit: 'point',
-        coords: [coord],
+        coords: [st.lngLat],
         movingEnd: 'uniform',
         properties: { kind: 'station', color, ...this.dragOverlayProps(idStr, 'station') },
       });
     }
 
-    // 4. Connected shots (lines) + shot labels.
+    // 4. Connected shots (lines) + shot labels. Walk each AFFECTED SECTION once
+    // (from the SoA), not once per moving station: re-filtering the lazy
+    // `Station[]` proxy per station materialized ~89k objects each time, and the
+    // per-shot `shotGeometry()` scan made it quadratic in section size (#mem).
     const seenShotKeys = new Set<string>();
-    for (const movingSt of movingStations) {
-      const section = this.cachedSections.find(s => s.id === movingSt.station_ref.section_id);
+    const movingSectionIds = new Set(movingStations.map((st) => st.station_ref.section_id));
+    for (const secId of movingSectionIds) {
+      const section = this.geoIndex.section(secId);
       if (!section) continue;
-      const sectionStations = this.cachedStations
-        .filter(s => s.station_ref.section_id === section.id)
-        .sort((a, b) => a.station_ref.station_index - b.station_ref.station_index);
+      const { shots: sectionShots } = this.geoIndex.sectionGeometry(secId);
 
-      for (let i = 0; i < section.shots.length; i++) {
-        const fromSt = sectionStations[i];
-        const toSt = sectionStations[i + 1];
-        const shot = section.shots[i];
-        if (!fromSt || !toSt || !shot) continue;
-
-        const fromKey = `${fromSt.station_ref.section_id}:${fromSt.station_ref.station_index}`;
-        const toKey = `${toSt.station_ref.section_id}:${toSt.station_ref.station_index}`;
+      for (const shot of sectionShots) {
+        // Shot `index` joins station `index` to `index + 1`.
+        const fromKey = `${secId}:${shot.index}`;
+        const toKey = `${secId}:${shot.index + 1}`;
         const fromIsMoving = movingRefKeys.has(fromKey);
         const toIsMoving = movingRefKeys.has(toKey);
         if (!fromIsMoving && !toIsMoving) continue;
 
-        const shotKey = `${section.id}:${shot.id}`;
+        const shotKey = `${secId}:${shot.shotId}`;
         if (seenShotKeys.has(shotKey)) continue;
         seenShotKeys.add(shotKey);
 
         const movingEnd: MovingEnd = fromIsMoving && toIsMoving ? 'both' : fromIsMoving ? 'from' : 'to';
         this.dragMovingShots.set(shotKey, movingEnd);
-        const fromCoord = metersToMapCoords(fromSt.coordinates.x, fromSt.coordinates.y, this.gpsOrigin) as [number, number];
-        const toCoord = metersToMapCoords(toSt.coordinates.x, toSt.coordinates.y, this.gpsOrigin) as [number, number];
-        const geo = this.geoIndex.shotGeometry(section.id, shot.id);
-        if (geo) excludedShotGlobals.add(geo.globalIdx);
-        affectedSectionIds.add(section.id);
-        const color = geo
-          ? resolveShotDisplayColor(this.cachedSurveyData, section.color ?? stationDefault, geo.globalIdx, ctx)
-          : (section.color ?? stationDefault);
+        const fromCoord = shot.from;
+        const toCoord = shot.to;
+        excludedShotGlobals.add(shot.globalIdx);
+        affectedSectionIds.add(secId);
+        const color = resolveShotDisplayColor(
+          this.cachedSurveyData,
+          section.color ?? stationDefault,
+          shot.globalIdx,
+          ctx,
+        );
         features.push({
           emit: 'line',
           coords: [fromCoord, toCoord],
@@ -2831,12 +2857,10 @@ export default class SurveyLayer {
       const bMoving = movingRefKeys.has(keyB);
       if (!aMoving && !bMoving) continue;
 
-      const stA = stationByKey.get(keyA);
-      const stB = stationByKey.get(keyB);
-      if (!stA || !stB) continue;
-
-      const fromCoord = metersToMapCoords(stA.coordinates.x, stA.coordinates.y, this.gpsOrigin) as [number, number];
-      const toCoord = metersToMapCoords(stB.coordinates.x, stB.coordinates.y, this.gpsOrigin) as [number, number];
+      // Coords from the SoA (O(1) per endpoint) — no Station materialization.
+      const fromCoord = this.geoIndex.stationCoords(lc.station_a);
+      const toCoord = this.geoIndex.stationCoords(lc.station_b);
+      if (!fromCoord || !toCoord) continue;
       features.push({
         emit: 'line',
         coords: [fromCoord, toCoord],
