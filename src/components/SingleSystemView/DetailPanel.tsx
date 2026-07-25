@@ -931,12 +931,14 @@ function StationDetail({ station }: { station: Station }) {
 
 /**
  * Compute inclination from depth change and shot length.
- * Positive = upward (depth decreases), negative = downward.
+ * Positive = downward (depth increases), negative = upward — the same frame
+ * the stored pitch is in, so this sits directly beside the recorded value
+ * without either needing to be flipped to compare (issue #296).
  * Returns null if length <= 0.
  */
 function computeInclination(depthIn: number, depthOut: number, length: number): number | null {
   if (length <= 0) return null;
-  const ratio = (depthIn - depthOut) / length;
+  const ratio = (depthOut - depthIn) / length;
   const clamped = Math.max(-1, Math.min(1, ratio));
   return (Math.asin(clamped) * 180) / Math.PI;
 }

@@ -31,15 +31,16 @@ function recordedPitch(shot: Shot): number | null {
   return shot.pitch_in ?? shot.pitch_out ?? null;
 }
 
-/** Signed inclination implied by the depth change and slope length, in the +up
- *  display convention used everywhere in the UI (DetailPanel's computeInclination):
- *  POSITIVE = upward (the shot ascends, depth DECREASES), negative = downward.
- *  Matching that convention keeps the resolve-flow value (and the proposed pitch)
- *  in the same orientation the Details panel shows and the recorded pitch uses, so
- *  the backend check agrees (issue #57, finding #7). Returns 0 for length<=0. */
+/** Signed inclination implied by the depth change and slope length, in the +down
+ *  convention used for stored pitch and everywhere in the UI (DetailPanel's
+ *  computeInclination): POSITIVE = downward (the shot descends, depth INCREASES),
+ *  negative = upward. That is the frame `depth_in` / `depth_out` are already in,
+ *  so this compares directly against the recorded pitch and against the backend's
+ *  cross-check, with nothing negated in between (issue #57 finding #7, issue #296).
+ *  Returns 0 for length<=0. */
 function impliedInclination(shot: Shot): number {
   if (!(shot.length > 0)) return 0;
-  const ratio = (shot.depth_in - shot.depth_out) / shot.length;
+  const ratio = (shot.depth_out - shot.depth_in) / shot.length;
   return (Math.asin(Math.max(-1, Math.min(1, ratio))) * 180) / Math.PI;
 }
 
@@ -181,11 +182,11 @@ export function computeProposedRaw(
     }
     case 'length-from-depth': {
       // Setting length to the depth change makes the shot vertical, so also set
-      // the inclination to the matching ∓90° in the +up convention (deeper =>
-      // depth increases => -90; shallower => +90) — otherwise a recorded
+      // the inclination to the matching ±90° in the +down convention (deeper =>
+      // depth increases => +90; shallower => -90) — otherwise a recorded
       // non-vertical pitch would immediately trip a fresh INCLINATION_DEPTH_MISMATCH
-      // (issue #57, finding #2).
-      const p = dz > 0 ? -90 : 90;
+      // (issue #57 finding #2, issue #296).
+      const p = dz > 0 ? 90 : -90;
       return { length: Math.abs(dz), pitchIn: p, pitchOut: p };
     }
     case 'length-from-incl': {
@@ -409,7 +410,7 @@ export function WarningResolution({
       }
       case 'INCLINATION_DEPTH_MISMATCH': {
         // Depth gauges are trusted, so the depth change is never altered here. The
-        // implied inclination is signed in the +up convention (DetailPanel's
+        // implied inclination is signed in the +down convention (DetailPanel's
         // computeInclination), matching the recorded pitch and the backend check.
         // Offer to adjust the inclination (keep the recorded length — always works,
         // also fixes a reversed sign), adjust the length (keep the recorded

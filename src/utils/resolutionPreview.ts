@@ -74,13 +74,13 @@ export function lengthFromInclination(depthChange: number, pitchDeg: number | nu
 
 /**
  * Whether keeping the recorded inclination and only adjusting the slope length can
- * satisfy the geometry with a POSITIVE length. In the +up convention the vertical
- * rise (`depth_in - depth_out = -depthChange`) must equal `length * sin(pitch)`
- * with `length > 0`, so the recorded pitch has to point the SAME way as the depth
- * change. A reversed-sign inclination (e.g. a 5 m descent recorded as `+30°`) has
+ * satisfy the geometry with a POSITIVE length. In the +down convention the descent
+ * (`depth_out - depth_in = depthChange`) must equal `length * sin(pitch)` with
+ * `length > 0`, so the recorded pitch has to point the SAME way as the depth
+ * change. A reversed-sign inclination (e.g. a 5 m descent recorded as `-30°`) has
  * no positive-length solution — it can only be fixed by adjusting the inclination —
  * and a zero depth change has none either, so the "adjust length"/"split" options
- * are withheld for those (issue #57 / Codex).
+ * are withheld for those (issue #57 / Codex, issue #296).
  *
  * @param depthChange `depth_out - depth_in` (m)
  * @param pitchDeg    the recorded inclination in degrees, or null when none
@@ -89,7 +89,7 @@ export function lengthFixableFromInclination(depthChange: number, pitchDeg: numb
   if (pitchDeg === null) return false;
   const sin = Math.sin((pitchDeg * Math.PI) / 180);
   if (Math.abs(sin) <= MIN_SIN_INCLINATION) return false;
-  return -depthChange / sin > 0;
+  return depthChange / sin > 0;
 }
 
 /**
