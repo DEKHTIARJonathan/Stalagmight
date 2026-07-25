@@ -241,3 +241,38 @@ describe('MeasurePathController', () => {
     expect(ctrl.isActive()).toBe(true);
   });
 });
+
+/**
+ * drawnCounts() — the observable E2E asserts on. The measure tint is a custom GL
+ * layer with no MapLibre feature-state, so "is the path tinted" is answered by
+ * how many segments/discs were handed to the layer, not by reading feature-state
+ * off a (deleted) vector-tile source.
+ */
+describe('MeasurePathController.drawnCounts', () => {
+  it('reports zero before any path, the counts while drawn, and zero after clear', () => {
+    const { map } = makeFakeMap([]);
+    const ctrl = new MeasurePathController(map, {
+      makeLayer: (id, d, cb) => new FakeLayer(id, d, cb),
+    });
+    expect(ctrl.drawnCounts()).toEqual({ shots: 0, stations: 0 });
+
+    ctrl.setPath(renderData(3, 4), []);
+    expect(ctrl.drawnCounts()).toEqual({ shots: 3, stations: 4 });
+
+    // A later update replaces the counts.
+    ctrl.setPath(renderData(1, 2), []);
+    expect(ctrl.drawnCounts()).toEqual({ shots: 1, stations: 2 });
+
+    ctrl.clear();
+    expect(ctrl.drawnCounts()).toEqual({ shots: 0, stations: 0 });
+  });
+
+  it('reports zero when the layer failed to initialize', () => {
+    const { map } = makeFakeMap([]);
+    const ctrl = new MeasurePathController(map, {
+      makeLayer: (id, d, cb) => new FakeLayer(id, d, cb, true, 'program-link-failed'),
+    });
+    ctrl.setPath(renderData(2, 2), []);
+    expect(ctrl.drawnCounts()).toEqual({ shots: 0, stations: 0 });
+  });
+});

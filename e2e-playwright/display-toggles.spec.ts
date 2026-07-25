@@ -1,17 +1,23 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedProjectWithSections, waitForMapReady, openAppMenu, type SectionSeed } from './helpers/app';
+import {
+  seedProjectWithSections,
+  waitForMapReady,
+  openAppMenu,
+  getStationScreenPositions,
+  waitForDrawnStations,
+  waitForDrawnShots,
+  readCanvasPixel,
+  countCanvasInk,
+  type PixelRgba,
+  type SectionSeed,
+} from './helpers/app';
 
 /**
  * E2E tests for visibility toggle behavior in the Display menu.
  * Tests visibility toggling, selection blocking, selection clearing,
  * toast notifications, toggle relationships, and tool operation interactions.
  */
-
-interface StationPosition {
-  x: number;
-  y: number;
-}
 
 /**
  * Helper to create a new project with mock sections/stations
@@ -71,67 +77,24 @@ async function toggleDisplayOption(page: Page, toggleKey: string): Promise<void>
 }
 
 /**
- * Helper to get map layer visibility via MapLibre API
- */
-async function getLayerVisibility(page: Page, layerId: string): Promise<string | undefined> {
-  return page.evaluate((id) => {
-    const map = (window as unknown as { __stalagmight_map__?: { getLayoutProperty: (l: string, p: string) => string } }).__stalagmight_map__;
-    if (!map) return undefined;
-    try {
-      return map.getLayoutProperty(id, 'visibility');
-    } catch {
-      return undefined;
-    }
-  }, layerId);
-}
-
-/**
- * Helper to wait for map layer to exist and be visible
- */
-async function waitForLayerVisible(page: Page, layerId: string): Promise<void> {
-  await expect.poll(async () => getLayerVisibility(page, layerId), { timeout: 5000 }).toBe('visible');
-}
-
-/**
- * Helper to get station screen positions via queryRenderedFeatures.
+ * Zoom in on the seeded survey before probing painted pixels.
  *
- * The visible survey-stations layer now returns MERGED MultiPoint features (one
- * group per section/color, coordinates = an ARRAY of station points, and NO
- * per-point sectionId/stationIndex). So we can't read a `(sectionId,
- * stationIndex)` off a feature; we flatten every individual point into its own
- * screen position. These tests only need a valid station SCREEN point (to click
- * or hover), so identity is not required here.
+ * The seeded survey is only a few metres across, so at the fit-to-bounds zoom the
+ * whole thing is ~9 screen px wide and the station discs cover the shot lines
+ * entirely — a pixel probe there cannot tell "shot hidden" from "shot behind a
+ * station". `setZoom` is a jump (no animation), and the geometry helpers project
+ * with the live map, so positions read after this call already match the new view.
  */
-async function getStationScreenPositions(page: Page): Promise<StationPosition[]> {
-  return page.evaluate(() => {
-    const map = (window as unknown as {
-      __stalagmight_map__?: {
-        queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
-          geometry: { type: string; coordinates: number[] | number[][] };
-        }>;
-        project: (coords: [number, number]) => { x: number; y: number };
-      };
-    }).__stalagmight_map__;
-    if (!map) return [];
+async function zoomIn(page: Page, delta = 4): Promise<void> {
+  await page.evaluate((d) => {
+    const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number; setZoom: (z: number) => void } }).__stalagmight_map__;
+    map?.setZoom(map.getZoom() + d);
+  }, delta);
+}
 
-    try {
-      const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-      const positions: Array<{ x: number; y: number }> = [];
-      for (const f of features) {
-        const raw =
-          f.geometry.type === 'MultiPoint'
-            ? (f.geometry.coordinates as number[][])
-            : [f.geometry.coordinates as number[]];
-        for (const c of raw) {
-          const screenPos = map.project([c[0]!, c[1]!]);
-          positions.push({ x: screenPos.x, y: screenPos.y });
-        }
-      }
-      return positions;
-    } catch {
-      return [];
-    }
-  });
+/** Background sample from an empty canvas corner, for {@link countCanvasInk}. */
+async function backgroundPixel(page: Page): Promise<PixelRgba> {
+  return readCanvasPixel(page, 8, 8);
 }
 
 test.describe('Display Toggle Visibility', () => {
@@ -141,7 +104,7 @@ test.describe('Display Toggle Visibility', () => {
     await createProject(page, 'Display Toggle Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
-    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
+    await waitForDrawnStations(page, 1);
   });
 
   test('geometry mode control renders; closure-adjusted disabled without closures', async ({ page }) => {
@@ -159,8 +122,18 @@ test.describe('Display Toggle Visibility', () => {
   });
 
   test('toggle stations hides and shows station markers on canvas @smoke', async ({ page }) => {
-    // Wait for station layer to be visible before testing
-    await waitForLayerVisible(page, 'survey-stations');
+    // The stations are drawn by the custom WebGL layer, so there is no
+    // `survey-stations` layer whose `visibility` can stand in for "markers are on
+    // screen": hiding them is a skipped draw call. The oracle is painted ink around
+    // the station. It cannot be the center pixel alone: a station disc and its
+    // shots share the section color, so the center stays that color either way —
+    // what changes is that the disc's ~9 px footprint collapses to the shot's line
+    // width.
+    await zoomIn(page);
+    const [station] = await waitForDrawnStations(page, 1);
+    const bg = await backgroundPixel(page);
+    const inkBefore = await countCanvasInk(page, station!.x, station!.y, bg, 9);
+    expect(inkBefore).toBeGreaterThan(0);
 
     // Open Display menu
     await openDisplayMenu(page);
@@ -175,9 +148,6 @@ test.describe('Display Toggle Visibility', () => {
     });
     expect(stationsVisibleBefore).toBe(true);
 
-    // Verify actual map layer is visible
-    expect(await getLayerVisibility(page, 'survey-stations')).toBe('visible');
-
     // Toggle stations off
     await toggleDisplayOption(page, 'showStations');
 
@@ -191,28 +161,36 @@ test.describe('Display Toggle Visibility', () => {
     });
     expect(stationsVisibleAfter).toBe(false);
 
-    // Verify actual map layer is now hidden
-    await expect.poll(async () => getLayerVisibility(page, 'survey-stations'), { timeout: 2000 }).toBe('none');
+    // The marker is really gone from the canvas: the ink around the station drops to
+    // whatever its shots leave behind.
+    await expect
+      .poll(async () => countCanvasInk(page, station!.x, station!.y, bg, 9), { timeout: 2000 })
+      .toBeLessThan(inkBefore);
 
     // Toggle stations back on
     await toggleDisplayOption(page, 'showStations');
     expect(await isToggleOn(page, 'showStations')).toBe(true);
 
-    // Verify layer is visible again
-    await expect.poll(async () => getLayerVisibility(page, 'survey-stations'), { timeout: 2000 }).toBe('visible');
+    // ...and the marker is painted again, identically.
+    await expect
+      .poll(async () => countCanvasInk(page, station!.x, station!.y, bg, 9), { timeout: 2000 })
+      .toBe(inkBefore);
   });
 
   test('toggle shots hides and shows shot lines on canvas @smoke', async ({ page }) => {
-    // Wait for shot layer to be visible
-    await waitForLayerVisible(page, 'survey-shots');
+    // Same reasoning as the stations toggle: the shot lines are custom-rendered, so
+    // the oracle is the painted pixel. A shot's midpoint is clear of the station
+    // discs once zoomed in, so it goes to bare background when shots are hidden.
+    await zoomIn(page);
+    const [shot] = await waitForDrawnShots(page, 1);
+    const bg = await backgroundPixel(page);
+    const inkBefore = await countCanvasInk(page, shot!.mid.x, shot!.mid.y, bg, 5);
+    expect(inkBefore).toBeGreaterThan(0);
 
     await openDisplayMenu(page);
 
     // Verify shots are visible by default
     expect(await isToggleOn(page, 'showShots')).toBe(true);
-
-    // Verify actual map layer visibility
-    expect(await getLayerVisibility(page, 'survey-shots')).toBe('visible');
 
     // Toggle shots off
     await toggleDisplayOption(page, 'showShots');
@@ -225,15 +203,19 @@ test.describe('Display Toggle Visibility', () => {
     });
     expect(shotsVisible).toBe(false);
 
-    // Verify actual map layer is hidden
-    await expect.poll(async () => getLayerVisibility(page, 'survey-shots'), { timeout: 2000 }).toBe('none');
+    // Nothing is painted along the shot any more.
+    await expect
+      .poll(async () => countCanvasInk(page, shot!.mid.x, shot!.mid.y, bg, 5), { timeout: 2000 })
+      .toBe(0);
 
     // Toggle shots back on
     await toggleDisplayOption(page, 'showShots');
     expect(await isToggleOn(page, 'showShots')).toBe(true);
 
-    // Verify layer is visible again
-    await expect.poll(async () => getLayerVisibility(page, 'survey-shots'), { timeout: 2000 }).toBe('visible');
+    // The line is painted again.
+    await expect
+      .poll(async () => countCanvasInk(page, shot!.mid.x, shot!.mid.y, bg, 5), { timeout: 2000 })
+      .toBe(inkBefore);
   });
 });
 
@@ -244,7 +226,7 @@ test.describe('Label Toggle Click Coverage', () => {
     await createProject(page, 'Label Toggle Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
-    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
+    await waitForDrawnStations(page, 1);
   });
 
   for (const toggleKey of ['showSectionNames', 'showStationLabels'] as const) {
@@ -268,21 +250,13 @@ test.describe('Selection Blocking When Hidden', () => {
     await createProject(page, 'Selection Blocking Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
-    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
+    await waitForDrawnStations(page, 1);
   });
 
   test('cannot select hidden stations - selection blocked', async ({ page }) => {
-    // Wait for stations to be visible and get their positions
-    await waitForLayerVisible(page, 'survey-stations');
-    const stations = await getStationScreenPositions(page);
-
-    // Skip if no stations available in test data
-    if (stations.length === 0) {
-      test.skip();
-      return;
-    }
-
-    const targetStation = stations[0];
+    // Wait for the stations to be drawn, then take their positions.
+    // waitForDrawnStations guarantees at least one, so no empty-data skip is needed.
+    const [targetStation] = await waitForDrawnStations(page, 1);
 
     // Hide stations
     await openDisplayMenu(page);
@@ -311,8 +285,8 @@ test.describe('Selection Blocking When Hidden', () => {
   });
 
   test('cannot select hidden shots - selection blocked', async ({ page }) => {
-    // Wait for shot layer to be visible
-    await waitForLayerVisible(page, 'survey-shots');
+    // Wait for the shots to be drawn.
+    await waitForDrawnShots(page, 1);
 
     // Hide shots
     await openDisplayMenu(page);
@@ -341,17 +315,9 @@ test.describe('Selection Blocking When Hidden', () => {
   });
 
   test('no hover effect on hidden stations', async ({ page }) => {
-    // Wait for stations to be visible and get their positions
-    await waitForLayerVisible(page, 'survey-stations');
-    const stations = await getStationScreenPositions(page);
-
-    // Skip if no stations available in test data
-    if (stations.length === 0) {
-      test.skip();
-      return;
-    }
-
-    const targetStation = stations[0];
+    // Wait for the stations to be drawn, then take their positions.
+    // waitForDrawnStations guarantees at least one, so no empty-data skip is needed.
+    const [targetStation] = await waitForDrawnStations(page, 1);
 
     // Hide stations
     await openDisplayMenu(page);
@@ -384,7 +350,7 @@ test.describe('Selection Clearing on Toggle', () => {
     await createProject(page, 'Selection Clearing Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
-    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
+    await waitForDrawnStations(page, 1);
   });
 
   test('station selection cleared when stations hidden', async ({ page }) => {
@@ -581,7 +547,7 @@ test.describe('Toggle Relationship Tests', () => {
     await createProject(page, 'Toggle Relationship Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
-    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
+    await waitForDrawnStations(page, 1);
   });
 
   test('Reference Shots toggle is disabled when Shots hidden', async ({ page }) => {
@@ -665,7 +631,7 @@ test.describe('Merge Tool Interaction', () => {
     await createProject(page, 'Tool Operation Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
-    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
+    await waitForDrawnStations(page, 1);
   });
 
   test('merge operation canceled when stations hidden mid-merge', async ({ page }) => {
@@ -712,7 +678,7 @@ test.describe('Display Menu State Persistence', () => {
     await createProject(page, 'State Persistence Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
-    await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
+    await waitForDrawnStations(page, 1);
   });
 
   test('toggle states persist when menu is closed and reopened', async ({ page }) => {

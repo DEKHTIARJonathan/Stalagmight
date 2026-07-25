@@ -5,6 +5,8 @@ import {
   seedProjectWithSections,
   waitForMapReady,
   waitForActiveTool,
+  getStationScreenPositions,
+  waitForDrawnStations,
   type SectionSeed,
 } from './helpers/app';
 
@@ -25,19 +27,10 @@ async function createProjectWithStations(page: Page): Promise<void> {
   await createProject(page, 'Non-Interactive Tool Test');
   await seedProjectWithSections(page, sectionSeeds);
   await waitForMapReady(page);
-  await expect.poll(
-    async () => {
-      return page.evaluate(() => {
-        const map = (window as unknown as {
-          __stalagmight_map__?: {
-            queryRenderedFeatures: (options?: { layers?: string[] }) => unknown[];
-          };
-        }).__stalagmight_map__;
-        return map?.queryRenderedFeatures({ layers: ['survey-stations'] })?.length ?? 0;
-      });
-    },
-    { timeout: 10000 }
-  ).toBeGreaterThan(0);
+  // The survey is drawn by the custom WebGL renderer, so there is no stock
+  // `survey-stations` layer for `queryRenderedFeatures` to read. Wait on the
+  // app's drawn-geometry hook instead (see helpers/app.ts).
+  await waitForDrawnStations(page, 1);
 }
 
 const sectionSeeds: SectionSeed[] = [
@@ -57,43 +50,6 @@ const sectionSeeds: SectionSeed[] = [
     ],
   },
 ];
-
-/**
- * Flatten the merged station features into individual station SCREEN points.
- *
- * The visible survey-stations layer now returns MERGED MultiPoint features (one
- * group per section/color, coordinates = an ARRAY of station points, and NO
- * per-point sectionId/stationIndex). So we can't read a `(sectionId,
- * stationIndex)` off a feature; we extract every individual point and identify a
- * target station BEHAVIORALLY (by which station a click on it selects).
- */
-async function getStationScreenPoints(page: Page): Promise<Array<{ x: number; y: number }>> {
-  return page.evaluate(() => {
-    const map = (window as unknown as {
-      __stalagmight_map__?: {
-        project: (coords: [number, number]) => { x: number; y: number };
-        queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
-          geometry: { type: string; coordinates: number[] | number[][] };
-        }>;
-      };
-    }).__stalagmight_map__;
-
-    if (!map) return [];
-    const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-    const points: Array<{ x: number; y: number }> = [];
-    for (const f of features) {
-      const raw =
-        f.geometry.type === 'MultiPoint'
-          ? (f.geometry.coordinates as number[][])
-          : [f.geometry.coordinates as number[]];
-      for (const c of raw) {
-        const s = map.project([c[0]!, c[1]!]);
-        points.push({ x: s.x, y: s.y });
-      }
-    }
-    return points;
-  });
-}
 
 /** The most isolated point (farthest from every OTHER point). A click on it
  *  unambiguously resolves to the one station rendered there. */
@@ -119,7 +75,7 @@ function mostIsolatedPoint(points: Array<{ x: number; y: number }>): { x: number
  * point so a click on it resolves unambiguously to a single station.
  */
 async function getStationPosition(page: Page): Promise<{ x: number; y: number } | null> {
-  const points = await getStationScreenPoints(page);
+  const points = await getStationScreenPositions(page);
   if (points.length === 0) return null;
   return mostIsolatedPoint(points);
 }
@@ -208,11 +164,12 @@ test.describe('Non-interactive tools', () => {
     await page.keyboard.press('s');
     await waitForActiveTool(page, 'select');
 
-    // Merged station features are MultiPoint with no per-point station identity,
-    // so discover a valid station ref BEHAVIORALLY: click the most isolated
-    // station point (unambiguous single-station resolution) and read which
-    // station the selection resolver picked.
-    const points = await getStationScreenPoints(page);
+    // Click the most isolated station point (unambiguous single-station
+    // resolution) and read which station the selection resolver picked. The
+    // store keys the ref by snake_case (section_id/station_index), so this
+    // still reads it back from the resolved selection rather than the
+    // drawn-geometry hook's camelCase identity.
+    const points = await getStationScreenPositions(page);
     expect(points.length).toBeGreaterThan(0);
     const target = mostIsolatedPoint(points);
 

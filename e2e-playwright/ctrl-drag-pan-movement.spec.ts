@@ -2,9 +2,16 @@ import { test, expect, Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
+  seedProjectWithSections,
   waitForMapReady,
   waitForActiveTool,
   waitForMapIdle,
+  getStationScreenPositions,
+  waitForDrawnStations,
+  readCanvasPixel,
+  countCanvasInk,
+  type SectionSeed,
+  type ScreenPoint,
 } from './helpers/app';
 
 /**
@@ -24,15 +31,22 @@ interface MapCenter {
   lat: number;
 }
 
-interface StationPosition {
-  id: string;
-  screenX: number;
-  screenY: number;
-}
+/** Geometry for the drawn-content check (a project is created empty by the mocks). */
+const SECTION_SEEDS: SectionSeed[] = [
+  {
+    name: 'Panner',
+    direction: 'in',
+    shots: [
+      { azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: 0, depth_out: -2 },
+      { azimuth_in: 90, azimuth_out: 270, length: 15, depth_in: -2, depth_out: -5 },
+    ],
+  },
+];
 
 /**
  * Helper to create a new project and get to SingleSystemView with map canvas.
- * Uses mock project which is pre-populated with sections/stations.
+ * The mocked project starts EMPTY, so a test that needs drawn survey geometry
+ * seeds it (see SECTION_SEEDS); the camera-only tests do not.
  */
 async function createProjectWithMap(page: Page): Promise<void> {
   await createProject(page, 'Pan Movement Test');
@@ -62,56 +76,18 @@ async function getMapZoom(page: Page): Promise<number | null> {
 }
 
 /**
- * Get station screen positions via queryRenderedFeatures + project.
+ * Canvas screen position of a map coordinate, used as the camera's own reference
+ * point: project the same lng/lat before and after a pan and the difference is
+ * exactly how far the camera slid the world across the screen.
  */
-async function getStationScreenPositions(page: Page): Promise<StationPosition[]> {
-  return page.evaluate(() => {
+async function projectLngLat(page: Page, lngLat: MapCenter): Promise<ScreenPoint> {
+  return page.evaluate((ll) => {
     const map = (window as unknown as {
-      __stalagmight_map__?: {
-        queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
-          geometry: { coordinates: [number, number] };
-          properties: { sectionId: number; stationIndex: number };
-        }>;
-        project: (coords: [number, number]) => { x: number; y: number };
-      };
+      __stalagmight_map__?: { project: (c: [number, number]) => { x: number; y: number } };
     }).__stalagmight_map__;
-
-    if (!map) return [];
-
-    try {
-      const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-      return features.map((f) => {
-        const coords = f.geometry.coordinates;
-        const screenPos = map.project(coords);
-        return {
-          id: `${f.properties.sectionId}:${f.properties.stationIndex}`,
-          screenX: screenPos.x,
-          screenY: screenPos.y,
-        };
-      });
-    } catch {
-      // Layer may not exist yet
-      return [];
-    }
-  });
-}
-
-/**
- * Log movement difference with tolerance check.
- */
-function logMovementDiff(
-  label: string,
-  expected: number,
-  actual: number,
-  tolerance: number
-): boolean {
-  const diff = Math.abs(actual - expected);
-  const passed = diff <= tolerance;
-  console.log(
-    `[${passed ? 'PASS' : 'FAIL'}] ${label}: expected=${expected.toFixed(4)}, ` +
-    `actual=${actual.toFixed(4)}, diff=${diff.toFixed(4)}, tolerance=${tolerance}`
-  );
-  return passed;
+    const p = map!.project([ll.lng, ll.lat]);
+    return { x: p.x, y: p.y };
+  }, lngLat);
 }
 
 /**
@@ -310,10 +286,78 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
       expect(zoomBefore).toBeCloseTo(zoomAfter!, 5);
     });
 
-    // Note: Station screen position tests are complex due to MapLibre timing quirks
-    // and warmup requirements. The map center movement tests above already verify
-    // that panning works correctly. Station positions are implicitly verified since
-    // they're rendered relative to the map's coordinate system.
+    test('drag right slides the drawn stations with the camera', async ({ page }) => {
+      // The premise of this spec is that a pan moves map CONTENT, not just the
+      // camera. Station screen positions come from the app's drawn-geometry hook
+      // (helpers/app.ts): the survey is drawn by a custom WebGL layer, so the stock
+      // `survey-stations` layer this used to query no longer exists. Reading the
+      // drawn geometry also removes the tile-render timing that made the original
+      // station-position checks too flaky to keep.
+      await seedProjectWithSections(page, SECTION_SEEDS);
+      await page.keyboard.press('p');
+      await waitForActiveTool(page, 'pan');
+      await waitForMapIdle(page);
+
+      const canvas = page.getByTestId('map-canvas');
+      const box = await canvas.boundingBox();
+      expect(box).not.toBeNull();
+
+      const before = await waitForDrawnStations(page, 2);
+      // Anchor on a fixed map coordinate; re-projecting it after the drag gives the
+      // camera's own screen shift, so the assertion is independent of MapLibre's pan
+      // inertia (which makes the final slide larger than the 100px of mouse travel).
+      const anchor = await getMapCenter(page);
+      expect(anchor).not.toBeNull();
+      const anchorBefore = await projectLngLat(page, anchor!);
+
+      const centerX = box!.x + box!.width / 2;
+      const centerY = box!.y + box!.height / 2;
+      await page.mouse.move(centerX, centerY);
+      await page.mouse.down();
+      await page.mouse.move(centerX + 100, centerY, { steps: 5 });
+      await page.mouse.up();
+      await waitForMapIdle(page);
+
+      const anchorAfter = await projectLngLat(page, anchor!);
+      const expectedDx = anchorAfter.x - anchorBefore.x;
+      const expectedDy = anchorAfter.y - anchorBefore.y;
+      console.log(`[Pan Mode] Camera slide: dx=${expectedDx.toFixed(2)}, dy=${expectedDy.toFixed(2)}`);
+
+      // A rightward drag must slide the world right by a real amount (not a no-op
+      // pan that would trivially satisfy the per-station equality below).
+      expect(expectedDx).toBeGreaterThan(50);
+
+      const after = await getStationScreenPositions(page);
+      expect(after.length).toBe(before.length);
+
+      // The drawn geometry is still PAINTED at its new place, not just bookkept:
+      // probe the canvas at the post-pan position of the station nearest the canvas
+      // center (with a margin, so the read stays inside the drawing buffer).
+      const cx = box!.width / 2;
+      const cy = box!.height / 2;
+      const probe = [...after]
+        .filter((s) => s.x > 20 && s.y > 20 && s.x < box!.width - 20 && s.y < box!.height - 20)
+        .sort((p, q) => Math.hypot(p.x - cx, p.y - cy) - Math.hypot(q.x - cx, q.y - cy))[0];
+      expect(probe, 'a station remains on screen after the pan').toBeTruthy();
+      const bg = await readCanvasPixel(page, 6, 6); // empty corner of the canvas
+      expect(
+        await countCanvasInk(page, probe!.x, probe!.y, bg),
+        `station ${probe!.sectionId}:${probe!.stationIndex} painted after the pan`
+      ).toBeGreaterThan(0);
+
+      for (const b of before) {
+        const a = after.find((s) => s.sectionId === b.sectionId && s.stationIndex === b.stationIndex);
+        expect(a, `station ${b.sectionId}:${b.stationIndex} still drawn`).toBeTruthy();
+        expect(
+          Math.abs(a!.x - b.x - expectedDx),
+          `station ${b.sectionId}:${b.stationIndex} x follows the camera`
+        ).toBeLessThanOrEqual(2);
+        expect(
+          Math.abs(a!.y - b.y - expectedDy),
+          `station ${b.sectionId}:${b.stationIndex} y follows the camera`
+        ).toBeLessThanOrEqual(2);
+      }
+    });
   });
 
   test.describe('Ctrl+Drag in Select Mode', () => {

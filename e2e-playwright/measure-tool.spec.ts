@@ -1,17 +1,18 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedProjectWithSections, waitForMapReady, type SectionSeed } from './helpers/app';
+import {
+  seedProjectWithSections,
+  waitForMapReady,
+  getStationScreenPositions,
+  getMeasuredPathCounts,
+  type SectionSeed,
+} from './helpers/app';
 
 /**
  * E2E for the dual-distance ruler/measure tool (#26): direct + along-cave-line
  * distance, shot tinting, and reset behavior. The mock returns a deterministic
  * along-line distance (12.34) and tints the first shots of the section.
  */
-
-interface StationPosition {
-  x: number;
-  y: number;
-}
 
 async function createProject(page: Page, name: string): Promise<void> {
   const newProjectBtn = page.locator('button:has-text("New Project"), h3:has-text("New Project")').first();
@@ -34,41 +35,9 @@ const sectionSeeds: SectionSeed[] = [
   },
 ];
 
-// The visible survey-stations layer now returns MERGED MultiPoint features (one
-// group per section/color, coordinates = an ARRAY of station points, and NO
-// per-point stationIndex). Flatten every individual point to its screen position;
-// distinct array indices resolve to distinct stations for the two-station measure
-// flow (identity is discovered behaviorally by which station a click selects).
-async function getStationScreenPositions(page: Page): Promise<StationPosition[]> {
-  return page.evaluate(() => {
-    const map = (window as unknown as {
-      __stalagmight_map__?: {
-        queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
-          geometry: { type: string; coordinates: number[] | number[][] };
-        }>;
-        project: (coords: [number, number]) => { x: number; y: number };
-      };
-    }).__stalagmight_map__;
-    if (!map) return [];
-    try {
-      const features = map.queryRenderedFeatures({ layers: ['survey-stations'] });
-      const out: StationPosition[] = [];
-      for (const f of features) {
-        const raw =
-          f.geometry.type === 'MultiPoint'
-            ? (f.geometry.coordinates as number[][])
-            : [f.geometry.coordinates as number[]];
-        for (const c of raw) {
-          const screenPos = map.project([c[0]!, c[1]!]);
-          out.push({ x: screenPos.x, y: screenPos.y });
-        }
-      }
-      return out;
-    } catch {
-      return [];
-    }
-  });
-}
+// The survey is drawn by the custom WebGL renderer, so there is no stock
+// `survey-stations` layer for `queryRenderedFeatures` to read. Screen positions
+// come from the app's drawn-geometry hook instead (see helpers/app.ts).
 
 async function activeTool(page: Page): Promise<string | undefined> {
   return page.evaluate(() => {
@@ -77,57 +46,15 @@ async function activeTool(page: Page): Promise<string | undefined> {
   });
 }
 
-/** Count distinct shots whose `measured` feature-state is set (the path tint).
- *  survey-data-shots is a VECTOR-TILE source now, so the query and every
- *  getFeatureState read must name the tile source-layer ('g'). */
+// The measured-path tint is drawn by a custom WebGL layer (no MapLibre
+// feature-state and no vector-tile source to query), so "is the path tinted" is
+// answered by how many segments/discs the layer was given.
 async function countMeasuredShots(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    const map = (window as unknown as {
-      __stalagmight_map__?: {
-        querySourceFeatures: (s: string, opts?: { sourceLayer?: string }) => Array<{ id?: number }>;
-        getFeatureState: (f: { source: string; sourceLayer?: string; id: number }) => { measured?: boolean };
-      };
-    }).__stalagmight_map__;
-    if (!map) return 0;
-    const seen = new Set<number>();
-    let n = 0;
-    for (const f of map.querySourceFeatures('survey-data-shots', { sourceLayer: 'g' })) {
-      if (f.id == null || seen.has(f.id)) continue;
-      seen.add(f.id);
-      if (map.getFeatureState({ source: 'survey-data-shots', sourceLayer: 'g', id: f.id })?.measured) n++;
-    }
-    return n;
-  });
+  return (await getMeasuredPathCounts(page)).shots;
 }
 
-/** Count distinct stations whose `measured` feature-state is set (the path tint).
- *  survey-data-stations is a VECTOR-TILE source now, so the query and every
- *  getFeatureState read must name the tile source-layer ('g'). */
 async function countMeasuredStations(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    const map = (window as unknown as {
-      __stalagmight_map__?: {
-        querySourceFeatures: (s: string, opts?: { sourceLayer?: string }) => Array<{ id?: number }>;
-        getFeatureState: (f: { source: string; sourceLayer?: string; id: number }) => { measured?: boolean };
-      };
-    }).__stalagmight_map__;
-    if (!map) return 0;
-    const seen = new Set<number>();
-    let n = 0;
-    for (const f of map.querySourceFeatures('survey-data-stations', { sourceLayer: 'g' })) {
-      if (f.id == null || seen.has(f.id)) continue;
-      seen.add(f.id);
-      if (map.getFeatureState({ source: 'survey-data-stations', sourceLayer: 'g', id: f.id })?.measured) n++;
-    }
-    return n;
-  });
-}
-
-async function shotsLineColor(page: Page): Promise<string> {
-  return page.evaluate(() => {
-    const map = (window as unknown as { __stalagmight_map__?: { getPaintProperty: (l: string, p: string) => unknown } }).__stalagmight_map__;
-    return map ? JSON.stringify(map.getPaintProperty('survey-shots', 'line-color')) : '';
-  });
+  return (await getMeasuredPathCounts(page)).stations;
 }
 
 async function clickStation(page: Page, index: number): Promise<void> {
@@ -168,9 +95,8 @@ test.describe('Measure tool — dual distance + tint (#26)', () => {
     await clickStation(page, 1);
     await expect(page.locator('[data-testid="measure-along-line"]')).toContainText('12.3');
 
-    // The shots line-color expression references the measured feature-state, and
-    // both at least one shot AND at least one station are tinted (#26).
-    await expect.poll(() => shotsLineColor(page)).toContain('measured');
+    // Both at least one shot AND at least one station are tinted (#26) — the
+    // shots side regressed once (only stations tinted), so assert both.
     await expect.poll(() => countMeasuredShots(page)).toBeGreaterThan(0);
     await expect.poll(() => countMeasuredStations(page)).toBeGreaterThan(0);
 

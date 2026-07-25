@@ -300,6 +300,47 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
 });
 
 /**
+ * Bulk geometry enumeration. With the custom renderer there are no stock
+ * `survey-stations` / `survey-shots` layers, so E2E tests project these coords
+ * instead of calling `queryRenderedFeatures`. Must agree with the per-item
+ * accessors (`stationCoords` / `shotGeometry`) and honor reference visibility.
+ */
+describe('SurveyGeometryIndex.enumerateGeometry', () => {
+  const { data } = buildPerFeature();
+  const index = new SurveyGeometryIndex(data, null);
+
+  it('enumerates every station and shot with identities matching the per-item accessors', () => {
+    const { stations, shots } = index.enumerateGeometry(true);
+    // Fixture: section 1 has 3 shots (4 stations), section 2 has 2 shots (3 stations).
+    expect(stations).toHaveLength(7);
+    expect(shots).toHaveLength(5);
+    for (const s of stations) {
+      const viaAccessor = index.stationCoords({
+        section_id: s.sectionId,
+        station_index: s.stationIndex,
+      })!;
+      expect(s.lngLat).toEqual(viaAccessor);
+    }
+    for (const sh of shots) {
+      const geo = index.shotGeometry(sh.sectionId, sh.shotId)!;
+      expect(sh.from).toEqual(geo.from);
+      expect(sh.to).toEqual(geo.to);
+    }
+  });
+
+  it('omits reference shots and all-reference stations when reference is hidden', () => {
+    const all = index.enumerateGeometry(true);
+    const visible = index.enumerateGeometry(false);
+    // Fixture shot 103 is a reference shot; it drops out, as does the station
+    // that only that shot touches.
+    expect(visible.shots.length).toBeLessThan(all.shots.length);
+    expect(visible.shots.some((s) => s.shotId === 103)).toBe(false);
+    expect(all.shots.some((s) => s.shotId === 103)).toBe(true);
+    expect(visible.stations.length).toBeLessThan(all.stations.length);
+  });
+});
+
+/**
  * Measured-path shot resolver (#26). The measured along-line tint feeds the
  * custom measure-path layer through `measuredShotSegments`, which must resolve
  * a shot from its canonical feature id WITHOUT decoding it. Shot ids are

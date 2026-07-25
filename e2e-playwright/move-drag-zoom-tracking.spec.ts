@@ -13,7 +13,11 @@ import {
  * #79 / #20 — a move-tool drag must keep the grabbed point under the cursor across
  * a mid-drag ZOOM, and must grab the EXACT feature (not the imprecise click point).
  *
- * The drag preview is a `*-translate` (screen-pixel) offset. Two independent bugs,
+ * The drag preview keeps the grabbed feature's ORIGINAL position and carries the
+ * live cursor delta as a screen-pixel offset, so the feature renders at
+ * `project(original) + offset`. That used to be a MapLibre `*-translate` paint
+ * property; it is now one shader uniform on the custom WebGL ghost layer
+ * (`survey-drag-ghost`), read back in `featureGap` below. Two independent bugs,
  * each guarded here:
  *   - #20 (grab precision): the grab baselined on `unproject(click)`, which at low
  *     zoom lands meters off the feature. Each test clicks a few px OFF the feature
@@ -48,85 +52,46 @@ const SECTION_SEEDS: SectionSeed[] = [
 ];
 
 /**
- * Read every individual station lng/lat off the VISIBLE survey-stations layer.
- * The bulk survey-data-* sources are VECTOR-TILE sources now, so the raw GeoJSON
- * is no longer reachable via getSource().serialize(); the visible layer returns
- * MERGED MultiPoint features (an ARRAY of station coords, no per-point id) which
- * we flatten (fall back to a plain Point). Returns [] when the tiles are not
- * rendered yet — callers poll via pollGeometry.
+ * Every drawn station + shot in MAP coords, read off the app's
+ * `__stalagmight_geometry__` hook (the same SoA geometry index the renderer and
+ * hit-testing use). The survey is drawn by a custom WebGL layer, so there is no
+ * stock `survey-stations` / `survey-shots` layer for `queryRenderedFeatures`; the
+ * shared helpers in helpers/app.ts project this hook to screen px, but these tests
+ * need the map coords themselves because each one `setCenter`s on a feature before
+ * grabbing it. Yields empty arrays until the geometry is indexed — callers poll via
+ * pollGeometry.
  */
-async function readStationLngLats(page: Page): Promise<Array<[number, number]>> {
+async function readDrawnGeometry(page: Page): Promise<{
+  stations: Array<{ sectionId: number; stationIndex: number; lngLat: [number, number] }>;
+  shots: Array<{ sectionId: number; shotId: number; from: [number, number]; to: [number, number] }>;
+}> {
   return page.evaluate(() => {
-    const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
-    if (!map) return [];
-    const qmap = map as unknown as {
-      queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
-        geometry: { type: string; coordinates: number[] | number[][] };
-      }>;
+    const w = window as unknown as {
+      __stalagmight_geometry__?: () => {
+        stations: Array<{ sectionId: number; stationIndex: number; lngLat: [number, number] }>;
+        shots: Array<{ sectionId: number; shotId: number; from: [number, number]; to: [number, number] }>;
+      } | null;
     };
-    let feats: Array<{ geometry: { type: string; coordinates: number[] | number[][] } }>;
-    try {
-      feats = qmap.queryRenderedFeatures({ layers: ['survey-stations'] });
-    } catch {
-      return [];
-    }
-    const pts: Array<[number, number]> = [];
-    for (const f of feats) {
-      if (f.geometry.type === 'MultiPoint') {
-        for (const c of f.geometry.coordinates as number[][]) pts.push([c[0]!, c[1]!]);
-      } else if (f.geometry.type === 'Point') {
-        const c = f.geometry.coordinates as number[];
-        pts.push([c[0]!, c[1]!]);
-      }
-    }
-    return pts;
+    return w.__stalagmight_geometry__?.() ?? { stations: [], shots: [] };
   });
 }
 
-/**
- * Read every shot's 2-point segment ([a, b] lng/lats) off the VISIBLE survey-shots
- * layer. Merged features are MultiLineString (each inner line = one shot's segment,
- * no per-shot id; fall back to a plain LineString). Returns [] when tiles are not
- * rendered yet — callers poll via pollGeometry.
- */
+/** Every drawn station's lng/lat, in the geometry index's (stable) order. */
+async function readStationLngLats(page: Page): Promise<Array<[number, number]>> {
+  return (await readDrawnGeometry(page)).stations.map((s) => s.lngLat);
+}
+
+/** Every drawn shot's 2-point segment ([from, to] lng/lats). */
 async function readShotSegments(page: Page): Promise<Array<[[number, number], [number, number]]>> {
-  return page.evaluate(() => {
-    const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
-    if (!map) return [];
-    const qmap = map as unknown as {
-      queryRenderedFeatures: (opts: { layers: string[] }) => Array<{
-        geometry: { type: string; coordinates: number[][] | number[][][] };
-      }>;
-    };
-    let feats: Array<{ geometry: { type: string; coordinates: number[][] | number[][][] } }>;
-    try {
-      feats = qmap.queryRenderedFeatures({ layers: ['survey-shots'] });
-    } catch {
-      return [];
-    }
-    const segs: Array<[[number, number], [number, number]]> = [];
-    for (const f of feats) {
-      const lines: number[][][] =
-        f.geometry.type === 'MultiLineString'
-          ? (f.geometry.coordinates as number[][][])
-          : f.geometry.type === 'LineString'
-            ? [f.geometry.coordinates as number[][]]
-            : [];
-      for (const line of lines) {
-        if (line.length >= 2) segs.push([[line[0]![0]!, line[0]![1]!], [line[1]![0]!, line[1]![1]!]]);
-      }
-    }
-    return segs;
-  });
+  return (await readDrawnGeometry(page)).shots.map((s) => [s.from, s.to]);
 }
 
 /**
  * Poll a read-only geometry fetch until it yields >= `min` items, and return the
- * captured items. Reading the MERGED geometry off the visible layer needs the
- * VECTOR tiles generated + rendered, so a single one-shot read can race a mid-flight
- * tile re-render (transiently empty). Capturing the items on the successful poll
- * iteration (rather than re-reading afterward) makes the subsequent center/project
- * independent of the live render state.
+ * captured items. The geometry hook returns nothing until the map exists and the
+ * seeded sections have been indexed, so a single one-shot read can race the seed.
+ * Capturing the items on the successful poll iteration (rather than re-reading
+ * afterward) makes the subsequent center/project independent of the live state.
  */
 async function pollGeometry<T>(read: () => Promise<T[]>, min: number, label: string): Promise<T[]> {
   let items: T[] = [];
@@ -207,26 +172,53 @@ async function centerOnShotMidpoint(page: Page, zoom: number) {
   return { screen: proj.mid, perp: proj.perp, lngLat: { lng: data.lng, lat: data.lat } };
 }
 
-/** Where the grabbed feature renders now (project + applied translate) vs `cursor`. */
+/**
+ * Where the grabbed feature renders now (project + the live drag offset) vs `cursor`,
+ * plus which drag-preview path is driving it.
+ *
+ * The preview is the custom WebGL ghost layer (`survey-drag-ghost`,
+ * surveyLayer/customRender/surveyGhostLayer.ts): its vertices are the captured
+ * ORIGINAL positions and the live cursor delta is a single screen-pixel shader
+ * uniform, so the grabbed feature paints at `project(original) + offset` — the same
+ * arithmetic the old `getPaintProperty('survey-drag-stations','circle-translate')`
+ * read fed, with the offset now read off the ghost layer (the uniform is in DEVICE
+ * px, hence the dpr divide). Reaching into the custom layer's offset is a test-only
+ * read; it is the only place the live offset exists.
+ *
+ * `mode` names the live path so a fallback cannot masquerade as a pass: the stock
+ * GeoJSON preview (`survey-drag-preview-*`, used only when the custom ghost fails to
+ * initialize) re-bakes its geometry AT the offset and leaves just the residual in
+ * `*-translate`, so `project(original) + translate` would not describe it.
+ */
 async function featureGap(page: Page, lngLat: { lng: number; lat: number }, cursor: { x: number; y: number }) {
   return page.evaluate(
     ({ ll, c }) => {
       const map = (window as unknown as { __stalagmight_map__?: import('maplibre-gl').Map }).__stalagmight_map__;
-      if (!map) return { hasPreview: false, gx: 0, gy: 0 };
-      const hasPreview = map.getLayer('survey-drag-stations') != null;
-      const t = (hasPreview
-        ? (map.getPaintProperty('survey-drag-stations', 'circle-translate') as [number, number] | undefined)
-        : null) ?? [0, 0];
+      if (!map) return { mode: 'none', gx: 0, gy: 0 };
+      // MapLibre wraps a CustomLayerInterface in a style layer that keeps the
+      // instance on `implementation`.
+      const ghost = map.getLayer('survey-drag-ghost') as unknown as
+        | { implementation?: { offsetX: number; offsetY: number } }
+        | undefined;
+      const impl = ghost?.implementation;
+      if (!impl) {
+        return {
+          mode: map.getLayer('survey-drag-preview-stations') != null ? 'stock' : 'none',
+          gx: 0,
+          gy: 0,
+        };
+      }
+      const dpr = window.devicePixelRatio || 1;
       const p = map.project([ll.lng, ll.lat]);
-      return { hasPreview, gx: p.x + t[0] - c.x, gy: p.y + t[1] - c.y };
+      return { mode: 'custom', gx: p.x + impl.offsetX / dpr - c.x, gy: p.y + impl.offsetY / dpr - c.y };
     },
     { ll: lngLat, c: cursor },
   );
 }
 
 /**
- * Poll until the grabbed feature (rendered at `lngLat` + the preview translate) sits
- * within `maxMag` px of `cursor`. `toPass` retries to ride out the async preview-layer
+ * Poll until the grabbed feature (rendered at `lngLat` + the live drag offset) sits
+ * within `maxMag` px of `cursor`. `toPass` retries to ride out the async preview
  * creation + the per-frame re-apply settling after a zoom.
  */
 async function expectTracksCursor(
@@ -238,7 +230,7 @@ async function expectTracksCursor(
 ) {
   await expect(async () => {
     const g = await featureGap(page, lngLat, cursor);
-    expect(g.hasPreview, `${label}: drag preview present`).toBe(true);
+    expect(g.mode, `${label}: custom drag ghost driving the preview`).toBe('custom');
     expect(Math.hypot(g.gx, g.gy), `${label}: gap from cursor (px)`).toBeLessThanOrEqual(maxMag);
   }).toPass({ timeout: 5000, intervals: [50, 100, 200, 400, 800] });
 }

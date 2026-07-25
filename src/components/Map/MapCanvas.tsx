@@ -22,6 +22,7 @@ import { buildDistanceFeatureState, overlayApplyAction } from '../../utils/dista
 import { buildGasReachFeatureState } from '../../utils/gasReach';
 import { buildMeasuredPathIds, buildMeasuredStationIds, MEASURE_TINT } from '../../utils/measurePath';
 import { computeImmovableStationKeys } from '../../utils/immovableStations';
+import { installMapE2eHooks } from '../../dev/mapE2eHooks';
 import { getBounds, getBoundsFromStationCoords, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
 import { getTileConfig } from '../../utils/tileConfig';
@@ -1812,16 +1813,18 @@ function MapCanvas() {
     };
   }, [mapLoaded]);
 
-  // Expose the active meters transform for E2E commit-offset assertions — lets a test
-  // predict a committed move offset with the SAME mapCoordsToMeters + gpsOrigin the
-  // component uses (the no-GPS linear fallback vs the ENU transform are not equivalent).
-  useEffect(() => {
-    (window as unknown as { __stalagmight_to_meters__?: (lng: number, lat: number) => { x: number; y: number } })
-      .__stalagmight_to_meters__ = (lng, lat) => mapCoordsToMeters(lng, lat, gpsOrigin);
-    return () => {
-      delete (window as unknown as { __stalagmight_to_meters__?: unknown }).__stalagmight_to_meters__;
-    };
-  }, [gpsOrigin]);
+  // Map E2E hooks (drawn geometry, measured-path tint, drag-ghost offset, the
+  // active meters transform). The custom renderer makes MapLibre's feature/paint
+  // queries useless to tests, so these expose what is actually drawn — see
+  // src/dev/mapE2eHooks.ts for the full rationale.
+  useEffect(
+    () =>
+      installMapE2eHooks({
+        surveyLayer: () => surveyLayerRef.current,
+        toMeters: (lng, lat) => mapCoordsToMeters(lng, lat, gpsOrigin),
+      }),
+    [surveyLayerRef, mapLoaded, gpsOrigin],
+  );
 
   // Update survey layer when data changes or map loads.
   // useLayoutEffect ensures setData() runs before the browser paints — critical

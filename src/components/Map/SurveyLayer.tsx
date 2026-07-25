@@ -3448,6 +3448,40 @@ export default class SurveyLayer {
    *  buffers alive until the next SurveyLayer overwrites the globals (#mem).
    *  dispose() is the map-free counterpart of destroy(); it is idempotent, so the
    *  destroy() path (which nulls both refs before calling this) is unaffected. */
+  /**
+   * Every drawn station center + shot segment in map coords, honoring the live
+   * reference-shots toggle. Exposed for E2E: the custom renderer draws survey
+   * geometry in a WebGL layer that `queryRenderedFeatures` cannot see, so tests
+   * project these instead of querying deleted stock layers (see MapCanvas's
+   * `__stalagmight_geometry__` hook). Returns null before geometry is indexed.
+   */
+  enumerateGeometry(): ReturnType<SurveyGeometryIndex['enumerateGeometry']> | null {
+    if (!this.geoIndex) return null;
+    return this.geoIndex.enumerateGeometry(this.showReferenceShotsCached);
+  }
+
+  /**
+   * How much measured-path tint is currently drawn (shot segments + station
+   * discs). Exposed for E2E: the tint is a custom GL layer with no MapLibre
+   * feature-state, so this replaces reading a `measured` feature-state off the
+   * deleted vector-tile sources.
+   */
+  measuredPathDrawnCounts(): { shots: number; stations: number } {
+    return this.measurePath?.drawnCounts() ?? { shots: 0, stations: 0 };
+  }
+
+  /**
+   * The live drag-preview offset in screen px, plus which ghost path is drawing
+   * (`custom` while the custom ghost layer is live, else `stock`). Null when no
+   * drag preview is active. Exposed for E2E so a drag test reads the offset from
+   * a supported accessor instead of the ghost layer's private fields.
+   */
+  dragGhostOffset(): { mode: 'custom' | 'stock'; dx: number; dy: number } | null {
+    const off = this.dragOverlayOffset;
+    if (!off) return null;
+    return { mode: this.dragGhost.isCustom() ? 'custom' : 'stock', dx: off.dx, dy: off.dy };
+  }
+
   releaseVtRegistry(): void {
     this.customRender?.dispose();
     this.customLabels?.dispose();

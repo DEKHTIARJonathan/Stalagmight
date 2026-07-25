@@ -57,6 +57,8 @@ export class MeasurePathController {
   private readonly onFatal: ((reason: string) => void) | undefined;
   /** Guards {@link onFatal} so it fires at most once per controller. */
   private fatalEmitted = false;
+  /** Last render data handed to the layer, for {@link drawnCounts}. */
+  private lastData: MeasurePathRenderData | null = null;
 
   constructor(
     private readonly map: maplibregl.Map,
@@ -83,6 +85,20 @@ export class MeasurePathController {
   }
 
   /**
+   * How much measured path is currently drawn: tinted shot segments and tinted
+   * station discs. Zeroes when nothing is drawn (cleared or never set).
+   *
+   * The measure tint is a custom WebGL layer with no MapLibre feature-state, so
+   * this is the observable an E2E test asserts on instead of reading a `measured`
+   * feature-state off a (deleted) vector-tile source.
+   */
+  drawnCounts(): { shots: number; stations: number } {
+    const data = this.lastData;
+    if (!this.layer || !data) return { shots: 0, stations: 0 };
+    return { shots: data.line.segmentCount, stations: data.circle.pointCount };
+  }
+
+  /**
    * Show / update the measured path. Pass render data with content to draw it;
    * pass null (or data whose line + circle are both empty) to clear.
    *
@@ -98,6 +114,7 @@ export class MeasurePathController {
       return;
     }
     if (this.layer) {
+      this.lastData = data;
       this.layer.setData(data);
       this.map.triggerRepaint();
       return;
@@ -111,6 +128,7 @@ export class MeasurePathController {
     this.selfDisableScheduled = false;
     if (this.layer && this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
     this.layer = null;
+    this.lastData = null;
   }
 
   /** Tear down on SurveyLayer destroy. */
@@ -134,11 +152,13 @@ export class MeasurePathController {
         return;
       }
       this.layer = layer;
+      this.lastData = data;
       this.map.triggerRepaint();
     } catch (e) {
       console.warn('[measurePath] custom measure-path threw on add', e);
       if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
       this.layer = null;
+      this.lastData = null;
       this.emitFatal(e instanceof Error ? e.message : 'add-threw');
     }
   }

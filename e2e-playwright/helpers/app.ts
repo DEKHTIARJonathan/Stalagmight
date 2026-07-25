@@ -340,3 +340,231 @@ export async function placeAllSections(page: Page): Promise<void> {
  */
 export const CUSTOM_TILE_URL_RE =
   /^(?:stalagmight-tiles:\/\/|http:\/\/stalagmight-tiles\.localhost\/)/;
+
+// ---------------------------------------------------------------------------
+// Drawn-geometry screen positions (custom WebGL renderer)
+// ---------------------------------------------------------------------------
+//
+// The survey is drawn by a custom WebGL layer, so `queryRenderedFeatures` on the
+// old stock `survey-stations` / `survey-shots` layers returns NOTHING (those
+// layers no longer exist). Tests that need on-screen positions read the drawn
+// geometry from the app's `__stalagmight_geometry__` E2E hook (the same SoA
+// geometry index the renderer and hit-testing use) and project it with the live
+// map, so the coordinates match what is actually painted.
+
+export interface ScreenPoint {
+  x: number;
+  y: number;
+}
+
+/** A station's identity plus its current screen position. */
+export interface StationScreenPos extends ScreenPoint {
+  sectionId: number;
+  stationIndex: number;
+}
+
+/** A shot's identity plus both endpoints' screen positions and its midpoint. */
+export interface ShotScreenPos {
+  sectionId: number;
+  shotId: number;
+  from: ScreenPoint;
+  to: ScreenPoint;
+  mid: ScreenPoint;
+}
+
+interface GeometrySnapshot {
+  stations: StationScreenPos[];
+  shots: ShotScreenPos[];
+}
+
+/**
+ * Screen positions of every drawn station and shot, honoring the live
+ * reference-shots toggle (hidden reference legs are absent, matching the
+ * renderer). Empty arrays until the map + geometry are ready — poll with
+ * `expect.poll` rather than asserting immediately after a seed.
+ */
+export async function getDrawnGeometry(page: Page): Promise<GeometrySnapshot> {
+  return page.evaluate(() => {
+    const w = window as unknown as {
+      __stalagmight_map__?: { project: (c: [number, number]) => { x: number; y: number } };
+      __stalagmight_geometry__?: () => {
+        stations: Array<{ sectionId: number; stationIndex: number; lngLat: [number, number] }>;
+        shots: Array<{
+          sectionId: number;
+          shotId: number;
+          from: [number, number];
+          to: [number, number];
+        }>;
+      } | null;
+    };
+    const map = w.__stalagmight_map__;
+    const geometry = w.__stalagmight_geometry__?.();
+    if (!map || !geometry) return { stations: [], shots: [] };
+    const stations = geometry.stations.map((s) => {
+      const p = map.project(s.lngLat);
+      return { sectionId: s.sectionId, stationIndex: s.stationIndex, x: p.x, y: p.y };
+    });
+    const shots = geometry.shots.map((sh) => {
+      const from = map.project(sh.from);
+      const to = map.project(sh.to);
+      return {
+        sectionId: sh.sectionId,
+        shotId: sh.shotId,
+        from: { x: from.x, y: from.y },
+        to: { x: to.x, y: to.y },
+        mid: { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 },
+      };
+    });
+    return { stations, shots };
+  });
+}
+
+/** Screen positions of the drawn stations (see {@link getDrawnGeometry}). */
+export async function getStationScreenPositions(page: Page): Promise<StationScreenPos[]> {
+  return (await getDrawnGeometry(page)).stations;
+}
+
+/** Screen positions of the drawn shots (see {@link getDrawnGeometry}). */
+export async function getShotScreenPositions(page: Page): Promise<ShotScreenPos[]> {
+  return (await getDrawnGeometry(page)).shots;
+}
+
+/** Wait until at least `minStations` stations are drawn, then return them. */
+export async function waitForDrawnStations(
+  page: Page,
+  minStations = 1,
+  timeout = 10000,
+): Promise<StationScreenPos[]> {
+  await expect
+    .poll(async () => (await getStationScreenPositions(page)).length, { timeout })
+    .toBeGreaterThanOrEqual(minStations);
+  return getStationScreenPositions(page);
+}
+
+/**
+ * How much measured-path (ruler) tint is drawn: tinted shot segments + tinted
+ * station discs. The tint is a custom GL layer with no MapLibre feature-state,
+ * so this replaces reading a `measured` feature-state off the (deleted) survey
+ * vector-tile sources.
+ */
+export async function getMeasuredPathCounts(
+  page: Page,
+): Promise<{ shots: number; stations: number }> {
+  return page.evaluate(() => {
+    const w = window as unknown as {
+      __stalagmight_measured__?: () => { shots: number; stations: number };
+    };
+    return w.__stalagmight_measured__?.() ?? { shots: 0, stations: 0 };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Canvas pixel probe (custom WebGL renderer)
+// ---------------------------------------------------------------------------
+//
+// With the custom renderer there is no `getPaintProperty('survey-stations',
+// 'circle-color')` and no per-feature state to read: a station's / shot's color
+// lives in a packed vertex attribute on the GPU, and "is it hidden" is a skipped
+// draw call. The honest oracle for both is therefore the painted pixel.
+//
+// The map canvas is created with `preserveDrawingBuffer: false`, so the drawing
+// buffer is only readable *inside* the frame that drew it. Reading during
+// MapLibre's `render` event (fired synchronously at the end of `_render()`,
+// before the compositor swap) is valid and deterministic — two reads of the same
+// unchanged scene return byte-identical pixels.
+
+/** One RGBA sample (each channel 0..255). */
+export type PixelRgba = [r: number, g: number, b: number, a: number];
+
+/**
+ * Read a `size` x `size` CSS-pixel block of the map canvas centered on
+ * (`x`, `y`) (canvas-relative CSS px, e.g. a {@link StationScreenPos}).
+ * Returns a flat RGBA array in WebGL row order, or `[]` if the map/GL context
+ * is unavailable.
+ */
+export async function readCanvasPixelBlock(
+  page: Page,
+  x: number,
+  y: number,
+  size = 1,
+): Promise<number[]> {
+  return page.evaluate(
+    ([px, py, sz]) =>
+      new Promise<number[]>((resolve) => {
+        const map = (
+          window as unknown as {
+            __stalagmight_map__?: {
+              getCanvas: () => HTMLCanvasElement;
+              triggerRepaint: () => void;
+              once: (ev: string, cb: () => void) => void;
+            };
+          }
+        ).__stalagmight_map__;
+        if (!map) return resolve([]);
+        const canvas = map.getCanvas();
+        // `getContext` returns the context MapLibre already created; the fallback
+        // covers a WebGL1 map (a machine without WebGL2).
+        const gl = (canvas.getContext('webgl2') ??
+          canvas.getContext('webgl')) as WebGL2RenderingContext | null;
+        if (!gl) return resolve([]);
+        const dpr = canvas.width / canvas.clientWidth;
+        map.once('render', () => {
+          const w = Math.max(1, Math.round(sz * dpr));
+          const h = Math.max(1, Math.round(sz * dpr));
+          const gx = Math.round(px * dpr - w / 2);
+          // WebGL's origin is bottom-left; CSS coords are top-left.
+          const gy = Math.round(canvas.height - py * dpr - h / 2);
+          const buf = new Uint8Array(w * h * 4);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          gl.readPixels(gx, gy, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+          resolve(Array.from(buf));
+        });
+        map.triggerRepaint();
+      }),
+    [x, y, size] as const,
+  );
+}
+
+/** The single painted pixel at (`x`, `y`) — see {@link readCanvasPixelBlock}. */
+export async function readCanvasPixel(page: Page, x: number, y: number): Promise<PixelRgba> {
+  const buf = await readCanvasPixelBlock(page, x, y, 1);
+  return [buf[0] ?? 0, buf[1] ?? 0, buf[2] ?? 0, buf[3] ?? 0];
+}
+
+/**
+ * How many pixels in a `size` x `size` block around (`x`, `y`) differ from the
+ * map background by more than `tolerance` per channel. "Ink" = something was
+ * drawn there, so this answers "are the markers/lines on screen?" without
+ * hard-coding any palette. Pass the same `bg` you sampled from an empty part of
+ * the canvas.
+ */
+export async function countCanvasInk(
+  page: Page,
+  x: number,
+  y: number,
+  bg: PixelRgba,
+  size = 9,
+  tolerance = 12,
+): Promise<number> {
+  const buf = await readCanvasPixelBlock(page, x, y, size);
+  let ink = 0;
+  for (let i = 0; i < buf.length; i += 4) {
+    const dr = Math.abs((buf[i] ?? 0) - bg[0]);
+    const dg = Math.abs((buf[i + 1] ?? 0) - bg[1]);
+    const db = Math.abs((buf[i + 2] ?? 0) - bg[2]);
+    if (dr > tolerance || dg > tolerance || db > tolerance) ink++;
+  }
+  return ink;
+}
+
+/** Wait until at least `minShots` shots are drawn, then return them. */
+export async function waitForDrawnShots(
+  page: Page,
+  minShots = 1,
+  timeout = 10000,
+): Promise<ShotScreenPos[]> {
+  await expect
+    .poll(async () => (await getShotScreenPositions(page)).length, { timeout })
+    .toBeGreaterThanOrEqual(minShots);
+  return getShotScreenPositions(page);
+}

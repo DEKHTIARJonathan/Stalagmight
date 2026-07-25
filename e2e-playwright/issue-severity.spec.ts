@@ -4,15 +4,27 @@ import {
   createProject,
   seedProjectWithSections,
   waitForMapIdle,
+  getShotScreenPositions,
+  getStationScreenPositions,
+  waitForDrawnShots,
+  readCanvasPixel,
+  type PixelRgba,
   type SectionSeed,
 } from './helpers/app';
 
 /**
- * E2E for the "Issue severity" Display coloring mode (#22). The mode bakes a
- * `color` property per shot/station feature (like depth), so we assert on the
- * `properties.color` of rendered features. Unlist warnings come from the backend
- * validator; the e2e mock returns none, so we inject them via the project store
- * (the same path warning-click.spec.ts uses) to drive red/yellow.
+ * E2E for the "Issue severity" Display coloring mode (#22). Unresolved warnings
+ * come from the backend validator; the e2e mock returns none, so we inject them
+ * via the project store (the same path warning-click.spec.ts uses) to drive
+ * red/yellow.
+ *
+ * The survey is drawn by a custom WebGL layer now: the mode's color is resolved
+ * per shot / station at build time and packed into a vertex attribute, so there is
+ * no `survey-shots` / `survey-stations` layer to read a `line-color` /
+ * `circle-color` paint off and no per-feature `colorIndex` to resolve through it.
+ * The oracle is the PAINTED PIXEL, which also restores per-feature identity for
+ * free (the drawn-geometry hook carries sectionId / shotId / stationIndex), so the
+ * old geometry-matching against merged vector-tile groups is gone.
  *
  * Severity palette (fixed, themeColors): error #ef4444, warning #eab308,
  * clear #22c55e.
@@ -105,178 +117,104 @@ async function issueSeverityFlag(page: Page): Promise<boolean> {
   });
 }
 
-/**
- * Colors of rendered shot features keyed by shotId.
- *
- * The bulk shot source is a VECTOR-TILE source of MERGED groups now (#mem): a
- * group carries a numeric `colorIndex` (which the `line-color` paint maps to the
- * real color) and a MERGED MultiLineString (one inner 2-point line per shot),
- * but NO per-shot `shotId`. Issue-severity coloring does NOT force per-feature
- * granularity, so we recover per-shot identity by geometry: a shot at
- * section-local order `i` joins station indices `i` and `i+1` (features.ts), so
- * its midpoint in survey metres identifies which merged segment (hence which
- * color) it owns. Metres come from the store's stations (station_ref +
- * coordinates); merged geometry (lng/lat) is converted back via
- * __stalagmight_to_meters__.
- */
-async function shotColorsById(page: Page): Promise<Record<number, string>> {
-  return page.evaluate(() => {
-    // Resolve a ["match", ["get","colorIndex"], k0, c0, ..., fallback] paint (or
-    // a constant string) to the color for a colorIndex: merged groups carry the
-    // numeric index, the layer paint maps it to the real color.
-    const resolve = (expr: unknown, ci: number): string | null => {
-      if (typeof expr === 'string') return expr;
-      if (!Array.isArray(expr) || expr[0] !== 'match') return null;
-      for (let i = 2; i + 1 < expr.length; i += 2) {
-        if (expr[i] === ci) return String(expr[i + 1]);
-      }
-      return String(expr[expr.length - 1]);
-    };
-    const map = (window as unknown as {
-      __stalagmight_map__?: {
-        queryRenderedFeatures: (o: { layers: string[] }) => Array<{ properties?: { colorIndex?: number }; geometry: { type: string; coordinates: number[] | number[][] | number[][][] } }>;
-        getPaintProperty: (l: string, p: string) => unknown;
-      };
-    }).__stalagmight_map__;
-    const toMeters = (window as unknown as {
-      __stalagmight_to_meters__?: (lng: number, lat: number) => { x: number; y: number };
-    }).__stalagmight_to_meters__;
-    const stores = (window as unknown as {
-      __E2E_TEST__?: {
-        projectStore: { getState: () => {
-          stations: Array<{ station_ref: { section_id: number; station_index: number }; coordinates: { x: number; y: number } }>;
-          project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> } | null;
-        } };
-      };
-    }).__E2E_TEST__;
-    const out: Record<number, string> = {};
-    if (!map || !toMeters || !stores) return out;
-    const state = stores.projectStore.getState();
-    if (!state.project) return out;
-    try {
-      const paint = map.getPaintProperty('survey-shots', 'line-color');
-      // Every merged inner segment's midpoint (metres) → its group color.
-      const segs: Array<{ mx: number; my: number; color: string }> = [];
-      for (const f of map.queryRenderedFeatures({ layers: ['survey-shots'] })) {
-        const ci = f.properties?.colorIndex;
-        if (typeof ci !== 'number') continue;
-        const color = resolve(paint, ci);
-        if (color == null) continue;
-        const lines: number[][][] =
-          f.geometry.type === 'MultiLineString'
-            ? (f.geometry.coordinates as number[][][])
-            : f.geometry.type === 'LineString'
-              ? [f.geometry.coordinates as number[][]]
-              : [];
-        for (const line of lines) {
-          for (let i = 0; i + 1 < line.length; i++) {
-            const a = toMeters(line[i]![0]!, line[i]![1]!);
-            const b = toMeters(line[i + 1]![0]!, line[i + 1]![1]!);
-            segs.push({ mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, color });
-          }
-        }
-      }
-      // Station coords keyed "sectionId:stationIndex" (survey metres).
-      const stationXY = new Map<string, { x: number; y: number }>();
-      for (const st of state.stations) {
-        stationXY.set(`${st.station_ref.section_id}:${st.station_ref.station_index}`, { x: st.coordinates.x, y: st.coordinates.y });
-      }
-      // Shot order i → shotId; its endpoints are stations i and i+1.
-      for (const section of state.project.sections) {
-        for (let i = 0; i < section.shots.length; i++) {
-          const from = stationXY.get(`${section.id}:${i}`);
-          const to = stationXY.get(`${section.id}:${i + 1}`);
-          if (!from || !to) continue;
-          const mx = (from.x + to.x) / 2;
-          const my = (from.y + to.y) / 2;
-          let best = Infinity;
-          let bestColor: string | null = null;
-          for (const s of segs) {
-            const d = Math.hypot(s.mx - mx, s.my - my);
-            if (d < best) { best = d; bestColor = s.color; }
-          }
-          if (bestColor != null && best < 1) out[section.shots[i]!.id] = bestColor;
-        }
-      }
-    } catch { /* style not ready */ }
-    return out;
-  });
+interface MapZoomHandle {
+  getZoom: () => number;
+  setZoom: (z: number) => void;
 }
 
 /**
- * Colors of rendered station features keyed by stationIndex.
+ * Zoom in before probing painted pixels. The seeded survey is only a few metres
+ * across, so at the fit-to-bounds zoom the whole thing is ~9 screen px wide and
+ * the station discs cover the shot lines entirely, so a probe there cannot tell a
+ * shot's color from a station's. `setZoom` is a jump (no animation) and the
+ * geometry helpers project with the live map, so positions read after this call
+ * already match the new view.
  *
- * Same merged vector-tile model as shotColorsById: the merged station group
- * carries a numeric `colorIndex` (mapped to a color by `circle-color`) and a
- * MERGED MultiPoint, but NO per-station `stationIndex`. We recover identity by
- * geometry: convert each group point back to survey metres and match it to the
- * store's stations (station_ref + metre coordinates). The seed is single-section
- * so station_index is unique, matching the original keying.
+ * A fit-to-bounds queued by the seed can still land after the map reports loaded
+ * and take the zoom back, so hold the target zoom until the drawn shots really are
+ * spread out on screen (`minSpanPx`).
  */
-async function stationColorsByIndex(page: Page): Promise<Record<number, string>> {
-  return page.evaluate(() => {
-    const resolve = (expr: unknown, ci: number): string | null => {
-      if (typeof expr === 'string') return expr;
-      if (!Array.isArray(expr) || expr[0] !== 'match') return null;
-      for (let i = 2; i + 1 < expr.length; i += 2) {
-        if (expr[i] === ci) return String(expr[i + 1]);
-      }
-      return String(expr[expr.length - 1]);
-    };
-    const map = (window as unknown as {
-      __stalagmight_map__?: {
-        queryRenderedFeatures: (o: { layers: string[] }) => Array<{ properties?: { colorIndex?: number }; geometry: { type: string; coordinates: number[] | number[][] } }>;
-        getPaintProperty: (l: string, p: string) => unknown;
-      };
-    }).__stalagmight_map__;
-    const toMeters = (window as unknown as {
-      __stalagmight_to_meters__?: (lng: number, lat: number) => { x: number; y: number };
-    }).__stalagmight_to_meters__;
-    const stores = (window as unknown as {
-      __E2E_TEST__?: {
-        projectStore: { getState: () => {
-          stations: Array<{ station_ref: { section_id: number; station_index: number }; coordinates: { x: number; y: number } }>;
-        } };
-      };
-    }).__E2E_TEST__;
-    const out: Record<number, string> = {};
-    if (!map || !toMeters || !stores) return out;
-    try {
-      const paint = map.getPaintProperty('survey-stations', 'circle-color');
-      const points: Array<{ x: number; y: number; color: string }> = [];
-      for (const f of map.queryRenderedFeatures({ layers: ['survey-stations'] })) {
-        const ci = f.properties?.colorIndex;
-        if (typeof ci !== 'number') continue;
-        const color = resolve(paint, ci);
-        if (color == null) continue;
-        const raw =
-          f.geometry.type === 'MultiPoint'
-            ? (f.geometry.coordinates as number[][])
-            : [f.geometry.coordinates as number[]];
-        for (const c of raw) {
-          const m = toMeters(c[0]!, c[1]!);
-          points.push({ x: m.x, y: m.y, color });
-        }
-      }
-      // Nearest merged group point (survey metres) identifies each store station.
-      for (const st of stores.projectStore.getState().stations) {
-        const sx = st.coordinates.x;
-        const sy = st.coordinates.y;
-        let best = Infinity;
-        let bestColor: string | null = null;
-        for (const p of points) {
-          const d = Math.hypot(p.x - sx, p.y - sy);
-          if (d < best) { best = d; bestColor = p.color; }
-        }
-        if (bestColor != null && best < 1) out[st.station_ref.station_index] = bestColor;
-      }
-    } catch { /* style not ready */ }
-    return out;
-  });
+async function zoomIn(page: Page, delta = 4, minSpanPx = 40): Promise<void> {
+  const target = await page.evaluate((d) => {
+    const map = (window as unknown as { __stalagmight_map__?: MapZoomHandle }).__stalagmight_map__;
+    if (!map) return 0;
+    const z = map.getZoom() + d;
+    map.setZoom(z);
+    return z;
+  }, delta);
+  await expect.poll(async () => {
+    await page.evaluate((z) => {
+      const map = (window as unknown as { __stalagmight_map__?: MapZoomHandle }).__stalagmight_map__;
+      if (map && map.getZoom() < z - 0.01) map.setZoom(z);
+    }, target);
+    const shots = await getShotScreenPositions(page);
+    return shots.reduce((m, s) => Math.max(m, Math.hypot(s.to.x - s.from.x, s.to.y - s.from.y)), 0);
+  }, { timeout: 10000 }).toBeGreaterThan(minSpanPx);
 }
 
-async function waitForShots(page: Page): Promise<void> {
-  await expect.poll(async () => Object.keys(await shotColorsById(page)).length, { timeout: 5000 }).toBeGreaterThan(0);
+/** `#rrggbb` -> the RGB channels a painted pixel would carry. */
+function hexRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+
+/**
+ * Whether a painted sample is the given palette color. A tolerance keeps the
+ * comparison honest without being brittle: the severity palette entries are far
+ * apart from each other and from the section blue, so nothing else lands within it.
+ */
+function isColor(px: PixelRgba | undefined, hex: string, tolerance = 10): boolean {
+  if (!px) return false;
+  const [r, g, b] = hexRgb(hex);
+  return (
+    Math.abs(px[0] - r) <= tolerance &&
+    Math.abs(px[1] - g) <= tolerance &&
+    Math.abs(px[2] - b) <= tolerance
+  );
+}
+
+/** Palette hex -> readable bucket name, so a color mismatch reads as a severity
+ *  mismatch in the failure diff instead of two RGB triples. */
+function severityName(hex: string): string {
+  if (hex === SEV_ERROR) return 'error';
+  if (hex === SEV_WARNING) return 'warning';
+  return 'clear';
+}
+
+/** Which severity bucket a painted sample belongs to (or the raw RGB if none). */
+function describeSeverity(px: PixelRgba | undefined): string {
+  if (!px) return 'not-drawn';
+  for (const hex of [SEV_ERROR, SEV_WARNING, SEV_CLEAR]) {
+    if (isColor(px, hex)) return severityName(hex);
+  }
+  return `other(${px.slice(0, 3).join(',')})`;
+}
+
+/**
+ * Painted color of every drawn shot, keyed by shotId, sampled at the shot's
+ * midpoint. That point is clear of the station discs once zoomed in, and in
+ * severity mode a shot is one flat color for its whole length (only depth mode
+ * ramps along a shot).
+ */
+async function shotColorsById(page: Page): Promise<Record<number, PixelRgba>> {
+  const out: Record<number, PixelRgba> = {};
+  for (const shot of await getShotScreenPositions(page)) {
+    out[shot.shotId] = await readCanvasPixel(page, shot.mid.x, shot.mid.y);
+  }
+  return out;
+}
+
+/**
+ * Painted FILL of every drawn station, keyed by stationIndex (the seed is
+ * single-section, so station_index is unique, keeping the original keying). The
+ * center pixel of a station disc is its fill; the stroke is a ring around it.
+ */
+async function stationColorsByIndex(page: Page): Promise<Record<number, PixelRgba>> {
+  const out: Record<number, PixelRgba> = {};
+  for (const st of await getStationScreenPositions(page)) {
+    out[st.stationIndex] = await readCanvasPixel(page, st.x, st.y);
+  }
+  return out;
 }
 
 test.describe('Issue Severity coloring (#22)', () => {
@@ -285,7 +223,8 @@ test.describe('Issue Severity coloring (#22)', () => {
     await createProject(page, 'Issue Severity Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapIdle(page);
-    await waitForShots(page);
+    await waitForDrawnShots(page, 3);
+    await zoomIn(page);
   });
 
   test('toggle paints clear geometry green and reverts when turned off', async ({ page }) => {
@@ -294,7 +233,7 @@ test.describe('Issue Severity coloring (#22)', () => {
 
     // Baseline: section colors, not the clear-green severity color.
     const shotsBefore = await shotColorsById(page);
-    expect(Object.values(shotsBefore).some((c) => c.toLowerCase() !== SEV_CLEAR)).toBe(true);
+    expect(Object.values(shotsBefore).some((c) => !isColor(c, SEV_CLEAR))).toBe(true);
 
     await toggleDisplayOption(page, 'showIssueSeverity');
     expect(await issueSeverityFlag(page)).toBe(true);
@@ -303,19 +242,19 @@ test.describe('Issue Severity coloring (#22)', () => {
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
       const vals = Object.values(shots);
-      return vals.length > 0 && vals.every((c) => c.toLowerCase() === SEV_CLEAR);
+      return vals.length > 0 && vals.every((c) => isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
     await expect.poll(async () => {
       const stations = await stationColorsByIndex(page);
       const vals = Object.values(stations);
-      return vals.length > 0 && vals.every((c) => c.toLowerCase() === SEV_CLEAR);
+      return vals.length > 0 && vals.every((c) => isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
 
     // Off ⇒ section colors return (no longer all green).
     await toggleDisplayOption(page, 'showIssueSeverity');
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
-      return Object.values(shots).some((c) => c.toLowerCase() !== SEV_CLEAR);
+      return Object.values(shots).some((c) => !isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
   });
 
@@ -335,26 +274,21 @@ test.describe('Issue Severity coloring (#22)', () => {
     await toggleDisplayOption(page, 'showIssueSeverity');
     expect(await issueSeverityFlag(page)).toBe(true);
 
+    // The old test read each feature's `colorIndex` (i.e. "this shot is in severity
+    // bucket N"); the equivalent now is "this shot is PAINTED the severity-N color".
+    const expectedShots = [SEV_ERROR, SEV_WARNING, SEV_CLEAR];
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
-      return [
-        shots[shotIds[0]!]?.toLowerCase(),
-        shots[shotIds[1]!]?.toLowerCase(),
-        shots[shotIds[2]!]?.toLowerCase(),
-      ].join(',');
-    }, { timeout: 4000 }).toBe([SEV_ERROR, SEV_WARNING, SEV_CLEAR].join(','));
+      return expectedShots.map((_, i) => describeSeverity(shots[shotIds[i]!])).join(',');
+    }, { timeout: 4000 }).toBe(expectedShots.map(severityName).join(','));
 
     // Stations: idx0 (shot0 only) = error; idx1 (shot0 error + shot1 warning) =
     // error (max); idx2 (shot1 warning + resolved shot2) = warning; idx3 = clear.
+    const expectedStations = [SEV_ERROR, SEV_ERROR, SEV_WARNING, SEV_CLEAR];
     await expect.poll(async () => {
       const st = await stationColorsByIndex(page);
-      return [
-        st[0]?.toLowerCase(),
-        st[1]?.toLowerCase(),
-        st[2]?.toLowerCase(),
-        st[3]?.toLowerCase(),
-      ].join(',');
-    }, { timeout: 4000 }).toBe([SEV_ERROR, SEV_ERROR, SEV_WARNING, SEV_CLEAR].join(','));
+      return expectedStations.map((_, i) => describeSeverity(st[i])).join(',');
+    }, { timeout: 4000 }).toBe(expectedStations.map(severityName).join(','));
   });
 
   test('is mutually exclusive with the depth gradient', async ({ page }) => {
@@ -383,7 +317,7 @@ test.describe('Issue Severity coloring (#22)', () => {
     // Baseline (Details tab): section colors, not the clear-green severity color.
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
-      return Object.values(shots).some((c) => c.toLowerCase() !== SEV_CLEAR);
+      return Object.values(shots).some((c) => !isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
 
     // Opening the Warnings tab recomputes the map into issue-severity coloring
@@ -392,7 +326,7 @@ test.describe('Issue Severity coloring (#22)', () => {
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
       const vals = Object.values(shots);
-      return vals.length > 0 && vals.every((c) => c.toLowerCase() === SEV_CLEAR);
+      return vals.length > 0 && vals.every((c) => isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
     // The persisted toggle was never mutated by the auto-highlight.
     expect(await issueSeverityFlag(page)).toBe(false);
@@ -401,7 +335,7 @@ test.describe('Issue Severity coloring (#22)', () => {
     await page.getByTestId('detail-tab-details').click();
     await expect.poll(async () => {
       const shots = await shotColorsById(page);
-      return Object.values(shots).some((c) => c.toLowerCase() !== SEV_CLEAR);
+      return Object.values(shots).some((c) => !isColor(c, SEV_CLEAR));
     }, { timeout: 3000 }).toBe(true);
   });
 });

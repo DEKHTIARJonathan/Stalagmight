@@ -505,6 +505,63 @@ export class SurveyGeometryIndex {
     return out;
   }
 
+  /**
+   * Every station center and shot segment in MAP coords, with identities.
+   *
+   * The authoritative geometry enumeration for tests/tooling: with the custom
+   * WebGL renderer there are no stock `survey-stations` / `survey-shots` layers
+   * for `queryRenderedFeatures` to read, so an E2E test that needs on-screen
+   * positions projects these instead (see MapCanvas's `__stalagmight_geometry__`
+   * hook). Same source of truth the renderer and hit-testing use, so positions
+   * agree with what is actually drawn.
+   *
+   * `includeReference: false` mirrors the reference-shots toggle — reference
+   * shots and all-reference stations are omitted, exactly as the layers filter
+   * them.
+   */
+  enumerateGeometry(includeReference: boolean): {
+    stations: Array<{ sectionId: number; stationIndex: number; lngLat: [number, number] }>;
+    shots: Array<{
+      sectionId: number;
+      shotId: number;
+      from: [number, number];
+      to: [number, number];
+    }>;
+  } {
+    this.ensureBuilt();
+    const stations: Array<{ sectionId: number; stationIndex: number; lngLat: [number, number] }> = [];
+    for (let g = 0; g < this.data.stationCount; g++) {
+      const sectionId = this.data.stationSectionIds[g]!;
+      const stationIndex = this.data.stationIndices[g]!;
+      if (!includeReference && !this.nonRefStations(sectionId).has(stationIndex)) continue;
+      stations.push({ sectionId, stationIndex, lngLat: this.stationLngLat(g) });
+    }
+    const shots: Array<{
+      sectionId: number;
+      shotId: number;
+      from: [number, number];
+      to: [number, number];
+    }> = [];
+    for (const section of this.data.sections) {
+      const lookup = this.stationLookup.get(section.id);
+      if (!lookup) continue;
+      for (let i = 0; i < section.shotCount; i++) {
+        const gi = section.shotOffset + i;
+        if (!includeReference && (this.data.shotFlags[gi]! & SHOT_FLAG_IS_REFERENCE) !== 0) continue;
+        const fromGlobal = lookup.get(i);
+        const toGlobal = lookup.get(i + 1);
+        if (fromGlobal === undefined || toGlobal === undefined) continue;
+        shots.push({
+          sectionId: section.id,
+          shotId: this.data.shotIds[gi]!,
+          from: this.stationLngLat(fromGlobal),
+          to: this.stationLngLat(toGlobal),
+        });
+      }
+    }
+    return { stations, shots };
+  }
+
   /** Whether every shot touching the station is a reference shot (the
    *  station is filtered out while reference shots are hidden). Stations
    *  with no feature-producing shots at all also count as all-reference,
