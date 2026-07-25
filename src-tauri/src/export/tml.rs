@@ -137,6 +137,24 @@ const SHORT: Names = Names {
     uuid: "UU",
 };
 
+/// Convert a model pitch into Ariane's `<Inclination>`.
+///
+/// The model is +down (positive descends, matching `depth_in` / `depth_out`).
+/// Ariane is taken to be +up, like every other survey format we read: Walls
+/// and Compass both store +up in-file, and the mNemo device reports +up. That
+/// could not be confirmed from data — across every Ariane file available, all
+/// 5,686 shots carry `Inclination` 0, because these surveys are depth-gauge
+/// based and Ariane never populates the field. So this is an inference from the
+/// surrounding ecosystem, not a measurement, and it is unobservable on real
+/// files; it only changes what we emit. `None` and `0` both export as a plain
+/// `0.0` rather than `-0.0`. Inverse of `parsers::tml::inclination_to_pitch`.
+fn pitch_to_inclination(pitch: Option<f64>) -> f64 {
+    match pitch {
+        Some(p) if p != 0.0 => -p,
+        _ => 0.0,
+    }
+}
+
 // ============================================================================
 // Internal shot representation for export
 // ============================================================================
@@ -588,7 +606,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                     length: shot.length,
                     depth: shot.depth_out,
                     depth_in: depth_in_val,
-                    inclination: shot.pitch_in.unwrap_or(0.0),
+                    inclination: pitch_to_inclination(shot.pitch_in),
                     left: shot.left.unwrap_or(0.0),
                     right: shot.right.unwrap_or(0.0),
                     up: shot.up.unwrap_or(0.0),
@@ -661,10 +679,9 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                         length: shot.length,
                         depth: reversed_depth_out,
                         depth_in: depth_in_val,
-                        inclination: shot
-                            .pitch_out
-                            .or_else(|| shot.pitch_in.map(|p| -p))
-                            .unwrap_or(0.0),
+                        inclination: pitch_to_inclination(
+                            shot.pitch_out.or_else(|| shot.pitch_in.map(|p| -p)),
+                        ),
                         left: shot.right.unwrap_or(0.0),
                         right: shot.left.unwrap_or(0.0),
                         up: shot.up.unwrap_or(0.0),
@@ -735,7 +752,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                             length: shot.length,
                             depth: shot.depth_out,
                             depth_in: depth_in_val,
-                            inclination: shot.pitch_in.unwrap_or(0.0),
+                            inclination: pitch_to_inclination(shot.pitch_in),
                             left: shot.left.unwrap_or(0.0),
                             right: shot.right.unwrap_or(0.0),
                             up: shot.up.unwrap_or(0.0),
@@ -811,10 +828,9 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                             length: shot.length,
                             depth: reversed_depth_out,
                             depth_in: depth_in_val,
-                            inclination: shot
-                                .pitch_out
-                                .or_else(|| shot.pitch_in.map(|p| -p))
-                                .unwrap_or(0.0),
+                            inclination: pitch_to_inclination(
+                                shot.pitch_out.or_else(|| shot.pitch_in.map(|p| -p)),
+                            ),
                             left: shot.right.unwrap_or(0.0),
                             right: shot.left.unwrap_or(0.0),
                             up: shot.up.unwrap_or(0.0),
@@ -877,10 +893,9 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                             length: shot.length,
                             depth: reversed_depth_out,
                             depth_in: depth_in_val,
-                            inclination: shot
-                                .pitch_out
-                                .or_else(|| shot.pitch_in.map(|p| -p))
-                                .unwrap_or(0.0),
+                            inclination: pitch_to_inclination(
+                                shot.pitch_out.or_else(|| shot.pitch_in.map(|p| -p)),
+                            ),
                             left: shot.right.unwrap_or(0.0),
                             right: shot.left.unwrap_or(0.0),
                             up: shot.up.unwrap_or(0.0),
@@ -991,7 +1006,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                 length: shot.length,
                 depth: shot.depth_out,
                 depth_in: depth_in_val,
-                inclination: shot.pitch_in.unwrap_or(0.0),
+                inclination: pitch_to_inclination(shot.pitch_in),
                 left: shot.left.unwrap_or(0.0),
                 right: shot.right.unwrap_or(0.0),
                 up: shot.up.unwrap_or(0.0),
@@ -1420,6 +1435,41 @@ mod tests {
         ZeroDatum,
     };
     use tempfile::NamedTempFile;
+
+    /// The model is +down and Ariane is treated as +up, so the two must be
+    /// mirror images and a round-trip must land back on the original value
+    /// (issue #296).  Zero stays a plain `0.0` in both directions: `-0.0` would
+    /// survive into the XML and into the collab baseline, where it reads as an
+    /// edit that never happened.
+    #[test]
+    fn tml_inclination_round_trips_through_the_sign_flip() {
+        use crate::parsers::tml::inclination_to_pitch;
+
+        for pitch in [30.0_f64, -30.0, 90.0, -90.0, 0.5, -0.5] {
+            let inclination = pitch_to_inclination(Some(pitch));
+            assert!(
+                (inclination + pitch).abs() < f64::EPSILON,
+                "pitch {pitch} should export as {}, got {inclination}",
+                -pitch
+            );
+            assert!(
+                (inclination_to_pitch(inclination) - pitch).abs() < f64::EPSILON,
+                "round-trip of pitch {pitch} did not return it"
+            );
+        }
+
+        for zero in [pitch_to_inclination(None), pitch_to_inclination(Some(0.0))] {
+            assert!(
+                zero == 0.0 && zero.is_sign_positive(),
+                "zero pitch must export as plain 0.0, not -0.0"
+            );
+        }
+        let back = inclination_to_pitch(0.0);
+        assert!(
+            back == 0.0 && back.is_sign_positive(),
+            "zero inclination must import as plain 0.0, not -0.0"
+        );
+    }
 
     fn simple_project() -> Project {
         let mut project = Project::new("Test Cave".to_string(), None);
