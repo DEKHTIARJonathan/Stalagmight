@@ -4390,6 +4390,183 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
     );
 }
 
+/// A push snapshot with a saved project, a dirty `speleo_link`, and `count` rows of
+/// undo history whose payload carries `marker` (so the raw file can be searched for
+/// it). Returns the path inside `temp`.
+fn dirty_push_snapshot(temp: &TempDir, marker: &str, count: usize) -> std::path::PathBuf {
+    let path = temp.path().join("push.stalx");
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&Project::new("Push".to_string(), None))
+        .unwrap();
+    db.save_speleo_link(Some(&sample_speleo_link(Some("abc"), true)))
+        .unwrap();
+    db.conn
+        .execute(
+            "UPDATE speleo_link SET last_edit_at = '2026-01-01T00:00:00+00:00'",
+            [],
+        )
+        .unwrap();
+    for i in 0..count {
+        db.conn
+            .execute(
+                "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) \
+                 VALUES (?1, ?2, ?2, '2026-01-01T00:00:00Z')",
+                rusqlite::params![i as i64, marker.repeat(64).as_bytes()],
+            )
+            .unwrap();
+    }
+    drop(db);
+    path
+}
+
+#[test]
+fn sanitize_push_snapshot_vacuums_the_deleted_undo_bytes_out_of_the_file() {
+    // The load-bearing half of the strip: DELETE only marks pages free, so without
+    // the VACUUM every "stripped" undo row is still physically present in the bytes
+    // that get uploaded to collaborators. Assert on the RAW file, not on row counts.
+    let temp = TempDir::new().unwrap();
+    let marker = "UNDOSECRET";
+    let path = dirty_push_snapshot(&temp, marker, 200);
+
+    let needle = marker.repeat(64).into_bytes();
+    let before = std::fs::read(&path).unwrap();
+    assert!(
+        before.windows(needle.len()).any(|w| w == needle.as_slice()),
+        "precondition: the undo payload is in the file before sanitize"
+    );
+    let pages_before: i64 = Connection::open(&path)
+        .unwrap()
+        .query_row("PRAGMA page_count", [], |r| r.get(0))
+        .unwrap();
+
+    Database::sanitize_push_snapshot(&path).unwrap();
+
+    let after = std::fs::read(&path).unwrap();
+    assert!(
+        !after.windows(needle.len()).any(|w| w == needle.as_slice()),
+        "the pusher's undo payload must not survive anywhere in the uploaded bytes"
+    );
+    let pages_after: i64 = Connection::open(&path)
+        .unwrap()
+        .query_row("PRAGMA page_count", [], |r| r.get(0))
+        .unwrap();
+    assert!(
+        pages_after < pages_before,
+        "VACUUM must reclaim the freed pages (before {pages_before}, after {pages_after})"
+    );
+}
+
+#[test]
+fn sanitize_push_snapshot_clears_the_dirty_bit() {
+    // The dirty bit is local hand-off state; a stale `1` riding to the server is a
+    // correctness bug for whoever pulls it next.
+    let temp = TempDir::new().unwrap();
+    let path = dirty_push_snapshot(&temp, "x", 1);
+
+    Database::sanitize_push_snapshot(&path).unwrap();
+
+    let link = Database::open_existing(&path)
+        .unwrap()
+        .load_speleo_link()
+        .unwrap()
+        .expect("link kept");
+    assert!(!link.has_unpushed_edits, "dirty bit cleared");
+    assert_eq!(link.last_edit_at, None, "edit timestamp cleared");
+    assert_eq!(
+        link.base_commit_sha.as_deref(),
+        Some("abc"),
+        "identity preserved"
+    );
+}
+
+#[test]
+fn sanitize_push_snapshot_tolerates_a_snapshot_without_collab_state() {
+    // An older snapshot shape can legitimately lack a local-only table. What does
+    // not exist cannot leak, so a missing table must never abort the push.
+    let temp = TempDir::new().unwrap();
+    let path = dirty_push_snapshot(&temp, "x", 3);
+    Connection::open(&path)
+        .unwrap()
+        .execute("DROP TABLE collab_state", [])
+        .unwrap();
+
+    Database::sanitize_push_snapshot(&path).expect("a missing local table must not fail the push");
+
+    let snap = Connection::open(&path).unwrap();
+    let undo: i64 = snap
+        .query_row("SELECT COUNT(*) FROM undo_stack", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(undo, 0, "the tables that DO exist are still stripped");
+}
+
+#[test]
+fn sanitize_push_snapshot_fails_closed_when_the_undo_strip_cannot_run() {
+    // The fail-closed half: if `undo_stack` exists but cannot be emptied, the
+    // snapshot still carries the pusher's edit history - both a privacy leak and a
+    // replay-corruption vector on adopt (#194 b3) - so the push must abort rather
+    // than upload it. A BEFORE DELETE trigger that RAISEs makes the DELETE fail
+    // while leaving the table (and its rows) in place.
+    let temp = TempDir::new().unwrap();
+    let path = dirty_push_snapshot(&temp, "x", 2);
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER block_undo_delete BEFORE DELETE ON undo_stack \
+             BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+        )
+        .unwrap();
+
+    let err = Database::sanitize_push_snapshot(&path)
+        .expect_err("an un-strippable undo_stack must abort the push");
+    assert!(
+        format!("{err:#}").contains("undo_stack"),
+        "the error should name the table that could not be stripped, got: {err:#}"
+    );
+
+    let undo: i64 = Connection::open(&path)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM undo_stack", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        undo, 2,
+        "the history is still there - which is why we abort"
+    );
+}
+
+#[test]
+fn sanitize_push_snapshot_tolerates_an_unstrippable_display_settings() {
+    // The other side of the policy: `display_settings` is a privacy-neutral local
+    // pref, so failing to strip it is logged, not fatal - blocking a push over view
+    // toggles would be a worse outcome for the user than the (harmless) leak. The
+    // fatal strips still run.
+    let temp = TempDir::new().unwrap();
+    let path = dirty_push_snapshot(&temp, "x", 2);
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO display_settings (key, value) VALUES ('zoom', '2')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER block_view_delete BEFORE DELETE ON display_settings \
+             BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+        )
+        .unwrap();
+    }
+
+    Database::sanitize_push_snapshot(&path)
+        .expect("a privacy-neutral local table must not abort the push");
+
+    let snap = Connection::open(&path).unwrap();
+    let count = |table: &str| -> i64 {
+        snap.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(count("undo_stack"), 0, "the fatal strips still ran");
+    assert_eq!(count("display_settings"), 1, "the best-effort strip failed");
+}
+
 /// Build a section of shots that all descend at ~30°, with `sign` applied to the
 /// recorded pitch: `-1.0` reproduces the pre-#296 DMP storage (+up), `1.0` the
 /// already-correct Walls/Compass storage (+down).

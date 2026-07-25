@@ -67,6 +67,16 @@ impl Database {
         "collab_state",
     ];
 
+    /// The subset of [`Self::PUSH_SNAPSHOT_LOCAL_TABLES`] whose strip is FATAL to the
+    /// push: these carry the pusher's edit history, which is both the privacy leak
+    /// and the data-CORRUPTION vector on adopt (#194 b3). If they cannot be emptied
+    /// the snapshot must not be uploaded at all.
+    ///
+    /// The others (`display_settings`, `collab_state`) are privacy-neutral local
+    /// prefs / wiring: aborting a push over them would be a worse outcome for the
+    /// user than the (harmless) leak, so a failure there stays a warning.
+    const PUSH_SNAPSHOT_FATAL_TABLES: &[&str] = &["undo_stack", "redo_stack"];
+
     /// Sanitize a push SNAPSHOT in place (#197/#194) before upload:
     ///
     /// - clears `speleo_link.has_unpushed_edits` / `last_edit_at` - the dirty bit is
@@ -83,20 +93,40 @@ impl Database {
     /// so anything in the snapshot is a legitimate editor's change.
     ///
     /// Operates on a SNAPSHOT copy via its own connection; the live project file is
-    /// never touched. Statements run independently so a missing table (an older
-    /// snapshot shape) is logged, not fatal.
+    /// never touched.
+    ///
+    /// FAIL-CLOSED, per table. A table that is ABSENT is skipped (an older snapshot
+    /// shape legitimately lacks it, and what does not exist cannot leak). A table
+    /// that EXISTS but cannot be emptied is fatal for
+    /// [`Self::PUSH_SNAPSHOT_FATAL_TABLES`] and a logged warning for the rest, so a
+    /// snapshot still holding the pusher's undo/redo history - or a dirty bit -
+    /// never reaches the upload.
+    ///
+    /// Finishes with a `VACUUM`, which is load-bearing rather than cosmetic: `DELETE`
+    /// only marks pages free, so without it every deleted undo row is still
+    /// physically present in the bytes that get uploaded. `VACUUM` rewrites the file
+    /// from the live pages, dropping the freed ones for real.
     pub fn sanitize_push_snapshot(snapshot: &Path) -> Result<()> {
+        // NOT a transaction: VACUUM cannot run inside one, and rusqlite only opens
+        // an explicit transaction when asked, so these statements auto-commit
+        // individually and the VACUUM at the end runs outside any.
         let conn = Connection::open(snapshot).context("open snapshot to sanitize for push")?;
-        // Every statement below runs INDEPENDENTLY + best-effort: a failure of one
-        // (e.g. a missing table on an older snapshot shape) is logged, never aborts,
-        // and - crucially - never skips the others. The undo/redo strip is FIRST
-        // because it is the data-CORRUPTION vector on adopt (#194 b3): it must run
-        // even if the dirty-bit clear below were to fail, which the old ordering
-        // (fatal dirty-clear first) did not guarantee (#197 review). Per-machine /
-        // per-session local tables never proliferate; the names are compile-time
-        // literals (no injection surface).
+        // The undo/redo strip is FIRST because it is the data-CORRUPTION vector on
+        // adopt (#194 b3): it must run even if the dirty-bit clear below were to
+        // fail, which the old ordering (dirty-clear first) did not guarantee (#197
+        // review). Table names are compile-time literals (no injection surface).
         for table in Self::PUSH_SNAPSHOT_LOCAL_TABLES {
+            if !Self::table_exists_on(&conn, table)? {
+                // An older snapshot shape simply has no such table - nothing local
+                // can be riding in it, so this must not abort the push.
+                continue;
+            }
             if let Err(e) = conn.execute(&format!("DELETE FROM {table}"), []) {
+                if Self::PUSH_SNAPSHOT_FATAL_TABLES.contains(table) {
+                    return Err(anyhow::Error::from(e).context(format!(
+                        "could not strip `{table}` from the push snapshot; refusing to upload it"
+                    )));
+                }
                 tracing::warn!(
                     error = %e,
                     table = %table,
@@ -104,17 +134,38 @@ impl Database {
                 );
             }
         }
-        // The dirty bit / edit timestamp are local hand-off state, never server state.
-        if let Err(e) = conn.execute(
-            "UPDATE speleo_link SET has_unpushed_edits = 0, last_edit_at = NULL",
-            [],
-        ) {
-            tracing::warn!(
-                error = %e,
-                "sanitize_push_snapshot: failed to clear the dirty bit in the push snapshot"
-            );
+        // The dirty bit / edit timestamp are local hand-off state, never server
+        // state, and a stale `has_unpushed_edits = 1` riding to the server is a
+        // correctness bug for whoever pulls it - so a failure here is fatal too.
+        // A missing `speleo_link` (older snapshot shape) carries no dirty bit at
+        // all, so there is nothing to clear and nothing to fail over.
+        if Self::table_exists_on(&conn, "speleo_link")? {
+            conn.execute(
+                "UPDATE speleo_link SET has_unpushed_edits = 0, last_edit_at = NULL",
+                [],
+            )
+            .context("could not clear the dirty bit in the push snapshot; refusing to upload it")?;
         }
+        // Reclaim the freed pages: the rows deleted above are still byte-for-byte
+        // present in the file until the database is rewritten, and this file is
+        // about to be uploaded to collaborators.
+        conn.execute_batch("VACUUM;")
+            .context("could not VACUUM the push snapshot; refusing to upload it")?;
+        // Close the connection explicitly so the rewritten file (and its rollback
+        // journal) is fully flushed before the caller reads it for the upload.
+        drop(conn);
         Ok(())
+    }
+
+    /// `table_exists` against a bare [`Connection`] - the sanitize path holds one
+    /// directly rather than a [`Database`].
+    fn table_exists_on(conn: &Connection, name: &str) -> Result<bool> {
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+            params![name],
+            |row| row.get(0),
+        )?;
+        Ok(exists > 0)
     }
 
     /// Open a database for recovery purposes, skipping integrity checks.

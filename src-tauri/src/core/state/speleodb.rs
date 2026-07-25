@@ -5,9 +5,9 @@
 //! Everything here is read-only against the server (login / list / pull); no
 //! lock, push, or persistence - those are later issues (#182 epic).
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::speleodb_cache::restore_display_settings;
 use super::{AppState, VirtualShotMode};
 use crate::speleodb::auth::TokenStore;
 use crate::speleodb::client;
@@ -388,44 +388,17 @@ enum PushOutcome {
 }
 
 /// Sanitize a push SNAPSHOT copy before upload: clear the dirty bit and strip the
-/// per-machine view toggles (`display_settings`) so they don't ride to the server
-/// (#197). All durable project data - survey, config, import-dedup,
-/// resolved-warnings - proliferates with the project. Best-effort - a failure only
-/// means the pushed file keeps a stale dirty bit, which the next puller re-stamps.
-/// See [`crate::persistence::Database::sanitize_push_snapshot`] for the exact set.
-fn clear_snapshot_dirty(snapshot: &Path) {
-    if let Err(e) = crate::persistence::Database::sanitize_push_snapshot(snapshot) {
-        tracing::warn!(error = %e, "clear_snapshot_dirty: failed to sanitize push snapshot");
-    }
-}
-
-/// Snapshot the local per-machine `display_settings` from an existing cache file
-/// BEFORE a download-replace overwrites it. View toggles are stripped from the
-/// server copy on push (#197), so without re-applying them a fast-forward / re-open
-/// - which replaces the whole local `.stalx` with the server's - would reset the
-/// user's view to defaults. Empty when the file is absent or unreadable (a first
-/// open → defaults, which is correct). Pairs with [`restore_display_settings`].
-fn preserved_display_settings(dest: &Path) -> HashMap<String, String> {
-    if !dest.exists() {
-        return HashMap::new();
-    }
-    crate::persistence::Database::open_existing(dest)
-        .and_then(|db| db.load_display_settings())
-        .unwrap_or_default()
-}
-
-/// Re-apply preserved local `display_settings` into a freshly-downloaded cache file
-/// (companion to [`preserved_display_settings`]). Best-effort per key - a failed
-/// restore only means that one view toggle falls back to its default.
-fn restore_display_settings(
-    db: &crate::persistence::Database,
-    preserved: &HashMap<String, String>,
-) {
-    for (key, value) in preserved {
-        if let Err(e) = db.save_display_setting(key, value) {
-            tracing::warn!(error = %e, key = %key, "failed to restore local display setting after download-replace");
-        }
-    }
+/// per-machine / per-session LOCAL tables so they don't ride to the server (#197).
+/// All durable project data - survey, config, import-dedup, resolved-warnings -
+/// proliferates with the project. See
+/// [`crate::persistence::Database::sanitize_push_snapshot`] for the exact set and
+/// for which failures are fatal (stripping the undo/redo history and clearing the
+/// dirty bit are; the privacy-neutral local prefs are not).
+///
+/// FATAL for the push: an unsanitized snapshot must never be uploaded.
+fn clear_snapshot_dirty(snapshot: &Path) -> Result<(), SpeleoDbError> {
+    crate::persistence::Database::sanitize_push_snapshot(snapshot)
+        .map_err(|e| SpeleoDbError::Io(format!("could not sanitize the push snapshot: {e}")))
 }
 
 /// Resolve the server head, re-fetching ONCE when a recorded BASE meets an empty
@@ -1034,8 +1007,12 @@ impl AppState {
         // Carry the user's local view toggles across the download-replace (a re-open
         // of a previously-customized remote project shouldn't reset their view -
         // display_settings are stripped from the server copy). Empty on first open.
-        let preserved_view = preserved_display_settings(&dest);
-        dump.extract_entry_to(&entry, &dest).map_err(local_dto)?;
+        // Also drops the live handle when this very cache file is the open project
+        // (a re-pull of what's already open); the FE re-opens it via `open_project`
+        // once this returns.
+        let preserved_view = self
+            .replace_cache_stalx(&mut dump, &entry, &dest)
+            .map_err(local_dto)?;
 
         // Stamp BASE = the server's TRUE HEAD (the revision-topology leaf), NOT the
         // list/get_project `latest_commit` field, which is `max(authored_date)` and
@@ -1934,9 +1911,13 @@ impl AppState {
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
         // Carry the user's local view toggles across the download-replace, same as a
-        // re-pull (display_settings are stripped from the server copy).
-        let preserved_view = preserved_display_settings(&dest);
-        dump.extract_entry_to(&entry, &dest).map_err(local_dto)?;
+        // re-pull (display_settings are stripped from the server copy), and drop the
+        // live handle to this file first - the reload below re-opens it anyway, so
+        // hoisting the close ahead of the extract costs nothing and keeps the swap
+        // off a mmap'd/locked destination.
+        let preserved_view = self
+            .replace_cache_stalx(&mut dump, &entry, &dest)
+            .map_err(local_dto)?;
 
         // Restore rides ON TOP of the current server HEAD (BASE = tip, dirty SET).
         // Resolve HEAD from the revision topology; if that blips, fall back to the open
@@ -2007,13 +1988,11 @@ impl AppState {
         // fast-forwards away). Mirrors the fast-forward reload (#193); the FE then
         // pulls the swapped geometry via refreshProjectState.
         //
-        // The cache `.stalx` was overwritten above via a direct (non-atomic) write
-        // while this handle was still open - deliberately, matching the fast-forward
-        // reload: the cache is a re-downloadable server copy, and validate_integrity on
-        // the reopen below turns any torn write (crash mid-extract) or Windows
-        // file-share hiccup into a loud re-pull, never a silent bad load. Hardening the
-        // overwrite to atomic temp+rename (and closing before extract) belongs to a
-        // focused change that also covers the fast-forward path (needs Windows testing).
+        // `replace_cache_stalx` above already closed the project when it WAS this
+        // file, and replaced it atomically (temp + rename), so the reopen below reads
+        // a whole file rather than a possibly-torn one. This close stays because it
+        // is not guaranteed to have fired (a stale/never-opened cache path) and it is
+        // a cheap no-op when it did.
         self.close_project();
         self.do_load_project_full(dest).map_err(|e| {
             local_dto(SpeleoDbError::Io(format!(
@@ -2389,9 +2368,11 @@ impl AppState {
         let dest = self.speleodb_cache_path(project_id)?;
         // Capture the user's local view toggles BEFORE the download replaces the
         // file - they're stripped from the server copy, so they'd otherwise reset
-        // to defaults on every fast-forward.
-        let preserved_view = preserved_display_settings(&dest);
-        dump.extract_entry_to(&entry, &dest)?;
+        // to defaults on every fast-forward - and close the live handle to this
+        // file before the replace. The reload below re-opens it and already resets
+        // undo/redo, so hoisting the close ahead of the extract is behaviour-
+        // preserving.
+        let preserved_view = self.replace_cache_stalx(&mut dump, &entry, &dest)?;
 
         // Re-stamp the hand-off link onto the refreshed file: BASE advances to the
         // server tip, the dirty bit clears, last_edit_at resets (clean checkout).
@@ -2821,7 +2802,9 @@ impl AppState {
         // the COPY so it never rides to the server.
         crate::persistence::Database::vacuum_snapshot(&live, &snapshot)
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
-        clear_snapshot_dirty(&snapshot);
+        // FATAL if it fails: an unsanitized snapshot still carries the pusher's
+        // undo/redo history (and a stale dirty bit) and must never be uploaded.
+        clear_snapshot_dirty(&snapshot).map_err(local_dto)?;
 
         let result = self.speleodb_handle_auth(
             Endpoint::UploadAuto,
@@ -3009,12 +2992,13 @@ impl AppState {
 mod tests {
     use super::{
         auth_error_drops_token, build_create_body, build_patch_body, classify_dump_entry,
-        clear_snapshot_dirty, coord_json, head_with_empty_retry, lock_held_by_me,
-        preserved_display_settings, resolve_endpoint, restore_display_settings, reverify_due,
-        revision_swap_base, validate_hexsha, validate_project_id, visibility_label,
-        whoami_indicates_dead_token, Endpoint, PushOutcome, SpeleoDbSession,
-        SpeleoProjectMetadataPatch, SpeleoPublishParams, Visibility, REVERIFY_INTERVAL_SECS,
+        clear_snapshot_dirty, coord_json, head_with_empty_retry, lock_held_by_me, resolve_endpoint,
+        restore_display_settings, reverify_due, revision_swap_base, validate_hexsha,
+        validate_project_id, visibility_label, whoami_indicates_dead_token, Endpoint, PushOutcome,
+        SpeleoDbSession, SpeleoProjectMetadataPatch, SpeleoPublishParams, Visibility,
+        REVERIFY_INTERVAL_SECS,
     };
+    use crate::core::state::speleodb_cache::preserved_display_settings;
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
     use crate::speleodb::auth::{InMemoryStore, SecretStore, TokenStore};
@@ -3226,7 +3210,7 @@ mod tests {
             .expect("stamp dirty link");
         }
 
-        clear_snapshot_dirty(&path);
+        clear_snapshot_dirty(&path).expect("sanitize the snapshot");
 
         let db = Database::open_existing(&path).expect("reopen snapshot");
         let link = db
@@ -3292,6 +3276,173 @@ mod tests {
         assert!(
             preserved_display_settings(&fresh).is_empty(),
             "first open preserves nothing"
+        );
+    }
+
+    // --- guarded close before a cache download-replace ---
+
+    /// Write a minimal openable `.stalx` at `path` and return it.
+    fn seed_stalx(path: &Path, name: &str) {
+        let mut db = Database::open(path).expect("open seed db");
+        db.save_project(&Project::new(name.to_owned(), None))
+            .expect("save seed project");
+    }
+
+    /// Whether a project (and its database handle) is currently open in `state`.
+    fn project_is_open(state: &AppState) -> bool {
+        let project = state.project.lock().expect("project lock").is_some();
+        let database = state.database.lock().expect("database lock").is_some();
+        assert_eq!(
+            project, database,
+            "project and database handles should open/close together"
+        );
+        project
+    }
+
+    #[test]
+    fn guarded_close_fires_when_dest_is_the_open_project() {
+        // The download-replace must not truncate a file this process still has an
+        // mmap-enabled SQLite connection to (SIGBUS / torn reads on Unix, a denied
+        // rename on Windows), so the live handle is dropped first.
+        let temp = TempDir::new().expect("temp dir");
+        let dest = temp.path().join("cache.stalx");
+        seed_stalx(&dest, "Cache");
+
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(dest.clone()).success, "open the cache");
+        assert!(project_is_open(&state));
+
+        assert!(
+            state.close_project_if_open_at(&dest),
+            "the open project IS this file, so it must be closed"
+        );
+        assert!(
+            !project_is_open(&state),
+            "the live handle must be gone before the replace"
+        );
+    }
+
+    #[test]
+    fn guarded_close_ignores_a_different_path() {
+        // Conditional on purpose: a pull can target a cached project the user does
+        // not have open, and dropping THAT project would throw away its undo history
+        // for nothing.
+        let temp = TempDir::new().expect("temp dir");
+        let open_path = temp.path().join("open.stalx");
+        let other = temp.path().join("other.stalx");
+        seed_stalx(&open_path, "Open");
+        seed_stalx(&other, "Other");
+
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(open_path).success, "open a project");
+
+        assert!(
+            !state.close_project_if_open_at(&other),
+            "a different file must not close the open project"
+        );
+        assert!(
+            project_is_open(&state),
+            "the unrelated open project must stay open"
+        );
+    }
+
+    #[test]
+    fn guarded_close_ignores_a_dest_that_does_not_exist_yet() {
+        // A first pull writes into an empty cache: `dest` cannot be canonicalized
+        // and cannot be the file a live connection holds.
+        let temp = TempDir::new().expect("temp dir");
+        let open_path = temp.path().join("open.stalx");
+        seed_stalx(&open_path, "Open");
+        let missing = temp.path().join("not-downloaded-yet.stalx");
+
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(open_path).success, "open a project");
+
+        assert!(
+            !state.close_project_if_open_at(&missing),
+            "a not-yet-existing dest is never the open project"
+        );
+        assert!(project_is_open(&state), "open project untouched");
+    }
+
+    #[test]
+    fn guarded_close_matches_through_a_non_canonical_spelling() {
+        // The open path and `dest` are frequently derived differently (cache-path
+        // join vs. the FE's opened path), so the comparison canonicalizes.
+        let temp = TempDir::new().expect("temp dir");
+        let dest = temp.path().join("cache.stalx");
+        seed_stalx(&dest, "Cache");
+        let round_about = temp.path().join("sub").join("..").join("cache.stalx");
+        std::fs::create_dir(temp.path().join("sub")).expect("mkdir sub");
+
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(dest).success, "open the cache");
+        assert!(
+            state.close_project_if_open_at(&round_about),
+            "the same file spelled differently must still match"
+        );
+        assert!(!project_is_open(&state));
+    }
+
+    #[test]
+    fn replace_cache_stalx_closes_preserves_and_swaps_atomically() {
+        // The chokepoint every download-replace goes through: preserve the local
+        // view toggles, drop the live handle to the destination, then swap in the
+        // downloaded copy via temp+rename.
+        let temp = TempDir::new().expect("temp dir");
+        let dest = temp.path().join("cache.stalx");
+        {
+            let mut db = Database::open(&dest).expect("open local cache");
+            db.save_project(&Project::new("Cache".to_owned(), None))
+                .expect("save project");
+            db.save_display_setting("grid", "off").expect("save grid");
+        }
+
+        // A server dump carrying a fresh `.stalx` (contents are opaque here - the
+        // swap is what's under test).
+        let zip = {
+            use std::io::Write as _;
+            let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            writer
+                .start_file("misc/project.stalx", opts)
+                .expect("start_file");
+            writer.write_all(b"SERVER-COPY").expect("write entry");
+            writer.finish().expect("finish zip").into_inner()
+        };
+
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(dest.clone()).success, "open the cache");
+
+        let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open dump");
+        let preserved = state
+            .replace_cache_stalx(&mut dump, "misc/project.stalx", &dest)
+            .expect("replace the cache file");
+
+        assert_eq!(
+            preserved.get("grid").map(String::as_str),
+            Some("off"),
+            "local view toggles are captured before the replace"
+        );
+        assert!(
+            !project_is_open(&state),
+            "the live handle is dropped before the file is replaced"
+        );
+        assert_eq!(
+            std::fs::read(&dest).expect("read replaced file"),
+            b"SERVER-COPY",
+            "the destination now holds the downloaded copy"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(temp.path())
+            .expect("readdir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "the atomic swap must leave no temp file behind, found {leftovers:?}"
         );
     }
 

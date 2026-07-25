@@ -10,8 +10,9 @@
 //! break the pull (the server stores "other" files under `misc/` today, but that
 //! is not part of the contract).
 
+use std::ffi::OsStr;
 use std::io::{Cursor, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::SpeleoDbError;
 
@@ -66,6 +67,21 @@ fn is_ariane_tml(path: &str) -> bool {
         .file_name()
         .and_then(|n| n.to_str())
         .is_some_and(|n| n.eq_ignore_ascii_case("ariane.tml"))
+}
+
+/// The sibling temp path used to stage an extraction before it replaces `dest`.
+///
+/// Lives in the SAME directory as `dest` so the follow-up `rename` stays on one
+/// filesystem (a cross-device rename fails with `EXDEV`), and carries a dedicated
+/// `.download.tmp` suffix so it can never collide with the save pipeline's
+/// `<stem>.stalx.tmp`.
+fn download_temp_path(dest: &Path) -> PathBuf {
+    let mut name = dest
+        .file_name()
+        .unwrap_or_else(|| OsStr::new("dump"))
+        .to_os_string();
+    name.push(".download.tmp");
+    dest.with_file_name(name)
 }
 
 /// A dump ZIP parsed once. Lists its entry paths and extracts the chosen entry
@@ -147,8 +163,33 @@ impl<'a> Dump<'a> {
                 "dump entry `{entry_path}` exceeded the {max_bytes}-byte limit while reading"
             )));
         }
-        std::fs::write(dest, &buf)
-            .map_err(|e| SpeleoDbError::Io(format!("could not write {}: {e}", dest.display())))?;
+        // Replace `dest` ATOMICALLY: stage the bytes in a sibling temp file, then
+        // rename over the destination. A write that dies part-way (crash, full disk,
+        // killed process) then leaves the PREVIOUS cache `.stalx` intact instead of a
+        // truncated stub, and no reader ever observes a half-written file - which a
+        // plain `fs::write` could not promise, because it truncates `dest` in place.
+        //
+        // Closing any live SQLite handle to `dest` first is the CALLER's job (see
+        // `AppState::close_project_if_open_at`). The two halves fix different failure
+        // modes and are both required: the close is what lets the rename succeed on
+        // Windows (SQLite opens the file without `FILE_SHARE_DELETE`, so replacing it
+        // under a live handle is denied), and the rename is what keeps an interrupted
+        // write from tearing the file even when nothing has it open.
+        let temp = download_temp_path(dest);
+        if let Err(e) = std::fs::write(&temp, &buf) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(SpeleoDbError::Io(format!(
+                "could not write {}: {e}",
+                temp.display()
+            )));
+        }
+        if let Err(e) = std::fs::rename(&temp, dest) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(SpeleoDbError::Io(format!(
+                "could not replace {}: {e}",
+                dest.display()
+            )));
+        }
         Ok(())
     }
 }
@@ -156,7 +197,7 @@ impl<'a> Dump<'a> {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{classify, Dump, DumpClassification, SpeleoDbError};
+    use super::{classify, download_temp_path, Dump, DumpClassification, SpeleoDbError};
 
     fn paths(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| (*s).to_owned()).collect()
@@ -316,6 +357,73 @@ mod tests {
         assert!(
             !dest.exists(),
             "nothing should be written when over the cap"
+        );
+    }
+
+    #[test]
+    fn extract_entry_to_leaves_no_temp_file_behind() {
+        // The atomic replace stages through a sibling temp file; a successful
+        // extract must consume it (rename), never leave it littering the cache dir.
+        let zip = make_zip(&[("misc/project.stalx", b"PAYLOAD")]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("project.stalx");
+        let mut dump = Dump::open(&zip).expect("valid zip opens");
+        dump.extract_entry_to("misc/project.stalx", &dest)
+            .expect("extract");
+        assert!(
+            !download_temp_path(&dest).exists(),
+            "the staging temp file must be renamed away, not left behind"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("readdir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            leftovers,
+            vec!["project.stalx".to_owned()],
+            "only the destination should remain in the directory"
+        );
+    }
+
+    #[test]
+    fn extract_entry_to_fully_replaces_an_existing_dest() {
+        // A pre-existing (longer) file must be REPLACED wholesale, not partially
+        // overwritten - the old tail must not survive the shorter new contents.
+        let zip = make_zip(&[("misc/project.stalx", b"NEW")]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("project.stalx");
+        std::fs::write(&dest, b"OLD-AND-MUCH-LONGER-CONTENTS").expect("seed dest");
+        let mut dump = Dump::open(&zip).expect("valid zip opens");
+        dump.extract_entry_to("misc/project.stalx", &dest)
+            .expect("extract over existing dest");
+        assert_eq!(std::fs::read(&dest).expect("readable"), b"NEW");
+    }
+
+    #[test]
+    fn extract_entry_to_leaves_dest_intact_when_the_staged_write_fails() {
+        // Failure injection: squat the staging temp path with a DIRECTORY, so the
+        // staged write cannot succeed. The atomic replace must then fail with the
+        // previous `dest` byte-for-byte untouched (the whole point of not
+        // truncating in place).
+        let zip = make_zip(&[("misc/project.stalx", b"NEW")]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("project.stalx");
+        std::fs::write(&dest, b"ORIGINAL").expect("seed dest");
+        std::fs::create_dir(download_temp_path(&dest)).expect("squat the temp path");
+
+        let mut dump = Dump::open(&zip).expect("valid zip opens");
+        let err = dump
+            .extract_entry_to("misc/project.stalx", &dest)
+            .expect_err("a blocked staging write must fail the extract");
+        assert!(
+            matches!(err, SpeleoDbError::Io(_)),
+            "a blocked staging write should map to Io, got {err:?}"
+        );
+        assert_eq!(
+            std::fs::read(&dest).expect("original still readable"),
+            b"ORIGINAL",
+            "the destination must be untouched when the extract fails"
         );
     }
 }

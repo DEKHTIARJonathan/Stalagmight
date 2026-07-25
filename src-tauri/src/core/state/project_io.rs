@@ -737,4 +737,59 @@ impl AppState {
         tracing::debug!("close_project: returning success");
         CommandResult::success()
     }
+
+    /// Close the open project IF AND ONLY IF it is the file at `dest`; returns
+    /// whether it was closed.
+    ///
+    /// Guards every path that REPLACES a `.stalx` on disk out from under the app
+    /// (the SpeleoDB cache download-replace: pull / fast-forward / revision swap).
+    /// Two reasons the live handle has to go first:
+    ///
+    /// - `Database::open_existing` enables a 256 MB mmap over the file. Truncating
+    ///   or replacing a file that SQLite has mmap'd can fault the mapped pages
+    ///   (SIGBUS) and hands the connection a torn view of a different database.
+    /// - On Windows, SQLite opens the file WITHOUT `FILE_SHARE_DELETE`, so
+    ///   `MoveFileEx(REPLACE_EXISTING)` over a live handle fails with "Access is
+    ///   denied" - the same hazard the save pipeline's pre-rename close covers.
+    ///
+    /// Closing is deliberately conditional: these callers replace a file that is
+    /// USUALLY, but not always, the open project (a pull can target a cached
+    /// project the user does not currently have open), and dropping an unrelated
+    /// open project would throw away its undo/redo history for nothing.
+    pub(super) fn close_project_if_open_at(&self, dest: &std::path::Path) -> bool {
+        let open_path = {
+            // Recover a poisoned lock rather than skip the close - silently leaving
+            // the handle open is the unsafe outcome here.
+            let guard = self.project.lock().unwrap_or_else(|e| e.into_inner());
+            guard.as_ref().and_then(|p| p.file_path.clone())
+        };
+        let Some(open_path) = open_path else {
+            return false;
+        };
+        if !same_file(&open_path, dest) {
+            return false;
+        }
+        tracing::info!(
+            path = ?dest,
+            purpose = "release the live handle before replacing the file",
+            "Closing the open project because its .stalx is about to be replaced"
+        );
+        self.close_project();
+        true
+    }
+}
+
+/// Whether two paths denote the same file on disk.
+///
+/// Canonicalization resolves `.`/`..`, symlinks, and (on Windows) case/short-name
+/// differences, so two spellings of the open project's path still compare equal.
+/// When either side cannot be canonicalized - most commonly because `dest` does
+/// not exist yet (a first pull into an empty cache) - it cannot be the file a live
+/// connection is holding unless it is LITERALLY the same path, so fall back to a
+/// plain comparison instead of guessing.
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => a == b,
+    }
 }
