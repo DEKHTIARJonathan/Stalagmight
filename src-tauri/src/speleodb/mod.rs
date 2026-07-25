@@ -1,15 +1,21 @@
-//! SpeleoDB integration - P0 read-only spike (#183).
+//! SpeleoDB integration - the primitives behind the single-writer hand-off (#182).
 //!
-//! Proves the read-only half of the single-writer hand-off: log in, list
-//! projects, download a project "dump", extract the `.stalx`, and open it
-//! locally. No lock, no real push, no SpeleoLink persistence, no edit gate -
-//! those are later issues (see the epic, #182).
+//! The full round trip is implemented: log in, list projects, download a project
+//! "dump" and extract its `.stalx`, take/release the server write lock (or
+//! force-edit without one), reconcile against the server history, push a new
+//! revision, persist the `SpeleoLink` that marks a project remote and drives the
+//! edit gate, browse/restore past revisions, and administer the project
+//! (metadata, collaborators, teams, delete).
 //!
 //! Layout:
-//! - [`client`] - the ureq HTTP surface (Bearer auth, retry/timeout idiom).
-//! - [`auth`]   - backend-only token storage (OS keychain + in-memory fallback).
-//! - [`dump`]   - ZIP dump classification + `.stalx` extraction.
-//! - [`models`] - serde DTOs + the IPC-facing summary types.
+//! - [`client`]   - the ureq HTTP surface (Bearer auth, retry/timeout idiom).
+//! - [`auth`]     - backend-only token storage (keychain / plaintext / memory tiers).
+//! - [`contract`] - the pure status→action table (#186) + `SpeleoErrorDto`.
+//! - [`dump`]     - ZIP dump classification + `.stalx` extraction.
+//! - [`metrics`]  - per-endpoint traffic instrumentation (#210).
+//! - [`models`]   - serde DTOs + the IPC-facing types.
+//! - [`sync`]     - the pure sync engine: BASE-SHA fence + ancestry recovery.
+//! - [`tls`]      - the http/https private-network policy (#187).
 //!
 //! The orchestration that ties these to `AppState`/config/app-dirs lives in
 //! `core::state::speleodb`; the IPC commands are in `commands::speleodb`.

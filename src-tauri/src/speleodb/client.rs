@@ -39,6 +39,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 // (Referenced by `upload_auto`, so rustc does not flag it dead even while that
 // method's orchestration caller is pending - no dead_code expectation needed.)
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+/// Dump-download timeout (#270). The dump is the whole working tree as a ZIP - the
+/// same payload the upload sends back - so it does NOT belong on the shared
+/// small-GET budget: `timeout_global` is end-to-end *including the body read*, so a
+/// big project on a slow link blows the 30 s read budget on every one of the three
+/// idempotent attempts while a same-size upload (120 s) succeeds. Named separately
+/// from [`UPLOAD_TIMEOUT`] so the two budgets can drift apart later.
+const DUMP_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 /// Transient-transport retries (total attempts = 1 + MAX_RETRIES).
 const MAX_RETRIES: u32 = 2;
 /// Backoff delays between retries (mirrors the tile-fetch idiom).
@@ -50,9 +57,17 @@ fn agent() -> ureq::Agent {
     agent_with_timeout(REQUEST_TIMEOUT)
 }
 
+/// Build a fresh agent for a dump download, on the longer
+/// [`DUMP_DOWNLOAD_TIMEOUT`] budget. Both dump endpoints go through here so
+/// neither can silently fall back to the small-GET budget.
+fn dump_agent() -> ureq::Agent {
+    agent_with_timeout(DUMP_DOWNLOAD_TIMEOUT)
+}
+
 /// Build a fresh agent with an explicit global timeout (upload uses the longer
-/// [`UPLOAD_TIMEOUT`]). `http_status_as_error(false)` is kept so the status
-/// branching shape #186 keys off is preserved.
+/// [`UPLOAD_TIMEOUT`], the dump download [`DUMP_DOWNLOAD_TIMEOUT`]).
+/// `http_status_as_error(false)` is kept so the status branching shape #186 keys
+/// off is preserved.
 fn agent_with_timeout(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
@@ -445,7 +460,7 @@ pub(crate) fn download_dump(
     let auth = bearer(token);
 
     let (status, body) = with_retry(base, insecure_http, true, Endpoint::DownloadDump, || {
-        let resp = agent()
+        let resp = dump_agent()
             .get(&url)
             .header("Authorization", auth.as_str())
             .call()?;
@@ -477,7 +492,7 @@ pub(crate) fn download_dump_at_hash(
     let auth = bearer(token);
 
     let (status, body) = with_retry(base, insecure_http, true, Endpoint::DownloadDump, || {
-        let resp = agent()
+        let resp = dump_agent()
             .get(&url)
             .header("Authorization", auth.as_str())
             .call()?;
@@ -1156,7 +1171,7 @@ mod tests {
         clean_transport, delete_project, download_dump_at_hash, list_teams, list_user_autocomplete,
         list_user_permissions, mime_for, parse_error_message, parse_upload_auto_response,
         remove_team_permission, remove_user_permission, set_user_permission, with_retry, Endpoint,
-        RevisionHistory, UserInfo,
+        RevisionHistory, UserInfo, DUMP_DOWNLOAD_TIMEOUT, REQUEST_TIMEOUT,
     };
     use crate::speleodb::{Permission, SpeleoDbError};
 
@@ -1968,5 +1983,52 @@ mod tests {
             )),
             "at-hash download GETs the dump pinned to the revision SHA: {wire}"
         );
+    }
+
+    #[test]
+    fn dump_download_gets_its_own_longer_budget() {
+        // #270: `timeout_global` is end-to-end INCLUDING the body read, so a dump
+        // (the whole working tree as a ZIP) on the shared 30 s small-GET budget
+        // fails all three idempotent attempts while a same-size upload succeeds.
+        assert_eq!(
+            super::dump_agent().config().timeouts().global,
+            Some(DUMP_DOWNLOAD_TIMEOUT),
+            "the dump agent must carry the dump budget"
+        );
+        assert_eq!(
+            super::agent().config().timeouts().global,
+            Some(REQUEST_TIMEOUT),
+            "the shared read agent keeps the small-GET budget"
+        );
+        assert!(
+            DUMP_DOWNLOAD_TIMEOUT > REQUEST_TIMEOUT,
+            "the dump budget must be longer than the shared read budget"
+        );
+    }
+
+    #[test]
+    fn both_dump_downloads_use_the_dump_agent() {
+        // The agent a function picks is not observable from its return value, so
+        // guard it at the source: BOTH dump endpoints must build `dump_agent()`. A
+        // future edit that reaches for the bare `agent()` silently reinstates the
+        // 30 s budget on one of them.
+        let src = include_str!("client.rs");
+        for name in [
+            "pub(crate) fn download_dump(",
+            "pub(crate) fn download_dump_at_hash(",
+        ] {
+            let start = src.find(name).expect("dump download fn present");
+            let body = &src[start..];
+            let end = body.find("\n}\n").expect("fn body terminates");
+            let body = &body[..end];
+            assert!(
+                body.contains("dump_agent()"),
+                "{name} must build its agent via dump_agent()"
+            );
+            assert!(
+                !body.contains(" agent()"),
+                "{name} must NOT fall back to the shared 30 s agent()"
+            );
+        }
     }
 }

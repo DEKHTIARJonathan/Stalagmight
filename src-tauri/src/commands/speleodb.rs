@@ -1,17 +1,21 @@
-//! IPC command surface for the SpeleoDB read-only spike (#183).
+//! IPC command surface for the SpeleoDB integration (#182 epic).
 //!
 //! Thin wrappers over the `AppState::speleodb_*` orchestration (which lives in
-//! `core::state::speleodb`, over the `crate::speleodb` client primitives).
-//! Errors are flattened to `String` at the IPC boundary - the structured
-//! status→action contract is #186. The auth token is never returned to the
-//! webview (login yields only the email + keychain flag).
+//! `core::state::speleodb`, over the `crate::speleodb` client primitives). The
+//! full surface is here: session (login / logout / session), pull (list / open /
+//! adopt), the lock + edit gate (start-editing / force-edit / done / push /
+//! update / take-remote / the release verbs), link status + unlink, revision
+//! history and restore, and project admin (metadata / publish / collaborators /
+//! teams / delete).
+//!
+//! Errors cross the boundary as the structured [`SpeleoErrorDto`] (#186), which
+//! carries the typed [`SpeleoDbAction`] the frontend branches on - not a
+//! flattened `String`. The auth token is never returned to the webview (login
+//! yields only the email + keychain flag).
 //!
 //! Each command runs its blocking work (HTTP + OS-keychain I/O) off the main
 //! thread via `spawn_blocking`: Tauri executes synchronous commands on the main
 //! thread, so doing the network/keychain round-trips inline would freeze the UI.
-//!
-//! The full `speleodb_*` surface (push / lock / release / create / settings)
-//! lands with later issues; this spike ships only login / list / open / logout.
 
 use tauri::{AppHandle, Manager};
 
@@ -108,7 +112,11 @@ pub async fn speleodb_adopt_ariane(
     .await
 }
 
-/// Forget the locally stored token and clear the session (no server call).
+/// Forget the locally stored token, clear the session, and clear the persisted
+/// account email (no server call). #270: an `Err` here does NOT mean the logout
+/// failed - the session is always dropped; it means the credential could not be
+/// removed from the OS keychain / plaintext store, so the frontend warns (and can
+/// offer a retry) while treating the user as logged out.
 #[tauri::command]
 pub async fn speleodb_logout(app: AppHandle) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_logout).await
